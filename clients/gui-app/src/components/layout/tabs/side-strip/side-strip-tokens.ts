@@ -280,16 +280,53 @@ export const SIDE_TAB_METER_MORE_CLASS = {
   row: "text-micro",
 } as const;
 /**
- * A split pair: two member rows joined in one shared fill, with a
- * 10px radius (`rounded-xl`) so the 8px rows inside its 2px padding sit
- * concentric.
+ * A split pair in the expanded strip: one row, the strip's 8px radius, its
+ * line of the split icon and two halves 2px inside its edge, so the row is the
+ * strip's 32px (52px with the Activity view's second line, 4px under the
+ * halves). The current pair's row is what joins the sheet.
  */
-export const SIDE_SPLIT_PAIR_CLASS = "rounded-xl bg-foreground/6 p-0.5";
-/** The seam between a pair's members and its hairline, expanded and collapsed. */
-export const SIDE_SPLIT_PAIR_SEAM_CLASS = "h-1";
-export const SIDE_SPLIT_PAIR_HAIRLINE_CLASS = "h-px bg-border/60";
-export const SIDE_SPLIT_PAIR_EXPANDED_HAIRLINE_CLASS = "mx-2 flex-1";
-export const SIDE_SPLIT_PAIR_COLLAPSED_HAIRLINE_CLASS = "w-5";
+export const SIDE_SPLIT_ROW_CLASS = "flex flex-col gap-1 rounded-lg p-0.5";
+/** The row's line: the split icon, then the two halves 4px apart. */
+export const SIDE_SPLIT_ROW_LINE_CLASS = "flex h-7 min-w-0 items-center gap-1";
+/**
+ * One half: 28px, a 6px radius concentric in the row's 8px, equal in width
+ * whatever the panes' ratio, with a title and its own trailing cell.
+ */
+export const SIDE_SPLIT_HALF_CLASS =
+  "h-7 min-w-0 flex-1 basis-0 rounded-md px-2 gap-1";
+/** A half at rest: the faint fill that parts the two titles, a step up on hover. */
+export const SIDE_SPLIT_HALF_REST_CLASS =
+  "bg-foreground/5 hover:bg-foreground/8";
+/**
+ * The current pair's focused half: the selected tab's own box, as the top bar
+ * draws a split's focused member, the background fill inside the sheets'
+ * border.
+ */
+export const SIDE_SPLIT_HALF_FOCUSED_CLASS =
+  "bg-background ring-1 ring-inset ring-canvas-border";
+/** An empty half waiting for a view: no fill, a dashed outline. */
+export const SIDE_SPLIT_HALF_EMPTY_CLASS =
+  "bg-transparent hover:bg-foreground/5 border border-dashed border-foreground/20";
+/** The dragged task's half in a split preview: titled and outlined in info blue. */
+export const SIDE_SPLIT_HALF_PREVIEW_CLASS =
+  "bg-info/10 text-info-foreground ring-1 ring-inset ring-info";
+/** A rail tile a drop would split with: the tile outlined in info blue. */
+export const SIDE_SPLIT_PREVIEW_TILE_CLASS = "ring-2 ring-inset ring-info";
+/**
+ * A split pair in the rail: its icon over its two stacked tiles in one
+ * rounded container, a 12px radius concentric round the tiles' 10px inside its
+ * 2px padding.
+ */
+export const SIDE_SPLIT_RAIL_CLASS =
+  "flex flex-col items-center gap-0.5 self-center rounded-[0.75rem] bg-foreground/6 p-0.5";
+/** The pair's second line starts under its first half: past the 24px icon and the 4px gap. */
+export const SIDE_SPLIT_DETAIL_INSET_CLASS = "ps-8";
+/**
+ * The caption over one half's agents under a pair: a 12px split icon with that
+ * half's pane filled, then its title, in 11px muted text.
+ */
+export const SIDE_SPLIT_CAPTION_CLASS =
+  "flex h-5 min-w-0 items-center gap-1.5 px-2 text-overline font-normal text-muted-foreground";
 /** The inline rename input in an expanded row's title slot. */
 export const SIDE_TAB_TITLE_INPUT_CLASS =
   "min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring";

@@ -1,4 +1,8 @@
 import type { HostNotificationsCloudFeedRowV11 } from "@traycer/protocol/host/notifications/contracts";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -358,6 +362,178 @@ export function seedSideStripIdleGroup(): void {
     summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
     version: 1,
   });
+}
+
+/** A split pair of two tabs, `focused` its focused half. */
+function splitItem(
+  id: string,
+  left: TabRef,
+  right: TabRef,
+  focused: "left" | "right",
+): StripItem {
+  return {
+    kind: "split",
+    id,
+    left: { kind: "tab", ref: left },
+    right: { kind: "tab", ref: right },
+    focusedSide: focused,
+    routeBackingSide: focused,
+    leftRatio: 0.5,
+  };
+}
+
+/**
+ * The split pairs' boards: GUI Sidebar Redesign, the current pair (Cookie Sync
+ * Performance and React UI Performance Audit, its left half focused), a second
+ * pair (Release checklist and Host watcher fix) and Start Page, all idle. The
+ * History tab is open as a non-task tab a pair can take.
+ */
+export function seedSideStripPairs(): void {
+  const gui = epicRef("GUI Sidebar Redesign");
+  const cookie = epicRef("Cookie Sync Performance");
+  const react = epicRef("React UI Performance Audit");
+  const release = epicRef("Release checklist");
+  const host = epicRef("Host watcher fix");
+  const start = epicRef("Start Page");
+  const refs = [gui, cookie, react, release, host, start];
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      loneItem(gui),
+      splitItem("split-current", cookie, react, "left"),
+      splitItem("split-other", release, host, "left"),
+      loneItem(start),
+    ],
+    activeItemId: "split-current",
+    stripOrder: refs,
+    systemTabs: {
+      history: {
+        id: "history",
+        kind: "history",
+        name: "All tasks",
+        lastPath: null,
+      },
+      settings: null,
+    },
+    groups: {},
+    customizations: {},
+  });
+  __setAgentActivityStateForTests({}, "local", "connected");
+  useCloudNotificationsStore.getState().applySnapshot({
+    rows: [],
+    summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+    version: 1,
+  });
+}
+
+/**
+ * The pairs' live statuses: Cookie Sync Performance working, React UI
+ * Performance Audit waiting on an approval from its Perf agent.
+ */
+export function seedSideStripPairStatuses(): void {
+  __setAgentActivityStateForTests(
+    { "fixture-cookie": { working: ["c-bench"], turn: ["c-bench"] } },
+    "local",
+    "connected",
+  );
+  useCloudNotificationsStore.getState().applySnapshot({
+    rows: [
+      feedRow({
+        epicId: "fixture-react",
+        minutesAgo: 3,
+        kind: { prompt: "approval", agentTitle: "Perf agent" },
+      }),
+    ],
+    summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+    version: 2,
+  });
+}
+
+/** The second pair's outcomes: Release checklist done, Host watcher fix failed, both unread. */
+export function seedSideStripPairOutcomes(): void {
+  useCloudNotificationsStore.getState().applySnapshot({
+    rows: [
+      feedRow({
+        epicId: "fixture-release",
+        minutesAgo: 4,
+        kind: { stopped: "done" },
+      }),
+      feedRow({
+        epicId: "fixture-host",
+        minutesAgo: 8,
+        kind: { stopped: "failed" },
+      }),
+    ],
+    summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+    version: 4,
+  });
+}
+
+const noopStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
+/** A session for `epicId` holding `chats` (id, title), so the strip names its agents. */
+function warmEpic(
+  epicId: string,
+  chats: ReadonlyArray<readonly [string, string]>,
+) {
+  const handle = openStoreForTest({
+    epicId,
+    userId: null,
+    factories: {
+      streamClientFactory: noopStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
+  });
+  const byId: Record<string, ChatProjection> = {};
+  const startedAt = Date.now() - 4 * MINUTE_MS;
+  for (const [id, title] of chats) {
+    byId[id] = {
+      id,
+      title,
+      parentId: null,
+      createdAt: startedAt,
+      updatedAt: startedAt,
+      userId: null,
+      hostId: "host-a",
+      isTitleEditedByUser: false,
+      docResident: false,
+      archivedAt: null,
+      settings: null,
+    };
+  }
+  handle.store.setState({ chats: { allIds: Object.keys(byId), byId } });
+  getOpenEpicRegistry().acquire(epicId, () => handle);
+}
+
+/**
+ * Named agents under the current pair: Cookie Sync's Sync agent and Bench
+ * runner, and React UI's Perf agent, all working, so both halves are Working.
+ */
+export function seedSideStripPairAgents(): void {
+  warmEpic("fixture-cookie", [
+    ["c-sync", "Sync agent"],
+    ["c-bench", "Bench runner"],
+  ]);
+  warmEpic("fixture-react", [["r-perf", "Perf agent"]]);
+  __setAgentActivityStateForTests(
+    {
+      "fixture-cookie": {
+        working: ["c-sync", "c-bench"],
+        turn: ["c-sync", "c-bench"],
+      },
+      "fixture-react": { working: ["r-perf"], turn: ["r-perf"] },
+    },
+    "local",
+    "connected",
+  );
 }
 
 // ── Movement and long lists ─────────────────────────────────────────────────

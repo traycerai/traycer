@@ -558,7 +558,7 @@ function AppFrameTaskRow(props: {
           <span className={cn(SIDE_TAB_TITLE_CLASS, "truncate font-semibold")}>
             {task.label}
           </span>
-          {sectionStyleOf(SAMPLE_NEEDS_YOU_ROW).detail}
+          {sectionStyleOf(SAMPLE_NEEDS_YOU_ROW, false).detail}
         </span>
       ) : (
         <span className={cn(SIDE_TAB_TITLE_CLASS, "min-w-0 flex-1 truncate")}>

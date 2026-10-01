@@ -16,14 +16,24 @@ import type { NeedsYouRow, StripTaskRow, ToReviewRow } from "./strip-sections";
 /**
  * How a section styles a row: a Needs you or To review row is a two-line row
  * with a bold title, a Working row one line of normal weight, an Idle row one
- * line of muted text.
+ * line of muted text. A split pair's half keeps the weight and draws no second
+ * line: its pair's row carries that.
  */
-export function sectionStyleOf(row: StripTaskRow): SideRowSection {
+export function sectionStyleOf(
+  row: StripTaskRow,
+  half: boolean,
+): SideRowSection {
   switch (row.section) {
     case "needs-you":
-      return { title: "strong", detail: <NeedsYouDetail row={row} /> };
+      return {
+        title: "strong",
+        detail: half ? null : <NeedsYouDetail row={row} />,
+      };
     case "to-review":
-      return { title: "strong", detail: <ToReviewDetail row={row} /> };
+      return {
+        title: "strong",
+        detail: half ? null : <ToReviewDetail row={row} />,
+      };
     case "working":
       return { title: "normal", detail: null };
     case "idle":
@@ -80,7 +90,9 @@ export function twoLineStatusOf(
  * trailing edge is the time, and a pending fork keeps its glyph; a Working or
  * Idle row draws the glyph or the meter, and the meter yields to the close
  * as a glyph does. The Layered view (`row` null) draws the chip, meter or
- * glyph of the flush-title row.
+ * glyph of the flush-title row. A split pair's half has room for its compact
+ * glyph alone (the spinner, the needs-you dot, the done check, the failed
+ * glyph); a chip's words are its card's and its pair's second line's.
  */
 export function taskStatusOf(input: {
   readonly row: StripTaskRow | null;
@@ -91,8 +103,18 @@ export function taskStatusOf(input: {
   readonly titleGenerating: boolean;
   /** The task's nested agents are showing, so they carry what the meter would. */
   readonly meterHidden: boolean;
+  readonly half: boolean;
 }): SideTabRowStatus | null {
   const { row, tabId, indicator } = input;
+  const glyph = (
+    <SideTabStatusGlyph
+      tabId={tabId}
+      indicatorState={indicator}
+      activityStatus={input.activityStatus}
+      titleGenerating={input.titleGenerating}
+    />
+  );
+  if (input.half) return { yieldsToClose: true, node: glyph };
   const twoLine = twoLineRowOf(row);
   if (twoLine !== null) {
     return twoLineStatusOf(
@@ -115,13 +137,6 @@ export function taskStatusOf(input: {
     agents: input.agents,
     meterHidden: input.meterHidden,
     meterYields: row !== null,
-    glyph: (
-      <SideTabStatusGlyph
-        tabId={tabId}
-        indicatorState={indicator}
-        activityStatus={input.activityStatus}
-        titleGenerating={input.titleGenerating}
-      />
-    ),
+    glyph,
   });
 }

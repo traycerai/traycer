@@ -57,6 +57,7 @@ function SideHomeRowBody(props: SideHomeRowProps): ReactNode {
     <SideTabRow
       frame={frame}
       variant={variant}
+      shape="row"
       active={isActive}
       session={null}
       tint={null}

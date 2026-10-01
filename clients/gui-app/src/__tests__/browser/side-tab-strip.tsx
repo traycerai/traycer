@@ -39,6 +39,7 @@ import {
   moveSideStripLongListTask,
   seedSideStripIdleGroup,
   seedSideStripLongList,
+  seedSideStripPairs,
   seedSideStripSections,
   seedSideStripTabs,
   type SeededSection,
@@ -85,6 +86,9 @@ import "@/index.css";
  * `?tasks=idle-group` is the owner's grouping report instead: four idle tasks,
  * the second alone in an organization's group, in either view (add
  * `scene=sections` for the Activity view).
+ *
+ * `?tasks=pairs` is the split pairs' boards: a task, the current pair, a second
+ * pair and Start Page, in either view.
  *
  * `&rail=1` collapses the strip to the rail, which in the sections scene runs
  * the same tasks as tiles in the same sections.
@@ -133,6 +137,8 @@ const LONG_LIST =
 const RAIL = new URLSearchParams(window.location.search).get("rail") === "1";
 const IDLE_GROUP =
   new URLSearchParams(window.location.search).get("tasks") === "idle-group";
+const PAIRS =
+  new URLSearchParams(window.location.search).get("tasks") === "pairs";
 
 function seedScene(): void {
   if (SECTIONS_SCENE) {
@@ -145,6 +151,7 @@ function seedScene(): void {
     });
   }
   if (IDLE_GROUP) seedSideStripIdleGroup();
+  else if (PAIRS) seedSideStripPairs();
   else if (!SECTIONS_SCENE) seedSideStripTabs(false);
   else if (LONG_LIST) seedSideStripLongList();
   else seedSideStripSections();

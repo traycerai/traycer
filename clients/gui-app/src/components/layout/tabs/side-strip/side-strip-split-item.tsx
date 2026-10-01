@@ -14,6 +14,7 @@ import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
 import { useDroppable } from "@dnd-kit/core";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { cn } from "@/lib/utils";
 import type { SplitSide } from "@/stores/tabs/layout";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -28,7 +29,9 @@ import {
   getHeaderStripItemSlotDropId,
   type HeaderTabSlotDropData,
 } from "../header-tab-dnd";
-import { splitSlotLabel } from "../header-tab-presentation";
+import { useSplitMemberLabel } from "../header-tab-presentation";
+import { SplitQuickActions } from "../split-quick-actions";
+import { SplitFocusIcon } from "../split-tab-chrome";
 import { useHeaderTabDisplacementTransition } from "../tab-chrome-tokens";
 import { SplitSlotMenuContent } from "../tab-strip-context-menu";
 import {
@@ -42,23 +45,32 @@ import {
   type SideStripHandlers,
   type SideStripItemProps,
 } from "./side-strip-item-input";
-import { SideSplitRowPair } from "./side-split-row-pair";
+import { SideSplitIcon, SideSplitRow } from "./side-split-row";
 import { SideStripTabRow } from "./side-strip-tab-row";
+import {
+  SIDE_SPLIT_CAPTION_CLASS,
+  SIDE_SPLIT_DETAIL_INSET_CLASS,
+  SIDE_SPLIT_HALF_EMPTY_CLASS,
+} from "./side-strip-tokens";
 import { StripAgentGroup } from "./strip-agent-group";
+import { PairNeedsYouDetail } from "./strip-section-detail";
 import { memberRowOf, type StripTaskRow } from "./strip-sections";
 import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
 import {
   SideTabRow,
   type SideRowFrame,
+  type SideTabRowShape,
   type SideTabRowVariant,
 } from "./side-tab-row";
 import { NO_LIVE_AGENTS } from "./side-tab-live-agents";
 
 /**
- * A split pair: one reorder frame (the split's drop slot, never a merge
- * target) around two joined member rows, the left member on top (S-08). No
- * quick-actions control: the split commands are in each member's menu (S-31).
+ * A split pair: one reorder frame (the split's drop slot, never a merge target)
+ * around one row of the split icon and two halves, each a tab of its own. The
+ * icon is the top bar's split actions button. In the Activity view the row
+ * draws the needs-you line of its halves, and each half's agents follow it,
+ * the left half's first, under a caption naming that half.
  */
 export function SideSplitItem(
   props: SideStripItemProps & {
@@ -108,6 +120,10 @@ export function SideSplitItem(
     focusedSide === "right",
     rightSection,
   );
+  const leftLabel = useSplitMemberLabel(item.left);
+  const rightLabel = useSplitMemberLabel(item.right);
+  const shapeOf = (side: "left" | "right"): SideTabRowShape =>
+    props.isActive && focusedSide !== side ? "on-screen-half" : "half";
   const member = (side: "left" | "right"): ReactNode => (
     <SideSplitMember
       member={side === "left" ? item.left : item.right}
@@ -116,6 +132,7 @@ export function SideSplitItem(
       partner={memberTab(side === "left" ? item.right : item.left)}
       side={side}
       focused={focusedSide === side}
+      shape={shapeOf(side)}
       splitId={item.id}
       stripIndex={stripIndex}
       memberIndex={
@@ -145,10 +162,20 @@ export function SideSplitItem(
   const pairFrame: SideRowFrame = {
     ref: setPairNode,
     role: "group",
-    "aria-label": "Split tab group",
+    "aria-label": `Split view: ${leftLabel} and ${rightLabel}`,
     "data-active": props.isActive ? "true" : "false",
     ...joinedAttribute(joined),
   };
+  const quickActionsTab = memberTab(item.left) ?? memberTab(item.right);
+  const expanded = props.variant === "expanded";
+  const needsYou = [
+    { row: leftSection, title: leftLabel },
+    { row: rightSection, title: rightLabel },
+  ].flatMap((half) =>
+    half.row?.section === "needs-you"
+      ? [{ row: half.row, title: half.title }]
+      : [],
+  );
   return (
     <m.div
       ref={setFrameRef}
@@ -161,31 +188,90 @@ export function SideSplitItem(
       data-strip-lane={props.lane ?? undefined}
       className="relative flex flex-col"
     >
-      <SideSplitRowPair
+      <SideSplitRow
         frame={pairFrame}
         variant={props.variant}
         testId={`split-tab-group-${item.id}`}
-        // Each half's agents sit right under that half and inside the pair's
-        // fill, so the pair and its agents stay one drag and join unit (D9).
-        first={
-          <>
-            {member("left")}
-            <StripAgentGroup group={leftGroup} />
-          </>
+        icon={
+          quickActionsTab === null ? (
+            <SideSplitIcon
+              splitId={item.id}
+              focusedSide={item.focusedSide}
+              engaged={props.isActive}
+            />
+          ) : (
+            <SplitQuickActions
+              splitId={item.id}
+              tab={quickActionsTab}
+              focusedSide={item.focusedSide}
+              engaged={props.isActive}
+              placement={expanded ? "side-row" : "rail"}
+              onSplitCommand={props.handlers.onSplitCommand}
+            />
+          )
         }
-        second={
-          <>
-            {member("right")}
-            <StripAgentGroup group={rightGroup} />
-          </>
+        left={member("left")}
+        right={member("right")}
+        detail={
+          expanded && needsYou.length > 0 ? (
+            <PairNeedsYouDetail
+              halves={needsYou}
+              className={SIDE_SPLIT_DETAIL_INSET_CLASS}
+            />
+          ) : null
         }
       />
+      {expanded ? (
+        <>
+          <StripAgentGroup
+            group={leftGroup}
+            caption={
+              <SplitHalfCaption
+                splitId={item.id}
+                side="left"
+                title={leftLabel}
+              />
+            }
+          />
+          <StripAgentGroup
+            group={rightGroup}
+            caption={
+              <SplitHalfCaption
+                splitId={item.id}
+                side="right"
+                title={rightLabel}
+              />
+            }
+          />
+        </>
+      ) : null}
     </m.div>
   );
 }
 
 function memberTab(member: HeaderStripMember): HeaderTab | null {
   return member.kind === "tab" ? member.tab : null;
+}
+
+/** Whose agents follow: a 12px split icon with that half's pane filled, then its title. */
+function SplitHalfCaption(props: {
+  readonly splitId: string;
+  readonly side: "left" | "right";
+  readonly title: string;
+}): ReactNode {
+  return (
+    <span
+      data-testid={`split-half-caption-${props.side}`}
+      className={SIDE_SPLIT_CAPTION_CLASS}
+    >
+      <SplitFocusIcon
+        splitId={`${props.splitId}-${props.side}`}
+        focusedSide={props.side}
+        size="size-3"
+      />
+      <span className="min-w-0 flex-1 truncate">{props.title}</span>
+    </span>
+  );
 }
 
 interface SideSplitMemberProps {
@@ -198,6 +284,7 @@ interface SideSplitMemberProps {
   readonly partner: HeaderTab | null;
   readonly side: "left" | "right";
   readonly focused: boolean;
+  readonly shape: SideTabRowShape;
   readonly splitId: string;
   readonly stripIndex: number;
   readonly memberIndex: number;
@@ -242,6 +329,7 @@ function SideSplitTabMember(
       rootRef={rootRef}
       input={input}
       variant={props.variant}
+      shape={props.shape}
       inBlock={props.inBlock}
       dropIndicator={props.dropIndicator}
       joined={null}
@@ -252,8 +340,10 @@ function SideSplitTabMember(
 }
 
 /**
- * An empty half of a split: a muted row titled for what it offers, whose click
- * focuses that side so the content area can offer its choices.
+ * An empty half of a split: "Choose a view" in a dashed outline, or
+ * "Unavailable" in the error tone for a half whose tab is gone. Its click
+ * focuses that side so the content area can offer its choices, and its menu is
+ * the slot's own.
  */
 function SideFillableMember(
   props: SideSplitMemberProps & {
@@ -264,16 +354,14 @@ function SideFillableMember(
   const focusSide = useCallback(() => {
     tabCommandCoordinator.focusSplitSide({ splitId, side });
   }, [side, splitId]);
-  const label = splitSlotLabel(props.slot);
+  const unavailable = props.slot.kind === "unavailable";
+  const label = unavailable ? props.slot.label : "Choose a view";
   const icon = <Plus className="size-4" />;
   const frame: SideRowFrame = {
     role: "tab",
     tabIndex: 0,
     "aria-selected": props.focused,
-    "aria-label":
-      props.slot.kind === "unavailable"
-        ? label
-        : "Choose a view for this split side",
+    "aria-label": unavailable ? label : "Choose a view for this split side",
     "data-testid": `split-tab-placeholder-${side}`,
     onClick: focusSide,
     onFocus: focusSide,
@@ -282,17 +370,26 @@ function SideFillableMember(
       event.preventDefault();
       focusSide();
     },
-    className: "cursor-pointer italic [-webkit-app-region:no-drag]",
+    className: cn(
+      "cursor-pointer [-webkit-app-region:no-drag]",
+      unavailable
+        ? "text-destructive hover:text-destructive"
+        : cn(
+            "italic",
+            props.variant === "expanded" && SIDE_SPLIT_HALF_EMPTY_CLASS,
+          ),
+    ),
   };
   const row = (
     <SideTabRow
       frame={frame}
       variant={props.variant}
+      shape={props.shape}
       active={props.focused}
       session={null}
       tint={null}
       inBlock={props.inBlock}
-      titleIcon={<Plus className="size-3.5 me-1.5" />}
+      titleIcon={unavailable ? null : <Plus className="size-3.5 me-1" />}
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}

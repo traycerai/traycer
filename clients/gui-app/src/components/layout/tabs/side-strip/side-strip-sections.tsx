@@ -336,7 +336,7 @@ function StripPromptRow(props: {
         >
           {displayTitle(entry.item.taskTitle, "epic")}
         </span>
-        {sectionStyleOf(entry.row).detail}
+        {sectionStyleOf(entry.row, false).detail}
       </span>
       <span
         className={cn(

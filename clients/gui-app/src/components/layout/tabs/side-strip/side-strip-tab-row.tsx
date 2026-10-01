@@ -29,7 +29,12 @@ import {
   stripTaskRowId,
   type StripTaskGroup,
 } from "./strip-task-group";
-import { SideTabRow, type SideTabRowVariant } from "./side-tab-row";
+import {
+  SideTabRow,
+  type SideTabRowShape,
+  type SideTabRowVariant,
+} from "./side-tab-row";
+import { SidePairPreview } from "./side-pair-preview";
 import { SideTabHoverCardBody } from "./side-tab-hover-card";
 import { joinedAttribute, type SheetJoin } from "./side-tab-join";
 import { sideTabTileOf, sideTabTitleIconOf } from "../tab-identity";
@@ -44,6 +49,8 @@ export function SideStripTabRow(props: {
   readonly rootRef: (node: HTMLDivElement | null) => void;
   readonly input: StripTabItemInput;
   readonly variant: SideTabRowVariant;
+  /** A row of its own, or a half of a split pair's row. */
+  readonly shape: SideTabRowShape;
   /** The row sits in its group's block or column, which carries the group's colour. */
   readonly inBlock: boolean;
   readonly dropIndicator: DropIndicator;
@@ -67,7 +74,8 @@ export function SideStripTabRow(props: {
   const badge = railBadgeOf(item.indicatorState);
   const groupDisclosure = props.group?.disclosure ?? null;
   const row = props.section;
-  const section = row === null ? null : sectionStyleOf(row);
+  const half = props.shape !== "row";
+  const section = row === null ? null : sectionStyleOf(row, half);
   const status = taskStatusOf({
     row,
     tabId: tab.id,
@@ -76,6 +84,7 @@ export function SideStripTabRow(props: {
     activityStatus,
     titleGenerating,
     meterHidden: groupDisclosure?.expanded === true,
+    half,
   });
   // The rail's tile falls back on the status glyph for a title with no letter.
   const leading = (
@@ -115,6 +124,7 @@ export function SideStripTabRow(props: {
             className: "cursor-pointer [-webkit-app-region:no-drag]",
           }}
           variant={props.variant}
+          shape={props.shape}
           active={isActive}
           session={sessionOf(tab, isActive)}
           tint={item.appearance?.color ?? null}
@@ -191,7 +201,11 @@ export function SideStripTabRow(props: {
             onClose: item.close,
           }}
           dropIndicator={props.dropIndicator}
-          pairPreview={pairPreview}
+          pairPreview={
+            pairPreview === null ? null : (
+              <SidePairPreview side={pairPreview} title={item.displayName} />
+            )
+          }
           dragSource={item.isDragging}
         />
       </div>

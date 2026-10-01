@@ -1,15 +1,23 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { VERTICAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 import { resolveMinimapRailMaskClassName } from "@/components/minimap/minimap-rail-mask";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { cn } from "@/lib/utils";
 import {
   flattenStripItemRefs,
+  tabItemId,
   tabRefKey,
   type StripItem,
 } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import type { HeaderTab } from "@/stores/tabs/types";
+import {
+  armHeaderStripCommitHandoff,
+  seedHeaderStripItemFrom,
+} from "../header-strip-commit-handoff";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "../header-strip-geometry";
 import type { TabStripController } from "../tab-strip-controller";
 import {
@@ -22,6 +30,7 @@ import type { SideStripHandlers } from "./side-strip-item-input";
 import { blockDropEdge, rowDropSide, stripDropLine } from "../strip-drop-line";
 import { SideStripItem } from "./side-strip-item";
 import { SideStripSections } from "./side-strip-sections";
+import { stripArrowTarget } from "./strip-arrow-keys";
 import { useSectionedStrip } from "./strip-agents-mode";
 import {
   SIDE_STRIP_LIST_CLASS,
@@ -146,6 +155,9 @@ export function SideStripRowList(props: {
       data-testid={HEADER_STRIP_SCROLL_TEST_ID}
       data-strip-axis="y"
       data-strip-edge={edge}
+      // Out of the Tab order: focus lands on its tabs, and the arrows move it.
+      tabIndex={-1}
+      onKeyDown={moveFocusByArrow}
       className={cn(
         SIDE_STRIP_LIST_CLASS[variant],
         "no-scrollbar min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-y-contain [-webkit-app-region:no-drag]",
@@ -208,6 +220,47 @@ export function SideStripRowList(props: {
   );
 }
 
+/**
+ * An arrow key on a tab moves focus to the next tab it names (Up and Down
+ * through the list, Left and Right between a pair's halves); it activates
+ * nothing. A key on something inside a tab (its rename input, its close) is
+ * that control's, and a keyboard drag owns the arrows while it lasts.
+ */
+function moveFocusByArrow(event: KeyboardEvent<HTMLDivElement>): void {
+  const { target } = event;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.getAttribute("role") !== "tab") return;
+  if (useEpicDndStore.getState().activeHeaderTab !== null) return;
+  const next = stripArrowTarget(event.currentTarget, target, event.key);
+  if (next === null) return;
+  event.preventDefault();
+  next.focus();
+}
+
+/**
+ * Before a split command on `tab`'s pair, let the strip's row motion carry
+ * what it changes: a row that takes the pair's place (a separated half, the
+ * partner of a closed one) starts where the pair is drawn, so separating opens
+ * the pair into its rows, and the rows after it move with the commit's
+ * re-base. Reduced motion settles at once, as the displacement does.
+ */
+function prepareSplitMotion(tab: HeaderTab): void {
+  const pair = useTabsStore
+    .getState()
+    .items.find(
+      (item) =>
+        item.kind === "split" &&
+        flattenStripItemRefs(item).some(
+          (ref) => tabRefKey(ref) === tabRefKey(tab),
+        ),
+    );
+  if (pair === undefined) return;
+  armHeaderStripCommitHandoff();
+  for (const ref of flattenStripItemRefs(pair)) {
+    seedHeaderStripItemFrom(tabItemId(ref), pair.id, VERTICAL_STRIP_AXIS);
+  }
+}
+
 /** The controller's handler fields, held stable across unrelated renders. */
 function useSideStripHandlers(
   controller: TabStripController,
@@ -233,7 +286,10 @@ function useSideStripHandlers(
       onDuplicateTab,
       onOpenInNewWindow,
       canOpenInNewWindow,
-      onSplitCommand,
+      onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => {
+        prepareSplitMotion(tab);
+        onSplitCommand(id, tab);
+      },
       taskPinnedStates,
       pendingSetPinnedEpicIds,
       onSetTaskPinned,

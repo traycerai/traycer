@@ -52,13 +52,19 @@ const NO_FOCUS = {
  */
 export function StripAgentGroup(props: {
   readonly group: StripTaskGroup | null;
+  /**
+   * Under a split pair, which half these agents are: its caption, first in the
+   * group. `null` under a task's own row.
+   */
+  readonly caption: ReactNode | null;
 }): ReactNode {
   if (props.group === null) return null;
-  return <StripAgentGroupBody group={props.group} />;
+  return <StripAgentGroupBody group={props.group} caption={props.caption} />;
 }
 
 function StripAgentGroupBody(props: {
   readonly group: StripTaskGroup;
+  readonly caption: ReactNode | null;
 }): ReactNode {
   const { group } = props;
   const [showAll, setShowAll] = useState(false);
@@ -83,6 +89,7 @@ function StripAgentGroupBody(props: {
       ref={group.epicId === null ? part : undefined}
       className={STRIP_AGENT_GROUP_CLASS}
     >
+      {props.caption}
       {shown.map((row) => (
         <div key={row.agent.id} className={fade}>
           <GroupRow group={group} row={row} onNeedsYou={activate} />

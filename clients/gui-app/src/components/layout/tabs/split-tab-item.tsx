@@ -3,12 +3,7 @@ import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-q
 import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import * as m from "motion/react-m";
-import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   getHeaderStripItemSlotDropId,
@@ -17,7 +12,8 @@ import {
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { useStripItemDisplacement } from "./use-strip-item-displacement";
 import { cn } from "@/lib/utils";
-import { SplitTabLayout, SplitFocusIcon } from "./split-tab-chrome";
+import { SplitTabLayout } from "./split-tab-chrome";
+import { SplitQuickActions } from "./split-quick-actions";
 import { SplitFillableMemberVisual } from "./header-tab-visual";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type {
@@ -38,12 +34,8 @@ import {
 import {
   useHeaderTabDisplacementTransition,
   splitFillableMemberClassName,
-  SPLIT_TAB_CONTROL_CLASS,
 } from "@/components/layout/tabs/tab-chrome-tokens";
-import {
-  SplitQuickActionsMenuContent,
-  SplitSlotMenuContent,
-} from "@/components/layout/tabs/tab-strip-context-menu";
+import { SplitSlotMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
 
 export interface SplitTabItemProps {
   readonly item: Extract<HeaderStripItem, { readonly kind: "split" }>;
@@ -176,6 +168,7 @@ export const SplitTabItem = memo(function SplitTabItem(
               tab={quickActionsTab}
               focusedSide={props.item.focusedSide}
               engaged={props.isActive}
+              placement="top-bar"
               onSplitCommand={props.onSplitCommand}
             />
           )
@@ -240,41 +233,6 @@ export const SplitTabItem = memo(function SplitTabItem(
     </m.div>
   );
 });
-
-function SplitQuickActions(props: {
-  readonly splitId: string;
-  readonly tab: HeaderTab;
-  readonly focusedSide: "left" | "right";
-  readonly engaged: boolean;
-  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-}): ReactNode {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant={props.engaged ? "info-ghost" : "muted"}
-          aria-label={`Split view actions, ${props.focusedSide} view focused`}
-          data-testid={`split-quick-actions-${props.splitId}`}
-          className={cn(
-            SPLIT_TAB_CONTROL_CLASS,
-            "[-webkit-app-region:no-drag]",
-          )}
-        >
-          <SplitFocusIcon
-            splitId={props.splitId}
-            focusedSide={props.focusedSide}
-          />
-        </Button>
-      </DropdownMenuTrigger>
-      <SplitQuickActionsMenuContent
-        tab={props.tab}
-        onSplitCommand={props.onSplitCommand}
-      />
-    </DropdownMenu>
-  );
-}
 
 function memberTab(member: HeaderStripMember): HeaderTab | null {
   return member.kind === "tab" ? member.tab : null;

@@ -9,7 +9,6 @@ import type {
 } from "react";
 import { ChevronRight, X } from "lucide-react";
 import * as m from "motion/react-m";
-import type { MergeSide } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { Button } from "@/components/ui/button";
 import { DropLine } from "@/components/ui/drop-line";
 import { HoverCard } from "@/components/ui/hover-card";
@@ -24,6 +23,10 @@ import { SideTabRailBadge } from "./side-tab-rail-badge";
 import type { RailBadgeKind } from "./rail-badge-kind";
 import {
   SIDE_TAB_ACCENT_BAR_CLASS,
+  SIDE_SPLIT_HALF_CLASS,
+  SIDE_SPLIT_HALF_FOCUSED_CLASS,
+  SIDE_SPLIT_HALF_REST_CLASS,
+  SIDE_SPLIT_PREVIEW_TILE_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_DROP_LINE_SEAT_CLASS,
   SIDE_TAB_HOVER_CLASS,
@@ -40,6 +43,13 @@ import {
   SIDE_TAB_TRAILING_CLASS,
 } from "./side-strip-tokens";
 export type SideTabRowVariant = "expanded" | "collapsed";
+
+/**
+ * What an expanded tab draws as: a row of its own, or one half of a split
+ * pair's row. A half of the current pair that is not the focused one is on
+ * screen too, so it reads in bright text.
+ */
+export type SideTabRowShape = "row" | "half" | "on-screen-half";
 
 /**
  * A task's disclosure: the chevron button that joins the trailing edge, before
@@ -104,6 +114,8 @@ export interface SideTabRowProps {
    */
   readonly frame: SideRowFrame;
   readonly variant: SideTabRowVariant;
+  /** Expanded: a row, or a half of a split pair's row; the rail draws a tile either way. */
+  readonly shape: SideTabRowShape;
   readonly active: boolean;
   /** Set only on the sample-workspace tab: its session state (L-163). */
   readonly session: "active" | "rest" | null;
@@ -150,8 +162,12 @@ export interface SideTabRowProps {
   readonly leaderBadge: ReactNode | null;
   readonly close: SideTabRowClose | null;
   readonly dropIndicator: "before" | "after" | null;
-  /** `"left"` highlights the top half, `"right"` the bottom half. */
-  readonly pairPreview: MergeSide | null;
+  /**
+   * While a drop over this tab would split with it: what the row draws in place
+   * of its own content, the pair it will become (`SidePairPreview`). The rail's
+   * tile is outlined instead.
+   */
+  readonly pairPreview: ReactNode | null;
   readonly dragSource: boolean;
 }
 
@@ -226,15 +242,29 @@ export function SideTabRow(props: SideTabRowProps) {
   const { ref: titleRef, isTruncated } = useIsTextTruncated<HTMLSpanElement>(
     typeof props.title === "string" ? props.title : "",
   );
+  // A half's card opens past its whole row, never over the other half.
+  const [reach, setReach] = useState(NO_REACH);
+  const measureReach = (node: HTMLElement): void => {
+    if (props.shape !== "row") setReach(pairRowReach(node));
+  };
   return (
     <SideTabRowHoverCard
       allowed={
         hoverCardAllowed(props) && (!props.hoverCardOnOverflow || isTruncated)
       }
       body={props.hoverCardBody}
+      reach={reach}
     >
       <div
         {...frame}
+        onPointerEnter={(event) => {
+          frame.onPointerEnter?.(event);
+          measureReach(event.currentTarget);
+        }}
+        onFocus={(event) => {
+          frame.onFocus?.(event);
+          measureReach(event.currentTarget);
+        }}
         data-side-tab={props.variant}
         data-active={props.active}
         data-tile-kind={collapsed ? props.tile.kind : undefined}
@@ -247,10 +277,8 @@ export function SideTabRow(props: SideTabRowProps) {
           "group/side-tab relative flex items-center outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50",
           collapsed
             ? cn(SIDE_TAB_TILE_CLASS, "shrink-0 justify-center self-center")
-            : cn(SIDE_TAB_ROW_CLASS, sectionRowHeight(props.section)),
-          collapsed
-            ? collapsedFill(props)
-            : expandedFill(props.active, sessionActive, props.section),
+            : expandedBox(props.shape, props.section),
+          collapsed ? collapsedFill(props) : expandedFill(props, sessionActive),
           props.dragSource && "opacity-0",
           frame.className,
         )}
@@ -272,13 +300,14 @@ export function SideTabRow(props: SideTabRowProps) {
             <CornerBadge badge={props.badge} />
           </>
         ) : (
-          <ExpandedContent {...props} titleRef={titleRef} />
+          (props.pairPreview ?? (
+            <ExpandedContent {...props} titleRef={titleRef} />
+          ))
         )}
         <SideTabDropIndicator
           side={props.dropIndicator}
           variant={props.variant}
         />
-        <SideTabPairPreview side={props.pairPreview} />
       </div>
     </SideTabRowHoverCard>
   );
@@ -325,44 +354,45 @@ function SideTabDropIndicator(props: {
   );
 }
 
-function SideTabPairPreview(props: {
-  readonly side: SideTabRowProps["pairPreview"];
-}) {
-  if (props.side === null) return null;
-  return (
-    <span
-      aria-hidden
-      data-testid="side-tab-pair-preview"
-      data-side={props.side}
-      className={cn(
-        "pointer-events-none absolute inset-x-1 z-30 rounded-sm bg-primary/20 ring-2 ring-primary",
-        props.side === "left" ? "top-1 bottom-1/2" : "top-1/2 bottom-1",
-      )}
-    />
+/** An expanded tab's box: a 32px row (52px with a second line), or a split half. */
+function expandedBox(
+  shape: SideTabRowShape,
+  section: SideRowSection | null,
+): string {
+  if (shape !== "row") return SIDE_SPLIT_HALF_CLASS;
+  return cn(
+    SIDE_TAB_ROW_CLASS,
+    section?.detail !== null &&
+      section?.detail !== undefined &&
+      SIDE_TAB_TWO_LINE_ROW_CLASS,
   );
 }
 
-function sectionRowHeight(section: SideRowSection | null): string | undefined {
-  if (section === null || section.detail === null) return undefined;
-  return SIDE_TAB_TWO_LINE_ROW_CLASS;
-}
-
-function expandedFill(
-  active: boolean,
-  sessionActive: boolean,
-  section: SideRowSection | null,
-): string {
+/**
+ * An expanded tab's fill and tone. A row: the active fill, else a hover fill.
+ * A half: the focused half of the current pair is raised as a selected tab;
+ * every other half keeps its faint fill, which is what parts the two titles,
+ * and the current pair's other half reads bright since it is on screen. A loud
+ * or working row reads at full strength; only idle, and every row of the
+ * Layered view, is muted until it is hovered.
+ */
+function expandedFill(props: SideTabRowProps, sessionActive: boolean): string {
   if (sessionActive) {
     return cn(SIDE_TAB_SESSION_ACTIVE_CLASS, SESSION_TAB_LABEL_CLASS);
   }
-  if (active) return cn(SIDE_TAB_ACTIVE_CLASS, "text-foreground");
-  // A loud or working row reads at full strength; only idle, and every row of
-  // the Layered view, is muted until it is hovered.
+  const half = props.shape !== "row";
+  if (props.active) {
+    return cn(
+      half ? SIDE_SPLIT_HALF_FOCUSED_CLASS : SIDE_TAB_ACTIVE_CLASS,
+      "text-foreground",
+    );
+  }
+  const quiet =
+    props.shape !== "on-screen-half" &&
+    (props.section === null || props.section.title === "muted");
   return cn(
-    SIDE_TAB_HOVER_CLASS,
-    section === null || section.title === "muted"
-      ? "text-muted-foreground hover:text-foreground"
-      : "text-foreground",
+    half ? SIDE_SPLIT_HALF_REST_CLASS : SIDE_TAB_HOVER_CLASS,
+    quiet ? "text-muted-foreground hover:text-foreground" : "text-foreground",
   );
 }
 
@@ -370,15 +400,22 @@ function expandedFill(
  * The collapsed tile fills like an expanded row: the active fill, else a hover
  * fill, and an idle task's tile in the Activity view dims to half until it is
  * hovered or focused, so its focus ring is never faint. The colour lives on the
- * monogram chip inside it.
+ * monogram chip inside it. A tile a drop would split with is outlined in info
+ * blue: the rail has no room to draw the pair it would become.
  */
 function collapsedFill(props: SideTabRowProps): string {
   if (props.session === "active") {
     return cn(SIDE_TAB_SESSION_ACTIVE_CLASS, SESSION_TAB_LABEL_CLASS);
   }
-  if (props.active) return SIDE_TAB_TILE_ACTIVE_CLASS;
+  if (props.active) {
+    return cn(
+      SIDE_TAB_TILE_ACTIVE_CLASS,
+      props.pairPreview !== null && SIDE_SPLIT_PREVIEW_TILE_CLASS,
+    );
+  }
   return cn(
     SIDE_TAB_TILE_HOVER_CLASS,
+    props.pairPreview !== null && SIDE_SPLIT_PREVIEW_TILE_CLASS,
     "text-muted-foreground hover:text-foreground",
     props.section?.title === "muted" &&
       "opacity-50 hover:opacity-100 focus-visible:opacity-100",
@@ -527,7 +564,10 @@ function ExpandedContent(
             <span
               ref={titleRef}
               className={cn(
-                "header-tab-title-text",
+                // A half is too short for the row's fade: it ends in an ellipsis.
+                props.shape === "row"
+                  ? "header-tab-title-text"
+                  : "block truncate",
                 props.tile.kind === "generating" && "text-muted-foreground",
               )}
             >
@@ -655,6 +695,26 @@ function TrailingContent(props: {
   );
 }
 
+/** How far a split half sits inside its pair's row, from each side. */
+interface RowReach {
+  readonly left: number;
+  readonly right: number;
+}
+
+const NO_REACH: RowReach = { left: 0, right: 0 };
+
+/** The distance from a split half to its pair row's edges; none for a row of its own. */
+function pairRowReach(half: HTMLElement): RowReach {
+  const row = half.closest("[data-side-split-pair]");
+  if (row === null) return NO_REACH;
+  const halfBox = half.getBoundingClientRect();
+  const rowBox = row.getBoundingClientRect();
+  return {
+    left: halfBox.left - rowBox.left,
+    right: rowBox.right - halfBox.right,
+  };
+}
+
 /**
  * The row's or tile's hover card, on the side facing the content: left of a
  * right-edge strip, right of a left-edge strip. Always mounted, so switching
@@ -665,18 +725,20 @@ function TrailingContent(props: {
 function SideTabRowHoverCard(props: {
   readonly allowed: boolean;
   readonly body: ReactNode;
+  readonly reach: RowReach;
   readonly children: ReactElement;
 }) {
   const placement = useColumnOverlayPlacement("row");
+  const side = placement?.side ?? "right";
   return (
     <HoverCard
       trigger={props.children}
       content={props.body}
       appearance="preview"
       semantics={{ role: "tooltip" }}
-      side={placement?.side ?? "right"}
+      side={side}
       align={placement?.align ?? "center"}
-      sideOffset={4}
+      sideOffset={4 + (side === "left" ? props.reach.left : props.reach.right)}
       enabled={props.allowed}
       open={null}
       onOpenChange={null}

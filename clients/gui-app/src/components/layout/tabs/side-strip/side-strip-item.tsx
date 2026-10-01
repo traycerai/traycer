@@ -99,13 +99,14 @@ function SideTabItem(
         rootRef={bindRow}
         input={input}
         variant={props.variant}
+        shape="row"
         inBlock={props.inBlock}
         dropIndicator={props.dropIndicator}
         joined={joined}
         group={group}
         section={section}
       />
-      <StripAgentGroup group={group} />
+      <StripAgentGroup group={group} caption={null} />
     </m.div>
   );
 }

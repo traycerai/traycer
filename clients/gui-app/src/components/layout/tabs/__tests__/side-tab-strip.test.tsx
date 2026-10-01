@@ -909,11 +909,13 @@ describe("<SideTabStrip />", () => {
     ).toBe("expanded");
   });
 
-  it("renders a split as one joined pair, left member first, with no quick actions", async () => {
+  it("renders a split as one row named for its halves, left half first, the split icon its actions button", async () => {
     openSplitPair("left");
     await renderStrip("/elsewhere", LEFT_STRIP);
 
-    const pair = screen.getByTestId("split-tab-group-split-a");
+    const pair = screen.getByRole("group", {
+      name: "Split view: Alpha and Beta",
+    });
     expect(pair.getAttribute("data-side-split-pair")).toBe("expanded");
     const members = within(pair).getAllByRole("tab");
     expect(members.map((node) => node.getAttribute("data-testid"))).toEqual([
@@ -929,7 +931,12 @@ describe("<SideTabStrip />", () => {
         .closest("[data-strip-item-id]")
         ?.getAttribute("data-strip-item-mergeable"),
     ).toBe("false");
-    expect(screen.queryByTestId("split-quick-actions-split-a")).toBeNull();
+    // The top bar's own control: one icon, one behaviour, in both strips.
+    expect(
+      within(pair).getByRole("button", {
+        name: "Split view actions, left view focused",
+      }),
+    ).toBe(screen.getByTestId("split-quick-actions-split-a"));
   });
 
   it("leaves Enter and Space on a row's close button to the button, never activating the row", async () => {
@@ -1505,7 +1512,7 @@ describe("<SideTabStrip />", () => {
       });
     });
 
-    it("nests each busy half of a split pair right under its own row, inside the pair's fill and either side of the seam", async () => {
+    it("lists each busy half's agents under the pair, the left half's first, each under a caption naming its half", async () => {
       openSplitPair("left");
       warmEpic("e-alpha", [chatProjection("s-left", { title: "Left agent" })]);
       warmEpic("e-beta", [chatProjection("s-right", { title: "Right agent" })]);
@@ -1524,21 +1531,30 @@ describe("<SideTabStrip />", () => {
       const pair = screen.getByTestId("split-tab-group-split-a");
       const leftRow = within(pair).getByTestId("tab-epic-e-alpha");
       const rightRow = within(pair).getByTestId("tab-epic-e-beta");
-      const seam = within(pair).getByTestId("side-split-row-pair-seam");
-      const leftAgent = within(pair).getByTestId("strip-agent-s-left");
-      const rightAgent = within(pair).getByTestId("strip-agent-s-right");
-      expect(
-        leftAgent.closest('[role="group"]')?.getAttribute("aria-labelledby"),
-      ).toBe(leftRow.id);
-      expect(
-        rightAgent.closest('[role="group"]')?.getAttribute("aria-labelledby"),
-      ).toBe(rightRow.id);
+      const leftAgent = screen.getByTestId("strip-agent-s-left");
+      const rightAgent = screen.getByTestId("strip-agent-s-right");
+      const leftGroup = leftAgent.closest<HTMLElement>('[role="group"]');
+      const rightGroup = rightAgent.closest<HTMLElement>('[role="group"]');
+      if (leftGroup === null || rightGroup === null)
+        throw new Error("no group");
+      expect(leftGroup.getAttribute("aria-labelledby")).toBe(leftRow.id);
+      expect(rightGroup.getAttribute("aria-labelledby")).toBe(rightRow.id);
+      const leftCaption = within(leftGroup).getByTestId(
+        "split-half-caption-left",
+      );
+      const rightCaption = within(rightGroup).getByTestId(
+        "split-half-caption-right",
+      );
+      expect(leftCaption.textContent).toBe("Alpha");
+      expect(rightCaption.textContent).toBe("Beta");
+      // Under the pair's row, not inside it: the row stays one line of two halves.
+      expect(pair.contains(leftAgent)).toBe(false);
       const follows = (a: HTMLElement, b: HTMLElement): boolean =>
         (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-      expect(follows(leftRow, leftAgent)).toBe(true);
-      expect(follows(leftAgent, seam)).toBe(true);
-      expect(follows(seam, rightRow)).toBe(true);
-      expect(follows(rightRow, rightAgent)).toBe(true);
+      expect(follows(rightRow, leftCaption)).toBe(true);
+      expect(follows(leftCaption, leftAgent)).toBe(true);
+      expect(follows(leftAgent, rightCaption)).toBe(true);
+      expect(follows(rightCaption, rightAgent)).toBe(true);
     });
   });
 

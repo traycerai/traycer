@@ -47,6 +47,53 @@ export function NeedsYouDetail(props: {
   );
 }
 
+/** A half of a split pair that needs the person, and its task's title. */
+export interface PairNeedsYouHalf {
+  readonly row: NeedsYouRow;
+  readonly title: string;
+}
+
+/**
+ * A split pair's second line: "Approve · task · agent" for the half that has
+ * waited longest (the left one on a tie), ending in "· +1 more" when the other
+ * half needs the person too. `null` when neither does.
+ */
+export function PairNeedsYouDetail(props: {
+  readonly halves: ReadonlyArray<PairNeedsYouHalf>;
+  readonly className: string;
+}): ReactNode {
+  const first = props.halves.reduce<PairNeedsYouHalf | null>(
+    (oldest, half) =>
+      oldest === null || waitedLonger(half.row, oldest.row) ? half : oldest,
+    null,
+  );
+  if (first === null) return null;
+  const { row } = first;
+  const words = [
+    NEEDS_YOU_VERB[row.reason],
+    first.title,
+    ...(row.agentTitle === null ? [] : [displayTitle(row.agentTitle, "agent")]),
+  ];
+  return (
+    <span
+      data-testid="side-tab-section-detail"
+      className={cn(DETAIL_CLASS, "text-warning-foreground", props.className)}
+    >
+      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warning" />
+      <span className={DETAIL_TEXT_CLASS}>{words.join(" · ")}</span>
+      {props.halves.length > 1 ? (
+        <span className="shrink-0">· +1 more</span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Whether `a` has waited longer than `b`; a request with no time loaded has waited least. */
+function waitedLonger(a: NeedsYouRow, b: NeedsYouRow): boolean {
+  if (a.createdAt === null) return false;
+  return b.createdAt === null || a.createdAt < b.createdAt;
+}
+
 /** A green check and "Done · ready to review", or a red cross and "Failed". */
 export function ToReviewDetail(props: {
   readonly row: ToReviewRow;

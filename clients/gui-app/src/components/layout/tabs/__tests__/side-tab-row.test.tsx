@@ -16,14 +16,10 @@ import {
   type SideTabRowProps,
   type SideTabRowStatus,
 } from "../side-strip/side-tab-row";
-import { SideSplitRowPair } from "../side-strip/side-split-row-pair";
 import type { SideTabLiveAgents } from "../side-strip/agent-meter";
 import { NO_LIVE_AGENTS } from "../side-strip/side-tab-live-agents";
 import type { AgentActivityCoverage } from "@/lib/agent-activity";
 import {
-  SIDE_SPLIT_PAIR_CLASS,
-  SIDE_SPLIT_PAIR_COLLAPSED_HAIRLINE_CLASS,
-  SIDE_SPLIT_PAIR_EXPANDED_HAIRLINE_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_ROW_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
@@ -84,6 +80,7 @@ function baseProps(): SideTabRowProps {
   return {
     frame: rowFrame({}),
     variant: "expanded",
+    shape: "row",
     active: false,
     session: null,
     tint: null,
@@ -627,28 +624,9 @@ describe("SideTabRow drag states", () => {
     );
   });
 
-  it.each([
-    ["left", "top-1 bottom-1/2"],
-    ["right", "top-1/2 bottom-1"],
-  ] as const)("highlights the %s pair-preview half", (side, halfClasses) => {
-    const row = renderRow({ pairPreview: side });
-    const preview = row.querySelector<HTMLElement>(
-      '[data-testid="side-tab-pair-preview"]',
-    );
-    expect(preview?.dataset.side).toBe(side);
-    expect(preview !== null && hasClasses(preview, halfClasses)).toBe(true);
-    expect(
-      preview !== null &&
-        hasClasses(preview, "bg-primary/20 ring-2 ring-primary"),
-    ).toBe(true);
-  });
-
-  it("draws neither when idle", () => {
+  it("draws no drop line when idle", () => {
     const row = renderRow({});
     expect(row.querySelector('[data-testid="tab-drop-indicator"]')).toBeNull();
-    expect(
-      row.querySelector('[data-testid="side-tab-pair-preview"]'),
-    ).toBeNull();
   });
 
   it("hides the drag source's paint without removing it", () => {
@@ -692,56 +670,4 @@ describe("SideTabRow frame", () => {
     expect(onKeyDown).toHaveBeenCalledTimes(1);
     expect(onPointerDown).toHaveBeenCalledTimes(1);
   });
-});
-
-describe("SideSplitRowPair", () => {
-  it.each(["expanded", "collapsed"] as const)(
-    "joins two %s members in the rail capsule's container",
-    (variant) => {
-      const ref = createRef<HTMLDivElement>();
-      const frame: Frame = {
-        ref,
-        "data-strip-item-id": "split:s1",
-        "data-strip-item-mergeable": "false",
-      };
-      render(
-        <SideSplitRowPair
-          frame={frame}
-          variant={variant}
-          testId="split-tab-group-s1"
-          first={<div data-testid="member-top" />}
-          second={<div data-testid="member-bottom" />}
-        />,
-      );
-      const pair = screen.getByTestId("split-tab-group-s1");
-      expect(pair).toBe(ref.current);
-      expect(pair.dataset.sideSplitPair).toBe(variant);
-      expect(pair.dataset.stripItemMergeable).toBe("false");
-      expect(hasClasses(pair, SIDE_SPLIT_PAIR_CLASS)).toBe(true);
-      expect(hasClasses(pair, "rounded-xl p-0.5 flex-col")).toBe(true);
-      const ids = Array.from(pair.children).map((child) =>
-        child.getAttribute("data-testid"),
-      );
-      expect(ids).toEqual([
-        "member-top",
-        "side-split-row-pair-seam",
-        "member-bottom",
-      ]);
-      const hairline = screen.getByTestId(
-        "side-split-row-pair-seam",
-      ).firstElementChild;
-      expect(
-        hairline !== null && hasClasses(hairline, "h-px bg-border/60"),
-      ).toBe(true);
-      expect(
-        hairline !== null &&
-          hasClasses(
-            hairline,
-            variant === "expanded"
-              ? SIDE_SPLIT_PAIR_EXPANDED_HAIRLINE_CLASS
-              : SIDE_SPLIT_PAIR_COLLAPSED_HAIRLINE_CLASS,
-          ),
-      ).toBe(true);
-    },
-  );
 });

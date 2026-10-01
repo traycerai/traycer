@@ -210,7 +210,16 @@ export function pairLayoutRefs(
     routeBackingSide: "right",
     leftRatio: validRatio(args.leftRatio) ? args.leftRatio : DEFAULT_LEFT_RATIO,
   };
-  const insertionIndex = Math.min(leftIndex, rightIndex);
+  // A pair made on a destination (a drop on a tab) takes that tab's place;
+  // otherwise it takes the earlier of the two.
+  let placeIndex = Math.min(leftIndex, rightIndex);
+  let otherIndex = Math.max(leftIndex, rightIndex);
+  if (args.targetRef !== undefined) {
+    const onLeft = refsEqual(args.targetRef, args.left);
+    placeIndex = onLeft ? leftIndex : rightIndex;
+    otherIndex = onLeft ? rightIndex : leftIndex;
+  }
+  const insertionIndex = placeIndex - (otherIndex < placeIndex ? 1 : 0);
   const retained = layout.items.filter(
     (item) =>
       item !== layout.items[leftIndex] && item !== layout.items[rightIndex],

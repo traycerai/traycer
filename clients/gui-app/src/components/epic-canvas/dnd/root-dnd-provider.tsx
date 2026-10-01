@@ -89,6 +89,7 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   flattenStripItemRefs,
+  tabItemId,
   type SplitStripItem,
   type StripItem,
 } from "@/stores/tabs/layout";
@@ -163,6 +164,7 @@ import { appLogger } from "@/lib/logger";
 import {
   armHeaderStripCommitHandoff,
   disarmHeaderStripCommitHandoff,
+  seedHeaderStripItemFrom,
 } from "@/components/layout/tabs/header-strip-commit-handoff";
 import {
   armTileStripCommitHandoff,
@@ -1219,6 +1221,14 @@ function commitHeaderStripPair(
     (tab) => tab.kind === sourceRef.kind && tab.id === sourceRef.id,
   );
   if (sourceTab === undefined) return;
+  const splitId = `split:${uuidv4()}`;
+  // The pair takes its target's place, starting where the target is drawn, and
+  // the rows around it settle from where they are, as a reorder's do.
+  const session = activeHeaderStripSession;
+  armHeaderStripCommitHandoff();
+  if (session !== null) {
+    seedHeaderStripItemFrom(splitId, tabItemId(target.targetRef), session.axis);
+  }
   activatePreparedPairTabIntent(
     navigate,
     {
@@ -1226,7 +1236,7 @@ function commitHeaderStripPair(
       right: side === "left" ? target.targetRef : sourceRef,
       focusedRef: sourceRef,
       targetRef: target.targetRef,
-      splitId: `split:${uuidv4()}`,
+      splitId,
       leftRatio: 0.5,
     },
     tabResolveIntent(sourceTab),

@@ -29,8 +29,14 @@ import type { SideTabLiveAgents } from "./agent-meter";
 import { NO_LIVE_AGENTS, useSideTabLiveAgents } from "./side-tab-live-agents";
 import { railBadgeOf } from "./rail-badge-kind";
 import { sideTabTileOf, sideTabTitleIconOf } from "../tab-identity";
-import { SideSplitRowPair } from "./side-split-row-pair";
-import { SideTabRow, type SideTabRowVariant } from "./side-tab-row";
+import { cn } from "@/lib/utils";
+import { SideSplitIcon, SideSplitRow } from "./side-split-row";
+import { SIDE_SPLIT_HALF_EMPTY_CLASS } from "./side-strip-tokens";
+import {
+  SideTabRow,
+  type SideTabRowShape,
+  type SideTabRowVariant,
+} from "./side-tab-row";
 import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import { sectionStyleOf, taskStatusOf } from "./strip-section-row";
 import { stripTaskRowOf, type StripTaskRow } from "./strip-sections";
@@ -91,8 +97,10 @@ export function SideTabDragOverlay(props: {
           tab={single}
           ghost={props.ghost}
           variant={variant}
+          shape="row"
           active={props.isActive}
-          join={tornMember === null}
+          // Faded out over a split preview, it does not join the sheet either.
+          join={tornMember === null && !mergeTargeted}
         />
       ) : null}
       {single === null && item.kind === "split" ? (
@@ -124,27 +132,39 @@ function OverlaySplitPair(props: {
     null,
     edgeMember?.kind === "tab" ? edgeMember.tab : null,
   );
+  const shapeOf = (side: "left" | "right"): SideTabRowShape =>
+    props.isActive && focusedSide !== side ? "on-screen-half" : "half";
   return (
-    <SideSplitRowPair
+    <SideSplitRow
       frame={joinedAttribute(joined)}
       variant={props.variant}
       testId={`split-tab-group-overlay-${item.id}`}
-      first={
+      icon={
+        <SideSplitIcon
+          splitId={`${item.id}-overlay`}
+          focusedSide={item.focusedSide}
+          engaged={props.isActive}
+        />
+      }
+      left={
         <OverlayMember
           member={item.left}
           ghost={item.left === draggedMember ? props.ghost : null}
           focused={focusedSide === "left"}
+          shape={shapeOf("left")}
           variant={props.variant}
         />
       }
-      second={
+      right={
         <OverlayMember
           member={item.right}
           ghost={item.right === draggedMember ? props.ghost : null}
           focused={focusedSide === "right"}
+          shape={shapeOf("right")}
           variant={props.variant}
         />
       }
+      detail={null}
     />
   );
 }
@@ -153,6 +173,7 @@ function OverlayMember(props: {
   readonly member: HeaderStripMember;
   readonly ghost: HeaderTabDragGhost | null;
   readonly focused: boolean;
+  readonly shape: SideTabRowShape;
   readonly variant: SideTabRowVariant;
 }): ReactNode {
   const { member } = props;
@@ -162,17 +183,27 @@ function OverlayMember(props: {
         tab={member.tab}
         ghost={props.ghost}
         variant={props.variant}
+        shape={props.shape}
         active={props.focused}
         join={false}
       />
     );
   }
-  const label = splitSlotLabel(member.slot);
+  const unavailable = member.slot.kind === "unavailable";
+  const label = unavailable ? splitSlotLabel(member.slot) : "Choose a view";
   const icon = <Plus className="size-4" />;
   return (
     <SideTabRow
-      frame={{ className: "italic" }}
+      frame={{
+        className: unavailable
+          ? "text-destructive"
+          : cn(
+              "italic",
+              props.variant === "expanded" && SIDE_SPLIT_HALF_EMPTY_CLASS,
+            ),
+      }}
       variant={props.variant}
+      shape={props.shape}
       active={props.focused}
       session={null}
       tint={null}
@@ -225,10 +256,12 @@ function OverlayTabRow(props: {
   readonly tab: HeaderTab;
   readonly ghost: HeaderTabDragGhost | null;
   readonly variant: SideTabRowVariant;
+  readonly shape: SideTabRowShape;
   readonly active: boolean;
   readonly join: boolean;
 }): ReactNode {
   const { tab, ghost } = props;
+  const half = props.shape !== "row";
   const joined = useSideTabJoin(props.active && props.join, null, tab);
   const epicId = tab.kind === "epic" ? tab.epicId : null;
   const { resolvedTabName, displayName } = useHeaderTabTitle(tab);
@@ -256,6 +289,7 @@ function OverlayTabRow(props: {
     <SideTabRow
       frame={joinedAttribute(joined)}
       variant={props.variant}
+      shape={props.shape}
       active={props.active}
       session={null}
       tint={appearance?.color ?? null}
@@ -277,8 +311,9 @@ function OverlayTabRow(props: {
         activityStatus,
         titleGenerating,
         meterHidden: false,
+        half,
       })}
-      section={row === null ? null : sectionStyleOf(row)}
+      section={row === null ? null : sectionStyleOf(row, half)}
       disclosure={null}
       title={displayName}
       hoverCardBody={displayName}

@@ -118,20 +118,28 @@ export function contentDirectionOf(edge: StripEdge): ContentDirection {
  * The end edge is tested first, so a member longer than the strip keeps its
  * end edge in view. The scroller's `scroll-padding` counts as covered: a strip
  * with a sticky header or an edge fade keeps the member clear of it, and one
- * with no scroll-padding reveals exactly to the edge.
+ * with no scroll-padding reveals exactly to the edge. `displacement` is how far
+ * the member is drawn from its place along the axis (a commit settling it),
+ * which is taken off: what is revealed is where the member will be, not a
+ * frame of its way there.
  */
 export function revealMemberAlongAxis(
   scroller: HTMLElement,
   member: HTMLElement,
   axis: StripAxis,
+  displacement: number,
 ): void {
   const memberBox = member.getBoundingClientRect();
   const viewBox = scroller.getBoundingClientRect();
   const padding = axis.scrollPadding(getComputedStyle(scroller));
   const pastEnd =
-    axis.mainEnd(memberBox) - (axis.mainEnd(viewBox) - padding.end);
+    axis.mainEnd(memberBox) -
+    displacement -
+    (axis.mainEnd(viewBox) - padding.end);
   const pastStart =
-    axis.mainStart(viewBox) + padding.start - axis.mainStart(memberBox);
+    axis.mainStart(viewBox) +
+    padding.start -
+    (axis.mainStart(memberBox) - displacement);
   if (pastEnd > 0) axis.scrollBy(scroller, pastEnd);
   else if (pastStart > 0) axis.scrollBy(scroller, -pastStart);
 }
