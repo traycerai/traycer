@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isOutcomeSettled,
+  profileCopyEntryEligible,
   profileCopyDraftPollActivity,
   profileCopyIncomingPollActivity,
   profileCopyOperationRows,
@@ -13,6 +14,7 @@ import {
   PROFILE_COPY_STATES,
   type ProfileCopyPreviewRecord,
 } from "@/lib/profile-copy/profile-copy-model";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
   profileCopyFeasibilitySchema,
   profileCopyOutcomeSchema,
@@ -73,6 +75,25 @@ describe("isOutcomeSettled", () => {
       expect(isOutcomeSettled(profileCopyOutcome({ state }))).toBe(true);
       expect(isOutcomeSettled(recordedOutcome({ state }))).toBe(true);
     }
+  });
+});
+
+describe("profileCopyEntryEligible", () => {
+  const V1_PROVIDERS: readonly ProviderId[] = [
+    "claude-code",
+    "codex",
+    "grok",
+    "antigravity",
+  ];
+
+  it("offers Copy on every profile of each v1 provider, the Terminal account included", () => {
+    for (const providerId of V1_PROVIDERS) {
+      expect(profileCopyEntryEligible(providerId)).toBe(true);
+    }
+  });
+
+  it("offers nothing for a provider outside the four", () => {
+    expect(profileCopyEntryEligible("cursor")).toBe(false);
   });
 });
 

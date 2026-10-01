@@ -8,10 +8,7 @@ import {
   type ProfileCopyAttempt,
   type ProfileCopyOutcome,
 } from "@traycer/protocol/host/profile-copy-schemas";
-import type {
-  ProviderId,
-  ProviderProfile,
-} from "@traycer/protocol/host/provider-schemas";
+import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 
 /**
@@ -131,17 +128,14 @@ export function profileCopyGuiProvider(
 }
 
 /**
- * Whether the Copy action belongs on this profile at all: a MANAGED profile of
- * one of the four providers. The ambient Terminal account is never copied.
- * Whether any device can actually receive it is the preview's answer.
+ * Whether the Copy action belongs on a profile of this provider at all: one
+ * of the four providers, every profile kind included. The Terminal account
+ * copies like a managed profile - nothing from the CLI's own home is
+ * exported, so a destination signs in itself. Whether any device can
+ * actually receive it is the preview's answer.
  */
-export function profileCopyEntryEligible(
-  providerId: ProviderId,
-  profile: Pick<ProviderProfile, "kind">,
-): boolean {
-  return (
-    profile.kind === "managed" && profileCopyWireProvider(providerId) !== null
-  );
+export function profileCopyEntryEligible(providerId: ProviderId): boolean {
+  return profileCopyWireProvider(providerId) !== null;
 }
 
 /** A destination recorded this outcome (it reserved a target profile id). */

@@ -14,6 +14,7 @@ import {
   profileCopyReasonSchema,
   profileCopyRevisionRequestSchema,
   profileCopyRevisionSchema,
+  profileCopySourceSchema,
 } from "../profile-copy-schemas";
 import {
   PROFILE_COPY_RPC_METHODS,
@@ -187,6 +188,55 @@ describe("profile-copy protocol contracts", () => {
     expect(
       profileCopyPayloadSchema.safeParse(payload(DEFAULT_API_KEY)).success,
     ).toBe(true);
+  });
+
+  it("accepts the Terminal account's literal id as a source and nothing else that is not a uuid", () => {
+    const ambient = { ...source, sourceProfileId: "ambient" };
+    expect(profileCopySourceSchema.safeParse(ambient).success).toBe(true);
+    expect(
+      profileCopyPreviewRequestSchema.safeParse({
+        ...ambient,
+        destinationHostIds: [DESTINATION_HOST],
+      }).success,
+    ).toBe(true);
+
+    for (const sourceProfileId of [
+      "Ambient",
+      "AMBIENT",
+      "ambient ",
+      "",
+      "../../.codex",
+      "/Users/attacker/.codex",
+    ]) {
+      expect(
+        profileCopySourceSchema.safeParse({ ...source, sourceProfileId })
+          .success,
+      ).toBe(false);
+      expect(
+        profileCopyPreviewRequestSchema.safeParse({
+          ...source,
+          sourceProfileId,
+          destinationHostIds: [DESTINATION_HOST],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps every id a copy mints a uuid even when the source is the Terminal account", () => {
+    expect(
+      hostProfileCopyPreflightRequestSchema.safeParse({
+        attempt: { ...attempt, sourceProfileId: "ambient" },
+        selection: { providerId: "antigravity", authMethod: "gemini-api-key" },
+        sourceIdentity: identityEvidence,
+      }).success,
+    ).toBe(true);
+    expect(
+      hostProfileCopyPreflightRequestSchema.safeParse({
+        attempt: { ...attempt, attemptId: "ambient" },
+        selection: { providerId: "antigravity", authMethod: "gemini-api-key" },
+        sourceIdentity: identityEvidence,
+      }).success,
+    ).toBe(false);
   });
 
   it("bounds destinations and rejects duplicates or the source as a destination", () => {

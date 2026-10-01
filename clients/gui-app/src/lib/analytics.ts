@@ -727,6 +727,8 @@ export interface AnalyticsEventProperties {
   /** Enum-only: no label, host id, operation id, account id or email. */
   readonly [AnalyticsEvent.ProfileCopyStarted]: {
     readonly provider: AnalyticsProvider;
+    /** Whether the source was a managed profile or the Terminal account. */
+    readonly source_kind: "managed" | "ambient";
     readonly destination_count: number;
   };
   /** One per attempt per window, when it settles. Wire enums only. */

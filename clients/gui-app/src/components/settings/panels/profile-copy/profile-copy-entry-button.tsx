@@ -41,7 +41,7 @@ export function ProfileCopyEntryButton(props: {
   readonly profile: ProviderProfile;
 }): ReactNode {
   if (props.hostId === null) return null;
-  if (!profileCopyEntryEligible(props.providerId, props.profile)) return null;
+  if (!profileCopyEntryEligible(props.providerId)) return null;
   return (
     <ProfileCopyEntryButtonForHost
       sourceHostId={props.hostId}
@@ -67,8 +67,14 @@ function ProfileCopyEntryButtonForHost(props: {
     (host) => host.hostId !== sourceHostId,
   );
 
+  const ambient = profile.kind === "ambient";
   let disabledReason: string | null = null;
-  if (supported === null) {
+  if (ambient && profile.auth.status !== "authenticated") {
+    // The source reads the Terminal account's registry row, which exists
+    // only once it has been seen signed in; a signed-out one has nothing to
+    // copy and would only ever answer "source missing".
+    disabledReason = `Sign in to the Terminal account on ${sourceName} first.`;
+  } else if (supported === null) {
     disabledReason = `Checking what ${sourceName} supports…`;
   } else if (!supported) {
     disabledReason = `Update Traycer on ${sourceName} to copy profiles.`;
@@ -81,7 +87,9 @@ function ProfileCopyEntryButtonForHost(props: {
     <TooltipWrapper
       label={
         disabledReason ??
-        "Copy this profile's name, color and settings to your other devices."
+        (ambient
+          ? "Copy this account's name and color to your other devices. Each device signs in itself."
+          : "Copy this profile's name, color and settings to your other devices.")
       }
       side="bottom"
       sideOffset={6}

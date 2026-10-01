@@ -268,6 +268,7 @@ export function ProfileCopyNewCopy(props: {
           }
           Analytics.getInstance().track(AnalyticsEvent.ProfileCopyStarted, {
             provider: profileCopyGuiProvider(provider),
+            source_kind: sourceProfileId === "ambient" ? "ambient" : "managed",
             destination_count: routableCount,
           });
           openView({ kind: "operation", operationId });

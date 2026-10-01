@@ -227,23 +227,9 @@ describe("ProfileCopyEntryButton", () => {
     resetStores();
   });
 
-  it("is hidden for the ambient Terminal account and non-v1 providers", () => {
+  it("is hidden for non-v1 providers", () => {
     const queryClient = createAppQueryClient();
     const { rerender } = render(
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <ProfileCopyEntryButton
-            hostId={SOURCE_HOST_ID}
-            providerId="claude-code"
-            profile={ambientProfile()}
-          />
-        </TooltipProvider>
-      </QueryClientProvider>,
-    );
-    expect(
-      screen.queryByRole("button", { name: /Copy to devices/ }),
-    ).toBeNull();
-    rerender(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ProfileCopyEntryButton
@@ -257,6 +243,141 @@ describe("ProfileCopyEntryButton", () => {
     expect(
       screen.queryByRole("button", { name: /Copy to devices/ }),
     ).toBeNull();
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="cursor"
+            profile={ambientProfile()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      screen.queryByRole("button", { name: /Copy to devices/ }),
+    ).toBeNull();
+  });
+
+  it("disables the Terminal account with a sign-in tooltip until it is signed in", () => {
+    const signedIn = ambientProfile();
+    const queryClient = createAppQueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="claude-code"
+            profile={{
+              ...signedIn,
+              auth: { ...signedIn.auth, status: "unauthenticated" },
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    const button = screen.getByRole("button", { name: /Copy to devices/ });
+    expect(button).toHaveProperty("disabled", true);
+    expect(tooltipTextNear(button)).toBe(
+      "Sign in to the Terminal account on Studio Mac first.",
+    );
+
+    // The sign-in reason leads the chain: it holds even while support is
+    // unknown, and a managed profile that is signed out is not subject to it.
+    harness.support = null;
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="claude-code"
+            profile={{
+              ...signedIn,
+              auth: { ...signedIn.auth, status: "unauthenticated" },
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      tooltipTextNear(screen.getByRole("button", { name: /Copy to devices/ })),
+    ).toBe("Sign in to the Terminal account on Studio Mac first.");
+
+    harness.support = true;
+    const managed = managedProfile(SOURCE_PROFILE_ID, "Work");
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="claude-code"
+            profile={{
+              ...managed,
+              auth: { ...managed.auth, status: "unauthenticated" },
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: /Copy to devices/ }),
+    ).toHaveProperty("disabled", false);
+  });
+
+  it("enables the signed-in Terminal account and says each device signs in itself", () => {
+    const queryClient = createAppQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="claude-code"
+            profile={ambientProfile()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    const button = screen.getByRole("button", { name: /Copy to devices/ });
+    expect(button).toHaveProperty("disabled", false);
+    expect(tooltipTextNear(button)).toBe(
+      "Copy this account's name and color to your other devices. Each device signs in itself.",
+    );
+  });
+
+  it("still gates the signed-in Terminal account on support and another device", () => {
+    const queryClient = createAppQueryClient();
+    harness.support = false;
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="claude-code"
+            profile={ambientProfile()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    let button = screen.getByRole("button", { name: /Copy to devices/ });
+    expect(button).toHaveProperty("disabled", true);
+    expect(tooltipTextNear(button)).toMatch(/Update Traycer on Studio Mac/);
+
+    harness.support = true;
+    harness.hosts = [hostOption(SOURCE_HOST_ID, "Studio Mac", true)];
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="claude-code"
+            profile={ambientProfile()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    button = screen.getByRole("button", { name: /Copy to devices/ });
+    expect(button).toHaveProperty("disabled", true);
+    expect(tooltipTextNear(button)).toMatch(/Add another device/);
   });
 
   it("disables with a tooltip while support is unknown, unsupported, or there is no other host", () => {
