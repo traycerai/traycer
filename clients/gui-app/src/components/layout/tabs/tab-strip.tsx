@@ -233,8 +233,10 @@ function TabStripBody() {
             data-strip-edge="top"
             onWheel={handleWheel}
             // `relative` so the selection traveller is placed in the strip's
-            // own scrolling content, scrolled and clipped with the tabs.
-            className="no-scrollbar relative flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
+            // own scrolling content, scrolled and clipped with the tabs. The
+            // clip reaches 3px under the tabs, as far as their colour lines
+            // drop (`TabColorEdgeLine`), with no change to the layout.
+            className="no-scrollbar relative -mb-0.75 flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain pb-0.75 [-webkit-app-region:no-drag]"
           >
             <StripSelectionTraveller ref={travellerRef} />
             {rows.map((row) => {
