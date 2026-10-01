@@ -1,5 +1,5 @@
-import type { ComponentPropsWithRef, ReactNode } from "react";
-import { ChevronsUpDown } from "lucide-react";
+import { useState, type ComponentPropsWithRef, type ReactNode } from "react";
+import { ChevronsUpDown, LogIn } from "lucide-react";
 import type { HostLeaseStatus } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { UserMenu, UserMenuAvatar } from "@/components/auth/user-menu";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
@@ -11,18 +11,28 @@ import { useRegionGhost } from "@/components/layout-editor/use-layout-region";
 import { useBarPlacements, useRegionShown } from "@/lib/layout-overrides";
 import { barClusterRegionsAt } from "@/lib/layout/layout-arrangement";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useAuthSignInMutation } from "@/hooks/auth/use-auth-sign-in-mutation";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SideTabRowVariant } from "./side-tab-row";
+import { NavRowButton } from "./side-strip-nav-rows";
 import {
   SIDE_STRIP_ACCOUNT_ROW_CLASS,
   SIDE_STRIP_FOOT_CLASS,
   SIDE_STRIP_HOST_DOT_CLASS,
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_TAB_HOVER_CLASS,
+  SIDE_TAB_LEADING_CLASS,
 } from "./side-strip-tokens";
 
 /**
@@ -109,7 +119,11 @@ function SideStripAccount(props: {
   const profile = useAuthStore((state) => state.profile);
   const isSignedIn = useAuthStore((state) => state.status === "signed-in");
   if (!isSignedIn || profile === null) {
-    return <SignInButton layout="compact" />;
+    return props.variant === "collapsed" ? (
+      <RailSignIn />
+    ) : (
+      <SignInButton layout="compact" />
+    );
   }
   const avatarUrl = profile.avatarUrl ?? null;
   return (
@@ -127,6 +141,50 @@ function SideStripAccount(props: {
         />
       }
     />
+  );
+}
+
+/**
+ * Signed out in the rail: a nav tile where the strip has its "Sign in" button,
+ * which is wider than the rail. A click starts the sign-in, as the button does,
+ * and opens the strip's sign-in controls beside the rail, so the device code,
+ * the progress and any error show there.
+ */
+function RailSignIn(): ReactNode {
+  const placement = useColumnOverlayPlacement("foot");
+  const [open, setOpen] = useState(false);
+  const signIn = useAuthSignInMutation();
+  const signingIn = useAuthStore((state) => state.status === "signing-in");
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        label={open ? null : "Sign in"}
+        side={placement?.side ?? "right"}
+        sideOffset={6}
+        align={placement?.align}
+      >
+        <PopoverTrigger asChild>
+          <NavRowButton
+            variant="collapsed"
+            active={open}
+            aria-label="Sign in"
+            data-testid="side-strip-sign-in-tile"
+            onClick={() => {
+              if (!signingIn && !signIn.isPending) signIn.mutate();
+            }}
+          >
+            <LogIn className={cn(SIDE_TAB_LEADING_CLASS, "me-0 shrink-0")} />
+          </NavRowButton>
+        </PopoverTrigger>
+      </TooltipWrapper>
+      <PopoverContent
+        side={placement?.side}
+        align={placement?.align ?? "end"}
+        className="w-fit max-w-xs"
+      >
+        <SignInButton layout="popover" />
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -123,6 +123,24 @@ test("wraps a group's run in a 48px column, its tiles 4px inside and on the rail
   expect(column.y + column.height - (host.y + host.height)).toBe(4);
 });
 
+test("signed out, keeps Sign in inside the rail, a 32px nav tile on the rail's axis", async ({
+  page,
+}) => {
+  await openRail(page, RAIL);
+  const strip = await boxOf(page.getByTestId("side-tab-strip"));
+  const allTasks = await boxOf(page.getByTestId("side-strip-all-tasks"));
+  const signIn = await boxOf(page.getByRole("button", { name: "Sign in" }));
+
+  expect(signIn.width).toBe(32);
+  expect(signIn.height).toBe(32);
+  expect(signIn.x).toBeGreaterThanOrEqual(strip.x);
+  expect(signIn.x + signIn.width).toBeLessThanOrEqual(strip.x + strip.width);
+  expect(signIn.x + signIn.width / 2).toBeCloseTo(
+    allTasks.x + allTasks.width / 2,
+    0,
+  );
+});
+
 test("dims an Idle tile to half and leaves every other tile whole, the current task's filled", async ({
   page,
 }) => {

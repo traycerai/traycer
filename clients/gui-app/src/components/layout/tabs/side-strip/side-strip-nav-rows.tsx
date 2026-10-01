@@ -170,7 +170,7 @@ export function SideStripTasksLabel(props: {
 }
 
 /** A nav row's element: the expanded row, or the collapsed 32px tile. */
-function NavRowButton(
+export function NavRowButton(
   props: ComponentPropsWithRef<"button"> & {
     readonly variant: SideTabRowVariant;
     readonly active: boolean;

@@ -9,6 +9,24 @@ import { cn } from "@/lib/utils";
 import { DeviceCodeFallback } from "./device-code-fallback";
 import { useRemainingSeconds } from "./use-remaining-seconds";
 
+/** The panel's card and the inset inside it; unframed, a popover is its card. */
+function frameOf(
+  isHero: boolean,
+  framed: boolean,
+): { readonly card: string | null; readonly inset: string } {
+  if (!framed) return { card: null, inset: "p-1.5" };
+  if (isHero) {
+    return {
+      card: "rounded-lg border border-white/15 bg-white/[0.075] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)]",
+      inset: "p-5",
+    };
+  }
+  return {
+    card: "rounded-lg border border-border bg-card text-card-foreground shadow-sm",
+    inset: "p-4",
+  };
+}
+
 /**
  * Active device-flow progress. The app already auto-opens the pre-filled
  * approval page; this surface leads with a one-click "open approval page"
@@ -20,6 +38,8 @@ import { useRemainingSeconds } from "./use-remaining-seconds";
 export function DeviceCodeProgress(props: {
   readonly progress: DeviceFlowProgress;
   readonly isHero: boolean;
+  /** Its own card; off inside a popover, whose frame it already is. */
+  readonly framed: boolean;
 }) {
   const openVerificationPageMutation = useAuthOpenVerificationPageMutation();
   const signInMutation = useAuthSignInMutation();
@@ -33,17 +53,14 @@ export function DeviceCodeProgress(props: {
     ? "Code expired"
     : `Expires in ${formatClockDuration(remainingSeconds)}`;
 
+  const frame = frameOf(props.isHero, props.framed);
+
   return (
     <div
-      className={cn(
-        "flex w-full flex-col overflow-hidden rounded-lg border text-card-foreground shadow-sm",
-        props.isHero
-          ? "border-white/15 bg-white/[0.075] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)]"
-          : "border-border bg-card",
-      )}
+      className={cn("flex w-full flex-col overflow-hidden", frame.card)}
       data-testid="signin-device-progress"
     >
-      <div className={cn("flex flex-col gap-4", props.isHero ? "p-5" : "p-4")}>
+      <div className={cn("flex flex-col gap-4", frame.inset)}>
         <div className="space-y-1.5 text-center">
           <h2 className="font-heading font-medium tracking-normal">
             Approve in your browser
