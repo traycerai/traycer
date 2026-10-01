@@ -188,11 +188,11 @@ export interface TerminalSessionState {
   /** Ask the host to resize; the host may pick a smaller min(cols/rows). */
   requestResize: (cols: number, rows: number) => string | null;
   /**
-   * Retag attachment intent. A change reopens `terminal.subscribe` (open
-   * frame only; there is no restate client frame). No-op when the value
-   * is unchanged or the store is disposed. A dead session (`lost` /
-   * `exited` / `reaped`) updates the field but does not attach a new
-   * stream — the PTY is no longer addressable.
+   * Retag attachment intent for a lease change. A change reopens
+   * `terminal.subscribe`, which is how a host of any version hears it. No-op
+   * when the value is unchanged or the store is disposed. A dead session
+   * (`lost` / `exited` / `reaped`) updates the field but does not attach a
+   * new stream — the PTY is no longer addressable.
    */
   setViewer: (viewer: TerminalSubscribeViewer) => void;
   /**

@@ -80,10 +80,11 @@ export interface LandingTerminalTileProps {
 /** The tile's props plus the one fact only its wrapper can read. */
 interface LandingTerminalTileBodyProps extends LandingTerminalTileProps {
   /**
-   * The panel is open and its Start Page is the one shown. A collapsed panel
-   * keeps its tiles mounted at full size and a retained page keeps them
-   * mounted hidden, so "mounted" is not "on screen" - and only an on-screen
-   * terminal may size the grid every attached client shares.
+   * This is the active tab of an open panel on the Start Page being shown. A
+   * collapsed panel keeps its tiles mounted at full size, a retained page
+   * keeps them mounted hidden and an inactive tab sits behind the active one,
+   * so "mounted" is not "on screen" - and only an on-screen terminal may size
+   * the grid every attached client shares.
    */
   readonly onScreen: boolean;
 }
@@ -102,10 +103,12 @@ export function LandingTerminalTile(
   // rewrites an inline `&&` into `? … : null`, which is right for children and
   // wrong for a boolean prop.
   const tileVisible = props.active && surfaceVisible;
-  // Deliberately not `tileVisible`: an inactive tab of an OPEN panel occupies
-  // the same box as the active one, so its size is the size this client would
-  // show it at, and keeping it attached is what makes a tab switch instant.
-  const onScreen = props.panelOpen && surfaceVisible;
+  // The active tab of an open panel on the shown page, and nothing else. An
+  // inactive tab shares the active one's box but its engine is not presented,
+  // so it cannot report a size: it would keep counting with whatever it last
+  // had, the 80x24 fallback if it never measured. It stays attached either
+  // way, so a tab switch is still instant.
+  const onScreen = props.panelOpen && tileVisible;
   return (
     <TabHostProvider hostId={props.tab.hostId}>
       <PaneVisibilityContext.Provider value={tileVisible}>

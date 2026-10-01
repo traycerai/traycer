@@ -218,7 +218,10 @@ const collectionQueryOptions = queryOptions<
   staleTime: Infinity,
 });
 
-function TileHarness(props: { readonly panelOpen: boolean }): ReactNode {
+function TileHarness(props: {
+  readonly panelOpen: boolean;
+  readonly active: boolean;
+}): ReactNode {
   const query = useQuery(collectionQueryOptions);
   const mutations = usePlainTerminalMutations({
     authority: {
@@ -248,7 +251,7 @@ function TileHarness(props: { readonly panelOpen: boolean }): ReactNode {
     <LandingTerminalTile
       landingPageId="landing-1"
       tab={TAB}
-      active
+      active={props.active}
       panelOpen={props.panelOpen}
       createEnabled
       authorityEntry={authorityEntry}
@@ -281,11 +284,12 @@ describe("<LandingTerminalTile /> viewer intent", () => {
   function tileTree(args: {
     readonly panelOpen: boolean;
     readonly paneVisible: boolean;
+    readonly active: boolean;
   }): ReactNode {
     return (
       <QueryClientProvider client={queryClient}>
         <PaneVisibilityContext.Provider value={args.paneVisible}>
-          <TileHarness panelOpen={args.panelOpen} />
+          <TileHarness panelOpen={args.panelOpen} active={args.active} />
         </PaneVisibilityContext.Provider>
       </QueryClientProvider>
     );
@@ -301,7 +305,7 @@ describe("<LandingTerminalTile /> viewer intent", () => {
   it("a collapsed panel's terminal opens one stream, as cache", async () => {
     const recorded = installRecordingStreamFactory();
 
-    render(tileTree({ panelOpen: false, paneVisible: true }));
+    render(tileTree({ panelOpen: false, paneVisible: true, active: true }));
     await settleGridMeasure();
 
     const streams = recorded.streams();
@@ -314,14 +318,18 @@ describe("<LandingTerminalTile /> viewer intent", () => {
   it("opening the panel restates presentation on the same stream, without reopening it", async () => {
     const recorded = installRecordingStreamFactory();
 
-    const rendered = render(tileTree({ panelOpen: false, paneVisible: true }));
+    const rendered = render(
+      tileTree({ panelOpen: false, paneVisible: true, active: true }),
+    );
     await settleGridMeasure();
     expect(recorded.streams()).toHaveLength(1);
     const stream = recorded.streams()[0];
     expect(stream.viewer).toBe("cache");
     expect(stream.frames).toEqual([]);
 
-    rendered.rerender(tileTree({ panelOpen: true, paneVisible: true }));
+    rendered.rerender(
+      tileTree({ panelOpen: true, paneVisible: true, active: true }),
+    );
 
     // The same stream: never closed, no second one opened, and the intent
     // went out as a `viewer` frame on it.
@@ -341,7 +349,7 @@ describe("<LandingTerminalTile /> viewer intent", () => {
   it("a hidden Start Page's terminal opens one stream, as cache, even with the panel open", async () => {
     const recorded = installRecordingStreamFactory();
 
-    render(tileTree({ panelOpen: true, paneVisible: false }));
+    render(tileTree({ panelOpen: true, paneVisible: false, active: true }));
     await settleGridMeasure();
 
     const streams = recorded.streams();
@@ -349,5 +357,76 @@ describe("<LandingTerminalTile /> viewer intent", () => {
     expect(streams[0].viewer).toBe("cache");
     expect(streams[0].closeCount).toBe(0);
     expect(streams[0].frames).toEqual([]);
+  });
+
+  it("an inactive tab of an open panel attaches as cache", async () => {
+    const recorded = installRecordingStreamFactory();
+
+    render(tileTree({ panelOpen: true, paneVisible: true, active: false }));
+    await settleGridMeasure();
+
+    const streams = recorded.streams();
+    expect(streams).toHaveLength(1);
+    expect(streams[0].viewer).toBe("cache");
+    expect(streams[0].closeCount).toBe(0);
+    expect(streams[0].frames).toEqual([]);
+  });
+
+  it("activating the tab restates presentation on the same stream", async () => {
+    const recorded = installRecordingStreamFactory();
+
+    const rendered = render(
+      tileTree({ panelOpen: true, paneVisible: true, active: false }),
+    );
+    await settleGridMeasure();
+    expect(recorded.streams()).toHaveLength(1);
+    const stream = recorded.streams()[0];
+    expect(stream.viewer).toBe("cache");
+    expect(stream.frames).toEqual([]);
+
+    rendered.rerender(
+      tileTree({ panelOpen: true, paneVisible: true, active: true }),
+    );
+
+    expect(recorded.streams()).toHaveLength(1);
+    expect(recorded.streams()[0]).toBe(stream);
+    expect(stream.closeCount).toBe(0);
+    expect(stream.frames).toEqual([
+      {
+        kind: "viewer",
+        hasBinaryPayload: false,
+        sessionId: TAB.sessionId,
+        viewer: "presentation",
+      },
+    ]);
+  });
+
+  it("deactivating the tab restates cache on the same stream", async () => {
+    const recorded = installRecordingStreamFactory();
+
+    const rendered = render(
+      tileTree({ panelOpen: true, paneVisible: true, active: true }),
+    );
+    await settleGridMeasure();
+    expect(recorded.streams()).toHaveLength(1);
+    const stream = recorded.streams()[0];
+    expect(stream.viewer).toBe("presentation");
+    expect(stream.frames).toEqual([]);
+
+    rendered.rerender(
+      tileTree({ panelOpen: true, paneVisible: true, active: false }),
+    );
+
+    expect(recorded.streams()).toHaveLength(1);
+    expect(recorded.streams()[0]).toBe(stream);
+    expect(stream.closeCount).toBe(0);
+    expect(stream.frames).toEqual([
+      {
+        kind: "viewer",
+        hasBinaryPayload: false,
+        sessionId: TAB.sessionId,
+        viewer: "cache",
+      },
+    ]);
   });
 });

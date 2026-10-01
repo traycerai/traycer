@@ -11607,7 +11607,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *
  * One manifest per `/stream` WS: `epic.subscribe@1.1`,
  * `chat.subscribe@1.6`, `notifications.subscribe@1.1`,
- * `terminal.subscribe@1.6`, `git.subscribeStatus@1.3`,
+ * `terminal.subscribe@1.7`, `git.subscribeStatus@1.3`,
  * `browser.sessions@1.0`, `browser.screencast@1.0`,
  * `resources.subscribe@1.4`, `agent.inbox.subscribe@1.2`,
  * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`,
