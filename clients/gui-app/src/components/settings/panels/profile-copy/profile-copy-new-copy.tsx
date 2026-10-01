@@ -27,6 +27,10 @@ import {
   presentProfileCopyPreview,
   type ProfileCopyNames,
 } from "@/lib/profile-copy/profile-copy-presentation";
+import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
+  hostOptionStatusWord,
+} from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
@@ -411,8 +415,14 @@ function ProfileCopyDestinationCandidate(props: {
     props.record === null
       ? null
       : presentProfileCopyPreview(props.record, props.names);
+  // The same status word every host picker uses ("offline", "restarting",
+  // "update required"…), so a device the preview will call unreachable is
+  // already marked before the check runs. `available` because this list has
+  // no surface-level refusal: an unusable device is explained by its preview
+  // verdict, not ruled out by the picker.
   const detail = [
     props.host.platform,
+    hostOptionStatusWord(props.host, AVAILABLE_HOST_ROW_SURFACE_STATE),
     props.host.isLocalMachine ? "this device" : null,
   ]
     .filter((part) => part !== null)

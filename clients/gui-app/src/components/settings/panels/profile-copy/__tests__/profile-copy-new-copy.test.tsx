@@ -666,4 +666,45 @@ describe("ProfileCopyNewCopy", () => {
     });
     expect(harness.hostOptionsCalls).toBeGreaterThan(0);
   });
+
+  it("marks a device with the shared status word before any preview runs", () => {
+    const offline = hostOption(DEST_HOST_ID, "Linux box", false);
+    harness.hosts = [
+      hostOption(SOURCE_HOST_ID, "Studio Mac", true),
+      {
+        ...offline,
+        connectable: false,
+        health: {
+          state: "offline",
+          label: "Offline",
+          detail: null,
+          tone: "idle",
+          live: false,
+        },
+      },
+      hostOption(DEST_HOST_TWO_ID, "Old Mac", false),
+    ];
+    const queryClient = createAppQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyFlowHost />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      useProfileCopyFlowStore.getState().open({
+        kind: "new",
+        sourceHostId: SOURCE_HOST_ID,
+        providerId: "claude",
+        sourceProfileId: SOURCE_PROFILE_ID,
+      });
+    });
+    expect(
+      screen.getByRole("checkbox", { name: "Linux boxlinux · offline" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("checkbox", { name: /^Old Maclinux$/ }),
+    ).toBeTruthy();
+  });
 });
