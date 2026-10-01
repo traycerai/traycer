@@ -53,7 +53,11 @@ export function SideStripFoot(props: {
       className={cn(
         SIDE_STRIP_FOOT_CLASS,
         "flex shrink-0 flex-col [-webkit-app-region:no-drag]",
-        collapsed ? "items-center" : "items-stretch",
+        // Expanded, the strip's width is the sign-in panel's `signin`
+        // container: narrow, the panel tightens so the device code keeps one
+        // line. Collapsed, the panel is in a popover sized by its content,
+        // which a container would collapse.
+        collapsed ? "items-center" : "@container/signin items-stretch",
       )}
     >
       <AppUpdateHeaderButton layout={collapsed ? "icon" : "row"} />

@@ -23,7 +23,9 @@ function frameOf(
   }
   return {
     card: "rounded-lg border border-border bg-card text-card-foreground shadow-sm",
-    inset: "p-4",
+    // In a narrow `signin` container (the strip's foot), tighter insets give
+    // the device code room for one line.
+    inset: "p-4 @max-[15rem]/signin:p-3",
   };
 }
 
@@ -82,7 +84,11 @@ export function DeviceCodeProgress(props: {
           data-testid="signin-open-approval"
         >
           Open approval page
-          <SquareArrowOutUpRight className="size-4" aria-hidden="true" />
+          {/* At the strip's narrowest, the label alone fills the button. */}
+          <SquareArrowOutUpRight
+            className="size-4 @max-[13rem]/signin:hidden"
+            aria-hidden="true"
+          />
         </Button>
 
         <div

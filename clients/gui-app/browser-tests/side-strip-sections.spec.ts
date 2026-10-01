@@ -185,6 +185,51 @@ test("signing in, keeps the device code's wait and its expiry apart in the strip
   expect(beside || below).toBe(true);
 });
 
+test("signing in at 192px, keeps the device code on one line, clear of its copy button", async ({
+  page,
+}) => {
+  await openStrip(page);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.evaluate("window.__sideTabStripProbe.setWidth(192)");
+  await nextFrames(page, 3);
+  const code = page.getByTestId("signin-device-code");
+  const copy = await boxOf(
+    page.getByRole("button", { name: "Copy device code" }),
+  );
+  const text = await code.evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const box = range.getBoundingClientRect();
+    return { lines: range.getClientRects().length, right: box.right };
+  });
+
+  expect(await code.textContent()).toBe("ABCDE-FGHIJ");
+  expect(text.lines).toBe(1);
+  expect(text.right).toBeLessThanOrEqual(copy.x);
+});
+
+test("signing in, pads the code panel's foot as much as its head", async ({
+  page,
+}) => {
+  await openStrip(page);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const panel = page.getByTestId("signin-device-fallback-content");
+  const box = await boxOf(panel);
+  const border = await panel.evaluate((node) =>
+    parseFloat(getComputedStyle(node).borderTopWidth),
+  );
+  // From the first label's top, and from the last field's own box: anything
+  // the field holds room for under it is space at the foot.
+  const label = await boxOf(panel.getByText("Device code"));
+  const field = await boxOf(
+    page.getByTestId("signin-device-url").locator(".."),
+  );
+
+  expect(box.y + box.height - (field.y + field.height)).toBe(
+    label.y - box.y - border,
+  );
+});
+
 test("fades a second line at the edge at 192px, as the title does, instead of ending in an ellipsis", async ({
   page,
 }) => {

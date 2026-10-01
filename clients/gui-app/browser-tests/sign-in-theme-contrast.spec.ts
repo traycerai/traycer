@@ -44,9 +44,9 @@ const PHONE = { width: 390, height: 844 };
 const EXEMPT: readonly RegExp[] = [
   // The build stamp in the corner, a deliberately recessive white alpha.
   /^footer span /,
-  // The device-code panel's field caption (white/55) and its "start over"
+  // The device-code panel's field captions (white/55) and its "start over"
   // escape link (white/72), over the panel's translucent fill.
-  /^signin-device-progress span "Approval address"/,
+  /^signin-device-fallback-content span "(Device code|Approval address)"/,
   /^signin-retry-link button /,
   // The manual-entry validation notice: the destructive red over the brighter
   // lower half of the photo backdrop.
