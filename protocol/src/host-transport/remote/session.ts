@@ -4033,6 +4033,12 @@ export class RemoteSession<
       this.clearPhaseTimer();
       this.clearStandingTimer();
       this.reportParkedRefusal(generation);
+      // The report above can retire this session (see `reportParkedRefusal`).
+      // Through `isClosed()`, not `this.phase`: the branch condition narrowed
+      // the phase and the checker cannot see the re-entrant change.
+      if (this.isClosed() || this.connection !== connection) {
+        return;
+      }
       this.failReadyWaitersHostDetached();
       if (this.reauthTimer === null) {
         this.startReauthLoop();
@@ -5145,8 +5151,13 @@ export class RemoteSession<
     if (provision.kind === "ok") {
       connection.relaySocket.sendReauth(provision.grant.grant);
     }
-    // Re-arm regardless: a failed mint retries at the next cadence, still under
-    // the relay's 60-min client-leg deadline (we mint at ~45 min with slack).
+    // Re-arm regardless. A failed mint (`unavailable`) retries at the next
+    // cadence, which lands PAST the relay's 60-min client-leg deadline: the
+    // relay then closes the leg and the ordinary redial recovers it. That is
+    // accepted, for a ready session and a parked one alike: a mint fails when
+    // authn is unreachable, and while authn is unreachable the redial cannot
+    // mint its attach grant either, so there is no attach storm to prevent -
+    // one extra attach per transient mint failure, at most once an hour.
     this.startReauthLoop();
   }
 
@@ -5803,6 +5814,16 @@ export class RemoteSession<
       `${this.evidenceScope}#${generation}-no-host-${this.parkedRefusals}`,
       "refusal",
     );
+    // RE-CHECK AFTER THE EXTERNAL CALLBACK. `reportEvidenceOutcome` hands
+    // control to the selection authority synchronously, and a verdict that
+    // retires this host (this report may be the one that confirms its death)
+    // can close this very session, or redial it, before the call returns.
+    // Teardown has cleared every timer by then; arming one here would hold the
+    // closed session for another interval (see the clock park for the same
+    // hazard and the same remedy).
+    if (!this.isCurrent(generation) || !this.isParkedBeforeReady()) {
+      return;
+    }
     this.clearParkTimer();
     this.parkTimer = setTimeout(() => {
       this.parkTimer = null;

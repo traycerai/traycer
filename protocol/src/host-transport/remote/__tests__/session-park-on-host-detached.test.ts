@@ -458,6 +458,45 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
     }
   });
 
+  it("arms nothing when the authority closes the session from inside the refusal report", async () => {
+    // `reportDialRefusal` hands control to the selection authority
+    // synchronously, and a verdict that retires this host can close this very
+    // session before the call returns - this report may be the one that
+    // confirms the host dead. Teardown has cleared every timer by then; the
+    // park must not arm its cadence or the re-auth loop on the corpse.
+    const relay = new FakeRelay();
+    const spies = buildEvidence();
+    const grants = okGrantProvider();
+    const session = buildSession(relay, spies.evidence, grants);
+    spies.reportDialRefusal.mockImplementationOnce(() => {
+      session.close();
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => {
+        expect(session.isClosed()).toBe(true);
+      });
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
+      expect(relay.sockets).toHaveLength(1);
+      expect(relay.sockets[0]?.closeCalls).toBe(1);
+      // The retention itself: a closed session holds no timer. Without the
+      // re-check the park timer and the re-auth timer are armed AFTER the
+      // teardown cleared everything, and hold the corpse for their interval.
+      expect(vi.getTimerCount()).toBe(0);
+      const mintsAtClose = grants.mock.calls.length;
+
+      // Past the park cadence and the re-auth cadence: no further refusal, no
+      // re-auth mint, no socket - nothing was left running.
+      await vi.advanceTimersByTimeAsync(60 * MINUTE_MS);
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
+      expect(grants.mock.calls.length).toBe(mintsAtClose);
+      expect(relay.sockets).toHaveLength(1);
+      expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();
+    } finally {
+      session.close();
+    }
+  });
+
   it("does not reset or double the cadence when host_detached repeats while parked", async () => {
     const relay = new FakeRelay();
     const spies = buildEvidence();
