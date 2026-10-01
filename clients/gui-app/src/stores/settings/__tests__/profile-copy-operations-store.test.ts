@@ -38,6 +38,7 @@ const HANDLE_FIELDS = [
   "startAcknowledged",
   "cancelConfirmedAt",
   "settled",
+  "settlementReadAt",
 ] as const;
 
 const PREVIEW_RECORD_FIELDS = [
@@ -67,6 +68,7 @@ function handle(
     startAcknowledged: false,
     cancelConfirmedAt: null,
     settled: false,
+    settlementReadAt: 0,
     ...overrides,
   };
 }
@@ -451,6 +453,105 @@ describe("useProfileCopyOperationsStore", () => {
       startAcknowledged: true,
       cancelConfirmedAt: 40,
     });
+  });
+
+  it("persists a settlement this window read, so settled history can fall off after a reload", async () => {
+    useProfileCopyOperationsStore
+      .getState()
+      .record(handle({ operationId: "op-settle-persist", createdAt: 1 }));
+    await flushPersist();
+    useProfileCopyOperationsStore
+      .getState()
+      .markSettled("op-settle-persist", true);
+    await flushPersist();
+    expect(firstObjectEntry(storedHandles())).toMatchObject({
+      operationId: "op-settle-persist",
+      settled: true,
+    });
+  });
+
+  it("does not let an older settled copy overwrite a newer unsettled read and evict an active copy", async () => {
+    const target = "op-stale-settled";
+    const other = (
+      index: number,
+      settled: boolean,
+    ): ProfileCopyOperationHandle =>
+      handle({
+        operationId: `cccccccc-cccc-4ccc-8ccc-${String(index).padStart(12, "0")}`,
+        createdAt: 10 + index,
+        settled,
+        settlementReadAt: 500,
+      });
+    const settledHistory = Array.from(
+      { length: PROFILE_COPY_MAX_HANDLES - 1 },
+      (_, index) => other(index, true),
+    );
+    // Window B last read the copy settled, beside 19 newer settled copies.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          handles: [
+            handle({
+              operationId: target,
+              createdAt: 0,
+              settled: true,
+              settlementReadAt: 1_000,
+            }),
+            ...settledHistory,
+          ],
+        },
+        version: CURRENT_PERSIST_VERSION,
+      }),
+    );
+    vi.resetModules();
+    const windowB =
+      await import("@/stores/settings/profile-copy-operations-store");
+    windowB.useProfileCopyOperationsStore.persist.setOptions({
+      name: PERSIST_KEY,
+    });
+    await windowB.useProfileCopyOperationsStore.persist.rehydrate();
+
+    // Window A then read it unsettled again (a retry) and stored that beside
+    // a newer copy, so it now sits past the cap.
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          handles: [
+            handle({
+              operationId: target,
+              createdAt: 0,
+              settled: false,
+              settlementReadAt: 2_000,
+            }),
+            ...settledHistory,
+            other(PROFILE_COPY_MAX_HANDLES, false),
+          ],
+        },
+        version: CURRENT_PERSIST_VERSION,
+      }),
+    );
+
+    // B writes (an acknowledgement, which re-caps nothing in its memory)
+    // before A's storage event reaches it.
+    windowB.useProfileCopyOperationsStore
+      .getState()
+      .acknowledgeStart(other(0, true).operationId);
+    await flushPersist();
+
+    const stored = storedHandles();
+    const row: unknown = Array.isArray(stored)
+      ? stored.find(
+          (entry: unknown) =>
+            typeof entry === "object" &&
+            entry !== null &&
+            "operationId" in entry &&
+            entry.operationId === target,
+        )
+      : undefined;
+    expect(row).toMatchObject({ operationId: target, settled: false });
+    expect(row).toMatchObject({ settlementReadAt: 2_000 });
   });
 
   it("keeps a handle this window removed from another window's write after a storage event", async () => {

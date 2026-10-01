@@ -11,7 +11,11 @@ import {
 /** The start request a handle records, before the source has answered. */
 export type ProfileCopyStartRecord = Omit<
   ProfileCopyOperationHandle,
-  "createdAt" | "startAcknowledged" | "cancelConfirmedAt" | "settled"
+  | "createdAt"
+  | "startAcknowledged"
+  | "cancelConfirmedAt"
+  | "settled"
+  | "settlementReadAt"
 >;
 
 /**
@@ -26,6 +30,7 @@ export function recordProfileCopyStart(record: ProfileCopyStartRecord): void {
     startAcknowledged: false,
     cancelConfirmedAt: null,
     settled: false,
+    settlementReadAt: 0,
   });
 }
 
@@ -55,6 +60,7 @@ export function openProfileCopySourceOperation(
       startAcknowledged: true,
       cancelConfirmedAt: null,
       settled: false,
+      settlementReadAt: 0,
     });
   }
   useProfileCopyFlowStore

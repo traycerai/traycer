@@ -50,6 +50,7 @@ function sampleHandle(): ProfileCopyOperationHandle {
     startAcknowledged: true,
     cancelConfirmedAt: null,
     settled: false,
+    settlementReadAt: 0,
   };
 }
 

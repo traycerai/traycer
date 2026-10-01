@@ -67,6 +67,12 @@ export interface ProfileCopyOperationHandle {
    * destination draft to reopen it from.
    */
   readonly settled: boolean;
+  /**
+   * When a `status` answer last set `settled` (ms), `0` before any. Two
+   * windows' copies of a handle keep the newer read's flag: a window that
+   * has not yet heard another's write still holds the older one.
+   */
+  readonly settlementReadAt: number;
 }
 
 /**
@@ -152,6 +158,10 @@ function parsePreviewRecord(value: unknown): ProfileCopyPreviewRecord | null {
   };
 }
 
+function parseReadAt(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 /**
  * Persisted state is whatever a previous build (or another window) wrote, so
  * every handle is re-validated field by field; a malformed one is dropped
@@ -196,6 +206,8 @@ function parseHandle(value: unknown): ProfileCopyOperationHandle | null {
       typeof cancelConfirmedAt === "number" ? cancelConfirmedAt : null,
     // Absent on a handle an earlier build wrote: unknown, so kept.
     settled: record.settled === true,
+    // Absent on a handle an earlier build wrote: older than any read.
+    settlementReadAt: parseReadAt(record.settlementReadAt),
   };
 }
 
@@ -212,7 +224,10 @@ function persistedHandles(
 
 /**
  * Two copies of one handle: acknowledgement and cancel are monotonic;
- * `settled` is the writing window's, since it follows the latest read.
+ * `settled` is the newer read's, and unsettled on a tie. The writer's own
+ * copy is not newer just for being written: it may predate a read another
+ * window stored, and a stale `settled: true` there lets the cap evict a copy
+ * that is moving again.
  */
 function mergeHandle(
   left: ProfileCopyOperationHandle,
@@ -225,10 +240,17 @@ function mergeHandle(
       right.cancelConfirmedAt,
     );
   }
+  const settlement =
+    right.settlementReadAt > left.settlementReadAt ||
+    (right.settlementReadAt === left.settlementReadAt && !right.settled)
+      ? right
+      : left;
   return {
     ...left,
     startAcknowledged: left.startAcknowledged || right.startAcknowledged,
     cancelConfirmedAt,
+    settled: settlement.settled,
+    settlementReadAt: settlement.settlementReadAt,
   };
 }
 
@@ -355,7 +377,7 @@ export const useProfileCopyOperationsStore =
           set({
             handles: current.map((handle) =>
               handle.operationId === operationId
-                ? { ...handle, settled }
+                ? { ...handle, settled, settlementReadAt: Date.now() }
                 : handle,
             ),
           });

@@ -124,6 +124,7 @@ function plantHandle(startAcknowledged: boolean): void {
     startAcknowledged,
     cancelConfirmedAt: null,
     settled: false,
+    settlementReadAt: 0,
   });
 }
 
