@@ -4,6 +4,10 @@ import {
   type HostNotificationEntryV22,
   type HostNotificationsCloudFeedRowV11,
 } from "@traycer/protocol/host/notifications/contracts";
+import {
+  useRegisteredEpicLiveAgents,
+  useRegisteredEpicTitles,
+} from "@/lib/epic-selectors";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
 import {
@@ -133,6 +137,28 @@ export function selectNeedsYouItems(
 }
 
 /**
+ * The item named as the app names its task and its chat, where this window
+ * holds them (`liveTask`, `liveAgent`; the chat's `title` is `null` while it is
+ * untitled), else by the names its prompt was filed under. A prompt is filed
+ * with the titles of that moment, so a chat titled after it asked (the usual
+ * case: titles are generated from the first prompt) would otherwise stay
+ * "Untitled agent". An agent's name that only repeats its task's is dropped:
+ * the task already says it.
+ */
+export function withLiveTitles(
+  item: NeedsYouItem,
+  liveTask: string | null,
+  liveAgent: { readonly title: string | null } | null,
+): NeedsYouItem {
+  const taskTitle = liveTask ?? item.taskTitle;
+  const name = liveAgent === null ? item.agentTitle : liveAgent.title;
+  const agentTitle = name === taskTitle ? null : name;
+  return taskTitle === item.taskTitle && agentTitle === item.agentTitle
+    ? item
+    : { ...item, taskTitle, agentTitle };
+}
+
+/**
  * Every prompt waiting on the person, newest first (the merged feed's order).
  * One item per chat and kind: the host keys a prompt row per chat.
  */
@@ -140,7 +166,7 @@ export function useNeedsYouItems(): ReadonlyArray<NeedsYouItem> {
   const rows = useMergedNotificationRows();
   const hostById = useHostNotificationsStore((state) => state.byId);
   const cloudRows = useCloudNotificationsStore((state) => state.rows);
-  return useMemo(
+  const filed = useMemo(
     () =>
       selectNeedsYouItems(rows, (row) => {
         // The cloud store keys its rows by feed id, not the bare entry id.
@@ -152,5 +178,28 @@ export function useNeedsYouItems(): ReadonlyArray<NeedsYouItem> {
           : null;
       }),
     [rows, hostById, cloudRows],
+  );
+  const refs = useMemo(
+    () =>
+      filed.map((item) => ({
+        // No task: no session to look in, so nothing resolves.
+        epicId: needsYouItemEpicId(item) ?? "",
+        agentId: needsYouItemChatId(item),
+      })),
+    [filed],
+  );
+  const epicIds = useMemo(() => refs.map((ref) => ref.epicId), [refs]);
+  const liveTasks = useRegisteredEpicTitles(epicIds);
+  const liveAgents = useRegisteredEpicLiveAgents(refs);
+  return useMemo(
+    () =>
+      filed.map((item, index) =>
+        withLiveTitles(
+          item,
+          liveTasks[index] ?? null,
+          liveAgents[index] ?? null,
+        ),
+      ),
+    [filed, liveTasks, liveAgents],
   );
 }

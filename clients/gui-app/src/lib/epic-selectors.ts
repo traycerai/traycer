@@ -1511,38 +1511,79 @@ export function useRegisteredEpicLiveAgents(
 ): readonly (RegisteredEpicLiveAgent | null)[] {
   const registry = getOpenEpicRegistry();
   const encodedAgents = useSyncExternalStore(
-    (listener) => {
-      const unsubscribeByHandle = new Map<object, () => void>();
-      const reconcileHandleSubscriptions = () => {
-        const currentHandles = new Set<object>();
-        for (const ref of refs) {
-          const handle = registry.peek(ref.epicId);
-          if (handle === null || currentHandles.has(handle)) continue;
-          currentHandles.add(handle);
-          if (!unsubscribeByHandle.has(handle)) {
-            unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
-          }
-        }
-        for (const [handle, unsubscribe] of unsubscribeByHandle) {
-          if (currentHandles.has(handle)) continue;
-          unsubscribe();
-          unsubscribeByHandle.delete(handle);
-        }
-      };
-      reconcileHandleSubscriptions();
-      const unsubscribeRegistry = registry.subscribe(() => {
-        reconcileHandleSubscriptions();
-        listener();
-      });
-      return () => {
-        unsubscribeRegistry();
-        for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
-      };
-    },
+    (listener) =>
+      subscribeRegisteredEpics(
+        registry,
+        refs.map((ref) => ref.epicId),
+        listener,
+      ),
     () => registeredAgentsSnapshot(registry, refs),
     () => JSON.stringify(refs.map(() => null)),
   );
   return useMemo(() => decodeRegisteredAgents(encodedAgents), [encodedAgents]);
+}
+
+/**
+ * Each epic's live title, as `useRegisteredEpicTitle` reads one, for a dynamic
+ * list: `null` for an epic not mounted in this window or still untitled.
+ */
+export function useRegisteredEpicTitles(
+  epicIds: readonly string[],
+): readonly (string | null)[] {
+  const registry = getOpenEpicRegistry();
+  const encodedTitles = useSyncExternalStore(
+    (listener) => subscribeRegisteredEpics(registry, epicIds, listener),
+    () =>
+      JSON.stringify(
+        epicIds.map((epicId) => liveEpicTitleFromHandle(registry.peek(epicId))),
+      ),
+    () => JSON.stringify(epicIds.map(() => null)),
+  );
+  return useMemo(() => {
+    const decoded: unknown = JSON.parse(encodedTitles);
+    return Array.isArray(decoded)
+      ? decoded.map((title: unknown) =>
+          typeof title === "string" ? title : null,
+        )
+      : [];
+  }, [encodedTitles]);
+}
+
+/**
+ * Subscribes `listener` to the registry and to every mounted epic among
+ * `epicIds`, following epics as they mount and unmount.
+ */
+function subscribeRegisteredEpics(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  listener: () => void,
+): () => void {
+  const unsubscribeByHandle = new Map<object, () => void>();
+  const reconcileHandleSubscriptions = () => {
+    const currentHandles = new Set<object>();
+    for (const epicId of epicIds) {
+      const handle = registry.peek(epicId);
+      if (handle === null || currentHandles.has(handle)) continue;
+      currentHandles.add(handle);
+      if (!unsubscribeByHandle.has(handle)) {
+        unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+      }
+    }
+    for (const [handle, unsubscribe] of unsubscribeByHandle) {
+      if (currentHandles.has(handle)) continue;
+      unsubscribe();
+      unsubscribeByHandle.delete(handle);
+    }
+  };
+  reconcileHandleSubscriptions();
+  const unsubscribeRegistry = registry.subscribe(() => {
+    reconcileHandleSubscriptions();
+    listener();
+  });
+  return () => {
+    unsubscribeRegistry();
+    for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
+  };
 }
 
 /**

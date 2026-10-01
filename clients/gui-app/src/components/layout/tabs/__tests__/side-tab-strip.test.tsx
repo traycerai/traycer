@@ -2053,6 +2053,55 @@ describe("<SideTabStrip />", () => {
       expect(screen.getByTestId("tab-epic-e-beta")).toBeTruthy();
     });
 
+    /** A task's second line, or `null` when it has none. */
+    function secondLineOf(epic: string): string | null {
+      return (
+        within(screen.getByTestId(`tab-epic-${epic}`)).queryByTestId(
+          "side-tab-section-detail",
+        )?.textContent ?? null
+      );
+    }
+
+    it("names the waiting agent by its chat's own title, not the name its prompt was filed under", async () => {
+      openSectionedTasks();
+      // The chat was titled after it asked: its prompt still carries the
+      // fallback it was filed with.
+      warmEpic("e-gamma", [
+        chatProjection("c-gamma", { title: "Using Ask Question Tool" }),
+      ]);
+      seedPrompts([
+        {
+          id: "approval-gamma",
+          epicId: "e-gamma",
+          chatId: "c-gamma",
+          agentTitle: "Untitled agent",
+          taskTitle: "Gamma",
+          minutesAgo: 2,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(secondLineOf("e-gamma")).toBe("Approve · Using Ask Question Tool");
+    });
+
+    it("says only what the person is asked when the waiting agent is named as its task is", async () => {
+      openSectionedTasks();
+      warmEpic("e-gamma", [chatProjection("c-gamma", { title: "Gamma" })]);
+      seedPrompts([
+        {
+          id: "approval-gamma",
+          epicId: "e-gamma",
+          chatId: "c-gamma",
+          agentTitle: "Untitled agent",
+          taskTitle: "Gamma",
+          minutesAgo: 2,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(secondLineOf("e-gamma")).toBe("Approve");
+    });
+
     it("draws Needs you and To review as two lines and Working and Idle as one", async () => {
       openSectionedTasks();
       seedPrompts([

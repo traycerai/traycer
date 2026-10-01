@@ -10,6 +10,7 @@ import {
   needsYouReasonOf,
   selectNeedsYouItems,
   useNeedsYouItems,
+  withLiveTitles,
   type NeedsYouReason,
 } from "@/stores/notifications/needs-you-items";
 
@@ -255,5 +256,52 @@ describe("useNeedsYouItems (cloud store wiring)", () => {
 
     expect(result.current).toHaveLength(1);
     expect(result.current[0]?.agentTitle).toBe("Deploy checkout fix");
+  });
+});
+
+describe("withLiveTitles", () => {
+  // Filed as "Untitled agent" under task "Deploy checkout fix" (`buildRow`).
+  const filed = selectNeedsYouItems([buildRow({})], () => "Untitled agent")[0];
+
+  it.each([
+    [
+      "the chat's own title, when this window holds the chat",
+      null,
+      { title: "Using Ask Question Tool" },
+      "Using Ask Question Tool",
+    ],
+    [
+      "no name, when the chat it holds is untitled",
+      null,
+      { title: null },
+      null,
+    ],
+    [
+      "the filed name, when it holds no record of the chat",
+      null,
+      null,
+      "Untitled agent",
+    ],
+    [
+      "no name, when the chat's title only repeats the filed task's",
+      null,
+      { title: "Deploy checkout fix" },
+      null,
+    ],
+    [
+      "no name, when the chat's title only repeats the task's own title",
+      "Checkout",
+      { title: "Checkout" },
+      null,
+    ],
+  ] as const)("names the agent by %s", (_name, task, agent, expected) => {
+    expect(withLiveTitles(filed, task, agent).agentTitle).toBe(expected);
+  });
+
+  it("names the task by its own title where this window holds it, else by the filed one", () => {
+    expect(withLiveTitles(filed, "Checkout", null).taskTitle).toBe("Checkout");
+    expect(withLiveTitles(filed, null, null).taskTitle).toBe(
+      "Deploy checkout fix",
+    );
   });
 });
