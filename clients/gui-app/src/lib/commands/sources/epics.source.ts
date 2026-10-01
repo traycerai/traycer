@@ -36,6 +36,7 @@ import { usePaletteLiveQuery } from "@/lib/commands/palette-query-context";
 import { parseScopePrefix } from "@/lib/commands/scopes";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { usePendingDeleteEpicIds } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import type {
   CommandContext,
   CommandItem,
@@ -75,6 +76,10 @@ function useEpicsItems(_ctx: CommandContext): ReadonlyArray<CommandItem> {
   const history = useHistoryQuery({ search, nowMs: null });
 
   const historyItems = history.data?.items;
+  // A task whose delete is in flight is still in both lists until the host
+  // answers. It is not offered: the palette has no row state to show the
+  // delete in, and opening it would race the delete.
+  const deletingEpicIds = usePendingDeleteEpicIds();
 
   return useMemo<ReadonlyArray<CommandItem>>(() => {
     const rows = historyItems ?? [];
@@ -82,7 +87,7 @@ function useEpicsItems(_ctx: CommandContext): ReadonlyArray<CommandItem> {
     for (const row of rows) {
       if (!rowsByEpicId.has(row.epicId)) rowsByEpicId.set(row.epicId, row);
     }
-    const seen = new Set<string>();
+    const seen = new Set<string>(deletingEpicIds);
     const items: Array<CommandItem> = [];
 
     for (const tab of openTabs) {
@@ -100,7 +105,7 @@ function useEpicsItems(_ctx: CommandContext): ReadonlyArray<CommandItem> {
     }
 
     return items;
-  }, [openTabs, historyItems]);
+  }, [openTabs, historyItems, deletingEpicIds]);
 }
 
 export const epicsSource: ReactCommandSource = {

@@ -298,6 +298,8 @@ function CurrentTaskRow(props: {
           data-history-row-target=""
           aria-label={`Open task ${historyItemDisplayTitle(item)}`}
           aria-describedby={describedBy}
+          // A button, not a link: it has no destination for the browser to
+          // act on, and `disabled` would take it out of keyboard traversal.
           aria-disabled={isDeleting || undefined}
           onClick={() => openItem(item)}
           onAuxClick={onMiddleClick(() => {

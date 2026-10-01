@@ -912,6 +912,83 @@ describe("<CurrentTasksSection />", () => {
       ).toBeNull();
     });
 
+    it("states aria-disabled on its row target only, and clears it once the delete settles", async () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      const held = holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSection();
+
+      // The neighbour is the control.
+      expect(rowButton("a").getAttribute("aria-disabled")).toBe("true");
+      expect(rowButton("b").hasAttribute("aria-disabled")).toBe(false);
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(rowButton("a").hasAttribute("aria-disabled")).toBe(false);
+      });
+    });
+
+    // This row's target is a native `<button>`, not a router `Link`: it has no
+    // destination to take away, and a real `disabled` attribute would make it
+    // unfocusable in a browser (jsdom cannot show that, so the attribute itself
+    // is what is read). It stays in the keyboard's reach and refuses the open.
+    it("does not natively disable its row target, which would take it out of the keyboard's reach", () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSection();
+
+      expect(rowButton("a").hasAttribute("disabled")).toBe(false);
+      expect(rowButton("b").hasAttribute("disabled")).toBe(false);
+    });
+
+    it("opens its organization chip read-only, and a live row's editable, until the delete settles", async () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      const held = holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSectionWithOrganization(
+        organizationView({
+          taskLabels: {
+            "epic-a": { labels: [taskLabel("Urgent")], removed: [] },
+            "epic-b": { labels: [taskLabel("Urgent")], removed: [] },
+          },
+        }),
+      );
+      const chipOf = (id: string): HTMLElement =>
+        within(rowItem(id)).getByRole("button", {
+          name: /^Task organization/,
+        });
+
+      fireEvent.click(chipOf("b"));
+      expect(openOrganizationDialog).toHaveBeenLastCalledWith({
+        kind: "labels",
+        taskId: "epic-b",
+        canEdit: true,
+      });
+
+      fireEvent.click(chipOf("a"));
+      expect(openOrganizationDialog).toHaveBeenLastCalledWith({
+        kind: "labels",
+        taskId: "epic-a",
+        canEdit: false,
+      });
+      expect(openOrganizationDialog).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("epics-list-row-deleting")).toBeNull();
+      });
+      fireEvent.click(chipOf("a"));
+      expect(openOrganizationDialog).toHaveBeenLastCalledWith({
+        kind: "labels",
+        taskId: "epic-a",
+        canEdit: true,
+      });
+    });
+
     it("does not open in a background tab on a middle-click", () => {
       setGroups({ open: [task("a", {}), task("b", {})] });
       holdEpicBatchDelete(queryClient, ["epic-a"]);

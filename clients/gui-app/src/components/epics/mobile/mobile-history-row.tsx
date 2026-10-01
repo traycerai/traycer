@@ -11,7 +11,10 @@ import {
   type ReactNode,
 } from "react";
 import { Link } from "@tanstack/react-router";
-import { historyRowDeletingAttributes } from "@/components/epics/history-row-deleting-attributes";
+import {
+  historyRowDeletingAttributes,
+  historyRowDeletingLinkProps,
+} from "@/components/epics/history-row-deleting-attributes";
 import { HistoryRowDeletingIndicator } from "@/components/epics/history-row-deleting-indicator";
 import { useIsEpicDeleteInFlight } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { Check, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
@@ -134,7 +137,10 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   const isDeleteInFlight = useIsEpicDeleteInFlight(item.epicId);
   const canDelete =
     canDeleteHistoryItem(item, cloudAuthorized) && !isDeleteInFlight;
-  const canRename = canEditHistoryItemTitle(item, cloudAuthorized);
+  // Also what the organization control edits under, so a task being deleted
+  // offers neither.
+  const canRename =
+    canEditHistoryItemTitle(item, cloudAuthorized) && !isDeleteInFlight;
   // `null` for the same reason as the desktop row, and it dispatches through
   // that row's handler: History's local-home readings come from the window's
   // own host, so gate and dispatch name the same machine.
@@ -332,6 +338,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
             linkTabId={linkTabId}
             selectionMode={selectionMode}
             isRenaming={isRenaming}
+            isDeleting={isDeleteInFlight}
             onActivate={handleActivate}
           />
           {/* Text stays inert so row activation has one path. Organization
@@ -519,6 +526,7 @@ function RowActivationOverlay(props: {
   readonly linkTabId: string;
   readonly selectionMode: boolean;
   readonly isRenaming: boolean;
+  readonly isDeleting: boolean;
   readonly onActivate: (event: ReactMouseEvent<HTMLElement>) => void;
 }): ReactNode {
   // An inline rename puts a real text field where the title was; an overlay
@@ -550,6 +558,7 @@ function RowActivationOverlay(props: {
       }}
       onClick={props.onActivate}
       aria-label={`Open task ${props.displayTitle}`}
+      {...historyRowDeletingLinkProps(props.isDeleting)}
       className={overlayClassName}
     />
   );

@@ -209,7 +209,10 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
         {props.organization === null ? null : (
           <OrganizationMetadata
             taskId={props.item.epicId}
-            canEdit={props.organization.canEdit}
+            canEdit={organizationCanEdit(
+              props.organization.canEdit,
+              isDeleting,
+            )}
             fallback={props.item.organization}
           />
         )}
@@ -467,6 +470,11 @@ function historyRowContentClassName(hasSweepControl: boolean): string {
     "max-md:flex-wrap max-md:gap-y-1",
     hasSweepControl && "pr-20",
   );
+}
+
+/** Organization edits go with the row's other actions while it is being deleted. */
+function organizationCanEdit(canEdit: boolean, isDeleting: boolean): boolean {
+  return canEdit && !isDeleting;
 }
 
 /**

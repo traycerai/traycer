@@ -40,6 +40,7 @@ import {
   useIsEpicDeleteInFlight,
   usePendingDeleteEpicIds,
 } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { historyRowDeletingLinkProps } from "@/components/epics/history-row-deleting-attributes";
 import { DELETE_IN_FLIGHT_TOOLTIP } from "@/components/epics/history-row-deleting-indicator";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
@@ -1789,7 +1790,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
             onAuxClick={onMiddleClick(openEpicRowInBackground)}
             onKeyDown={onRowKeyDown}
             aria-label={`Open task ${displayTitle}`}
-            aria-disabled={isDeleteInFlight || undefined}
+            {...historyRowDeletingLinkProps(isDeleteInFlight)}
             data-history-row-target=""
             className={cn(
               "absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
