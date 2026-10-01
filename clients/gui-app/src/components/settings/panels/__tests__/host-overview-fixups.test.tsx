@@ -520,8 +520,16 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
     const view = render(makeUi());
     await selectHostOverviewTab("updates");
 
-    // No click: mounting the page IS the request now. It parks on the gate.
-    await screen.findByText("Checking for updates…");
+    // No click: mounting the page IS the request now. It parks on the gate,
+    // and the one sign of a check running is Check now, on the version list's
+    // heading, disabled while it does (the answer card itself stays quiet).
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("host-overview-update-check")
+          .hasAttribute("disabled"),
+      ).toBe(true);
+    });
     expect(armedHostCalls).toBe(0);
 
     hostBindingMock.current = { hostClient: fixtureB.client };

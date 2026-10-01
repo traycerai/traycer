@@ -46,6 +46,7 @@ import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import {
@@ -360,6 +361,7 @@ function DrawerRowProvenanceLabel(props: {
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isEpicDeleteInFlight = useEpicDeleteInFlightReader();
   const { openHistory } = useSystemTabModalActions();
   // One subscription to the shared 60s clock for the whole list, then the pure
   // formatter per row - rather than a per-row `useRelativeTimestamp`, which
@@ -413,6 +415,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   });
 
   const openItem = (item: HistoryItem) => {
+    // Same refusal as every History list: this drawer lists the same tasks,
+    // and a delete confirmed there is still running while the row is here.
+    if (isEpicDeleteInFlight(item.epicId)) return;
     props.onNavigate();
     // The end of the mobile "your tasks" branch of the first-task guide: it
     // asked the user to pick up where they left off, and this is them doing
