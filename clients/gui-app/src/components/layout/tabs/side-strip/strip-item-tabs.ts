@@ -1,4 +1,5 @@
 import { flattenStripItemRefs, tabRefKey } from "@/stores/tabs/layout";
+import type { TabGroup } from "@/stores/tabs/tab-groups";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabStripController } from "../tab-strip-controller";
 import { stripRowsOf } from "../tab-strip-rows";
@@ -9,11 +10,9 @@ export type StripItemsSource = Pick<
   "headerItemIds" | "layoutItems" | "groups" | "customizations" | "tabs"
 >;
 
-/** The tab group a strip item is in, as a section's block draws it. */
-export interface StripItemGroup {
+/** The tab group a strip item is in, as a section's block draws and edits it. */
+export interface StripItemGroup extends TabGroup {
   readonly id: string;
-  readonly name: string;
-  readonly color: string;
 }
 
 /** One strip item's tabs (two for a split pair) in strip order. */
@@ -51,13 +50,7 @@ export function stripItemTabsOf(
     itemId: row.itemId,
     stripIndex: row.stripIndex,
     group:
-      row.group === null
-        ? null
-        : {
-            id: row.group.groupId,
-            name: row.group.group.name,
-            color: row.group.group.color,
-          },
+      row.group === null ? null : { ...row.group.group, id: row.group.groupId },
     tabs: itemTabs,
   }));
 }

@@ -34,7 +34,7 @@ import {
 } from "@/hooks/organization/organization-context";
 import { OrganizationDot } from "./organization-metadata";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useGroupEditorAnchored } from "@/stores/tabs/group-editor-store";
+import { useGroupEditorTarget } from "@/stores/tabs/group-editor-store";
 
 /** The group a task is in, as the organization view has it. */
 function taskGroupIdOf(
@@ -53,12 +53,12 @@ function taskGroupIdOf(
  */
 function useEditGroupAction(
   groupId: string | null,
-  onEditGroup: ((groupId: string) => void) | null,
+  onEditGroup: ((anchorId: string) => void) | null,
 ): (() => void) | null {
-  const anchored = useGroupEditorAnchored(groupId);
-  return groupId === null || onEditGroup === null || !anchored
+  const anchorId = useGroupEditorTarget(groupId);
+  return anchorId === null || onEditGroup === null
     ? null
-    : () => onEditGroup(groupId);
+    : () => onEditGroup(anchorId);
 }
 
 export function TaskOrganizationMenu(props: {
@@ -66,8 +66,8 @@ export function TaskOrganizationMenu(props: {
   readonly canEdit: boolean;
   readonly title: string | undefined;
   readonly dropdown?: boolean;
-  /** Opens a group's editor, where the menu's host has one to open; else `null`. */
-  readonly onEditGroup: ((groupId: string) => void) | null;
+  /** Opens the editor on an anchor, where the menu's host has one to open; else `null`. */
+  readonly onEditGroup: ((anchorId: string) => void) | null;
 }) {
   const MenuItem = props.dropdown ? DropdownMenuItem : ContextMenuItem;
   const MenuSeparator = props.dropdown

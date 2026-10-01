@@ -209,7 +209,7 @@ export function SideStripRowList(props: {
               color={start.group.color}
               lane={null}
               dropEdge={dropEdge}
-              header={header}
+              header={{ kind: "tile", tile: header }}
             >
               {members}
             </SideTabGroupColumn>

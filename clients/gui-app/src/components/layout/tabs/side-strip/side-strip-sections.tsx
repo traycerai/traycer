@@ -244,7 +244,11 @@ function StripSectionRows(props: {
             color={segment.group.color}
             lane={group.section}
             dropEdge={dropEdge}
-            header={null}
+            header={{
+              kind: "column",
+              group: segment.group,
+              onClose: controller.onCloseGroup,
+            }}
           >
             {members}
           </SideTabGroupColumn>
@@ -259,7 +263,8 @@ function StripSectionRows(props: {
             header={
               <SideTabGroupLabel
                 groupId={segment.group.id}
-                name={segment.group.name}
+                group={segment.group}
+                onClose={controller.onCloseGroup}
               />
             }
           >

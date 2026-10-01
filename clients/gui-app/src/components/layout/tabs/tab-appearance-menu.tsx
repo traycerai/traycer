@@ -27,8 +27,8 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Input } from "@/components/ui/input";
 import {
-  useGroupEditorAnchored,
   useGroupEditorStore,
+  useGroupEditorTarget,
 } from "@/stores/tabs/group-editor-store";
 import { GroupFollowNote } from "./group-follow-note";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -186,8 +186,8 @@ function EpicOrganizationMenu(props: {
           task.epic.light?.createdBy === organization.userId ||
           isEditableRole(task.epic.permission?.role ?? null)
         }
-        onEditGroup={(groupId) =>
-          useGroupEditorStore.getState().request(groupId)
+        onEditGroup={(anchorId) =>
+          useGroupEditorStore.getState().request(anchorId)
         }
       />
     );
@@ -286,7 +286,7 @@ function TabColorSection(props: {
   readonly group: TabGroup | undefined;
 }) {
   const { groupId, group } = props;
-  const editable = useGroupEditorAnchored(groupId);
+  const editorAnchor = useGroupEditorTarget(groupId);
   return (
     <>
       <fieldset disabled={group !== undefined} className="min-w-0">
@@ -301,15 +301,17 @@ function TabColorSection(props: {
       {groupId === null || group === undefined ? null : (
         <>
           <GroupFollowNote name={group.name} />
-          {editable ? (
+          {editorAnchor === null ? null : (
             <ContextMenuItem
               className="mt-1"
-              onSelect={() => useGroupEditorStore.getState().request(groupId)}
+              onSelect={() =>
+                useGroupEditorStore.getState().request(editorAnchor)
+              }
             >
               <Pencil />
               Edit group…
             </ContextMenuItem>
-          ) : null}
+          )}
         </>
       )}
     </>

@@ -128,6 +128,14 @@ const TAB: HeaderTab = {
   canOpenInNewWindow: false,
 };
 
+/** The group of the anchor "Edit group…" asked to open, if it asked. */
+function requestedGroup(): string | null {
+  const { anchors, requestedAnchorId } = useGroupEditorStore.getState();
+  return requestedAnchorId === null
+    ? null
+    : (anchors[requestedAnchorId] ?? null);
+}
+
 /** The menu, beside the "existing" group's chip when it has one to open its editor on. */
 function renderMenu(withGroupChip: boolean): void {
   render(
@@ -223,7 +231,7 @@ function taskContextsResponse(resolutions: {
 describe("tab appearance and grouping controls", () => {
   beforeEach(() => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
-    useGroupEditorStore.setState({ groupId: null, requestedGroupId: null });
+    useGroupEditorStore.setState({ anchorId: null, requestedAnchorId: null });
     useTabsStore.setState({
       items: [
         {
@@ -582,8 +590,8 @@ describe("tab appearance and grouping controls", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Edit group…" }));
 
     // The menu only asks: the strip opens it once the menu has closed.
-    expect(useGroupEditorStore.getState().requestedGroupId).toBe("existing");
-    expect(useGroupEditorStore.getState().groupId).toBeNull();
+    expect(requestedGroup()).toBe("existing");
+    expect(useGroupEditorStore.getState().anchorId).toBeNull();
   });
 
   it("locks an organized task's swatches to its group's colour, keeping its own cloud colour, and offers Edit group", async () => {
@@ -635,7 +643,7 @@ describe("tab appearance and grouping controls", () => {
     ).toBeTruthy();
     expect(screen.getByLabelText("Icon").matches(":disabled")).toBe(false);
     fireEvent.click(screen.getByRole("menuitem", { name: "Edit group…" }));
-    expect(useGroupEditorStore.getState().requestedGroupId).toBe("existing");
+    expect(requestedGroup()).toBe("existing");
     expect(command).not.toHaveBeenCalled();
   });
 
