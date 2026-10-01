@@ -542,6 +542,7 @@ function TuiAgentTileLive(
     instanceId,
     sessionKind: "terminal-agent",
     preparePayload,
+    viewer: "presentation",
     enabled: agent !== null && prepareLaunch.isIdle,
     // `adoptOnly` rather than `enabled: false` for the sleeping arm, for the
     // reason the replica arm uses it: the create must not fire, but an ATTACH

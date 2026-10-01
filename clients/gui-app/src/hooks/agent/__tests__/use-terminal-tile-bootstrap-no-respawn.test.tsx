@@ -102,6 +102,7 @@ function runBootstrap(sessionKind: "terminal" | "terminal-agent") {
         sessionId: "term-1",
         instanceId: "inst-1",
         sessionKind,
+        viewer: "presentation",
         preparePayload: () =>
           Promise.resolve({
             tuiHarnessId: null,
@@ -225,6 +226,7 @@ describe("useTerminalTileBootstrap create gate", () => {
             sessionId: "term-1",
             instanceId: "inst-1",
             sessionKind: "terminal-agent",
+            viewer: "presentation",
             enabled: props.enabled,
             preparePayload: () =>
               Promise.resolve({
