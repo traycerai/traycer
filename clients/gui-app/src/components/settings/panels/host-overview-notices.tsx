@@ -32,7 +32,7 @@ export interface HostOverviewNoticesProps {
   /**
    * The update operation the host reports, or `null` for none. A QUIET view
    * is `null` too: the card is for an operation, and when there is none the
-   * version card on Updates is the whole story (the landing banner hides on
+   * answer card on Updates is the whole story (the landing banner hides on
    * the same predicate).
    */
   readonly operation: ComponentProps<typeof HostOverviewOperationCard> | null;

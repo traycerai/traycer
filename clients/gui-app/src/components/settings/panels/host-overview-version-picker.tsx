@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -31,7 +32,7 @@ export interface VersionPickerProps {
   readonly disabled: boolean;
   /**
    * THIS machine's host was started in a terminal: what the list says in
-   * place of an install, or `null`. The version card's Update now line
+   * place of an install, or `null`. The answer card's Update now line
    * (`hostForegroundUpdateLine`) - an explicit version is still an update the
    * CLI refuses over that run, so every row's install is withheld with it.
    */
@@ -40,16 +41,24 @@ export interface VersionPickerProps {
   /** True before the first check has answered — no list to show yet. */
   readonly awaitingFirstCheck: boolean;
   readonly checking: boolean;
-  /** The same forced check the version card's Check now runs. */
+  /**
+   * The forced check behind Check now: it re-asks the ONE shared query, so
+   * the list and the answer card above it refresh together.
+   */
   readonly onCheck: () => void;
-  /** One failure state shared with the version card's answer. */
+  /** One failure state shared with the answer card. */
   readonly failureDescription: string | null;
 }
 
 /**
  * "Pick a different version" — the list the card body used to hold open, and
  * then Installation's Advanced disclosure held shut. It is the Updates tab's
- * now, shown open, directly under the version card's answer.
+ * now, shown open, under the answer card and the auto-update switch.
+ *
+ * Its heading carries the page's one Check now. The check asks the host for
+ * this very catalog, so the button sits on the list it refreshes; the answer
+ * card above reads the same query and moves with it. Hidden, not disabled,
+ * while an update is in flight (`checkNowShown`), like the answer card.
  *
  * The RC checkbox re-asks the HOST rather than filtering a list already in hand,
  * which is why it is here and not a client-side predicate: `host available`
@@ -57,7 +66,12 @@ export interface VersionPickerProps {
  * renderer would disagree with the CLI the first time a build id stopped being
  * semver.
  */
-export function VersionPicker(props: VersionPickerProps): ReactNode {
+export function VersionPicker(
+  props: VersionPickerProps & {
+    /** `false` while an update runs, waits or restarts. */
+    readonly checkNowShown: boolean;
+  },
+): ReactNode {
   const [confirmingVersion, setConfirmingVersion] = useState<string | null>(
     null,
   );
@@ -76,8 +90,17 @@ export function VersionPicker(props: VersionPickerProps): ReactNode {
       className="flex flex-col gap-2"
       data-testid="host-overview-version-picker"
     >
-      <div className="font-medium text-foreground">
-        Pick a different version
+      <div className="flex min-h-7 flex-wrap items-center justify-between gap-2">
+        <div className="font-medium text-foreground">
+          Pick a different version
+        </div>
+        {props.checkNowShown ? (
+          <CheckNowButton
+            checking={props.checking}
+            disabled={props.disabled}
+            onCheck={props.onCheck}
+          />
+        ) : null}
       </div>
       <div className="overflow-hidden rounded-md border border-border/40">
         <div className="flex flex-col gap-3 px-4 py-3">
@@ -159,6 +182,38 @@ export function VersionPicker(props: VersionPickerProps): ReactNode {
   );
 }
 
+/**
+ * The page's one Check now. The refresh glyph gives way to the spinner while
+ * the check runs; the label never changes.
+ */
+function CheckNowButton(props: {
+  readonly checking: boolean;
+  readonly disabled: boolean;
+  readonly onCheck: () => void;
+}): ReactNode {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      disabled={props.checking || props.disabled}
+      data-testid="host-overview-update-check"
+      onClick={props.onCheck}
+    >
+      {props.checking ? (
+        <AgentSpinningDots
+          className="size-3.5"
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : (
+        <RefreshCw data-icon="inline-start" aria-hidden />
+      )}
+      Check now
+    </Button>
+  );
+}
+
 function VersionPickerList(input: {
   readonly picker: VersionPickerProps;
   readonly onInstallAnyway: (version: string) => void;
@@ -176,21 +231,10 @@ function VersionPickerList(input: {
       Asking this host which versions it can install…
     </div>
   ) : (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <p className="text-ui-sm text-muted-foreground">
-        This host didn't return a list of installable versions.
-      </p>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled={picker.disabled}
-        onClick={picker.onCheck}
-        data-testid="host-overview-version-check"
-      >
-        Check now
-      </Button>
-    </div>
+    // Check now is on the heading directly above; no second copy here.
+    <p className="text-ui-sm text-muted-foreground">
+      This host didn't return a list of installable versions.
+    </p>
   );
   return (
     <div

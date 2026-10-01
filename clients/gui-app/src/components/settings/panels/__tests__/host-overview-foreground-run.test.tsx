@@ -276,7 +276,7 @@ describe("the header menu's Restart during a foreground run", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The version card's "Update now"
+// The answer card's "Update now"
 // ---------------------------------------------------------------------------
 
 function updatableManifestHandlers(): MockHandlerMap<HostRpcRegistry> {
@@ -290,7 +290,29 @@ function updatableManifestHandlers(): MockHandlerMap<HostRpcRegistry> {
   };
 }
 
-describe("the version card's Update now during a foreground run", () => {
+/**
+ * A catalog whose only (newer) version is yanked: the answer is
+ * `not-installable` — a card with a sentence and nothing to install.
+ */
+function unofferableManifestHandlers(): MockHandlerMap<HostRpcRegistry> {
+  const manifest = updateCheckManifest("1.6.0");
+  return {
+    "host.update.check": () => ({
+      outcome: "ok" as const,
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
+      manifest: {
+        ...manifest,
+        versions: manifest.versions.map((entry) => ({
+          ...entry,
+          yanked: true,
+        })),
+      },
+    }),
+  };
+}
+
+describe("the answer card's Update now during a foreground run", () => {
   it("RED: hides Update now and shows the foreground reason when a newer version exists", async () => {
     renderOverview({
       hostId: "host-local",
@@ -325,7 +347,34 @@ describe("the version card's Update now during a foreground run", () => {
     expect(screen.queryByTestId("host-overview-update-foreground")).toBeNull();
   });
 
-  it("GREEN control: foreground with no newer version — no reason anywhere", async () => {
+  it("GREEN control: foreground with nothing to install — the card draws, but no reason and no Update now", async () => {
+    // A card that DRAWS with nothing to install: the one newer version in the
+    // catalog is yanked, so the answer is `not-installable`. That reaches the
+    // foreground sentence's own guard (`updatableVersion !== null`), which a
+    // current host never does (its card is null before getting there).
+    const { queryClient } = renderOverview({
+      hostId: "host-local",
+      isLocalMachine: true,
+      admittedAs: "foreground",
+      hostVersion: "1.5.0",
+      overrideHandlers: unofferableManifestHandlers(),
+    });
+
+    await screen.findByTestId("host-identity-name-row");
+    await selectHostOverviewTab("updates");
+    // The card is the positive to settle on; then wait for every query this
+    // render started (the lifecycle read that feeds the foreground sentence
+    // included) to finish before asserting the negatives.
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("not-installable");
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(screen.queryByTestId("host-overview-update-foreground")).toBeNull();
+    expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
+  });
+
+  it("GREEN control: foreground with no newer version — no card and no reason anywhere", async () => {
     const { queryClient } = renderOverview({
       hostId: "host-local",
       isLocalMachine: true,
@@ -335,17 +384,20 @@ describe("the version card's Update now during a foreground run", () => {
       // `latest === hostVersion`, i.e. nothing to offer.
     });
 
-    // Nothing here is expected to ever appear, so there is no positive to
-    // settle on — wait for every query this render started to finish
-    // instead, then assert the negative.
+    // Nothing here is expected to ever appear, so the one positive to settle
+    // on is the version list's empty state, which reads only once the check
+    // has answered (the fixture's manifest lists no versions) — then wait for
+    // every query this render started to finish, and assert the negatives.
     await screen.findByTestId("host-identity-name-row");
     await selectHostOverviewTab("updates");
-    await screen.findByTestId("host-overview-version-card");
+    await screen.findByText("No versions available.");
     await waitFor(() => {
       expect(queryClient.isFetching()).toBe(0);
     });
     expect(screen.queryByTestId("host-overview-update-foreground")).toBeNull();
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
+    // A current host has no answer to give: the card draws nothing at all.
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
   });
 });
 
@@ -1250,7 +1302,7 @@ function renderForegroundOverview(options: {
   return { fixture, queryClient };
 }
 
-describe("the version card's Update now under the foreground-sentence ruling", () => {
+describe("the answer card's Update now under the foreground-sentence ruling", () => {
   it("RED: capability none — the self-update sentence, not the foreground-update one, and Update now absent", async () => {
     renderForegroundOverview({
       hostId: "host-local",
