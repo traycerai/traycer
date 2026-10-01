@@ -105,6 +105,7 @@ describe("<LandingTerminalTile /> exit focus hand-off", () => {
         landingPageId={LANDING_PAGE_ID}
         tab={EXITING_TAB}
         active
+        panelOpen
         createEnabled={false}
         authorityEntry={null}
       />,

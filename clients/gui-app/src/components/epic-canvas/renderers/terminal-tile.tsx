@@ -665,6 +665,7 @@ function HostTerminalTileLive(
     reattachMode: runtimeRunning ? "live" : "fresh",
     kind: "terminal",
     enabled: gridReady && (runtimeRunning || lifecycle.requestSettled),
+    viewer: "presentation",
   });
   // Centered session-ended Close is presentation-only, matching tab X and
   // the directory-offline dead banner. Explicit lifetime deletion stays on

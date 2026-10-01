@@ -70,9 +70,22 @@ export interface LandingTerminalTileProps {
   readonly landingPageId: string;
   readonly tab: LandingTerminalTabRef;
   readonly active: boolean;
+  /** The panel this tile lives in is open, not parked past its row's edge. */
+  readonly panelOpen: boolean;
   /** True only after active-host probe/reconciliation has settled. */
   readonly createEnabled: boolean;
   readonly authorityEntry: LandingTerminalAuthorityEntry | null;
+}
+
+/** The tile's props plus the one fact only its wrapper can read. */
+interface LandingTerminalTileBodyProps extends LandingTerminalTileProps {
+  /**
+   * The panel is open and its Start Page is the one shown. A collapsed panel
+   * keeps its tiles mounted at full size and a retained page keeps them
+   * mounted hidden, so "mounted" is not "on screen" - and only an on-screen
+   * terminal may size the grid every attached client shares.
+   */
+  readonly onScreen: boolean;
 }
 
 /** One permanent, host-bound terminal tile in the landing panel stack. */
@@ -89,16 +102,22 @@ export function LandingTerminalTile(
   // rewrites an inline `&&` into `? … : null`, which is right for children and
   // wrong for a boolean prop.
   const tileVisible = props.active && surfaceVisible;
+  // Deliberately not `tileVisible`: an inactive tab of an OPEN panel occupies
+  // the same box as the active one, so its size is the size this client would
+  // show it at, and keeping it attached is what makes a tab switch instant.
+  const onScreen = props.panelOpen && surfaceVisible;
   return (
     <TabHostProvider hostId={props.tab.hostId}>
       <PaneVisibilityContext.Provider value={tileVisible}>
-        <LandingTerminalTileBody {...props} />
+        <LandingTerminalTileBody {...props} onScreen={onScreen} />
       </PaneVisibilityContext.Provider>
     </TabHostProvider>
   );
 }
 
-function LandingTerminalTileBody(props: LandingTerminalTileProps): ReactNode {
+function LandingTerminalTileBody(
+  props: LandingTerminalTileBodyProps,
+): ReactNode {
   // Before the capability switch, whatever the host's authority says: the
   // session is the host's (manager-owned, provider spawn env), so neither
   // bootstrap below may run - the durable one would `terminal.plain.create`
@@ -245,7 +264,7 @@ export function LandingTerminalLegacyBootstrap(
 }
 
 function LandingTerminalDurableBootstrap(
-  props: Omit<LandingTerminalTileProps, "authorityEntry"> & {
+  props: Omit<LandingTerminalTileBodyProps, "authorityEntry"> & {
     readonly authorityEntry: LandingTerminalAuthorityEntry;
   },
 ): ReactNode {
@@ -358,6 +377,11 @@ function LandingTerminalDurableBootstrap(
     reattachMode: runtimeRunning ? "live" : "fresh",
     kind: "terminal",
     enabled: gridReady && (runtimeRunning || lifecycle.requestSettled),
+    // Off screen the tile keeps its stream (so a reveal is instant and the
+    // tab strip's title stays live) but as a `cache` attachment. As a viewer
+    // it capped every other client's view of this terminal at whatever it
+    // subscribed with: the 80x24 fallback when it could not measure itself.
+    viewer: props.onScreen ? "presentation" : "cache",
   });
 
   return (

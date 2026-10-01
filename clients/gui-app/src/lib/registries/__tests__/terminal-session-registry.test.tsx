@@ -14,6 +14,7 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 
 // `useTerminalSessionHandle`'s own module state (the process-wide registry) is
@@ -177,6 +178,41 @@ function createTrackedOpenTransport(): {
   return { openTransport, records: () => records };
 }
 
+interface RecordedTerminalStream {
+  readonly sessionId: string;
+  readonly cols: number;
+  readonly rows: number;
+  readonly viewer: TerminalSubscribeViewer;
+  closeCount: number;
+}
+
+/**
+ * Installs a recording stream-client factory: every stream the store opens is
+ * kept (with the viewer it was opened for) and counts its own `close()`.
+ */
+function installRecordingStreamFactory(): {
+  readonly streams: () => ReadonlyArray<RecordedTerminalStream>;
+} {
+  const streams: RecordedTerminalStream[] = [];
+  __setTerminalStreamClientFactoryForTests((args) => {
+    const record: RecordedTerminalStream = {
+      sessionId: args.sessionId,
+      cols: args.cols,
+      rows: args.rows,
+      viewer: args.viewer,
+      closeCount: 0,
+    };
+    streams.push(record);
+    return {
+      sendAction: () => undefined,
+      close: () => {
+        record.closeCount += 1;
+      },
+    };
+  });
+  return { streams: () => streams };
+}
+
 function wrapper(props: { readonly children: ReactNode }): ReactNode {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -225,6 +261,7 @@ describe("useTerminalSessionHandle owner identity (R-1)", () => {
           // comparison this discriminator depends on.
           kind: "terminal-agent",
           enabled: true,
+          viewer: "presentation",
         }),
       { wrapper },
     );
@@ -291,6 +328,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
           reattachMode: "fresh",
           kind: "terminal-agent",
           enabled,
+          viewer: "presentation",
         }),
       { wrapper, initialProps: true },
     );
@@ -344,6 +382,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
       reattachMode: "fresh" as const,
       kind: "terminal-agent" as const,
       enabled: true,
+      viewer: "presentation" as const,
     };
 
     const first = renderHook(() => useTerminalSessionHandle(sharedArgs), {
@@ -396,6 +435,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
           reattachMode: "fresh",
           kind: "terminal-agent",
           enabled,
+          viewer: "presentation",
         }),
       { wrapper, initialProps: true },
     );
@@ -466,6 +506,7 @@ describe("useTerminalSessionHandle transport-loss release", () => {
           reattachMode: "fresh",
           kind: "terminal-agent",
           enabled: true,
+          viewer: "presentation",
         }),
       { wrapper: strictWrapper },
     );
@@ -507,6 +548,7 @@ describe("useTerminalSessionHandle transport-loss release", () => {
           reattachMode: "fresh",
           kind: "terminal-agent",
           enabled,
+          viewer: "presentation",
         }),
       { wrapper: strictWrapper, initialProps: true },
     );
@@ -530,5 +572,144 @@ describe("useTerminalSessionHandle transport-loss release", () => {
       firstHandle,
     );
     expect(firstHandle.store.getState().viewer).toBe("cache");
+  });
+});
+
+describe("useTerminalSessionHandle viewer intent", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllTerminalSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    __setTerminalStreamClientFactoryForTests(null);
+  });
+
+  function openStreams(
+    streams: ReadonlyArray<RecordedTerminalStream>,
+  ): ReadonlyArray<RecordedTerminalStream> {
+    return streams.filter((stream) => stream.closeCount === 0);
+  }
+
+  function lastStream(
+    streams: ReadonlyArray<RecordedTerminalStream>,
+  ): RecordedTerminalStream {
+    const last = streams.at(-1);
+    if (last === undefined) throw new Error("expected at least one stream");
+    return last;
+  }
+
+  function renderViewerHook(initialViewer: TerminalSubscribeViewer) {
+    return renderHook(
+      (viewer: TerminalSubscribeViewer) =>
+        useTerminalSessionHandle({
+          hostId: "host-1",
+          scope: { kind: "independent" },
+          sessionId: "terminal-viewer-1",
+          instanceId: "inst-viewer",
+          cols: 80,
+          rows: 24,
+          reattachMode: "fresh",
+          kind: "terminal",
+          enabled: true,
+          viewer,
+        }),
+      { wrapper, initialProps: initialViewer },
+    );
+  }
+
+  it("a tile that asks for a cache attachment never keeps a presentation stream", async () => {
+    globalClientRef.value = buildGlobalClient();
+    const recorded = installRecordingStreamFactory();
+
+    const { result } = renderViewerHook("cache");
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    const streams = recorded.streams();
+    expect(lastStream(streams).viewer).toBe("cache");
+    // A fresh store opens as `presentation` before the hook restates intent;
+    // that first stream must be closed, not left attached beside the cache one.
+    for (const earlier of streams.slice(0, -1)) {
+      expect(earlier.closeCount).toBe(1);
+    }
+    expect(openStreams(streams)).toHaveLength(1);
+    expect(openStreams(streams)[0].viewer).toBe("cache");
+    expect(result.current?.store.getState().viewer).toBe("cache");
+  });
+
+  it("flipping the tile's intent reopens the stream with the new intent", async () => {
+    globalClientRef.value = buildGlobalClient();
+    const recorded = installRecordingStreamFactory();
+
+    const { result, rerender } = renderViewerHook("cache");
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) throw new Error("expected initial handle");
+    const cacheStream = lastStream(recorded.streams());
+    expect(cacheStream.viewer).toBe("cache");
+
+    // The grid this tile was last asked to show. The reopened stream has to
+    // carry it, not the size the store was first created with.
+    act(() => {
+      handle.store.getState().requestResize(132, 43);
+    });
+    expect(handle.store.getState().requestedCols).toBe(132);
+    expect(handle.store.getState().requestedRows).toBe(43);
+
+    rerender("presentation");
+
+    await waitFor(() => {
+      expect(lastStream(recorded.streams()).viewer).toBe("presentation");
+    });
+    const presentationStream = lastStream(recorded.streams());
+    expect(cacheStream.closeCount).toBe(1);
+    expect(presentationStream.closeCount).toBe(0);
+    expect(presentationStream.cols).toBe(132);
+    expect(presentationStream.rows).toBe(43);
+    expect(openStreams(recorded.streams())).toEqual([presentationStream]);
+    expect(result.current).toBe(handle);
+    expect(handle.store.getState().viewer).toBe("presentation");
+
+    act(() => {
+      handle.store.getState().requestResize(100, 30);
+    });
+
+    rerender("cache");
+
+    await waitFor(() => {
+      expect(lastStream(recorded.streams()).viewer).toBe("cache");
+    });
+    const secondCacheStream = lastStream(recorded.streams());
+    expect(presentationStream.closeCount).toBe(1);
+    expect(secondCacheStream).not.toBe(cacheStream);
+    expect(secondCacheStream.closeCount).toBe(0);
+    expect(secondCacheStream.cols).toBe(100);
+    expect(secondCacheStream.rows).toBe(30);
+    expect(openStreams(recorded.streams())).toEqual([secondCacheStream]);
+    expect(result.current).toBe(handle);
+    expect(handle.store.getState().viewer).toBe("cache");
+  });
+
+  it("a presentation tile opens exactly one stream", async () => {
+    globalClientRef.value = buildGlobalClient();
+    const recorded = installRecordingStreamFactory();
+
+    const { result } = renderViewerHook("presentation");
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    const streams = recorded.streams();
+    expect(streams).toHaveLength(1);
+    expect(streams[0].viewer).toBe("presentation");
+    expect(streams[0].closeCount).toBe(0);
+    expect(result.current?.store.getState().viewer).toBe("presentation");
   });
 });

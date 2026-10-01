@@ -22,6 +22,7 @@ import type {
   TerminalSessionKind,
   TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
 
 const registry = new TerminalSessionRegistry();
 
@@ -80,6 +81,13 @@ export interface UseTerminalSessionHandleArgs {
   readonly kind: TerminalSessionKind;
   /** Set false until the host-side session is known to exist (post-create or post-list-hit). */
   readonly enabled: boolean;
+  /**
+   * Attachment intent while this tile holds its lease. `presentation` is a
+   * terminal someone can see, and the host sizes the shared grid from those
+   * only. `cache` is a tile that stays mounted off screen (a collapsed Start
+   * Page panel): its stream stays warm but its size constrains nobody.
+   */
+  readonly viewer: TerminalSubscribeViewer;
 }
 
 export function useTerminalSessionHandle(
@@ -100,6 +108,7 @@ export function useTerminalSessionHandle(
     cols: args.cols,
     rows: args.rows,
     reattachMode: args.reattachMode,
+    viewer: args.viewer,
   });
 
   // Readiness gate: authenticated request context + dialable endpoint (or the
@@ -144,8 +153,9 @@ export function useTerminalSessionHandle(
       cols: args.cols,
       rows: args.rows,
       reattachMode: args.reattachMode,
+      viewer: args.viewer,
     };
-  }, [args.cols, args.rows, args.reattachMode]);
+  }, [args.cols, args.rows, args.reattachMode, args.viewer]);
 
   const scopeEpicId = args.scope.kind === "epic" ? args.scope.epicId : null;
   // Callers commonly construct a scope literal during render. Keep an
@@ -238,6 +248,10 @@ export function useTerminalSessionHandle(
       args.hostId,
     );
     acquiredHandle = next;
+    // A fresh store and a revived one both come back as `presentation`. Restate
+    // this tile's intent in the same turn, before either stream's socket can
+    // open, so an off-screen tile never attaches as a viewer at all.
+    next.store.getState().setViewer(creationConfigRef.current.viewer);
     handleHostIds.set(next, args.hostId);
     handleOwnerIdentityKeys.set(next, ownerIdentityKey);
     setHandle(next);
@@ -260,6 +274,13 @@ export function useTerminalSessionHandle(
     ownerIdentityKey,
     openTransport,
   ]);
+
+  // The tile coming on or going off screen while it keeps its lease. Intent is
+  // open-frame-only, so this reopens the stream; a no-op when unchanged.
+  useEffect(() => {
+    if (handle === null) return;
+    handle.store.getState().setViewer(args.viewer);
+  }, [handle, args.viewer]);
 
   useEffect(() => {
     if (handle === null) return;

@@ -128,6 +128,7 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         landingPageId="landing-1"
         tab={TAB}
         active
+        panelOpen
         createEnabled
         authorityEntry={null}
       />,
@@ -139,6 +140,7 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         landingPageId="landing-1"
         tab={TAB}
         active
+        panelOpen
         createEnabled
         authorityEntry={null}
       />,
@@ -163,6 +165,7 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         landingPageId="landing-1"
         tab={TAB}
         active
+        panelOpen
         createEnabled
         authorityEntry={null}
       />,

@@ -94,6 +94,7 @@ describe("<LandingTerminalTile /> S5 bounded pre-bootstrap wait", () => {
           landingPageId="landing-1"
           tab={TAB}
           active
+          panelOpen
           createEnabled={false}
           authorityEntry={null}
         />,

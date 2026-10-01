@@ -426,6 +426,7 @@ export function useTerminalTileBootstrap(
     reattachMode,
     kind: input.sessionKind,
     enabled: sessionReady && gridReady,
+    viewer: "presentation",
   });
 
   // The session store handle resolving marks the end of the bootstrap leg:
