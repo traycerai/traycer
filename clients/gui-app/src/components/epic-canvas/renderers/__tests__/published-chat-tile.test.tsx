@@ -1,10 +1,17 @@
 import {
+  act,
   cleanup,
   render,
   screen,
   waitFor,
   type RenderResult,
 } from "@testing-library/react";
+import {
+  focusManager,
+  onlineManager,
+  QueryClientProvider,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
@@ -35,6 +42,18 @@ import {
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
 import type { PublishedChatSessionHandle } from "@/lib/chats/published-chat-session";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type { UseHostQueryOptions } from "@/hooks/host/use-host-query";
+import { createAppQueryClient } from "@/lib/query-client";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 
 // A narrow stand-in for `UseQueryResult`, not the real thing: the tile only
 // ever reads `.data` and `.isPending` off this query, and hand-building a
@@ -55,6 +74,8 @@ interface MockHostReachability {
   readonly hostLabel: string;
   /** Absent on most fixtures, like the real hook's `null`. */
   readonly unavailability?: "offline" | "plan-restricted";
+  /** Absent on most fixtures, which never arms the owner recovery read. */
+  readonly hostKind?: "local" | "remote" | "unknown";
 }
 
 /**
@@ -103,6 +124,47 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 // `<TabHostProvider>` would resolve for this tab.
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-1",
+}));
+// The owner recovery read, recorded at the hook boundary like every other read
+// in this suite: which client it was handed is the whole assertion.
+interface HostQueryCall {
+  readonly method: string;
+  readonly client: unknown;
+}
+const hostQueryCalls: HostQueryCall[] = [];
+// The request-level block swaps in the REAL `useHostQuery` and a real owner
+// client, so what it asserts is what reaches the wire. Every other test keeps
+// the recording stub; both flags are fixed for a whole render.
+const ownerRecoveryWireState = vi.hoisted<{
+  realQuery: boolean;
+  owner: {
+    readonly hostId: string;
+    readonly client: HostClient<HostRpcRegistry>;
+  } | null;
+}>(() => ({ realQuery: false, owner: null }));
+vi.mock("@/hooks/host/use-host-query", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...actual,
+    useHostQuery: (
+      args: UseHostQueryOptions<HostRpcRegistry, "host.status">,
+    ) => {
+      hostQueryCalls.push({ method: args.method, client: args.client });
+      return ownerRecoveryWireState.realQuery
+        ? actual.useHostQuery(args)
+        : { data: undefined };
+    },
+  };
+});
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) => {
+    if (hostId === null) return null;
+    const owner = ownerRecoveryWireState.owner;
+    return owner !== null && owner.hostId === hostId
+      ? owner.client
+      : { hostId };
+  },
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: (hostId: string) => mockUseHostReachability(hostId),
@@ -331,6 +393,7 @@ afterEach(() => {
   vi.clearAllMocks();
   deadTileBannerContainerProps.length = 0;
   chatTileSessionViewCalls.length = 0;
+  hostQueryCalls.length = 0;
 });
 
 describe("PublishedChatTile - doc-replica fallback", () => {
@@ -934,5 +997,231 @@ describe("PublishedChatTile - head-keyed refresh", () => {
     expect(mockUseChatReplicaRead).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: false }),
     );
+  });
+});
+
+// The regression: the cloud reported a running owner `offline`, only a ready
+// session could overturn that verdict, and nothing dialed the owner - so the
+// canvas kept this copy (and the live tab it substitutes for) on screen until
+// an unrelated surface, such as the new-agent composer, happened to dial it.
+describe("PublishedChatTile - offline owner recovery", () => {
+  const OFFLINE_REMOTE_OWNER: MockHostReachability = {
+    status: "unreachable",
+    hostLabel: "Ada's Mac",
+    unavailability: "offline",
+    hostKind: "remote",
+  };
+
+  function renderVisibility(visibility: {
+    readonly paneVisible: boolean;
+    readonly tabSelected: boolean;
+  }): void {
+    render(
+      <PaneVisibilityContext.Provider value={visibility.paneVisible}>
+        <TabBodySelectedContext.Provider value={visibility.tabSelected}>
+          <PublishedChatTile
+            node={NODE}
+            viewTabId="tab-1"
+            tileId="pane-1"
+            isActive={false}
+            epicId="epic-1"
+          />
+        </TabBodySelectedContext.Provider>
+      </PaneVisibilityContext.Provider>,
+    );
+  }
+
+  function lastStatusClient(): unknown {
+    return hostQueryCalls.filter((call) => call.method === "host.status").at(-1)
+      ?.client;
+  }
+
+  beforeEach(() => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+  });
+
+  it("asks the OWNER for host.status while the copy is on screen, even in an unfocused pane", () => {
+    mockUseHostReachability.mockImplementation((hostId) =>
+      hostId === NODE.ownerHostId
+        ? OFFLINE_REMOTE_OWNER
+        : { status: "reachable", hostLabel: "Serving host" },
+    );
+    renderVisibility({ paneVisible: true, tabSelected: true });
+
+    expect(lastStatusClient()).toEqual({ hostId: NODE.ownerHostId });
+  });
+
+  it.each([
+    ["the pane is hidden", { paneVisible: false, tabSelected: true }],
+    ["the tab is not selected", { paneVisible: true, tabSelected: false }],
+  ])("does not dial while %s", (_label, visibility) => {
+    mockUseHostReachability.mockReturnValue(OFFLINE_REMOTE_OWNER);
+    renderVisibility(visibility);
+
+    expect(lastStatusClient()).toBeNull();
+  });
+
+  it.each<[string, MockHostReachability]>([
+    ["reachable", { status: "reachable", hostLabel: "Ada's Mac" }],
+    [
+      "plan-restricted",
+      { ...OFFLINE_REMOTE_OWNER, unavailability: "plan-restricted" },
+    ],
+    ["a local host", { ...OFFLINE_REMOTE_OWNER, hostKind: "local" }],
+    ["an unknown host", { ...OFFLINE_REMOTE_OWNER, hostKind: "unknown" }],
+  ])("does not dial when the owner is %s", (_label, reachability) => {
+    mockUseHostReachability.mockReturnValue(reachability);
+    renderVisibility({ paneVisible: true, tabSelected: true });
+
+    expect(lastStatusClient()).toBeNull();
+  });
+});
+
+// Request level: the real `useHostQuery` with the app's query defaults and a
+// real owner client, so the assertions count the requests the tile actually
+// dispatches rather than which client it picked. The transport underneath is
+// a mock messenger, so this is not a relay or handshake test.
+describe("PublishedChatTile - offline owner recovery requests", () => {
+  const OFFLINE_REMOTE_OWNER: MockHostReachability = {
+    status: "unreachable",
+    hostLabel: "Ada's Mac",
+    unavailability: "offline",
+    hostKind: "remote",
+  };
+
+  interface OwnerFixture {
+    readonly queryClient: QueryClient;
+    readonly statusRequests: () => number;
+    readonly dispose: () => void;
+  }
+
+  let fixture: OwnerFixture | null = null;
+
+  beforeEach(() => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    mockUseHostReachability.mockReturnValue(OFFLINE_REMOTE_OWNER);
+    ownerRecoveryWireState.realQuery = true;
+  });
+
+  afterEach(() => {
+    // Unmount while the real hook is still the one mounted, then tear down.
+    cleanup();
+    fixture?.dispose();
+    fixture = null;
+    ownerRecoveryWireState.realQuery = false;
+    ownerRecoveryWireState.owner = null;
+    focusManager.setFocused(undefined);
+    onlineManager.setOnline(true);
+    resetHostConnectionRegistryForTest();
+  });
+
+  function installOwnerFixture(): OwnerFixture {
+    let statusRequests = 0;
+    const ownerEntry = { ...mockRemoteHostEntry, hostId: NODE.ownerHostId };
+    const queryClient = createAppQueryClient();
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === ownerEntry.hostId ? ownerEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-1",
+        handlers: {
+          "host.status": () => {
+            statusRequests += 1;
+            return {
+              ready: true,
+              hostVersion: "1.2.3",
+              protocolVersion: { major: 1, minor: 0 },
+              busy: false,
+              busySessionCount: 0,
+              updateProgress: null,
+              busyBreakdown: null,
+              updateOperation: null,
+              updateTransaction: null,
+              storeFormats: null,
+              install: null,
+            };
+          },
+        },
+      }),
+    });
+    client.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    ownerRecoveryWireState.owner = {
+      hostId: ownerEntry.hostId,
+      client: client.createRequester(ownerEntry),
+    };
+    return {
+      queryClient,
+      statusRequests: () => statusRequests,
+      dispose: () => {
+        queryClient.clear();
+        client.dispose();
+      },
+    };
+  }
+
+  function tile(queryClient: QueryClient, paneVisible: boolean): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <PaneVisibilityContext.Provider value={paneVisible}>
+          <PublishedChatTile
+            node={NODE}
+            viewTabId="tab-1"
+            tileId="pane-1"
+            isActive={false}
+            epicId="epic-1"
+          />
+        </PaneVisibilityContext.Provider>
+      </QueryClientProvider>
+    );
+  }
+
+  async function expectSettledAt(owner: OwnerFixture, count: number) {
+    await waitFor(() => {
+      expect(owner.statusRequests()).toBe(count);
+      expect(owner.queryClient.isFetching()).toBe(0);
+    });
+  }
+
+  it("sends one host.status, none on focus or reconnect, and one more after hidden to visible", async () => {
+    const owner = installOwnerFixture();
+    fixture = owner;
+    const rendered = render(tile(owner.queryClient, true));
+    await expectSettledAt(owner, 1);
+
+    // Focus and reconnect are deliberately not refetch triggers app-wide.
+    await act(async () => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+      await Promise.resolve();
+    });
+    await expectSettledAt(owner, 1);
+    await act(async () => {
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      await Promise.resolve();
+    });
+    await expectSettledAt(owner, 1);
+
+    // Hiding the tab disarms the read without dispatching anything.
+    await act(async () => {
+      rendered.rerender(tile(owner.queryClient, false));
+      await Promise.resolve();
+    });
+    await expectSettledAt(owner, 1);
+
+    // Showing it again re-arms it, and it asks exactly once more.
+    await act(async () => {
+      rendered.rerender(tile(owner.queryClient, true));
+      await Promise.resolve();
+    });
+    await expectSettledAt(owner, 2);
   });
 });
