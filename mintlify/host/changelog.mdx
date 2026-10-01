@@ -6,11 +6,31 @@ rss: true
 ---
 
 <Update label="v1.4.2">
-Traycer Host 1.4.2 is available. Binaries and signatures are in the [GitHub release](https://github.com/traycerai/traycer/releases/tag/host-v1.4.2).
+Reliable Codex terminal agents and less background work for long chats, artifact history, and deleted worktrees.
+
+* **Codex terminal agents** — starting, resuming, and forking work with current Codex versions. Permissions and additional writable folders are passed correctly, including on a reopen. The bundled Codex is updated to 0.159.1.
+* **Long-running chats** — saving new activity no longer grows more expensive as consecutive agent turns accumulate without another user message.
+* **Artifact history** — capturing an unchanged artifact no longer writes to the version journal, reducing background disk activity.
+* **Worktrees** — checks avoid unnecessary Git launches into deleted worktrees and limit filesystem work on unresponsive mounts.
+* **Provider sign-in** — cancelling one attempt leaves a shared login running for the other attempts that still need it.
+* **Notifications** — a shell-output notification waiting for delivery carries its chat, so it can open the right conversation.
+* **Diagnostics** — requests that have ended are no longer logged as credential failures at ERROR level.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/host-v1.4.2).
 </Update>
 
 <Update label="v1.4.1">
-Traycer Host 1.4.1 is available. Binaries and signatures are in the [GitHub release](https://github.com/traycerai/traycer/releases/tag/host-v1.4.1).
+Fixes for provider sign-in, Copilot startup, Task renames, and background resource cleanup.
+
+* **Provider sign-in** — failed account switches no longer report success by falling back to the old account. Refusals and account-verification links are surfaced.
+* **Antigravity** — sign-in can continue after the request that started it ends. Custom CLI paths are refused because the agent needs its managed ACP server.
+* **Copilot** — opening a session scans the managed skills folder instead of the whole Traycer data folder, avoiding startup timeouts on machines with many worktrees and chats.
+* **Task renames** — a rename interrupted by reconnecting storage is retried, and History metadata catches up after the connection returns.
+* **OpenCode and downloads** — finished event streams and abandoned downloads close their connections instead of leaving unread data accumulating in network memory.
+* **Background workers** — if the Host's working directory is removed while it runs, the Host recovers to an available home folder so replacement workers can start again.
+* **Artifact watching** — shutting down a Task safely contains late file-watcher errors.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/host-v1.4.1).
 </Update>
 
 <Update label="v1.4.0">
