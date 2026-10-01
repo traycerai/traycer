@@ -152,11 +152,12 @@ export interface TerminalSessionState {
    */
   readonly kind: TerminalSessionKind;
   /**
-   * `terminal.subscribe@1.6` attachment intent currently on the wire.
-   * Follows lease state, not session kind: a leased tile is `presentation`;
-   * a lease-free keep-warm / linger attachment is `cache`. Intent is
-   * open-frame-only, so {@link TerminalSessionState.setViewer} reopens the
-   * stream rather than restating on the live session.
+   * `terminal.subscribe@1.6` attachment intent this store stands for. A
+   * lease-free keep-warm / linger attachment is `cache`; a leased tile is
+   * `presentation` unless it is mounted off screen. A lease change goes
+   * through {@link TerminalSessionState.setViewer}, which reopens the stream;
+   * a tile going on or off screen goes through
+   * {@link TerminalSessionState.restateViewer}, which does not.
    */
   readonly viewer: TerminalSubscribeViewer;
   readonly pendingActions: Readonly<Record<string, PendingTerminalAction>>;
@@ -194,6 +195,16 @@ export interface TerminalSessionState {
    * stream — the PTY is no longer addressable.
    */
   setViewer: (viewer: TerminalSubscribeViewer) => void;
+  /**
+   * Changes attachment intent on the stream this store already has, with the
+   * `terminal.subscribe@1.7` `viewer` frame, and never reopens. For a tile
+   * that keeps its lease while it goes on and off screen: a reopen there
+   * replays a full snapshot into a cleared view on every tab switch. Against
+   * a host older than 1.7 the frame is not sent and the attachment keeps the
+   * intent it opened with, which costs nothing: such a host counts every
+   * attachment toward the grid whatever its intent.
+   */
+  restateViewer: (viewer: TerminalSubscribeViewer) => void;
   /** Rebuilds the owned transport while preserving this retained PTY handle. */
   retryTransport: () => void;
   /** Closes the underlying stream client (does NOT call `terminal.kill`). */
@@ -207,6 +218,11 @@ export interface TerminalSessionStoreOptions {
   readonly rows: number;
   readonly reattachMode: TerminalReattachMode;
   readonly kind: TerminalSessionKind;
+  /**
+   * Attachment intent the first stream opens with. A tile created off screen
+   * passes `cache`, so it never holds a `presentation` attachment at all.
+   */
+  readonly viewer: TerminalSubscribeViewer;
   readonly streamClientFactory: TerminalStreamClientFactory;
 }
 
@@ -409,7 +425,7 @@ export function createTerminalSessionStore(
   let disposed = false;
   let writer: TerminalDataWriter | null = null;
   let streamClient: TerminalStreamClientHandle | null = null;
-  let viewer: TerminalSubscribeViewer = "presentation";
+  let viewer: TerminalSubscribeViewer = options.viewer;
   // Bumped before tearing down a subscriber so its close-driven status
   // callback cannot map a deliberate viewer-intent reopen to "lost".
   const streamGuard = createGenerationGuard();
@@ -831,6 +847,23 @@ export function createTerminalSessionStore(
       attachStream(state.requestedCols, state.requestedRows);
     };
 
+    const restateViewer = (nextViewer: TerminalSubscribeViewer): void => {
+      if (disposed) return;
+      if (nextViewer === viewer) return;
+      viewer = nextViewer;
+      set({ viewer: nextViewer });
+      if (isTerminalOrDead(get().status)) return;
+      // Straight to the client, not through `dispatchClientFrame`: that drops
+      // a frame while the stream is not open, and the client must still learn
+      // the intent so its next subscribe declares it.
+      streamClient?.sendAction({
+        kind: "viewer",
+        hasBinaryPayload: false,
+        sessionId: options.sessionId,
+        viewer: nextViewer,
+      });
+    };
+
     return {
       sessionId: options.sessionId,
       scope: options.scope,
@@ -845,7 +878,7 @@ export function createTerminalSessionStore(
       requestedRows: options.rows,
       reattachMode: options.reattachMode,
       kind: options.kind,
-      viewer: "presentation",
+      viewer: options.viewer,
       pendingActions: {},
       lastOutputPreview: null,
       lastInputLostAt: null,
@@ -936,6 +969,7 @@ export function createTerminalSessionStore(
         return clientActionId;
       },
       setViewer,
+      restateViewer,
       retryTransport: () => {
         if (disposed) return;
         const state = get();

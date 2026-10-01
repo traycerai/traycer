@@ -16,7 +16,10 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
-import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
+import type {
+  TerminalSubscribeClientFrameV17,
+  TerminalSubscribeViewer,
+} from "@traycer/protocol/host/terminal/subscribe";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { MEASURE_GRID_TIMEOUT_MS } from "@/hooks/agent/use-terminal-tile-bootstrap";
 import { usePlainTerminalMutations } from "@/hooks/terminal/use-plain-terminal-mutations";
@@ -148,9 +151,15 @@ const resolveNoOwnerClient = (): null => null;
 
 interface RecordedTerminalStream {
   readonly viewer: TerminalSubscribeViewer;
+  /** Every client frame the store handed this stream, in order. */
+  readonly frames: TerminalSubscribeClientFrameV17[];
   closeCount: number;
 }
 
+/**
+ * Every stream the store opens is kept (with the viewer it was opened for),
+ * records the client frames it was given, and counts its own `close()`.
+ */
 function installRecordingStreamFactory(): {
   readonly streams: () => ReadonlyArray<RecordedTerminalStream>;
 } {
@@ -158,11 +167,14 @@ function installRecordingStreamFactory(): {
   __setTerminalStreamClientFactoryForTests((args) => {
     const record: RecordedTerminalStream = {
       viewer: args.viewer,
+      frames: [],
       closeCount: 0,
     };
     streams.push(record);
     return {
-      sendAction: () => undefined,
+      sendAction: (frame) => {
+        record.frames.push(frame);
+      },
       close: () => {
         record.closeCount += 1;
       },
@@ -286,47 +298,56 @@ describe("<LandingTerminalTile /> viewer intent", () => {
     });
   }
 
-  function openStreams(
-    streams: ReadonlyArray<RecordedTerminalStream>,
-  ): ReadonlyArray<RecordedTerminalStream> {
-    return streams.filter((stream) => stream.closeCount === 0);
-  }
-
-  it("a collapsed panel's terminal attaches as cache", async () => {
+  it("a collapsed panel's terminal opens one stream, as cache", async () => {
     const recorded = installRecordingStreamFactory();
 
     render(tileTree({ panelOpen: false, paneVisible: true }));
     await settleGridMeasure();
 
-    const open = openStreams(recorded.streams());
-    expect(open).toHaveLength(1);
-    expect(open[0].viewer).toBe("cache");
+    const streams = recorded.streams();
+    expect(streams).toHaveLength(1);
+    expect(streams[0].viewer).toBe("cache");
+    expect(streams[0].closeCount).toBe(0);
+    expect(streams[0].frames).toEqual([]);
   });
 
-  it("opening the panel makes it a presentation viewer", async () => {
+  it("opening the panel restates presentation on the same stream, without reopening it", async () => {
     const recorded = installRecordingStreamFactory();
 
     const rendered = render(tileTree({ panelOpen: false, paneVisible: true }));
     await settleGridMeasure();
-    const cacheStream = openStreams(recorded.streams())[0];
-    expect(cacheStream.viewer).toBe("cache");
+    expect(recorded.streams()).toHaveLength(1);
+    const stream = recorded.streams()[0];
+    expect(stream.viewer).toBe("cache");
+    expect(stream.frames).toEqual([]);
 
     rendered.rerender(tileTree({ panelOpen: true, paneVisible: true }));
 
-    const open = openStreams(recorded.streams());
-    expect(open).toHaveLength(1);
-    expect(open[0].viewer).toBe("presentation");
-    expect(cacheStream.closeCount).toBe(1);
+    // The same stream: never closed, no second one opened, and the intent
+    // went out as a `viewer` frame on it.
+    expect(recorded.streams()).toHaveLength(1);
+    expect(recorded.streams()[0]).toBe(stream);
+    expect(stream.closeCount).toBe(0);
+    expect(stream.frames).toEqual([
+      {
+        kind: "viewer",
+        hasBinaryPayload: false,
+        sessionId: TAB.sessionId,
+        viewer: "presentation",
+      },
+    ]);
   });
 
-  it("a hidden Start Page's terminal attaches as cache even with the panel open", async () => {
+  it("a hidden Start Page's terminal opens one stream, as cache, even with the panel open", async () => {
     const recorded = installRecordingStreamFactory();
 
     render(tileTree({ panelOpen: true, paneVisible: false }));
     await settleGridMeasure();
 
-    const open = openStreams(recorded.streams());
-    expect(open).toHaveLength(1);
-    expect(open[0].viewer).toBe("cache");
+    const streams = recorded.streams();
+    expect(streams).toHaveLength(1);
+    expect(streams[0].viewer).toBe("cache");
+    expect(streams[0].closeCount).toBe(0);
+    expect(streams[0].frames).toEqual([]);
   });
 });

@@ -85,7 +85,8 @@ export interface UseTerminalSessionHandleArgs {
    * Attachment intent while this tile holds its lease. `presentation` is a
    * terminal someone can see, and the host sizes the shared grid from those
    * only. `cache` is a tile that stays mounted off screen (a collapsed Start
-   * Page panel): its stream stays warm but its size constrains nobody.
+   * Page panel): its stream stays warm but its size constrains nobody. A
+   * change while the lease is held is restated on the live stream.
    */
   readonly viewer: TerminalSubscribeViewer;
 }
@@ -231,6 +232,11 @@ export function useTerminalSessionHandle(
       };
     };
 
+    // The tile's intent goes in with the acquire, to a fresh store and to a
+    // revived one alike, so a tile mounted off screen never holds a
+    // `presentation` attachment. Opening as one and retagging afterwards is
+    // not equivalent: an already-open remote session writes the subscribe at
+    // once, and the host sizes the grid from it before the retag arrives.
     const next = registry.acquire(
       args.instanceId,
       () => {
@@ -242,16 +248,14 @@ export function useTerminalSessionHandle(
           rows: creationConfig.rows,
           reattachMode: creationConfig.reattachMode,
           kind: args.kind,
+          viewer: creationConfig.viewer,
           streamClientFactory: factory,
         });
       },
       args.hostId,
+      creationConfigRef.current.viewer,
     );
     acquiredHandle = next;
-    // A fresh store and a revived one both come back as `presentation`. Restate
-    // this tile's intent in the same turn, before either stream's socket can
-    // open, so an off-screen tile never attaches as a viewer at all.
-    next.store.getState().setViewer(creationConfigRef.current.viewer);
     handleHostIds.set(next, args.hostId);
     handleOwnerIdentityKeys.set(next, ownerIdentityKey);
     setHandle(next);
@@ -275,12 +279,14 @@ export function useTerminalSessionHandle(
     openTransport,
   ]);
 
-  // The tile coming on or going off screen while it keeps its lease. Intent is
-  // open-frame-only, so this reopens the stream; a no-op when unchanged.
+  // The tile coming on or going off screen while it keeps its lease: restated
+  // on the stream it already has, a no-op when unchanged. Not while disabled:
+  // `handle` still names the store this commit just released, and that one's
+  // intent now follows its lease.
   useEffect(() => {
-    if (handle === null) return;
-    handle.store.getState().setViewer(args.viewer);
-  }, [handle, args.viewer]);
+    if (handle === null || !args.enabled) return;
+    handle.store.getState().restateViewer(args.viewer);
+  }, [handle, args.enabled, args.viewer]);
 
   useEffect(() => {
     if (handle === null) return;

@@ -14,7 +14,10 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
+import type {
+  TerminalSubscribeClientFrameV17,
+  TerminalSubscribeViewer,
+} from "@traycer/protocol/host/terminal/subscribe";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 
 // `useTerminalSessionHandle`'s own module state (the process-wide registry) is
@@ -136,9 +139,9 @@ function fakeStreamSession(): IStreamSession {
 function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
   return {
     subscribe: () => fakeStreamSession(),
-    subscribeWithParamsProvider: () => {
-      throw new Error("not exercised by this test");
-    },
+    // `TerminalStreamClient` opens through the provider form, so the fake has
+    // to answer it for the real client to be constructible.
+    subscribeWithParamsProvider: () => fakeStreamSession(),
     close: () => undefined,
     isClosed: () => false,
     notifyBearerRotated: () => undefined,
@@ -183,12 +186,15 @@ interface RecordedTerminalStream {
   readonly cols: number;
   readonly rows: number;
   readonly viewer: TerminalSubscribeViewer;
+  /** Every client frame the store handed this stream, in order. */
+  readonly frames: TerminalSubscribeClientFrameV17[];
   closeCount: number;
 }
 
 /**
  * Installs a recording stream-client factory: every stream the store opens is
- * kept (with the viewer it was opened for) and counts its own `close()`.
+ * kept (with the viewer it was opened for), records the client frames it was
+ * given through `sendAction`, and counts its own `close()`.
  */
 function installRecordingStreamFactory(): {
   readonly streams: () => ReadonlyArray<RecordedTerminalStream>;
@@ -200,11 +206,14 @@ function installRecordingStreamFactory(): {
       cols: args.cols,
       rows: args.rows,
       viewer: args.viewer,
+      frames: [],
       closeCount: 0,
     };
     streams.push(record);
     return {
-      sendAction: () => undefined,
+      sendAction: (frame) => {
+        record.frames.push(frame);
+      },
       close: () => {
         record.closeCount += 1;
       },
@@ -618,7 +627,18 @@ describe("useTerminalSessionHandle viewer intent", () => {
     );
   }
 
-  it("a tile that asks for a cache attachment never keeps a presentation stream", async () => {
+  function viewerFrame(
+    viewer: TerminalSubscribeViewer,
+  ): TerminalSubscribeClientFrameV17 {
+    return {
+      kind: "viewer",
+      hasBinaryPayload: false,
+      sessionId: "terminal-viewer-1",
+      viewer,
+    };
+  }
+
+  it("a tile that asks for a cache attachment opens exactly one stream, as cache, and never closes it", async () => {
     globalClientRef.value = buildGlobalClient();
     const recorded = installRecordingStreamFactory();
 
@@ -628,19 +648,18 @@ describe("useTerminalSessionHandle viewer intent", () => {
       expect(result.current).not.toBeNull();
     });
 
+    // The store is created with the tile's intent, so no `presentation`
+    // stream ever exists to be closed and replaced.
     const streams = recorded.streams();
-    expect(lastStream(streams).viewer).toBe("cache");
-    // A fresh store opens as `presentation` before the hook restates intent;
-    // that first stream must be closed, not left attached beside the cache one.
-    for (const earlier of streams.slice(0, -1)) {
-      expect(earlier.closeCount).toBe(1);
-    }
-    expect(openStreams(streams)).toHaveLength(1);
-    expect(openStreams(streams)[0].viewer).toBe("cache");
+    expect(streams).toHaveLength(1);
+    expect(streams[0].viewer).toBe("cache");
+    expect(streams[0].closeCount).toBe(0);
+    // Mounting states no intent change: nothing is restated on the stream.
+    expect(streams[0].frames).toEqual([]);
     expect(result.current?.store.getState().viewer).toBe("cache");
   });
 
-  it("flipping the tile's intent reopens the stream with the new intent", async () => {
+  it("flipping the tile's intent restates it on the one live stream, without reopening", async () => {
     globalClientRef.value = buildGlobalClient();
     const recorded = installRecordingStreamFactory();
 
@@ -651,52 +670,37 @@ describe("useTerminalSessionHandle viewer intent", () => {
     });
     const handle = result.current;
     if (handle === null) throw new Error("expected initial handle");
-    const cacheStream = lastStream(recorded.streams());
-    expect(cacheStream.viewer).toBe("cache");
-
-    // The grid this tile was last asked to show. The reopened stream has to
-    // carry it, not the size the store was first created with.
-    act(() => {
-      handle.store.getState().requestResize(132, 43);
-    });
-    expect(handle.store.getState().requestedCols).toBe(132);
-    expect(handle.store.getState().requestedRows).toBe(43);
+    expect(recorded.streams()).toHaveLength(1);
+    const stream = lastStream(recorded.streams());
+    expect(stream.viewer).toBe("cache");
 
     rerender("presentation");
 
-    await waitFor(() => {
-      expect(lastStream(recorded.streams()).viewer).toBe("presentation");
-    });
-    const presentationStream = lastStream(recorded.streams());
-    expect(cacheStream.closeCount).toBe(1);
-    expect(presentationStream.closeCount).toBe(0);
-    expect(presentationStream.cols).toBe(132);
-    expect(presentationStream.rows).toBe(43);
-    expect(openStreams(recorded.streams())).toEqual([presentationStream]);
-    expect(result.current).toBe(handle);
+    expect(stream.frames).toEqual([viewerFrame("presentation")]);
     expect(handle.store.getState().viewer).toBe("presentation");
-
-    act(() => {
-      handle.store.getState().requestResize(100, 30);
-    });
+    expect(recorded.streams()).toHaveLength(1);
+    expect(stream.closeCount).toBe(0);
 
     rerender("cache");
 
-    await waitFor(() => {
-      expect(lastStream(recorded.streams()).viewer).toBe("cache");
-    });
-    const secondCacheStream = lastStream(recorded.streams());
-    expect(presentationStream.closeCount).toBe(1);
-    expect(secondCacheStream).not.toBe(cacheStream);
-    expect(secondCacheStream.closeCount).toBe(0);
-    expect(secondCacheStream.cols).toBe(100);
-    expect(secondCacheStream.rows).toBe(30);
-    expect(openStreams(recorded.streams())).toEqual([secondCacheStream]);
-    expect(result.current).toBe(handle);
+    expect(stream.frames).toEqual([
+      viewerFrame("presentation"),
+      viewerFrame("cache"),
+    ]);
     expect(handle.store.getState().viewer).toBe("cache");
+    // Still the one stream the tile opened with: no reopen in either
+    // direction, and the same handle throughout.
+    expect(recorded.streams()).toHaveLength(1);
+    expect(openStreams(recorded.streams())).toEqual([stream]);
+    expect(stream.closeCount).toBe(0);
+    expect(result.current).toBe(handle);
+
+    // A re-render with an unchanged intent restates nothing.
+    rerender("cache");
+    expect(stream.frames).toHaveLength(2);
   });
 
-  it("a presentation tile opens exactly one stream", async () => {
+  it("a presentation tile opens exactly one stream and sends no viewer frame", async () => {
     globalClientRef.value = buildGlobalClient();
     const recorded = installRecordingStreamFactory();
 
@@ -710,6 +714,7 @@ describe("useTerminalSessionHandle viewer intent", () => {
     expect(streams).toHaveLength(1);
     expect(streams[0].viewer).toBe("presentation");
     expect(streams[0].closeCount).toBe(0);
+    expect(streams[0].frames).toEqual([]);
     expect(result.current?.store.getState().viewer).toBe("presentation");
   });
 });
