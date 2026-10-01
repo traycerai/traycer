@@ -12,6 +12,10 @@ import { LiveActivityPromoteContext } from "@/components/chat/segments/live-acti
 import { SegmentRow } from "@/components/chat/segments/segment-row";
 import type { ReactNode } from "react";
 import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 /**
  * Every link surface below reaches the external-link bridge mutation, which
@@ -886,5 +890,60 @@ describe("<ReasoningSegment />", () => {
     expect(header.getAttribute("aria-expanded")).toBeNull();
     expect(header.getAttribute("aria-controls")).toBeNull();
     expect(screen.queryByTestId("reasoning-tail")).toBeNull();
+  });
+});
+
+// Chat display settings (audit R1): a completed block's default disclosure
+// follows Layout > Chat > Thinking's size, and a reader's own click wins over
+// it for the rest of the block's life (L-176).
+describe("<ReasoningSegment /> default disclosure follows Thinking's size", () => {
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  function renderCompleted() {
+    return render(
+      <ReasoningSegment
+        findUnitId={null}
+        markdown="Considering the options"
+        isStreaming={false}
+        durationMs={12000}
+        bodyBoundedByParent={false}
+        headerless={false}
+        initiallyExpanded={false}
+      />,
+    );
+  }
+
+  it("starts expanded when Thinking is full, collapsed when chip", () => {
+    useLayoutStore.getState().setRegionValues("thinking", { size: "full" });
+    renderCompleted();
+    expect(screen.getByText("Considering the options")).toBeTruthy();
+    cleanup();
+
+    useLayoutStore.getState().setRegionValues("thinking", { size: "chip" });
+    renderCompleted();
+    expect(screen.queryByText("Considering the options")).toBeNull();
+  });
+
+  it("a click overrides the default and survives a later setting change", () => {
+    useLayoutStore.getState().setRegionValues("thinking", { size: "chip" });
+    renderCompleted();
+    expect(screen.queryByText("Considering the options")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Thought for 12s/ }));
+    expect(screen.getByText("Considering the options")).toBeTruthy();
+
+    // Moving the setting away and back to the one the block started under
+    // would collapse it again if the click choice were not sticky.
+    act(() => {
+      useLayoutStore.getState().setRegionValues("thinking", { size: "full" });
+    });
+    act(() => {
+      useLayoutStore.getState().setRegionValues("thinking", { size: "chip" });
+    });
+
+    expect(screen.getByText("Considering the options")).toBeTruthy();
   });
 });

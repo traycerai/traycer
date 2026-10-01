@@ -292,6 +292,7 @@ function windowOf(input: {
     indexRevision: 1,
     indexRevisionRebuilding: false,
     skeleton: input.skeleton,
+    skeletonRevision: 0,
     skeletonComplete: input.skeletonComplete,
     skeletonStreamCoveredThrough: input.skeletonComplete ? input.rowCount : 0,
     records: { messages: messageLedger, events: eventLedger, revision: 0 },

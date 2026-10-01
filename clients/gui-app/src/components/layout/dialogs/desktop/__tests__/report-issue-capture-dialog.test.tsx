@@ -28,7 +28,10 @@ import type {
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
-import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import {
+  buildReportIssueDraftContext,
+  createReportIssueDraftContext,
+} from "@/lib/report-issue-draft-context";
 import { captureReportIssueError } from "@/lib/report-issue-error-capture";
 import {
   knownField,
@@ -36,6 +39,10 @@ import {
   __resetSupportContextRegistryForTests,
 } from "@/lib/support-context-registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { capturePersistedAgentError } from "@/lib/report-issue-error-capture";
+import { routingSettledReportText } from "@/components/chat/fallback/routing-receipt";
+import type { RoutingSettledNotice } from "@/components/chat/fallback/routing-settled-card";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 
 vi.mock("sonner", () => ({
@@ -258,6 +265,7 @@ function createBaseRunnerHost(): IRunnerHost {
       onClick: () => ({ dispose: () => undefined }),
     },
     tray: {
+      showsEpics: true,
       setEpics: () => Promise.resolve(),
       setIndicator: () => Promise.resolve(),
       onEpicSelected: () => ({ dispose: () => undefined }),
@@ -297,6 +305,7 @@ function createBaseRunnerHost(): IRunnerHost {
     migration: null,
     hostManagement: null,
     hostTray: null,
+    hostLifecycle: null,
     zoom: null,
     pushPermission: null,
     systemBack: null,
@@ -2572,6 +2581,193 @@ describe("Report issue capture dialog (deep interactions)", () => {
       await screen.findByRole("heading", { name: "Report sent" });
       expect(lastSubmittedForm(harness).images).toHaveLength(1);
     });
+  });
+});
+
+describe("evidence review shows the whole error message", () => {
+  const SETTLED_NOTICE: RoutingSettledNotice = {
+    title: "Routing stopped",
+    message: "Every account and model that could take this turn said no.",
+    details: [{ label: "Tried", value: "2 accounts" }],
+    receipt: {
+      causeLabel: "Rate limit reached",
+      steps: [
+        {
+          kind: "switch",
+          providerLabel: "Claude Code",
+          modelLabel: "claude-sonnet-4",
+          profileLabel: "Work",
+          resumedAt: null,
+          endedLabel: "rate limited",
+        },
+        {
+          kind: "wait",
+          providerLabel: "Claude Code",
+          modelLabel: "claude-sonnet-4",
+          profileLabel: "Personal 3",
+          resumedAt: Date.UTC(2026, 5, 15, 1, 2, 0),
+          endedLabel: "still rate limited",
+        },
+      ],
+    },
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetStores();
+    vi.restoreAllMocks();
+  });
+
+  // Built the way `ErrorSegment` builds it, with no stack, so the review DOM is
+  // deterministic.
+  function openAgentErrorReport(message: string): void {
+    const draft = buildReportIssueDraftContext(
+      createReportIssueContext({
+        title: "Agent error",
+        message: null,
+        code: null,
+        source: "Chat",
+      }),
+      capturePersistedAgentError({
+        message,
+        code: "rate_limit",
+        recoverable: false,
+      }),
+    );
+    useDesktopDialogStore.getState().openReportIssueDraft(draft);
+  }
+
+  async function openReview(message: string): Promise<SupportBridgeHarness> {
+    const harness = createSupportBridgeHarness({
+      snapshot: undefined,
+      submitReport: undefined,
+      buildPublicDraft: undefined,
+      openExternalLink: undefined,
+      frozenDesktopLines: undefined,
+      frozenHostLines: undefined,
+    });
+    openAgentErrorReport(message);
+    renderReportIssueDialog(createRunnerHost(harness));
+    await flushDialogEffects();
+    fireEvent.click(screen.getByRole("button", { name: "Review" }));
+    return harness;
+  }
+
+  function reviewList(): HTMLElement {
+    const list = screen.getByText("Error", { selector: "dt" }).closest("dl");
+    if (list === null) throw new Error("no review list");
+    return list;
+  }
+
+  function detailsDescription(): HTMLElement {
+    const term = screen.getByText("Details", { selector: "dt" });
+    const description = term.nextElementSibling;
+    if (description === null || description.tagName !== "DD") {
+      throw new Error("Details term has no description");
+    }
+    if (!(description instanceof HTMLElement)) {
+      throw new Error("Details description is not an element");
+    }
+    return description;
+  }
+
+  it("shows the lines after the first, so a settled card's routing steps are visible before they are sent", async () => {
+    const routing = routingSettledReportText(SETTLED_NOTICE);
+    const harness = await openReview(`Rate limited.\n\n${routing}`);
+
+    expect(detailsDescription().textContent).toBe(routing);
+    const stepLines = routing
+      .split("\n")
+      .filter((line) => line.startsWith("Step "));
+    expect(stepLines).toHaveLength(2);
+    expect(stepLines[1]).toContain("resumed at ");
+    for (const line of stepLines) {
+      expect(detailsDescription().textContent).toContain(line);
+    }
+
+    // Shown = sent.
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+    await screen.findByRole("heading", { name: "Report sent" });
+    const sent = lastSubmittedForm(harness).privateDiagnostics?.cause?.message;
+    expect(sent).toContain(routing);
+    for (const line of stepLines) {
+      expect(sent).toContain(line);
+    }
+  });
+
+  it("shows what is sent for the live-drive fixture, with exactly one Cause line", async () => {
+    const routing = routingSettledReportText({
+      title: "Routing couldn't recover this turn",
+      message: "The rate limit on Claude Code · Surya stands.",
+      details: [
+        { label: "Code", value: "FALLBACK_EXHAUSTED" },
+        { label: "Detail", value: "Routing tried 1 option and none worked." },
+        { label: "Cause", value: "Every step was tried" },
+        { label: "Reason", value: "Rate limit reached" },
+        { label: "Failed on", value: "claude/opus (Surya)" },
+        { label: "Tried", value: "claude/sonnet (Surya 2)" },
+        {
+          label: "Hop 1",
+          value: "claude/opus (Surya) → claude/sonnet (Surya 2)",
+        },
+      ],
+      receipt: {
+        causeLabel: "Every step was tried",
+        steps: [
+          {
+            kind: "switch",
+            providerLabel: "Claude Code",
+            modelLabel: "sonnet",
+            profileLabel: "Surya 2",
+            resumedAt: null,
+            endedLabel: "Rate limit reached",
+          },
+        ],
+      },
+    });
+    const harness = await openReview(`Rate limited.\n\n${routing}`);
+
+    const shown = detailsDescription().textContent;
+    fireEvent.click(screen.getByRole("button", { name: "Send report" }));
+    await screen.findByRole("heading", { name: "Report sent" });
+    const sent =
+      lastSubmittedForm(harness).privateDiagnostics?.cause?.message ?? "";
+    const remainder = sent.split("\n").slice(1).join("\n").trim();
+
+    expect(shown).toBe(remainder);
+    expect(
+      shown.split("\n").filter((line) => line.startsWith("Cause:")),
+    ).toHaveLength(1);
+  });
+
+  it("renders a single-line message exactly as before", async () => {
+    await openReview("Rate limited.");
+
+    expect(screen.queryByText("Details", { selector: "dt" })).toBeNull();
+    // Recorded on the bytes before the Details row existed; a single-line
+    // message must keep producing exactly this.
+    expect(reviewList().textContent).toBe(
+      "Errorrate_limit: Rate limited.Operationagent-turnVersionsapp 1.2.3 · host 0.4.0 · darwin arm64",
+    );
+  });
+
+  it("wraps a long unbroken token instead of widening the dialog", async () => {
+    const slug = "x".repeat(400);
+    await openReview(`Rate limited.\n\nSlug: ${slug}`);
+
+    const description = detailsDescription();
+    expect(description.textContent).toContain(slug);
+    expect(description.className).toContain("wrap-anywhere");
+    expect(description.className).toContain("whitespace-pre-wrap");
+    const list = description.closest("dl");
+    expect(list?.className).toContain("grid-cols-1");
+    const strip = list?.closest(".overflow-y-auto");
+    expect(strip?.className).toContain("grid-cols-1");
   });
 });
 

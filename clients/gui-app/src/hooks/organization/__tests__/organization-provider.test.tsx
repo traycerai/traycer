@@ -78,7 +78,10 @@ vi.mock("@/stores/auth/auth-store", () => ({
         readonly contextMetadata: { readonly userId: string } | null;
       }) => T,
     ): T => selector(authSnapshot()),
-    { getState: authSnapshot },
+    {
+      getState: authSnapshot,
+      subscribe: () => () => {},
+    },
   ),
 }));
 

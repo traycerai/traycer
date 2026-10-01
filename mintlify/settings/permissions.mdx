@@ -5,33 +5,45 @@ description: "Choose the default permission mode, pick the judge that reviews co
 
 **Permissions** settings control how much an agent may do on its own, and who reviews the rest. The page has four tabs: **Modes**, **Judge**, **Rules**, and **Activity**.
 
+Permissions is in the Host group of Settings. **Judge** and **Activity** apply to the host selected in the [host picker](/settings#host-picker). **Modes** is the exception: the host picker doesn't change anything on that tab.
+
 For what each mode does in a conversation, see [Permissions](/panels/agents#permissions) on the Agents page.
 
 ## Modes
 
-**New conversations start in** sets the default mode for new conversations on all machines. A card for each mode lists what that mode runs without asking.
+**New conversations start in** sets the default mode for new conversations. It is marked **All machines** because it applies whichever host a conversation runs on. The default is **Full access**.
 
-| Mode                  | Runs without asking                                                                 |
-| --------------------- | ----------------------------------------------------------------------------------- |
-| **Supervised**        | Nothing. Every command and file change asks.                                        |
-| **Auto-accept edits** | Reads, searches, and edits. Commands still ask.                                     |
-| **Auto**              | Reads, searches, edits, and the commands the judge approves. Risky ones still ask.  |
-| **Full access**       | Everything.                                                                         |
+A card for each mode lists what that mode runs without asking.
 
-You can still change the mode for any conversation from the composer.
+| Mode                  | Runs without asking                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Supervised**        | Reads and searches. Every command and file change asks.                                                             |
+| **Auto-accept edits** | Reads, searches, and file edits. Commands still ask.                                                                |
+| **Auto**              | Reads, searches, edits, and the commands the judge approves. Risky commands still ask you.                          |
+| **Full access**       | Everything, unreviewed.                                                                                             |
+
+**Auto is experimental.** We’re still improving its reliability and speed. It appears last in the permission picker, and it carries an **Experimental** label in the picker, on its mode card, and on the **Judge** tab.
+
+In **Auto** mode, edits to files that define what runs later still ask you, because the judge can't see what such an edit changes. These include git internals and hooks, CI workflows, project manifests and build or test configuration (such as `package.json`, `Makefile` or `pyproject.toml`), editor and agent settings (such as `.vscode/tasks.json` or `.claude/settings.json`), SSH configuration, and the repository's `.traycer/auto-policy.md` and `.traycer/environment.json`.
+
+You can change the mode for any conversation from the composer. A new composer starts from the settings you last ran with on that host (for a new conversation in a Task, the ones you last used in that Task), mode included. **New conversations start in** applies when there are none.
 
 This default applies only to conversations you start in the app. Agents created from the [CLI](/cli/commands) or by another agent start in **Full access** unless their creator passes `--permission-mode`.
 
 ## Judge
 
-The judge is the model that reviews commands when a conversation runs in Auto mode. This choice is stored on the machine you are editing.
+The judge is the model that reviews commands when a conversation runs in Auto mode. This choice is stored on the host you are editing.
 
 | Option               | What reviews commands                                                                                                                                            |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Automatic**        | Traycer's hosted model when Traycer inference is available and uses Traycer credits. If it isn't available, the conversation's own provider reviews, billed to your account there. |
 | **A specific model** | The **Provider**, **Account**, and **Model** you choose. It is billed to that provider's account, on top of the conversation itself.                             |
 
-The Auto option in the composer picker shows which judge is active and how it is billed, for example **Reviewed by … on Traycer · uses credits**. If no judge can run on the machine, it shows **No judge available on this machine · asks you instead**, and commands go to you for approval.
+<Note>
+  When GitHub Copilot does the reviewing, either because you chose it or because **Automatic** falls back to a Copilot conversation's own provider, the judge uses Copilot premium requests: about 60–350 per hour of Auto mode, billed on top of the conversation.
+</Note>
+
+This tab is where you see which judge is active and how it is billed. The Auto option in the composer picker shows only a short description, without the judge or its billing. If no judge can run on the host, the option shows **No judge available on this machine · asks you instead**, and commands go to you for approval.
 
 ### Providers With A Built-In Reviewer
 
@@ -53,6 +65,12 @@ Rules tell the judge what to trust and what to bring to you. Your rules add to T
 
 Click **Save rules** to apply your changes, or **Discard** to drop them.
 
+### Allow From Now On
+
+When the judge sends you an action only because you didn't ask for that exact action, the approval card says "Sent to you because you didn't ask for this exact action." and offers **Allow from now on…**. The same link appears on those decisions in [Activity](#activity).
+
+**Allow from now on…** opens the **Rules** tab with a drafted **Always allow** rule that names the judge's rule and the exact action. When Traycer knows where the conversation runs, the draft is narrowed to that repository and worktree branch. Edit the draft if you want it broader or narrower, then click **Save rules**. Nothing changes until you save.
+
 ### Repository Rules
 
 A repository can add its own rules in a committed file:
@@ -65,12 +83,14 @@ Repository rules can only add restrictions. Only their **Ask first** and **Never
 
 ## Activity
 
-**Recent decisions** lists what the judge decided recently on this machine: when, which action, and the outcome. Filter by **Allowed**, **Asked you**, **Refused**, or **Couldn't decide**.
+**Recent decisions** lists what the judge decided on this host: when, in which conversation, which action, the outcome, and why. The host keeps the last 200 decisions. Filter by **All**, **Allowed**, **Asked you**, **Refused**, or **Couldn't decide**.
 
-Commands the judge approves run without a card in the conversation, so this is where to check them. Decisions stay on the machine and are not synced.
+Commands the judge approves run without a card in the conversation, so this is where to check them. Decisions stay on the host and are not synced.
+
+For a conversation reviewed by a provider's built-in classifier, Activity shows what the classifier allowed. What it refused reaches you as an ordinary approval and isn't listed here.
 
 <Note>
-  If a machine's Host predates Auto mode, the Auto option says **Needs a newer
-  Traycer on this machine**, and these tabs ask you to update the Host. See
-  [Host](/settings/host).
+  If a host predates Auto mode, the Auto option says **Needs a newer
+  Traycer on this machine**, and these tabs ask you to update the host. See
+  [Overview](/settings/host).
 </Note>

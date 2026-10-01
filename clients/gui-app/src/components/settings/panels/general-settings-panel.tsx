@@ -5,6 +5,7 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
+import { HostLifecycleSettingsSection } from "@/components/settings/host-lifecycle-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
 import { runnerMutationKeys } from "@/lib/query-keys";
-import { clearAllPersistedStores } from "@/lib/persist";
+import { clearAllPersistedStores } from "@/lib/persist/wipe";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import type {
   DesktopJsonValue,
@@ -98,6 +99,10 @@ export function GeneralSettingsPanel() {
           hides itself on builds with no power bridge - so the heading has to
           go with it rather than be gated a second time here. */}
         <PreventSleepSettingsSection />
+
+        {/* Desktop only, and gated inside: it draws nothing on a shell with
+          no host lifecycle bridge. */}
+        <HostLifecycleSettingsSection />
 
         <SettingsGroup
           group={GENERAL.definitions.worktrees}

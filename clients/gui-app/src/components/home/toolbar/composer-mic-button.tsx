@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Mic, Square } from "lucide-react";
 import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -5,10 +6,15 @@ import { cn } from "@/lib/utils";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useRegionShown } from "@/lib/layout-overrides";
 import { DICTATION_ACTION_ID } from "@/hooks/composer/use-dictation-hotkey";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
+import {
+  useLayoutRegion,
+  useRegionGhost,
+} from "@/components/layout-editor/use-layout-region";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
@@ -57,7 +63,7 @@ export function ComposerMicButton({
   const isBusy = state === "requesting" || state === "transcribing";
   const isRecording = state === "recording";
   const label = labelFor(state);
-  const mic = useLayoutStore((s) => s.composer.mic);
+  const micShown = useMicDrawn();
   // Surface the (live, rebindable) shortcut in the tooltip when idle so it's
   // discoverable; omit it where the action is unbound, or where shortcut hints
   // are suppressed - the tooltip then carries the plain action label.
@@ -71,7 +77,7 @@ export function ComposerMicButton({
       ? `${label} (${hint})`
       : label;
 
-  if (mic === "hidden") return null;
+  if (!micShown) return null;
 
   return (
     <TooltipWrapper
@@ -85,8 +91,11 @@ export function ComposerMicButton({
         aria-pressed={isRecording}
         onClick={onToggle}
         className={cn(
+          // Recording keeps its border whichever toolbar chrome is active
+          // (Layout ▸ Composer ▸ Toolbar style): a destructive fill with no
+          // edge reads as a mis-painted chip rather than as a live state.
           isRecording &&
-            "bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
+            "border border-destructive/30 bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
         )}
       >
         <MicButtonIcon isBusy={isBusy} isRecording={isRecording} />
@@ -174,8 +183,8 @@ export function ComposerMicPreparing({
     status.downloadState === "downloading" ? status.progress : null;
   // Holds the mic's slot, so it follows the mic's own visibility: a toolbar
   // configured without a mic must not sprout one for the length of a download.
-  const mic = useLayoutStore((s) => s.composer.mic);
-  if (mic === "hidden") return null;
+  const micShown = useMicDrawn();
+  if (!micShown) return null;
   // A native `title` on a `disabled` button doesn't show on hover (the button
   // gets no pointer events). Put the tooltip on a wrapping span and make the
   // button `pointer-events-none` so the hover lands on the span.
@@ -198,4 +207,55 @@ export function ComposerMicPreparing({
       </span>
     </TooltipWrapper>
   );
+}
+
+/**
+ * The mic's toolbar slot, as the `mic` region: `ComposerMicButton` while
+ * dictation is available, `ComposerMicPreparing` while the on-device model
+ * downloads, and nothing when the layout preference hides it or this host
+ * cannot offer voice input at all.
+ */
+/**
+ * Whether the mic slot draws: its own `shown`, plus the editor's materialised
+ * preview of a hidden one (L-14). Both leaves below render from the props the
+ * slot already holds, so a preview of one starts no work.
+ */
+function useMicDrawn(): boolean {
+  const shown = useRegionShown("mic");
+  const ghost = useRegionGhost("mic");
+  return shown || ghost;
+}
+
+export function ComposerMicSlot(props: {
+  readonly dictation: ComposerDictationControl | null;
+  readonly dictationPreparing: DictationPreparingStatus | null;
+}): ReactNode {
+  const tileId = useComposerTileId();
+  const { ref, editing } = useLayoutRegion({
+    regionId: "mic",
+    instanceId: tileId,
+  });
+  const micShown = useMicDrawn();
+  if (!micShown) return null;
+  if (props.dictation !== null) {
+    return (
+      <span
+        ref={ref}
+        className={cn(editing ? "inline-flex items-center" : "contents")}
+      >
+        <ComposerMicButton control={props.dictation} />
+      </span>
+    );
+  }
+  if (props.dictationPreparing !== null) {
+    return (
+      <span
+        ref={ref}
+        className={cn(editing ? "inline-flex items-center" : "contents")}
+      >
+        <ComposerMicPreparing status={props.dictationPreparing} />
+      </span>
+    );
+  }
+  return null;
 }

@@ -42,6 +42,10 @@ import {
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
@@ -721,7 +725,12 @@ describe("<UserMessageBody /> agent messages", () => {
     const display = screen
       .getByLabelText("Attached Image#2: second.png")
       .closest("[data-user-message-display]");
-    expect(display?.className).toContain("max-w-[min(100%,48rem)]");
+    // No hardcoded cap of its own: it inherits the ancestor row's reading
+    // width, exactly like its sibling `InlineUserMessageEditor` (which is
+    // plain `w-full`) - a regression guard against either the old fixed
+    // 48rem cap or the even older 85% one reappearing.
+    expect(display?.className).toContain("w-full");
+    expect(display?.className).not.toContain("max-w-[min(100%,48rem)]");
     expect(display?.className).not.toContain("max-w-[85%]");
   });
 
@@ -1103,12 +1112,19 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   it("renders received agent messages as an expandable A2A card", () => {
-    render(
+    const { container } = render(
       <UserMessageBody
         actions={null}
         message={agentMessage("Investigate this failure.")}
       />,
     );
+
+    // No hardcoded cap of its own (it used to carry
+    // `max-w-[min(100%,48rem)]`) - it inherits the ancestor row's reading
+    // width instead, matching the sent A2A card (`A2ASendToolSegment`),
+    // which has no width wrapper at all. `attachments: []` on this fixture
+    // leaves this wrapper as the render's only element.
+    expect(container.firstElementChild?.className).toBe("w-full");
 
     // The direction label is for assistive tech only: the icon plus "from"
     // already say it, and the visible words were crowding the sender name out
@@ -2103,6 +2119,7 @@ describe("<ChatMessage /> sender overline timestamp", () => {
 
   afterEach(() => {
     cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("renders exactly one timestamp on a sent YOU row", () => {
@@ -2219,4 +2236,36 @@ describe("<ChatMessage /> sender overline timestamp", () => {
       expect(overline?.textContent).toBe("You");
     },
   );
+
+  // Layout > Chat > Timestamps (audit R1, R3): the stamp and the " · " that
+  // joins it to the sender label are one region, and hiding it must not
+  // strand the separator any more than an unrepresentable instant does above.
+  it("renders the stamp and its ' · ' separator when Timestamps is shown, neither when hidden", () => {
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+    expect(screen.getByTestId("chat-message-timestamp")).not.toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toContain(" · ");
+    cleanup();
+
+    useLayoutStore.getState().setRegionValues("timestamps", {
+      shown: "hidden",
+    });
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toBe("You");
+  });
 });

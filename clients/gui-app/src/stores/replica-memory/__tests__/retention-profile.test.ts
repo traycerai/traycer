@@ -52,6 +52,9 @@ describe("RetentionProfile", () => {
     expect(MOBILE_RETENTION_PROFILE.maxLingeringPlainTerminals).toBeLessThan(
       DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals,
     );
+    expect(MOBILE_RETENTION_PROFILE.transcriptImageCacheBytes).toBeLessThan(
+      DESKTOP_RETENTION_PROFILE.transcriptImageCacheBytes,
+    );
   });
 
   it("keeps the live-epic cap above the retained-surface count on mobile too", () => {
@@ -63,6 +66,13 @@ describe("RetentionProfile", () => {
     // defeat the ratio the doc comment on `RetentionProfile` describes.
     expect(MOBILE_RETENTION_PROFILE.maxLiveEpics).toBeGreaterThan(
       MOBILE_RETENTION_PROFILE.retainedTopLevelSurfaces,
+    );
+  });
+
+  it("owns the unknown-activity cap grace in each shell profile", () => {
+    expect(DESKTOP_RETENTION_PROFILE.unknownActivityCapGraceMs).toBe(60_000);
+    expect(MOBILE_RETENTION_PROFILE.unknownActivityCapGraceMs).toBeGreaterThan(
+      0,
     );
   });
 

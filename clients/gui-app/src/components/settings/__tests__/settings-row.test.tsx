@@ -7,7 +7,12 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 /** Rows shaped like the real ones; the section id is incidental. */
 const ROWS = defineSettingsSection("appearance", {
-  page: { label: "Appearance", description: "Page.", keywords: ["page"] },
+  page: {
+    availableWhen: alwaysAvailable,
+    label: "Appearance",
+    description: "Page.",
+    keywords: ["page"],
+  },
   artifactIconColors: {
     kind: "row",
     group: null,

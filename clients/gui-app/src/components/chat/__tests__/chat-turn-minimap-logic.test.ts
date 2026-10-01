@@ -11,6 +11,7 @@ import {
   resolveChatTurnMinimapCurrentIndex,
   resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapTopStyle,
+  shouldRunChatTurnMinimapRail,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { MINIMAP_TRACK_END_HIT_PADDING } from "@/components/minimap/minimap-track-geometry";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
@@ -182,6 +183,7 @@ describe("chatTurnMinimapItems caching", () => {
       indexRevision: 1,
       indexRevisionRebuilding: false,
       skeleton: entries,
+      skeletonRevision: 0,
       skeletonComplete: true,
       // Fully delivered: the prefix reached the end of the index.
       skeletonStreamCoveredThrough: entries.length,
@@ -296,5 +298,38 @@ describe("chatTurnMinimapItems caching", () => {
     const second = chatTurnMinimapItems({ rows: suppressed, window });
 
     expect(second).not.toBe(first);
+  });
+});
+
+/**
+ * The rail's geometry effect measures the transcript container, which forces a
+ * layout while the virtualized list is measuring its own rows - so the gate
+ * that decides whether it runs at all is worth pinning on its own. It lost its
+ * only direct coverage when the old overlay suite went.
+ */
+describe("shouldRunChatTurnMinimapRail", () => {
+  it.each([
+    {
+      name: "runs where the rail can actually paint",
+      input: { shown: true, coarsePointer: false, mobileViewport: false },
+      expected: true,
+    },
+    {
+      name: "stands down for a touch pointer, which never hovers it",
+      input: { shown: true, coarsePointer: true, mobileViewport: false },
+      expected: false,
+    },
+    {
+      name: "stands down below the breakpoint that hides it",
+      input: { shown: true, coarsePointer: false, mobileViewport: true },
+      expected: false,
+    },
+    {
+      name: "stands down when the layout hides the minimap",
+      input: { shown: false, coarsePointer: false, mobileViewport: false },
+      expected: false,
+    },
+  ] as const)("$name", ({ input, expected }) => {
+    expect(shouldRunChatTurnMinimapRail(input)).toBe(expected);
   });
 });

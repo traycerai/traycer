@@ -74,7 +74,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
@@ -198,8 +198,8 @@ function renderPanelPersistent(): { rerender: () => void } {
 }
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -221,7 +221,7 @@ function attemptOperation(
 }
 
 function statusWith(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -244,7 +244,7 @@ function statusWith(
 // carrying the whole signal, and that is exactly the shape this suite's
 // coarse-progress tests below exercise.
 function statusWithCoarseProgress(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   updateProgress: ResponseOfMethod<
     HostRpcRegistry,
     "host.status"
@@ -287,7 +287,7 @@ function floorCapableMinorFor(method: string): number {
 
 function statusWithBusy(
   hostVersion: string,
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   busy: boolean,
   busySessionCount: number,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
@@ -698,7 +698,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
    * what holds it to that.
    */
   function statusRunning(
-    operation: HostStatusUpdateOperation,
+    operation: HostStatusUpdateOperationV2,
     hostVersion: string,
   ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
     return {
@@ -2687,16 +2687,15 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
 // a completed/finalizing-record update is SETTINGS-ONLY. The landing banner
 // never renders that kind at all and never calls this hook (G9,
 // `host-update-banner-bound.test.tsx`), so there is no cross-surface contract
-// to pin here — this card owns the manual dismiss, the auto-collapse timer,
-// and its own write into `landingDismissedAttemptIds` for a success. That
-// store field stays failure-writable from landing too, but this card only
-// ever resolves an attempt id out of it for `complete`/`finalizing-record`,
-// never `failed`, which is what keeps a landing failure dismissal from
-// hiding a failure here.
-describe("HostOverviewOperationCard — success acknowledgement (Settings-only)", () => {
+// to pin for a success — this card owns the manual dismiss, the auto-collapse
+// timer, and its own write into `landingDismissedAttemptIds`. A FAILURE is
+// dismissible here as well, by hand only, through the same per-attempt list
+// the landing banner writes: one dismissal hides the failure on both
+// surfaces, and a newer attempt id arrives undismissed.
+describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", () => {
   const HOST_ID = "host-a";
 
-  function completeOperation(attemptId: string): HostStatusUpdateOperation {
+  function completeOperation(attemptId: string): HostStatusUpdateOperationV2 {
     return attemptOperation({
       attemptId,
       phase: "complete",
@@ -2841,15 +2840,7 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
     await screen.findByTestId("host-overview-operation-card");
   });
 
-  it("a FAILED attempt already dismissed (by id) on the landing banner still renders on Settings, with no dismiss control offered there", async () => {
-    // Simulates a prior landing dismissal writing this attempt id into the
-    // SAME store field this card's success dismissal uses.
-    // `useHostUpdateCompletion` resolves an attempt id only for
-    // `complete`/`finalizing-record`, so a `failed` view is never suppressed
-    // by it regardless of what the store holds under this id.
-    useHostUpdateBannerStore
-      .getState()
-      .dismissLandingAttempt("attempt-failed-shared");
+  function bindFailed(attemptId: string): void {
     const fixture = buildOverviewHostFixture({
       hostId: HOST_ID,
       isLocalMachine: true,
@@ -2857,9 +2848,15 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
         "host.status": () =>
           statusWith(
             attemptOperation({
-              attemptId: "attempt-failed-shared",
-              phase: "downloading",
-              liveness: "interrupted",
+              attemptId,
+              phase: "failed",
+              execution: "terminal",
+              liveness: "terminal",
+              error: {
+                code: "verify-timeout",
+                message: "the host did not become healthy at that version",
+                phase: "verifying",
+              },
             }),
           ),
       },
@@ -2867,16 +2864,77 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
     recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+  }
+
+  it("a FAILED attempt offers a manual Dismiss, clicking it hides the card, and the dismissal is remembered by attempt id", async () => {
+    bindFailed("attempt-failed-dismiss");
     renderPanel();
 
     const card = await screen.findByTestId("host-overview-operation-card");
     expect(card.textContent).toMatch(/Update failed/);
-    expect(screen.queryByTestId("host-overview-operation-dismiss")).toBeNull();
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-failed-dismiss");
+  });
+
+  it("a FAILED attempt is never auto-collapsed — only the person dismisses it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bindFailed("attempt-failed-no-timer");
+      renderPanel();
+      await screen.findByTestId("host-overview-operation-card");
+      await vi.advanceTimersByTimeAsync(
+        HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS * 2,
+      );
+      expect(
+        screen.queryByTestId("host-overview-operation-card"),
+      ).not.toBeNull();
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).not.toContain("attempt-failed-no-timer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a FAILED attempt already dismissed (by id) on the landing banner is dismissed on Settings too, and a NEWER failed attempt id is not", async () => {
+    // A prior landing dismissal writes this attempt id into the SAME
+    // per-attempt list the Settings card consults, so the failure is hidden
+    // on both surfaces at once.
+    useHostUpdateBannerStore
+      .getState()
+      .dismissLandingAttempt("attempt-failed-shared");
+    bindFailed("attempt-failed-shared");
+    const queryClient = renderPanel();
+    await selectHostOverviewTab("updates");
+    await screen.findByTestId("host-overview-version");
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+
+    // Tear the first tree down for real (`QueryClient.unmount` would only
+    // detach the cache, leaving the panel mounted beside the next one).
+    cleanup();
+    hostBindingMock.current = null;
+    bindFailed("attempt-failed-newer");
+    renderPanel();
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toMatch(/Update failed/);
+    expect(
+      screen.queryByTestId("host-overview-operation-dismiss"),
+    ).not.toBeNull();
   });
 
   const NON_TERMINAL_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation;
+    readonly operation: HostStatusUpdateOperationV2;
   }> = [
     {
       name: "active (downloading)",
@@ -2920,7 +2978,7 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
   // lost its dismiss/timer, and a fresh dismissal stopped matching once the
   // kind changed and the card reappeared.
   describe("retained (stale) success — PR2069 regression", () => {
-    function bindDisconnectable(operation: HostStatusUpdateOperation): {
+    function bindDisconnectable(operation: HostStatusUpdateOperationV2): {
       readonly disconnect: () => void;
     } {
       const fixture = buildOverviewHostFixture({
@@ -3001,14 +3059,16 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
       expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     });
 
-    it("a FAILED attempt shows with no dismiss offered while reachable; once the scope goes unusable the offline notice replaces the card", async () => {
+    it("a FAILED attempt is dismissible while reachable; once the scope goes unusable the offline notice replaces the card and the dismissal holds", async () => {
       // A terminal `failed` phase: staleness retains the raw phase, so only
       // a phase that already IS "failed" retains as failed. T2's Status tab
       // withholds the update card entirely once the host can't be reached —
       // the offline notice is the tab's only unreachable wording then — so
       // the retained "Last seen: Update failed" sentence this pin used to
       // read off the card now lives there instead (with no phase clause:
-      // `LAST_SEEN_CLAUSE.failed === null`).
+      // `LAST_SEEN_CLAUSE.failed === null`). The dismiss is offered for the
+      // failure exactly as for a success, and a dismissal taken while
+      // reachable is not resurrected by the demotion to `unknown`.
       const { disconnect } = bindDisconnectable(
         attemptOperation({
           attemptId: "attempt-retained-failed",
@@ -3025,9 +3085,15 @@ describe("HostOverviewOperationCard — success acknowledgement (Settings-only)"
           screen.getByTestId("host-overview-operation-phase").textContent,
         ).toBe("Update failed");
       });
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-dismiss"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
       expect(
-        screen.queryByTestId("host-overview-operation-dismiss"),
-      ).toBeNull();
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).toContain("attempt-retained-failed");
 
       disconnect();
       panel.rerender();

@@ -59,6 +59,12 @@ export function createProcessMemoryRuntime(
     environment,
     observedCeilingBytes: OBSERVED_RENDERER_CEILING_BYTES,
   });
+  accountant.subscribeSettlements(() => {
+    for (const listener of settlementListeners) listener();
+  });
+  accountant.subscribeProvisionalCharges(() => {
+    for (const listener of provisionalChargeListeners) listener();
+  });
 
   accountant.register({
     planeId: BUDGET_PLANE_IDS.chatWindows,
@@ -96,6 +102,28 @@ export function createProcessMemoryRuntime(
 }
 
 let processRuntime: ProcessMemoryRuntime | null = null;
+const settlementListeners = new Set<() => void>();
+const provisionalChargeListeners = new Set<() => void>();
+
+/** The byte budget observes completed measurements across all planes. */
+export function subscribeProcessMemorySettlements(
+  listener: () => void,
+): () => void {
+  settlementListeners.add(listener);
+  return () => {
+    settlementListeners.delete(listener);
+  };
+}
+
+/** Provisional growth wakes the global byte budget without a hot-path encode. */
+export function subscribeProcessMemoryProvisionalCharges(
+  listener: () => void,
+): () => void {
+  provisionalChargeListeners.add(listener);
+  return () => {
+    provisionalChargeListeners.delete(listener);
+  };
+}
 
 /**
  * The process-wide singleton. Callers inject the environment on first
@@ -118,6 +146,11 @@ export function getProcessMemoryRuntime(): ProcessMemoryRuntime {
       "process memory runtime is not installed; call ensureProcessMemoryRuntime",
     );
   }
+  return processRuntime;
+}
+
+/** Diagnostics can open before the first replica or chat has installed it. */
+export function readProcessMemoryRuntime(): ProcessMemoryRuntime | null {
   return processRuntime;
 }
 

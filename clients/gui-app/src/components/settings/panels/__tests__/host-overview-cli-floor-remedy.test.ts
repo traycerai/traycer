@@ -1109,4 +1109,31 @@ describe("describeCliFloorRemedy", () => {
     // into a retrying check and this negative pin would turn RED.
     expect(current.sentence).toContain("up to date");
   });
+
+  const SMART_QUOTES = ["\u2018", "\u2019", "\u201A", "\u201B"];
+
+  it.each(SMART_QUOTES)(
+    "doubles PowerShell single-quote %s in the Windows copy-command invocation",
+    (quoteChar: string) => {
+      const binaryPath = `C:\\Users\\O${quoteChar}Brien\\cli\\traycer.exe`;
+      const result = describeCliFloorRemedy(
+        input({
+          source: "manual",
+          platform: "win32-x64",
+          isLocalMachine: false,
+          desktopUpdate: null,
+          overrides: { cliBinaryPath: binaryPath },
+        }),
+      );
+      expect(result.actions).toEqual([
+        {
+          kind: "copy-command",
+          label: "Copy commands",
+          command:
+            `& 'C:\\Users\\O${quoteChar}${quoteChar}Brien\\cli\\traycer.exe' cli upgrade\n` +
+            `& 'C:\\Users\\O${quoteChar}${quoteChar}Brien\\cli\\traycer.exe' host restart`,
+        },
+      ]);
+    },
+  );
 });

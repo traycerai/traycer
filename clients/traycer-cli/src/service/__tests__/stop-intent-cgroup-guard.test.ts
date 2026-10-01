@@ -176,7 +176,9 @@ describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before t
       ),
     );
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
     });
 
@@ -203,7 +205,7 @@ describe("withCliInvocationRecord(withStopIntent(...)) - the guard runs before t
       ),
     );
 
-    await controller.uninstall({ label });
+    await controller.uninstall({ label, leaveForegroundRun: null });
 
     expect(recordMocks.uninstallTransactions).toBe(1);
     expect(mocks.writes).toEqual(["uninstall"]);
@@ -336,7 +338,9 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
       }),
     );
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
     });
 
@@ -403,7 +407,7 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
         },
       }),
     );
-    await uninstallController.uninstall({ label });
+    await uninstallController.uninstall({ label, leaveForegroundRun: null });
 
     const restartController = withStopIntent(
       baseController({
@@ -466,7 +470,9 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     await expect(
       controller.stopForRestart(label, { force: false }),
     ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
     });
     await expect(controller.restart(label)).rejects.toMatchObject({
@@ -524,7 +530,9 @@ describe("withStopIntent - Linux cgroup self-protection guard", () => {
     await expect(
       controller.stopForRestart(label, { force: false }),
     ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: "E_SERVICE_CONTROL_FAILED",
     });
     await expect(controller.restart(label)).rejects.toMatchObject({

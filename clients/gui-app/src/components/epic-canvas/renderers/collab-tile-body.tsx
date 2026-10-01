@@ -24,6 +24,7 @@ import { ArtifactAttachmentScopeContext } from "@/lib/attachments/artifact-attac
 import { useArtifactAttachmentScopeValue } from "@/lib/attachments/use-artifact-attachment-scope-value";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { collabTileNotice } from "./collab-tile-availability-copy";
 import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
@@ -63,7 +64,12 @@ import {
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { cn } from "@/lib/utils";
+import {
+  useArrangementValue,
+  useReadingWidthStyle,
+  useRegionShown,
+} from "@/lib/layout-overrides";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
@@ -302,6 +308,7 @@ function CollabTileSkeleton(props: {
   readonly bodyBoundOnce: boolean;
   readonly budgetElapsed: boolean;
 }) {
+  const readingWidth = useReadingWidthStyle();
   const testIdSuffix =
     props.subscribeAnswered && props.bodyAvailability === "unavailable"
       ? "unavailable"
@@ -320,7 +327,11 @@ function CollabTileSkeleton(props: {
       data-body-subscribe-answered={props.subscribeAnswered ? "true" : "false"}
       data-body-bound-once={props.bodyBoundOnce ? "true" : "false"}
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
-      className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
+      className={cn(
+        "mx-auto flex w-full flex-col gap-3 px-6 py-8",
+        readingWidth.className,
+      )}
+      style={{ maxWidth: readingWidth.maxWidth }}
     >
       {notice === null ? (
         <>
@@ -380,6 +391,7 @@ function draftRangeOwnedByTile(
 }
 
 function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
+  const readingWidth = useReadingWidthStyle();
   const {
     node,
     viewTabId,
@@ -735,6 +747,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // the document instead of holding the tile edge.
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
+      <MobileDrawerVisibleTilePaintReporter ready={editor !== null} />
       <CollabTileBodySyncStrip artifactId={node.id} testId={testId} />
       <ArtifactHeadingMinimapMount
         editor={editor}
@@ -749,7 +762,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
         onScroll={onScroll}
       >
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-col gap-4",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
           <div className="tc-editor-surface">
             <div
               className="tc-editor-body"
@@ -843,11 +862,15 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
  * is missing, and saying "Reconnecting to this document…" over one the host
  * already holds is the state this strip replaced.
  *
- * The same sweep and the same words as every other surface that says it is
- * syncing, escalated the same way: after `LINK_DOWN_ESCALATION_MS` the bar
- * stops moving and the label becomes "Still syncing…". A sync that is paused
- * (a credential the host is waiting to see rotated) would otherwise animate for
- * as long as the tile is open.
+ * The same sweep as every other surface that says it is syncing, escalated the
+ * same way: after `LINK_DOWN_ESCALATION_MS` the bar stops moving. A sync that
+ * is paused (a credential the host is waiting to see rotated) would otherwise
+ * animate for as long as the tile is open.
+ *
+ * The bar is the whole visible signal; the words are for assistive tech only.
+ * A visible caption had nowhere to go: the tile's top-right corner belongs to
+ * the version-history button, which covered it on every artifact kind, and a
+ * moving bar at the tile edge already says what the word said.
  */
 function CollabTileBodySyncStrip(props: {
   readonly artifactId: string;
@@ -864,14 +887,17 @@ function CollabTileBodySyncStrip(props: {
       data-testid={`${props.testId}-body-syncing`}
       role="status"
       aria-live="polite"
-      className="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-col items-end"
+      className="pointer-events-none absolute inset-x-0 top-0 z-10"
     >
       <SyncingSweepBar
         settled={escalated}
         testId={`${props.testId}-body-syncing-bar`}
         className={undefined}
       />
-      <span className="mt-1 mr-3 text-ui-xs text-muted-foreground">
+      <span
+        data-testid={`${props.testId}-body-syncing-label`}
+        className="sr-only"
+      >
         {streamSyncingLabel(escalated)}
       </span>
     </div>
@@ -884,10 +910,11 @@ function CollabTileBodySyncStrip(props: {
  * artifact kinds get an outline - a workspace file tile shares this body but
  * is not a document with a heading skeleton.
  *
- * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
- * bar existed - the rail is the only consumer there. On a phone viewport it
- * stays mounted and suppresses only its own rail, because the tile bar's
- * button reads the outline it registers and does not obey `hide`.
+ * A hidden minimap unmounts on a desktop viewport, exactly as before the phone
+ * tile bar existed - the rail is the only consumer there. On a phone viewport
+ * it stays mounted and suppresses only its own rail, because the tile bar's
+ * button reads the outline it registers and ignores the region's `shown`
+ * value.
  */
 function ArtifactHeadingMinimapMount(props: {
   readonly editor: Editor | null;
@@ -895,12 +922,13 @@ function ArtifactHeadingMinimapMount(props: {
   readonly refreshRef: RefObject<() => void>;
   readonly scroller: HTMLElement | null;
 }) {
-  const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  const minimapShown = useRegionShown("minimap");
+  const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
   if (
     props.editor === null ||
     !isEpicArtifactKind(props.node.type) ||
-    (side === "hide" && !isMobileViewport)
+    (!minimapShown && !isMobileViewport)
   ) {
     return null;
   }
@@ -909,7 +937,8 @@ function ArtifactHeadingMinimapMount(props: {
       editor={props.editor}
       refreshRef={props.refreshRef}
       scroller={props.scroller}
-      side={side}
+      shown={minimapShown}
+      side={minimapSide}
     />
   );
 }

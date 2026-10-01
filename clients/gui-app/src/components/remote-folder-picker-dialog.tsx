@@ -383,6 +383,7 @@ function RemoteFolderPickerBody(): ReactNode {
       <RemoteFolderPickerFooter
         activeIndex={clampedIndex}
         chooseNatively={nativePicker.chooseNatively}
+        nativePickerAvailable={nativePicker.nativePickerAvailable}
         nativePickerDisabledReason={nativePicker.nativePickerDisabledReason}
         rowCount={rowCount}
         showHiddenFolders={showHiddenFolders}
@@ -467,10 +468,15 @@ function useRemoteFolderPickerNative(args: {
   const [nativePickerPending, setNativePickerPending] = useState(false);
   const nativePickerPendingRef = useRef(false);
   const activeHost = client?.getActiveHost() ?? null;
+  // A shell that can never open a native dialog (the phone, or a desktop
+  // launched with no local host of its own) shows no button at all rather
+  // than one that is permanently disabled.
+  const nativePickerAvailable =
+    runnerHost?.workspaceFolders.canPickNatively === true;
   const nativePickerDisabledReason = readNativePickerDisabledReason(
     nativePickerPending,
     activeHost?.kind ?? null,
-    runnerHost?.workspaceFolders.canPickNatively === true,
+    nativePickerAvailable,
   );
 
   const chooseNatively = async (): Promise<void> => {
@@ -513,7 +519,7 @@ function useRemoteFolderPickerNative(args: {
     }
   };
 
-  return { chooseNatively, nativePickerDisabledReason };
+  return { chooseNatively, nativePickerAvailable, nativePickerDisabledReason };
 }
 
 function isCurrentPickerRequest(requestId: number): boolean {
@@ -538,6 +544,7 @@ function readNativePickerDisabledReason(
 function RemoteFolderPickerFooter(props: {
   readonly activeIndex: number;
   readonly chooseNatively: () => Promise<void>;
+  readonly nativePickerAvailable: boolean;
   readonly nativePickerDisabledReason: string | null;
   readonly rowCount: number;
   readonly showHiddenFolders: boolean;
@@ -570,28 +577,30 @@ function RemoteFolderPickerFooter(props: {
         </div>
       </ShortcutHint>
       <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
-        <TooltipWrapper
-          label={props.nativePickerDisabledReason}
-          side="top"
-          sideOffset={4}
-          align="end"
-        >
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
-            aria-disabled={
-              props.nativePickerDisabledReason === null ? undefined : true
-            }
-            data-testid="remote-folder-picker-native"
-            onClick={() => {
-              void props.chooseNatively();
-            }}
+        {props.nativePickerAvailable ? (
+          <TooltipWrapper
+            label={props.nativePickerDisabledReason}
+            side="top"
+            sideOffset={4}
+            align="end"
           >
-            Open native picker
-          </Button>
-        </TooltipWrapper>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+              aria-disabled={
+                props.nativePickerDisabledReason === null ? undefined : true
+              }
+              data-testid="remote-folder-picker-native"
+              onClick={() => {
+                void props.chooseNatively();
+              }}
+            >
+              Open native picker
+            </Button>
+          </TooltipWrapper>
+        ) : null}
         <Popover>
           <PopoverTrigger asChild>
             <TooltipWrapper

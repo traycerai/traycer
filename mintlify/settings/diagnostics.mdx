@@ -1,0 +1,39 @@
+---
+title: "Diagnostics (Application)"
+sidebarTitle: "Diagnostics"
+description: "Set the desktop app's log level, capture memory diagnostics for a report, and read the app's recent logs."
+---
+
+**Diagnostics** in the **Application** group covers the Traycer app itself: this window's logging and memory, whichever host it points at. For the selected host's logs and log levels, use **Diagnostics** in the Host group; see [Diagnostics (Host)](/settings/host-diagnostics).
+
+These controls are in the desktop app.
+
+## Log Detail
+
+**App log level** sets how much the desktop app writes to its own log. It applies to this app, not to a host.
+
+| Level | Use it for |
+| --- | --- |
+| **Trace** | The most detail. |
+| **Debug** | Capturing a problem for support. |
+| **Info** | Normal use. This is the default. |
+| **Warn** | Warnings and errors only. |
+| **Error** | Errors only. |
+
+When you capture logs for support, raise the level to **Debug**, reproduce the problem, then set it back. While a level differs from Info, the group reminds you, and **Reset all to Info** puts it back.
+
+## Memory
+
+Use these when reporting high memory use.
+
+- **Capture heap snapshot** writes a heap snapshot of this window for a memory report and shows the file's path with a **Copy** button. The app stops responding while the snapshot is written, and the file can be several gigabytes.
+- **Measure JS heaps** lists every JavaScript heap in this window: the page and each background worker it runs, with live, committed, embedder and backing memory for each. A heap snapshot covers the page only, so this accounts for the rest. It doesn't freeze the app.
+
+## Recent Logs
+
+**Recent logs** shows the last 100 lines of the desktop app's log (**Desktop Log**). Expand it to read the lines, then:
+
+- **Copy** copies the lines shown.
+- **Reveal** shows the log file in your file manager.
+
+To send these logs with a bug report, see [Troubleshooting](/reference/troubleshooting).

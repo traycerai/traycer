@@ -11,6 +11,17 @@ import { cn } from "@/lib/utils";
 export const TAB_CLASS_BASE =
   "group/tab relative flex h-9 w-full min-w-0 items-center gap-1.5 px-[var(--header-tab-padding,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
 
+/**
+ * Where a header tab's box sits in its 36px frame: 2px in from every side, so
+ * the box is 32px tall and centred in the 40px header, and neighbouring boxes
+ * keep 4px of ground between them. The corners are the sheets' own
+ * `radius-xl`: a hover, a split's focused member and an unjoined active tab
+ * are this one box; the joined active tab is the same box opened at the
+ * bottom onto the task tray (the tray join in `index.css`).
+ */
+export const TAB_BOX_CLASS =
+  "pointer-events-none absolute inset-0.5 rounded-xl";
+
 export const SPLIT_MEMBER_CLASS =
   "gap-1 px-[var(--header-tab-padding,1.25rem)]";
 export const SPLIT_TAB_CONTROL_CLASS =

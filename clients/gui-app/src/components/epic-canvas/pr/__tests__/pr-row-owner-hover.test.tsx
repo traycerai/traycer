@@ -178,9 +178,15 @@ function rowBody(): HTMLElement {
   return screen.getByTestId("pr-row-main");
 }
 
-/** Radix's trigger opens on a TIMER, and skips touch pointers outright. */
+/**
+ * `useHover`'s open-delay timer lives on a native `mouseenter` listener
+ * Floating UI attaches directly to the DOM node, gated on the pointer type
+ * `onPointerEnter` (a React prop) just recorded - both have to fire, like a
+ * real browser's compat mouse events would.
+ */
 function hoverRow(): void {
   fireEvent.pointerEnter(rowBody(), { pointerType: "mouse" });
+  fireEvent.mouseEnter(rowBody());
   act(() => {
     vi.advanceTimersByTime(OPEN_DELAY_MS * 2);
   });
@@ -269,7 +275,12 @@ describe("PrRow owner hover card", () => {
       }),
     );
     // Left open it would sit over the tile it just opened until the pointer
-    // happened to leave the row.
+    // happened to leave the row. `open` flips synchronously, but the content
+    // node stays mounted for its exit transition (`useTransitionStyles`,
+    // motion unmocked in this file) until that timer fires.
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(hoverCard()).toBeNull();
   });
 

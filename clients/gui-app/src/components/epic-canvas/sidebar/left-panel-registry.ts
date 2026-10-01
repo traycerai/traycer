@@ -10,12 +10,15 @@ import {
   UserPlus,
   type LucideIcon,
 } from "lucide-react";
+import { DEFAULT_LEFT_PANEL_ID } from "@/stores/epics/left-panel-store";
+import { visibleRailPanelIds, type RailEntry } from "@/lib/layout/rail";
 import {
-  DEFAULT_LEFT_PANEL_ID,
   type LeftPanelId,
-  type LeftPanelGroup,
   type PanelVisibilityOverrideById,
-} from "@/stores/epics/left-panel-store";
+} from "@/lib/left-panel-ids";
+
+export const COMMENTS_AUTO_HINT =
+  "Auto: appears after you open or start a comment on the active artifact.";
 
 export interface LeftPanelAvailabilityContext {
   readonly commentsPanelRevealed: boolean;
@@ -154,7 +157,7 @@ const PANEL_DEFINITION_BY_ID = new Map(
  * user's own order (the rail, and Layout settings' panel list). Falls back to
  * the first definition rather than widening every caller to a nullable, since
  * every `LeftPanelId` has a definition by construction and a persisted id this
- * build does not know is already dropped when the groups are normalized.
+ * build does not know is already dropped when the rail is normalized.
  */
 export function getLeftPanelDefinition(
   panelId: LeftPanelId,
@@ -176,45 +179,45 @@ export function isLeftPanelVisible(
 }
 
 /**
- * Which of the visible rail groups owns `activePanelId` - or, when that panel
- * is not currently visible, the group the sidebar body falls back to.
+ * Which visible panel the sidebar body draws - `activePanelId` when it is
+ * visible, and the fallback the body lands on when it is not.
  *
  * Rail and body both resolve through here so hiding the active panel cannot
  * leave them disagreeing: the icon that lights up is the one whose body is on
  * screen. `null` means nothing is visible at all, which the body answers with
  * the default panel.
  */
-export function resolveActiveVisibleGroupIndex(
-  visibleGroupPanelIds: ReadonlyArray<ReadonlyArray<LeftPanelId>>,
+export function resolveDisplayedPanelId(
+  visiblePanelIds: ReadonlyArray<LeftPanelId>,
   activePanelId: LeftPanelId,
-): number | null {
-  const activeIndex = visibleGroupPanelIds.findIndex((panelIds) =>
-    panelIds.includes(activePanelId),
-  );
-  if (activeIndex >= 0) return activeIndex;
-  const defaultIndex = visibleGroupPanelIds.findIndex((panelIds) =>
-    panelIds.includes(DEFAULT_LEFT_PANEL_ID),
-  );
-  if (defaultIndex >= 0) return defaultIndex;
-  return visibleGroupPanelIds.length === 0 ? null : 0;
+): LeftPanelId | null {
+  if (visiblePanelIds.includes(activePanelId)) return activePanelId;
+  if (visiblePanelIds.includes(DEFAULT_LEFT_PANEL_ID))
+    return DEFAULT_LEFT_PANEL_ID;
+  return visiblePanelIds.at(0) ?? null;
 }
 
-/** Retain the PR section in the displayed group while its host has no rows yet. */
+/**
+ * Retain the PR panel while its host has no rows yet and it is the panel the
+ * user is looking at.
+ *
+ * The one thing a flat rail still has to ask in two steps: whether the PR
+ * panel is drawn depends on the context, and the context depends on whether
+ * the PR panel is the one being drawn. Asked by resolving the body's panel
+ * against a context that assumes the rows are there, and keeping that
+ * assumption only if the answer was `pull-requests`.
+ */
 export function retainDisplayedPrPanel(
-  groups: ReadonlyArray<LeftPanelGroup>,
+  rail: ReadonlyArray<RailEntry>,
   activePanelId: LeftPanelId,
   context: LeftPanelAvailabilityContext,
 ): LeftPanelAvailabilityContext {
   const candidateContext = { ...context, hasPullRequests: true };
-  const visibleGroups = groups
-    .map((group) =>
-      group.panelIds.filter((id) =>
-        isLeftPanelVisible(getLeftPanelDefinition(id), candidateContext),
-      ),
-    )
-    .filter((ids) => ids.length > 0);
-  const index = resolveActiveVisibleGroupIndex(visibleGroups, activePanelId);
-  return index !== null && visibleGroups[index].includes("pull-requests")
-    ? candidateContext
-    : context;
+  const displayed = resolveDisplayedPanelId(
+    visibleRailPanelIds(rail, (panelId) =>
+      isLeftPanelVisible(getLeftPanelDefinition(panelId), candidateContext),
+    ),
+    activePanelId,
+  );
+  return displayed === "pull-requests" ? candidateContext : context;
 }

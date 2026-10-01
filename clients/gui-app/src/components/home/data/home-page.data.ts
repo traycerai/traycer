@@ -46,6 +46,10 @@ export interface HistoryItem {
   updatedAtMs: number;
   updatedLabel: string;
   updatedBucket: HistoryRecencyBucket;
+  /** Viewer-scoped task edit or own-chat activity; absent before listTasks@1.7. */
+  recentAtMs?: number;
+  recentLabel?: string;
+  recentBucket?: HistoryRecencyBucket;
   linkedRepos: ReadonlyArray<string>;
   linkedWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
   /**
@@ -77,6 +81,15 @@ export interface HistoryItem {
    * and only this device's edits remain - would be invisible again.
    */
   isPreservedOrphan?: boolean;
+}
+
+/** The row's timestamp describes the key used by its time-based sort. */
+export function historyRowTimeLabel(
+  item: HistoryItem,
+  sort: HistorySortOption,
+): string {
+  if (sort === "oldest") return `updated ${item.updatedLabel}`;
+  return `activity ${item.recentLabel ?? item.updatedLabel}`;
 }
 
 export interface HistoryFilters {
@@ -189,6 +202,20 @@ export function buildHistoryItemsFromTasks(
   });
 }
 
+// date-fns' under-a-minute phrase is the longest label it produces, and the
+// History row reserves its timestamp column at the longest label a row can
+// show. "just now" keeps a phrase that lives for seconds from setting the
+// width of every row.
+const UNDER_A_MINUTE_LABELS = new Set([
+  "less than a minute ago",
+  "in less than a minute",
+]);
+
+export function formatUpdatedLabel(updatedAtMs: number): string {
+  const label = formatDistanceToNow(updatedAtMs, { addSuffix: true });
+  return UNDER_A_MINUTE_LABELS.has(label) ? "just now" : label;
+}
+
 function buildHistoryItem(args: {
   light: { id: string; title: string; updatedAt: number; createdBy: string };
   taskType: "epic" | "phase";
@@ -216,6 +243,7 @@ function buildHistoryItem(args: {
     isPreservedOrphan,
   } = args;
   const ownership = light.createdBy === userId ? "mine" : "shared";
+  const recentAt = Math.max(light.updatedAt, task.recentAt ?? light.updatedAt);
   return {
     organization:
       "organization" in task
@@ -233,8 +261,11 @@ function buildHistoryItem(args: {
       taskType === "epic" ? light.title : displayTitle(light.title, "phase"),
     initialUserPrompt,
     updatedAtMs: light.updatedAt,
-    updatedLabel: formatDistanceToNow(light.updatedAt, { addSuffix: true }),
+    updatedLabel: formatUpdatedLabel(light.updatedAt),
     updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
+    recentAtMs: task.recentAt === undefined ? undefined : recentAt,
+    recentLabel: formatUpdatedLabel(recentAt),
+    recentBucket: toHistoryRecencyBucket(recentAt, nowMs),
     linkedRepos: readTaskRepos(task),
     linkedWorkspaces: readTaskWorkspaces(task),
     chatHostIds: task.chatHostIds ?? null,
@@ -586,9 +617,9 @@ export function sortHistoryItems(
         .sort(
           (left, right) =>
             comparePinnedHistoryItems(left, right) ||
-            right.updatedAtMs - left.updatedAtMs ||
-            BUCKET_ORDER[left.updatedBucket] -
-              BUCKET_ORDER[right.updatedBucket],
+            (right.recentAtMs ?? right.updatedAtMs) -
+              (left.recentAtMs ?? left.updatedAtMs) ||
+            compareRecentEpicIds(left.epicId, right.epicId),
         );
     case "last-viewed":
       // The central list endpoint already returns the complete eligible set in
@@ -626,6 +657,12 @@ export function sortHistoryItems(
   }
 }
 
+function compareRecentEpicIds(left: string, right: string): number {
+  if (left < right) return 1;
+  if (left > right) return -1;
+  return 0;
+}
+
 /** Stable pinned-first partition for relevance-ranked search results. */
 export function prioritizePinnedHistoryItems(
   items: ReadonlyArray<HistoryItem>,
@@ -649,9 +686,10 @@ export function groupHistoryItems(
   const groups = new Map<HistoryRecencyBucket, HistoryItem[]>();
 
   for (const item of items) {
-    const current = groups.get(item.updatedBucket) ?? [];
+    const bucket = item.recentBucket ?? item.updatedBucket;
+    const current = groups.get(bucket) ?? [];
     current.push(item);
-    groups.set(item.updatedBucket, current);
+    groups.set(bucket, current);
   }
 
   return (["today", "yesterday", "earlier"] as const).flatMap((bucket) => {
@@ -662,7 +700,7 @@ export function groupHistoryItems(
   });
 }
 
-function toHistoryRecencyBucket(
+export function toHistoryRecencyBucket(
   updatedAtMs: number,
   nowMs: number,
 ): HistoryRecencyBucket {

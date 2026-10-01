@@ -1,15 +1,55 @@
 ---
 title: "Wireframes"
-description: "Open live HTML previews in artifacts and copy their source."
+description: "Add live HTML previews of proposed screens to artifacts, and copy their source."
 ---
 
-<video className="w-full aspect-video rounded-xl" controls autoPlay loop muted playsInline aria-label="Open a wireframe in fullscreen and access Copy HTML">
-  <source src="https://assets.traycer.ai/docs/videos/wireframe-live-preview.mp4" type="video/mp4" />
-  Unable to load video.
-</video>
+import { FeatureVideo } from "/snippets/feature-video.jsx";
 
-A `wireframe` code block in an artifact renders a self-contained HTML document as a live preview. Ask an agent to include a wireframe when you want to inspect a proposed screen or layout.
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/wireframe-live-preview.mp4" label="Open a wireframe in fullscreen and access Copy HTML" />
 
-## Inspect A Preview
+A `wireframe` code block in an artifact holds a self-contained HTML document, and renders it as a live preview. Use one to look at a proposed screen or layout before anyone builds it.
 
-Hover the preview to reveal its controls. **Fullscreen** opens it in the **UI Preview** dialog. **Copy HTML** copies the preview's HTML so you can reuse or inspect it. The inline preview also has a resize grip.
+## Add a Wireframe
+
+Either:
+
+- **Ask an agent.** For example: "Add a wireframe of the new settings page to the spec." Agents are told to use wireframes for UI and layout.
+- **Write one yourself.** In an artifact, type a code fence named `wireframe` that holds a complete HTML document, with its styles and scripts inline. After a short pause it turns into a live preview.
+
+````markdown
+```wireframe
+<!doctype html>
+<html>
+  <body style="font-family: system-ui; padding: 24px">
+    <h1>Settings</h1>
+    <button>Save</button>
+  </body>
+</html>
+```
+````
+
+There is no HTML editor in the app. To change a wireframe, ask an agent to edit it.
+
+## Preview Controls
+
+Hover the preview to show its controls:
+
+| Control        | What it does                                                    |
+| -------------- | --------------------------------------------------------------- |
+| **Fullscreen** | Opens the preview in a large dialog, titled **UI Preview** by default, with **Copy HTML**. |
+| **Copy HTML**  | Copies the preview's HTML.                                      |
+
+The grip at the bottom of the inline preview is **Resize preview**:
+
+- Drag it to change the preview's height.
+- With the grip focused, press ↑ / ↓ to resize in small steps.
+- Double-click it to go back to automatic height.
+
+## What Runs in a Preview
+
+The preview runs in an isolated frame. Its scripts run, so buttons, tabs, and other interactions work. It can't navigate away, submit forms, open popups, or reach the app, your files, or your session.
+
+## Wireframes Elsewhere
+
+- The artifact's file on disk keeps the wireframe as a `wireframe` code block. See [Artifacts on Disk](/panels/artifacts#artifacts-on-disk).
+- A PDF export shows the wireframe's HTML source instead of the preview. See [Export](/panels/artifacts/export).

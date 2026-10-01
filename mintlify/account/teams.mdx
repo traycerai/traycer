@@ -1,0 +1,84 @@
+---
+title: "Teams"
+description: "Create a team, invite members, manage seats and credits, and share Tasks with your team."
+keywords: ['teams', 'team management', 'seat management', 'members', 'invite members', 'roles', 'admin', 'billing', 'team billing', 'seats', 'credits', 'bundle limits', 'sharing', 'leave team', 'remove member', 'delete team', 'organization']
+---
+
+A team has one subscription and one credit pool. You manage teams in the [web dashboard](https://traycer.ai/settings). Once you belong to a team, use the team switcher at the top of the dashboard's sidebar to move between your personal account and each team.
+
+With a team selected, the sidebar's **Team** group shows **Members**, **Billing** and **Settings**.
+
+## Create a Team
+
+<Steps>
+  <Step title="Open the team switcher">
+    In the [web dashboard](https://traycer.ai/settings), open the team switcher and click **Create team**.
+  </Step>
+  <Step title="Name the team">
+    Enter a team name. You can also add the email addresses of the people you want to invite now, or invite them later.
+  </Step>
+  <Step title="Start the trial">
+    Click **Create Team**. The dashboard opens the team's **Billing** page. A team admin clicks **Start Trial** there to try Sync free for 7 days, with no card needed. See [Trials](/account/pricing#trials).
+  </Step>
+</Steps>
+
+## Members
+
+The **Members** page lists everyone on the team, with each member's activity, role and monthly bundle allocation.
+
+- **Roles.** Every member is an **Admin** or a **Member**. Only admins can click **Invite Members**.
+- **Invites.** An invited person shows as **Pending** until they open the team link.
+- **Removing members.** An admin removes one member from their row, or selects several and removes them together.
+
+## Leave a Team
+
+There is no **Leave** button. To leave a team, ask one of its admins to remove you on the **Members** page.
+
+Admins can't remove themselves either, so an admin who wants to leave needs another admin to remove them. A team always keeps at least one admin: the last admin can't be removed or changed to a member.
+
+## Seats and Billing
+
+Open **Billing** with the team selected to start the trial, subscribe, change plan or manage the subscription. Only admins can start the trial or subscribe. To keep Sync after the trial, add a payment method before the trial ends; otherwise the team moves to Free.
+
+Sync is billed per seat for the whole team: the seat count is the number of team members, including pending invites. There is no separate seat counter to set.
+
+<Info>
+**Billing timing.** A seat is billed as soon as the invite is sent, not when it is accepted. Added seats are billed immediately and prorated. A removed seat drops off at the end of the current billing cycle.
+</Info>
+
+## Team Credits
+
+Team members share the team's credit pool for models accessed through the Traycer provider. On the team's **Billing** page:
+
+- Click **Purchase Credits** to add credits to the pool. A team can hold at most 2,000 bundle credits.
+- Click **Configure Bundle Limits** to set how many credits each member can use per month.
+
+See [Pricing](/account/pricing#inference-credits) for how credits are bought and spent.
+
+## Share Tasks With a Team
+
+Share a Task with a whole team from the **Teams** section of the [Sharing](/panels/sharing) panel: pick a role (**Editor** or **Viewer**) for the team and click **Share**. Only the Task's owner can do this.
+
+The team must be on Sync. Otherwise sharing fails with "This team needs the Sync plan before it can share tasks." Tasks already shared with a team stay shared if the team later moves back to Free.
+
+Inviting individual people to a Task works on every plan. See [Sharing](/panels/sharing).
+
+## Delete a Team
+
+Open **Settings** with the team selected and click **Delete team**. Deleting a team removes its data and cancels its subscription immediately, with no refund. It cannot be undone.
+
+## Frequently Asked Questions
+
+<AccordionGroup>
+  <Accordion title="Does Traycer support SSO or SAML?">
+    No. Everyone signs in with GitHub, Google, Apple, or a one-time code sent by email. See [Sign In](/account/sign-in).
+  </Accordion>
+
+  <Accordion title="Is there a paid plan for individuals?">
+    Individuals don't need one. Free includes cloud sync, remote hosts and the mobile app, and credit bundles pay for Traycer inference when you need it. Sync is the team plan, priced per seat, so the 7-day trial is for teams only; see [Trials](/account/pricing#trials).
+  </Accordion>
+
+  <Accordion title="How is my team's privacy protected?">
+    Prompt text is always hidden in usage logs for usage billed to a team, so nothing needs to be turned on. For personal usage, each member controls this with their own **Privacy Mode** setting under **Settings → Privacy Settings** in the [web dashboard](https://platform.traycer.ai).
+  </Accordion>
+</AccordionGroup>

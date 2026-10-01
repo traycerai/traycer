@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { useOptimisticActivityHistoryItems } from "@/hooks/home/use-optimistic-activity-history-items";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import type { TrayEpic } from "@traycer-clients/shared/platform/runner-host";
 import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
@@ -9,6 +10,7 @@ import { useTrayProjectionStore } from "@/stores/tray/tray-projection-store";
 // few inline and folds the rest into a "More" submenu, so we send a slightly
 // larger window than is shown inline; the full list stays in the in-app view.
 const TRAY_EPIC_LIMIT = 20;
+const EMPTY_ITEMS: readonly HistoryItem[] = [];
 
 /**
  * Sources the tray's recent-epic list from the same history store that backs
@@ -28,22 +30,36 @@ export function useTrayEpicsSource(): void {
   // to the value computed when this hook first mounted (it lives for the whole
   // app session) and never refresh. The projection store dedupes by content,
   // so a tick that doesn't change any label is a no-op and fires no IPC.
+  //
+  // Plain `setInterval`, not `startVisibleInterval`: the native tray menu
+  // stays on screen when the desktop window is minimised, and opening the
+  // tray does not show the window, so a visibility gate would freeze labels
+  // until the user restored the GUI.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 60_000);
     return () => clearInterval(id);
   }, []);
 
-  const { data } = useHistoryQuery({
-    search: DEFAULT_HISTORY_SEARCH,
-    nowMs,
+  const { data, currentUserId, hostId, activityRefreshScope, refetchTasks } =
+    useHistoryQuery({
+      search: DEFAULT_HISTORY_SEARCH,
+      nowMs,
+    });
+  // This source stays mounted while History is closed. Share the panel's
+  // bounded activity reconciliation so its cached Recent page and tray order
+  // advance on own-record changes without an extra query per row.
+  const items = useOptimisticActivityHistoryItems({
+    items: data?.items ?? EMPTY_ITEMS,
+    userId: currentUserId,
+    hostId,
+    enabled: true,
+    refreshScope: activityRefreshScope,
+    refetch: refetchTasks,
   });
   const setEpics = useTrayProjectionStore((state) => state.setEpics);
 
-  const epics = useMemo(
-    () => projectTrayEpics(data?.items ?? []),
-    [data?.items],
-  );
+  const epics = useMemo(() => projectTrayEpics(items), [items]);
 
   // Sync external (query) state into the projection store. The store dedupes
   // by content, so a refetch returning identical epics is a no-op and does
@@ -62,6 +78,6 @@ function projectTrayEpics(
     .map((item) => ({
       epicId: item.epicId,
       title: item.title,
-      subtitle: item.updatedLabel,
+      subtitle: item.recentLabel ?? item.updatedLabel,
     }));
 }

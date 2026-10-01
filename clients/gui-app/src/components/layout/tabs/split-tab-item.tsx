@@ -15,7 +15,7 @@ import {
   type HeaderTabSlotDropData,
 } from "@/components/layout/tabs/header-tab-dnd";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
-import { useHeaderTabDisplacement } from "./use-header-tab-displacement";
+import { useStripItemDisplacement } from "./use-strip-item-displacement";
 import { cn } from "@/lib/utils";
 import { SplitTabLayout, SplitFocusIcon } from "./split-tab-chrome";
 import { SplitFillableMemberVisual } from "./header-tab-visual";
@@ -25,6 +25,9 @@ import type {
   HeaderStripMember,
 } from "@/stores/tabs/use-header-tabs";
 import type { SplitSide } from "@/stores/tabs/layout";
+import { tabRefKey } from "@/stores/tabs/layout";
+import { useConcealedForTravel } from "./strip-selection-travel";
+import { useStripEntrance } from "./use-strip-entrance";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import {
@@ -100,6 +103,9 @@ export const SplitTabItem = memo(function SplitTabItem(
       state.activeHeaderTab !== null &&
       state.activeHeaderTab.stripItemId === props.item.id,
   );
+  // While the selection slides here, the traveller draws the joined box.
+  const concealed = useConcealedForTravel(props.item.id);
+  const joined = props.isActive && !isDragging && !concealed;
   const quickActionsTab =
     memberTab(props.item.left) ?? memberTab(props.item.right);
 
@@ -110,9 +116,9 @@ export const SplitTabItem = memo(function SplitTabItem(
   // strip exempt from every commit, in both directions, while its neighbours
   // were corrected.
   const frameRef = useRef<HTMLDivElement | null>(null);
-  const x = useHeaderTabDisplacement({
+  const x = useStripItemDisplacement({
     nodeRef: frameRef,
-    offsetX: props.offsetX,
+    offset: props.offsetX,
     transition,
   });
   const setFrameRef = useCallback(
@@ -121,6 +127,14 @@ export const SplitTabItem = memo(function SplitTabItem(
       setNodeRef(node);
     },
     [setNodeRef],
+  );
+  // A reopened split comes back through either of its tabs' marks.
+  useStripEntrance(
+    frameRef,
+    [memberTab(props.item.left), memberTab(props.item.right)]
+      .flatMap((tab) => (tab === null ? [] : [tabRefKey(tab)]))
+      .join(" "),
+    "tab",
   );
   return (
     <m.div
@@ -149,10 +163,9 @@ export const SplitTabItem = memo(function SplitTabItem(
       className="relative flex w-[min(60vw,31rem)] min-w-[min(60vw,26.25rem)] group-data-[tab-layout=shrink]/strip:min-w-36 max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
     >
       <SplitTabLayout
-        leftColor={memberTab(props.item.left)?.appearance?.color ?? null}
-        rightColor={memberTab(props.item.right)?.appearance?.color ?? null}
         splitId={props.item.id}
         selectedSide={props.isActive ? props.item.focusedSide : null}
+        joined={joined}
         control={
           quickActionsTab === null ? null : (
             <SplitQuickActions

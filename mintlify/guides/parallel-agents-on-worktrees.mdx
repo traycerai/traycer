@@ -1,0 +1,51 @@
+---
+title: "Run agents in parallel on worktrees"
+description: "Give each agent its own worktree and branch so several can change the same repository at once, then review the branches and clean up."
+---
+
+Use this guide when you want several agents working on separate changes in the same repository at the same time. Each agent runs in its own [worktree](/concepts/worktrees): a separate checkout on a new branch. Their edits don't collide with each other or with your main folder, and each change ends up on a branch you can review and merge on its own.
+
+## Before You Start
+
+- A Task with a git repository as a workspace folder. A folder that isn't a git repository can only run **Local**.
+- If a fresh checkout needs dependencies installed before an agent can work, a setup script. Step 1 adds one.
+
+## Run the Agents
+
+<Steps>
+  <Step title="Add a setup script (optional)">
+    In the workspace picker, on the start page or in **Start a new agent**, click the gear on the folder's row (**Repository settings**). Enter a **Setup script**, such as `bun install`, and click **Save**. With the folder's run location on **Local**, this writes `.traycer/environment.json` in your folder. Commit that file: a new worktree reads it from the branch it starts from. See [Setup and teardown scripts](/concepts/worktrees/scripts).
+  </Step>
+  <Step title="Start the first agent on a new worktree">
+    In the **Agents** panel, click **+** to open **Start a new agent**. In the workspace picker, set the folder's run location to **New worktree**. Traycer proposes a branch name, such as `traycer/swift-otter`; click the folder's branch control to change it or to pick a different **Source**. Write the prompt and click **Send**.
+  </Step>
+  <Step title="Let setup finish">
+    The agent shows a setup card: **Creating worktree**, **Setting up worktree**, then **Worktree ready**. Its first message waits for setup. If setup fails, **Open terminal** shows the output and **Retry setup** runs it again.
+  </Step>
+  <Step title="Start the other agents">
+    Repeat for each change, choosing **New worktree** every time, so each agent gets its own checkout and branch. To put another agent, such as a reviewer, on a worktree that already exists, choose **Existing worktree** and pick it from the list.
+  </Step>
+  <Step title="Or let one agent split the work">
+    An agent can create worktrees and start child agents in them. Ask for it in the prompt, for example "Split this into three child agents, each on its own new worktree." The children appear under it in the **Agents** panel. See [Agent-to-Agent](/concepts/agent-to-agent). Whether agents may create worktrees, and whether they ask you first, is set by [Agent worktrees](/settings/worktrees#agent-worktrees) in **Settings › Worktrees**.
+  </Step>
+  <Step title="Keep them in view">
+    Use **Split group right** in the tab strip, or drag a tab to the edge of a group, to keep several agents visible side by side. See [Work Side by Side](/panels#work-side-by-side). **Agent office**, in the **⋯** menu of the Agents panel, shows how the agents are talking to each other.
+  </Step>
+  <Step title="Review each branch">
+    In **Git Diff**, pick a worktree in the workspace picker to see that agent's changes. See [Review agent changes](/guides/review-agent-changes). When a branch is ready, ask its agent to push it and open a pull request; the **Pull Requests** panel then lists it with its checks.
+  </Step>
+  <Step title="Clean up">
+    Once the work has landed, click the paintbrush at the end of the Task's status row to open **Sweep**. It preselects idle worktrees whose work is **Landed** or **At base commit**. Click **Remove N worktrees**. The branches are kept. See [Sweep](/concepts/sweep).
+  </Step>
+</Steps>
+
+<Warning>
+  Removing a worktree deletes its folder, including uncommitted and ignored files. Commit or copy anything you need first.
+</Warning>
+
+## Related
+
+- [Worktrees](/concepts/worktrees)
+- [Setup and teardown scripts](/concepts/worktrees/scripts)
+- [Settings › Worktrees](/settings/worktrees): every worktree on a host, and automatic cleanup.
+- [Resource monitor](/concepts/hosts/resource-monitor): CPU and memory for each agent.

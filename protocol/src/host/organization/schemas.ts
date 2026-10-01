@@ -2,7 +2,9 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   taskFiltersSchema,
   listTasksRequestSchema,
+  listTasksResponseSchemaPre17,
   listTasksResponseSchema,
+  listTaskLightSchemaPre17,
   listTaskLightSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { z } from "zod";
@@ -292,7 +294,23 @@ export const taskOrganizationSchema = lazySchema(() =>
   }),
 );
 export type TaskOrganization = z.infer<typeof taskOrganizationSchema>;
-// Cloud additive fields do not reshape released host RPC minors.
+// `organization.history@1.0` shipped before the per-viewer activity key.
+// Freeze its row and page instead of inheriting the live epic list schemas.
+export const cloudListTaskLightSchemaV10 = lazySchema(() =>
+  listTaskLightSchemaPre17.extend({
+    organization: taskOrganizationSchema.optional(),
+  }),
+);
+export const cloudListTasksResponseSchemaV10 = lazySchema(() =>
+  listTasksResponseSchemaPre17.extend({
+    tasks: z.array(cloudListTaskLightSchemaV10),
+    organizationFacets: z
+      .object({ labelNames: z.array(labelNameSchema) })
+      .optional(),
+  }),
+);
+
+// The current cloud row is also the `organization.history@1.1` response.
 export const cloudListTaskLightSchema = lazySchema(() =>
   listTaskLightSchema.extend({
     organization: taskOrganizationSchema.optional(),

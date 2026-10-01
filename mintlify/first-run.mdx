@@ -1,0 +1,102 @@
+---
+title: "First run and importing"
+description: "What happens the first time you open Traycer Desktop: signing in, host setup, the introduction, importing your Claude Code, Codex and OpenCode sessions, and the setup guides."
+keywords: ['first run', 'onboarding', 'getting started', 'import', 'import your work', 'claude code', 'codex', 'opencode', 'choose your agents', 'setting up traycer']
+---
+
+This page walks through the first time you open Traycer Desktop. If you haven't installed it yet, start with [Install](/install).
+
+## Sign In
+
+The app opens on **Welcome to Traycer**. Click **Sign in** and approve the sign-in in your browser. If the browser doesn't open, expand **Use code instead** and approve the sign-in with a code from any browser. See [Sign in](/account/sign-in).
+
+## Setting Up Traycer
+
+On the first launch, Traycer sets up this computer's host, the background service that runs your agents. The app shows **Setting up Traycer**: "Traycer is getting this machine's host ready. This runs once, and the app opens as soon as it's done." Progress reads "Starting Traycer…", then "Downloading Traycer Host…" and "Setting up Traycer Host…".
+
+If setup doesn't finish, see [Troubleshooting](/reference/troubleshooting). To learn what the host does, see [Hosts](/concepts/hosts).
+
+## The Introduction
+
+A short introduction follows "Welcome to Traycer." It has three steps:
+
+| Step | Title | What you do |
+|---|---|---|
+| **Workspace** | "A home for all your work." | See how Tasks, agents, browsers and artifacts sit side by side. |
+| **Providers** | "Choose your agents." | See which coding agents are installed on your host and whether you're signed in to them. Turn each agent on or off, or use **Sign in & enable**. At least one must stay on. Traycer also lists the skills and plugins it found for each agent. |
+| **Import** | "Pick up where you left off." | Bring in your Claude Code, Codex and OpenCode sessions. See [Import Your Work](#import-your-work). This step appears when your host supports importing. |
+
+Click **Continue** or press Enter to move on, and **Back** to go back. **Skip intro** skips the rest. On the Import step, **Skip for now** finishes without importing; after an import starts, the button reads **Start building**.
+
+To see the introduction again, use **Initial tour** in [Getting started](/settings/getting-started).
+
+## Import Your Work
+
+**Import your work** turns sessions you already ran in Claude Code, Codex or OpenCode into Traycer Tasks, so you can pick them up here. It reads the sessions stored on the host's machine.
+
+Open it from:
+
+- The **Import** step of the introduction.
+- Settings › Host › [Overview](/settings/host) › **Data** › **Import your work** › **Import**. The import runs on the host that Settings is showing.
+
+<Steps>
+  <Step title="Find your sessions">
+    Search with "Search sessions or folders". Switch between **Sessions** and **By project**, which groups sessions by folder; sessions whose folder no longer exists are grouped under "Deleted Folders". Choose how far back to look: **Last 24 hours**, **Last 7 days** (the default), **Last 2 weeks**, **Last 30 days** or **All work**. Each agent has a toggle that includes or leaves out its sessions.
+  </Step>
+  <Step title="Select them">
+    Check the sessions you want, or check a folder to take all of its sessions. Sessions you already imported are hidden; turn on **Show imported** to see them, marked **Imported**.
+  </Step>
+  <Step title="Import">
+    Click **Import N sessions**, where N is the number you selected. You can keep using the app while the import runs; progress reads "Importing 3 of 12". When it finishes, Traycer shows how many sessions it imported, and **Import more** takes you back to the list.
+  </Step>
+</Steps>
+
+What you get:
+
+- Sessions from the same repository land together in one Task, as one agent per session, with the whole conversation.
+- Imported Tasks sort by when the work happened, not by when you imported it.
+- A new imported Task shows a dot until you open it ("Imported from … - not opened yet").
+- Open the Task and send a message to keep going. The composer starts on the agent the session came from.
+
+Some sessions can't be imported, for example when a session can't be read or has no messages. The list marks sessions it can't read as "Unreadable", and after an import Traycer says which sessions weren't imported and why.
+
+## Your First Task
+
+After the introduction, a short guide points at the start page:
+
+1. **Pick a project.** Add the folder Traycer should work in.
+2. **Choose where it runs.** Local, a new worktree, or an existing one.
+3. **Give it a task.** Describe what to build or debug, then press Enter.
+
+If you imported sessions, the guide shows you where your Tasks are instead, then how to continue one.
+
+When the guide ends, a notification reads "You're all set — More setup is in Settings." Click **Open** to go to Getting started.
+
+For a full walkthrough of the first Task, see [Quickstart](/quickstart).
+
+## Getting Started Checklist
+
+Your setup checklist sits at the top of the **Home** tab, and in Settings › [Getting started](/settings/getting-started). It replays the introduction (**Initial tour**) and runs three guides on the real settings:
+
+- **Agent selection**: choose how agents delegate work.
+- **Appearance and layout**: theme, start page, fonts and layout.
+- **Browser sign-ins**: bring your website sign-ins from another browser into Traycer's [browser](/panels/browsers). Desktop app only, and it needs a connected host.
+
+On Home, the checklist stays open with its cards while any guide is left, with a count such as "2 of 4 complete". Once every guide is done, it folds into a single **Getting started** row marked ✓, which starts closed each time you open Home; expand it to revisit a guide. Home leaves out a guide this app can never offer, such as **Browser sign-ins** outside the desktop app, and doesn't count it. Settings and Home show the same cards and the same progress.
+
+## Where To Go Next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" href="/quickstart">
+    Create your first Task and run your first agent.
+  </Card>
+  <Card title="Coding agents" href="/agents-and-models/coding-agents">
+    Set up the coding agents Traycer runs.
+  </Card>
+  <Card title="Panels" href="/panels">
+    Find your way around a Task.
+  </Card>
+  <Card title="Search and navigation" href="/concepts/search-and-navigation">
+    The command palette, chat search, and moving between tabs and windows.
+  </Card>
+</CardGroup>

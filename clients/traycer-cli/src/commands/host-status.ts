@@ -10,7 +10,20 @@ import {
   readHostPidMetadata,
   type HostPidMetadata,
 } from "../host/pid-metadata";
-import { bootstrapLogPath } from "../store/paths";
+import {
+  lifecycleSnapshotRows,
+  readHostLifecycleSnapshot,
+  type HostLifecycleSnapshot,
+} from "../host/lifecycle-snapshot";
+import {
+  readUpdateAttemptRecord,
+  type HostUpdateAttemptRecord,
+} from "@traycer-clients/shared/host-update";
+import { bootstrapLogPath, hostHomeDir } from "../store/paths";
+import {
+  describeNonterminalRecordRecovery,
+  parkedActivationRelaunchable,
+} from "../host/parked-activation-relaunch";
 import { makeColorizer, shouldUseColor, type Colorizer } from "../runner/ansi";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { RuntimeContext } from "../runner/runtime";
@@ -29,6 +42,88 @@ interface HostStatusOutput {
   // there is no decision left to report; `commands/login.ts` carries the same
   // pinned-null field for the same reason.
   readonly bootstrap: null;
+  /**
+   * The host lifecycle policy, the desktop presence, and whether the running
+   * supervisor enforces the policy - so "why is my host not running after a
+   * reboot" has an answer here. Additive: existing
+   * parsers of this payload ignore it.
+   */
+  readonly lifecycle: HostLifecycleSnapshot;
+  /**
+   * The durable update attempt standing beside the host, when it is not
+   * terminal; `null` when there is none (or the record is unreadable - a
+   * status read never fails over it). Additive: every field above keeps its
+   * shape.
+   *
+   * Carried because it changes the next move. `service install` refuses over
+   * any parked or interrupted record, and `host ensure` / `service start`
+   * start the host only over a record the supervisor's own relaunch admits
+   * (`supervisorRelaunchDisposition`: a work park, a claimed activation park
+   * the install still matches, or an interrupted phase whose next act is that
+   * start) and refuse every other one. `host update` is the one command that
+   * resumes any of them - so a status that reports "not running" without this
+   * cannot point at the command that works.
+   */
+  readonly updateAttempt: HostStatusUpdateAttempt | null;
+}
+
+export interface HostStatusUpdateAttempt {
+  readonly attemptId: string;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptRecord["phase"];
+  readonly execution: HostUpdateAttemptRecord["execution"];
+  readonly continuation: HostUpdateAttemptRecord["continuation"];
+  /**
+   * For a claimed `waiting-to-activate` park: whether the installed host is
+   * still the one the park's claim names, which is what decides whether `host
+   * update` resumes it in one step or retires it as stale. `null` when no
+   * comparison applies or could run: a non-parked record, a `waiting-for-work`
+   * park (no bytes placed; it always resumes), a claim-less park, or an
+   * install record that could not be read - a status read never fails over
+   * that, it reports it (the human hint says which).
+   */
+  readonly parkMatchesInstall: boolean | null;
+}
+
+/**
+ * The projection for the payload, and the sentence for the human block, from
+ * ONE read of the record - so the hint always describes the attempt the
+ * payload shows.
+ */
+interface NonterminalUpdateAttemptRead {
+  readonly summary: HostStatusUpdateAttempt;
+  readonly recovery: string;
+}
+
+async function readNonterminalUpdateAttempt(
+  environment: RuntimeContext["environment"],
+): Promise<NonterminalUpdateAttemptRead | null> {
+  const read = await readUpdateAttemptRecord(hostHomeDir(environment));
+  if (read.kind !== "valid" || read.value.execution === "terminal") {
+    return null;
+  }
+  const record = read.value;
+  // Only an ACTIVATION park with a claim is compared: `waiting-for-work` has
+  // placed no bytes and resumes regardless, and the relaunch predicate answers
+  // `false` for it by design (it admits only `waiting-to-activate`), which is
+  // not "stale" (traycer#2208 review).
+  const parkMatchesInstall =
+    record.execution === "parked" &&
+    record.phase === "waiting-to-activate" &&
+    record.claim !== undefined
+      ? await parkedActivationRelaunchable(environment, record)
+      : null;
+  return {
+    summary: {
+      attemptId: record.attemptId,
+      targetVersion: record.targetVersion,
+      phase: record.phase,
+      execution: record.execution,
+      continuation: record.continuation,
+      parkMatchesInstall,
+    },
+    recovery: describeNonterminalRecordRecovery(record, parkMatchesInstall),
+  };
 }
 
 // Runner-aware `traycer host status` - reads pid metadata, bootstrap
@@ -45,9 +140,11 @@ interface HostStatusOutput {
 // `traycer login` had already dropped its own auto-bootstrap call for the
 // same reason; this removes the last one.
 //
-// Nothing here writes: the three reads below touch pid.json and
-// bootstrap.log and nothing else, so `host status` is safe to poll, safe in
-// CI, and safe on a machine whose host is deliberately uninstalled.
+// Nothing here writes: the reads below touch pid.json, bootstrap.log, the
+// lifecycle records (`host/lifecycle-snapshot.ts`), and the update attempt
+// record with the install record it is compared against, and nothing else, so
+// `host status` is safe to poll, safe in CI, and safe on a machine whose host
+// is deliberately uninstalled.
 //
 // JSON mode emits the runner's NDJSON envelope; the legacy `--json`
 // pretty-print is replaced by the runner's `{ type:"result", status:"ok",
@@ -71,6 +168,11 @@ export const hostStatusCommand: CommandFn = async (
   // observable.)
   const running =
     pidMetadata !== null && !publishedHostProcessGone(pidMetadata);
+  // Lock-free like the other reads: a status projection observes the record
+  // and never contends for it.
+  const updateAttempt = await readNonterminalUpdateAttempt(
+    ctx.runtime.environment,
+  );
   const output: HostStatusOutput = {
     running,
     pidMetadata,
@@ -78,11 +180,20 @@ export const hostStatusCommand: CommandFn = async (
     bootstrapLogPath: bootstrapLogPath(ctx.runtime.environment),
     bootstrapLogTail,
     bootstrap: null,
+    lifecycle: await readHostLifecycleSnapshot(
+      ctx.runtime.environment,
+      running,
+    ),
+    updateAttempt: updateAttempt === null ? null : updateAttempt.summary,
   };
 
   return {
     data: output,
-    human: renderHumanStatus(output, ctx.runtime),
+    human: renderHumanStatus(
+      output,
+      updateAttempt === null ? null : updateAttempt.recovery,
+      ctx.runtime,
+    ),
     exitCode: 0,
   };
 };
@@ -91,6 +202,9 @@ export const hostStatusCommand: CommandFn = async (
 
 function renderHumanStatus(
   output: HostStatusOutput,
+  // The recovery sentence for a standing nonterminal update record, `null`
+  // when there is none; the not-running hint below is built from it.
+  updateRecovery: string | null,
   runtime: RuntimeContext,
 ): string {
   // The block is printed on stdout, so that is the stream that decides.
@@ -139,18 +253,29 @@ function renderHumanStatus(
     lines.push(...kvBlock(c, rows));
   }
 
+  // Lifecycle: the mode, who asked for this run and who owns it. A parked
+  // unattended start leaves no marker behind, so on a machine in Linked or
+  // Ask mode this block is what explains a host that is down after a reboot.
+  lines.push("");
+  lines.push(c.bold("Lifecycle"));
+  lines.push(...kvBlock(c, lifecycleSnapshotRows(output.lifecycle)));
+
   // Reading a status is no longer what starts a host (CLI-001), so the
   // not-running branch has to SAY what does. Without this the command is
   // observational and unhelpful in the same breath: it reports a stopped host
   // and leaves the reader with no next move, which is precisely the dead end
   // the implicit bootstrap used to paper over.
+  //
+  // And the move has to be one that WORKS from this state. While a nonterminal
+  // update record stands, `service install` refuses, and `host ensure` /
+  // `service start` refuse every record the supervisor's relaunch would (a
+  // claim-less or stale activation park, most active phases), so pointing at
+  // `ensure` can send the reader into the refusal loop the 2026-09-27 staging
+  // outage sat in for an hour. The one command that resumes every record is
+  // `host update`, so that is the hint when a record stands.
   if (!output.running) {
     lines.push("");
-    lines.push(
-      c.dim(
-        "Run 'traycer host ensure' to install, register, and start the host.",
-      ),
-    );
+    lines.push(c.dim(nextMoveHint(updateRecovery)));
   }
 
   const recent = output.bootstrapMarkers.slice(-RECENT_ACTIVITY_ROWS).reverse();
@@ -167,7 +292,19 @@ function renderHumanStatus(
   return lines.join("\n");
 }
 
-function kvBlock(c: Colorizer, rows: readonly [string, string][]): string[] {
+function nextMoveHint(updateRecovery: string | null): string {
+  if (updateRecovery === null) {
+    return "Run 'traycer host ensure' to install, register, and start the host.";
+  }
+  // The shared sentence (`describeNonterminalRecordRecovery`), capitalised for
+  // a line of its own.
+  return `${updateRecovery.charAt(0).toUpperCase()}${updateRecovery.slice(1)}.`;
+}
+
+function kvBlock(
+  c: Colorizer,
+  rows: readonly (readonly [string, string])[],
+): string[] {
   const keyWidth = rows.reduce((w, [k]) => Math.max(w, k.length), 0);
   return rows.map(([k, v]) => `  ${c.dim(k.padEnd(keyWidth))}  ${v}`);
 }

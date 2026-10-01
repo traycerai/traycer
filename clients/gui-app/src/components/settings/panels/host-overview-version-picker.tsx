@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +29,13 @@ export interface VersionPickerProps {
   readonly includePreReleasesExplanation: string | null;
   readonly installingVersion: string | null;
   readonly disabled: boolean;
+  /**
+   * THIS machine's host was started in a terminal: what the list says in
+   * place of an install, or `null`. The version card's Update now line
+   * (`hostForegroundUpdateLine`) - an explicit version is still an update the
+   * CLI refuses over that run, so every row's install is withheld with it.
+   */
+  readonly foregroundUpdateLine: string | null;
   readonly onInstall: (version: string, acceptStoreFormatLoss: boolean) => void;
   /** True before the first check has answered — no list to show yet. */
   readonly awaitingFirstCheck: boolean;
@@ -137,9 +144,10 @@ export function VersionPicker(props: VersionPickerProps): ReactNode {
         actionLabel="Install anyway"
         isPending={props.installingVersion !== null}
         blockedReason={
-          props.disabled || props.checking
+          props.foregroundUpdateLine ??
+          (props.disabled || props.checking
             ? "Wait for this device's current operation to finish."
-            : null
+            : null)
         }
         onConfirm={() => {
           if (confirmingVersion === null || confirmationBody === null) return;
@@ -156,6 +164,8 @@ function VersionPickerList(input: {
   readonly onInstallAnyway: (version: string) => void;
 }): ReactNode {
   const { picker } = input;
+  const foregroundLineId = useId();
+  const listShown = !picker.awaitingFirstCheck && picker.rows.length > 0;
   const noListState = picker.checking ? (
     <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
       <AgentSpinningDots
@@ -188,11 +198,18 @@ function VersionPickerList(input: {
         "flex flex-col gap-3 border-t border-border/40 px-4 py-3",
         // HostVersionRows includes Show all after its list. Keep the
         // refusal against the rows, before that secondary list control.
-        !picker.awaitingFirstCheck &&
-          picker.rows.length > 0 &&
-          "[&>div]:order-2",
+        listShown && "[&>div]:order-2",
       )}
     >
+      {listShown && picker.foregroundUpdateLine !== null ? (
+        <p
+          id={foregroundLineId}
+          className="text-ui-sm text-muted-foreground"
+          data-testid="host-overview-version-foreground"
+        >
+          {picker.foregroundUpdateLine}
+        </p>
+      ) : null}
       {picker.awaitingFirstCheck ? (
         noListState
       ) : (
@@ -206,7 +223,14 @@ function VersionPickerList(input: {
           // refetches, `keepPreviousData` keeps the OLD filter's rows on
           // screen — freezing them is what stops an excluded RC from being
           // installable in the gap after unchecking the option.
-          disabled={picker.disabled || picker.checking}
+          disabled={
+            picker.disabled ||
+            picker.checking ||
+            picker.foregroundUpdateLine !== null
+          }
+          describedBy={
+            picker.foregroundUpdateLine === null ? null : foregroundLineId
+          }
           onInstall={(version) => picker.onInstall(version, false)}
           onInstallAnyway={input.onInstallAnyway}
         />

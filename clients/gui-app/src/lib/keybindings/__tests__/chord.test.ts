@@ -6,6 +6,7 @@ const platformMock = vi.hoisted(() => ({ mac: false }));
 vi.mock("@/lib/keybindings/platform", () => createPlatformMock(platformMock));
 
 import {
+  canonicalChord,
   chordFromEvent,
   chordFromEventCtrlAware,
   chordMatchesEvent,
@@ -176,6 +177,30 @@ describe("parseChordString", () => {
   it("rejects malformed input", () => {
     expect(parseChordString("")).toBeNull();
     expect(parseChordString("foo+bar+baz")).toBeNull();
+  });
+});
+
+describe("canonicalChord", () => {
+  it("reorders modifiers into mod, ctrl, shift, alt", () => {
+    expect(canonicalChord("alt+shift+m")).toBe("shift+alt+m");
+  });
+
+  it("reads ctrl as mod off macOS", () => {
+    expect(canonicalChord("ctrl+alt+n")).toBe("mod+alt+n");
+  });
+
+  it("leaves ctrl alone on macOS, where it is distinct from mod", () => {
+    platformMock.mac = true;
+    expect(canonicalChord("ctrl+alt+n")).toBe("ctrl+alt+n");
+  });
+
+  it("leaves an already-canonical mac chord unchanged", () => {
+    platformMock.mac = true;
+    expect(canonicalChord("mod+ctrl+s")).toBe("mod+ctrl+s");
+  });
+
+  it("passes an unparseable string through unchanged", () => {
+    expect(canonicalChord("mod+")).toBe("mod+");
   });
 });
 

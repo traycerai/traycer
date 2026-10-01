@@ -14,11 +14,7 @@ import type {
   WorktreeWorkspaceSummaryV14,
 } from "@traycer/protocol/host/worktree-schemas";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   OwnerWorkspaceMetadataContent,
@@ -551,11 +547,9 @@ describe("worktree PR metadata", () => {
   it("keeps the owner-preview scroll root out of sequential focus inside a HoverCard", () => {
     const entry = worktree({});
     renderWithProviders(
-      <HoverCard open>
-        <HoverCardTrigger asChild>
-          <button type="button">Owner trigger</button>
-        </HoverCardTrigger>
-        <HoverCardContent side="bottom">
+      <HoverCard
+        trigger={<button type="button">Owner trigger</button>}
+        content={
           <OwnerWorkspaceMetadataContent
             binding={BINDING}
             worktrees={[entry]}
@@ -566,8 +560,18 @@ describe("worktree PR metadata", () => {
             error={false}
             openPrInApp={null}
           />
-        </HoverCardContent>
-      </HoverCard>,
+        }
+        appearance="preview"
+        semantics={{ role: "dialog", label: "Owner trigger" }}
+        side="bottom"
+        align="start"
+        sideOffset={8}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
     );
     // HoverCard renders a single copy (no hidden a11y clone), and its scroll
     // root carries the explicit tab-stop opt-out.

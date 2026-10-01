@@ -12,6 +12,7 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 // app-wide.
 export const PERMISSIONS = defineSettingsSection("permissions", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Permissions",
     description:
       "How much an agent may do on its own, and who reviews the rest.",

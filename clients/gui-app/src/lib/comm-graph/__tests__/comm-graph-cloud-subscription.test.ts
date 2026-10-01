@@ -1,7 +1,16 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
 import {
   CommGraphCloudSubscriptionManager,
+  type CommGraphCloudSubscriptionHandlers,
   type CommGraphCloudSubscriptionOpener,
   type CommGraphCloudSubscriptionRequest,
 } from "@/lib/comm-graph/comm-graph-cloud-subscription";
@@ -46,6 +55,21 @@ function cloudEvent(
   };
 }
 
+/**
+ * Every pre-existing case in this file was written against a manager that
+ * published synchronously on every applied row - a zero data-commit window
+ * keeps that shape, so these cases stay a proof about the merge and the relay
+ * bookkeeping, not about the coalescing window, which gets its own describe
+ * block below with a real window and fake timers.
+ */
+function synchronousManager(
+  epicId: string,
+  opener: CommGraphCloudSubscriptionOpener,
+  onRowsPruned: (rowKeys: ReadonlySet<string>) => void,
+): CommGraphCloudSubscriptionManager {
+  return new CommGraphCloudSubscriptionManager(epicId, opener, onRowsPruned, 0);
+}
+
 function recordedOpener(): {
   readonly opener: CommGraphCloudSubscriptionOpener;
   readonly requests: CommGraphCloudSubscriptionRequest[];
@@ -68,7 +92,7 @@ beforeEach(() => {
 describe("CommGraphCloudSubscriptionManager", () => {
   it("normalizes cloud identity and uses one cursor-aware path for snapshots and events", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -139,7 +163,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("carries a cross-task row's peerEpicId through onto the normalized event", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -156,7 +180,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("advances resume progress through a caught-up skipped terminal row", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -181,7 +205,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("suppresses initial and historical-upload pulses but reports a later live row", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -216,7 +240,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("keeps cloud rows through a transient relay failure - never clears events on a reconnecting status", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -245,7 +269,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("fails over when the preferred relay throws synchronously while dialing", () => {
     const requests: CommGraphCloudSubscriptionRequest[] = [];
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       (request) => {
         if (request.hostId === "relay-broken") {
@@ -269,7 +293,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
     const requests: CommGraphCloudSubscriptionRequest[] = [];
     let staleClosed = false;
     let replacementClosed = false;
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       (request) => {
         requests.push(request);
@@ -307,7 +331,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
   it("retries a rejected relay when its directory readiness changes in place", () => {
     const requests: CommGraphCloudSubscriptionRequest[] = [];
     let shouldFail = true;
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       (request) => {
         if (shouldFail) throw new Error("not published yet");
@@ -332,7 +356,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
   it("reopens an active relay when its directory readiness rotates", () => {
     const requests: CommGraphCloudSubscriptionRequest[] = [];
     let firstClosed = false;
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       (request) => {
         requests.push(request);
@@ -360,7 +384,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
   it("keeps an active relay open when another host's readiness changes", () => {
     const requests: CommGraphCloudSubscriptionRequest[] = [];
     const close = vi.fn();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       (request) => {
         requests.push(request);
@@ -392,7 +416,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("retries retained relays after a detached surface reattaches", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -411,7 +435,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("revokes established cloud authority when every relay is incompatible", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -427,7 +451,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("fails over a replacement relay without losing established cloud authority", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -445,7 +469,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
   it("fails over when a relay remains reconnecting past the bounded deadline", () => {
     vi.useFakeTimers();
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -472,7 +496,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
   it("starts a new bounded relay cycle after every retryable candidate times out", () => {
     vi.useFakeTimers();
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -499,7 +523,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("projects a cloud feed status to every origin host", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -517,7 +541,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("keeps duplicate cloud origin sequences independently addressable in playback", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
+    const manager = synchronousManager(
       "epic-1",
       recorded.opener,
       () => undefined,
@@ -551,14 +575,10 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
   it("applies an advancing frontier without reconnecting and returns a pruned playback cursor to live", () => {
     const recorded = recordedOpener();
-    const manager = new CommGraphCloudSubscriptionManager(
-      "epic-1",
-      recorded.opener,
-      (rowKeys) => {
-        dropCommGraphRowOpenKeys("epic-1", rowKeys);
-        reconcilePrunedCommGraphTimelineRows("epic-1", rowKeys);
-      },
-    );
+    const manager = synchronousManager("epic-1", recorded.opener, (rowKeys) => {
+      dropCommGraphRowOpenKeys("epic-1", rowKeys);
+      reconcilePrunedCommGraphTimelineRows("epic-1", rowKeys);
+    });
     manager.setRelayHostIds(["relay-b"]);
     manager.attach();
     const handlers = recorded.requests[0].handlers;
@@ -645,7 +665,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
     it("keeps a live incumbent through a pure order change: no close, no open, no timer change", () => {
       vi.useFakeTimers();
       const tracked = trackedOpener();
-      const manager = new CommGraphCloudSubscriptionManager(
+      const manager = synchronousManager(
         "epic-1",
         tracked.opener,
         () => undefined,
@@ -695,7 +715,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
       let rejectRelayB = true;
       const opens: CommGraphCloudSubscriptionRequest[] = [];
       const closeSpies = new Map<string, Mock>();
-      const manager = new CommGraphCloudSubscriptionManager(
+      const manager = synchronousManager(
         "epic-1",
         (request) => {
           // Recorded BEFORE the throw: a dial that fails is still a dial, and
@@ -764,7 +784,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
     it("reopens onto the new first candidate when the incumbent's own key changes", () => {
       const tracked = trackedOpener();
-      const manager = new CommGraphCloudSubscriptionManager(
+      const manager = synchronousManager(
         "epic-1",
         tracked.opener,
         () => undefined,
@@ -800,7 +820,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
 
     it("opens exactly one relay - the new first candidate - when the active host is removed and replaced together", () => {
       const tracked = trackedOpener();
-      const manager = new CommGraphCloudSubscriptionManager(
+      const manager = synchronousManager(
         "epic-1",
         tracked.opener,
         () => undefined,
@@ -847,7 +867,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
     it("keeps a synchronous unsupported verdict through the same reconcile and opens the next candidate once", () => {
       const opens: CommGraphCloudSubscriptionRequest[] = [];
       const closeSpies = new Map<string, Mock>();
-      const manager = new CommGraphCloudSubscriptionManager(
+      const manager = synchronousManager(
         "epic-1",
         (request) => {
           opens.push(request);
@@ -902,7 +922,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
     it("arms exactly one failover timer for a reconnecting incumbent once an alternative appears, unmoved by a later reorder or unrelated readiness change", () => {
       vi.useFakeTimers();
       const tracked = trackedOpener();
-      const manager = new CommGraphCloudSubscriptionManager(
+      const manager = synchronousManager(
         "epic-1",
         tracked.opener,
         () => undefined,
@@ -989,7 +1009,7 @@ describe("CommGraphCloudSubscriptionManager", () => {
       // again" - a real opener's compatibility verdict for a given transport
       // identity does not flip back and forth within one attach cycle.
       let reportRelayBUnsupported = true;
-      const manager = new CommGraphCloudSubscriptionManager(
+      const manager = synchronousManager(
         "epic-1",
         (request) => {
           opens.push(request);
@@ -1052,6 +1072,336 @@ describe("CommGraphCloudSubscriptionManager", () => {
         manager.dispose();
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("coalesced data commits", () => {
+    // Constructed DIRECTLY with a real window - everything else in this file
+    // goes through `synchronousManager` so its cases stay a proof about the
+    // merge and the relay bookkeeping, never about coalescing timing.
+    const WINDOW_MS = 80;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /**
+     * One relay, attached and available, with the listener cleared so every
+     * case starts counting from zero. `vi.advanceTimersByTime(1000)` before
+     * the clear settles the window opened by `onAvailability`'s own commit,
+     * so the first push inside a case is always a fresh leading edge.
+     */
+    function setUp(): {
+      readonly manager: CommGraphCloudSubscriptionManager;
+      readonly handlers: CommGraphCloudSubscriptionHandlers;
+      readonly listener: Mock;
+    } {
+      const recorded = recordedOpener();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        recorded.opener,
+        () => undefined,
+        WINDOW_MS,
+      );
+      manager.setRelayHostIds(["relay-b"]);
+      manager.attach();
+      const listener = vi.fn();
+      manager.subscribe(listener);
+      const handlers = recorded.requests[0].handlers;
+      handlers.onAvailability("available");
+      vi.advanceTimersByTime(1_000);
+      listener.mockClear();
+      return { manager, handlers, listener };
+    }
+
+    it("N frames in one window notify exactly twice", () => {
+      const { manager, handlers, listener } = setUp();
+
+      // Distinct eventIds, increasing ingestVersion (so every one is
+      // accepted), DELIBERATELY out of capturedAt order - the merge sorts by
+      // timestamp regardless of arrival or ingest order.
+      const events = [
+        cloudEvent({ eventId: "e1", ingestVersion: 1, capturedAt: 5_000 }),
+        cloudEvent({ eventId: "e2", ingestVersion: 2, capturedAt: 1_000 }),
+        cloudEvent({ eventId: "e3", ingestVersion: 3, capturedAt: 4_000 }),
+        cloudEvent({ eventId: "e4", ingestVersion: 4, capturedAt: 2_000 }),
+        cloudEvent({ eventId: "e5", ingestVersion: 5, capturedAt: 3_000 }),
+      ];
+
+      handlers.onEvent(events[0]);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(manager.getSnapshot().events).toHaveLength(1);
+      const publishedAfterLeadingEdge = manager.getSnapshot().events;
+
+      for (const event of events.slice(1)) handlers.onEvent(event);
+
+      // Still one call and one row: the published snapshot is unchanged
+      // INSIDE the window, however many frames landed.
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(manager.getSnapshot().events).toHaveLength(1);
+      // Same reference from two `getSnapshot()` calls - `useSyncExternalStore`
+      // depends on that identity holding while nothing has actually published.
+      expect(manager.getSnapshot().events).toBe(publishedAfterLeadingEdge);
+
+      vi.advanceTimersByTime(WINDOW_MS);
+
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(
+        manager.getSnapshot().events.map((event) => event.eventId),
+      ).toEqual(["e2", "e4", "e5", "e3", "e1"]);
+    });
+
+    it("a frame after a quiet period notifies immediately", () => {
+      const { manager, handlers, listener } = setUp();
+
+      handlers.onEvent(
+        cloudEvent({ eventId: "e1", ingestVersion: 1, capturedAt: 1_000 }),
+      );
+      handlers.onEvent(
+        cloudEvent({ eventId: "e2", ingestVersion: 2, capturedAt: 2_000 }),
+      );
+      vi.advanceTimersByTime(WINDOW_MS);
+      listener.mockClear();
+
+      vi.advanceTimersByTime(1_000);
+      handlers.onEvent(
+        cloudEvent({ eventId: "e3", ingestVersion: 3, capturedAt: 3_000 }),
+      );
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(
+        manager.getSnapshot().events.map((event) => event.eventId),
+      ).toContain("e3");
+    });
+
+    it("a status change mid-window commits immediately with the rows so far and cancels the trailing timer", () => {
+      const { manager, handlers, listener } = setUp();
+
+      handlers.onEvent(
+        cloudEvent({ eventId: "e1", ingestVersion: 1, capturedAt: 1_000 }),
+      );
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      handlers.onEvent(
+        cloudEvent({ eventId: "e2", ingestVersion: 2, capturedAt: 2_000 }),
+      );
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      handlers.onStatus("reconnecting");
+      expect(listener).toHaveBeenCalledTimes(2);
+      const snapshot = manager.getSnapshot();
+      expect(snapshot.events.map((event) => event.eventId)).toEqual([
+        "e1",
+        "e2",
+      ]);
+      expect(
+        snapshot.hosts.every((host) => host.status === "reconnecting"),
+      ).toBe(true);
+
+      // The trailing timer armed by the second event was cancelled by the
+      // status commit above; nothing is left to publish when it would have
+      // fired.
+      vi.advanceTimersByTime(WINDOW_MS);
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it("an unchanged status does not notify", () => {
+      const { handlers, listener } = setUp();
+
+      handlers.onStatus("live");
+      expect(listener).toHaveBeenCalledTimes(1);
+      listener.mockClear();
+
+      handlers.onStatus("live");
+      handlers.onStatus("live");
+      handlers.onStatus("live");
+      expect(listener).not.toHaveBeenCalled();
+
+      // Control: a status that actually differs from what was published
+      // still notifies, so the zero above is the no-op guard and not a dead
+      // status path.
+      handlers.onStatus("reconnecting");
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("the first connecting a fresh relay reports is still published", () => {
+      const recorded = recordedOpener();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        recorded.opener,
+        () => undefined,
+        WINDOW_MS,
+      );
+      manager.setRelayHostIds(["relay-b"]);
+      manager.attach();
+      const listener = vi.fn();
+      manager.subscribe(listener);
+
+      // Before the first status report, nothing has been published for this
+      // relay at all - the no-op has to compare against what was PUBLISHED,
+      // not against the field `openNextRelay` already set to "connecting".
+      expect(
+        manager.getSnapshot().hosts.some((host) => host.hostId === "relay-b"),
+      ).toBe(false);
+
+      recorded.requests[0].handlers.onStatus("connecting");
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(manager.getSnapshot().hosts).toEqual([
+        expect.objectContaining({ hostId: "relay-b", status: "connecting" }),
+      ]);
+    });
+
+    it("live rows landing inside one window pulse once - accepted on purpose", () => {
+      const { manager, handlers, listener } = setUp();
+
+      handlers.onSnapshot([], 10, null);
+      handlers.onCaughtUp(null, 10);
+      vi.advanceTimersByTime(1_000);
+      listener.mockClear();
+
+      const first = cloudEvent({
+        eventId: "live-11",
+        ingestVersion: 11,
+        capturedAt: 1_000,
+        historicalUpload: false,
+      });
+      const second = cloudEvent({
+        eventId: "live-12",
+        ingestVersion: 12,
+        capturedAt: 2_000,
+        historicalUpload: false,
+      });
+      const third = cloudEvent({
+        eventId: "live-13",
+        ingestVersion: 13,
+        capturedAt: 3_000,
+        historicalUpload: false,
+      });
+
+      handlers.onEvent(first);
+      expect(manager.getSnapshot().lastArrival?.eventId).toBe("live-11");
+
+      handlers.onEvent(second);
+      handlers.onEvent(third);
+
+      vi.advanceTimersByTime(WINDOW_MS);
+
+      // ACCEPTED ON PURPOSE: `lastArrival` holds only the newest arrival, so
+      // live rows landing inside one coalesced window pulse once between
+      // them - the middle arrival is never itself published as `lastArrival`.
+      expect(manager.getSnapshot().lastArrival?.eventId).toBe("live-13");
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it("dispose with a trailing commit pending notifies nobody and does not throw", () => {
+      const { manager, handlers, listener } = setUp();
+
+      handlers.onEvent(
+        cloudEvent({ eventId: "e1", ingestVersion: 1, capturedAt: 1_000 }),
+      );
+      handlers.onEvent(
+        cloudEvent({ eventId: "e2", ingestVersion: 2, capturedAt: 2_000 }),
+      );
+      listener.mockClear();
+
+      expect(() => manager.dispose()).not.toThrow();
+      expect(() => vi.advanceTimersByTime(WINDOW_MS)).not.toThrow();
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("a zero window publishes every frame", () => {
+      const recorded = recordedOpener();
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        recorded.opener,
+        () => undefined,
+        0,
+      );
+      manager.setRelayHostIds(["relay-b"]);
+      manager.attach();
+      const listener = vi.fn();
+      manager.subscribe(listener);
+      const handlers = recorded.requests[0].handlers;
+      handlers.onAvailability("available");
+      listener.mockClear();
+
+      for (let index = 0; index < 5; index += 1) {
+        handlers.onEvent(
+          cloudEvent({
+            eventId: `zero-${index}`,
+            ingestVersion: index + 1,
+            capturedAt: (index + 1) * 1_000,
+          }),
+        );
+      }
+
+      expect(listener).toHaveBeenCalledTimes(5);
+    });
+
+    it("a frame that prunes rows publishes at once, inside an open window", () => {
+      // `setUp()` wires the manager with `() => undefined` as `onRowsPruned`,
+      // so this case builds the manager the same way `setUp()` does but with
+      // a recording callback instead - the smaller diff, since no other case
+      // in this block needs the pruned keys back.
+      const recorded = recordedOpener();
+      const prunedRowKeyBatches: ReadonlySet<string>[] = [];
+      const manager = new CommGraphCloudSubscriptionManager(
+        "epic-1",
+        recorded.opener,
+        (rowKeys) => {
+          prunedRowKeyBatches.push(rowKeys);
+        },
+        WINDOW_MS,
+      );
+      manager.setRelayHostIds(["relay-b"]);
+      manager.attach();
+      const listener = vi.fn();
+      manager.subscribe(listener);
+      const handlers = recorded.requests[0].handlers;
+      handlers.onAvailability("available");
+      vi.advanceTimersByTime(1_000);
+      listener.mockClear();
+
+      const rowA = cloudEvent({ eventId: "a", ingestVersion: 1 });
+      handlers.onEvent(rowA);
+      expect(listener).toHaveBeenCalledTimes(1);
+      const rowAPublished = manager.getSnapshot().events[0];
+
+      const rowB = cloudEvent({ eventId: "b", ingestVersion: 5 });
+      handlers.onEvent(rowB);
+      // Still one call, and the published snapshot still holds only A - the
+      // window is open and the trailing timer is pending. This is what proves
+      // the prune below arrives INSIDE an open window rather than after one
+      // had already closed on its own.
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(
+        manager.getSnapshot().events.map((event) => event.eventId),
+      ).toEqual(["a"]);
+
+      // Frontier 3: A's ingestVersion (1) is below it and is pruned; B's (5)
+      // survives.
+      handlers.onSnapshot([], 5, 3);
+
+      // Synchronous, with no timer advanced: the prune commits at once
+      // instead of waiting for the trailing timer.
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(
+        manager.getSnapshot().events.map((event) => event.eventId),
+      ).toEqual(["b"]);
+      expect(prunedRowKeyBatches).toHaveLength(1);
+      expect(prunedRowKeyBatches[0].has(commGraphEventKey(rowAPublished))).toBe(
+        true,
+      );
+
+      // The prune commit retired the trailing timer armed by row B, so there
+      // is nothing left to publish when it would have fired.
+      vi.advanceTimersByTime(WINDOW_MS);
+      expect(listener).toHaveBeenCalledTimes(2);
     });
   });
 });

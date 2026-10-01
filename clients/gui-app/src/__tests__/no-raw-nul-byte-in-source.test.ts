@@ -79,6 +79,7 @@ const BINARY_EXTENSIONS = new Set([
   ".otf",
   ".mp4",
   ".webm",
+  ".wav",
   ".pdf",
 ]);
 

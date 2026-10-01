@@ -691,7 +691,6 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         runnerHost: host,
         featureSettings: null,
         mobileApp: false,
-        mobileFooter: false,
       },
       document.body,
     );
@@ -710,7 +709,6 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
         runnerHost: host,
         featureSettings: null,
         mobileApp: false,
-        mobileFooter: false,
       },
       document.body,
     );

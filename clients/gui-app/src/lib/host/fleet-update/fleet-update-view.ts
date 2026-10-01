@@ -149,6 +149,7 @@ export interface FleetUpdateRecordObservation {
    * `failed` view carries it the way the stale coarse marker's does.
    */
   readonly errorMessage: string | null;
+  readonly errorCode: string | null;
   /**
    * What the READER's own holder probe established (D13), never something
    * derived from the record's contents.
@@ -472,6 +473,8 @@ export interface FleetUpdateView {
   readonly blockingBreakdown: HostBusyBreakdown | null;
   /** Phase-specific cause, for the `failed` arm only. */
   readonly errorMessage: string | null;
+  /** Machine-readable failure code, when the attempt reported one. */
+  readonly errorCode: string | null;
 }
 
 /**
@@ -496,6 +499,7 @@ export const UNKNOWN_FLEET_UPDATE_VIEW: FleetUpdateView = {
   blockingSessionCount: null,
   blockingBreakdown: null,
   errorMessage: null,
+  errorCode: null,
 };
 
 export interface FleetUpdateViewInput {
@@ -743,6 +747,7 @@ function recordObservationView(
     // Same slot the stale coarse marker fills: a retained `failed` with its
     // cause, so the host-down window can say WHY, not only that it failed.
     errorMessage: observation.errorMessage,
+    errorCode: observation.errorCode,
   };
 }
 
@@ -806,6 +811,7 @@ function coarseProgressView(
       lastKnownKind: coarse.kind,
       lastObservedAtMs: observation.observedAtMs,
       errorMessage: coarse.errorMessage,
+      errorCode: null,
     };
   }
   return {
@@ -820,6 +826,7 @@ function coarseProgressView(
         ? { kind: "indeterminate", bytes: null, totalBytes: null }
         : { kind: "none" },
     errorMessage: coarse.errorMessage,
+    errorCode: null,
   };
 }
 
@@ -969,6 +976,7 @@ function attemptOperationView(input: {
     blockingSessionCount: operation.busySessionCount,
     blockingBreakdown: operation.busyBreakdown,
     errorMessage: operation.error?.message ?? null,
+    errorCode: operation.error?.code ?? null,
   } satisfies Omit<
     FleetUpdateView,
     "kind" | "qualified" | "lastKnownKind" | "lastObservedAtMs"
@@ -1062,6 +1070,7 @@ function attemptOperationView(input: {
         // `failed` arm, and carrying a refusal reason here would put a red
         // sentence's worth of alarm into a success card.
         errorMessage: null,
+        errorCode: null,
       };
     }
     // The ONLY route to `failed` that the phase alone does not carry: a

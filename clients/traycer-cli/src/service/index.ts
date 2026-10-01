@@ -18,6 +18,7 @@ import { createWindowsController, epochMicrosNow } from "./platforms/windows";
 import { assertNotInsideHostUnit } from "../host/cgroup-relocation";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
+import type { ForegroundHostRun } from "../host/foreground-host-run";
 import { hostHomeDir } from "../store/paths";
 import {
   CLI_INVOCATION_TXN_POLL_MS,
@@ -66,6 +67,19 @@ export interface InstallServiceOptions {
 
 export interface UninstallServiceOptions {
   readonly label: ServiceLabel;
+  /**
+   * A host a person started in a terminal, found live under the caller's lock
+   * (`findForegroundHostRun`). The uninstall removes the registration beside
+   * it and leaves it running: no stop intent, no kill, and its `pid.json`
+   * kept - they are that host's, not the service's. No service host can be
+   * live beside it in one slot (a start declines to a live incumbent), so
+   * there is nothing of the service's left to take down.
+   *
+   * `null` when the caller read none, or when it takes the host down itself
+   * (`host uninstall --all`): the uninstall then also ends whatever the
+   * service runs, as it always has.
+   */
+  readonly leaveForegroundRun: ForegroundHostRun | null;
 }
 
 // Outcome of `ServiceController.retireCompetingRegistration`.
@@ -549,6 +563,13 @@ export function withStopIntent(
     },
     uninstall: async (options) => {
       await assertNotInsideHostUnit();
+      // Nothing is stopped, so nothing is announced - and an intent left
+      // behind would tell that host's own supervisor its child's next exit
+      // was asked for. Nor is any existing intent retired on a failure: it
+      // is not this uninstall's.
+      if (options.leaveForegroundRun !== null) {
+        return controller.uninstall(options);
+      }
       await announceStop(options.label.environment, "uninstall", false);
       try {
         return await controller.uninstall(options);

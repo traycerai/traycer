@@ -83,6 +83,10 @@ export class CommGraphCloudSubscriptionManager {
   private lastArrival: CommGraphEvent | null = null;
   private handle: CommGraphCloudSubscriptionHandle | null = null;
   private reconnectingFailoverTimer: number | null = null;
+  private readonly dataCommitWindowMs: number;
+  private dataCommitTimer: number | null = null;
+  /** When the snapshot was last published, by any path. */
+  private lastCommitAt = Number.NEGATIVE_INFINITY;
   private generation = 0;
   private attached = false;
   private disposed = false;
@@ -93,14 +97,21 @@ export class CommGraphCloudSubscriptionManager {
     lastArrival: null,
   };
 
+  /**
+   * `dataCommitWindowMs` is how long rows arriving on the heels of a publish
+   * are held before the next one - see `requestDataCommit`. Zero publishes
+   * every frame as it is applied.
+   */
   constructor(
     epicId: string,
     opener: CommGraphCloudSubscriptionOpener,
     onRowsPruned: (rowKeys: ReadonlySet<string>) => void,
+    dataCommitWindowMs: number,
   ) {
     this.epicId = epicId;
     this.opener = opener;
     this.onRowsPruned = onRowsPruned;
+    this.dataCommitWindowMs = dataCommitWindowMs;
   }
 
   setRelayHostIds(hostIds: ReadonlyArray<string>): void {
@@ -115,7 +126,7 @@ export class CommGraphCloudSubscriptionManager {
     }
     this.closeCurrent();
     if (this.attached) this.openNextRelay();
-    this.publish();
+    this.commit();
   }
 
   /**
@@ -147,7 +158,7 @@ export class CommGraphCloudSubscriptionManager {
     if (this.relayHostId !== null) {
       this.scheduleReconnectingFailover(this.relayHostId);
     }
-    this.publish();
+    this.commit();
   }
 
   /**
@@ -215,7 +226,7 @@ export class CommGraphCloudSubscriptionManager {
     if (this.relayHostId !== null) {
       this.scheduleReconnectingFailover(this.relayHostId);
     }
-    this.publish();
+    this.commit();
   }
 
   setOriginHostIds(hostIds: ReadonlyArray<string>): void {
@@ -223,7 +234,7 @@ export class CommGraphCloudSubscriptionManager {
     const next = Array.from(new Set(hostIds));
     if (sameOrderedHostIds(next, this.originHostIds)) return;
     this.originHostIds = next;
-    this.publish();
+    this.commit();
   }
 
   attach(): void {
@@ -253,7 +264,7 @@ export class CommGraphCloudSubscriptionManager {
     this.historyBoundaryInitialized = false;
     this.historyCaughtUp = false;
     this.lastArrival = null;
-    this.publish();
+    this.commit();
   }
 
   redialHosts(hostIds: ReadonlyArray<string>): void {
@@ -296,6 +307,9 @@ export class CommGraphCloudSubscriptionManager {
     if (this.disposed) return;
     this.disposed = true;
     this.detach();
+    // `detach` publishes, which also cancels a pending data commit - but only
+    // when there was something attached to detach.
+    this.clearDataCommitTimer();
     this.listeners.clear();
   }
 
@@ -343,7 +357,7 @@ export class CommGraphCloudSubscriptionManager {
       ) {
         this.availability = "unsupported";
       }
-      this.publish();
+      this.commit();
       return;
     }
     this.relayHostId = hostId;
@@ -404,7 +418,7 @@ export class CommGraphCloudSubscriptionManager {
         cause,
       );
       this.openNextRelay();
-      this.publish();
+      this.commit();
     }
   }
 
@@ -416,7 +430,7 @@ export class CommGraphCloudSubscriptionManager {
       this.lastArrival = null;
     }
     this.availability = "available";
-    this.publish();
+    this.commit();
   }
 
   /** Snapshot and incremental frames share this cursor-aware apply path. */
@@ -455,8 +469,18 @@ export class CommGraphCloudSubscriptionManager {
       this.events = this.events.concat(accepted);
       this.events.sort(compareCommGraphEvents);
     }
-    if (accepted.length > 0 || headVersion !== null || prunedRowKeys.size > 0) {
-      this.publish();
+    // A PRUNE PUBLISHES NOW. `onRowsPruned` has already reset the timeline
+    // cursor and the open rows in their stores, synchronously, and those
+    // stores render in this same task. Holding the snapshot for the window
+    // would render that reset against the rows it was reset FOR, a live graph
+    // still drawing the pruned rows until the timer fired. A frontier moves
+    // rarely, so publishing it at once costs the window nothing.
+    if (prunedRowKeys.size > 0) {
+      this.commit();
+      return;
+    }
+    if (accepted.length > 0 || headVersion !== null) {
+      this.requestDataCommit();
     }
   }
 
@@ -488,7 +512,7 @@ export class CommGraphCloudSubscriptionManager {
     if (this.historyBoundaryInitialized && headVersion >= (boundary ?? 0)) {
       this.historyCaughtUp = true;
     }
-    this.publish();
+    this.commit();
   }
 
   private noteArrival(row: CommGraphEvent): void {
@@ -510,6 +534,16 @@ export class CommGraphCloudSubscriptionManager {
   }
 
   private applyStatus(hostId: string, status: CommGraphHostStatus): void {
+    // THE STREAM REPORTS `live` AHEAD OF EVERY FRAME IT DELIVERS, so a status
+    // that publishes unconditionally publishes once per frame and the data
+    // path's coalescing coalesces nothing. A status that is already the
+    // published one is not news.
+    //
+    // Compared against what was PUBLISHED, not only against the field: opening
+    // a relay sets the field to `connecting` without publishing, so the first
+    // `connecting` the stream reports matches the field and is still the first
+    // anyone downstream hears of this relay.
+    if (status === this.relayStatus && this.publishedStatusIs(status)) return;
     this.relayStatus = status;
     if (status !== "reconnecting") this.clearReconnectingFailover();
     if (status === "unsupported" || status === "unreachable") {
@@ -522,7 +556,7 @@ export class CommGraphCloudSubscriptionManager {
     if (status === "reconnecting") {
       this.scheduleReconnectingFailover(hostId);
     }
-    this.publish();
+    this.commit();
   }
 
   private scheduleReconnectingFailover(hostId: string): void {
@@ -569,7 +603,7 @@ export class CommGraphCloudSubscriptionManager {
         this.rejectedRelayHostIds = new Set(this.unsupportedRelayHostIds);
       }
       this.openNextRelay();
-      this.publish();
+      this.commit();
     }, RECONNECTING_RELAY_FAILOVER_MS);
   }
 
@@ -604,15 +638,87 @@ export class CommGraphCloudSubscriptionManager {
     }
   }
 
-  private publish(): void {
-    if (this.disposed) return;
-    let statusHostIds = this.originHostIds;
-    if (statusHostIds.length === 0 && this.relayHostId !== null) {
-      statusHostIds = [this.relayHostId];
+  /** The hosts the feed's status is reported on - see `originHostIds`. */
+  private statusHostIds(): ReadonlyArray<string> {
+    if (this.originHostIds.length === 0 && this.relayHostId !== null) {
+      return [this.relayHostId];
     }
+    return this.originHostIds;
+  }
+
+  /** Whether the published snapshot already reports `status` on these hosts. */
+  private publishedStatusIs(status: CommGraphHostStatus): boolean {
+    const expected = this.statusHostIds();
+    const published = this.snapshot.hosts;
+    return (
+      published.length === expected.length &&
+      published.every(
+        (host, index) =>
+          host.hostId === expected[index] && host.status === status,
+      )
+    );
+  }
+
+  /**
+   * Publishes applied rows, at most once per window.
+   *
+   * ROWS ARE APPLIED AS THEY ARRIVE AND PUBLISHED IN BATCHES. An epic's history
+   * arrives as hundreds of frames a second, each in a task of its own, and a
+   * publish is a render of everything that reads the feed. Publishing per
+   * frame made a few thousand rows cost a few thousand renders of a graph
+   * that grew by one row each time.
+   *
+   * LEADING EDGE, THEN A TRAILING ONE. A frame that arrives after a quiet
+   * window publishes immediately, so a lone live row lands as it always did.
+   * Frames that follow inside the window are applied and wait for one timer,
+   * which publishes all of them together. A burst of any size is therefore two
+   * publishes, and what is published is always the merged log in order.
+   *
+   * ONLY THIS PATH WAITS. Status, availability, the relay directory, caught-up,
+   * detach and a frame that prunes rows publish as they happen (`commit`):
+   * they are rare, and what reads them - the feed-health dot, the resume
+   * cursor, the timeline cursor a prune resets - reads them in the same tick.
+   * Such a publish carries every row applied so far, so it also retires the
+   * timer.
+   *
+   * WHAT A BATCH COSTS: `lastArrival` holds the newest arrival only, so live
+   * rows that land inside one window pulse once between them, where each used
+   * to pulse on its own. That is accepted. Letting an arrival skip the window
+   * would bring back a publish per row for the one case that most needs
+   * batching, because a backlog that overflows the first snapshot is delivered
+   * as arrivals.
+   */
+  private requestDataCommit(): void {
+    if (this.disposed) return;
+    const sinceLastCommit = Date.now() - this.lastCommitAt;
+    // A wall clock can be set back. A negative interval is not "inside the
+    // window", and reading it as one would arm a timer for longer than the
+    // window is.
+    if (sinceLastCommit < 0 || sinceLastCommit >= this.dataCommitWindowMs) {
+      this.commit();
+      return;
+    }
+    if (this.dataCommitTimer !== null) return;
+    this.dataCommitTimer = window.setTimeout(() => {
+      this.dataCommitTimer = null;
+      this.commit();
+    }, this.dataCommitWindowMs - sinceLastCommit);
+  }
+
+  private clearDataCommitTimer(): void {
+    if (this.dataCommitTimer === null) return;
+    window.clearTimeout(this.dataCommitTimer);
+    this.dataCommitTimer = null;
+  }
+
+  /** Publishes now. Everything but `apply` comes here directly. */
+  private commit(): void {
+    if (this.disposed) return;
+    this.clearDataCommitTimer();
+    this.lastCommitAt = Date.now();
     this.snapshot = {
       events: this.events,
-      hosts: statusHostIds.map((hostId) => ({
+      hosts: this.statusHostIds().map((hostId) => ({
         hostId,
         status: this.relayStatus,
         cursor: this.cursor?.ingestVersion ?? null,

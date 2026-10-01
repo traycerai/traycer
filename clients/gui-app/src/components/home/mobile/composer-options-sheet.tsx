@@ -2,15 +2,15 @@ import type { ReactNode } from "react";
 import { Check, ChevronRight } from "lucide-react";
 
 import {
+  AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
   AUTO_MID_TURN_NOTICE,
-  PERMISSION_OPTIONS,
+  PERMISSION_PICKER_OPTIONS,
   composerOffersPermissionMode,
   normalizePermissionMode,
   unsupportedPermissionModeCopy,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
 import {
-  autoJudgeMetaLine,
   autoModeMidTurnLock,
   type AutoJudgeBilling,
 } from "@/lib/auto-mode/auto-judge-billing";
@@ -21,6 +21,7 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
@@ -38,7 +39,7 @@ interface ComposerOptionsSheetProps {
   readonly hostKnowsAutoMode: boolean | null;
   /** See `PermissionsPicker`: drives the `auto` row's mid-turn notice. */
   readonly turnActive: boolean;
-  /** See `PermissionsPicker`: which pocket this host's judge spends. */
+  /** See `PermissionsPicker`: determines Auto's mid-turn availability. */
   readonly judgeBilling: AutoJudgeBilling | null;
   readonly settingsLocked: boolean;
   /** The trailing "Permission settings…" row - see `PermissionsPicker`. */
@@ -95,7 +96,7 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-2 pb-safe-bottom-gutter">
           <div role="radiogroup" aria-label="Permissions">
             <OptionsSectionLabel>Permissions</OptionsSectionLabel>
-            {PERMISSION_OPTIONS.map((option) => {
+            {PERMISSION_PICKER_OPTIONS.map((option) => {
               const Icon = option.icon;
               // Through the shared predicate, which is where the "empty means
               // unconstrained" rule AND the host's own line live now - see
@@ -119,6 +120,11 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                 });
               } else if (lockedMidTurn) {
                 description = autoMidTurnLock;
+              } else if (
+                option.id === "auto" &&
+                props.judgeBilling?.kind === "blocked"
+              ) {
+                description = AUTO_JUDGE_UNAVAILABLE_DESCRIPTION;
               } else {
                 description = option.description;
               }
@@ -129,19 +135,8 @@ export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
                     <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                   }
                   label={option.label}
+                  experimental={option.id === "auto"}
                   description={description}
-                  // The same two `auto`-only lines the desktop dropdown adds,
-                  // through the same helpers: this sheet reads the desktop
-                  // picker's registries rather than restating them, so the copy
-                  // and the gating stay in one place.
-                  metaLine={
-                    isSupported &&
-                    !lockedMidTurn &&
-                    option.id === "auto" &&
-                    props.judgeBilling !== null
-                      ? autoJudgeMetaLine(props.judgeBilling)
-                      : null
-                  }
                   notice={
                     isSupported &&
                     !lockedMidTurn &&
@@ -204,9 +199,8 @@ function OptionsSectionLabel(props: { readonly children: ReactNode }) {
 interface OptionRowProps {
   readonly icon: ReactNode;
   readonly label: string;
+  readonly experimental: boolean;
   readonly description: string;
-  /** The `auto` row's billing disclosure; `null` on every other row. */
-  readonly metaLine: string | null;
   /** The `auto` row's mid-turn notice; `null` on every other row. */
   readonly notice: string | null;
   readonly selected: boolean;
@@ -231,20 +225,19 @@ function OptionRow(props: OptionRowProps) {
     >
       {props.icon}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-ui-sm font-medium text-foreground">
-          {props.label}
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-ui-sm font-medium text-foreground">
+            {props.label}
+          </span>
+          {props.experimental ? (
+            <Badge variant="muted" size="xs">
+              Experimental
+            </Badge>
+          ) : null}
         </span>
         <span className="text-ui-xs text-muted-foreground">
           {props.description}
         </span>
-        {props.metaLine !== null ? (
-          <span
-            data-testid="composer-options-permission-meta"
-            className="text-ui-xs text-muted-foreground"
-          >
-            {props.metaLine}
-          </span>
-        ) : null}
         {props.notice !== null ? (
           <span
             data-testid="composer-options-permission-mid-turn-notice"

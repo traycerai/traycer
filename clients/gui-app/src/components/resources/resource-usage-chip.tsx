@@ -14,8 +14,8 @@ import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
 import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
 import type { NavigatorResourceMetric } from "@/stores/settings/settings-store";
-
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+
 function pluralize(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : plural;
 }
@@ -157,6 +157,34 @@ export function OwnerResourceChip(props: OwnerResourceChipProps) {
       processCount={usage.processCount}
       metrics={props.metrics}
       label="Resource usage"
+      className={props.className}
+    />
+  );
+}
+
+export interface NavigatorResourceHotspotOwner {
+  readonly epicId: string;
+  readonly kind: ResourceOwnerKindWireV14;
+  readonly ownerId: string;
+  readonly hostId: string | null;
+}
+
+export interface NavigatorResourceHotspotChipProps {
+  /** Null for a row that never owns a tracked process (a spec, a ticket). */
+  readonly owner: NavigatorResourceHotspotOwner | null;
+  readonly metrics: ReadonlyArray<NavigatorResourceMetric>;
+  readonly className: string | undefined;
+}
+
+/** Resolve the snapshot before deciding whether this row has a measurable chip. */
+export function NavigatorResourceHotspotChip(
+  props: NavigatorResourceHotspotChipProps,
+): ReactNode {
+  if (props.owner === null || props.metrics.length === 0) return null;
+  return (
+    <OwnerResourceChip
+      {...props.owner}
+      metrics={props.metrics}
       className={props.className}
     />
   );

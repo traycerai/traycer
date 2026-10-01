@@ -215,6 +215,7 @@ function makeFakeChild(): FakeChildHandle {
 // Imported AFTER the mocks so module-init evaluates against them.
 const {
   registerHostLoginItem,
+  readHostLaunchdJobs,
   readHostLoginItemStatus,
   readParkedRegistrationTakeover,
   retireCompetingCliRegistrationAtLaunch,
@@ -703,6 +704,172 @@ describe("registerHostLoginItem", () => {
     expect(revalidate).toHaveBeenCalledTimes(7);
     expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
   });
+
+  // Regression coverage for the snapshots observed on real Macs after a
+  // launchctl bootout. These exercise the production snapshot -> guard ->
+  // register flow, rather than a mocked guard: a label SMAppService never
+  // registered reports `not-found`, which means there is no registration to
+  // restore, not an unsafe unknown state that should strand the host.
+  it.each([
+    ["the production bootout snapshot", "enabled", "not-found", false],
+    ["the staging mirror snapshot", "not-found", "enabled", true],
+  ] as const)(
+    "registers through %s (%s, %s, legacy manifest %s)",
+    async (_name, primary, legacy, hasLegacyManifest) => {
+      if (hasLegacyManifest) writeLegacyCliManifest();
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+      // A missing primary leg has no SMAppService clear, so its next read is
+      // the post-register poll. An enabled primary still has a real clear
+      // and consequently a post-clear status read first.
+      if (primary === "enabled") {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "not-registered" }) // post-clear
+          .mockReturnValueOnce({ status: "enabled" }); // post-register
+      } else {
+        getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
+      }
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+
+      // The successful agent registration is the important assertion: a
+      // `not-found` snapshot must not merely avoid logging a park. It also
+      // has no clear operation of its own; throwing from a nonexistent
+      // service's clear must never be able to park this cycle.
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === true &&
+            options.serviceName === "ai.traycer.host.agent.plist",
+        ),
+      ).toBe(true);
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === false &&
+            options.serviceName ===
+              (primary === "not-found"
+                ? "ai.traycer.host.agent.plist"
+                : "ai.traycer.host.plist"),
+        ),
+      ).toBe(false);
+      expect(existsSync(legacyCliManifestPath())).toBe(false);
+    },
+  );
+
+  it.each([
+    ["primary", "not-supported", "enabled"],
+    ["legacy", "enabled", "not-supported"],
+  ] as const)(
+    "registers when the %s SMAppService leg is not-supported",
+    async (_leg, primary, legacy) => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+      if (primary === "enabled") {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "not-registered" }) // post-clear
+          .mockReturnValueOnce({ status: "enabled" }); // post-register
+      } else {
+        getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
+      }
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === true &&
+            options.serviceName === "ai.traycer.host.agent.plist",
+        ),
+      ).toBe(true);
+      expect(
+        setLoginItemSettings.mock.calls.some(
+          ([options]) =>
+            options.openAtLogin === false &&
+            options.serviceName ===
+              (primary === "not-supported"
+                ? "ai.traycer.host.agent.plist"
+                : "ai.traycer.host.plist"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it.each([
+    ["primary", "not-found", "enabled"],
+    ["legacy", "enabled", "not-found"],
+    ["primary", "not-supported", "enabled"],
+    ["legacy", "enabled", "not-supported"],
+  ] as const)(
+    "skips the %s missing SMAppService clear even when that clear would throw",
+    async (_leg, primary, legacy) => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+      if (primary === "enabled") {
+        getLoginItemSettings
+          .mockReturnValueOnce({ status: "enabled" }) // post-clear
+          .mockReturnValueOnce({ status: "enabled" }); // post-register
+      } else {
+        getLoginItemSettings.mockReturnValueOnce({ status: "enabled" }); // post-register
+      }
+      const missingServiceName =
+        primary === "not-found" || primary === "not-supported"
+          ? "ai.traycer.host.agent.plist"
+          : "ai.traycer.host.plist";
+      setLoginItemSettings.mockImplementation((options) => {
+        if (
+          options.openAtLogin === false &&
+          options.serviceName === missingServiceName
+        ) {
+          throw new Error("missing SMAppService clear must not run");
+        }
+      });
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("enabled");
+      expect(setLoginItemSettings).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          openAtLogin: false,
+          serviceName: missingServiceName,
+        }),
+      );
+    },
+  );
+
+  it("still parks on an unreadable primary SMAppService status", async () => {
+    getLoginItemSettings
+      .mockImplementationOnce(() => {
+        throw new Error("SMAppService status unreadable");
+      })
+      .mockReturnValueOnce({ status: "enabled" }); // snapshot: legacy
+
+    await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(electronLog.warn).toHaveBeenLastCalledWith(
+      "[host-login-item] registration parked: prior registration cannot be restored exactly",
+      {
+        primary: null,
+        legacy: "enabled",
+        legacyManifest: "absent",
+      },
+    );
+  });
+
+  it.each([
+    ["primary", "requires-approval", "enabled"],
+    ["legacy", "enabled", "requires-approval"],
+  ] as const)(
+    "still parks when the %s SMAppService leg requires approval",
+    async (_leg, primary, legacy) => {
+      getLoginItemSettings
+        .mockReturnValueOnce({ status: primary }) // snapshot: primary
+        .mockReturnValueOnce({ status: legacy }); // snapshot: legacy
+
+      await expect(registerHostLoginItem(undefined)).resolves.toBe("parked");
+      expect(setLoginItemSettings).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // Acceptance evidence for the <=1.1.6 deadlock fix: a `present` legacy
@@ -1171,6 +1338,214 @@ describe("readHostLoginItemStatus", () => {
     });
 
     expect(readHostLoginItemStatus()).toBe("not-registered");
+  });
+});
+
+// `readHostLaunchdJobs` answers whether launchd has a job under EITHER host
+// label. The login item's status cannot: it reads the BTM record, and a
+// `launchctl bootout` of the agent unloads the job while the record still
+// reads `enabled` - the state that sent the app's Restart to the CLI, whose
+// relaunch then had no loaded label to start (in-app field report). Only a
+// definite not-found from BOTH labels is `neither-loaded`; an unanswerable
+// label is `indeterminate`, and callers act on `neither-loaded` alone.
+describe("readHostLaunchdJobs", () => {
+  // The labels the mocked "production" config yields, as the neighbouring
+  // suites spell them.
+  const HOST_AGENT_LABEL = "ai.traycer.host.agent";
+  const CLI_HOST_LABEL = "ai.traycer.host";
+  const uid = process.getuid?.() ?? 0;
+  const agentTarget = `gui/${uid}/${HOST_AGENT_LABEL}`;
+  const cliTarget = `gui/${uid}/${CLI_HOST_LABEL}`;
+
+  function printResult(fields: {
+    readonly exitCode: number;
+    readonly stdout: string;
+    readonly stderr: string;
+    readonly timedOut: boolean;
+    readonly spawnFailed: boolean;
+  }): ProbeCommandResult {
+    return { ...fields, signal: null };
+  }
+
+  const notFound = printResult({
+    exitCode: 113,
+    stdout: "",
+    stderr:
+      'Could not find service "ai.traycer.host" in domain for user gui: 501\n',
+    timedOut: false,
+    spawnFailed: false,
+  });
+
+  function loaded(stdout: string): ProbeCommandResult {
+    return printResult({
+      exitCode: 0,
+      stdout,
+      stderr: "",
+      timedOut: false,
+      spawnFailed: false,
+    });
+  }
+
+  // Every way a print can fail to be an ANSWER. None may read as "absent".
+  const spawnFailed = printResult({
+    exitCode: -1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    spawnFailed: true,
+  });
+  const timedOut = printResult({
+    exitCode: -1,
+    stdout: "",
+    stderr: "",
+    timedOut: true,
+    spawnFailed: false,
+  });
+  const permissionDenied = printResult({
+    exitCode: 1,
+    stdout: "",
+    stderr: "Operation not permitted\n",
+    timedOut: false,
+    spawnFailed: false,
+  });
+  const unrecognizedExit = printResult({
+    exitCode: 5,
+    stdout: "",
+    stderr: "Could not kickstart service: 5",
+    timedOut: false,
+    spawnFailed: false,
+  });
+
+  let printRunner: Mock<(target: string) => Promise<ProbeCommandResult>>;
+
+  // Answers per label and records every target, so a test states which label
+  // answered what and asserts which labels were asked about, in order.
+  function stagePrints(answers: {
+    readonly agent: ProbeCommandResult | Error;
+    readonly cli: ProbeCommandResult | Error;
+  }): void {
+    printRunner.mockImplementation(async (target) => {
+      const answer = target.endsWith(`/${HOST_AGENT_LABEL}`)
+        ? answers.agent
+        : answers.cli;
+      if (answer instanceof Error) throw answer;
+      return answer;
+    });
+  }
+
+  function printedTargets(): readonly string[] {
+    return printRunner.mock.calls.map((call) => call[0]);
+  }
+
+  // Same convention as the neighbouring launchd-probe suites: the runner is
+  // always stubbed so the suite never reads the developer's real launchd
+  // domain.
+  beforeEach(() => {
+    printRunner = vi.fn<(target: string) => Promise<ProbeCommandResult>>(
+      async () => notFound,
+    );
+    overrideAgentPrintRunnerForTests(printRunner);
+  });
+
+  afterEach(() => {
+    overrideAgentPrintRunnerForTests(null);
+  });
+
+  it("is `neither-loaded` when launchd answers not-found for both labels, having asked about the agent label first", async () => {
+    stagePrints({ agent: notFound, cli: notFound });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("neither-loaded");
+
+    expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+  });
+
+  // A print that succeeds is a job launchd found, whatever it says about the
+  // job's state: a job that is loaded but idle or waiting is still loaded.
+  it.each([
+    ["no output", ""],
+    ["an idle job", "\tstate = waiting\n\tpath = /some/path\n"],
+    ["a running job", "\tstate = running\n\tpid = 4242\n"],
+  ] as const)(
+    "is `loaded` as soon as the agent label prints successfully (%s), without asking about the CLI label",
+    async (_name, stdout) => {
+      stagePrints({ agent: loaded(stdout), cli: notFound });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("loaded");
+
+      expect(printedTargets()).toEqual([agentTarget]);
+    },
+  );
+
+  it("is `loaded` when the agent label is not-found and the CLI label prints successfully", async () => {
+    stagePrints({
+      agent: notFound,
+      cli: loaded("\tstate = waiting\n"),
+    });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("loaded");
+
+    expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+  });
+
+  // A loaded label settles it: the other label being unanswerable leaves no
+  // question about whether launchd has SOME job.
+  it.each([
+    ["a spawn failure", spawnFailed],
+    ["a timeout", timedOut],
+  ] as const)(
+    "is `loaded`, not `indeterminate`, when the agent label's print is %s but the CLI label is loaded",
+    async (_name, agentAnswer) => {
+      stagePrints({ agent: agentAnswer, cli: loaded("") });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("loaded");
+    },
+  );
+
+  it.each([
+    ["a spawn failure", spawnFailed],
+    ["a timeout", timedOut],
+  ] as const)(
+    "is `indeterminate` when the agent label's print is %s and the CLI label is not-found, and still asks about both",
+    async (_name, agentAnswer) => {
+      stagePrints({ agent: agentAnswer, cli: notFound });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
+
+      expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+    },
+  );
+
+  it.each([
+    ["a permission refusal", permissionDenied],
+    ["a non-zero exit with unrecognized output", unrecognizedExit],
+    ["a spawn failure", spawnFailed],
+    ["a timeout", timedOut],
+  ] as const)(
+    "is `indeterminate` when the agent label is not-found and the CLI label's print is %s",
+    async (_name, cliAnswer) => {
+      stagePrints({ agent: notFound, cli: cliAnswer });
+
+      await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
+    },
+  );
+
+  it("is `indeterminate` when the print runner itself rejects for the agent label and the CLI label is not-found", async () => {
+    stagePrints({
+      agent: new Error("spawn EAGAIN"),
+      cli: notFound,
+    });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
+    expect(printedTargets()).toEqual([agentTarget, cliTarget]);
+  });
+
+  it("is `indeterminate` when the print runner itself rejects for the CLI label and the agent label is not-found", async () => {
+    stagePrints({
+      agent: notFound,
+      cli: new Error("spawn EAGAIN"),
+    });
+
+    await expect(readHostLaunchdJobs()).resolves.toBe("indeterminate");
   });
 });
 

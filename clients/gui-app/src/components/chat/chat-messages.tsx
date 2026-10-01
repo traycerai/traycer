@@ -38,9 +38,11 @@ import { chatFindCoverageMessage } from "@/components/chat/chat-find";
 import {
   FULLY_LOADED_TRANSCRIPT,
   chatFindTranscriptPlacement,
+  type ChatFindIndexRead,
   type ChatFindTranscriptPlacement,
 } from "@/components/chat/chat-find-index";
 import { ChatFindIndexSource } from "@/components/chat/chat-find-index-source";
+import { ChatFindIndexReadSource } from "@/components/chat/chat-find-index-read-source";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import {
   CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS,
@@ -124,6 +126,15 @@ import {
   subagentOpenInitializedScopes,
   useSubagentOpenStore,
 } from "@/stores/chats/subagent-open-store";
+import {
+  OpenSubagentAsChatContext,
+  useSubagentDrillIn,
+} from "@/components/chat/segments/subagent-open-as-chat";
+import { SubagentChatView } from "@/components/chat/subagent-chat-view";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { LayoutClusterContextMenu } from "@/components/layout-editor/region-quick-verbs";
+import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
+import { isThinkingShown } from "@/stores/layout/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
 import { resolveHostedTileOwnership } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
@@ -133,6 +144,7 @@ import type {
 } from "@/stores/composer/chat-store";
 import {
   createFallbackAnnouncementObserver,
+  fallbackAnnouncementPlan,
   fallbackNoticeAnnouncements,
   fallbackOutcomeAnnouncement,
   fallbackReturnAnnouncement,
@@ -144,7 +156,6 @@ import {
   type ChatAnnouncementKind,
   type FallbackAnnouncement,
   type FallbackAnnouncementObserver,
-  type FallbackAnnouncementPlan,
   type FallbackNoticeAnnouncement,
 } from "@/stores/chats/chat-announcements";
 import {
@@ -166,10 +177,7 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import type {
-  BackgroundItem,
-  FallbackImpendingAction,
-} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
   use,
@@ -211,6 +219,12 @@ interface ChatMessagesProps {
    * that as "no viewport obligation", never as a request.
    */
   onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
+  /**
+   * `ChatSessionState.requestFindReadOrdinal` - names (or clears, with `null`)
+   * the one row chat find needs hydrated to confirm an index hit. Required
+   * hydration, never a viewport move.
+   */
+  onFindReadOrdinalChange: (ordinal: number | null) => void;
   /**
    * `ChatSessionState.transcriptBaselineEpoch` - which connection's snapshot
    * established these rows. The polite-announcement deriver needs it to tell
@@ -691,6 +705,7 @@ function activityGroupIdForBlock(
   const timeline = buildChatActivityTimeline(message.segments, {
     turnState: message.completedAt === null ? "active" : "complete",
     promotedToolBlockIds,
+    hideReasoning: !isThinkingShown(),
   });
   for (const item of timeline) {
     if (item.kind !== "activity_group") continue;
@@ -1034,27 +1049,6 @@ interface ChatLiveAnnouncementsProps extends ChatAnnouncementScope {
   readonly visible: boolean;
   readonly taskTitle: string;
   readonly completion: ChatAnnouncement | null;
-}
-
-function fallbackPlanForAnnouncement(
-  action: FallbackImpendingAction | null,
-  destination: string | null,
-): FallbackAnnouncementPlan | null {
-  if (action === null) return null;
-  let kind: FallbackAnnouncementPlan["action"];
-  if (action.pending !== null) {
-    kind = "checking";
-  } else if (action.rung === "profile" || action.rung === "tier") {
-    kind = "switch";
-  } else {
-    kind = action.rung;
-  }
-  return {
-    planId: action.planId,
-    action: kind,
-    destination,
-    resumesAt: action.resumesAt,
-  };
 }
 
 interface ManualFallbackAnnouncementObservation {
@@ -1556,6 +1550,26 @@ function announcedHarnessIdsOf(
   ];
 }
 
+/**
+ * The render a deferred store event waits for, and the harnesses it waits on.
+ *
+ * `subjects` is state rather than read off the queued frames because the queue
+ * is a ref, and the catalogue request is made at render: a frame that names a
+ * harness the burst has already moved past (A → B → cleared, before React
+ * renders) still has to be spoken by a resolver asked about B. Reading only the
+ * latest state asked about nobody, so a catalogue warm in the cache was never
+ * read and the slug was spoken.
+ */
+interface DeferredAnnouncementWake {
+  readonly tick: number;
+  readonly subjects: ReadonlyArray<string>;
+}
+
+const NO_DEFERRED_ANNOUNCEMENT_WAKE: DeferredAnnouncementWake = {
+  tick: 0,
+  subjects: [],
+};
+
 function ChatFallbackAnnouncementSource(
   props: ChatLiveAnnouncementsProps & {
     readonly hostId: string;
@@ -1573,9 +1587,20 @@ function ChatFallbackAnnouncementSource(
       state.pendingReturn !== undefined ||
       state.confirmedManualFallbackAction?.rung === "switch",
   );
+  // Store events waiting for the render that points the resolvers at their
+  // subjects, in arrival order; see `observeFromStore`. The wake is that
+  // render, and it carries the queued frames' harnesses into the catalogue
+  // request below until they are spoken.
+  const deferredStates = useRef<ChatSessionState[]>([]);
+  const [deferredWake, setDeferredWake] = useState<DeferredAnnouncementWake>(
+    NO_DEFERRED_ANNOUNCEMENT_WAKE,
+  );
+  // A queued frame still has to be named after the live state has moved past
+  // it, so the reads stay on while one is waiting.
+  const announcing = hasFallback || deferredWake.subjects.length > 0;
   const labelFor = useFallbackProfileLabels(
     client,
-    props.visible && hasFallback,
+    props.visible && announcing,
   );
   // The harnesses this announcer may have to name, subscribed rather than
   // assembled from props: its subjects are read inside an effect event off live
@@ -1590,14 +1615,18 @@ function ChatFallbackAnnouncementSource(
     handle.store,
     useShallow(announcedHarnessIdsOf),
   );
+  // The live state's subjects plus every queued frame's. The hook keys its
+  // requests on the distinct ids, so a harness named by both is one request,
+  // and a warm catalogue answers at this render without a fetch.
+  const catalogueSubjects = [...announcedHarnessIds, ...deferredWake.subjects];
   // `settledFor` beside the resolver, because this surface is the one that
   // cannot take back a name it has already spoken - see its use in
   // `observeState` below.
   const { labelFor: modelLabelFor, settledFor: modelCatalogueSettledFor } =
     useFallbackModelCatalogues(
       client,
-      announcedHarnessIds,
-      props.visible && hasFallback,
+      catalogueSubjects,
+      props.visible && announcing,
     );
   const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
   const lastManualSequence = useRef(0);
@@ -1625,10 +1654,11 @@ function ChatFallbackAnnouncementSource(
             labelFor,
             modelLabelFor,
           );
-    const plan = fallbackPlanForAnnouncement(
-      pending?.impendingAction ?? null,
-      targetIdentity,
-    );
+    // The card's plan for this frame, never a second reading of it.
+    const plan =
+      pending === undefined
+        ? null
+        : fallbackAnnouncementPlan(pending, targetIdentity);
     const returning = state.pendingReturn;
     const preferredIdentity =
       returning === undefined
@@ -1746,8 +1776,39 @@ function ChatFallbackAnnouncementSource(
     enqueue(next.map((entry) => entry.text));
   });
 
+  // The label resolvers are built at render, for the harnesses the RENDERED
+  // state names, and the store subscription below runs before React renders
+  // the state it reports. A countdown whose first frame already names its
+  // destination was therefore observed against resolvers asked about no
+  // harness, spoke the raw slug ("sonnet · low on Surya"), and the render a
+  // moment later said it again by name: two plans in one live region on every
+  // such fallback (seen live). An event naming a harness the resolvers were
+  // not built for waits for that render instead, and so does everything
+  // behind it, so the batching this subscription exists to keep is replayed
+  // in order rather than lost. Its harnesses ride the wake into that render's
+  // catalogue request, because the state that render reads may no longer
+  // name them.
+  const observeFromStore = useEffectEvent((state: ChatSessionState) => {
+    const named = announcedHarnessIdsOf(state).flatMap((id) =>
+      id === null ? [] : [id],
+    );
+    if (
+      deferredStates.current.length === 0 &&
+      named.every((id) => catalogueSubjects.includes(id))
+    ) {
+      observeState(state);
+      return;
+    }
+    deferredStates.current.push(state);
+    setDeferredWake((prior) => ({
+      tick: prior.tick + 1,
+      subjects: [...new Set([...prior.subjects, ...named])],
+    }));
+  });
+
   useLayoutEffect(() => {
     observerRef.current = createFallbackAnnouncementObserver();
+    deferredStates.current = [];
     lastManualSequence.current = 0;
     lastUnattendedSequence.current = 0;
     manualHold.current = null;
@@ -1768,11 +1829,12 @@ function ChatFallbackAnnouncementSource(
         state.snapshotLoaded !== prior.snapshotLoaded ||
         state.transcriptBaselineEpoch !== prior.transcriptBaselineEpoch
       ) {
-        observeState(state);
+        observeFromStore(state);
       }
     });
     return () => {
       unsubscribe();
+      deferredStates.current = [];
       // The hold timer calls back into `observeState`, which reads the store
       // and the observer this effect owns, so it must not outlive them.
       if (manualHoldTimer.current !== null) {
@@ -1784,7 +1846,30 @@ function ChatFallbackAnnouncementSource(
   }, [handle, reset]);
 
   useLayoutEffect(() => {
+    const deferred = deferredStates.current;
+    deferredStates.current = [];
+    // Spoken with whatever this render's resolvers hold. A catalogue this
+    // render is the first to ask about is not waited for: a countdown
+    // announcement is time-critical and a live region is not held for a
+    // network read, so a cold catalogue names the slug - as the first frame
+    // of a live traversal does before its catalogue lands. What a live frame
+    // gets and a drained one does not is the correction when the label
+    // arrives, because the state that would re-announce it has moved on.
+    for (const state of deferred) observeState(state);
     observeState(handle.store.getState());
+    // Every queued frame is spoken, so their harnesses stop being asked
+    // about. Off the layout pass, and only for the wake that was drained: a
+    // frame deferred in between keeps its own.
+    if (deferredWake.subjects.length > 0) {
+      const drained = deferredWake.tick;
+      queueMicrotask(() => {
+        setDeferredWake((current) =>
+          current.tick === drained && current.subjects.length > 0
+            ? { tick: current.tick, subjects: [] }
+            : current,
+        );
+      });
+    }
   }, [
     handle,
     notices,
@@ -1813,6 +1898,9 @@ function ChatFallbackAnnouncementSource(
     // this counter instead and the re-observation arrives the ordinary way,
     // through this effect, with every other dependency freshly read.
     manualHoldTick,
+    // The render a deferred store event was waiting for; see
+    // `observeFromStore`.
+    deferredWake,
   ]);
   return null;
 }
@@ -1887,6 +1975,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     instanceId,
     messages,
     nextStepActions,
+    onFindReadOrdinalChange,
     onVisibleOrdinalRangeChange,
     onScrollRequestSettled,
     scrollRequest,
@@ -1995,6 +2084,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  // The open-as-chat view's scroll area while a card is open (`null` while the
+  // transcript shows): the scroll keys and chat find address it instead of the
+  // timeline it covers.
+  const subagentViewScrollRef = useRef<HTMLDivElement | null>(null);
   // Width AND typography invalidate every remembered height at once - see
   // `observeLayoutBasis`. A ResizeObserver on the container rather than React
   // state, for the reason the memory itself is not state: a resize must not
@@ -2485,10 +2578,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   const handleKeyDownCapture = useCallback(
     (event: globalThis.KeyboardEvent): void => {
-      const scroller = chatTimelineRef.current?.getScrollableNode();
-      if (!scroller) return;
       const scrollAction = chatKeyboardScrollAction(event);
       if (scrollAction === null) return;
+      // An open-as-chat view covers the timeline: the keys scroll the
+      // conversation the reader is looking at, and the timeline's follow state
+      // is left exactly as it was.
+      const drillInScroller = subagentViewScrollRef.current;
+      if (drillInScroller !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        applyChatKeyboardScroll(drillInScroller, scrollAction);
+        return;
+      }
+      const scroller = chatTimelineRef.current?.getScrollableNode();
+      if (!scroller) return;
       event.preventDefault();
       event.stopPropagation();
       // Freeze an owned native smooth-scroll at its current pixel first, then
@@ -2795,10 +2898,24 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const quoteReplyEnabled = useSettingsStore(
     (state) => state.quoteReplyEnabled,
   );
-  const chatTurnMinimapSide = useSettingsStore(
-    (state) => state.chatTurnMinimapSide,
-  );
+  const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
+  // This tile's `minimap` region, registered here because this is the
+  // component that draws it. Whether the registration actually reaches the
+  // editor is `useLayoutRegion`'s own pane-visibility gate to decide and not
+  // this file's - while a session is live the sample workspace is the only
+  // visible top-level surface, so every epic surface's
+  // `PaneVisibilityContext` is false and nothing here registers. The ref is
+  // handed to the rail unconditionally: `ChatTurnMinimap` renders nothing
+  // (and so attaches nothing) unless the rail is actually running.
+  const { ref: minimapHotspotRef, ghost: minimapGhost } = useLayoutRegion({
+    regionId: "minimap",
+    instanceId: taskId,
+  });
+  // A hidden minimap materialises in place while the editor points at it
+  // (L-14). It is a pure view over rows the transcript already has, so
+  // drawing one costs nothing the chat was not already paying.
+  const minimapShown = useRegionShown("minimap") || minimapGhost;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteReplyEnabled && visible && !systemOverlayActive,
@@ -3737,6 +3854,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [hostId, instanceId, taskId],
   );
+  // The index hit find is confirming: its row is hydrated where it stands, and
+  // the client scan then keeps or drops the hit. See `ChatFindIndexReadSource`.
+  const [findIndexRead, setFindIndexRead] = useState<ChatFindIndexRead | null>(
+    null,
+  );
+  // A read that lands after the reader moved on must not take them back.
+  const getReaderNavigationGeneration = useCallback(
+    (): number => anchorUserScrollGenerationRef.current,
+    [],
+  );
+
+  // Open-as-chat: a card's conversation drawn over the transcript, inside
+  // this tile. Declared before find, which searches only that conversation
+  // while it is open.
+  const subagentDrillIn = useSubagentDrillIn();
+  const { close: closeSubagentDrillIn } = subagentDrillIn;
+  const getSubagentViewRoot = useCallback(
+    (): HTMLElement | null => subagentViewScrollRef.current,
+    [],
+  );
 
   const {
     onRenderedDataChange: onChatFindRenderedDataChange,
@@ -3744,6 +3881,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     indexDemand: chatFindIndexDemand,
     setIndexAnswer: setChatFindIndexAnswer,
     onTranscriptLandingSettled: onChatFindTranscriptLandingSettled,
+    onIndexReadFailed: onChatFindIndexReadFailed,
   } = useChatFindController({
     instanceId,
     messages,
@@ -3753,11 +3891,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getFindCoverageMessage,
     getFindPlacement,
     requestIndexJump: requestFindIndexJump,
+    requestIndexRead: setFindIndexRead,
     rowIndexByKeyRef,
     getScroller,
     scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
     cancelManualNavigation: cancelManualNavigationForFind,
+    getNavigationGeneration: getReaderNavigationGeneration,
     setScrolledActiveUserMessageIdIfChanged,
+    openSubagentId: subagentDrillIn.openId,
+    getSubagentViewRoot,
   });
   useLayoutEffect(() => {
     findLandingSettledRef.current = onChatFindTranscriptLandingSettled;
@@ -3816,6 +3958,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
+    // A jump from outside the tile targets the transcript: an open-as-chat
+    // view covering it would hide where the jump lands.
+    closeSubagentDrillIn();
     if (request.kind === "end") {
       scrollToEnd(true);
       scrollRequestRef.current = null;
@@ -3874,6 +4019,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [
     activityGroupOpenStore,
     cancelTimelineLiveFollowForUserNavigation,
+    closeSubagentDrillIn,
     identity,
     scrollRequest?.requestId,
     scrollToEnd,
@@ -3935,100 +4081,149 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     unseenCompletion: hasUnseenTurnCompletion,
     workingVerb,
   });
+  // The rail navigates the transcript, which an open-as-chat view covers; it
+  // would float over that view (z-40), so it steps aside until the view closes.
+  const showTurnMinimap =
+    subagentDrillIn.openId === null &&
+    shouldMountChatTurnMinimap({
+      hasContent,
+      shown: minimapShown,
+      mobileViewport: isMobileViewport,
+    });
 
   return (
     <ChatOpenStoreScopeProvider value={instanceId}>
       <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
-        <div
-          ref={transcriptContainerRef}
-          data-testid="chat-transcript-container"
-          // Ctrl/Cmd+A selects the transcript, not the whole window (#592).
-          // Marked here rather than on the chat tile's transcript wrapper: that
-          // wrapper also holds the absolutely-positioned lower-surfaces dock
-          // (composer, approvals, todo), which must stay out of the selection.
-          // The timeline is virtualized, so this covers the mounted rows.
-          data-selection-root=""
-          onPointerDown={handleTranscriptPointerDown}
-          className="relative flex-1 overflow-hidden"
-        >
-          <ChatTimeline
-            rows={listRows}
-            onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
-            taskTitle={taskTitle}
-            backgroundToolBlockIds={backgroundToolBlockIds}
-            getMessageActions={getMessageActions}
-            nextStepActions={nextStepActions}
-            listRef={chatTimelineRef}
-            onScroll={handleScroll}
-            initialScrollAtEnd={initialScrollAtEnd}
-            initialScrollIndex={initialScrollIndexAnchor}
-            contentInsetEndAdjustment={endInset}
-            onFollowIntentChange={onFollowIntentChange}
-            onReaderGesture={handleTimelineReaderGesture}
-            followLatchRef={followLatchRef}
-            isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
-            resolveSuppressedEndLanding={resolveSuppressedEndLanding}
-            navigationHighlightedMessageId={
-              navigationHighlight?.messageId ?? null
-            }
-            navigationHighlightedBlockId={navigationHighlight?.blockId ?? null}
-            rowHeightMemory={rowHeightMemory}
-            onItemSizeChanged={onChatTimelineItemSizeChanged}
-            onRowMount={onChatTimelineRowMount}
-            onListMetricsChange={onListMetricsChange}
-            data-testid="chat-messages-scroll"
-            data-scroll-mode={scrollMode}
-          />
-          {/* The minimap rail is untappable on touch and its hover-expand
-              never fires; hide it below md and reclaim the right edge.
-              `contents` keeps the absolutely-positioned rail's layout
-              identical on desktop (>=768px). The `side` setting is a user
-              preference, not a viewport rule, so it cannot stand in for this. */}
-          {shouldMountChatTurnMinimap({
-            hasContent,
-            side: chatTurnMinimapSide,
-            mobileViewport: isMobileViewport,
-          }) ? (
-            <div className="contents max-md:hidden">
-              <ChatTurnMinimap
-                rows={listRows}
-                transcriptWindow={transcriptWindow}
-                inViewRefreshRef={minimapInViewRefreshRef}
-                listRef={chatTimelineRef}
-                topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
-                viewportRef={transcriptContainerRef}
+        {/* One menu for the whole transcript, naming the region under the
+            pointer (G3-10): timestamps, activity rows and reasoning blocks
+            repeat on every message, and a root per item was a Radix menu per
+            row of a long chat. The minimap is inside it too (L-144). */}
+        <OpenSubagentAsChatContext.Provider value={subagentDrillIn.open}>
+          <LayoutClusterContextMenu>
+            <div
+              ref={transcriptContainerRef}
+              data-testid="chat-transcript-container"
+              // Ctrl/Cmd+A selects the transcript, not the whole window (#592).
+              // Marked here rather than on the chat tile's transcript wrapper: that
+              // wrapper also holds the absolutely-positioned lower-surfaces dock
+              // (composer, approvals, todo), which must stay out of the selection.
+              // The timeline is virtualized, so this covers the mounted rows.
+              // While an open-as-chat view covers it the view declares the root
+              // instead (an outer root would shadow it), so Ctrl/Cmd+A selects
+              // the conversation on screen, not the transcript underneath.
+              data-selection-root={
+                subagentDrillIn.openId === null ? "" : undefined
+              }
+              onPointerDown={handleTranscriptPointerDown}
+              className="relative flex-1 overflow-hidden"
+            >
+              {/* What an open-as-chat view covers is inert while it is open:
+                  covering it is visual only, so without this Shift+Tab walks
+                  back into the hidden timeline and a screen reader reads both
+                  conversations. `contents` leaves the layout untouched. The
+                  quote popover stays outside: it serves selections in the
+                  view too. Closing drops `inert` in the same commit, before
+                  the view's layout effect returns focus to the open control. */}
+              <div className="contents" inert={subagentDrillIn.openId !== null}>
+                <ChatTimeline
+                  rows={listRows}
+                  onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
+                  taskTitle={taskTitle}
+                  backgroundToolBlockIds={backgroundToolBlockIds}
+                  getMessageActions={getMessageActions}
+                  nextStepActions={nextStepActions}
+                  listRef={chatTimelineRef}
+                  onScroll={handleScroll}
+                  initialScrollAtEnd={initialScrollAtEnd}
+                  initialScrollIndex={initialScrollIndexAnchor}
+                  contentInsetEndAdjustment={endInset}
+                  onFollowIntentChange={onFollowIntentChange}
+                  onReaderGesture={handleTimelineReaderGesture}
+                  followLatchRef={followLatchRef}
+                  isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
+                  resolveSuppressedEndLanding={resolveSuppressedEndLanding}
+                  navigationHighlightedMessageId={
+                    navigationHighlight?.messageId ?? null
+                  }
+                  navigationHighlightedBlockId={
+                    navigationHighlight?.blockId ?? null
+                  }
+                  rowHeightMemory={rowHeightMemory}
+                  onItemSizeChanged={onChatTimelineItemSizeChanged}
+                  onRowMount={onChatTimelineRowMount}
+                  onListMetricsChange={onListMetricsChange}
+                  data-testid="chat-messages-scroll"
+                  data-scroll-mode={scrollMode}
+                />
+                {/* The minimap rail is untappable on touch and its hover-expand
+                never fires; hide it below md and reclaim the right edge.
+                `contents` keeps the absolutely-positioned rail's layout
+                identical on desktop (>=768px). The `side` setting is a user
+                preference, not a viewport rule, so it cannot stand in for this. */}
+                {showTurnMinimap ? (
+                  <div className="contents max-md:hidden">
+                    <ChatTurnMinimap
+                      ref={minimapHotspotRef}
+                      rows={listRows}
+                      transcriptWindow={transcriptWindow}
+                      inViewRefreshRef={minimapInViewRefreshRef}
+                      listRef={chatTimelineRef}
+                      topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
+                      viewportRef={transcriptContainerRef}
+                      bottomInset={endInset}
+                      onSelect={onMinimapItemSelect}
+                      shown={minimapShown}
+                      side={minimapSide}
+                    />
+                  </div>
+                ) : null}
+                {hasContent ? (
+                  <ScrollToEndPill
+                    state={scrollToEndPillState}
+                    onClick={() => scrollToEnd(true)}
+                    bottomOffsetPx={endInset + 4}
+                  />
+                ) : null}
+              </div>
+              {quoteSelection.snapshot !== null ? (
+                <QuoteSelectionPopover
+                  taskId={taskId}
+                  snapshot={quoteSelection.snapshot}
+                  onDismiss={quoteSelection.dismiss}
+                  boundaryRef={transcriptContainerRef}
+                  bottomOverlayInsetPx={endInset}
+                />
+              ) : null}
+              <SubagentChatView
+                drillIn={subagentDrillIn}
+                messages={messages}
                 bottomInset={endInset}
-                onSelect={onMinimapItemSelect}
-                side={chatTurnMinimapSide}
+                scrollRef={subagentViewScrollRef}
+                transcriptRef={transcriptContainerRef}
               />
             </div>
-          ) : null}
-          {hasContent ? (
-            <ScrollToEndPill
-              state={scrollToEndPillState}
-              onClick={() => scrollToEnd(true)}
-              bottomOffsetPx={endInset + 4}
-            />
-          ) : null}
-          {quoteSelection.snapshot !== null ? (
-            <QuoteSelectionPopover
-              taskId={taskId}
-              snapshot={quoteSelection.snapshot}
-              onDismiss={quoteSelection.dismiss}
-              boundaryRef={transcriptContainerRef}
-              bottomOverlayInsetPx={endInset}
-            />
-          ) : null}
-        </div>
+          </LayoutClusterContextMenu>
+        </OpenSubagentAsChatContext.Provider>
         {hostId !== null && transcriptWindow !== null ? (
-          <ChatFindIndexSource
-            hostId={hostId}
-            epicId={epicId}
-            chatId={taskId}
-            demandSource={chatFindIndexDemand}
-            hasUnhydratedRows={chatFindIndexHasUnhydratedRows}
-            onAnswer={setChatFindIndexAnswer}
-          />
+          <>
+            <ChatFindIndexSource
+              hostId={hostId}
+              epicId={epicId}
+              chatId={taskId}
+              demandSource={chatFindIndexDemand}
+              hasUnhydratedRows={chatFindIndexHasUnhydratedRows}
+              onAnswer={setChatFindIndexAnswer}
+            />
+            <ChatFindIndexReadSource
+              hostId={hostId}
+              epicId={epicId}
+              chatId={taskId}
+              transcriptWindow={transcriptWindow}
+              read={findIndexRead}
+              requestFindReadOrdinal={onFindReadOrdinalChange}
+              onReadFailed={onChatFindIndexReadFailed}
+            />
+          </>
         ) : null}
         <ChatLiveAnnouncements
           epicId={epicId}

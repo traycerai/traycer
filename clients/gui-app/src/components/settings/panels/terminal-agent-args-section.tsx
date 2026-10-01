@@ -13,7 +13,7 @@ type ProviderId = ProviderCliState["providerId"];
 
 const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<ProviderId, string> = {
   "claude-code": "--dangerously-skip-permissions",
-  codex: "--full-auto",
+  codex: "--approve-for-me",
   opencode: "--model anthropic/claude-opus-4-8",
   cursor: "CLI arguments (optional)",
   traycer: "CLI arguments (optional)",

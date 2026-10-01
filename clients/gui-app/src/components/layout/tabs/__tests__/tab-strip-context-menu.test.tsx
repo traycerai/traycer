@@ -1,3 +1,4 @@
+import { useState, type ReactElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -6,8 +7,19 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import {
+  HomeTabContextMenu,
+  TabContextMenuContent,
+} from "@/components/layout/tabs/tab-strip-context-menu";
+import { installEditFirewall } from "@/components/layout-editor/canvas/edit-firewall";
+import type { TabStripPlacement } from "@/lib/layout/layout-arrangement";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { setMobileApp } from "@/lib/mobile-app";
@@ -48,6 +60,13 @@ vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
   },
 }));
 
+// Home's layout verbs and its "Customize layout..." item navigate; nothing
+// here follows them, but the hook needs a router to be called.
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+}));
+
 // This suite exercises the tab context menu's pin and keybinding guards. The
 // appearance submenu now composes the organization task-context query, but no
 // case here supplies an organization host or asserts that submenu's data.
@@ -59,9 +78,28 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     tasksById: new Map(),
     localHomedTaskIds: new Set(),
     isFetching: false,
+    isPending: false,
     error: null,
+    refetch: () => Promise.resolve(),
+    refetchBatches: [],
   }),
 }));
+
+// The appearance submenu reads the query client to look for task contexts the
+// tab strip already cached, so the menu needs the provider the app always has.
+// A fresh client per mount keeps one case's cache out of the next.
+function QueryClientWrapper(props: { readonly children: ReactNode }) {
+  const [queryClient] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
+function renderWithQueryClient(ui: ReactElement) {
+  return render(ui, { wrapper: QueryClientWrapper });
+}
 
 const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   kind: "epic",
@@ -133,7 +171,7 @@ function renderPinMenu(
   onSetTaskPinned: (pinned: boolean) => void,
   taskPinnedState: TaskPinnedState | null,
 ): void {
-  render(
+  renderWithQueryClient(
     <ContextMenu open>
       <ContextMenuTrigger>Open menu</ContextMenuTrigger>
       <TabContextMenuContent
@@ -210,7 +248,7 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
 
   it("renders live non-Mac binding labels for reopen and duplicate actions", () => {
     setMobileApp(false);
-    render(
+    renderWithQueryClient(
       <ContextMenu open>
         <ContextMenuTrigger>Open menu</ContextMenuTrigger>
         <TabContextMenuContent
@@ -242,7 +280,7 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
 
   it("updates a duplicate hint when rebound, then hides it when cleared while keeping the action", () => {
     const onDuplicateTab = vi.fn<(tab: HeaderTab) => void>();
-    const view = render(
+    const view = renderWithQueryClient(
       <ContextMenu open>
         <ContextMenuTrigger>Open menu</ContextMenuTrigger>
         <TabContextMenuContent
@@ -474,6 +512,167 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     expect(item.textContent).not.toMatch(/newer host/i);
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Tabs placement radio group", () => {
+  afterEach(() => {
+    cleanup();
+    useLayoutEditorStore.getState().endSession();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  function placement(): TabStripPlacement {
+    return useLayoutStore.getState().arrangement.tabStripPlacement;
+  }
+
+  function renderTabMenu(): void {
+    renderPinMenu(() => undefined, CLOUD_UNPINNED_KNOWN);
+  }
+
+  it("sits after the split commands and before Close Other Tabs, checked on the stored placement", async () => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    renderTabMenu();
+
+    const top = await screen.findByTestId("tab-strip-placement-top");
+    const pair = screen.getByTestId(
+      `tab-pair-current-${EPIC_TAB.kind}-${EPIC_TAB.id}`,
+    );
+    const closeOthers = screen.getByTestId(
+      `tab-close-others-${EPIC_TAB.kind}-${EPIC_TAB.id}`,
+    );
+    expect(
+      pair.compareDocumentPosition(top) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      top.compareDocumentPosition(closeOthers) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const group = screen.getByRole("group", { name: "Tabs" });
+    expect(group.getAttribute("aria-label")).toBeNull();
+    expect(top.getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen
+        .getByTestId("tab-strip-placement-left")
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it.each<[TabStripPlacement, TabStripPlacement]>([
+    ["top", "left"],
+    ["left", "right"],
+    ["right", "top"],
+  ])("writes %s -> %s at rest, with no history", async (from, to) => {
+    const seeded = {
+      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+      tabStripPlacement: from,
+    };
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+      arrangement: seeded,
+    });
+    renderTabMenu();
+
+    fireEvent.click(await screen.findByTestId(`tab-strip-placement-${to}`));
+
+    expect(placement()).toBe(to);
+    // Finding 8: the same writer every placement call site now shares
+    // (`writeArrangementField`) - every other field stays exactly as seeded.
+    expect(useLayoutStore.getState().arrangement).toEqual({
+      ...seeded,
+      tabStripPlacement: to,
+    });
+    expect(useLayoutEditorStore.getState().history.past).toHaveLength(0);
+  });
+
+  it("in a session, the firewall swallows the task tab's menu and Home's menu writes one undo step", async () => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useLayoutEditorStore.getState().beginSession({
+      entry: "keyboard",
+      source: "direct_ui",
+      startedAt: 0,
+      origin: { kind: "tab" },
+    });
+    renderWithQueryClient(
+      <div data-testid="app-column">
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button type="button">Task tab</button>
+          </ContextMenuTrigger>
+          <TabContextMenuContent
+            tab={EPIC_TAB}
+            canCloseOtherTabs
+            canOpenInNewWindow={false}
+            canEditTitle={false}
+            taskPinnedState={CLOUD_UNPINNED_KNOWN}
+            isTaskPinPending={false}
+            onCloseOtherTabs={() => undefined}
+            onDuplicateTab={() => undefined}
+            onOpenInNewWindow={() => undefined}
+            onSplitCommand={() => undefined}
+            onEditTitle={() => undefined}
+            onSetTaskPinned={() => undefined}
+          />
+        </ContextMenu>
+        <HomeTabContextMenu>
+          <button type="button" data-layout-region="homeTab">
+            Home
+          </button>
+        </HomeTabContextMenu>
+      </div>,
+    );
+    const uninstall = installEditFirewall({
+      column: screen.getByTestId("app-column"),
+      focusTarget: () => null,
+    });
+
+    try {
+      // A task tab is not a region, so its menu is the app acting and stays
+      // shut for the whole session.
+      fireEvent.contextMenu(screen.getByText("Task tab"));
+      expect(screen.queryByTestId("tab-strip-placement-left")).toBeNull();
+
+      // Home is a region with a trigger, so its menu opens and its write is a
+      // recorded gesture that Discard takes back.
+      fireEvent.contextMenu(screen.getByText("Home"));
+      fireEvent.click(await screen.findByTestId("tab-strip-placement-left"));
+
+      expect(placement()).toBe("left");
+      expect(useLayoutEditorStore.getState().history.past).toHaveLength(1);
+      act(() => {
+        useLayoutEditorStore.getState().discard();
+      });
+      expect(placement()).toBe("top");
+    } finally {
+      uninstall();
+    }
+  });
+
+  it("is on Home's menu between its layout verbs and Customize layout", async () => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    renderWithQueryClient(
+      <HomeTabContextMenu>
+        <button type="button">Home</button>
+      </HomeTabContextMenu>,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Home" }));
+
+    const left = await screen.findByTestId("tab-strip-placement-left");
+    const verb = document.querySelector(
+      '[data-testid^="layout-quick-verb-homeTab-"]',
+    );
+    if (verb === null) throw new Error("Home's menu has no layout verb");
+    const customize = screen.getByTestId("customize-layout-menu-item");
+    expect(
+      verb.compareDocumentPosition(left) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      left.compareDocumentPosition(customize) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(left);
+    expect(placement()).toBe("left");
   });
 });
 

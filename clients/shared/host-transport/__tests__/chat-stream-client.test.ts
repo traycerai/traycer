@@ -493,7 +493,9 @@ function makeNoopCallbacks(
     onManagedCommandsChanged: () => undefined,
     onHeldUpdatesChanged: () => undefined,
     onPortForwardsChanged: () => undefined,
+    onThinkingTokens: () => undefined,
     onConnectionStatus: () => undefined,
+    readSkeletonResume: () => null,
   };
 }
 
@@ -541,6 +543,26 @@ describe("ChatStreamClient protocol capability getters", () => {
     expect(client.draftBlobBridgeSupported()).toBe(false);
     client.close();
   });
+
+  it.each([
+    [{ major: 1, minor: 17 }, false],
+    [{ major: 1, minor: 18 }, true],
+    [null, false],
+  ] as const)(
+    "N5: reports queue-pause-reason support from this session's negotiated version (%j)",
+    (version, expected) => {
+      const { wsStreamClient } = stubClientAtVersion(version);
+      const client = new ChatStreamClient({
+        wsStreamClient,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        callbacks: makeNoopCallbacks(() => undefined),
+      });
+
+      expect(client.queuePauseReasonProtocolSupported()).toBe(expected);
+      client.close();
+    },
+  );
 });
 
 describe("ChatStreamClient", () => {
@@ -623,7 +645,9 @@ describe("ChatStreamClient", () => {
           frame.portForwards.map((forward) => forward.forwardId),
         );
       },
+      onThinkingTokens: () => undefined,
       onConnectionStatus: () => undefined,
+      readSkeletonResume: () => null,
     };
 
     const client = new ChatStreamClient({
@@ -1296,7 +1320,9 @@ function recordingCallbacks(): {
         frame.portForwards.map((forward) => forward.forwardId),
       );
     },
+    onThinkingTokens: () => undefined,
     onConnectionStatus: () => undefined,
+    readSkeletonResume: () => null,
   };
   return { callbacks, recorded };
 }
@@ -1874,6 +1900,157 @@ describe("ChatStreamClient.autoPermissionModeProtocolSupported", () => {
 
     expect(client.autoPermissionModeProtocolSupported()).toBe(false);
 
+    client.close();
+  });
+});
+
+describe("ChatStreamClient skeleton resume (chat.subscribe@1.19)", () => {
+  const CLAIM = {
+    derivation: 1,
+    blockSize: 256,
+    blockDigests: ["abc1234"],
+  };
+
+  function resumeCallbacks(read: () => typeof CLAIM | null): {
+    readonly callbacks: ChatStreamCallbacks;
+    readonly reads: () => number;
+  } {
+    let count = 0;
+    return {
+      callbacks: {
+        ...makeNoopCallbacks(() => undefined),
+        readSkeletonResume: () => {
+          count += 1;
+          return read();
+        },
+      },
+      reads: () => count,
+    };
+  }
+
+  it("re-reads the claim for every wire subscribe, reconnects included", () => {
+    let provider: ((version: SchemaVersion | null) => unknown) | null = null;
+    const session = new StubStreamSession({ major: 1, minor: 19 });
+    const wsStreamClient: IStreamClient<typeof hostStreamRpcRegistry> = {
+      subscribe: () => {
+        throw new Error("chat.subscribe must open through the params provider");
+      },
+      subscribeWithParamsProvider: (_method, paramsProvider) => {
+        provider = paramsProvider;
+        return session;
+      },
+      getMethodSchemaVersion: () => ({ major: 1, minor: 19 }),
+    };
+    let held: typeof CLAIM | null = null;
+    const { callbacks, reads } = resumeCallbacks(() => held);
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks,
+    });
+    const read = (version: SchemaVersion | null): unknown => {
+      if (provider === null) throw new Error("no provider was registered");
+      return provider(version);
+    };
+
+    // The first subscribe: a chat that holds nothing claims nothing.
+    expect(read({ major: 1, minor: 19 })).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      resume: null,
+    });
+    // A reconnect after the chat has filled in describes what it holds NOW.
+    held = CLAIM;
+    expect(read({ major: 1, minor: 19 })).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      resume: CLAIM,
+    });
+    // A transport that cannot report the version is on the newest line.
+    expect(read(null)).toMatchObject({ resume: CLAIM });
+    expect(reads()).toBe(3);
+
+    // A line below the claim is never offered one, and the chat is not asked:
+    // asking would record an offer no host answers.
+    expect(read({ major: 1, minor: 17 })).toMatchObject({ resume: null });
+    expect(read({ major: 1, minor: 18 })).toMatchObject({ resume: null });
+    expect(reads()).toBe(3);
+    client.close();
+  });
+
+  it("puts the claim on the wire at 1.19 and none at 1.18 or 1.17", () => {
+    for (const [minor, expected] of [
+      [19, { epicId: "epic-1", chatId: "chat-1", resume: CLAIM }],
+      [18, { epicId: "epic-1", chatId: "chat-1" }],
+      [17, { epicId: "epic-1", chatId: "chat-1" }],
+    ] as const) {
+      const { factory, sockets } = makeFactory();
+      const client = new ChatStreamClient({
+        wsStreamClient: makeWsStreamClient(factory),
+        epicId: "epic-1",
+        chatId: "chat-1",
+        callbacks: resumeCallbacks(() => CLAIM).callbacks,
+      });
+      completeHandshakeAtVersion(sockets[0], { major: 1, minor });
+      expect(parseText(sockets[0].textSent[1])).toMatchObject({
+        kind: "subscribe",
+        method: "chat.subscribe",
+        schemaVersion: { major: 1, minor },
+        params: expected,
+      });
+      client.close();
+    }
+  });
+
+  it("sends a 1.18 host exactly the 1.18 open request, without asking the chat", () => {
+    const { factory, sockets } = makeFactory();
+    const { callbacks, reads } = resumeCallbacks(() => CLAIM);
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks,
+    });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 18 });
+    const frame = parseText(sockets[0].textSent[1]);
+    expect(frame.schemaVersion).toEqual({ major: 1, minor: 18 });
+    // `toEqual`, not `toMatchObject`: an older host must not see a `resume`
+    // key at all, not even a null one.
+    expect(frame.params).toEqual({ epicId: "epic-1", chatId: "chat-1" });
+    expect(reads()).toBe(0);
+    client.close();
+  });
+
+  it("hands retainedRows through to the chunk callback", () => {
+    const { wsStreamClient, session } = stubClientAtVersion({
+      major: 1,
+      minor: 19,
+    });
+    const received: (number | undefined)[] = [];
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: {
+        ...makeNoopCallbacks(() => undefined),
+        onWindowedSnapshot: () => undefined,
+        onSkeletonChunk: (frame) => {
+          received.push(frame.retainedRows);
+        },
+      },
+    });
+    const chunkFrame = (extra: Record<string, number>) => ({
+      kind: "skeletonChunk",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chunk: { epoch: 0, fromOrdinal: 256, entries: [], isFinal: true },
+      ...extra,
+    });
+    session.deliver(chunkFrame({ retainedRows: 256 }));
+    session.deliver(chunkFrame({}));
+    expect(received).toEqual([256, undefined]);
     client.close();
   });
 });

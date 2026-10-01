@@ -23,7 +23,10 @@ import {
 } from "@/stores/tabs/layout";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
@@ -91,7 +94,8 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
-  useSettingsStore.setState({ homeTabEnabled: false });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
   tabCommandCoordinator.resetReconciliationForTesting();
 }
 
@@ -476,7 +480,7 @@ describe("desktop tabs persistence", () => {
    */
   describe("Home selection across the desktop snapshot", () => {
     it("restores a Home-selected snapshot with the null selection, both tabs, and the /home route", () => {
-      useSettingsStore.setState({ homeTabEnabled: true });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
       const { tabA, tabB } = openTwoEpicTabs();
 
       const hydration = hydrateDesktopTabs(
@@ -515,7 +519,7 @@ describe("desktop tabs persistence", () => {
     });
 
     it("schedules a layout write while Home is active only once the route agrees", async () => {
-      useSettingsStore.setState({ homeTabEnabled: true });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
       const { tabA, tabB } = openTwoEpicTabs();
       useTabsStore.getState().setStripOrder([
         { kind: "epic", id: tabA },

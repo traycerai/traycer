@@ -3,6 +3,8 @@ import type {
   FleetUpdateViewKind,
 } from "@/lib/host/fleet-update/fleet-update-view";
 import { formatHostTransfer } from "@/lib/host/host-progress-copy";
+import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
+import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
 
 /**
  * The one place an update phase becomes words.
@@ -173,7 +175,7 @@ const PHASE_SENTENCE: Record<
   reconnecting: () => "Waiting for host to reconnect",
   verifying: ({ to }) => `Verifying updated host${to}`,
   complete: ({ target }) => completeSentence(target),
-  failed: ({ view }) => failedSentence(view.errorMessage),
+  failed: ({ view }) => failedSentence(view.errorMessage, view.errorCode),
   // The success first, because the ORDER is the message: the update landed, and
   // the leftover is bookkeeping. Leading with the bookkeeping would read as a
   // qualification on the success.
@@ -379,7 +381,13 @@ function completeSentence(targetVersion: string | null): string {
     : `Updated to v${targetVersion}`;
 }
 
-function failedSentence(errorMessage: string | null): string {
+function failedSentence(
+  errorMessage: string | null,
+  errorCode: string | null,
+): string {
+  if (errorCode === HOST_STORE_FORMAT_FLOOR_CODE) {
+    return `Update failed: ${hostUpdateFailureMessage(errorCode, errorMessage ?? "")}`;
+  }
   return errorMessage === null
     ? "Update failed"
     : `Update failed: ${errorMessage}`;

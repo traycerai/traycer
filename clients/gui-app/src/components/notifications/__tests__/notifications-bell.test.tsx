@@ -521,6 +521,45 @@ describe("NotificationsBell", () => {
     ).toBe("Notifications, 150 notifications need attention");
   });
 
+  it("rolls the badge count through the shared primitive, ungrouped, and lets the badge leave", () => {
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, undefined);
+    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 0, attentionCount: 1234 },
+      });
+    });
+
+    const badge = screen.getByTestId("notifications-attention-badge");
+    // Four figures stay four figures. This badge is 16px tall and has no
+    // `99+` cap of its own, so a thousands separator would both widen it and
+    // have to roll in and out on the way past 999.
+    expect(
+      screen.getByTestId("notifications-attention-count").textContent,
+    ).toBe("1234");
+    expect(badge.textContent).toBe("1234");
+    // The count sits inside an already-hidden badge; the button's own sentence
+    // is the whole accessible story, and a second one would double it.
+    expect(badge.getAttribute("aria-hidden")).toBe("true");
+
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 0, attentionCount: 0 },
+      });
+    });
+
+    // `AnimatePresence` holds an exiting child until its exit resolves. This
+    // asserts the hold always ends, so a state change can never strand a
+    // stale count on the bell.
+    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+  });
+
   it("renders unknown DISTINGUISHABLY from clear, and the quiet-dot for quietDot", () => {
     const runnerHost = createRunnerHost();
     const { factory, handle } = fakeFactory();

@@ -58,7 +58,10 @@ import {
 } from "@/components/epic-canvas/surface-host/hosted-tile-dom";
 import { evictChatTabPersistenceForEpic } from "@/stores/chats/chat-tab-persistence-eviction";
 import { getOrCreateActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
-import type { ActivityGroupOpenState } from "@/stores/chats/activity-group-open-store-context";
+import type {
+  ActivityGroupOpenChoices,
+  ActivityGroupOpenState,
+} from "@/stores/chats/activity-group-open-store-context";
 import { getOrCreateA2AOpenStore } from "@/stores/chats/a2a-open-store-context";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
@@ -67,6 +70,10 @@ import { deriveActivityGroupRenderId } from "@/components/chat/chat-collapsible-
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { InterviewSegment } from "@/stores/composer/chat-store";
 import type { TileFindAdapter } from "@/stores/tile-find";
@@ -90,6 +97,10 @@ const LEGEND_LIST_HEADER_PX = 40;
 const DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX = 80;
 
 function noOpOnVisibleOrdinalRangeChange(_range: OrdinalRange | null): void {
+  return undefined;
+}
+
+function noOpOnFindReadOrdinalChange(_ordinal: number | null): void {
   return undefined;
 }
 
@@ -128,6 +139,8 @@ vi.mock("@/stores/epics/canvas/tile-instance-liveness", () => ({
 vi.mock("@/components/chat/chat-message", async () => {
   const { ChatBlockNavigationAnchor } =
     await import("@/components/chat/chat-navigation-highlight");
+  const { useOpenSubagentAsChat } =
+    await import("@/components/chat/segments/subagent-open-as-chat");
   return {
     ChatMessage: function MockChatMessage(props: {
       message: ChatMessageModel;
@@ -135,6 +148,7 @@ vi.mock("@/components/chat/chat-message", async () => {
       const interview = props.message.segments.find(
         (segment): segment is InterviewSegment => segment.kind === "interview",
       );
+      const openAsChat = useOpenSubagentAsChat();
       const answer = interview?.answers[0]?.values[0] ?? null;
       const interviewUnitId =
         interview === undefined || answer === null
@@ -152,6 +166,18 @@ vi.mock("@/components/chat/chat-message", async () => {
             props.message.content
           ) : (
             <span data-chat-find-unit={interviewUnitId}>{answer}</span>
+          )}
+          {props.message.segments.map((segment) =>
+            segment.kind === "subagent" ? (
+              <button
+                key={segment.id}
+                type="button"
+                data-subagent-open-as-chat={segment.id}
+                onClick={() => openAsChat?.(segment.id)}
+              >
+                open {segment.id}
+              </button>
+            ) : null,
           )}
         </div>
       );
@@ -256,10 +282,10 @@ vi.mock(
     return {
       ...actual,
       createActivityGroupOpenStore: (
-        initialOpenIds: ReadonlySet<string> | null,
+        initialChoices: ActivityGroupOpenChoices | null,
       ) =>
         wrapWithSetOpenTracking(
-          actual.createActivityGroupOpenStore(initialOpenIds),
+          actual.createActivityGroupOpenStore(initialChoices),
         ),
       getOrCreateActivityGroupOpenStore: (
         identity: ChatTabPersistenceIdentity,
@@ -981,6 +1007,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           composerOverlayHeight={state.composerOverlayHeight}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={state.onVisibleOrdinalRangeChange}
+          onFindReadOrdinalChange={noOpOnFindReadOrdinalChange}
           coldRewrittenMessageIds={state.coldRewrittenMessageIds}
         />
       </div>
@@ -1071,9 +1098,9 @@ describe("ChatMessages scroll policy", () => {
     installLegendListViewportMetrics();
     vi.useRealTimers();
     useSettingsStore.setState({
-      chatTurnMinimapSide: "right",
       quoteReplyEnabled: false,
     });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
   });
 
@@ -1085,7 +1112,7 @@ describe("ChatMessages scroll policy", () => {
     tileLiveness.live = false;
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setLegendListScrollContainerScrollHeightOverride(null);
-    useSettingsStore.setState({ chatTurnMinimapSide: "right" });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     // Ticket 15: dual-key durable entries survive tab-key cleanup - clear the
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
@@ -2694,7 +2721,7 @@ describe("ChatMessages scroll policy", () => {
       expect(screen.getByTestId("chat-turn-minimap-card")).toBeTruthy();
     });
     it("does not mount the minimap when its placement is hidden", async () => {
-      useSettingsStore.setState({ chatTurnMinimapSide: "hide" });
+      useLayoutStore.getState().setRegionValues("minimap", { shown: "hidden" });
       renderChatMessages({
         messages: makeTranscript(20),
         scrollStateKey: "hidden-minimap",
@@ -2759,6 +2786,150 @@ describe("ChatMessages scroll policy", () => {
         expect(nextId).toBeTruthy();
         expect(messageIndex(nextId)).toBeGreaterThan(messageIndex(parkedId));
       });
+    });
+  });
+
+  describe("open-as-chat wiring", () => {
+    const CARD_ID = "drill-card";
+
+    function transcriptWithCard(): ReadonlyArray<ChatMessageModel> {
+      const [first, second, ...rest] = makeCompletedTranscript(6);
+      const withCard: ChatMessageModel = {
+        ...second,
+        segments: [
+          {
+            id: CARD_ID,
+            kind: "subagent",
+            name: "Drill",
+            agentType: null,
+            task: "Drill task",
+            progressUpdates: [],
+            result: null,
+            isStreaming: false,
+            endState: null,
+            stopped: false,
+            startedAt: 1,
+            durationMs: 10,
+            spawnToolCallId: null,
+            parentId: null,
+            workflowMeta: null,
+            children: [
+              {
+                id: "drill-text",
+                kind: "text",
+                markdown: "drill words",
+                isStreaming: false,
+                parentId: CARD_ID,
+              },
+            ],
+          },
+        ],
+      };
+      return [first, withCard, ...rest];
+    }
+
+    async function openView(scrollStateKey: string) {
+      const rendered = renderChatMessages({
+        messages: transcriptWithCard(),
+        scrollStateKey,
+      });
+      await settleLegendList();
+      fireEvent.click(screen.getByRole("button", { name: `open ${CARD_ID}` }));
+      return rendered;
+    }
+
+    function viewScrollArea(): HTMLElement {
+      const area = screen
+        .getByTestId("subagent-chat-view")
+        .querySelector<HTMLElement>("[data-selection-root]");
+      if (area === null) throw new Error("view scroll area is missing");
+      return area;
+    }
+
+    it("scrolls the view, not the timeline, on PageDown", async () => {
+      await openView("drill-pagedown");
+      const area = viewScrollArea();
+      Object.defineProperty(area, "scrollHeight", {
+        configurable: true,
+        value: 2000,
+      });
+      Object.defineProperty(area, "clientHeight", {
+        configurable: true,
+        value: 400,
+      });
+      const timelineBefore = getScrollNode().scrollTop;
+      const viewBefore = area.scrollTop;
+
+      act(() => {
+        dispatchKeyInScope("PageDown");
+      });
+
+      expect(area.scrollTop).toBeGreaterThan(viewBefore);
+      expect(getScrollNode().scrollTop).toBe(timelineBefore);
+    });
+
+    it("hands the selection root to the view while it is open", async () => {
+      await openView("drill-selection");
+      const container = screen.getByTestId("chat-transcript-container");
+      expect(container.hasAttribute("data-selection-root")).toBe(false);
+      expect(viewScrollArea().hasAttribute("data-selection-root")).toBe(true);
+
+      fireEvent.click(screen.getByTestId("subagent-chat-back"));
+      expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
+      expect(
+        screen
+          .getByTestId("chat-transcript-container")
+          .hasAttribute("data-selection-root"),
+      ).toBe(true);
+    });
+
+    // The view covers the transcript visually only: without `inert`, Shift+Tab
+    // walks back into the hidden timeline's controls and a screen reader reads
+    // both conversations at once.
+    it("makes the covered timeline and its scroll pill inert while the view is open", async () => {
+      // The pill is aria-hidden while it has nothing to show, and a hidden
+      // element has no accessible name, so it is found by its label attribute.
+      const pill = (): HTMLButtonElement => {
+        const node = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Scroll to end"]',
+        );
+        if (node === null) throw new Error("scroll-to-end pill is missing");
+        return node;
+      };
+      await openView("drill-inert");
+      expect(getScrollNode().closest("[inert]")).not.toBeNull();
+      expect(pill().closest("[inert]")).not.toBeNull();
+      expect(
+        screen.getByTestId("subagent-chat-view").closest("[inert]"),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByTestId("subagent-chat-back"));
+      expect(getScrollNode().closest("[inert]")).toBeNull();
+      expect(pill().closest("[inert]")).toBeNull();
+      // Focus goes back to the opening control, which is no longer inert.
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: `open ${CARD_ID}` }),
+      );
+    });
+
+    it("closes on Escape and returns focus to the card's open control", async () => {
+      await openView("drill-escape");
+      fireEvent.keyDown(screen.getByRole("heading", { name: "Drill" }), {
+        key: "Escape",
+      });
+      expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: `open ${CARD_ID}` }),
+      );
+    });
+
+    it("closes the view when a cross-tile scroll request arrives", async () => {
+      const { rerenderWith } = await openView("drill-scroll-request");
+      expect(screen.getByTestId("subagent-chat-view")).toBeTruthy();
+
+      rerenderWith({ scrollRequest: { kind: "end", requestId: 90 } });
+
+      expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
     });
   });
 
@@ -4683,6 +4854,7 @@ describe("ChatMessages scroll policy", () => {
             composerOverlayHeight={80}
             transcriptWindow={null}
             onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
+            onFindReadOrdinalChange={noOpOnFindReadOrdinalChange}
             coldRewrittenMessageIds={new Set()}
           />
         </Parent>

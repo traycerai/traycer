@@ -8,6 +8,7 @@ import {
   getTaskContextsResponseSchemaPre12,
   getTaskContextsResponseSchemaV10,
   getTaskContextsResponseSchemaPre13,
+  getTaskContextsResponseSchemaPre14,
   type ListTaskLight,
   listTaskLightSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -51,8 +52,10 @@ describe("epic.getTaskContexts", () => {
     hostRpcRegistry["epic.getTaskContexts"][1].versions[2].contract;
   const v13Contract =
     hostRpcRegistry["epic.getTaskContexts"][1].versions[3].contract;
+  const v14Contract =
+    hostRpcRegistry["epic.getTaskContexts"][1].versions[4].contract;
 
-  it("keeps v1.0 frozen and registers the v1.1, v1.2 and v1.3 minors", () => {
+  it("keeps v1.0-v1.3 frozen and registers the v1.4 minor", () => {
     expect(v10Contract.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(v11Contract.method).toBe("epic.getTaskContexts");
     expect(v11Contract.schemaVersion).toEqual({ major: 1, minor: 1 });
@@ -60,7 +63,9 @@ describe("epic.getTaskContexts", () => {
     expect(v12Contract.schemaVersion).toEqual({ major: 1, minor: 2 });
     expect(v13Contract.method).toBe("epic.getTaskContexts");
     expect(v13Contract.schemaVersion).toEqual({ major: 1, minor: 3 });
-    expect(hostRpcRegistry["epic.getTaskContexts"][1].latestMinor).toBe(3);
+    expect(v14Contract.method).toBe("epic.getTaskContexts");
+    expect(v14Contract.schemaVersion).toEqual({ major: 1, minor: 4 });
+    expect(hostRpcRegistry["epic.getTaskContexts"][1].latestMinor).toBe(4);
     expect(hostRpcRegistry["epic.getTaskContexts"].degrade).toEqual({
       kind: "unsupported",
     });
@@ -78,7 +83,9 @@ describe("epic.getTaskContexts", () => {
     expect(v12Contract.requestSchema).toBe(getTaskContextsRequestSchema);
     expect(v12Contract.responseSchema).toBe(getTaskContextsResponseSchemaPre13);
     expect(v13Contract.requestSchema).toBe(getTaskContextsRequestSchema);
-    expect(v13Contract.responseSchema).toBe(getTaskContextsResponseSchema);
+    expect(v13Contract.responseSchema).toBe(getTaskContextsResponseSchemaPre14);
+    expect(v14Contract.requestSchema).toBe(getTaskContextsRequestSchema);
+    expect(v14Contract.responseSchema).toBe(getTaskContextsResponseSchema);
   });
 
   it("adds `localHomedTaskIds` at `@1.3` and nothing else", () => {
@@ -112,6 +119,28 @@ describe("epic.getTaskContexts", () => {
         localHomedTaskIds: ["epic-1"],
       }),
     ).toEqual({ tasks: {} });
+  });
+
+  it("adds `recentAtByTaskId` at `@1.4` while every earlier response stays frozen", () => {
+    const response = {
+      tasks: {},
+      localHomedTaskIds: ["epic-1"],
+      recentAtByTaskId: { "epic-1": 1234 },
+    };
+    expect(getTaskContextsResponseSchema.parse(response)).toEqual(response);
+    expect(getTaskContextsResponseSchemaPre14.parse(response)).toEqual({
+      tasks: {},
+      localHomedTaskIds: ["epic-1"],
+    });
+    expect(getTaskContextsResponseSchemaPre13.parse(response)).toEqual({
+      tasks: {},
+    });
+    expect(getTaskContextsResponseSchemaPre12.parse(response)).toEqual({
+      tasks: {},
+    });
+    expect(getTaskContextsResponseSchemaV10.parse(response)).toEqual({
+      tasks: {},
+    });
   });
 
   it("round-trips a request within the id cap", () => {

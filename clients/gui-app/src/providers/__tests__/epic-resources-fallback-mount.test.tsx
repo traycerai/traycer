@@ -14,7 +14,10 @@ import {
 } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { holdGlobalResourcesConsumer } from "@/stores/resources/global-resources-consumers";
 
 // Defaults are a REMOTE host as the transport reports one: `"unknown"` support
@@ -143,10 +146,7 @@ function EpicPane(props: { readonly monitorOpen: boolean }) {
 
 describe("<EpicResourcesFallbackMount />", () => {
   beforeEach(() => {
-    useSettingsStore.setState({
-      showGlobalResourceMonitor: true,
-      navigatorResourceMetrics: [],
-    });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     __setResourcesStreamClientFactoryForTests((scope, callbacks) => {
       streams.set(scopeKey(scope), callbacks);
       return {
@@ -220,13 +220,14 @@ describe("<EpicResourcesFallbackMount />", () => {
     expect(resourcesRegistry.get("epic-1")).toBeNull();
   });
 
-  // The footer readout alone: header monitor off, no navigator chips. The
-  // pane's settings gate reads that as nobody wanting numbers; the readout
-  // is still a global consumer, and on an old host it has no other source.
-  it("feeds a footer-only readout on an old host with no chip on screen", () => {
-    useSettingsStore.setState({
-      showGlobalResourceMonitor: false,
-      navigatorResourceMetrics: [],
+  // The demand is the consumer, not the layout switches the pane's own
+  // stream used to be gated on: with the monitor region hidden and the
+  // agent rows' readings off, a mounted global consumer still has no other
+  // source on an old host.
+  it("feeds a global consumer on an old host whatever the layout switches say", () => {
+    useLayoutStore.getState().setRegionValues("resourceMonitor", {
+      shown: "hidden",
+      agentRows: false,
     });
     render(<EpicPane monitorOpen />);
 

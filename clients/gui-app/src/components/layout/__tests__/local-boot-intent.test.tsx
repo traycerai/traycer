@@ -72,6 +72,8 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 interface ManagementSpy {
@@ -120,7 +122,8 @@ function buildManagementSpy(): ManagementSpy {
     registerService: notImplemented("registerService"),
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
-    freePortAndRestart: (input) => Promise.resolve(input),
+    freePortAndRestart: (input) =>
+      Promise.resolve({ kind: "applied" as const, ...input }),
     runDoctorRepairQueued: () => Promise.resolve({ kind: "applied" as const }),
     freePortAndRestartIfIdle: () =>
       Promise.resolve({
@@ -133,6 +136,9 @@ function buildManagementSpy(): ManagementSpy {
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
     restartHostIfIdle: notImplemented("restartHostIfIdle"),
+    restartHostServiceIfHostIdle: notImplemented(
+      "restartHostServiceIfHostIdle",
+    ),
     runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
     getHostName: () =>
       Promise.resolve({

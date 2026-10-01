@@ -5,6 +5,24 @@ description: "Track the latest updates and improvements to the Traycer Host."
 rss: true
 ---
 
+<Update label="v1.4.0">
+Model routing, Auto mode, agents that work across your machines, Antigravity, and rebuilt storage.
+
+* **Model routing** — when a turn fails on a usage limit, a sign-out, a billing problem, or an unavailable provider or model, the Host can move the chat to a model in the same tier. For a usage limit, a sign-out or a billing problem it can also switch to another account for the same provider, and for a usage limit it can wait for the reset and retry. After a switch, it asks you, or switches back on its own if you choose, once your preferred account or model is available again. Tiers match models by name pattern.
+* **Auto mode** — a judge reviews commands before they run and asks you about the ones it won't approve; edits to sensitive files such as git config and hooks still ask you. By default the judge runs on Traycer Inference and falls back to the conversation's own provider and account, and Claude Code conversations can use Claude Code's own classifier instead. A repository's `.traycer/auto-policy.md` can add restrictions but never loosen yours, and the Host keeps a log of recent decisions.
+* **Your machines, working together** — agents can list your machines, create and message agents on them, run a command on another machine, copy files between machines, and forward a port between their own machine and another of yours. A remote agent's browser can open in the desktop app you messaged it from.
+* **Across Tasks** — agents can list your Tasks, message and manage agents in your other Tasks, and search your chat history on their machine.
+* **Chat search** — the Host indexes the prompts, agent replies, and notices of your chats on it, across Tasks, for full-text search. Terminal-agent chats, reasoning, and tool output are not indexed.
+* **Remote sign-in** — sign a remote Host in to Codex, Grok, or Kimi with a sign-in link and a one-time code, or to Claude Code by pasting a code, from the machine you're using. Signing in to an account no longer interrupts chats already running on it.
+* **Antigravity** — Google's Antigravity coding agent runs through its official ACP server. Models are read live from your account, effort levels are grouped under one model, and, with a Google sign-in, 5-hour and weekly limits are reported for each model group. It is not available on Intel Macs.
+* **Storage** — database work runs asynchronously instead of blocking the Host, and chats are stored as rows instead of one document that is rewritten whole. The Host also holds less in memory, and on macOS it no longer holds on to freed large memory blocks.
+* **Version history** — the Host keeps version history for specs, stories, tickets, and reviews. It is on by default and stored separately from checkpoint snapshots, so clearing those doesn't affect it.
+* **Labels** — Task labels are saved to the cloud, with edits queued across restarts and retried. Earlier imports the Host still has a record of also get the **Imported** label.
+* **Worktrees** — optional automatic cleanup, off by default: once a day the Host deletes worktrees that have been inactive longer than the limit you set and whose work is merged, pushed, or never moved from its starting commit, with no uncommitted changes, open PR, or active session. Anything it can't verify is skipped. Deleting a worktree also says why a busy agent is holding it.
+* **Grok** — editing or forking from an earlier message now continues Grok's own session instead of starting a new one, plus image attachments and permission prompts that go through Traycer.
+* **Fixes** — an open chat reconnects on its own through a planned Host restart, Stop can now end a turn whose provider has stopped answering, terminal agents' launch arguments on Windows keep their backslashes and quotes, shell commands agents run on a Windows Host actually run, and a terminal whose folder was deleted reopens in your home folder.
+</Update>
+
 <Update label="v1.3.1">
 * **Cursor** — Composer no longer always runs in fast mode; the fast setting is applied per run.
 </Update>
@@ -40,6 +58,10 @@ Remote hosts, chats backed up to the cloud, and usage analytics.
 * **Git** — edit files in place from the diff, and read GitHub pull requests and issues for mentions.
 * **Worktrees** — branch prefixes can be set per repository, and recent workspace folders are remembered.
 * **Fixes** — Claude profiles no longer sign themselves out, idle Hosts stay quiet, and restart checks ignore idle terminals.
+</Update>
+
+<Update label="v1.1.11">
+* **Terminals** — zsh terminals keep loading your own startup files and environment variables however long the host has been running. Before, once the system cleaned up temporary files, new terminals could open with a bare environment and the default prompt.
 </Update>
 
 <Update label="v1.1.10">

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeAttemptRecordForEnvironment } from "./attempt-record-test-support";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import type { HostInstallRecord } from "../../manifest/host-install";
 
 // `host restart`'s command-level wiring (Host Update Layer Redesign Tech
 // Plan, "Lifecycle lock coverage" + "host restart --if-idle"): the whole
@@ -20,6 +22,12 @@ const mocks = vi.hoisted(() => ({
   busyCalls: [] as Array<string | undefined>,
   lockCalls: [] as Array<{ reason: string }>,
   stopForRestartForceValues: [] as boolean[],
+  // When set, the stub's relaunch crosses the REAL service spawn edge, which
+  // is what publishes the adoption proof - so the proof's origin becomes
+  // observable in `publishedOrigins`. Off by default: every other case pins
+  // command-level wiring and never publishes.
+  crossSpawnEdge: false,
+  publishedOrigins: [] as string[],
 }));
 
 vi.mock("../../service", async (importOriginal) => {
@@ -54,6 +62,11 @@ vi.mock("../../service", async (importOriginal) => {
       },
       relaunchAfterRestart: async () => {
         mocks.controllerCalls.push("relaunchAfterRestart");
+        if (mocks.crossSpawnEdge) {
+          const { atServiceSpawnEdge } =
+            await import("../../service/spawn-edge");
+          await atServiceSpawnEdge();
+        }
       },
       hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
@@ -66,10 +79,18 @@ vi.mock("../../service", async (importOriginal) => {
 // the adoption handshake (that's `host-start-adoption.test.ts`), so
 // replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
-  publishHostStartAdoption: async () => ({
-    waitForSpawn: async () => undefined,
-    cancel: async () => undefined,
-  }),
+  publishHostStartAdoption: async (
+    _capability: unknown,
+    _contenderOptions: unknown,
+    _serviceLabel: string,
+    origin: string,
+  ) => {
+    mocks.publishedOrigins.push(origin);
+    return {
+      waitForSpawn: async () => undefined,
+      cancel: async () => undefined,
+    };
+  },
 }));
 
 vi.mock("../../host/busy-check", () => ({
@@ -136,10 +157,16 @@ function fakeCtx(): CommandContext {
   };
 }
 
-async function writeInstallRecordForAttestation(): Promise<void> {
+// Returns the record it wrote so callers can compute the SAME
+// `installGeneration` a matching park's claim would carry
+// (`encodeInstallGeneration(record)`) - never a hand-rebuilt literal, for the
+// exact reason `install-generation.ts` warns about: a per-site copy of the
+// four fields is how the claim baseline and this fixture would drift apart
+// silently.
+async function writeInstallRecordForAttestation(): Promise<HostInstallRecord> {
   const { writeHostInstallRecord } =
     await import("../../manifest/host-install");
-  await writeHostInstallRecord("production", {
+  const record: HostInstallRecord = {
     installId: "restart-attestation-install",
     version: "1.7.0",
     runtimeVersion: null,
@@ -153,11 +180,13 @@ async function writeInstallRecordForAttestation(): Promise<void> {
     sizeBytes: 1,
     executablePath: join(workHome, "host", "traycer-host"),
     executableSha256: null,
-  });
+  };
+  await writeHostInstallRecord("production", record);
+  return record;
 }
 
 describe("buildHostRestartCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     workHome = mkdtempSync(join(tmpdir(), "traycer-host-restart-cmd-test-"));
     osHome.current = workHome;
     process.env.HOME = workHome;
@@ -166,11 +195,17 @@ describe("buildHostRestartCommand", () => {
     // module cache so each test (and the dynamic import below) sees its
     // own tmp HOME, matching host-restart-finalize.test.ts's pattern.
     vi.resetModules();
+    // HOME-safety guard: prove the redirect actually took before any test
+    // can touch a real path under it.
+    const { hostHomeDir } = await import("../../store/paths");
+    expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
     mocks.controllerCalls = [];
     mocks.busyOverride = null;
     mocks.busyCalls = [];
     mocks.lockCalls = [];
     mocks.stopForRestartForceValues = [];
+    mocks.crossSpawnEdge = false;
+    mocks.publishedOrigins = [];
   });
 
   afterEach(() => {
@@ -193,6 +228,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -204,6 +240,27 @@ describe("buildHostRestartCommand", () => {
     ]);
   });
 
+  it("publishes the relaunch's adoption proof as `maintenance`, whoever asked for the restart", async () => {
+    // Lifecycle modes: a restart brings back a run that already
+    // existed, so its relaunch leg records `maintenance` in the proof the
+    // supervisor consumes - never the caller's `--lifecycle-origin`.
+    mocks.crossSpawnEdge = true;
+    const { buildHostRestartCommand } = await import("../host-restart");
+    const command = buildHostRestartCommand({
+      ifIdle: false,
+      force: false,
+      deferIfParked: false,
+      lifecycleOrigin: "terminal",
+    });
+    await command(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual([
+      "stopForRestart",
+      "relaunchAfterRestart",
+    ]);
+    expect(mocks.publishedOrigins).toEqual(["maintenance"]);
+  });
+
   it("plain restart proceeds unconditionally even when the host is busy", async () => {
     mocks.busyOverride = "busy";
     const { buildHostRestartCommand } = await import("../host-restart");
@@ -211,6 +268,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 
@@ -229,6 +287,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
 
     const result = await command(fakeCtx());
@@ -246,6 +305,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -263,6 +323,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
 
     await expect(command(fakeCtx())).rejects.toMatchObject({
@@ -281,6 +342,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: true,
       force: true,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
 
     await expect(command(fakeCtx())).rejects.toMatchObject({
@@ -297,6 +359,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: true,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -313,6 +376,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await command(fakeCtx());
 
@@ -338,6 +402,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -351,7 +416,7 @@ describe("buildHostRestartCommand", () => {
       });
     });
 
-    it("the same stop-only record WITHOUT --defer-if-parked keeps the old behavior: stops the service, restarted:false", async () => {
+    it("a CLAIM-LESS park WITHOUT --defer-if-parked keeps the old stop-only behavior: stops the service, restarted:false, human names 'traycer host update'", async () => {
       await writeAttemptRecordForEnvironment("production", {
         phase: "waiting-to-activate",
         execution: "parked",
@@ -362,6 +427,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -370,6 +436,10 @@ describe("buildHostRestartCommand", () => {
         restarted: false,
         deferredForParkedActivation: false,
       });
+      // The 2026-09-27 staging outage: the old stop-only sentence gave the
+      // reader no way back. The stopped-outcome human text must now name the
+      // one command that recovers a parked record.
+      expect(result.human).toContain("traycer host update");
     });
 
     it("a restart-current record (restarting/activate) still restarts even with --defer-if-parked set", async () => {
@@ -383,6 +453,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -408,6 +479,7 @@ describe("buildHostRestartCommand", () => {
         ifIdle: false,
         force: false,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -420,6 +492,276 @@ describe("buildHostRestartCommand", () => {
         deferredForParkedActivation: false,
       });
     });
+  });
+
+  // `parkedActivationRelaunchable` (`host/parked-activation-relaunch.ts`):
+  // a `waiting-to-activate` park whose claim names EXACTLY the bytes
+  // installed right now is not a generic stop-only hazard - it is the
+  // activation restart the park itself is waiting for, so a plain
+  // `host restart` (no flags) must continue it rather than stop the host and
+  // leave the machine down beside a park nothing then resumes.
+  describe("a parked record whose claim matches the installed bytes", () => {
+    it("restarts (stopForRestart + relaunchAfterRestart), restarted: true", async () => {
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          installedVersion: "1.7.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual([
+        "stopForRestart",
+        "relaunchAfterRestart",
+      ]);
+      expect(result.data).toMatchObject({
+        restarted: true,
+        deferredForParkedActivation: false,
+      });
+    });
+
+    it("--defer-if-parked still defers even over a MATCHING park: decided before the park is examined", async () => {
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          installedVersion: "1.7.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: true,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      // Desktop's force-restart caller runs its own activation once this
+      // command reports `deferred` - a matching park must still defer rather
+      // than be activated here behind its back, so this is UNCONDITIONAL on
+      // `deferIfParked`, not merely "when it wouldn't have matched anyway".
+      expect(mocks.controllerCalls).toEqual([]);
+      expect(result.data).toMatchObject({
+        restarted: false,
+        deferredForParkedActivation: true,
+      });
+      // The install comparison runs for a DEFERRED record too (traycer#2208
+      // review): a deferred park that still matches the install must not be
+      // called stale - Desktop's own activation is what resumes it next.
+      expect(result.human).toContain("run 'traycer host update' to resume it");
+      expect(result.human).not.toContain("no longer matches");
+    });
+
+    it("--defer-if-parked over a MISMATCHING park: still defers, but the human text calls it stale, not resumable", async () => {
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          // The claim names a DIFFERENT installed version than what is
+          // actually on disk (still "1.7.0", from
+          // `writeInstallRecordForAttestation`).
+          installedVersion: "1.6.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: true,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      // Still deferred - `--defer-if-parked` is decided BEFORE the match is
+      // examined, so the service is never touched here either.
+      expect(mocks.controllerCalls).toEqual([]);
+      expect(result.data).toMatchObject({
+        restarted: false,
+        deferredForParkedActivation: true,
+      });
+      expect(result.human).toContain("installed host no longer matches");
+    });
+
+    it("a claim whose installedVersion disagrees with the installed bytes stays stop-only", async () => {
+      const installed = await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          // The claim names a DIFFERENT installed version than what is
+          // actually on disk (still "1.7.0", from `writeInstallRecordForAttestation`).
+          installedVersion: "1.6.0",
+          installGeneration: encodeInstallGeneration(installed),
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(result.data).toMatchObject({
+        restarted: false,
+        deferredForParkedActivation: false,
+      });
+      // The guidance is about THIS record: a stale park is not brought back
+      // by `host update` alone (it retires the record `install-changed` and
+      // exits), so the sentence must not promise that (traycer#2208 review).
+      expect(result.human).toContain("installed host no longer matches");
+      expect(result.human).toContain("'traycer host ensure' to start the host");
+      expect(result.human).not.toContain("also starts the host");
+    });
+
+    it("a claim whose installGeneration disagrees with the installed bytes stays stop-only", async () => {
+      await writeInstallRecordForAttestation();
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          installedVersion: "1.7.0",
+          // A generation that does not match the install record's own
+          // `installId`-derived fingerprint - a different install instance
+          // that happens to carry the same version string.
+          installGeneration: "id:some-other-install",
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(result.data).toMatchObject({
+        restarted: false,
+        deferredForParkedActivation: false,
+      });
+    });
+
+    it("a matching claim with NO install record on disk stays stop-only (unverifiable is refused, never admitted)", async () => {
+      // Deliberately no `writeInstallRecordForAttestation()` call - there is
+      // no install record at all, so `readHostInstallRecord` returns `null`
+      // and the park cannot be verified against anything.
+      await writeAttemptRecordForEnvironment("production", {
+        targetVersion: "1.7.0",
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: {
+          installedVersion: "1.7.0",
+          installGeneration: "id:restart-attestation-install",
+          stageFingerprint: null,
+          allowDowngrade: false,
+          acceptStoreFormatLoss: false,
+        },
+      });
+      const { buildHostRestartCommand } = await import("../host-restart");
+      const command = buildHostRestartCommand({
+        ifIdle: false,
+        force: false,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      });
+      const result = await command(fakeCtx());
+
+      expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(result.data).toMatchObject({
+        restarted: false,
+        deferredForParkedActivation: false,
+      });
+    });
+
+    it.each([
+      {
+        phase: "applying" as const,
+        execution: "active" as const,
+        continuation: null,
+      },
+      {
+        phase: "preparing" as const,
+        execution: "active" as const,
+        continuation: "activate" as const,
+      },
+    ])(
+      "an ACTIVE record ($phase/$execution) stays stop-only regardless of a matching claim - never even reaches the parked exemption",
+      async ({ phase, execution, continuation }) => {
+        const installed = await writeInstallRecordForAttestation();
+        await writeAttemptRecordForEnvironment("production", {
+          targetVersion: "1.7.0",
+          phase,
+          execution,
+          continuation,
+          claim: {
+            installedVersion: "1.7.0",
+            installGeneration: encodeInstallGeneration(installed),
+            stageFingerprint: null,
+            allowDowngrade: false,
+            acceptStoreFormatLoss: false,
+          },
+        });
+        const { buildHostRestartCommand } = await import("../host-restart");
+        const command = buildHostRestartCommand({
+          ifIdle: false,
+          force: false,
+          deferIfParked: false,
+          lifecycleOrigin: "terminal",
+        });
+        const result = await command(fakeCtx());
+
+        expect(mocks.controllerCalls).toEqual(["stop"]);
+        expect(result.data).toMatchObject({
+          restarted: false,
+          deferredForParkedActivation: false,
+        });
+      },
+    );
   });
 
   // Codex P2 (round 5): `reconcilePostFinalizeMarker` used to drop the
@@ -485,6 +827,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 
@@ -501,6 +844,7 @@ describe("buildHostRestartCommand", () => {
       ifIdle: false,
       force: false,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 

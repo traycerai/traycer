@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { HostGlyph } from "@/components/settings/host-scope/host-glyph";
 import {
   hostOptionKindLabel,
@@ -57,13 +57,19 @@ export function HostOptionRow(props: {
    * means a surface can only show a badge for state it already had.
    */
   readonly updateView: FleetUpdateView | null;
+  /**
+   * The name's element, for a surface that tells when its width has cut the
+   * name (the account menu's tooltip, G4), or `null`.
+   */
+  readonly nameRef: Ref<HTMLSpanElement>;
 }): ReactNode {
-  const { host } = props;
+  const { host, picked, active, intent, surfaceState, updateView, nameRef } =
+    props;
   // Includes "setting up" (M5): host-scope narration for a local host being
   // installed. When another host can serve the window that setup is NOT a
   // window-wide event — the global modal deliberately stays away, and this row
   // plus Settings' progress banner are where it shows instead.
-  const statusWord = hostOptionStatusWord(host, props.surfaceState);
+  const statusWord = hostOptionStatusWord(host, surfaceState);
   // Two INDEPENDENT words, and a row may carry both — "offline · update failed"
   // is a real and useful pair. They are not merged because they answer
   // different questions (route/health vs update), which is the distinction
@@ -77,13 +83,13 @@ export function HostOptionRow(props: {
   // of the three pickers that deliberately pass `null`, which is the exact leak
   // the opt-in exists to prevent — and a cast is what would let it type-check.
   const updateBadge =
-    props.updateView === null || props.surfaceState.kind === "inert"
+    updateView === null || surfaceState.kind === "inert"
       ? null
-      : hostOptionUpdateBadge(props.updateView);
+      : hostOptionUpdateBadge(updateView);
   // The ACTIVE tag exists to separate two marks that can disagree: what you are
   // VIEWING versus what this window runs on. Under `bind` they are the same
   // fact by definition, so the tag would restate the check it sits next to.
-  const showActiveTag = props.intent === "view" && props.active;
+  const showActiveTag = intent === "view" && active;
   return (
     <>
       <HostGlyph
@@ -91,8 +97,10 @@ export function HostOptionRow(props: {
         className="size-4 shrink-0 text-muted-foreground"
       />
       <span className="sr-only">{hostOptionKindLabel(host)}</span>
-      <span className="min-w-0 flex-1 truncate text-start">{host.name}</span>
-      {props.picked && props.intent === "view" ? (
+      <span ref={nameRef} className="min-w-0 flex-1 truncate text-start">
+        {host.name}
+      </span>
+      {picked && intent === "view" ? (
         <span className="sr-only">Currently viewing</span>
       ) : null}
       {showActiveTag ? <ActiveTag /> : null}

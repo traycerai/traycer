@@ -21,7 +21,6 @@ import {
   autoJudgeBillingForRun,
   autoJudgeEffortLabel,
   autoJudgeGetKnowsReasoningEffort,
-  autoJudgeMetaLine,
   autoJudgeSetStoresReasoningEffort,
   autoJudgeTarget,
   autoModeMidTurnLock,
@@ -468,7 +467,7 @@ describe("autoJudgeTarget", () => {
     ).toEqual({ kind: "none" });
   });
 
-  it("composes to 'blocked' billing and the no-judge meta line for a traycer-hosted run under fallback", () => {
+  it("composes to 'blocked' billing for a traycer-hosted run under fallback", () => {
     const target = autoJudgeTarget({
       ...BASE_INPUT,
       effective: { source: "fallback" },
@@ -485,13 +484,7 @@ describe("autoJudgeTarget", () => {
       judgeEffortLabel: null,
       judgeRecordUnrunnable: false,
     });
-    if (billing === null) {
-      throw new Error("expected a billing verdict, got null");
-    }
     expect(billing).toEqual({ kind: "blocked" });
-    expect(autoJudgeMetaLine(billing)).toBe(
-      "No judge available on this machine · asks you instead",
-    );
   });
 
   // Provider-native precedence is unaffected by the fix above: a run whose
@@ -692,96 +685,6 @@ describe("autoJudgeBillingForRun", () => {
       modelLabel: "Sonnet",
       effortLabel: "Low",
     });
-  });
-});
-
-describe("autoJudgeMetaLine", () => {
-  it("names the model and Traycer credits for the traycer kind", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "traycer",
-        modelLabel: "Sonnet 5",
-        effortLabel: null,
-      }),
-    ).toBe("Reviewed by Sonnet 5 on Traycer · uses credits");
-  });
-
-  it("names the model and effort, and Traycer credits, for the traycer kind when an effort is named", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "traycer",
-        modelLabel: "Sonnet 5",
-        effortLabel: "Low",
-      }),
-    ).toBe("Reviewed by Sonnet 5 (Low) on Traycer · uses credits");
-  });
-
-  it("names the model and the provider's own account for the provider kind", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-        modelLabel: "Sonnet",
-        effortLabel: null,
-      }),
-    ).toBe("Reviewed by Sonnet on Claude Code · your account");
-  });
-
-  it("names the model and effort for the provider kind when an effort is named", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-        modelLabel: "Sonnet",
-        effortLabel: "Low",
-      }),
-    ).toBe("Reviewed by Sonnet (Low) on Claude Code · your account");
-  });
-
-  it("names the premium-request range for the Copilot provider kind", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "provider",
-        harnessId: "copilot",
-        harnessLabel: "Copilot",
-        modelLabel: "GPT-5",
-        effortLabel: null,
-      }),
-    ).toBe(
-      "Reviewed by GPT-5 on Copilot · uses premium requests (60–350 per hour)",
-    );
-  });
-
-  it("names the model and effort for the Copilot provider kind when an effort is named", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "provider",
-        harnessId: "copilot",
-        harnessLabel: "Copilot",
-        modelLabel: "GPT-5",
-        effortLabel: "High",
-      }),
-    ).toBe(
-      "Reviewed by GPT-5 (High) on Copilot · uses premium requests (60–350 per hour)",
-    );
-  });
-
-  it("names the provider's own classifier, at no extra cost, for the provider-native kind", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "provider-native",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      }),
-    ).toBe("Reviewed by Claude Code's built-in classifier · no extra cost");
-  });
-
-  it("says no judge is available for the blocked kind", () => {
-    expect(autoJudgeMetaLine({ kind: "blocked" })).toBe(
-      "No judge available on this machine · asks you instead",
-    );
   });
 });
 

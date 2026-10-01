@@ -12,6 +12,11 @@ interface SettingsSegmentedControlProps<Value extends string> {
   readonly onChange: (next: Value) => void;
   /** Names the CHOICE, not the option - the pressed state names the option. */
   readonly ariaLabel: string;
+  /**
+   * The choice exists but does not apply right now; the row says why. The
+   * pressed segment keeps showing the stored value.
+   */
+  readonly disabled: boolean;
 }
 
 /**
@@ -27,12 +32,16 @@ interface SettingsSegmentedControlProps<Value extends string> {
 export function SettingsSegmentedControl<Value extends string>(
   props: SettingsSegmentedControlProps<Value>,
 ): ReactNode {
-  const { value, options, onChange, ariaLabel } = props;
+  const { value, options, onChange, ariaLabel, disabled } = props;
   return (
     <div
       role="group"
       aria-label={ariaLabel}
-      className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5"
+      aria-disabled={disabled || undefined}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5",
+        disabled && "opacity-50",
+      )}
     >
       {options.map((option) => {
         const active = option.value === value;
@@ -41,6 +50,7 @@ export function SettingsSegmentedControl<Value extends string>(
             key={option.value}
             type="button"
             aria-pressed={active}
+            disabled={disabled}
             onClick={() => {
               if (active) return;
               onChange(option.value);
@@ -50,7 +60,7 @@ export function SettingsSegmentedControl<Value extends string>(
               "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
               active
                 ? "bg-card text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
+                : "text-muted-foreground enabled:hover:text-foreground",
             )}
           >
             {option.label}

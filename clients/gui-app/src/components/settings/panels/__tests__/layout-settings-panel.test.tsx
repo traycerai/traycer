@@ -1,1642 +1,1450 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import type { ProviderRateLimits } from "@traycer/protocol/host";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
-import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
-import { SETTINGS_SEARCH_ENTRIES } from "@/lib/settings-search/settings-search-entries";
-import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
-import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
-import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
-import { setMobileApp } from "@/lib/mobile-app";
-import {
-  isStatusBarControlsAvailable,
-  type SettingsAvailabilityContext,
-} from "@/lib/settings/settings-availability";
-import {
-  DEFAULT_STATUS_BAR_LAYOUT,
-  useLayoutStore,
-} from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
-
-// The panel's own `trackLayoutSetting` calls straight into `trackSettingChanged`
-// - mocked here (preserving every other export) so a round-trip test can
-// assert the exact analytics id fired, the same seam the rest of this suite
-// already uses for its other hook mocks.
-vi.mock("@/lib/analytics", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/analytics")>();
-  return {
-    ...actual,
-    trackSettingChanged: vi.fn(),
-  };
-});
-
-// ── module-level mock state ─────────────────────────────────────────────────
-
-interface MockState {
-  providers: ReadonlyArray<ConfiguredRateLimitProvider>;
-  envelopes: Record<string, ProviderRateLimitEnvelope>;
-  // `null` only until the first `resetAll()` (every test's `beforeEach`)
-  // assigns a real fixture - kept nullable here rather than cast, since
-  // `hostScopeFixture` cannot be referenced from inside `vi.hoisted`'s
-  // synchronous initializer (it runs before the module's own imports settle).
-  scope: HostScope | null;
-  hasExplicitPick: boolean;
-}
-
-const mocks = vi.hoisted<MockState>(() => ({
-  providers: [],
-  envelopes: {},
-  scope: null,
-  hasExplicitPick: false,
-}));
-
-// The panel depends on the SCOPE, not the six hooks it composes - the same
-// boundary `rate-limit-icon.test.tsx` mocks at. `useScopedHostBinding` is left
-// real: it is a pure function of the scope and the ambient binding.
-vi.mock("@/hooks/rate-limits/use-rate-limit-host-scope", () => ({
-  useRateLimitResolveHostScope: () => ({
-    scope: mocks.scope ?? hostScopeFixture({}),
-    hasExplicitPick: mocks.hasExplicitPick,
-  }),
-}));
-
-vi.mock(
-  "@/hooks/rate-limits/use-configured-rate-limit-providers",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/hooks/rate-limits/use-configured-rate-limit-providers")
-      >();
-    return {
-      ...actual,
-      useVisibleRateLimitProviders: () => mocks.providers,
-    };
-  },
-);
-
-vi.mock(
-  "@/hooks/rate-limits/use-rate-limit-profile-selection",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/hooks/rate-limits/use-rate-limit-profile-selection")
-      >();
-    return {
-      ...actual,
-      useRateLimitProfileSelection: () => ({
-        shownProfiles: {},
-        lastProfileByHarness: {},
-      }),
-    };
-  },
-);
-
-interface RateLimitRequestParams {
-  readonly providerId: string;
-  readonly profileId: string | null;
-}
-
-function resultKey(providerId: string, profileId: string | null): string {
-  return profileId === null ? providerId : `${providerId}:${profileId}`;
-}
-
-vi.mock("@/hooks/host/use-host-queries", () => ({
-  useHostQueriesWithResponseMap: (args: {
-    readonly requests: ReadonlyArray<{
-      readonly params: RateLimitRequestParams;
-    }>;
-  }) =>
-    args.requests.map((request) => ({
-      data: mocks.envelopes[
-        resultKey(request.params.providerId, request.params.profileId)
-      ],
-      isPending: false,
-      isFetching: false,
-      isError: false,
-      dataUpdatedAt: 0,
-      refetch: () => Promise.resolve({}),
-    })),
-}));
-
-// `useHostClient` is never actually exercised: every real read behind it
-// (`useVisibleRateLimitProviders`, `useHostQueriesWithResponseMap`) is mocked
-// above, so this only needs to satisfy the hook's call site without throwing.
-// `useHostBinding` and `HostRuntimeContext` stay real - `useScopedHostBinding`
-// composes them directly and this suite wants its real null-binding behavior.
-vi.mock("@/lib/host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/host")>();
-  return {
-    ...actual,
-    useHostClient: () => null,
-  };
-});
-
+import userEvent, { type UserEvent } from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
+import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import {
-  AnalyticsEvent,
-  sanitizeAnalyticsProperties,
-  trackSettingChanged,
-} from "@/lib/analytics";
+  LAYOUT_REGION_LIST,
+  regionFacts,
+} from "@/components/layout-editor/regions/region-facts";
+import { SURFACE_GROUPS } from "@/components/layout-editor/regions/region-grammar";
+import { RAIL_REGION_IDS } from "@/lib/layout/rail";
+import {
+  DEFAULT_ARRANGEMENT,
+  USAGE_PROVIDER_IDS,
+} from "@/lib/layout/layout-arrangement";
+import type { HideableRegionId } from "@/lib/layout/layout-values";
+import {
+  navigateToLayoutArea,
+  navigateToLayoutRegion,
+} from "@/lib/settings-navigation";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import {
+  effectiveLayoutValues,
+  PRESET_VALUES,
+} from "@/lib/layout/layout-presets";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { searchSettings } from "@/lib/settings-search/settings-search";
+import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
 
-// ── fixtures ─────────────────────────────────────────────────────────────
+// The provider list is read through the watched host's scope; this page needs
+// it mounted, never connected.
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => null,
+}));
 
-const NO_PROFILES: ReadonlyArray<ProviderProfile> = [];
+// A provider row's disclosure draws `ProviderLimitsControl`, which reads the
+// windows the strip has already read (L-96, L-106) - through the watched host
+// scope, a profile selection and the segment model, none of which this page is
+// about. Mocked at the same one boundary `provider-limits-choose.test.tsx`
+// mocks, so the page is tested for its COMPOSITION and the control is tested
+// where it lives.
+vi.mock(
+  "@/components/layout-editor/inspector/provider-limit-windows",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/layout-editor/inspector/provider-limit-windows")
+    >()),
+    ProviderLimitWindowsReader: (props: {
+      readonly children: (limits: {
+        windows: ReadonlyArray<never>;
+        drawnKeys: ReadonlyArray<never>;
+      }) => ReactNode;
+    }) => props.children({ windows: [], drawnKeys: [] }),
+    // The page wraps itself in this directly (the shared watched-usage read),
+    // which resolves a host scope through a runner-host provider this suite
+    // has none of. A pass-through here, and the fixed catalog below, keep the
+    // "usage providers are a Status bar list" cases drawing real rows without
+    // standing up that scope for real.
+    LayoutUsageProvider: (props: { readonly children: ReactNode }) =>
+      props.children,
+  }),
+);
 
-function configuredProvider(
-  providerId: "codex" | "claude-code",
-): ConfiguredRateLimitProvider {
-  return {
-    providerId,
-    lane: "ephemeralProcess",
-    profiles: NO_PROFILES,
-    fetchEligibility: { ambient: true, managedProfiles: true },
-  };
+vi.mock(
+  "@/components/layout-editor/inspector/use-layout-usage",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/layout-editor/inspector/use-layout-usage")
+    >()),
+    useLayoutUsage: () => ({
+      providerIds: USAGE_PROVIDER_IDS,
+      cluster: { kind: "no-providers" as const },
+      hostName: "the watched host",
+    }),
+  }),
+);
+
+const navigateMock = vi.hoisted(() => vi.fn());
+const openLayoutEditorMock = vi.hoisted(() => vi.fn());
+
+// The width gate reads the window, and the door is not what this suite is
+// about: every case below wants the page's own rows, not a session.
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => navigateMock,
+}));
+
+vi.mock("@/lib/layout/editor-session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/layout/editor-session")>()),
+  openLayoutEditor: openLayoutEditorMock,
+}));
+
+function resetLayout(): void {
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 }
 
-const NOW = Date.now();
-
-function codexReady(): Extract<ProviderRateLimits, { provider: "codex" }> {
-  return {
-    provider: "codex",
-    available: true,
-    planType: "pro_5x",
-    limitId: null,
-    limitName: null,
-    primary: {
-      usedPercent: 4,
-      resetsAt: NOW + 60 * 60 * 1000,
-      durationMinutes: 300,
-    },
-    secondary: null,
-    extraWindows: [],
-    credits: null,
-    individualLimit: null,
-    resetCredits: null,
-    rateLimitReachedType: null,
-  };
-}
-
-function claudeReady(): Extract<
-  ProviderRateLimits,
-  { provider: "claude-code" }
-> {
-  return {
-    provider: "claude-code",
-    available: true,
-    subscriptionType: "max",
-    fiveHour: {
-      usedPercent: 22,
-      resetsAt: NOW + 60 * 60 * 1000,
-      durationMinutes: 300,
-    },
-    sevenDay: null,
-    sevenDayOpus: null,
-    sevenDaySonnet: null,
-    modelScoped: [],
-    extraUsage: null,
-  };
-}
-
-/**
- * Two live limits on one provider, deliberately in two severity tiers: `5h` at
- * 22% of a 5-hour window is healthy, `wk` at 96% of a 7-day one is running low
- * (long windows warn at 95). A figure drawn from the wrong window is therefore
- * visible in its COLOUR as well as its width.
- */
-function claudeReadyWithTwoLimits(): Extract<
-  ProviderRateLimits,
-  { provider: "claude-code" }
-> {
-  return {
-    ...claudeReady(),
-    sevenDay: {
-      usedPercent: 96,
-      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
-      durationMinutes: 7 * 24 * 60,
-    },
-  };
-}
-
-/**
- * The same two limits with the weekly one spent, so the list has to draw `100%`
- * - the widest reading `windowPercentValueText` can produce - beside a shorter
- * one.
- */
-function claudeReadyWithExhaustedWeekly(): Extract<
-  ProviderRateLimits,
-  { provider: "claude-code" }
-> {
-  return {
-    ...claudeReady(),
-    sevenDay: {
-      usedPercent: 100,
-      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
-      durationMinutes: 7 * 24 * 60,
-    },
-  };
-}
-
-/** The same two limits with the 5-hour one already rolled over. */
-function claudeReadyWithExpiredFiveHour(): Extract<
-  ProviderRateLimits,
-  { provider: "claude-code" }
-> {
-  const reading = claudeReadyWithTwoLimits();
-  return {
-    ...reading,
-    fiveHour: { usedPercent: 22, resetsAt: NOW - 1000, durationMinutes: 300 },
-  };
-}
-
-/**
- * A Claude reading carrying a MODEL-SCOPED window, whose key exists only in the
- * payload - the half `fixedProviderWindowKeys` cannot name.
- */
-function claudeReadyWithModelWindow(): Extract<
-  ProviderRateLimits,
-  { provider: "claude-code" }
-> {
-  return {
-    ...claudeReady(),
-    modelScoped: [
-      {
-        displayName: "Fable",
-        usedPercent: 57,
-        resetsAt: NOW + 6 * 24 * 60 * 60 * 1000,
-        durationMinutes: null,
-      },
-    ],
-  };
-}
-
-function envelopeFor(
-  rateLimits: ProviderRateLimits,
-): ProviderRateLimitEnvelope {
-  return rateLimits.available
-    ? {
-        latest: rateLimits,
-        lastGood: rateLimits,
-        lastGoodAt: NOW,
-        lastFailureAt: null,
-      }
-    : {
-        latest: rateLimits,
-        lastGood: null,
-        lastGoodAt: null,
-        lastFailureAt: null,
-      };
-}
-
-// ── setup / teardown ─────────────────────────────────────────────────────
-
-function resetAll(): void {
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
-  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
-  window.localStorage.clear();
-  mocks.providers = [];
-  mocks.envelopes = {};
-  mocks.scope = hostScopeFixture({});
-  mocks.hasExplicitPick = false;
+beforeEach(() => {
   setMobileApp(false);
-  vi.mocked(trackSettingChanged).mockClear();
-}
-
-beforeEach(resetAll);
+  resetLayout();
+});
 afterEach(() => {
   cleanup();
-  resetAll();
+  setMobileApp(false);
+  setPhoneLayoutOnly(false);
+  resetLayout();
+  setSystemTabModalApi(null);
+  useSettingsSearchStore.setState({
+    query: "",
+    pendingReveal: null,
+    handoffPending: false,
+  });
+  navigateMock.mockClear();
+  openLayoutEditorMock.mockClear();
+  useLayoutEditorStore.getState().endSession();
 });
 
-/** Radix's select: open with the keyboard, then commit the named option. */
-function choose(control: string, option: string): void {
-  fireEvent.keyDown(screen.getByRole("combobox", { name: control }), {
-    key: "ArrowDown",
-  });
-  const item = screen.getByRole("option", { name: option });
-  fireEvent.focus(item);
-  fireEvent.keyDown(item, { key: "Enter" });
+/** One region's effective value, which is what a row draws and writes. */
+function shownValue(regionId: HideableRegionId): string {
+  const snapshot = useLayoutStore.getState();
+  return effectiveLayoutValues(snapshot.basePreset, snapshot.overrides)[
+    regionId
+  ].shown;
 }
 
-/** The checkbox list a provider's "Limits" row renders. */
-function limitsGroup(providerLabel: string): HTMLElement {
-  return screen.getByRole("group", { name: `${providerLabel} limits` });
+/** Every row of every list on the page, by the id it carries. */
+function rowIds(): ReadonlyArray<string> {
+  return [...document.querySelectorAll("[data-sortable-id]")].map(
+    (node) => node.getAttribute("data-sortable-id") ?? "",
+  );
+}
+
+function row(id: string): HTMLElement {
+  const nodes = document.querySelectorAll(`[data-sortable-id="${id}"]`);
+  const node = nodes[0];
+  if (!(node instanceof HTMLElement)) throw new Error(`no such row: ${id}`);
+  return node;
+}
+
+function surface(id: string): HTMLElement {
+  return screen.getByTestId(`layout-surface-${id}`);
 }
 
 /**
- * A limit entry by its LABEL. The figures beside a limit that has a reading
- * extend the box's accessible name rather than replacing it (`5h, 4% used`), so
- * every call site here names the label and nothing else.
+ * Whether a `forceMount`ed tab's own `TabsContent` carries `hidden` - every
+ * tab stays mounted now (L-166's Presence-timing fix), so absence from the
+ * DOM no longer means inactive; the `hidden` attribute Radix toggles on the
+ * inactive `role="tabpanel"` does.
  */
-function limitCheckbox(providerLabel: string, name: string): HTMLElement {
-  return within(limitsGroup(providerLabel)).getByRole("checkbox", {
-    name: (accessibleName: string) =>
-      accessibleName === name || accessibleName.startsWith(`${name},`),
-  });
+function tabPanelHiddenFor(testId: string): boolean {
+  const panel = screen.getByTestId(testId).closest('[role="tabpanel"]');
+  if (!(panel instanceof HTMLElement)) {
+    throw new Error(`no tabpanel ancestor for ${testId}`);
+  }
+  return panel.hasAttribute("hidden");
 }
 
-/** The entry labels a provider's list draws, in list order. */
-function limitLabels(providerLabel: string): ReadonlyArray<string | null> {
-  return within(limitsGroup(providerLabel))
-    .getAllByTestId("settings-checkbox-list-label")
-    .map((label) => label.textContent);
+/** The one `role="tabpanel"` Radix has NOT marked `hidden` right now. */
+function activeTabPanel(): HTMLElement {
+  const panel = document.querySelector('[role="tabpanel"]:not([hidden])');
+  if (!(panel instanceof HTMLElement)) throw new Error("no active tabpanel");
+  return panel;
 }
 
-/** One entry's percent cell, whose reserved width is what aligns the gauges. */
-function limitPercentCell(
-  providerLabel: string,
-  name: string,
-): HTMLElement | null {
-  return (
-    limitCheckbox(providerLabel, name)
-      .closest("label")
-      ?.querySelector('[data-testid="layout-limit-percent"]') ?? null
-  );
+function renderPanel(): void {
+  render(<LayoutSettingsPanel />);
 }
 
-/** One entry's mini bar, or `null` for an entry drawing no figure. */
-function limitBar(providerLabel: string, name: string): HTMLElement | null {
-  return (
-    limitCheckbox(providerLabel, name)
-      .closest("label")
-      ?.querySelector('[data-testid="status-bar-provider-mini-bar-fill"]') ??
-    null
-  );
+/**
+ * Switches the page to one surface's own tab, the way a click on its
+ * `TabsTrigger` would. Every tab stays mounted (`forceMount`), so this is
+ * about which one is VISIBLE, not which one exists - `surface()` finds a
+ * hidden tab's rows too, so a test that means "the active tab's rows" reads
+ * this first.
+ */
+async function goToSurfaceTab(user: UserEvent, id: string): Promise<void> {
+  const label = SURFACE_GROUPS.find((group) => group.id === id)?.label ?? id;
+  // Anchored prefix, not exact: a changed area's tab carries a sr-only ",
+  // changed" suffix in its accessible name (H2).
+  await user.click(screen.getByRole("tab", { name: new RegExp(`^${label}`) }));
 }
 
-const AUTOMATIC = "Tightest limit (automatic)";
-
-/** A pick the current reading does not carry, so the list stands automatic in. */
-const STALE_LIMIT_KEY = "codex:extra:retired-limit:primary";
-
-function metricsGroup(): HTMLElement {
-  return screen.getByRole("group", { name: "Metrics" });
-}
-
-describe("<LayoutSettingsPanel />", () => {
-  it("writes the placement setting to the store via the segmented control", () => {
-    render(<LayoutSettingsPanel />);
-
-    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
-
-    fireEvent.click(screen.getByRole("button", { name: "Header" }));
-
-    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
-  });
-
-  // The segment renders no default hint, so order is the only place the page
-  // says which option an untouched install is on.
-  it("puts the default placement first in the segmented control", () => {
-    render(<LayoutSettingsPanel />);
-
-    const segment = screen.getByRole("group", { name: "Placement" });
-    const labels = within(segment)
-      .getAllByRole("button")
-      .map((button) => button.textContent);
-
-    expect(labels).toEqual(["Status bar", "Header"]);
-  });
-
-  it("renders the groups in their fixed order, Presets first and Sidebar last", () => {
-    // The order a control keeps as groups arrive: Presets, then Status bar,
-    // then Tabs, then Composer, then Chat, then Sidebar. Asserted on the
-    // rendered document rather than trusted to a JSX read, since each group is
-    // now its own file mounted from one line here.
-    render(<LayoutSettingsPanel />);
-
-    const order = [
-      "presets",
-      "status-bar",
-      "tabs",
-      "composer",
-      "chat",
-      "sidebar",
-    ].map((group) => screen.getByTestId(`layout-${group}-group`));
-
-    for (let index = 1; index < order.length; index += 1) {
-      expect(
-        order[index - 1].compareDocumentPosition(order[index]) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
-    }
-  });
-
-  it("shows the header resource-monitor row only while placement is header", () => {
-    render(<LayoutSettingsPanel />);
-
-    // Absent on the default footer placement, where the group's own `Show
-    // resource monitor` governs the same monitor.
-    expect(
-      screen.queryByRole("switch", { name: "Show resource monitor in header" }),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Header" }));
-
-    expect(
-      screen.getByRole("switch", { name: "Show resource monitor in header" }),
-    ).toBeTruthy();
-  });
-
-  it("keeps the header resource-monitor row under status-bar placement at a narrow viewport", () => {
-    // A desktop build narrowed below `md` - a split screen, a dragged-in edge.
-    // `AppShell` drops the strip there whatever the placement says and
-    // `MobileAppHeader` keeps the resource monitor, so this row governs the
-    // only monitor on screen and the group's own `Show resource monitor`
-    // governs a strip that is not drawn. `useIsMobileViewport` reads
-    // `window.innerWidth` directly (the global `matchMedia` shim always reports
-    // `false`), so setting it before render is enough.
-    Object.defineProperty(window, "innerWidth", {
-      configurable: true,
-      value: 400,
-    });
-    try {
-      useLayoutStore.setState({
-        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
-      });
-      render(<LayoutSettingsPanel />);
-      const monitor = screen.getByRole("switch", {
-        name: "Show resource monitor in header",
-      });
-
-      fireEvent.click(monitor);
-
-      expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
-      // The GROUP stays on the build, not the viewport: a temporarily narrow
-      // window must not hide the usage and resource settings, which describe a
-      // strip this window still has as soon as it is widened.
-      expect(
-        screen.getByRole("switch", { name: "Show usage limits" }),
-      ).toBeTruthy();
-      // Placement is the one row that DOES follow the viewport, because below
-      // `md` it decides nothing: `AppShell` reads `mobileFooter` instead, and
-      // that switch takes its place.
-      expect(screen.queryByRole("button", { name: "Status bar" })).toBeNull();
-      expect(
-        screen.getByRole("switch", { name: "Footer status bar" }),
-      ).toBeTruthy();
-    } finally {
-      Object.defineProperty(window, "innerWidth", {
-        configurable: true,
-        value: 1024,
-      });
-    }
-  });
-
-  it("renders provider subgroups in ORDERED_PROVIDERS order regardless of input order", () => {
-    // Fed claude-code before codex; ORDERED_PROVIDERS ranks codex ahead of
-    // claude-code, and the panel must sort rather than render input order.
-    mocks.providers = [
-      configuredProvider("claude-code"),
-      configuredProvider("codex"),
-    ];
-    mocks.envelopes = {
-      codex: envelopeFor(codexReady()),
-      "claude-code": envelopeFor(claudeReady()),
-    };
-
-    render(<LayoutSettingsPanel />);
-
-    const codexCard = screen.getByTestId("layout-provider-subgroup-codex");
-    const claudeCard = screen.getByTestId(
-      "layout-provider-subgroup-claude-code",
-    );
-    expect(
-      codexCard.compareDocumentPosition(claudeCard) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-  });
-
-  it("round-trips 'Show used / remaining label' to showModeWord and tracks the analytics id", () => {
-    render(<LayoutSettingsPanel />);
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.showModeWord).toBe(
-      true,
-    );
-
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Show used / remaining label" }),
-    );
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.showModeWord).toBe(
-      false,
-    );
-    expect(trackSettingChanged).toHaveBeenCalledWith(
-      "layout",
-      "layout.statusBar.rateLimits.showModeWord",
-    );
-  });
-
-  it("lists the automatic entry first, checked and held, then one unchecked entry per limit the provider reports", () => {
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    const boxes = within(limitsGroup("Codex")).getAllByRole("checkbox");
-    expect(boxes.map((box) => box.getAttribute("aria-checked"))).toEqual([
-      "true",
-      "false",
-    ]);
-    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
-      true,
-    );
-    expect(limitCheckbox("Codex", "5h").hasAttribute("disabled")).toBe(false);
-  });
-
-  it("checks a limit into the provider's explicit picks and tracks the analytics id, and the box follows the store", () => {
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
-      {},
-    );
-
-    fireEvent.click(limitCheckbox("Codex", "5h"));
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
-      codex: { automatic: true, limitKeys: ["codex:primary"] },
-    });
-    expect(trackSettingChanged).toHaveBeenCalledWith(
-      "layout",
-      "layout.statusBar.rateLimits.providerLimits",
-    );
-    expect(limitCheckbox("Codex", "5h").getAttribute("aria-checked")).toBe(
-      "true",
-    );
-
-    fireEvent.click(limitCheckbox("Codex", "5h"));
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
-      codex: { automatic: true, limitKeys: [] },
-    });
-    expect(limitCheckbox("Codex", "5h").getAttribute("aria-checked")).toBe(
-      "false",
-    );
-  });
-
-  it("unchecks automatic once an explicit pick is checked, tracking its own analytics id, and then holds that pick", () => {
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    fireEvent.click(limitCheckbox("Codex", "5h"));
-    // Two checked: neither is held.
-    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
-      false,
-    );
-
-    fireEvent.click(limitCheckbox("Codex", AUTOMATIC));
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
-      codex: { automatic: false, limitKeys: ["codex:primary"] },
-    });
-    expect(trackSettingChanged).toHaveBeenCalledWith(
-      "layout",
-      "layout.statusBar.rateLimits.providerAutomatic",
-    );
-    // The one checked entry left is held, so the provider always draws
-    // something; the switch above is how it is hidden.
-    expect(limitCheckbox("Codex", "5h").hasAttribute("disabled")).toBe(true);
-    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
-      false,
-    );
-  });
-
-  it("collapses a hidden provider's limits list, restores it when re-enabled, and never touches the selection", () => {
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    // Pick a limit first, so the selection is non-default going into the
-    // provider toggle below - proving the provider switch never reaches it.
-    fireEvent.click(limitCheckbox("Codex", "5h"));
-    const selected = {
-      codex: { automatic: true, limitKeys: ["codex:primary"] },
-    };
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
-      selected,
-    );
-
-    fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
-
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
-    ).toEqual(["codex"]);
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
-      selected,
-    );
-    expect(screen.queryByRole("group", { name: "Codex limits" })).toBeNull();
-
-    fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
-
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
-    ).toEqual([]);
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
-      selected,
-    );
-    expect(limitCheckbox("Codex", "5h").getAttribute("aria-checked")).toBe(
-      "true",
-    );
-  });
-
-  it("keeps a provider with no reading toggleable, listing only the automatic entry and saying why", () => {
-    // Nothing in the shared cache for this provider: the page never fetches,
-    // so "no envelope" is a routine state and not an error one. The automatic
-    // entry needs no reading to exist, so the list still has its one row.
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = {};
-
-    render(<LayoutSettingsPanel />);
-
-    expect(
-      screen.getByText(/listed here once the first reading arrives/),
-    ).toBeTruthy();
-    expect(within(limitsGroup("Codex")).getAllByRole("checkbox")).toHaveLength(
-      1,
-    );
-    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
-      true,
-    );
-
-    fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
-
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
-    ).toEqual(["codex"]);
-  });
-
-  // The list is built from `providerWindowEntries` on the retained reading, not
-  // from the fixed-key list, which is what lets a model-scoped limit - whose
-  // identity is a `displayName` off the wire - be picked at all.
-  it("lists a discovered model window by its catalog label and writes its catalog key", () => {
-    mocks.providers = [configuredProvider("claude-code")];
-    mocks.envelopes = {
-      "claude-code": envelopeFor(claudeReadyWithModelWindow()),
-    };
-
-    render(<LayoutSettingsPanel />);
-
-    // In list order, so this pins the catalog's ordering too.
-    expect(limitLabels("Claude Code")).toEqual([AUTOMATIC, "5h", "Fable"]);
-
-    fireEvent.click(limitCheckbox("Claude Code", "Fable"));
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
-      "claude-code": {
-        automatic: true,
-        limitKeys: ["claude-code:model:Fable"],
-      },
-    });
-  });
-
-  // ── each entry's own figure ───────────────────────────────────────────────
-
-  it("draws one mini bar and percentage per limit, each filled and toned from its own window", () => {
-    mocks.providers = [configuredProvider("claude-code")];
-    mocks.envelopes = {
-      "claude-code": envelopeFor(claudeReadyWithTwoLimits()),
-    };
-
-    render(<LayoutSettingsPanel />);
-
-    const fiveHour = limitBar("Claude Code", "5h");
-    const weekly = limitBar("Claude Code", "wk");
-    expect(fiveHour?.style.width).toBe("22%");
-    expect(weekly?.style.width).toBe("96%");
-    // Two rows of one provider in two severity tiers: a bar drawn from the
-    // provider's tightest window instead of its own would be amber twice.
-    expect(fiveHour?.className).toContain("bg-info");
-    expect(weekly?.className).toContain("bg-warning");
-    expect(within(limitsGroup("Claude Code")).getByText("22%")).toBeTruthy();
-    // The figures are `aria-hidden`; the same reading reaches the box's name.
-    expect(limitCheckbox("Claude Code", "5h")).toBe(
-      within(limitsGroup("Claude Code")).getByRole("checkbox", {
-        name: "5h, 22% used",
-      }),
-    );
-  });
-
-  it("reserves one percent-cell width across every row, wide enough for a 100% reading", () => {
-    // `100%` is the widest reading there is, and its `%` advances wider than a
-    // tabular digit - so a cell sized by digit count grows for that row alone
-    // and shifts its gauge left of every other row's. Every row reserving the
-    // same width is what makes the column a track.
-    mocks.providers = [configuredProvider("claude-code")];
-    mocks.envelopes = {
-      "claude-code": envelopeFor(claudeReadyWithExhaustedWeekly()),
-    };
-
-    render(<LayoutSettingsPanel />);
-
-    expect(limitPercentCell("Claude Code", "wk")?.textContent).toBe("100%");
-    expect(limitPercentCell("Claude Code", "5h")?.textContent).toBe("22%");
-    for (const entry of [AUTOMATIC, "5h", "wk"]) {
-      expect(limitPercentCell("Claude Code", entry)?.className).toContain(
-        "min-w-[5ch]",
-      );
-    }
-  });
-
-  it("shows the tightest limit's figure and short name on the automatic entry", () => {
-    mocks.providers = [configuredProvider("claude-code")];
-    mocks.envelopes = {
-      "claude-code": envelopeFor(claudeReadyWithTwoLimits()),
-    };
-
-    render(<LayoutSettingsPanel />);
-
-    // `wk` at 96% binds harder than `5h` at 22%, so that is what the entry is
-    // reading - and it says which, because a bare percentage on this one row
-    // would be the only figure in the list with nothing naming its limit.
-    const automatic = limitCheckbox("Claude Code", AUTOMATIC);
-    expect(automatic).toBe(
-      within(limitsGroup("Claude Code")).getByRole("checkbox", {
-        name: `${AUTOMATIC}, wk, 96% used`,
-      }),
-    );
-    const row = automatic.closest("label");
-    expect(
-      row
-        ?.querySelector('[data-testid="status-bar-provider-mini-bar"]')
-        ?.getAttribute("data-window-key"),
-    ).toBe("claude-code:sevenDay");
-    expect(row?.textContent).toContain("wk");
-  });
-
-  it("gives a discovered model window its own figure, and reads it when it is the tightest", () => {
-    mocks.providers = [configuredProvider("claude-code")];
-    mocks.envelopes = {
-      "claude-code": envelopeFor(claudeReadyWithModelWindow()),
-    };
-
-    render(<LayoutSettingsPanel />);
-
-    expect(limitBar("Claude Code", "Fable")?.style.width).toBe("57%");
-    const group = within(limitsGroup("Claude Code"));
-    expect(
-      group.getByRole("checkbox", { name: "Fable, 57% used" }),
-    ).toBeTruthy();
-    expect(
-      group.getByRole("checkbox", { name: `${AUTOMATIC}, Fable, 57% used` }),
-    ).toBeTruthy();
-  });
-
-  it("draws no figures at all for a provider with no reading", () => {
-    // Nothing fetched, and this page never fetches - so the list is what it
-    // always was, labels alone. A control does not show sample figures.
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = {};
-
-    render(<LayoutSettingsPanel />);
-
-    expect(
-      limitsGroup("Codex").querySelectorAll(
-        '[data-testid="status-bar-provider-mini-bar"]',
-      ),
-    ).toHaveLength(0);
-    expect(
-      limitCheckbox("Codex", AUTOMATIC).closest("label")?.textContent,
-    ).toBe(AUTOMATIC);
-  });
-
-  it("keeps an expired window listed and checkable but draws no figure for it", () => {
-    // Its reset instant has passed, so the strip has already dropped it
-    // (`liveWindows`) and its percentage is spent usage. The row stays - the
-    // pick has to survive the window's own cycle - and simply shows nothing.
-    mocks.providers = [configuredProvider("claude-code")];
-    mocks.envelopes = {
-      "claude-code": envelopeFor(claudeReadyWithExpiredFiveHour()),
-    };
-
-    render(<LayoutSettingsPanel />);
-
-    expect(limitLabels("Claude Code")).toEqual([AUTOMATIC, "5h", "wk"]);
-    expect(limitBar("Claude Code", "5h")).toBeNull();
-    expect(limitBar("Claude Code", "wk")?.style.width).toBe("96%");
-
-    fireEvent.click(limitCheckbox("Claude Code", "5h"));
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
-      "claude-code": { automatic: true, limitKeys: ["claude-code:fiveHour"] },
-    });
-  });
-
-  // The migrated `Show all limits` user opening Layout before any reading has
-  // landed: the strip is drawing the tightest (`shownWindows` stands it in), so
-  // the list has to say so rather than render nothing checked.
-  it("shows automatic checked and held when none of the stored picks is in the current reading", () => {
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = {};
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-          providers: {
-            codex: {
-              automatic: false,
-              limitKeys: ["codex:primary", "codex:secondary"],
-            },
-          },
-        },
-      },
-    });
-
-    render(<LayoutSettingsPanel />);
-
-    expect(limitCheckbox("Codex", AUTOMATIC).getAttribute("aria-checked")).toBe(
-      "true",
-    );
-    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
-      true,
-    );
-    expect(
-      screen.getByText(/The limits you picked come back with them/),
-    ).toBeTruthy();
-    // Rendering it checked must not write: the picks are still the stored
-    // selection and return with the first reading.
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
-      codex: {
-        automatic: false,
-        limitKeys: ["codex:primary", "codex:secondary"],
-      },
-    });
-  });
-
-  // The forced -> unforced transition: a pick made while the automatic entry is
-  // standing in must not lift the stand-in out from under itself, which would
-  // hold (and blur) the box just clicked and silently uncheck automatic.
-  it("writes automatic through with a pick made while it is standing in, holding nothing", async () => {
+/**
+ * The full-width host of the one layout form (L-03), after G6.
+ *
+ * What is pinned here is the SHAPE the owner asked for: one tab per surface,
+ * the region as a row inside it, and each shared group control drawn exactly
+ * once. The rows' own behaviour is covered where the components live
+ * (`components/layout-editor/inspector`); what this page owns is which of
+ * them appear, on which tab, and how many times.
+ */
+describe("Settings - Layout", () => {
+  it("shows every region as a row inside its own surface's tab", async () => {
     const user = userEvent.setup();
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-          providers: {
-            // A model-scoped pick whose model has been renamed: stored, and
-            // absent from a reading that carries other windows.
-            codex: { automatic: false, limitKeys: [STALE_LIMIT_KEY] },
-          },
-        },
-      },
-    });
+    renderPanel();
 
-    render(<LayoutSettingsPanel />);
-
-    expect(limitCheckbox("Codex", AUTOMATIC).getAttribute("aria-checked")).toBe(
-      "true",
-    );
-    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
-      true,
-    );
-
-    await user.click(limitCheckbox("Codex", "5h"));
-
-    // The stale pick stays - it comes back with its own reading - and the
-    // checked automatic the user was looking at is now the stored one.
-    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
-      codex: {
-        automatic: true,
-        limitKeys: [STALE_LIMIT_KEY, "codex:primary"],
-      },
-    });
-    expect(document.activeElement).toBe(limitCheckbox("Codex", "5h"));
-    expect(
-      within(limitsGroup("Codex"))
-        .getAllByRole("checkbox")
-        .map((box) => box.hasAttribute("disabled")),
-    ).toEqual([false, false]);
-  });
-
-  it("describes the limits group by its row description, so the rule that held an entry is announced", () => {
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    const describedBy = limitsGroup("Codex").getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy ?? "")?.textContent).toContain(
-      "At least one stays checked",
-    );
-  });
-
-  // A focused element that becomes `disabled` blurs to `<body>`. The rendered
-  // count is what prevents it: the entry a click can reach is never the one
-  // that is about to be held.
-  it("keeps focus on the entry that was clicked, in both directions", async () => {
-    const user = userEvent.setup();
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    await user.click(limitCheckbox("Codex", "5h"));
-    expect(document.activeElement).toBe(limitCheckbox("Codex", "5h"));
-
-    await user.click(limitCheckbox("Codex", AUTOMATIC));
-    expect(document.activeElement).toBe(limitCheckbox("Codex", AUTOMATIC));
-    expect(limitCheckbox("Codex", "5h").hasAttribute("disabled")).toBe(true);
-  });
-
-  it("turning off 'Show usage limits' collapses Display and every provider card, leaves Placement and Resource monitor mounted, and restores everything when turned back on", () => {
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    expect(screen.getByTestId("layout-usage-display-subgroup")).toBeTruthy();
-    expect(screen.getByTestId("layout-provider-subgroup-codex")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("switch", { name: "Show usage limits" }));
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.enabled).toBe(false);
-    expect(screen.queryByTestId("layout-usage-display-subgroup")).toBeNull();
-    expect(screen.queryByTestId("layout-provider-subgroup-codex")).toBeNull();
-    expect(screen.getByRole("group", { name: "Placement" })).toBeTruthy();
-    expect(screen.getByTestId("layout-resource-monitor-subgroup")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("switch", { name: "Show usage limits" }));
-
-    expect(useLayoutStore.getState().statusBar.rateLimits.enabled).toBe(true);
-    expect(screen.getByTestId("layout-usage-display-subgroup")).toBeTruthy();
-    expect(screen.getByTestId("layout-provider-subgroup-codex")).toBeTruthy();
-  });
-
-  it("turning off 'Show resource monitor' collapses the Scope row and the Metrics chips", () => {
-    render(<LayoutSettingsPanel />);
-
-    expect(screen.getByRole("group", { name: "Scope" })).toBeTruthy();
-    expect(metricsGroup()).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Show resource monitor" }),
-    );
-
-    expect(useLayoutStore.getState().statusBar.resources.enabled).toBe(false);
-    expect(screen.queryByRole("group", { name: "Scope" })).toBeNull();
-    expect(screen.queryByRole("group", { name: "Metrics" })).toBeNull();
-  });
-
-  it("round-trips a metric chip to resources.metrics and tracks the analytics id", () => {
-    render(<LayoutSettingsPanel />);
-
-    expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
-      "cpu",
-      "processes",
-    ]);
-
-    fireEvent.click(
-      within(metricsGroup()).getByRole("button", { name: "CPU" }),
-    );
-
-    expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual([
-      "processes",
-    ]);
-    expect(trackSettingChanged).toHaveBeenCalledWith(
-      "layout",
-      "layout.statusBar.resources.metric",
-    );
-  });
-
-  it("disables the RAM share chip while the resource scope is desktop-app, no-ops its click, and shows the hint", () => {
-    render(<LayoutSettingsPanel />);
-
-    const ramShare = () =>
-      within(metricsGroup()).getByRole("button", { name: "RAM share" });
-    expect(ramShare().getAttribute("aria-disabled")).toBe("false");
-    expect(
-      screen.queryByText("RAM share is only available for the host scope."),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Desktop app" }));
-
-    expect(useLayoutStore.getState().statusBar.resources.scope).toBe(
-      "desktop-app",
-    );
-    expect(ramShare().getAttribute("aria-disabled")).toBe("true");
-    expect(
-      screen.getByText("RAM share is only available for the host scope."),
-    ).toBeTruthy();
-
-    const before = useLayoutStore.getState().statusBar.resources.metrics;
-    fireEvent.click(ramShare());
-    expect(useLayoutStore.getState().statusBar.resources.metrics).toEqual(
-      before,
-    );
-  });
-
-  // The mobile footer's opt-in switch, and the three things it moves: the
-  // group it unlocks, the row order it sits at the top of, and the search
-  // index, which re-answers because the availability context subscribes to it.
-  describe("mobile footer switch", () => {
-    function footerSwitch(): HTMLElement {
-      return screen.getByRole("switch", { name: "Footer status bar" });
-    }
-
-    it("is the group's first row in the installed mobile app, above the note", () => {
-      // On a phone every other row in this group is downstream of this
-      // answer, so it reads first - and a control that moved when it was
-      // flipped would move under the finger that flipped it.
-      setMobileApp(true);
-      render(<LayoutSettingsPanel />);
-
-      const group = screen.getByTestId("layout-status-bar-group");
-      const note = screen.getByText("Off by default on phones");
-      expect(
-        footerSwitch().compareDocumentPosition(note) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy();
-      expect(group.contains(footerSwitch())).toBe(true);
-    });
-
-    it("opens the whole group when flipped on, without the placement segment", () => {
-      setMobileApp(true);
-      render(<LayoutSettingsPanel />);
-      expect(
-        screen.queryByRole("switch", { name: "Show usage limits" }),
-      ).toBeNull();
-
-      fireEvent.click(footerSwitch());
-
-      expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(true);
-      expect(trackSettingChanged).toHaveBeenCalledWith(
-        "layout",
-        "layout.statusBar.mobileFooter",
-      );
-      // The availability context subscribes to the store key, so the gate that
-      // collapses the group re-answers in the same commit - no remount, no
-      // second render pass to wait on.
-      expect(
-        screen.getByRole("switch", { name: "Show usage limits" }),
-      ).toBeTruthy();
-      expect(
-        screen.getByRole("switch", { name: "Show resource monitor" }),
-      ).toBeTruthy();
-      expect(screen.getByTestId("status-bar-preview-frame")).toBeTruthy();
-      // Placement does NOT come back: the mobile header keeps both controls
-      // whatever it says, so the segment would pick between two identical
-      // outcomes.
-      expect(screen.queryByRole("button", { name: "Header" })).toBeNull();
-      // And the switch is still there to turn it off again - it is the one
-      // control that survives its own gate.
-      expect(footerSwitch()).toBeTruthy();
-    });
-
-    it("closes the group again when flipped back off", () => {
-      setMobileApp(true);
-      useLayoutStore.setState({
-        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, mobileFooter: true },
-      });
-      render(<LayoutSettingsPanel />);
-
-      fireEvent.click(footerSwitch());
-
-      expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(false);
-      expect(
-        screen.queryByRole("switch", { name: "Show usage limits" }),
-      ).toBeNull();
-      expect(screen.getByText("Off by default on phones")).toBeTruthy();
-    });
-
-    it("is absent on a desktop build at a desktop width", () => {
-      // The switch is about a viewport this window is not in, and `placement`
-      // is the live question here instead.
-      render(<LayoutSettingsPanel />);
-
-      expect(
-        screen.queryByRole("switch", { name: "Footer status bar" }),
-      ).toBeNull();
-      expect(screen.getByRole("button", { name: "Header" })).toBeTruthy();
-    });
-  });
-
-  it("collapses the status bar group to the note and the header resource-monitor row in the installed mobile app, with no preview", () => {
-    setMobileApp(true);
-    render(<LayoutSettingsPanel />);
-
-    expect(screen.getByText("Off by default on phones")).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "Placement" })).toBeNull();
-    expect(
-      screen.queryByRole("switch", { name: "Show usage limits" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("switch", { name: "Show resource monitor" }),
-    ).toBeNull();
-    expect(screen.queryByTestId("status-bar-preview-frame")).toBeNull();
-
-    // Other groups are unaffected - only the status bar surface is dropped.
-    expect(
-      screen.getByRole("switch", { name: "Pin context breakdown" }),
-    ).toBeTruthy();
-  });
-
-  it("keeps the header resource-monitor switch reachable in the installed mobile app", () => {
-    setMobileApp(true);
-    useSettingsStore.setState({ showGlobalResourceMonitor: true });
-    render(<LayoutSettingsPanel />);
-
-    // `MobileAppHeader` draws that monitor, and the store key is device-local -
-    // so if this row collapsed with the footer controls the preference would be
-    // stuck at its default on the phone. It carries no placement condition
-    // here: there is no other placement on that build.
-    const monitor = screen.getByRole("switch", {
-      name: "Show resource monitor in header",
-    });
-
-    fireEvent.click(monitor);
-
-    expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
-  });
-
-  it("shows the unresolved-host notice, lists no providers, and renders no preview for an unusable explicit pick", () => {
-    mocks.hasExplicitPick = true;
-    mocks.scope = hostScopeFixture({
-      status: "unreachable",
-      isViewingActive: false,
-      hostLabel: "Other Machine",
-    });
-    mocks.providers = [configuredProvider("codex")];
-    mocks.envelopes = { codex: envelopeFor(codexReady()) };
-
-    render(<LayoutSettingsPanel />);
-
-    expect(
-      screen.getByText(/Can't reach Other Machine right now/),
-    ).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: "Codex" })).toBeNull();
-    expect(screen.queryByTestId("status-bar-preview-frame")).toBeNull();
-  });
-
-  describe("relocated rows", () => {
-    it("renders and writes 'Pin context breakdown' in the Chat group", () => {
-      render(<LayoutSettingsPanel />);
-      const chatGroup = screen.getByTestId("layout-chat-group");
-
-      expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(false);
-      fireEvent.click(
-        within(chatGroup).getByRole("switch", {
-          name: "Pin context breakdown",
-        }),
-      );
-      expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
-    });
-
-    it("hides the pinned breakdown field chips while the pin switch is off and shows them once it is on", () => {
-      render(<LayoutSettingsPanel />);
-      const chatGroup = screen.getByTestId("layout-chat-group");
-
-      expect(
-        within(chatGroup).queryByRole("group", {
-          name: "Pinned breakdown fields",
-        }),
-      ).toBeNull();
-
-      fireEvent.click(
-        within(chatGroup).getByRole("switch", {
-          name: "Pin context breakdown",
-        }),
-      );
-
-      const subgroup = within(chatGroup).getByTestId(
-        "layout-chat-pinned-context-subgroup",
-      );
-      const chips = within(subgroup).getByRole("group", {
-        name: "Pinned breakdown fields",
-      });
-      expect(
-        within(chips)
-          .getAllByRole("button")
-          .map((chip) => chip.textContent),
-      ).toEqual(["Used", "Fresh", "Cache read", "Cache write", "Output"]);
-      for (const chip of within(chips).getAllByRole("button")) {
-        expect(chip.getAttribute("aria-pressed")).toBe("true");
+    for (const group of SURFACE_GROUPS) {
+      await goToSurfaceTab(user, group.id);
+      expect(surface(group.id)).toBeTruthy();
+      for (const region of LAYOUT_REGION_LIST.filter(
+        (entry) => entry.surface === group.id,
+      )) {
+        expect(surface(group.id).textContent).toContain(region.name);
       }
-    });
+    }
+  });
 
-    it("writes the pinned breakdown fields from the chips and tracks the analytics id", () => {
-      useSettingsStore.setState({ pinContextUsageBreakdown: true });
-      render(<LayoutSettingsPanel />);
-      const chips = screen.getByRole("group", {
-        name: "Pinned breakdown fields",
-      });
+  it("puts the Presets tab first, then every surface in reading order", () => {
+    renderPanel();
 
-      fireEvent.click(within(chips).getByRole("button", { name: "Fresh" }));
-      fireEvent.click(
-        within(chips).getByRole("button", { name: "Cache write" }),
+    const labels = screen.getAllByRole("tab").map((tab) => tab.textContent);
+    expect(labels[0]).toBe(LAYOUT.definitions.presets.label);
+    expect(labels.slice(1)).toEqual(SURFACE_GROUPS.map((group) => group.label));
+  });
+
+  describe("de-duplication (L-92, L-95)", () => {
+    it("gives the Sidebar ONE list holding all nine panels plus its dividers", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "sidebar");
+
+      const sidebar = surface("sidebar");
+      const panelRows = [...sidebar.querySelectorAll("[data-sortable-id]")].map(
+        (node) => node.getAttribute("data-sortable-id") ?? "",
       );
 
-      expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
-        "used",
-        "cacheRead",
-        "output",
-      ]);
-      expect(
-        within(chips)
-          .getByRole("button", { name: "Fresh" })
-          .getAttribute("aria-pressed"),
-      ).toBe("false");
-      expect(trackSettingChanged).toHaveBeenCalledWith(
-        "layout",
-        "pinnedContextBreakdownFields",
-      );
-    });
-
-    it("keeps the last selected field chip pressed and inert", () => {
-      useSettingsStore.setState({
-        pinContextUsageBreakdown: true,
-        pinnedContextBreakdownFields: ["output"],
-      });
-      render(<LayoutSettingsPanel />);
-      const chips = screen.getByRole("group", {
-        name: "Pinned breakdown fields",
-      });
-      const output = within(chips).getByRole("button", { name: "Output" });
-
-      expect(output.getAttribute("aria-disabled")).toBe("true");
-      // The inert chip is not silent about why: a hint says what the floor is
-      // and where the strip is hidden instead.
-      expect(
-        screen.getByText(
-          "One field stays selected - use the switch above to hide the strip.",
-        ),
-      ).toBeTruthy();
-      fireEvent.click(output);
-
-      expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
-        "output",
-      ]);
-      expect(output.getAttribute("aria-pressed")).toBe("true");
-      expect(
-        within(chips)
-          .getByRole("button", { name: "Used" })
-          .getAttribute("aria-disabled"),
-      ).toBe("false");
-    });
-
-    it("renders and writes 'Context indicator' in the Chat group, tracking the analytics id", () => {
-      render(<LayoutSettingsPanel />);
-      const chatGroup = screen.getByTestId("layout-chat-group");
-      const control = within(chatGroup).getByRole("group", {
-        name: "Context indicator",
-      });
-
-      expect(
-        within(control)
-          .getByRole("button", { name: "Text" })
-          .getAttribute("aria-pressed"),
-      ).toBe("true");
-
-      fireEvent.click(within(control).getByRole("button", { name: "Ring" }));
-      expect(useSettingsStore.getState().contextIndicatorStyle).toBe("ring");
-
-      fireEvent.click(
-        within(control).getByRole("button", { name: "Ring only" }),
-      );
-      expect(useSettingsStore.getState().contextIndicatorStyle).toBe(
-        "ring-only",
-      );
-      expect(
-        within(control)
-          .getByRole("button", { name: "Ring only" })
-          .getAttribute("aria-pressed"),
-      ).toBe("true");
-      expect(trackSettingChanged).toHaveBeenCalledWith(
-        "layout",
-        "contextIndicatorStyle",
-      );
-    });
-
-    it.each(["pinnedContextBreakdownFields", "contextIndicatorStyle"])(
-      "accepts %s through the runtime analytics allowlist",
-      (setting) => {
+      for (const railId of RAIL_REGION_IDS) {
         expect(
-          sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
-            source: "direct_ui",
-            section: "layout",
-            setting,
+          panelRows.filter((id) => id === railId),
+          railId,
+        ).toHaveLength(1);
+      }
+      // Dividers are items of the same list (L-25), so the row count is the
+      // whole rail - one list, not nine copies of it.
+      expect(panelRows).toHaveLength(DEFAULT_ARRANGEMENT.rail.length);
+      expect(
+        within(sidebar).getAllByRole("button", { name: "Add divider" }),
+      ).toHaveLength(1);
+    });
+
+    /**
+     * The Composer card's dock list. The claim is the one the ticket is
+     * about: every member in `DEFAULT_ARRANGEMENT.dock`, reorderable, in the
+     * stored order, with no row of a different kind mixed in - the page reads
+     * the arrangement, so a member that had to be spelled out per region
+     * somewhere would show up here as a missing or a stray row.
+     */
+    it("gives the Composer's dock list every stored member, in the stored order", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "composer");
+
+      const composerRows = [
+        ...surface("composer").querySelectorAll("[data-sortable-id]"),
+      ].map((node) => node.getAttribute("data-sortable-id") ?? "");
+      const dockRows = composerRows.filter((id) =>
+        DEFAULT_ARRANGEMENT.dock.some((member) => member === id),
+      );
+
+      expect(dockRows).toEqual([...DEFAULT_ARRANGEMENT.dock]);
+      expect(dockRows).toHaveLength(DEFAULT_ARRANGEMENT.dock.length);
+      for (const id of DEFAULT_ARRANGEMENT.dock) {
+        expect(
+          screen.queryAllByRole("radiogroup", {
+            name: `${regionFacts(id).name} display`,
           }),
-        ).toEqual({ source: "direct_ui", section: "layout", setting });
-      },
+          id,
+        ).toHaveLength(1);
+      }
+    });
+
+    it("draws no region's row twice within its own surface's tab", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      for (const group of SURFACE_GROUPS) {
+        await goToSurfaceTab(user, group.id);
+        const ids = rowIds();
+        for (const region of LAYOUT_REGION_LIST.filter(
+          (entry) => entry.surface === group.id,
+        )) {
+          expect(
+            ids.filter((id) => id === region.id),
+            region.name,
+          ).toHaveLength(1);
+        }
+      }
+    });
+
+    it("gives every region with a state control exactly one, in one vocabulary", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      for (const group of SURFACE_GROUPS) {
+        await goToSurfaceTab(user, group.id);
+        for (const region of LAYOUT_REGION_LIST.filter(
+          (entry) => entry.surface === group.id,
+          // Model has no Hide at all (G6): the picker always draws, so it has
+          // no state control to be duplicated. Covered on its own below.
+        ).filter((entry) => entry.id !== "model")) {
+          // One wording for all three option sets (L-121): the page used to
+          // carry two visibility vocabularies, a `Switch` and a tri-state, and
+          // a dock row carried a size control AND a switch for one value.
+          expect(
+            screen.queryAllByRole("radiogroup", {
+              name: `${region.name} display`,
+            }),
+            region.name,
+          ).toHaveLength(1);
+          expect(
+            screen.queryAllByRole("switch", { name: `Show ${region.name}` }),
+            region.name,
+          ).toEqual([]);
+        }
+      }
+    });
+
+    it("draws no display control for Model, whose picker always shows (G6)", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "composer");
+
+      expect(
+        screen.queryByRole("radiogroup", { name: "Model display" }),
+      ).toBeNull();
+    });
+
+    it("says each list's instruction once, with its rule joined to it", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      let long = 0;
+      let short = 0;
+      let queued = 0;
+      let pinnedCount = 0;
+      let pinnedInComposer = false;
+
+      for (const group of SURFACE_GROUPS) {
+        await goToSurfaceTab(user, group.id);
+        // Scoped to the ACTIVE tabpanel: every tab stays mounted now
+        // (`forceMount`), so an unscoped query would also match the same
+        // text sitting inert in a tab visited on an earlier pass.
+        const panel = within(activeTabPanel());
+        long += panel.queryAllByText(
+          "Drag to reorder, here or on the canvas. Drop one icon onto the middle of another to stack them in one panel. Add a divider to space icons apart.",
+        ).length;
+        short += panel.queryAllByText(
+          "Drag to reorder, here or on the canvas.",
+        ).length;
+        // The fixed Message queue is said by the list it sits under.
+        queued += panel.queryAllByText(
+          "Drag to reorder, here or on the canvas. The message queue stays next to the message box.",
+        ).length;
+        // The pinned-right note belongs to the Toolbar-right LIST, so it is
+        // part of that list header's one line rather than a footnote under
+        // the card (redesign 4.8).
+        const pinnedHere = panel.queryAllByText(
+          "Drag to reorder, here or on the canvas. The model chip stays on the right.",
+        );
+        pinnedCount += pinnedHere.length;
+        if (pinnedHere.length > 0) {
+          pinnedInComposer = surface(group.id).contains(pinnedHere[0]);
+        }
+      }
+
+      expect(long).toBe(1);
+      expect(short).toBe(1);
+      expect(queued).toBe(1);
+      expect(pinnedCount).toBe(1);
+      expect(pinnedInComposer).toBe(true);
+    });
+
+    it("gives each strip reading its own bar and side, and shares neither (L-156)", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
+
+      // The row that moved both at once is gone: where a reading lives is the
+      // region's own pick now, behind its own disclosure.
+      expect(within(surface("statusBar")).queryByText("Show these in")).toBe(
+        null,
+      );
+
+      const names = {
+        usageLimits: "Usage limits",
+        resourceMonitor: "Resource monitor",
+      } as const;
+      for (const regionId of ["usageLimits", "resourceMonitor"] as const) {
+        await user.click(row(regionId));
+        const name = names[regionId];
+        expect(
+          within(row(regionId)).getAllByRole("radiogroup", {
+            name: `${name} position`,
+          }),
+        ).toHaveLength(1);
+        expect(
+          within(row(regionId)).getAllByRole("radiogroup", {
+            name: `${name} side`,
+          }),
+        ).toHaveLength(1);
+      }
+    });
+
+    it("keeps only what the phone footer honours: no Location, Alignment or Display (L-162)", async () => {
+      setPhoneLayoutOnly(true);
+      // Both in the Tab strip, where a desktop window would offer Display.
+      useLayoutStore.setState({
+        ...DEFAULT_LAYOUT_SNAPSHOT,
+        arrangement: {
+          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+          usageHost: "header",
+          resourceHost: "header",
+        },
+      });
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
+
+      const names = {
+        usageLimits: "Usage limits",
+        resourceMonitor: "Resource monitor",
+      } as const;
+      for (const regionId of ["usageLimits", "resourceMonitor"] as const) {
+        await user.click(row(regionId));
+        const name = names[regionId];
+        const opened = within(row(regionId));
+        expect(
+          opened.queryByRole("radiogroup", { name: `${name} position` }),
+        ).toBeNull();
+        expect(
+          opened.queryByRole("radiogroup", { name: `${name} side` }),
+        ).toBeNull();
+        expect(opened.queryByRole("radio", { name: "Icon only" })).toBeNull();
+      }
+      // The readouts themselves still apply to the footer.
+      expect(
+        within(row("usageLimits")).getByRole("radio", { name: "Remaining" }),
+      ).not.toBeNull();
+      expect(
+        within(row("resourceMonitor")).getByRole("checkbox", { name: "CPU" }),
+      ).not.toBeNull();
+    });
+  });
+
+  describe("the rail's tri-state (L-93, D5)", () => {
+    it("writes auto, shown and hidden from the row's one control", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "sidebar");
+      // `railComments` still carries a presence hint ("Auto - appears when an
+      // artifact is open"), which is what earns it the three-way control
+      // (G6): most rail panels have no rule of their own any more and only
+      // offer Shown/Hidden, whose "on" writes `auto` (see the other test in
+      // this block, which exercises exactly that two-option row).
+      const comments = within(row("railComments"));
+
+      await user.click(comments.getByRole("radio", { name: "Shown" }));
+      expect(shownValue("railComments")).toBe("shown");
+
+      await user.click(comments.getByRole("radio", { name: "Hidden" }));
+      expect(shownValue("railComments")).toBe("hidden");
+
+      // Back to `auto` reads as no override at all, because `auto` IS the
+      // shipped value - so the effective value is what this asserts on.
+      await user.click(comments.getByRole("radio", { name: "Auto" }));
+      expect(shownValue("railComments")).toBe("auto");
+    });
+
+    it("keeps a pinned Shown pinned through any other interaction on the page", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "sidebar");
+
+      await user.click(
+        within(row("railPullRequests")).getByRole("radio", { name: "Shown" }),
+      );
+      expect(shownValue("railPullRequests")).toBe("shown");
+
+      // The eye button on every rail list row is what used to undo this: it
+      // wrote through `regionShownOnValue`, so two presses anywhere on the
+      // page turned the pin back into `auto` without saying so (D5). There is
+      // one control per region now, and nothing else on the page can reach
+      // this value.
+      expect(
+        screen.queryAllByRole("button", { name: /^(Hide|Show) Pull/ }),
+      ).toEqual([]);
+
+      await user.click(
+        within(row("railAgents")).getByRole("radio", { name: "Hidden" }),
+      );
+      await user.click(row("railPullRequests"));
+
+      expect(shownValue("railPullRequests")).toBe("shown");
+    });
+  });
+
+  it("writes the region's own value from its row's state control", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await goToSurfaceTab(user, "chat");
+
+    await user.click(
+      within(row("minimap")).getByRole("radio", { name: "Hidden" }),
     );
 
-    it("keeps the Chat group's own order, with Fields inside the pin subgroup", () => {
-      useSettingsStore.setState({ pinContextUsageBreakdown: true });
-      render(<LayoutSettingsPanel />);
-      const chatGroup = screen.getByTestId("layout-chat-group");
-      const subgroup = within(chatGroup).getByTestId(
-        "layout-chat-pinned-context-subgroup",
-      );
+    expect(useLayoutStore.getState().overrides.minimap?.shown).toBe("hidden");
+  });
 
-      // The Fields row belongs to the switch that governs it - scoping the
-      // query to the group alone would still pass if it escaped the subgroup.
-      expect(
-        within(subgroup).getByRole("group", {
-          name: "Pinned breakdown fields",
-        }),
-      ).toBeTruthy();
+  describe("the pictures (L-120, redesign 3.2)", () => {
+    it("opens the Sidebar card with its first row, not with a plinth", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "sidebar");
 
-      const order = [
-        within(chatGroup).getByTestId("context-usage-preview-block"),
-        subgroup,
-        within(chatGroup).getByRole("group", { name: "Context indicator" }),
-        within(chatGroup).getByRole("combobox", { name: "Minimap position" }),
-      ];
-      for (let index = 1; index < order.length; index += 1) {
+      const sidebar = surface("sidebar");
+      // The word the deleted plinth printed. Its absence is the complaint
+      // L-118 was filed about, and it is not a class-name assertion.
+      expect(within(sidebar).queryByText("Specimen")).toBeNull();
+      // Below the surface's own Side row, the first button in the card is the
+      // first panel's own grab, so the list that changes the rail comes next.
+      const focusable = sidebar.querySelector("[data-row-grab]");
+      const firstRow = sidebar.querySelector("[data-sortable-id]");
+      expect(firstRow?.contains(focusable ?? null)).toBe(true);
+    });
+
+    it("draws each Sidebar row's registry icon in the icon column, like every other list", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "sidebar");
+
+      // The rail's own 1:1 button used to stand in the icon column, which
+      // pushed these names off the column every other row's name starts in.
+      for (const railId of RAIL_REGION_IDS) {
         expect(
-          order[index - 1].compareDocumentPosition(order[index]) &
-            Node.DOCUMENT_POSITION_FOLLOWING,
-        ).toBeTruthy();
+          row(railId).querySelectorAll("[data-row-icon]"),
+          railId,
+        ).toHaveLength(1);
+        expect(
+          row(railId).querySelectorAll("[data-row-glyph]"),
+          railId,
+        ).toHaveLength(0);
       }
-    });
-
-    it("previews the context indicator at the top of the Chat group, following the controls under it", () => {
-      render(<LayoutSettingsPanel />);
-      const chatGroup = screen.getByTestId("layout-chat-group");
-      const frame = within(chatGroup).getByTestId(
-        "context-usage-preview-frame",
-      );
-
-      // The real chip, from the sample usage - so the destructive tone the
-      // sample was chosen for is what a reader sees first.
-      expect(within(frame).getByTestId("context-usage-chip").textContent).toBe(
-        "5% context left",
-      );
-
-      fireEvent.click(
-        within(
-          within(chatGroup).getByRole("group", { name: "Context indicator" }),
-        ).getByRole("button", { name: "Ring only" }),
-      );
-      expect(within(frame).getByTestId("context-usage-ring")).toBeTruthy();
-
-      fireEvent.click(
-        within(chatGroup).getByRole("switch", {
-          name: "Pin context breakdown",
-        }),
-      );
-      expect(
-        within(frame).getByTestId("context-usage-pinned-strip"),
-      ).toBeTruthy();
-
-      const fieldChips = within(chatGroup).getByRole("group", {
-        name: "Pinned breakdown fields",
-      });
-      fireEvent.click(
-        within(fieldChips).getByRole("button", { name: "Cache write" }),
-      );
-      expect(within(frame).queryByText("Cache write")).toBeNull();
-
-      // Back on through the same chip: the strip prints it again, in place.
-      fireEvent.click(
-        within(fieldChips).getByRole("button", { name: "Cache write" }),
-      );
-      expect(within(frame).getByText("Cache write")).toBeTruthy();
-
-      // Unpinning returns the chip to the STYLE that was chosen, not to the
-      // default the group started at.
-      fireEvent.click(
-        within(chatGroup).getByRole("switch", {
-          name: "Pin context breakdown",
-        }),
-      );
-      expect(
-        within(frame).queryByTestId("context-usage-pinned-strip"),
-      ).toBeNull();
-      expect(within(frame).getByTestId("context-usage-ring")).toBeTruthy();
-    });
-
-    it("renders and writes 'Minimap position' in the Chat group", () => {
-      render(<LayoutSettingsPanel />);
-      const chatGroup = screen.getByTestId("layout-chat-group");
-
-      expect(
-        within(chatGroup).getByRole("combobox", { name: "Minimap position" }),
-      ).toBeTruthy();
-      choose("Minimap position", "Left");
-      expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
-    });
-
-    it("renders 'Resource chips on sidebar rows' as metric chips in the Sidebar group and writes the list", () => {
-      render(<LayoutSettingsPanel />);
-      const sidebarGroup = screen.getByTestId("layout-sidebar-group");
-      const chips = within(sidebarGroup).getByRole("group", {
-        name: "Resource chips on sidebar rows",
-      });
-      const cpu = within(chips).getByRole("button", { name: "CPU" });
-      const memory = within(chips).getByRole("button", { name: "Memory" });
-      const processes = within(chips).getByRole("button", {
-        name: "Processes",
-      });
-
-      // Off by default, exactly as the switch it replaces was.
-      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-      expect(cpu.getAttribute("aria-pressed")).toBe("false");
-      expect(memory.getAttribute("aria-pressed")).toBe("false");
-      expect(processes.getAttribute("aria-pressed")).toBe("false");
-
-      fireEvent.click(processes);
-      fireEvent.click(cpu);
-      // Chip order, not click order.
-      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-        "cpu",
-        "processes",
-      ]);
-      expect(cpu.getAttribute("aria-pressed")).toBe("true");
-      expect(memory.getAttribute("aria-pressed")).toBe("false");
-      expect(processes.getAttribute("aria-pressed")).toBe("true");
-
-      fireEvent.click(memory);
-      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
-        "cpu",
-        "memory",
-        "processes",
-      ]);
-
-      fireEvent.click(cpu);
-      fireEvent.click(memory);
-      fireEvent.click(processes);
-      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
-      expect(
-        within(sidebarGroup).queryByRole("switch", {
-          name: /resource chips/i,
-        }),
-      ).toBeNull();
-    });
-
-    it("renders and writes 'Show resource monitor in header' in the Status bar group", () => {
-      // Under the HEADER placement: this row is drawn only while the header is
-      // the surface holding the monitor (or below `md`), and it is the header
-      // half of the relocated preference that is under test here.
-      useLayoutStore.setState({
-        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "header" },
-      });
-      render(<LayoutSettingsPanel />);
-      const statusBarGroup = screen.getByTestId("layout-status-bar-group");
-
-      expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(true);
-      fireEvent.click(
-        within(statusBarGroup).getByRole("switch", {
-          name: "Show resource monitor in header",
-        }),
-      );
-      expect(useSettingsStore.getState().showGlobalResourceMonitor).toBe(false);
     });
   });
 
-  // Every anchored Layout entry the search index offers must land on exactly
-  // one element in the shell that offers it, and on none where it is
-  // withheld. The one gate on this page is the build: the footer controls
-  // collapse in the installed mobile app, and an entry left always-available
-  // while its row is gated fails the mobile case.
-  describe("search targets", () => {
-    it("matches the index on desktop", () => {
-      const context: SettingsAvailabilityContext = {
-        runnerHost: null,
-        featureSettings: null,
-        mobileApp: false,
-        mobileFooter: false,
-      };
-      expect(isStatusBarControlsAvailable(context)).toBe(true);
-      const { container } = render(<LayoutSettingsPanel />);
+  describe("usage providers are a Status bar list (L-123)", () => {
+    it("draws a row per provider, opening its Limits pick in place", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
 
-      assertSettingsSearchTargets("layout", context, container);
+      const statusBar = within(surface("statusBar"));
+      for (const providerId of DEFAULT_ARRANGEMENT.usageProviders) {
+        expect(row(providerId), providerId).toBeTruthy();
+      }
+
+      const first = DEFAULT_ARRANGEMENT.usageProviders[0];
+      expect(
+        statusBar.queryByRole("radiogroup", { name: "Limits" }),
+      ).toBeNull();
+      await user.click(row(first));
+
+      // Two levels, not five: the provider's own limits are one disclosure
+      // below its row, with no second stage and no second header.
+      expect(
+        within(row(first)).getByRole("radiogroup", { name: "Limits" }),
+      ).toBeTruthy();
     });
 
-    it("matches the index in the installed mobile app", () => {
-      setMobileApp(true);
-      const context: SettingsAvailabilityContext = {
-        runnerHost: null,
-        featureSettings: null,
-        mobileApp: true,
-        mobileFooter: false,
-      };
-      expect(isStatusBarControlsAvailable(context)).toBe(false);
-      const { container } = render(<LayoutSettingsPanel />);
+    it("is absent while Usage limits is hidden", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
 
-      assertSettingsSearchTargets("layout", context, container);
+      await user.click(
+        within(row("usageLimits")).getByRole("radio", { name: "Hidden" }),
+      );
+
+      expect(rowIds()).not.toContain(DEFAULT_ARRANGEMENT.usageProviders[0]);
+      expect(screen.queryByText("Providers")).toBeNull();
     });
+  });
 
-    it("matches the index in the installed mobile app with the footer on", () => {
-      setMobileApp(true);
-      useLayoutStore.setState({
-        statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, mobileFooter: true },
+  describe("applying a preset clears the per-region delta (L-133 overturned)", () => {
+    it("replaces the pick with the preset's own value and drops the delta", () => {
+      act(() => {
+        useLayoutStore.getState().setRegionValues("mic", { shown: "shown" });
+        useLayoutStore.getState().applyPreset("compact");
       });
-      const context: SettingsAvailabilityContext = {
-        runnerHost: null,
-        featureSettings: null,
-        mobileApp: true,
-        mobileFooter: true,
-      };
-      expect(isStatusBarControlsAvailable(context)).toBe(true);
-      const { container } = render(<LayoutSettingsPanel />);
+      renderPanel();
 
-      assertSettingsSearchTargets("layout", context, container);
+      // The apply cleared the delta, so the status line reads the preset
+      // name alone. The Presets tab is the page's default, so it needs no
+      // switch.
+      expect(screen.getByTestId("preset-status-line").textContent).toBe(
+        "Compact",
+      );
+      expect(useLayoutStore.getState().overrides).toEqual({});
+      expect(shownValue("mic")).toBe(PRESET_VALUES.compact.mic.shown);
     });
+  });
 
-    it("promises no Placement anchor on a desktop build narrowed below md", () => {
-      // The case that made `Placement` give up its own anchor: the segment is
-      // hidden at this width (the shell reads `mobileFooter` instead) while
-      // every shell-level predicate still says "desktop", so an anchored entry
-      // would be indexed here and resolve to nothing.
-      //
-      // Asserted row by row rather than through `assertSettingsSearchTargets`,
-      // which is a contract about SHELLS: several rows on this page are gated
-      // on the viewport (the sidebar's Panels group, the mobile switch itself),
-      // and a width is a mode every one of them answers differently.
-      Object.defineProperty(window, "innerWidth", {
-        configurable: true,
-        value: 400,
-      });
-      try {
-        const { container } = render(<LayoutSettingsPanel />);
-
-        expect(screen.queryByRole("button", { name: "Header" })).toBeNull();
-        expect(
-          container.querySelector(
-            '[data-settings-anchor="layout-status-bar-placement"]',
-          ),
-        ).toBeNull();
-        // And nothing in the index still points at it, in any shell.
-        expect(
-          SETTINGS_SEARCH_ENTRIES.some(
-            (entry) => entry.anchor === "layout-status-bar-placement",
-          ),
-        ).toBe(false);
-      } finally {
-        Object.defineProperty(window, "innerWidth", {
-          configurable: true,
-          value: 1024,
+  describe("the safety net (L-20, P-6)", () => {
+    it("restores every value and every arrangement field", async () => {
+      const user = userEvent.setup();
+      act(() => {
+        useLayoutStore.getState().applyPreset("compact");
+        useLayoutStore.getState().setRegionValues("minimap", {
+          shown: "hidden",
         });
-      }
+        useLayoutStore.getState().setArrangement({
+          ...DEFAULT_ARRANGEMENT,
+          usageHost: "header",
+          minimapSide: "left",
+          mobileFooter: true,
+          hiddenProviders: [DEFAULT_ARRANGEMENT.usageProviders[0]],
+          providerLimits: {
+            [DEFAULT_ARRANGEMENT.usageProviders[0]]: { limitKeys: ["5h"] },
+          },
+          dock: [...DEFAULT_ARRANGEMENT.dock].reverse(),
+        });
+      });
+      // The reset button lives on the Presets tab, the page's default, so no
+      // tab switch is needed to reach it.
+      renderPanel();
+
+      await user.click(screen.getByRole("button", { name: "Reset layout…" }));
+      await user.click(screen.getByTestId("confirm-action"));
+
+      const state = useLayoutStore.getState();
+      expect(state.basePreset).toBe("default");
+      expect(state.overrides).toEqual({});
+      expect(state.arrangement.usageHost).toBe(DEFAULT_ARRANGEMENT.usageHost);
+      expect(state.arrangement.minimapSide).toBe(
+        DEFAULT_ARRANGEMENT.minimapSide,
+      );
+      expect(state.arrangement.mobileFooter).toBe(false);
+      expect(state.arrangement.hiddenProviders).toEqual([]);
+      expect(state.arrangement.providerLimits).toEqual({});
+      expect(state.arrangement.dock).toEqual(DEFAULT_ARRANGEMENT.dock);
+    });
+
+    it("sits after the presets block on its own tab, toned danger, and inoperable on an untouched layout", () => {
+      renderPanel();
+
+      // Reset Everything merged into the Presets tab (G6): the floor is no
+      // longer the last card on a single scrolling page, it is the last thing
+      // in the tab that opens by default.
+      const presets = screen.getByTestId("layout-presets-group");
+      const card = screen.getByTestId("layout-reset-group");
+      expect(
+        presets.compareDocumentPosition(card) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // Showing the floor and saying you are standing on it, rather than a
+      // card that vanishes (5.8).
+      expect(
+        within(card)
+          .getByRole("button", { name: "Reset layout…" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("marks a moved region's row and gives it a revert", async () => {
+      const user = userEvent.setup();
+      act(() => {
+        useLayoutStore.getState().setArrangement({
+          ...DEFAULT_ARRANGEMENT,
+          minimapSide: "left",
+        });
+      });
+      renderPanel();
+      await goToSurfaceTab(user, "chat");
+
+      // The revert after the name is the row's changed signal; it draws no dot.
+      expect(within(row("minimap")).queryByTestId("changed-dot")).toBeNull();
+
+      await user.click(
+        within(row("minimap")).getByRole("button", { name: "Revert Minimap" }),
+      );
+
+      expect(useLayoutStore.getState().arrangement.minimapSide).toBe(
+        DEFAULT_ARRANGEMENT.minimapSide,
+      );
     });
   });
 
-  // Its own group, not a row borrowed by the footer's: a tab is not part of
-  // the status bar, and the status bar group collapses on a build where this
-  // row still applies.
-  describe("Tabs", () => {
-    it("renders and writes 'Home tab' in the Tabs group, tracking the analytics id", () => {
-      render(<LayoutSettingsPanel />);
-      const tabsGroup = screen.getByTestId("layout-tabs-group");
+  it("lands a deep link on its region's row, switching to its tab and opening the disclosure", async () => {
+    // The door's width-gate redirect goes through the modal bridge, so a
+    // landing needs a published Settings surface to be redirected to.
+    setSystemTabModalApi({
+      active: null,
+      openSettings: vi.fn(),
+      openHistory: vi.fn(),
+      close: vi.fn(),
+      setSection: vi.fn(),
+      promoteToTab: vi.fn(),
+      isOverlayActive: () => true,
+    });
+    renderPanel();
+    // The page opens on Presets, and `contextUsage` lives on Chat - the
+    // landing has to switch tabs itself (G6), not just open a disclosure.
+    expect(
+      screen
+        .getByRole("tab", { name: "Presets" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
 
-      expect(useSettingsStore.getState().homeTabEnabled).toBe(false);
-      const toggle = within(tabsGroup).getByRole("switch", {
-        name: "Home tab",
-      });
-      expect(toggle.getAttribute("aria-checked")).toBe("false");
-
-      fireEvent.click(toggle);
-
-      expect(useSettingsStore.getState().homeTabEnabled).toBe(true);
-      // The row moved off General with its key and its setting id; only the
-      // section follows the page.
-      expect(trackSettingChanged).toHaveBeenCalledWith(
-        "layout",
-        "homeTabEnabled",
-      );
+    await act(async () => {
+      navigateToLayoutRegion("contextUsage");
+      await Promise.resolve();
     });
 
-    it("reflects a Home tab value already in the store", () => {
-      useSettingsStore.setState({ homeTabEnabled: true });
-      render(<LayoutSettingsPanel />);
+    expect(
+      screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      within(row("contextUsage")).getByRole("radiogroup", { name: "Style" }),
+    ).toBeTruthy();
+    // The scroll is for the eye; the focus is for the hands (5.9).
+    expect(row("contextUsage").querySelector("[data-row-grab]")).toBe(
+      document.activeElement,
+    );
+  });
+
+  it("opens a row on a click, but never touches the editor's own selection (item toggleRow)", async () => {
+    // This page keeps its own local `openRows` state (`layout-settings-panel.tsx`'s
+    // `useState`), never the editor store's - the editor's `selected` is a
+    // fact about the DOCKED inspector, which this page is not.
+    const user = userEvent.setup();
+    renderPanel();
+    await goToSurfaceTab(user, "chat");
+
+    await user.click(within(row("contextUsage")).getByRole("button"));
+
+    expect(
+      within(row("contextUsage")).getByRole("radiogroup", { name: "Style" }),
+    ).toBeTruthy();
+    expect(useLayoutEditorStore.getState().selected).toBeNull();
+  });
+
+  it("gives a non-disclosing row no aria-pressed here, and a click on it does nothing (item C)", async () => {
+    // Home tab has no disclosure at all (`rows: []`) - in the editor its label
+    // button selects it (`onSelectRow`), but this page passes `onSelectRow={null}`,
+    // so the same button here is inert and never claims to be a toggle.
+    const user = userEvent.setup();
+    renderPanel();
+    await goToSurfaceTab(user, "topBar");
+
+    const button = within(row("homeTab")).getByRole("button");
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+
+    await user.click(button);
+
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+    expect(useLayoutEditorStore.getState().selected).toBeNull();
+  });
+
+  it("picks the area an editor exit lands on, with no row touched (5.3)", async () => {
+    setSystemTabModalApi({
+      active: null,
+      openSettings: vi.fn(),
+      openHistory: vi.fn(),
+      close: vi.fn(),
+      setSection: vi.fn(),
+      promoteToTab: vi.fn(),
+      isOverlayActive: () => true,
+    });
+    renderPanel();
+    expect(
+      screen
+        .getByRole("tab", { name: "Presets" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+
+    await act(async () => {
+      navigateToLayoutArea("composer");
+      await Promise.resolve();
+    });
+
+    expect(
+      screen
+        .getByRole("tab", { name: "Composer" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+
+    await act(async () => {
+      navigateToLayoutArea(null);
+      await Promise.resolve();
+    });
+
+    expect(
+      screen
+        .getByRole("tab", { name: "Presets" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  describe("the small-screen status bar row (L-51)", () => {
+    it("is absent outside the installed mobile app", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
 
       expect(
-        screen
-          .getByRole("switch", { name: "Home tab" })
+        screen.queryByRole("switch", {
+          name: "Status bar on small screens",
+        }),
+      ).toBeNull();
+    });
+
+    it("writes the arrangement in the mobile app", async () => {
+      setMobileApp(true);
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
+
+      await user.click(
+        screen.getByRole("switch", {
+          name: "Status bar on small screens",
+        }),
+      );
+
+      expect(useLayoutStore.getState().arrangement.mobileFooter).toBe(true);
+    });
+  });
+
+  describe("the surface placement rows", () => {
+    it("labels the Tabs tab, and opens it with Placement then Tab overflow", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "topBar");
+
+      const tabs = surface("topBar");
+      const position = tabs.querySelector(
+        "[data-settings-anchor='layout-tab-strip-placement']",
+      );
+      const taskTabLayout = tabs.querySelector(
+        "[data-settings-anchor='layout-task-tab-layout']",
+      );
+      if (position === null || taskTabLayout === null) {
+        throw new Error("missing a Tabs surface row");
+      }
+      expect(position.textContent).toContain("Placement");
+      expect(
+        position.compareDocumentPosition(taskTabLayout) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        within(tabs).getByRole("radiogroup", { name: "Tab placement" }),
+      ).toBeTruthy();
+    });
+
+    it("disables Tab overflow with its reason while the tabs are vertical, keeping its value", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "topBar");
+      const taskTabLayout = within(surface("topBar")).getByRole("radiogroup", {
+        name: "Tab overflow",
+      });
+      const disabledStates = (): ReadonlyArray<boolean> =>
+        within(taskTabLayout)
+          .getAllByRole<HTMLButtonElement>("radio")
+          .map((radio) => radio.disabled);
+      expect(disabledStates()).toEqual([false, false]);
+
+      await user.click(
+        within(
+          screen.getByRole("radiogroup", { name: "Tab placement" }),
+        ).getByRole("radio", { name: "Left" }),
+      );
+
+      expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+        "left",
+      );
+      expect(disabledStates()).toEqual([true, true]);
+      expect(surface("topBar").textContent).toContain(
+        "Available when tabs are at the top.",
+      );
+      expect(
+        within(taskTabLayout)
+          .getByRole("radio", { name: "Scroll" })
           .getAttribute("aria-checked"),
       ).toBe("true");
     });
 
-    // No `isMobileApp()` gate anywhere in this group: that build has no strip
-    // but it does draw the Home tab, as the first entry in the nav drawer.
-    it("renders whole in the installed mobile app, where the Status bar group collapses", () => {
-      setMobileApp(true);
-      render(<LayoutSettingsPanel />);
+    it("opens the Tabs tab with Side tab view, disabled at the top and writable once vertical (D8)", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "topBar");
 
-      expect(screen.getByText("Off by default on phones")).toBeTruthy();
-      const tabsGroup = screen.getByTestId("layout-tabs-group");
-
-      fireEvent.click(
-        within(tabsGroup).getByRole("switch", { name: "Home tab" }),
+      const tabs = surface("topBar");
+      const view = tabs.querySelector(
+        "[data-settings-anchor='layout-side-strip-view']",
+      );
+      expect(view?.textContent).toContain("Side tab view");
+      const viewGroup = within(tabs).getByRole("radiogroup", {
+        name: "Side tab view",
+      });
+      expect(
+        within(viewGroup)
+          .getAllByRole<HTMLButtonElement>("radio")
+          .every((option) => option.disabled),
+      ).toBe(true);
+      expect(tabs.textContent).toContain(
+        "Available when tabs are on the left or right.",
       );
 
-      expect(useSettingsStore.getState().homeTabEnabled).toBe(true);
+      await user.click(
+        within(
+          screen.getByRole("radiogroup", { name: "Tab placement" }),
+        ).getByRole("radio", { name: "Left" }),
+      );
+
+      expect(
+        within(viewGroup)
+          .getAllByRole<HTMLButtonElement>("radio")
+          .every((option) => option.disabled),
+      ).toBe(false);
+      await user.click(
+        within(viewGroup).getByRole("radio", { name: "Tabs and agents" }),
+      );
+
+      expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
+        "activity",
+      );
+    });
+
+    it("opens the Sidebar tab with Side, which writes the sidebar's side", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "sidebar");
+
+      const sidebar = surface("sidebar");
+      const side = sidebar.querySelector(
+        "[data-settings-anchor='layout-sidebar-side']",
+      );
+      expect(side?.textContent).toContain("Side");
+      await user.click(
+        within(
+          within(sidebar).getByRole("radiogroup", { name: "Sidebar side" }),
+        ).getByRole("radio", { name: "Right" }),
+      );
+
+      expect(useLayoutStore.getState().arrangement.sidebarSide).toBe("right");
+    });
+
+    it("withholds the desktop-only rows and the editor door in the installed mobile app", async () => {
+      setMobileApp(true);
+      useLayoutStore.setState({
+        ...DEFAULT_LAYOUT_SNAPSHOT,
+        arrangement: {
+          ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+          tabStripPlacement: "left",
+        },
+      });
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "topBar");
+
+      expect(
+        screen.queryByRole("radiogroup", { name: "Tab placement" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("radiogroup", { name: "Side tab view" }),
+      ).toBeNull();
+      // No tab strip on the phone, so nothing for overflow to fit.
+      expect(
+        screen.queryByRole("radiogroup", { name: "Tab overflow" }),
+      ).toBeNull();
+      // No window there is ever wide enough, so neither the button nor the
+      // "needs a wider window" line that stands in for it.
+      expect(
+        screen.queryByRole("button", { name: "Customize layout" }),
+      ).toBeNull();
+      expect(document.body.textContent).not.toContain(
+        "The editor needs a wider window",
+      );
+
+      // Each of the rest lives on a different tab, so it has to be checked on
+      // ITS tab - on topBar's it would read as absent whether or not the
+      // mobile-app guard withheld it.
+      await goToSurfaceTab(user, "sidebar");
+      expect(
+        screen.queryByRole("radiogroup", { name: "Sidebar side" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("switch", { name: "Readings on agent rows" }),
+      ).toBeNull();
+      await goToSurfaceTab(user, "chat");
+      expect(
+        screen.queryByRole("radiogroup", { name: "Reading width" }),
+      ).toBeNull();
+      // The phone's minimap is a bottom drawer with no side, so the Minimap
+      // row keeps its Shown control and opens nothing.
+      const minimap = surface("chat").querySelector(
+        '[data-sortable-id="minimap"]',
+      );
+      if (!(minimap instanceof HTMLElement)) throw new Error("no Minimap row");
+      expect(
+        within(minimap)
+          .getByRole("button", { name: /^Minimap/ })
+          .hasAttribute("aria-expanded"),
+      ).toBe(false);
+      expect(minimap.querySelector("[data-region-detail]")).toBeNull();
+    });
+
+    it("says what the Home tab still decides on a phone, which has no tab strip", async () => {
+      setPhoneLayoutOnly(true);
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "topBar");
+      const row = surface("topBar").querySelector(
+        '[data-sortable-id="homeTab"]',
+      );
+      if (!(row instanceof HTMLElement)) throw new Error("no Home tab row");
+
+      await user.click(within(row).getByRole("button", { name: /^Home tab/ }));
+
+      expect(row.textContent).toContain("Adds Home to the menu");
+    });
+
+    it.each(["vertical tabs", "side tabs"])(
+      "finds Position when searching %s",
+      (query) => {
+        const anchors = searchSettings(query, {
+          runnerHost: null,
+          featureSettings: null,
+          mobileApp: false,
+        }).map((result) => result.entry.anchor);
+
+        expect(anchors).toContain("layout-tab-strip-placement");
+      },
+    );
+
+    it.each(["activity", "live agents", "needs you"])(
+      "finds View when searching %s (D8)",
+      (query) => {
+        const anchors = searchSettings(query, {
+          runnerHost: null,
+          featureSettings: null,
+          mobileApp: false,
+        }).map((result) => result.entry.anchor);
+
+        expect(anchors).toContain("layout-side-strip-view");
+      },
+    );
+  });
+
+  describe("tab navigation (G6)", () => {
+    it("shows only the active surface's rows, hiding every other tab's", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      for (const group of SURFACE_GROUPS) {
+        await goToSurfaceTab(user, group.id);
+        expect(tabPanelHiddenFor(`layout-surface-${group.id}`)).toBe(false);
+        expect(tabPanelHiddenFor("layout-presets-group")).toBe(true);
+        for (const other of SURFACE_GROUPS) {
+          if (other.id === group.id) continue;
+          expect(
+            tabPanelHiddenFor(`layout-surface-${other.id}`),
+            other.id,
+          ).toBe(true);
+        }
+      }
+
+      // Back on Presets, no surface's content is visible.
+      await user.click(
+        screen.getByRole("tab", { name: LAYOUT.definitions.presets.label }),
+      );
+      expect(tabPanelHiddenFor("layout-presets-group")).toBe(false);
+      for (const group of SURFACE_GROUPS) {
+        expect(tabPanelHiddenFor(`layout-surface-${group.id}`)).toBe(true);
+      }
+    });
+  });
+
+  describe("settings-search anchor landing (G6)", () => {
+    it("switches to a row's own tab when a search result asks to land on it", () => {
+      // Seeded before the panel mounts, the way a search-result click's
+      // request outlives the navigation that made it (5.9).
+      useSettingsSearchStore
+        .getState()
+        .requestReveal("layout", LAYOUT.definitions.sidebarSide.anchor);
+
+      renderPanel();
+
+      expect(
+        screen
+          .getByRole("tab", { name: "Sidebar" })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+      expect(tabPanelHiddenFor("layout-surface-sidebar")).toBe(false);
+      // Presets, the page's own default, is not what's showing.
+      expect(tabPanelHiddenFor("layout-presets-group")).toBe(true);
+    });
+  });
+
+  describe("the area rail (H2)", () => {
+    it("shows exactly one area's panel at a time", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      expect(
+        document.querySelectorAll('[role="tabpanel"]:not([hidden])'),
+      ).toHaveLength(1);
+      expect(activeTabPanel()).toBe(
+        screen.getByTestId("layout-presets-group").closest('[role="tabpanel"]'),
+      );
+
+      await goToSurfaceTab(user, "chat");
+
+      expect(
+        document.querySelectorAll('[role="tabpanel"]:not([hidden])'),
+      ).toHaveLength(1);
+      expect(activeTabPanel()).toBe(
+        surface("chat").closest('[role="tabpanel"]'),
+      );
+    });
+
+    it("walks the rail with arrow keys, Home and End (Radix roving focus)", async () => {
+      renderPanel();
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs.map((tab) => tab.textContent)).toEqual([
+        "Presets",
+        "Task tabs",
+        "Sidebar",
+        "Chat",
+        "Composer",
+        "Usage and resources",
+      ]);
+
+      // Radix moves the roving tab stop on a `setTimeout(0)` rather than
+      // synchronously in the keydown handler, so every press needs a
+      // macrotask flush before the new `document.activeElement` is read.
+      async function press(key: string): Promise<void> {
+        fireEvent.keyDown(document.activeElement ?? tabs[0], { key });
+        await act(async () => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+          });
+        });
+      }
+
+      act(() => {
+        tabs[0].focus();
+      });
+
+      await press("ArrowDown");
+      expect(document.activeElement).toBe(tabs[1]);
+      expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+
+      await press("End");
+      expect(document.activeElement).toBe(tabs[tabs.length - 1]);
+      expect(tabs[tabs.length - 1].getAttribute("aria-selected")).toBe("true");
+
+      await press("Home");
+      expect(document.activeElement).toBe(tabs[0]);
+      expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+
+      await press("ArrowDown");
+      await press("ArrowUp");
+      expect(document.activeElement).toBe(tabs[0]);
+      expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    });
+
+    it("puts the editor door in the page header, with its search anchor, and draws no Customize card", () => {
+      renderPanel();
+
+      const anchor = document.querySelector(
+        `[data-settings-anchor="${LAYOUT.definitions.customizeEntry.anchor}"]`,
+      );
+      expect(anchor).not.toBeNull();
+      expect(anchor?.textContent).toMatch(
+        /Open the editor|needs a wider window/,
+      );
+      expect(screen.queryByText("Customize layout")).toBeNull();
+    });
+
+    it("lights an area's dot after an edit, independently of every other area's", () => {
+      act(() => {
+        useLayoutStore.getState().setArrangement({
+          ...DEFAULT_ARRANGEMENT,
+          minimapSide: "left", // chat
+          sidebarSide: "right", // sidebar
+        });
+      });
+      renderPanel();
+
+      const chatTab = () => screen.getByRole("tab", { name: /^Chat/ });
+      const sidebarTab = () => screen.getByRole("tab", { name: /^Sidebar/ });
+      const composerTab = () => screen.getByRole("tab", { name: /^Composer/ });
+      expect(within(chatTab()).getByTestId("area-changed-dot")).toBeTruthy();
+      expect(within(sidebarTab()).getByTestId("area-changed-dot")).toBeTruthy();
+      expect(
+        within(composerTab()).queryByTestId("area-changed-dot"),
+      ).toBeNull();
+    });
+
+    it("scrolls a newly picked area back to its top", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "chat");
+
+      const chatBody = surface("chat").closest("[data-layout-area-body]");
+      if (!(chatBody instanceof HTMLElement)) {
+        throw new Error("no scroll body for chat");
+      }
+      chatBody.scrollTop = 100;
+
+      await goToSurfaceTab(user, "composer");
+      await goToSurfaceTab(user, "chat");
+
+      expect(chatBody.scrollTop).toBe(0);
+    });
+  });
+
+  describe("the header's door into the editor", () => {
+    const originalInnerWidth = window.innerWidth;
+
+    // The door is withheld under the editor's own 1100px threshold
+    // (`LAYOUT_EDITOR_MIN_WIDTH`), which jsdom's default width is below.
+    beforeEach(() => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: 1400,
+      });
+    });
+    afterEach(() => {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: originalInnerWidth,
+      });
+    });
+
+    it("opens with origin settings/presets (area null) at rest", () => {
+      renderPanel();
+
+      fireEvent.click(screen.getByRole("button", { name: "Customize layout" }));
+
+      expect(openLayoutEditorMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          source: "direct_ui",
+          entry: "pointer",
+          target: null,
+          origin: { kind: "settings", area: null },
+        }),
+      );
+    });
+
+    it("names the current surface tab as the origin's area", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "sidebar");
+
+      fireEvent.click(screen.getByRole("button", { name: "Customize layout" }));
+
+      expect(openLayoutEditorMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          origin: { kind: "settings", area: "sidebar" },
+        }),
+      );
+    });
+  });
+
+  describe("the phone's area select says which areas changed (H2)", () => {
+    // jsdom draws the rail AND the select (nothing here applies `md:hidden`),
+    // so the select is read as it is on a phone without a viewport to fake.
+    // `browser-tests/layout-settings.spec.ts` keeps the real-pointer pick;
+    // what the trigger and the open list SAY is decided by the markup, which
+    // is this file's.
+    function areaSelect(): HTMLElement {
+      return screen.getByRole("combobox", { name: "Layout area" });
+    }
+
+    function changeChat(): void {
+      act(() => {
+        useLayoutStore.getState().setArrangement({
+          ...DEFAULT_ARRANGEMENT,
+          minimapSide: "left", // Chat
+        });
+      });
+    }
+
+    it("draws the dot and says ', changed' on the trigger only while the picked area differs", async () => {
+      const user = userEvent.setup();
+      changeChat();
+      renderPanel();
+
+      await goToSurfaceTab(user, "chat");
+      expect(within(areaSelect()).getByTestId("area-changed-dot")).toBeTruthy();
+      expect(areaSelect().textContent).toContain(", changed");
+
+      // The dot follows the picked area, not the page: Composer is untouched.
+      await goToSurfaceTab(user, "composer");
+      expect(within(areaSelect()).queryByTestId("area-changed-dot")).toBeNull();
+      expect(areaSelect().textContent).not.toContain(", changed");
+    });
+
+    it("marks, in the open list, exactly the areas that changed - by the dot and in words", () => {
+      changeChat();
+      renderPanel();
+
+      fireEvent.keyDown(areaSelect(), { key: "ArrowDown" });
+
+      const options = screen.getAllByRole("option");
+      expect(options).toHaveLength(SURFACE_GROUPS.length + 1);
+      const marked = options
+        .filter(
+          (option) =>
+            option.textContent.includes(", changed") &&
+            option.querySelector('[data-testid="area-changed-dot"]') !== null,
+        )
+        .map((option) => option.querySelector(".truncate")?.textContent);
+      // Presets reads as changed whenever anything differs from the shipped
+      // preset (its own summary says "Modified"); of the surfaces, only Chat.
+      expect(marked).toEqual(["Presets", "Chat"]);
+    });
+
+    it("keeps focus inside the area's panel when Enter on a changed row's revert puts the row back", async () => {
+      const user = userEvent.setup();
+      changeChat();
+      renderPanel();
+      await goToSurfaceTab(user, "chat");
+      const revert = within(activeTabPanel()).getByRole("button", {
+        name: "Revert Minimap",
+      });
+      act(() => {
+        revert.focus();
+      });
+      expect(document.activeElement).toBe(revert);
+
+      await user.keyboard("{Enter}");
+
+      expect(
+        within(activeTabPanel()).queryByRole("button", {
+          name: "Revert Minimap",
+        }),
+      ).toBeNull();
+      expect(useLayoutStore.getState().arrangement.minimapSide).toBe(
+        DEFAULT_ARRANGEMENT.minimapSide,
+      );
+      // The revert unmounted with the change it undid; focus must not have
+      // fallen to the page with it.
+      expect(document.activeElement).not.toBe(document.body);
+      expect(activeTabPanel().contains(document.activeElement)).toBe(true);
+    });
+  });
+
+  describe("a landing marks its row, and the marks retire (H2)", () => {
+    // The retired CDP driver read `data-settings-anchor-flash` beside the
+    // row's place in the pane. The place needs layout and stays a browser
+    // claim (`browser-tests/layout-settings.spec.ts`); the
+    // mark, its retirement and the composition of the two landing doors with
+    // the pane's tabs are decided here.
+    const ANCHOR = LAYOUT.definitions.sidebarSide.anchor;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      Object.defineProperty(Element.prototype, "checkVisibility", {
+        configurable: true,
+        value: function checkVisibility(this: Element): boolean {
+          return this.closest("[hidden]") === null;
+        },
+      });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      Reflect.deleteProperty(Element.prototype, "checkVisibility");
+    });
+
+    function Page(): ReactNode {
+      useSettingsAnchorReveal("layout");
+      return <LayoutSettingsPanel />;
+    }
+
+    function flashed(): ReadonlyArray<Element> {
+      return [...document.querySelectorAll("[data-settings-anchor-flash]")];
+    }
+
+    it("a deep link to a region marks its row, keeps the mark while it reads, then retires it", async () => {
+      setSystemTabModalApi({
+        active: null,
+        openSettings: vi.fn(),
+        openHistory: vi.fn(),
+        close: vi.fn(),
+        setSection: vi.fn(),
+        promoteToTab: vi.fn(),
+        isOverlayActive: () => true,
+      });
+      renderPanel();
+
+      await act(async () => {
+        navigateToLayoutRegion("contextUsage");
+        await Promise.resolve();
+      });
+
+      expect(flashed()).toEqual([row("contextUsage")]);
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(flashed()).toEqual([row("contextUsage")]);
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(flashed()).toEqual([]);
+    });
+
+    it("a search result marks its row in the area it switched to, never the hidden one it started from", () => {
+      render(<Page />);
+      expect(tabPanelHiddenFor("layout-surface-sidebar")).toBe(true);
+
+      act(() => {
+        useSettingsSearchStore.getState().requestReveal("layout", ANCHOR);
+      });
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+
+      const marked = flashed();
+      expect(marked).toHaveLength(1);
+      expect(marked[0].getAttribute("data-settings-anchor")).toBe(ANCHOR);
+      expect(marked[0].closest('[role="tabpanel"]')).toBe(activeTabPanel());
+      expect(marked[0].closest("[hidden]")).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(flashed()).toEqual([]);
     });
   });
 });

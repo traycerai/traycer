@@ -3,9 +3,11 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   hostRestartUpgradeV10ToV11,
   hostRestartUpgradeV11ToV12,
+  hostRestartUpgradeV12ToV13,
   hostRestartV10,
   hostRestartV11,
   hostRestartV12,
+  hostRestartV13,
 } from "@traycer/protocol/host/restart/contracts";
 import {
   hostRestartResponseSchema,
@@ -103,15 +105,19 @@ describe("host.restart@1.2 busyBreakdown", () => {
 });
 
 describe("host.restart registry membership", () => {
-  it("installs @1.0, @1.1, and @1.2 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.3 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.restart"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(2);
+    expect(entry[1].latestMinor).toBe(3);
     expect(entry[1].versions[0].contract).toBe(hostRestartV10);
     expect(entry[1].versions[1].contract).toBe(hostRestartV11);
     expect(entry[1].versions[2].contract).toBe(hostRestartV12);
     expect(entry[1].versions[2].upgradeFromPreviousVersion).toBe(
       hostRestartUpgradeV11ToV12,
+    );
+    expect(entry[1].versions[3].contract).toBe(hostRestartV13);
+    expect(entry[1].versions[3].upgradeFromPreviousVersion).toBe(
+      hostRestartUpgradeV12ToV13,
     );
   });
 });

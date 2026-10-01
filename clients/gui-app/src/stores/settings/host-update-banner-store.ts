@@ -43,17 +43,15 @@ interface HostUpdateBannerState {
   snooze: (latestVersion: string, snoozeUntilMs: number) => void;
   clearSnooze: (latestVersion: string) => void;
   /**
-   * Dismissed terminal attempts: successes in Settings and failures on landing.
-   * Landing does not show successful updates.
+   * Dismissed terminal attempts: successes and failures in Settings, failures
+   * on landing (landing does not show successful updates). One list for both
+   * surfaces, so a failure dismissed on either is dismissed on both.
    * The persisted field and action keep their original names for compatibility.
    *
    * Keyed by `attemptId`, and that is what makes supersession free: a newer
    * attempt has an id nobody has dismissed, so it presents normally without any
    * expiry rule or version comparison. Keying by host, or by a boolean, would
    * mean the next failure on that machine arrived pre-dismissed.
-   *
-   * The selected-host Overview consults this only for successful updates.
-   * Failures remain discoverable there until host-side expiry or supersession.
    */
   readonly landingDismissedAttemptIds: ReadonlyArray<string>;
   dismissLandingAttempt: (attemptId: string) => void;

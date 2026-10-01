@@ -11,15 +11,14 @@
   },
   "scripts": {
     "cn:build": "cn build --full --config cn.config.mjs -o src/lib/cn-tables.ts",
-    "compile": "tsgo -p tsconfig.app.json --incremental --singleThreaded && tsgo -p tsconfig.node.json --incremental --singleThreaded",
+    "compile": "tsgo -p tsconfig.app.json --incremental --singleThreaded && tsgo -p tsconfig.node.json --incremental --singleThreaded && tsgo -p tsconfig.browser-tests.json --incremental --singleThreaded",
     "lint": "bun run lint:files .",
     "lint:files": "bun scripts/lint-files.mjs",
     "react-doctor": "npx -y react-doctor@latest . --verbose --offline --blocking warning",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "test": "bun scripts/run-tests.ts",
-    "test:diff-edit-browser": "bun scripts/diff-edit-browser-regression.mjs",
-    "test:pierre-tree-zoom-browser": "bun scripts/pierre-tree-zoom-browser-regression.mjs",
+    "test:browser": "playwright test",
     "test:react-compiler": "vitest run --config vitest.react-compiler.config.ts src/components/epic-canvas/comm-graph/__tests__/use-comm-graph-snapshot-cloud-authority.test.tsx src/hooks/epic/__tests__/use-epic-node-mutations.react-compiler.test.tsx",
     "test:watch": "vitest --config vitest.config.ts"
   },
@@ -33,9 +32,11 @@
     "@dnd-kit/sortable": "catalog:",
     "@dnd-kit/utilities": "catalog:",
     "@floating-ui/dom": "catalog:",
+    "@floating-ui/react": "catalog:",
     "@fontsource-variable/figtree": "catalog:",
     "@legendapp/list": "catalog:",
     "@lobehub/icons": "catalog:",
+    "@number-flow/react": "catalog:",
     "@pierre/diffs": "catalog:",
     "@pierre/trees": "catalog:",
     "@sentry/browser": "catalog:",
@@ -126,6 +127,7 @@
     "zustand": "catalog:"
   },
   "devDependencies": {
+    "@playwright/test": "catalog:",
     "@rolldown/plugin-babel": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/eslint-plugin-query": "catalog:",

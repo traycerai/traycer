@@ -61,7 +61,8 @@ import {
 } from "@/lib/composer/image-atoms";
 import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
-import { cn, formatSingleLine } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
   chatFindA2AReceivedBodyUnitId,
@@ -85,7 +86,10 @@ import type {
   ChatMessageUserActions,
 } from "./chat-message";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
-import { ChatUserMessageContent } from "./chat-user-message-content";
+import {
+  ChatUserMessageContent,
+  UserMessageBubble,
+} from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
@@ -297,13 +301,18 @@ function AgentMessageDisplayView({
         />
         {expectReply ? <ReplyExpectedIcon /> : null}
       </span>
-      <ChatMessageTimestamp timestamp={sentAt} />
+      <ChatMessageTimestamp
+        timestamp={sentAt}
+        separated={false}
+        instanceId={messageId}
+      />
     </>
   );
 
   const preview = (
     <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
-      {formatSingleLine(messageText, { maxLength: 180, ellipsis: "…" })}
+      {/* Uncapped: `line-clamp-2` cuts it at two lines of the card's width. */}
+      {collapseToSingleLine(messageText)}
     </p>
   );
 
@@ -319,7 +328,7 @@ function AgentMessageDisplayView({
   ) : null;
 
   return (
-    <div className="w-full max-w-[min(100%,48rem)]">
+    <div className="w-full">
       <SegmentCard
         open={open}
         onOpenChange={handleOpenChange}
@@ -408,7 +417,7 @@ function UserMessageDisplayView({
 
   return (
     <div
-      className="group/user-message flex min-w-0 max-w-[min(100%,48rem)] flex-col items-end"
+      className="group/user-message flex min-w-0 w-full flex-col items-end"
       data-user-message-display=""
     >
       {visibleSteerBadge !== null ? (
@@ -417,7 +426,7 @@ function UserMessageDisplayView({
         </div>
       ) : null}
       <div className="relative min-w-0 max-w-full">
-        <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+        <UserMessageBubble>
           <UserMessageAttachmentGallery
             attachments={message.attachments}
             browserAnnotations={message.browserAnnotations}
@@ -443,7 +452,7 @@ function UserMessageDisplayView({
           {isOverflowing ? (
             <ShowMoreToggle expanded={expanded} onToggle={toggleExpanded} />
           ) : null}
-        </div>
+        </UserMessageBubble>
         {/* The action chip floats over the bubble's bottom-right border instead
             of reserving a row beneath it, so the assistant reply sits close
             under the user message rather than after a tall hover gap. The copy

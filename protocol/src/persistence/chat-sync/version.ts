@@ -126,6 +126,16 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // does - an older reader parses the `permission.blocked` event and projects no
 // row for it. It rides this still-unreleased minor on the same rule as the
 // fields above (`host-v1.3.0` shipped chat-sync 1.3).
+//
+// 1.6 also carries `text.providerNotice.receipt` (the settled fallback card's
+// structured account - a `chat.subscribe@1.18` field that lands in a
+// publication), on the same still-unreleased-minor rule: the newest release,
+// `host-v1.3.1`, still ships chat-sync 1.3. Optional, so an older record
+// parses unchanged, and a content block's `raw` re-emission (§2 of
+// `COMPATIBILITY.md`) carries the key through an older reader's
+// re-publication. No reader floor: an older reader renders the notice from
+// `title` / `message` / `details` exactly as before, which is the divider that
+// notice was until this key existed.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 6 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

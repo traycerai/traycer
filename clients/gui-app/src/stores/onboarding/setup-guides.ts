@@ -38,6 +38,21 @@ export interface SetupGuideStep {
    * having happened.
    */
   readonly completesOn?: SetupGuideEvent;
+  /**
+   * Whether the real chrome around Settings takes the layout editor's lit
+   * treatment while this step is up (L-50) - the canvas signal shown rather
+   * than entered. Closing the step ends the effect; nothing is entered and
+   * nothing is written.
+   */
+  readonly litChrome?: true;
+  /**
+   * The step points at the layout editor's door, so it is left out wherever
+   * the editor can never open (`isLayoutEditorAvailable`). Only a guide's LAST
+   * step may carry it: the step before it becomes the last, and Done there
+   * completes the guide, so the stored progress keeps one meaning in every
+   * shell.
+   */
+  readonly requiresLayoutEditor?: true;
 }
 
 export interface SetupGuide {
@@ -94,17 +109,33 @@ const SETUP_GUIDES = {
       },
       {
         section: "layout",
-        selector: `[data-settings-anchor="${LAYOUT.definitions.presetChoice.anchor}"] [role="group"]`,
+        selector: `[data-settings-anchor="${LAYOUT.definitions.presets.anchor}"]`,
         title: "Choose a density",
         content:
-          "Compact trims the chrome, Detailed shows everything. Every group below follows.",
+          "Compact trims the chrome, Detailed shows everything. Each card shows the layout it gives you.",
       },
       {
         section: "layout",
-        selector: `[data-settings-anchor="${LAYOUT.definitions.sidebarPanels.anchor}"]`,
-        title: "Arrange the sidebar",
+        // The areas and the picked one together rather than one area's card:
+        // only the picked area is on screen, and the list says where the
+        // rest live.
+        selector: "[data-layout-areas]",
+        title: "Every piece has a row",
         content:
-          "Drag icons to reorder. Drop one onto another to tab them together.",
+          "Pick where it sits, then find one row per piece of chrome there: show it, hide it, or move it. Each sidebar row carries the button it moves.",
+      },
+      // The guide ends by SHOWING the editor rather than entering it (L-50):
+      // the chrome around Settings dims the way it does on the canvas, so the
+      // signal is understood before the door is ever opened. Closing the card
+      // ends the effect and completes the guide.
+      {
+        section: "layout",
+        selector: `[data-settings-anchor="${LAYOUT.definitions.customizeEntry.anchor}"]`,
+        title: "Or point at the chrome itself",
+        content:
+          "The app dims around what you can change. The editor opens on a sample workspace, so your own task is left alone.",
+        litChrome: true,
+        requiresLayoutEditor: true,
       },
     ],
   },
@@ -151,6 +182,20 @@ export function setupGuide(id: SetupGuideId): SetupGuide {
 /** How many steps a guide has - also the progress value that means complete. */
 export function setupGuideLength(id: SetupGuideId): number {
   return setupGuide(id).steps.length;
+}
+
+/**
+ * The steps a shell actually walks: a step that points at the layout editor's
+ * door is left out where the editor can never open. The one place that rule is
+ * written - the guide card and the checklist's "Step n of total" both read it.
+ */
+export function setupGuideStepsFor(
+  id: SetupGuideId,
+  shell: { readonly layoutEditor: boolean },
+): ReadonlyArray<SetupGuideStep> {
+  return setupGuide(id).steps.filter(
+    (step) => shell.layoutEditor || step.requiresLayoutEditor !== true,
+  );
 }
 
 /** Where a guide's step lives, so a resume lands on the right section. */

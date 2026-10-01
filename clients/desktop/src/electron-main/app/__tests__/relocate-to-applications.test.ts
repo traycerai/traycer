@@ -172,6 +172,97 @@ describe("maybePromptRelocateToApplications", () => {
   });
 });
 
+// A macOS move-to-Applications relaunch is not a user quit. Electron
+// 42.11.6's `moveToApplicationsFolder` (electron_bundle_mover.mm:426-440)
+// relaunches, then calls `Browser::Quit()`, which synchronously emits
+// `before-quit` - all BEFORE `moveToApplicationsFolder` itself returns. A
+// listener on `before-quit` (`wireAppLifecycle`'s quit transaction) must be
+// able to tell this apart from an ordinary user quit, so main needs a flag
+// it can read while that call is still running. Not on head at all -
+// `relocate-to-applications.ts` exports no such thing.
+describe("isRelocationRelaunchPending is true only while the native relaunch is in flight", () => {
+  it("reads true during moveToApplicationsFolder's synchronous before-quit", async () => {
+    const observed: boolean[] = [];
+    const { relocate } = await loadRelocateWithMoveStub({
+      moveResult: true,
+      moveThrows: false,
+      onMove: (relocateModule) => {
+        observed.push(relocateModule.isRelocationRelaunchPending());
+      },
+    });
+
+    await relocate.maybePromptRelocateToApplications();
+
+    expect(observed).toEqual([true]);
+  });
+
+  it("reads false again after a move that returns false", async () => {
+    const { relocate } = await loadRelocateWithMoveStub({
+      moveResult: false,
+      moveThrows: false,
+      onMove: () => undefined,
+    });
+
+    await relocate.maybePromptRelocateToApplications();
+
+    expect(relocate.isRelocationRelaunchPending()).toBe(false);
+  });
+
+  it("reads false again after a move that throws", async () => {
+    const { relocate } = await loadRelocateWithMoveStub({
+      moveResult: false,
+      moveThrows: true,
+      onMove: () => undefined,
+    });
+
+    await relocate.maybePromptRelocateToApplications();
+
+    expect(relocate.isRelocationRelaunchPending()).toBe(false);
+  });
+});
+
+async function loadRelocateWithMoveStub(opts: {
+  readonly moveResult: boolean;
+  readonly moveThrows: boolean;
+  readonly onMove: (relocateModule: RelocateModule) => void;
+}): Promise<{ readonly relocate: RelocateModule }> {
+  vi.resetModules();
+  setPlatform("darwin");
+  Object.defineProperty(process, "resourcesPath", {
+    configurable: true,
+    value: "/tmp/traycer-test-resources",
+  });
+  let relocateModuleRef: RelocateModule | null = null;
+  const app: FakeApp = {
+    isPackaged: true,
+    isInApplicationsFolder: vi.fn(() => false),
+    moveToApplicationsFolder: vi.fn(() => {
+      if (relocateModuleRef !== null) opts.onMove(relocateModuleRef);
+      if (opts.moveThrows) {
+        throw new Error("permission denied");
+      }
+      return opts.moveResult;
+    }),
+    getPath: vi.fn(() => "/tmp/traycer-test-userdata"),
+  };
+  const dialog: FakeDialog = {
+    showMessageBox: vi.fn(() => Promise.resolve({ response: 0 })),
+    showMessageBoxSync: vi.fn(() => 0),
+  };
+  const fs: FakeFs = {
+    existsSync: vi.fn((path: string) => path.endsWith("app-update.yml")),
+    writeFileSync: vi.fn(),
+  };
+  vi.doMock("electron", () => ({ app, dialog }));
+  vi.doMock("node:fs", () => ({ ...fs, default: fs }));
+  vi.doMock("../logger", () => ({
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  }));
+  const relocate = await import("../relocate-to-applications");
+  relocateModuleRef = relocate;
+  return { relocate };
+}
+
 async function loadRelocate(opts: {
   readonly platform: string;
   readonly isPackaged: boolean;

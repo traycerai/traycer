@@ -1,5 +1,40 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { rmSync } from "node:fs";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { CommandContext, CommandFn } from "../../runner/runner";
+import { hostHomeDir } from "../../store/paths";
+
+// HOME is redirected to a private temp dir BEFORE anything reads it:
+// `store/paths` binds `homedir()` at module load, so without this the suite
+// would resolve this machine's REAL `~/.traycer`.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-defer-if-parked-bridge-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+beforeAll(() => {
+  expect(osHome.current).not.toBe("");
+  expect(hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
 
 // Round-3 finding: the two Commander -> builder bridges for
 // `--defer-if-parked` had NO permanent test.
@@ -120,7 +155,12 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
     );
 
     expect(captured.restart).toEqual([
-      { ifIdle: false, force: true, deferIfParked: true },
+      {
+        ifIdle: false,
+        force: true,
+        deferIfParked: true,
+        lifecycleOrigin: "terminal",
+      },
     ]);
   });
 
@@ -133,7 +173,12 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
     });
 
     expect(captured.restart).toEqual([
-      { ifIdle: false, force: true, deferIfParked: false },
+      {
+        ifIdle: false,
+        force: true,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      },
     ]);
   });
 
@@ -152,7 +197,12 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
     );
 
     expect(captured.freePort).toEqual([
-      { pid: 1234, port: 5678, deferIfParked: true },
+      {
+        pid: 1234,
+        port: 5678,
+        deferIfParked: true,
+        lifecycleOrigin: "terminal",
+      },
     ]);
   });
 
@@ -163,7 +213,12 @@ describe("--defer-if-parked reaches the builder through the Commander bridge", (
     );
 
     expect(captured.freePort).toEqual([
-      { pid: 1234, port: 5678, deferIfParked: false },
+      {
+        pid: 1234,
+        port: 5678,
+        deferIfParked: false,
+        lifecycleOrigin: "terminal",
+      },
     ]);
   });
 

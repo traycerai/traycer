@@ -250,7 +250,7 @@ describe("image-blob-cache", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("aborts the fetch and creates no blob when released before it resolves", async () => {
+  it("schedules abort of an in-flight fetch and creates no blob after grace", async () => {
     let aborted = false;
     const fetcher = vi.fn(
       (_hash: string, signal: AbortSignal) =>
@@ -266,12 +266,324 @@ describe("image-blob-cache", () => {
 
     const lease = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
     lease.release();
+    expect(aborted).toBe(false);
+    expect(cache.size()).toBe(1);
 
-    await expect(lease.promise).rejects.toThrow();
+    const settled = expect(lease.promise).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(1000);
+    await settled;
     expect(aborted).toBe(true);
     expect(created).toHaveLength(0);
     expect(revoked).toHaveLength(0);
     expect(cache.size()).toBe(0);
+  });
+
+  it("discards an in-flight fetch immediately, bypassing grace", async () => {
+    let aborted = false;
+    const fetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          });
+        }),
+    );
+    const { ops, created } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const lease = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    const settled = expect(lease.promise).rejects.toThrow();
+    cache.discard(TEST_SCOPE, "h1");
+    await settled;
+    expect(aborted).toBe(true);
+    expect(created).toHaveLength(0);
+    expect(cache.size()).toBe(0);
+  });
+
+  it("rejoins an in-flight fetch when re-acquired before grace elapses", async () => {
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    let abortCount = 0;
+    const fetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            abortCount += 1;
+            reject(new Error("aborted"));
+          });
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops, created } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const first = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    first.release();
+    const second = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(abortCount).toBe(0);
+
+    resolvers[0]?.({ bytes: new Uint8Array([1]), mediaType: null });
+    const firstUrl = (await first.promise).url;
+    const secondUrl = (await second.promise).url;
+    expect(secondUrl).toBe(firstUrl);
+    expect(created).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(abortCount).toBe(0);
+    second.release();
+  });
+
+  it("does not let a later identity join an in-flight fetch after teardown during grace", async () => {
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    let abortCount = 0;
+    const fetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            abortCount += 1;
+            reject(new Error("aborted"));
+          });
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 10_000);
+    const outgoing = cache.acquire(
+      "h1",
+      "image/png",
+      scopeFor('["chat-attachment","host","epic","chat"]', fetcher),
+      "grace",
+    );
+    outgoing.release();
+    expect(cache.size()).toBe(1);
+    const outgoingSettled = expect(outgoing.promise).rejects.toThrow();
+    cache.clear();
+    await outgoingSettled;
+    const incoming = cache.acquire(
+      "h1",
+      "image/png",
+      scopeFor('["chat-attachment","host","epic","chat"]', fetcher),
+      "grace",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(abortCount).toBe(1);
+    expect(cache.size()).toBe(1);
+    incoming.release();
+  });
+
+  it("restarts grace from resolve when the last holder dropped while in flight", async () => {
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    const fetcher = vi.fn(
+      (_hash: string, _signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops, created, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const first = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    first.release();
+    await vi.advanceTimersByTimeAsync(900);
+    resolvers[0]?.({ bytes: new Uint8Array([1]), mediaType: null });
+    const url = (await first.promise).url;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(revoked).toHaveLength(0);
+    expect(cache.size()).toBe(1);
+
+    const second = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    expect((await second.promise).url).toBe(url);
+    expect(created).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    second.release();
+  });
+
+  it("revokes a blob created after last-ref drop once the restarted grace elapses", async () => {
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    const fetcher = vi.fn(
+      (_hash: string, _signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops, revoked } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const lease = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    lease.release();
+    resolvers[0]?.({ bytes: new Uint8Array([1]), mediaType: null });
+    const url = (await lease.promise).url;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(revoked).toEqual([url]);
+    expect(cache.size()).toBe(0);
+  });
+
+  it("does not let a stale in-flight grace timer drop a replacement after a failed fetch", async () => {
+    const firstFetcher = vi.fn((_hash: string, _signal: AbortSignal) =>
+      Promise.reject(new Error("fetch failed")),
+    );
+    let replacementAborted = false;
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    const replacementFetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            replacementAborted = true;
+            reject(new Error("replacement aborted"));
+          });
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const first = cache.acquire(
+      "fail-then-replace",
+      "image/png",
+      scoped(firstFetcher),
+      "grace",
+    );
+    first.release();
+    await expect(first.promise).rejects.toThrow("fetch failed");
+    expect(cache.size()).toBe(0);
+
+    const replacement = cache.acquire(
+      "fail-then-replace",
+      "image/png",
+      scoped(replacementFetcher),
+      "grace",
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(replacementAborted).toBe(false);
+    expect(cache.size()).toBe(1);
+    resolvers[0]?.({ bytes: new Uint8Array([2]), mediaType: null });
+    await replacement.promise;
+    expect(replacementAborted).toBe(false);
+    replacement.release();
+  });
+
+  it("rejoins a session-retained in-flight fetch when remounted inside grace", async () => {
+    const resolvers: Array<(result: ImageBytesResult) => void> = [];
+    let abortCount = 0;
+    const fetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            abortCount += 1;
+            reject(new Error("aborted"));
+          });
+          resolvers.push(resolve);
+        }),
+    );
+    const { ops, created } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const first = cache.acquire(
+      "session-pending",
+      "image/png",
+      scoped(fetcher),
+      "session",
+    );
+    first.release();
+    const remount = cache.acquire(
+      "session-pending",
+      "image/png",
+      scoped(fetcher),
+      "session",
+    );
+    expect(abortCount).toBe(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    resolvers[0]?.({ bytes: new Uint8Array([1]), mediaType: null });
+    const url = (await remount.promise).url;
+    expect(created).toEqual([url]);
+    remount.release();
+    cache.clear();
+  });
+
+  it("aborts a session-retained in-flight fetch after grace with no holders", async () => {
+    let abortCount = 0;
+    const fetcher = vi.fn(
+      (_hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            abortCount += 1;
+            reject(new Error("aborted"));
+          });
+        }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+    const lease = cache.acquire(
+      "session-pending",
+      "image/png",
+      scoped(fetcher),
+      "session",
+    );
+    const settled = expect(lease.promise).rejects.toThrow();
+    lease.release();
+    await vi.advanceTimersByTimeAsync(1000);
+    await settled;
+    expect(abortCount).toBe(1);
+    expect(cache.size()).toBe(0);
+  });
+
+  /**
+   * JSON unary replies carry image bytes as base64 (`epic.readChatAttachment`,
+   * `epic.fetchArtifactAttachment`). 3 raw bytes become 4 characters, so a
+   * call count hides a 1–2 MB body. Tests record both.
+   */
+  function wireBytesFor(decoded: number): number {
+    return 4 * Math.ceil(decoded / 3);
+  }
+
+  it("scroll recycle of in-flight images does not re-transfer bytes inside grace", async () => {
+    const IMAGE_COUNT = 5;
+    const DECODED_BYTES_PER_IMAGE = 1_500_000;
+    const payload = new Uint8Array(DECODED_BYTES_PER_IMAGE);
+    const resolvers = new Map<string, (result: ImageBytesResult) => void>();
+    let abortCount = 0;
+    let decodedTransferred = 0;
+    const fetcher = vi.fn(
+      (hash: string, signal: AbortSignal) =>
+        new Promise<ImageBytesResult>((resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            abortCount += 1;
+            reject(new Error("aborted"));
+          });
+          resolvers.set(hash, (result) => {
+            decodedTransferred += result.bytes.byteLength;
+            resolve(result);
+          });
+        }),
+    );
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const firstLeases = Array.from({ length: IMAGE_COUNT }, (_, i) =>
+      cache.acquire(`img-${i}`, "image/png", scoped(fetcher), "grace"),
+    );
+    for (const lease of firstLeases) lease.release();
+    expect(fetcher).toHaveBeenCalledTimes(IMAGE_COUNT);
+    expect(abortCount).toBe(0);
+
+    const secondLeases = Array.from({ length: IMAGE_COUNT }, (_, i) =>
+      cache.acquire(`img-${i}`, "image/png", scoped(fetcher), "grace"),
+    );
+    expect(fetcher).toHaveBeenCalledTimes(IMAGE_COUNT);
+
+    for (let i = 0; i < IMAGE_COUNT; i++) {
+      resolvers.get(`img-${i}`)?.({ bytes: payload, mediaType: null });
+    }
+    await Promise.all(secondLeases.map((lease) => lease.promise));
+
+    const expectedDecoded = IMAGE_COUNT * DECODED_BYTES_PER_IMAGE;
+    expect(decodedTransferred).toBe(expectedDecoded);
+    // 1.5 MiB raw → 2.0 MiB base64 on the unary JSON wire.
+    expect(wireBytesFor(DECODED_BYTES_PER_IMAGE)).toBe(2_000_000);
+    expect(abortCount).toBe(0);
+    expect(fetcher).toHaveBeenCalledTimes(IMAGE_COUNT);
+
+    for (const lease of secondLeases) lease.release();
   });
 
   it("keeps distinct URLs for distinct hashes", async () => {

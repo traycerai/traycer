@@ -72,7 +72,7 @@ type EpicRootDropTargetKind =
 const LEFT_PANEL_TARGET_KINDS: ReadonlyArray<EpicRootDropTargetKind> = [
   "left-panel-rail-item",
   "left-panel-rail-list",
-  "left-panel-group",
+  "left-panel-body",
 ];
 
 const CANVAS_TARGET_KINDS: ReadonlyArray<EpicRootDropTargetKind> = [
@@ -130,7 +130,7 @@ const TARGET_KIND_PRIORITY = {
   "artifact-tab-strip-end": 2,
   "left-panel-rail-item": 3,
   "left-panel-rail-list": 4,
-  "left-panel-group": 5,
+  "left-panel-body": 5,
   "artifact-tab-group-body": 6,
   "empty-shell": 6,
   // Sidebar reparent targets: the row beats the panel so hovering a row picks

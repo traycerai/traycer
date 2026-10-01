@@ -5,22 +5,27 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
+import { afterEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ChatPinnedStack } from "@/components/chat/chat-pinned-stack";
-import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
+import { PinnedTodoPanel } from "@/components/chat/chat-pinned-stack";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import type { SegmentTodoItem } from "@/stores/composer/chat-store";
 
-describe("<ChatPinnedStack />", () => {
+/**
+ * The dock's pinned Todo panel (L-97).
+ *
+ * `ChatPinnedStack` itself is gone: it was the pre-dock wrapper and had no
+ * production caller left once `ChatLowerDock` took over the frame. How the
+ * Todo and Changed files panels stack inside that frame is
+ * `chat-lower-dock.test.tsx`'s; this file owns the Todo panel's own content.
+ */
+describe("the dock's pinned Todo panel", () => {
   afterEach(() => {
     cleanup();
-    vi.clearAllMocks();
   });
 
   it("shows active todo copy, done counts, and cancelled counts in the header", () => {
-    renderStack(todoSnapshot("todo-1", todoItems()), baseRestore([]));
+    renderStack(todoSnapshot("todo-1", todoItems()));
 
     const panel = screen.getByTestId("pinned-todo-panel");
 
@@ -31,7 +36,7 @@ describe("<ChatPinnedStack />", () => {
   });
 
   it("places the todo status icon after the divider beside the active copy", () => {
-    renderStack(todoSnapshot("todo-1", todoItems()), baseRestore([]));
+    renderStack(todoSnapshot("todo-1", todoItems()));
 
     const divider = screen.getByTestId("pinned-todo-header-divider");
     const statusIcon = screen.getByTestId("pinned-todo-header-status-icon");
@@ -48,7 +53,7 @@ describe("<ChatPinnedStack />", () => {
   });
 
   it("preserves provider row order with single-line todo rows", () => {
-    renderStack(todoSnapshot("todo-1", todoItems()), baseRestore([]));
+    renderStack(todoSnapshot("todo-1", todoItems()));
 
     fireEvent.click(screen.getByRole("button", { name: /Todo/ }));
 
@@ -67,22 +72,15 @@ describe("<ChatPinnedStack />", () => {
   });
 
   it("keeps user expansion state when a newer todo snapshot replaces the pinned block", () => {
-    const { rerender } = renderStack(
-      todoSnapshot("todo-1", todoItems()),
-      baseRestore([]),
-    );
+    const { rerender } = renderStack(todoSnapshot("todo-1", todoItems()));
 
     fireEvent.click(screen.getByRole("button", { name: /Todo/ }));
     expect(screen.queryByTestId("pinned-todo-list")).not.toBeNull();
 
-    rerender(
-      stackUi(todoSnapshot("todo-1", [todoItem("same", "pending")]), []),
-    );
+    rerender(stackUi(todoSnapshot("todo-1", [todoItem("same", "pending")])));
     expect(screen.queryByTestId("pinned-todo-list")).not.toBeNull();
 
-    rerender(
-      stackUi(todoSnapshot("todo-2", [todoItem("next", "pending")]), []),
-    );
+    rerender(stackUi(todoSnapshot("todo-2", [todoItem("next", "pending")])));
     expect(screen.queryByTestId("pinned-todo-list")).not.toBeNull();
   });
 
@@ -94,7 +92,6 @@ describe("<ChatPinnedStack />", () => {
           todoItem(`Task ${index}`, "pending"),
         ),
       ),
-      baseRestore([]),
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Todo/ }));
@@ -103,64 +100,22 @@ describe("<ChatPinnedStack />", () => {
     expect(list.className).toContain("max-h-[min(40dvh,24rem)]");
     expect(list.className).toContain("overflow-y-auto");
   });
-
-  it("renders todo above accumulated file changes in one stack", () => {
-    renderStack(
-      todoSnapshot("todo-1", todoItems()),
-      baseRestore([fileChange()]),
-    );
-
-    const stack = screen.getByTestId("chat-pinned-stack");
-    const todoPanel = screen.getByTestId("pinned-todo-panel");
-    const changesPanel = screen.getByTestId("accumulated-changes-panel");
-
-    const text = stack.textContent;
-
-    expect(stack.contains(todoPanel)).toBe(true);
-    expect(stack.contains(changesPanel)).toBe(true);
-    expect(text.indexOf("Todo")).toBeLessThan(text.indexOf("1 file changed"));
-  });
 });
 
-function renderStack(
-  todo: PinnedTodoSnapshot,
-  restore: ChatRestoreContextValue,
-) {
-  return render(stackUi(todo, restore.accumulatedFileChanges));
+function renderStack(todo: PinnedTodoSnapshot) {
+  return render(stackUi(todo));
 }
 
-function stackUi(
-  todo: PinnedTodoSnapshot,
-  changes: ReadonlyArray<AccumulatedChangeRow>,
-) {
+function stackUi(todo: PinnedTodoSnapshot) {
   return (
     <TooltipProvider delayDuration={0}>
-      <ChatPinnedStack
+      <PinnedTodoPanel
         todo={todo}
-        restore={baseRestore(changes)}
-        topSpacing="normal"
+        scrollRegionMaxHeightClass="max-h-[min(40dvh,24rem)]"
+        separated={false}
       />
     </TooltipProvider>
   );
-}
-
-function baseRestore(
-  changes: ReadonlyArray<AccumulatedChangeRow>,
-): ChatRestoreContextValue {
-  return {
-    accessRole: "owner",
-    currentUserId: "owner-1",
-    activeHostId: "host-1",
-    activeTurnStatus: null,
-    localSnapshotsClearedAt: null,
-    restore: null,
-    restoreActionPending: false,
-    restoreCheckpoint: vi.fn().mockReturnValue(null),
-    accumulatedFileChanges: changes,
-    undeliveredChangeCount: 0,
-    accumulatedSetComplete: true,
-    revertFileChanges: vi.fn().mockReturnValue(null),
-  };
 }
 
 function todoSnapshot(
@@ -192,20 +147,5 @@ function todoItem(
     text,
     priority: null,
     activeForm: null,
-  };
-}
-
-function fileChange(): AccumulatedChangeRow {
-  return {
-    filePath: "/repo/src/app.ts",
-    operation: "edit",
-    diffSource: "snapshot",
-    reason: "snapshot",
-    undoable: true,
-    artifact: null,
-    counts: { additions: 1, deletions: 1 },
-    hasContents: true,
-    digest: null,
-    liveDiff: null,
   };
 }

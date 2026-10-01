@@ -53,6 +53,10 @@ import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-h
 import { OnboardingBrowserPreview } from "@/components/onboarding/onboarding-browser-preview";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { useOnboardingHorizontalDrag } from "@/components/onboarding/use-onboarding-swipe";
 import {
   DIORAMA_CHAPTERS,
@@ -147,27 +151,12 @@ function useDioramaPlayback(
     setChapter((current) => ({ index, run: current.run + 1 }));
   }, []);
 
-  // A hidden tab is the only thing that pauses the tour, and it has to: rAF
-  // stops firing while hidden but wall-clock time does not, so without this a
-  // return would land mid-chapter and skip the ones it slept through. Hover and
-  // focus deliberately do NOT pause - a tour that stops under the pointer for
-  // reasons the viewer cannot see reads as broken, not as considerate.
-  useEffect(() => {
-    const onVisibilityChange = () => {
-      clock.current = setDioramaPaused(
-        clock.current,
-        document.hidden,
-        performance.now(),
-      );
-    };
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, []);
-
   // One rAF loop per chapter, reading elapsed time off the clock rather than
   // counting frames, so a pause is exact and a resume loses nothing.
+  //
+  // Desktop windows run with `backgroundThrottling: false`, so rAF keeps
+  // firing while minimised. Pause the clock AND cancel the pending frame on
+  // hide; restart on show. Hover and focus do not pause.
   useEffect(() => {
     beatRef.current = 0;
     if (reducedMotion) {
@@ -177,10 +166,19 @@ function useDioramaPlayback(
     const started = performance.now();
     clock.current = {
       startedAt: started,
-      pausedAt: document.hidden ? started : null,
+      pausedAt: isDocumentVisible() ? null : started,
     };
     let frame = 0;
+    const stopFrame = (): void => {
+      if (frame === 0) return;
+      cancelAnimationFrame(frame);
+      frame = 0;
+    };
     const tick = () => {
+      if (!isDocumentVisible()) {
+        frame = 0;
+        return;
+      }
       const elapsed = dioramaElapsedMs(clock.current, performance.now());
       const ratio = Math.min(1, elapsed / active.durationMs);
       paint(chapter.index, ratio);
@@ -198,9 +196,28 @@ function useDioramaPlayback(
       }
       frame = requestAnimationFrame(tick);
     };
-    frame = requestAnimationFrame(tick);
+    const onVisibilityChange = (): void => {
+      const hidden = !isDocumentVisible();
+      clock.current = setDioramaPaused(
+        clock.current,
+        hidden,
+        performance.now(),
+      );
+      if (hidden) {
+        stopFrame();
+        return;
+      }
+      if (frame === 0) {
+        frame = requestAnimationFrame(tick);
+      }
+    };
+    const stopVisibility = subscribeDocumentVisibility(onVisibilityChange);
+    if (isDocumentVisible()) {
+      frame = requestAnimationFrame(tick);
+    }
     return () => {
-      cancelAnimationFrame(frame);
+      stopVisibility();
+      stopFrame();
     };
   }, [chapter, active, chapters, reducedMotion, paint]);
 
@@ -403,7 +420,7 @@ function DioramaWindow(props: {
           <ArrowRight className="size-4 text-muted-foreground" />
           <House className="ml-4 size-4 text-muted-foreground" />
           <div
-            className="diorama-task-tabs ml-1 flex h-full min-w-0 flex-1 items-end rounded-md px-0.75 pb-0.75"
+            className="diorama-task-tabs ml-1 flex h-full min-w-0 flex-1 items-center rounded-md px-0.75"
             data-region="tabs"
             data-dim={dimOf(beat, "tabs")}
             data-ring={ringOf(beat, "tabs")}
@@ -415,15 +432,15 @@ function DioramaWindow(props: {
                   className={cn(
                     "relative flex h-9 min-w-0 flex-1 items-center gap-2 px-6 text-ui-sm",
                     index === 0
-                      ? "diorama-active-tab -mb-px z-10"
+                      ? "diorama-active-tab z-10"
                       : "text-muted-foreground",
                   )}
                 >
                   {index === 0 ? (
                     <TabChromeBackground
                       fill="var(--background)"
-                      borderColor="var(--border)"
-                      coversBaseline
+                      borderColor="var(--canvas-border)"
+                      joined={false}
                       className={undefined}
                     />
                   ) : null}

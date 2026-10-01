@@ -170,10 +170,35 @@ const readMethodSupport = (
   method: keyof HostStreamRpcRegistry & string,
 ) => client.getMethodSupport(method);
 
+// A transport can replace a negotiated version object with an equal predicted
+// version when its last session closes. An external-store snapshot must be
+// stable by value: otherwise that handoff re-renders every consumer even
+// though the wire capability did not change. Keep the canonical objects for
+// only as long as their transport is reachable.
+const schemaVersionsByClient = new WeakMap<
+  IHostStreamClient<HostStreamRpcRegistry>,
+  Map<string, SchemaVersion>
+>();
+
 const readMethodSchemaVersion = (
   client: IHostStreamClient<HostStreamRpcRegistry>,
   method: keyof HostStreamRpcRegistry & string,
-) => client.getMethodSchemaVersion(method);
+): SchemaVersion | null => {
+  const version = client.getMethodSchemaVersion(method);
+  if (version === null) return null;
+  let versions = schemaVersionsByClient.get(client);
+  if (versions === undefined) {
+    versions = new Map();
+    schemaVersionsByClient.set(client, versions);
+  }
+  const key = `${version.major}.${version.minor}`;
+  let canonical = versions.get(key);
+  if (canonical === undefined) {
+    canonical = Object.freeze({ major: version.major, minor: version.minor });
+    versions.set(key, canonical);
+  }
+  return canonical;
+};
 
 export function useStreamMethodSupport(
   method: keyof HostStreamRpcRegistry & string,

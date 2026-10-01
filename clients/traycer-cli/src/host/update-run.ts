@@ -4,6 +4,7 @@ import {
   isValidHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
 import {
   attemptIdentityOf,
   isParkedPhase,
@@ -53,6 +54,8 @@ import type { ProgressInfo } from "../runner/output";
 import { createServiceController, serviceLabelFor } from "../service";
 import { assertHostNotBusy } from "./busy-check";
 import { readHostPidMetadata } from "./pid-metadata";
+import { refuseUpdateOverUnstartableService } from "./update-service-unstartable";
+import type { ServiceRegistrationWarning } from "../service/registration-owner";
 import { getPublishedProcessIdentityVerdict } from "../store/process-identity";
 import { hostHomeDir } from "../store/paths";
 import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../service/spawn-edge-bounds";
@@ -270,6 +273,18 @@ export interface HostUpdateRunOutcome {
    * running state is a different fact and now travels as one.
    */
   readonly runningVersion: string | null;
+  /**
+   * `true` when the activation arm's restart brought up a host that was NOT
+   * running - the `no-live-host` reading under its lock - rather than
+   * replacing a live one. An explicit fact, because the legacy projection
+   * cannot express it: `previousVersion === version` holds for that run, and
+   * ALSO for a genuine restart of a live host whose published version equals
+   * the catalog version while its runtime stamp does not (the runtime-stamp
+   * domain in `classifyActivationAgainst` reads that as debt). The shell
+   * renders the two differently, and inferring the first from version
+   * equality mislabels the second (traycer#2208 review).
+   */
+  readonly startedStoppedHost: boolean;
 }
 
 // Matches `projectInstallResult`'s own fallback when `serviceLifecycle` is
@@ -402,6 +417,7 @@ export async function runHostUpdate(
     lastSeenRunningVersion: null,
     planActivationReading: null,
     foreignRuntimeVersion: null,
+    activationStartedStoppedHost: false,
   };
 
   // The ONE settlement point every exit in the table above funnels through.
@@ -419,6 +435,19 @@ export async function runHostUpdate(
     // Parsed ONCE, here, beside the intent it qualifies: both are argv
     // authority, and both must be refused before anything is read or written.
     const expectedIdentity = parseBoundExpectedIdentity(args, intent);
+    // Every `host update` is an automatic path, whatever its trigger (the
+    // reconciler's detached run included): over a service this account could
+    // not start again - disabled by its owner, or another account's task under
+    // a host started through it - it parks here, after the argv checks and
+    // before the plan, the claim, a download or a stop, and the dispatcher's
+    // ack settles it as the refusal it is. Another account's task with no host
+    // of this account's running through it is not refused: the swap goes on,
+    // and this is the warning its verify leg ends on.
+    const preSwapWarning = await refuseUpdateOverUnstartableService(
+      environment,
+      logger,
+      "host update",
+    );
     const plan = await resolvePlan(args, intent, selection);
     const segment = await runLocalAttemptExecutorSegment(
       {
@@ -458,6 +487,7 @@ export async function runHostUpdate(
           claim,
           complete,
           advance,
+          preSwapWarning,
         }),
     );
     return await projectSegment({ args, settlement, selection, segment });
@@ -662,6 +692,13 @@ interface SelectionFacts {
    * activated.
    */
   foreignRuntimeVersion: string | null;
+  /**
+   * Written by the ACTIVATION ARM, under its lock: its restart was taken on a
+   * `no-live-host` reading, so the run started a stopped host rather than
+   * replacing a live one. See `HostUpdateRunOutcome.startedStoppedHost` for
+   * why the legacy projection cannot carry this.
+   */
+  activationStartedStoppedHost: boolean;
 }
 
 /**
@@ -1903,6 +1940,12 @@ interface RunArmInput {
    * this file holds it any more.
    */
   readonly advance: AdvanceExecutorSegment;
+  /**
+   * The pre-claim refusal's answer when it let the run go on over a task
+   * another account owns: no host of this account's ran through that task,
+   * and none can start through it after the swap (`postSwapStartFailure`).
+   */
+  readonly preSwapWarning: ServiceRegistrationWarning | null;
 }
 
 async function runArm(input: RunArmInput): Promise<LegacyHostUpdateResult> {
@@ -1990,9 +2033,14 @@ async function writeFailure(
       await writer.supersede();
       return;
     }
+    const code = err instanceof CliError ? err.code : "unexpected";
+    const message = err instanceof Error ? err.message : String(err);
+    // Older clients render this durable error verbatim. Keep the thrown CLI
+    // error intact for a terminal, but store safe copy for every client and
+    // for the progress marker that mirrors this record.
     await writer.fail({
-      code: err instanceof CliError ? err.code : "unexpected",
-      message: err instanceof Error ? err.message : String(err),
+      code,
+      message: hostUpdateFailureMessage(code, message),
       phase,
     });
   } catch {
@@ -2556,50 +2604,57 @@ async function applyArm(
     contenderOptions,
     async () => {
       try {
-        return await applyHostWithAttempt(input.capability, contenderOptions, {
-          environment: args.environment,
-          force: args.force,
-          noService: false,
-          // The apply arm can land older bytes too: a stage this executor did
-          // not promote may be incomparable to the install, which reconcile's
-          // stale-or-equal rule does not remove and no version test can prove
-          // is an upgrade. `applyHost` gates it before its busy check. The
-          // consent is the CLAIM's as much as the argument's - see
-          // `storeFormatLossAccepted`.
-          acceptStoreFormatLoss: storeFormatLossAccepted(input),
-          expectedStageFingerprint,
-          // The ONE version binding (#1752 round 10/14, ticket 08 decision 2).
-          // The executor feeds the installer the CLAIM's target - not the
-          // argument - because the claim is this attempt's authorization: an
-          // implicit `latest` that resolved to 2.0.0 is as bound to 2.0.0 as
-          // an explicit `--version 2.0.0`, and the stage another promoter
-          // replaced in the unlocked wait must not be committed under either.
-          // The installer decides it BEFORE the busy gate and before it
-          // announces anything, and reports `stage-version-mismatch` having
-          // consumed nothing.
-          expectedStagedVersion: target,
-          onProgress: input.onProgress,
-          // Deliberately NO `onWillCommitStaged`: it fires BEFORE the
-          // cooperative stop, so a denial there must still park from
-          // `preparing`, and the coarse marker is record-driven now.
-          onWillCommitStaged: null,
-          // The disruption boundary, and the ONLY one on this arm: reported
-          // by the ACTUATORS (the lifecycle's pre-stop check and the commit's
-          // pre-swap check), never inferred from the `service-stop` / `swap`
-          // progress lines, which precede both and precede the authority
-          // checks that can still refuse (#1752 rounds 10/11, cold review B
-          // C2). The progress-derived rule that used to shadow this callback
-          // is gone; nothing else marks the flag here.
-          onWillDisruptHost: () => input.mirror.markDisturbed(),
-          hooks: {
-            beforeSwapCommit: () => writer.phaseWrite("applying", null),
-            afterSwap: async () =>
-              writer.phaseWrite(
-                "restarting",
-                await generationWrittenBySwap(input.args.environment),
-              ),
+        // `maintenance`: this is `host update`'s own relaunch leg, bringing
+        // back a run that already existed, whoever invoked the update.
+        return await applyHostWithAttempt(
+          input.capability,
+          contenderOptions,
+          "maintenance",
+          {
+            environment: args.environment,
+            force: args.force,
+            noService: false,
+            // The apply arm can land older bytes too: a stage this executor did
+            // not promote may be incomparable to the install, which reconcile's
+            // stale-or-equal rule does not remove and no version test can prove
+            // is an upgrade. `applyHost` gates it before its busy check. The
+            // consent is the CLAIM's as much as the argument's - see
+            // `storeFormatLossAccepted`.
+            acceptStoreFormatLoss: storeFormatLossAccepted(input),
+            expectedStageFingerprint,
+            // The ONE version binding (#1752 round 10/14, ticket 08 decision 2).
+            // The executor feeds the installer the CLAIM's target - not the
+            // argument - because the claim is this attempt's authorization: an
+            // implicit `latest` that resolved to 2.0.0 is as bound to 2.0.0 as
+            // an explicit `--version 2.0.0`, and the stage another promoter
+            // replaced in the unlocked wait must not be committed under either.
+            // The installer decides it BEFORE the busy gate and before it
+            // announces anything, and reports `stage-version-mismatch` having
+            // consumed nothing.
+            expectedStagedVersion: target,
+            onProgress: input.onProgress,
+            // Deliberately NO `onWillCommitStaged`: it fires BEFORE the
+            // cooperative stop, so a denial there must still park from
+            // `preparing`, and the coarse marker is record-driven now.
+            onWillCommitStaged: null,
+            // The disruption boundary, and the ONLY one on this arm: reported
+            // by the ACTUATORS (the lifecycle's pre-stop check and the commit's
+            // pre-swap check), never inferred from the `service-stop` / `swap`
+            // progress lines, which precede both and precede the authority
+            // checks that can still refuse (#1752 rounds 10/11, cold review B
+            // C2). The progress-derived rule that used to shadow this callback
+            // is gone; nothing else marks the flag here.
+            onWillDisruptHost: () => input.mirror.markDisturbed(),
+            hooks: {
+              beforeSwapCommit: () => writer.phaseWrite("applying", null),
+              afterSwap: async () =>
+                writer.phaseWrite(
+                  "restarting",
+                  await generationWrittenBySwap(input.args.environment),
+                ),
+            },
           },
-        });
+        );
       } catch (err) {
         if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
           // Parked from INSIDE the same lock span the busy decision was made
@@ -2614,9 +2669,11 @@ async function applyArm(
   );
   if (outcome.outcome === "no-op") {
     // The stage this attempt was going to commit was gone by the time it held
-    // the lock: another actor consumed it - Desktop's launch converge runs
-    // `host apply --no-service`, which commits the bytes and restarts nothing.
-    //
+    // the lock: another actor consumed it - Desktop's launch converge, whose
+    // `host apply` commits the bytes. Only on packaged macOS is that
+    // `--no-service` (it restarts nothing); on Windows and Linux it is
+    // `host apply --respect-hold`, which runs the full service lifecycle
+    // (stop, swap, re-register, start).
     return settleDeliveredByAnotherActor(
       input,
       writer,
@@ -2667,7 +2724,11 @@ async function applyArm(
       exitCode: 1,
     });
   }
-  await verifyUnderClaim(input, writer, outcome.postSwapError);
+  await verifyUnderClaim(
+    input,
+    writer,
+    postSwapStartFailure(outcome, input.preSwapWarning),
+  );
   return projectApplied(outcome);
 }
 
@@ -3063,7 +3124,11 @@ async function downgradeArm(
       `host update: ${target} was already installed by another actor when the downgrade ran`,
     );
   }
-  await verifyUnderClaim(input, writer, outcome.postSwapError);
+  await verifyUnderClaim(
+    input,
+    writer,
+    postSwapStartFailure(outcome, input.preSwapWarning),
+  );
   return projectApplied(outcome);
 }
 
@@ -3200,11 +3265,16 @@ async function activationArm(
       await relaunchHostAfterRestartWithAttempt(
         input.capability,
         contenderOptions,
+        "maintenance",
         controller,
         label,
         stopped,
       );
       restarted = true;
+      // The reading this arm ACTED on, not a re-read: the same lock span
+      // decided there was no live host and relaunched one.
+      selection.activationStartedStoppedHost =
+        readingUnderLock.kind === "no-live-host";
     } catch (err) {
       if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
         throw await parkForActivation(input, writer, err);
@@ -3441,6 +3511,50 @@ function refusedMessage(target: string, refusal: string): string {
   return `host update: applied ${target} and the host is running it, but it REFUSED this client's authenticated call, so the update could not be verified: ${refusal}. The bytes ARE committed at ${target}. ${plane} Run 'traycer host doctor' to inspect the credential plane; updating forward to a newer host is the recovery.`;
 }
 
+/** Why the swap's service step started no host: see `postSwapStartFailure`. */
+interface PostSwapStartFailure {
+  readonly reason: string;
+  /** What brings the host back, as a clause; `null` when `reason` says it. */
+  readonly remedy: string | null;
+}
+
+const SERVICE_START_REMEDY =
+  "run 'traycer host service install' and then 'traycer host service start'.";
+
+/**
+ * Why the swap's service step started no host, or `null` when it asked the
+ * service to start one: the verify leg's start error. A failure
+ * (`postSwapError`), or a registration that finished without a start - one
+ * its owner disabled (on this automatic run, a disable that landed during the
+ * swap's own registration: every earlier one parked the run before its
+ * claim), or another account's task (the re-registration refused, or the
+ * pre-claim refusal's own warning when no host of this account's ran through
+ * it). No host is coming either way, and waiting the whole verify budget for
+ * one ended as `verify-timeout`, "did not become healthy", for a host that
+ * was never started. Another account's task names its own way forward; the
+ * others name the service repair.
+ */
+function postSwapStartFailure(
+  outcome: {
+    readonly postSwapError: string | null;
+    readonly postSwapWarning: ServiceRegistrationWarning | null;
+  },
+  preSwapWarning: ServiceRegistrationWarning | null,
+): PostSwapStartFailure | null {
+  if (outcome.postSwapError !== null) {
+    return { reason: outcome.postSwapError, remedy: SERVICE_START_REMEDY };
+  }
+  const warning = outcome.postSwapWarning ?? preSwapWarning;
+  if (warning === null) return null;
+  return {
+    reason: warning.message,
+    remedy:
+      warning.code === CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED
+        ? null
+        : SERVICE_START_REMEDY,
+  };
+}
+
 /**
  * `verifying`, then the evidence loop, then the executor's terminal write.
  *
@@ -3452,8 +3566,9 @@ function refusedMessage(target: string, refusal: string): string {
 async function verifyUnderClaim(
   input: RunArmInput,
   writer: AttemptRecordWriter,
-  postSwapError: string | null,
+  startFailure: PostSwapStartFailure | null,
 ): Promise<void> {
+  const postSwapError = startFailure === null ? null : startFailure.reason;
   const { args } = input;
   await writer.phaseWrite("verifying", null);
   const home = hostHomeDir(args.environment);
@@ -3570,7 +3685,7 @@ async function verifyUnderClaim(
         ? refusedMessage(target, observation.runningRefusal ?? diagnosis)
         : postSwapError === null
           ? `host update: applied ${target} but the host did not become healthy at that version: ${diagnosis}`
-          : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}; run 'traycer host service install' and then 'traycer host service start'. (probe: ${diagnosis})`;
+          : `host update: applied ${target} but the service start failed, so the host never came up: ${postSwapError}. The bytes ARE committed at ${target}${startFailure === null || startFailure.remedy === null ? "." : `; ${startFailure.remedy}`} (probe: ${diagnosis})`;
       await writer.fail({
         code: refused
           ? HOST_UPDATE_REFUSES_RPC_CODE
@@ -3737,6 +3852,7 @@ async function projectSegment(
       // An executed arm reports through its own result; the running state is
       // the release path's question.
       runningVersion: null,
+      startedStoppedHost: selection.activationStartedStoppedHost,
     };
   }
   // `terminalized` is `update-verify`'s exit and never this command's: under
@@ -3868,6 +3984,8 @@ async function projectSegment(
     releasedReason: reason,
     foreignRuntimeVersion: selection.foreignRuntimeVersion,
     runningVersion,
+    // A release started nothing.
+    startedStoppedHost: false,
   };
 }
 

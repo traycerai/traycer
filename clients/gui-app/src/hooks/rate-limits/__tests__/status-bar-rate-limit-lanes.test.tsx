@@ -28,9 +28,9 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { createQueryClientWrapper } from "@/lib/rate-limits/__tests__/provider-rate-limit-sharing-harness";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 
 // Filled in by each test before render; read lazily inside the `@/lib/host`
 // mock closure below, so the mock module never needs its own state.
@@ -142,12 +142,14 @@ function configuredProvider(
 // both together (rather than hand-building the `providers` array) is what
 // makes this an end-to-end proof of the real composition, not just of the
 // segments hook in isolation.
-function useLaneProbe(mode: StatusBarRateLimitMode) {
+function useLaneProbe(mode: StatusBarRateLimitMode, editing: boolean) {
   const providers = useStatusBarWindowedProviders();
   return useStatusBarRateLimitSegments({
     providers,
     profileSelection: PROFILE_SELECTION,
     mode,
+    editing,
+    sample: false,
   });
 }
 
@@ -156,7 +158,7 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
     cleanup();
     harnessClient = null;
     configuredProviders = [];
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("reads the eligible httpFetch provider but never spawns a read for the ephemeralProcess provider beside it", async () => {
@@ -167,7 +169,7 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
       configuredProvider("opencode", "httpFetch"),
     ];
 
-    renderHook(() => useLaneProbe("live"), {
+    renderHook(() => useLaneProbe("live", false), {
       wrapper: createQueryClientWrapper(harness.queryClient),
     });
 
@@ -193,7 +195,9 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
     ];
 
     const wrapper = createQueryClientWrapper(harness.queryClient);
-    const passive = renderHook(() => useLaneProbe("passive"), { wrapper });
+    const passive = renderHook(() => useLaneProbe("passive", false), {
+      wrapper,
+    });
 
     // An enabled observer fetches on mount, so give one every chance to: a
     // macrotask turn is more than the httpFetch batch needs below.
@@ -216,9 +220,82 @@ describe("status bar rate-limit lane isolation (real query stack)", () => {
     // mode changes, and now opencode is read. Without this the empty list
     // above would also pass for a harness that could never have been called.
     passive.unmount();
-    renderHook(() => useLaneProbe("live"), { wrapper });
+    renderHook(() => useLaneProbe("live", false), { wrapper });
     await waitFor(() =>
       expect(harness.calledProviderIds).toContain("opencode"),
     );
+  });
+});
+
+describe("status bar rate-limit editor-only segments never fetch (review w3, should-fix 11)", () => {
+  afterEach(() => {
+    cleanup();
+    harnessClient = null;
+    configuredProviders = [];
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  it("keeps a HIDDEN httpFetch provider from polling or enqueueing while entering an editing session, and reads it once unhidden", async () => {
+    const harness = createLaneHarness();
+    harnessClient = harness.client;
+    configuredProviders = [configuredProvider("opencode", "httpFetch")];
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      hiddenProviders: ["opencode"],
+    });
+
+    const wrapper = createQueryClientWrapper(harness.queryClient);
+    // `editing: true` is exactly what the layout editor's session passes so
+    // the hidden provider's ghost can still register a hotspot - the bug this
+    // guards is that doing so used to also admit it into the fetch-eligible
+    // batch.
+    const editing = renderHook(() => useLaneProbe("live", true), { wrapper });
+
+    // Give an enabled observer every chance to fire on mount.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(harness.calledProviderIds).toEqual([]);
+    expect(editing.result.current.mountTargets).toEqual([]);
+    expect(editing.result.current.refresh.ephemeralTargets).toEqual([]);
+    expect(editing.result.current.refresh.httpRefetches).toEqual([]);
+
+    // Same harness, same provider, same query keys - only the deny-list
+    // changes. This proves the empty list above is specifically the hidden
+    // provider being suppressed, not "editing mode never fetches anything".
+    editing.unmount();
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      hiddenProviders: [],
+    });
+    renderHook(() => useLaneProbe("live", true), { wrapper });
+    await waitFor(() =>
+      expect(harness.calledProviderIds).toContain("opencode"),
+    );
+  });
+
+  it("keeps a hidden ephemeralProcess provider's queue enqueue off while editing", async () => {
+    const harness = createLaneHarness();
+    harnessClient = harness.client;
+    configuredProviders = [configuredProvider("codex", "ephemeralProcess")];
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      hiddenProviders: ["codex"],
+    });
+
+    const editing = renderHook(() => useLaneProbe("live", true), {
+      wrapper: createQueryClientWrapper(harness.queryClient),
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    // The queue lane is always passive-observed regardless of hidden state
+    // (proven above), so the load-bearing new assertion here is the mount
+    // hook: a hidden provider must not hand back a cold-start enqueue target
+    // just because a Customize session wants to draw its ghost.
+    expect(harness.calledProviderIds).toEqual([]);
+    expect(editing.result.current.mountTargets).toEqual([]);
+    expect(editing.result.current.refresh.ephemeralTargets).toEqual([]);
   });
 });

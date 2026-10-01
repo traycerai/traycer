@@ -1,3 +1,5 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
+import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Host-driven raw-terminal list rendered as a left-panel rail entry. Durable
@@ -59,14 +61,9 @@ import {
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
+import { NavigatorResourceHotspotChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
 import { useIsActiveTile } from "@/stores/epics/canvas/store";
-import {
-  useEpicLeftPanelStore,
-  useLeftPanelSectionCollapsed,
-} from "@/stores/epics/left-panel-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -167,24 +164,15 @@ function TerminalsPanelBodyLive(props: {
 /**
  * Header "+" action for the "terminals" left panel - opens the host +
  * folder picker; selecting a folder opens a fresh raw terminal tab in
- * that directory. Subscribes only to the open-action (no terminal-list
- * subscription) so a collapsed Terminals section doesn't re-render on
- * every host list update.
+ * that directory. Subscribes to nothing but the open-action, so it does not
+ * re-render on every host list update.
  */
 export function TerminalsPanelActions(props: LeftPanelSlotProps) {
-  const collapsed = useLeftPanelSectionCollapsed("terminals");
-  const setPanelSectionCollapsed = useEpicLeftPanelStore(
-    (state) => state.setPanelSectionCollapsed,
-  );
-  const expandBeforeOpen = useCallback(() => {
-    if (collapsed) setPanelSectionCollapsed("terminals", false);
-  }, [collapsed, setPanelSectionCollapsed]);
   return (
     <NewTerminalPicker
       epicId={props.epicId}
       tabId={props.tabId}
       onLaunched={null}
-      onBeforeOpen={expandBeforeOpen}
     />
   );
 }
@@ -202,6 +190,7 @@ interface TerminalSidebarBodyProps {
 function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   const { panel } = props;
   const listRef = useRef<HTMLUListElement>(null);
+  const navigatorResourceMetrics = useNavigatorResourceMetrics();
   const revealRequest = useSidebarNodeRevealRequest(props.tabId);
   useLayoutEffect(() => {
     if (revealRequest === null || listRef.current === null) return;
@@ -230,7 +219,16 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
     );
   }
   if (panel.rows.length === 0 && panel.failedCreates.length === 0) {
-    return <TerminalsEmptyState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
+    return (
+      <>
+        <TerminalsEmptyState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />
+        <NavigatorResourceHotspotChip
+          owner={null}
+          metrics={navigatorResourceMetrics}
+          className={undefined}
+        />
+      </>
+    );
   }
   return (
     <ul
@@ -286,6 +284,7 @@ interface TerminalRowProps {
 }
 
 function TerminalRow(props: TerminalRowProps) {
+  const placement = useColumnOverlayPlacement("row");
   const {
     authority,
     durable,
@@ -307,9 +306,7 @@ function TerminalRow(props: TerminalRowProps) {
     durable,
     authority,
   });
-  const navigatorResourceMetrics = useSettingsStore(
-    (state) => state.navigatorResourceMetrics,
-  );
+  const navigatorResourceMetrics = useNavigatorResourceMetrics();
   const label = actions.label;
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
@@ -475,16 +472,16 @@ function TerminalRow(props: TerminalRowProps) {
                       </span>
                     ) : null}
                   </div>
-                  {navigatorResourceMetrics.length > 0 ? (
-                    <OwnerResourceChip
-                      epicId={epicId}
-                      kind="terminal"
-                      ownerId={session.sessionId}
-                      hostId={hostId}
-                      metrics={navigatorResourceMetrics}
-                      className={undefined}
-                    />
-                  ) : null}
+                  <NavigatorResourceHotspotChip
+                    owner={{
+                      epicId,
+                      kind: "terminal",
+                      ownerId: session.sessionId,
+                      hostId,
+                    }}
+                    metrics={navigatorResourceMetrics}
+                    className={undefined}
+                  />
                 </button>
                 <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/term-row:opacity-100">
                   <DropdownMenu>
@@ -500,7 +497,11 @@ function TerminalRow(props: TerminalRowProps) {
                         <MoreHorizontal className="size-3" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-max">
+                    <DropdownMenuContent
+                      side={placement?.side}
+                      align={placement?.align ?? "end"}
+                      className="w-max"
+                    >
                       <SidebarDropdownMenuItems entries={rowMenuEntries} />
                     </DropdownMenuContent>
                   </DropdownMenu>

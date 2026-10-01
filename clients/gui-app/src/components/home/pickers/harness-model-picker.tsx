@@ -5,6 +5,8 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
   findUpgradeServiceTierForModel,
   findReasoningOptionsForModel,
@@ -87,10 +89,8 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-register-active-model-picker";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
-import {
-  useLayoutStore,
-  type ComposerReasoningIndicator,
-} from "@/stores/settings/layout-store";
+import { useRegionValue } from "@/lib/layout-overrides";
+import type { ModelStyle } from "@/lib/layout/layout-values";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -104,8 +104,8 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
-  EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID,
-  loginCapabilityByHarnessIdFromProviderStates,
+  EMPTY_PROVIDER_STATE_BY_HARNESS_ID,
+  providerStateByHarnessIdFromProviderStates,
   resolveCreateProfileGate,
   useCreateProfileHostIsLocal,
 } from "@/components/home/pickers/harness-model-picker-create-profile-gate";
@@ -172,9 +172,46 @@ export interface HarnessModelPickerEmbedding {
   /** The picker fills this with a function that opens it, the same path a
    *  trigger click takes, and clears it on unmount. */
   readonly openRef: RefObject<(() => void) | null>;
+  /**
+   * The picker fills this with a function that closes it, and clears it on
+   * unmount; `null` for a surface that never closes it itself. A surface whose
+   * footer commits something (the routing chooser's confirm) closes the
+   * popover once that lands.
+   */
+  readonly closeRef: RefObject<(() => void) | null> | null;
+  /**
+   * The picker fills this with a function that moves its browsed rail - the
+   * provider and the account its profile dropdown names - to the store's
+   * current selection, and clears it on unmount. It touches nothing else: the
+   * search, the keyboard-active row and the list stay as they are, where
+   * `openRef` would start the popover over. For a surface whose store moves
+   * under an OPEN picker by something other than the picker's own clicks (the
+   * routing chooser following a late listing answer); a call while closed
+   * only sets what the next open copies from the selection anyway.
+   *
+   * `null` for a surface whose store only the picker moves while it is open;
+   * the picker then fills nothing. A composer passes no embedding at all, so
+   * it never reaches this.
+   */
+  readonly followSelectionRef: RefObject<(() => void) | null> | null;
+  /**
+   * Called with every change of the popover's VISIBLE open state - a trigger
+   * click, `openRef`, an outside click, Escape, the jump to provider settings,
+   * the surface going inactive. Not only the popover's own `onOpenChange`:
+   * several of those close through the reducer directly, and a surface that
+   * holds something while the picker is open (a routing hold) must hear every
+   * close. `null` when nothing listens.
+   */
+  readonly onOpenChange: ((open: boolean) => void) | null;
+  /**
+   * Rendered at the foot of the popover, under the effort footer; `null` for
+   * none. The popover grows by its height rather than taking it from the list.
+   */
+  readonly footer: ReactNode | null;
 }
 
 interface HarnessModelPickerProps {
+  readonly presentation?: boolean;
   /** Per-composer toolbar store; the picker subscribes to the selection /
    *  reasoning / service-tier slices and dispatches through its actions. */
   store: ComposerToolbarStore;
@@ -299,6 +336,13 @@ function buildReasoningFooter(input: {
   };
 }
 
+function isModelHotspotInteractive(
+  registerActivation: boolean,
+  activityEnabled: boolean,
+): boolean {
+  return registerActivation && activityEnabled;
+}
+
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const {
     store,
@@ -367,6 +411,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     disabled,
   );
   useEmbeddingOpenHandle(embedding, handleOpenChange);
+  useEmbeddingCloseHandle(embedding, closeOnly);
+  useEmbeddingFollowSelectionHandle(embedding, store, setActiveRailEntry);
+  const seams = embeddingSeams(embedding);
+  useReportedOpenState(visibleOpen, seams.onOpenChange);
   const reasoningFooter = useMemo<ReasoningFooterConfig | null>(
     () =>
       buildReasoningFooter({
@@ -466,11 +514,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     createProfileClient,
     { enabled: activityEnabled, subscribed: activityEnabled },
   );
-  const loginCapabilityByHarnessId = useMemo(
+  const createProfileStateByHarnessId = useMemo(
     () =>
       createProfileProvidersQuery.data === undefined
-        ? EMPTY_LOGIN_CAPABILITY_BY_HARNESS_ID
-        : loginCapabilityByHarnessIdFromProviderStates(
+        ? EMPTY_PROVIDER_STATE_BY_HARNESS_ID
+        : providerStateByHarnessIdFromProviderStates(
             createProfileProvidersQuery.data.providers,
           ),
     [createProfileProvidersQuery.data],
@@ -697,12 +745,13 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
   // Mirrors Settings' `providerCanStartProfileOauth` gate: OAuth sign-in
-  // needs a local host that advertises login args for the browsed provider.
+  // needs a local host that advertises login args for the browsed provider,
+  // has it turned on and has a CLI to run for it.
   // A tab-bound composer gates on the TAB's host locality (`createProfileHostIsLocal`,
   // resolved from `createProfileHostId`), never the renderer-default host.
   const createProfileGate = resolveCreateProfileGate(
     createProfileHostIsLocal,
-    loginCapabilityByHarnessId.get(resolvedActiveProviderId),
+    createProfileStateByHarnessId.get(resolvedActiveProviderId),
   );
   const activeProvider = useBrowsedProviderCatalogEntry({
     runTargetClient,
@@ -1064,13 +1113,23 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activationController,
   );
 
+  // Same test the shortcut registration above uses to keep fork / add-node
+  // dialog pickers and the Auto-judge picker out - a genuine toolbar mount,
+  // not every place this component is used as a plain picker.
+  const modelHotspotInteractive = isModelHotspotInteractive(
+    registerActivation,
+    activityEnabled,
+  );
+  const tileId = useComposerTileId();
+  const { ref: modelHotspotRef } = useLayoutRegion({
+    regionId: "model",
+    instanceId: tileId,
+  });
   const selectedHarnessLabel = selectedHarness?.label ?? selection.harnessId;
   // Layout ▸ Composer ▸ Reasoning level. Read here rather than in the trigger
   // so the chip stays a pure function of its props, and both surfaces that
   // mount this picker (the chat composer, the terminal launcher) follow it.
-  const reasoningIndicator = useLayoutStore(
-    (state) => state.composer.reasoningIndicator,
-  );
+  const reasoningIndicator = useRegionValue("model", "style");
   const tooltipLabel = (
     <HarnessModelPickerTooltip
       harnessLabel={selectedHarnessLabel}
@@ -1102,6 +1161,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     >
       <HarnessModelTrigger
         {...paneActivationDeferProps}
+        ref={modelHotspotInteractive ? modelHotspotRef : undefined}
         selection={selection}
         label={presentation.label}
         reasoningLabel={presentation.reasoningLabel}
@@ -1176,9 +1236,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         createProfileDisabledReason={createProfileGate.reason}
         profileAdmission={profileAdmission}
         closeFocusesComposer={embedding === null}
+        footer={seams.footer}
       />
     </Popover>
   );
+}
+
+/**
+ * The embedding's optional seams, each `null` for a composer. Read in one
+ * place so the component body carries one branch for them, not two.
+ */
+function embeddingSeams(embedding: HarnessModelPickerEmbedding | null): {
+  readonly onOpenChange: ((open: boolean) => void) | null;
+  readonly footer: ReactNode | null;
+} {
+  if (embedding === null) return { onOpenChange: null, footer: null };
+  return { onOpenChange: embedding.onOpenChange, footer: embedding.footer };
 }
 
 /**
@@ -1235,6 +1308,80 @@ function useEmbeddingOpenHandle(
   );
 }
 
+/** Fills an embedding's `closeRef` with the reducer's close; see its doc. */
+function useEmbeddingCloseHandle(
+  embedding: HarnessModelPickerEmbedding | null,
+  closeOnly: () => void,
+): void {
+  useImperativeHandle(
+    embedding === null ? null : embedding.closeRef,
+    () => closeOnly,
+    [closeOnly],
+  );
+}
+
+/**
+ * Fills an embedding's `followSelectionRef` with the rail move its doc
+ * describes. The selection is read from the store when called, not from this
+ * render, so a caller that runs after the store moved - the routing chooser's
+ * layout effect - gets the selection it just saw.
+ */
+function useEmbeddingFollowSelectionHandle(
+  embedding: HarnessModelPickerEmbedding | null,
+  store: ComposerToolbarStore,
+  setActiveRailEntry: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void,
+): void {
+  useImperativeHandle(
+    embedding === null ? null : embedding.followSelectionRef,
+    () => () => {
+      const { selection } = store.getState();
+      setActiveRailEntry(selection.harnessId, selection.profileId);
+    },
+    [setActiveRailEntry, store],
+  );
+}
+
+/**
+ * Reports the VISIBLE open state to an embedding on every change - see
+ * `HarnessModelPickerEmbedding.onOpenChange`. Read off `visibleOpen` rather
+ * than hooked into each writer, because the writers are many (the popover,
+ * the reducer's direct closes, a disabled surface) and a missed close would
+ * leave a hold taken on open with nobody to give it back. The ref starts at
+ * `false`, the reducer's initial state, so mounting closed says nothing.
+ *
+ * Unmounting while visibly open is a close too - the popover goes with the
+ * picker - so it is reported once, through the latest callback, exactly as
+ * any other close is. An embedding that also cleans up on its own unmount
+ * must make the two idempotent (the routing chooser pays its hold once).
+ */
+function useReportedOpenState(
+  visibleOpen: boolean,
+  onOpenChange: ((open: boolean) => void) | null,
+): void {
+  const reportedRef = useRef(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+  useEffect(() => {
+    if (onOpenChange === null) return;
+    if (reportedRef.current === visibleOpen) return;
+    reportedRef.current = visibleOpen;
+    onOpenChange(visibleOpen);
+  }, [onOpenChange, visibleOpen]);
+  useEffect(
+    () => () => {
+      if (!reportedRef.current) return;
+      reportedRef.current = false;
+      onOpenChangeRef.current?.(false);
+    },
+    [],
+  );
+}
+
 /**
  * A model that reports no thinking levels at all, which greys the footer's
  * control rather than removing it. A model that has not RESOLVED yet reports
@@ -1247,7 +1394,42 @@ function hasNoReasoningLevels(
   return selectedModel !== null && options.length === 0;
 }
 
-export const HarnessModelPicker = memo(HarnessModelPickerImpl);
+function HarnessModelPickerSurface(props: HarnessModelPickerProps) {
+  return props.presentation ? (
+    <PresentationHarnessModelPicker {...props} />
+  ) : (
+    <HarnessModelPickerImpl {...props} />
+  );
+}
+export const HarnessModelPicker = memo(HarnessModelPickerSurface);
+
+/** The same trigger, with no catalog queries, activation registration or writes. */
+function PresentationHarnessModelPicker(props: HarnessModelPickerProps) {
+  const selection = useStore(props.store, (state) => state.selection);
+  const tileId = useComposerTileId();
+  const { ref } = useLayoutRegion({
+    regionId: "model",
+    instanceId: tileId,
+  });
+  const reasoningIndicator = useRegionValue("model", "style");
+  return (
+    <HarnessModelTrigger
+      ref={ref}
+      selection={selection}
+      label="Sample model"
+      reasoningLabel="Medium"
+      reasoningStep={{ index: 1, count: 3 }}
+      reasoningIndicator={reasoningIndicator}
+      serviceTierLabel={null}
+      serviceTierActive={false}
+      profileLabel={null}
+      profileAccentDot={null}
+      isLoading={false}
+      disabled={false}
+      labelDisplay={props.labelDisplay}
+    />
+  );
+}
 
 function HarnessModelPickerTooltip({
   harnessLabel,
@@ -1310,7 +1492,7 @@ function TooltipSummaryRow({
  * only draws. The `text` mode keeps the bare name - the chip already says it.
  */
 function reasoningTooltipLabel(
-  reasoningIndicator: ComposerReasoningIndicator,
+  reasoningIndicator: ModelStyle,
   reasoningLabel: string | null,
   reasoningStep: ReasoningStep | null,
 ): string | null {

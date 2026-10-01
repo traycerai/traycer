@@ -92,3 +92,8 @@ release yet). The signed-in account must be allowed to use remote hosts
 (server-side plan gate), and a host must be enrolled against the staging
 cloud — from the internal repo, `make remote-host-staging` or a staging-target
 host on your own machine.
+
+## Relay traffic diagnostics
+
+For a staging iPhone capture with opt-in per-method frame and byte counters,
+follow the [standalone capture procedure](docs/relay-traffic-capture.md).

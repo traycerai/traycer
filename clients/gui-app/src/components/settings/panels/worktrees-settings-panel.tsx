@@ -122,6 +122,7 @@ import {
 } from "@/components/settings/panels/use-worktree-delete-run";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import { WorktreeAutoCleanupChip } from "@/components/settings/panels/worktree-auto-cleanup-chip";
+import { WorktreeAgentCreateChip } from "@/components/settings/panels/worktree-agent-create-chip";
 import { WorktreeCleanupHistory } from "@/components/settings/panels/worktree-cleanup-history";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
@@ -306,20 +307,21 @@ function WorktreesToolbar(props: {
   readonly canRefresh: boolean;
   readonly lastUpdatedAt: number | null;
   /**
-   * The leading slot. A SLOT rather than the scope itself, so the toolbar
-   * stays a layout with no opinion on the automatic-cleanup policy - exactly
-   * like `selectionControls` and `filterControls` beside it.
+   * The leading slot: the host's worktree policy chips (automatic cleanup and
+   * agent-created worktrees). A SLOT rather than the scope itself, so the
+   * toolbar stays a layout with no opinion on either policy - exactly like
+   * `selectionControls` and `filterControls` beside it.
    */
-  readonly cleanup: ReactNode;
+  readonly policies: ReactNode;
   readonly selectionControls: ReactNode | null;
   readonly filterControls: ReactNode | null;
 }): ReactNode {
   const {
     canRefresh,
-    cleanup,
     filterControls,
     lastUpdatedAt,
     onRefresh,
+    policies,
     refreshing,
     selectionControls,
   } = props;
@@ -336,10 +338,10 @@ function WorktreesToolbar(props: {
     <div className="@container/worktrees-toolbar flex flex-col gap-2 border-b border-border/40 px-5 py-2.5">
       {/* The slot on the left held first a host `<Select>`, then a readout of
           the scoped host. Both are gone - the sidebar names that host one row
-          away and never scrolls - and it now carries the automatic-cleanup
-          chip, which wraps onto its own line with the row at narrow widths. */}
+          away and never scrolls - and it now carries the host's policy chips,
+          which wrap onto their own line with the row at narrow widths. */}
       <div className="flex flex-wrap items-center gap-2">
-        {cleanup}
+        {policies}
         <div
           className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2"
           data-testid="worktrees-toolbar-actions"
@@ -676,8 +678,11 @@ function WorktreesBody(props: {
     // Built HERE, not inside the toolbar, because the toolbar renders in two
     // places (standalone above the gate, and inside the list) and the chip
     // must be the same element in both.
-    cleanup: (
-      <WorktreeAutoCleanupChip scope={scope} onOpenHistory={onOpenHistory} />
+    policies: (
+      <>
+        <WorktreeAutoCleanupChip scope={scope} onOpenHistory={onOpenHistory} />
+        <WorktreeAgentCreateChip scope={scope} />
+      </>
     ),
     onRefresh,
     // Only the explicit Refresh mutation locks the button - NOT enrichment.
@@ -957,7 +962,7 @@ export function WorktreesList(props: {
   readonly onVisiblePathsChange: (paths: readonly string[]) => void;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string>;
   readonly toolbarProps: {
-    readonly cleanup: ReactNode;
+    readonly policies: ReactNode;
     readonly onRefresh: () => Promise<unknown>;
     readonly refreshing: boolean;
     readonly canRefresh: boolean;

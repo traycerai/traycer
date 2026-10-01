@@ -31,6 +31,13 @@ name: "Traycer CodeQL config"
 #                                      a blind spot created now would persist
 #                                      silently.
 #
+# `clients/gui-app/browser-tests/**` is the same class under another name: the
+# GUI's Playwright specs and their support code, which run only against the
+# fixture pages in `src/__tests__/browser/` (already excluded above). Their
+# page-side checks are expressions built from test constants with
+# `JSON.stringify`, which `js/bad-code-sanitization` reads as code built from an
+# unsanitized value; nothing there reaches a user's input or a shipped build.
+#
 # If a future finding here is a false positive rather than a whole class, dismiss
 # that alert with its own reasoning instead of widening these patterns.
 paths-ignore:
@@ -39,3 +46,4 @@ paths-ignore:
   - "**/*.test.ts"
   - "**/*.test.tsx"
   - "**/*.test.mjs"
+  - "clients/gui-app/browser-tests/**"

@@ -11,10 +11,10 @@
  * allotment. The rate is a fact about our behaviour that we control and that
  * cannot go stale when GitHub reprices; the allotment is theirs, and it would.
  *
- * The composer's Auto row names the MODEL as well as the pocket ("Reviewed by
- * Sonnet 5 on Traycer · uses credits"), so the run-level shape carries a model
- * label. Which judge that is comes from `autoJudge.get`'s `effective`, and
- * under Automatic's fallback it is the conversation's own harness - see
+ * The run-level shape resolves the model and billing route from
+ * `autoJudge.get`'s `effective`. The composer uses that route to gate mid-turn
+ * switches; model and billing details are presented in Settings. Under
+ * Automatic's fallback the judge is the conversation's own harness - see
  * {@link autoJudgeTarget}.
  */
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
@@ -48,7 +48,6 @@ import { providerAutoJudgeFor } from "@/lib/providers/provider-auto-judge";
  * presented as some other provider.
  */
 const TRAYCER_JUDGE_HARNESS_ID = "traycer";
-const COPILOT_JUDGE_HARNESS_ID = "copilot";
 
 /**
  * What a stored judge SELECTION can be billed as, and the whole of it.
@@ -115,7 +114,7 @@ export type AutoJudgeBilling =
    * still readable, but it names a judge that will not be called, and a label
    * on this row would invite the reader to believe otherwise. Settings ▸
    * Permissions ▸ Judge already explains WHICH blocker and how to clear it;
-   * the composer's one line only has to stop claiming a pocket.
+   * the composer's description explains that approvals will ask the user.
    */
   | { readonly kind: "blocked" };
 
@@ -129,7 +128,7 @@ const BLOCKED_BILLING: AutoJudgeBilling = { kind: "blocked" };
  * - `none` - no judge can run: the host said so (`effective: null`, or a
  *   `blocked` reason), and every command asks the user.
  * - `unknown` - an input the answer needs has not arrived, or the host cannot
- *   say. The row shows no meta line rather than a guess.
+ *   say. Mid-turn switching stays locked until the judge is known.
  */
 export type AutoJudgeTarget =
   | { readonly kind: "unknown" }
@@ -524,45 +523,9 @@ function judgeHarnessLabel(harnessId: string): string {
  * The measured order of magnitude of Copilot premium requests an hour of Auto
  * mode spends - Traycer's own call rate over real sessions, not a derivation
  * from one call per command (a reviewed command can take two calls, or none on
- * a cache hit). Quoted by the composer's meta line below and by Settings ▸
- * Permissions ▸ Judge, so the two cannot drift.
+ * a cache hit). Quoted by Settings ▸ Permissions ▸ Judge.
  */
 export const COPILOT_PREMIUM_REQUESTS_PER_HOUR = "60–350";
-
-/**
- * The one-line disclosure on the composer's Auto row, so a user who never
- * opens Settings still learns which model reviews and which pocket is charged
- * BEFORE turning the mode on.
- */
-export function autoJudgeMetaLine(billing: AutoJudgeBilling): string {
-  switch (billing.kind) {
-    case "traycer":
-      return `Reviewed by ${judgeModelWithEffort(billing)} on Traycer · uses credits`;
-    case "provider":
-      // The metered case is named with its range, whether the user picked
-      // Copilot or Automatic fell back to a Copilot conversation.
-      if (billing.harnessId === COPILOT_JUDGE_HARNESS_ID) {
-        return `Reviewed by ${judgeModelWithEffort(billing)} on Copilot · uses premium requests (${COPILOT_PREMIUM_REQUESTS_PER_HOUR} per hour)`;
-      }
-      return `Reviewed by ${judgeModelWithEffort(billing)} on ${billing.harnessLabel} · your account`;
-    case "provider-native":
-      return `Reviewed by ${billing.harnessLabel}'s built-in classifier · no extra cost`;
-    // Says what HAPPENS, not what is missing: a user about to turn Auto on
-    // needs to know every command will come to them.
-    case "blocked":
-      return "No judge available on this machine · asks you instead";
-  }
-}
-
-/** "Sonnet 5 (Low)" - the model, and the effort it reviews at when named. */
-function judgeModelWithEffort(billing: {
-  readonly modelLabel: string;
-  readonly effortLabel: string | null;
-}): string {
-  return billing.effortLabel === null
-    ? billing.modelLabel
-    : `${billing.modelLabel} (${billing.effortLabel})`;
-}
 
 /**
  * Why the composer's Auto row is disabled for the turn running now, or `null`

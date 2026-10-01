@@ -44,9 +44,9 @@ export interface GlobalResourcesStreamMountProps {
  * global stream's own negotiation for a remote one - read against the ambient
  * host this pane's lease would be opened on.
  *
- * The demand is the consumer itself, NOT the pane's settings gate: a footer
- * readout is a global consumer with the header monitor and the navigator
- * chips both off, and that gate would read it as nobody wanting numbers.
+ * The demand is the consumer itself, NOT the layout switches the pane's own
+ * stream used to be gated on (the monitor's Shown, the agent rows'
+ * readings): a mounted global consumer is what reads the fallback.
  */
 export function EpicResourcesFallbackMount(
   props: ResourcesStreamMountProps,

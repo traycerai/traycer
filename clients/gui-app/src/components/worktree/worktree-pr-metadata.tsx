@@ -307,7 +307,7 @@ function WorktreePrHoverDetail(props: {
 
 /**
  * Chat/owner workspace hover preview. Renders on the shared hover-preview card
- * surface (`HoverPreviewCard`), so its tones are the card's own
+ * surface (`HoverCard`), so its tones are the card's own
  * foreground/muted pair — matching the composer's @mention preview panel and
  * the workspace picker's folder list.
  */

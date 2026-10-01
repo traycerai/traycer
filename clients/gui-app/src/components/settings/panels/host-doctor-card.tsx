@@ -4,6 +4,7 @@ import {
   type RecurrenceState,
 } from "@/components/settings/panels/host-doctor-recurrence";
 import { HostDoctorReportContent } from "@/components/settings/panels/host-doctor-report-content";
+import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
 import {
   RECURRENCE_THRESHOLD,
   RECURRENCE_WINDOW_MS,
@@ -37,6 +38,7 @@ import type {
   HostDoctorIssue,
   HostDoctorReport,
   FreePortAndRestartInput,
+  FreePortAndRestartResult,
   IHostManagement,
   HostLogsTailResult,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -88,6 +90,9 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
     onExternalRecurrenceChange,
   } = props;
   const queryClient = useQueryClient();
+  // This card is THIS machine's by construction (the CLI bridge), so the
+  // foreground run is always its own.
+  const foregroundRun = useLocalHostForegroundRun();
   const recurrenceModel = useDoctorRecurrence({
     externalRecurrence,
     onExternalRecurrenceChange,
@@ -174,7 +179,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   });
 
   const freePortMutation = useMutation<
-    FreePortAndRestartInput,
+    FreePortAndRestartResult,
     Error,
     FreePortAndRestartInput,
     { readonly management: IHostManagement }
@@ -183,9 +188,19 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
     onMutate: () => ({ management }),
     mutationFn: (input) =>
       management.freePortAndRestart({ ...input, expectedHostId }),
-    onSuccess: (_data, _input, context) => {
-      toast.success("Restarted with port freed");
+    onSuccess: (result, _input, context) => {
       setFreePortPrompt(null);
+      // Refused before anything ran (a host started in a terminal, this app
+      // committed `none`): information, like a declined fix, and nothing to
+      // re-read.
+      if (result.kind === "declined") {
+        toastHostRepairDeclined(
+          fixActionLabel("host-free-port-and-restart"),
+          result.message,
+        );
+        return;
+      }
+      toast.success("Restarted with port freed");
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostDoctor(
           context.management,
@@ -322,6 +337,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       recurrence={recurrenceModel.recurrence}
       reportFetching={reportFetching}
       fixPendingCode={pendingRepairCode ?? pendingLogsCode}
+      foregroundRun={foregroundRun}
       logTail={logsMutation.data?.tail ?? null}
       freePortPrompt={freePortPrompt}
       freePortPending={freePortMutation.isPending}

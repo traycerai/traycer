@@ -1,3 +1,4 @@
+import { cssEscape } from "@/lib/dom/css-escape";
 import { useCallback, useEffect, useRef } from "react";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -33,8 +34,13 @@ const FLASH_ATTRIBUTE = "data-settings-anchor-flash";
  * On the scrolling pane each settings surface wraps its panel in — the page a
  * `null`-anchor request means. Owned by the surfaces, not by the panels, so
  * every section has one however bespoke its panel is.
+ *
+ * Exported because a panel may legitimately need to find its own scrollport -
+ * `layout-settings-panel.tsx` roots its sticky filter's observer on it. One
+ * name for the attribute means renaming it stays a rename, rather than leaving
+ * a second copy that compiles and silently finds nothing.
  */
-const PANEL_PANE_SELECTOR = "[data-settings-panel-pane]";
+export const PANEL_PANE_SELECTOR = "[data-settings-panel-pane]";
 
 /**
  * Scrolls to, and briefly marks, the element a search result asked for.
@@ -245,21 +251,6 @@ function nearestScrollingAncestor(element: Element): HTMLElement | null {
     current = current.parentElement;
   }
   return null;
-}
-
-/**
- * Anchors are authored kebab-case tokens, so this never has real work to do —
- * but the value reaches `querySelector`, and a selector built by
- * concatenation is the one place a future anchor with a dot or a colon in it
- * would stop being a lookup and start being a different selector. `CSS.escape`
- * where the runtime has it (every browser this app targets), and a
- * conservative fallback for the jsdom-shaped environments that do not.
- */
-function cssEscape(value: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(value);
-  }
-  return value.replace(/[^\w-]/g, "\\$&");
 }
 
 function prefersReducedMotion(): boolean {

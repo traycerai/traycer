@@ -25,6 +25,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import type {
   AppResourceSnapshotWireV15,
@@ -48,6 +49,11 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
+import type { BarReadingForm } from "@/components/layout/tabs/side-strip/side-strip-tokens";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import {
   resourcesRegistry,
@@ -881,7 +887,7 @@ function renderPopover(): void {
       <EpicLease epicId="epic-1" />
       <ResourceMonitorPopover
         trigger="header-button"
-        className={undefined}
+        form="glyph"
         claimsOpenAction
       />
     </TooltipProvider>,
@@ -982,7 +988,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction={false}
         />
       </TooltipProvider>,
@@ -2459,7 +2465,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -3672,7 +3678,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -3703,7 +3709,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -3763,7 +3769,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -3792,7 +3798,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -3867,7 +3873,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -3913,7 +3919,7 @@ describe("ResourceMonitorPopover", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -4865,7 +4871,7 @@ describe("ResourceMonitorPopover · host picker", () => {
         <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
-          className={undefined}
+          form="glyph"
           claimsOpenAction
         />
       </TooltipProvider>,
@@ -5376,45 +5382,145 @@ describe("ResourceMonitorPopover · custom trigger", () => {
 });
 
 /**
- * The header button is a bare glyph that shows nothing while closed, so the
- * global stream follows its panel on every shell. A readout trigger prints
- * live numbers while closed and keeps its background lease on every shell.
+ * `readingButtonLook` (G6): what the header-button trigger draws in each
+ * form. `glyph` stays the icon-only button every other form used to be;
+ * `readout` and `inline` draw the segment's own metrics, at the strip
+ * tile's width for `readout` and at their natural width for `inline` -
+ * the difference `header-actions.tsx`'s desktop header relies on to make
+ * room for readings rather than a bare glyph.
+ */
+describe("ResourceMonitorPopover · header-button forms (G6)", () => {
+  afterEach(() => {
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  function renderPopoverForm(form: BarReadingForm): {
+    readonly emit: () => ResourcesStreamCallbacks;
+  } {
+    const stub = installStubFactory();
+    render(
+      <TooltipProvider>
+        <EpicLease epicId="epic-1" />
+        <ResourceMonitorPopover
+          trigger="header-button"
+          form={form}
+          claimsOpenAction
+        />
+      </TooltipProvider>,
+    );
+    return stub;
+  }
+
+  it("draws the metrics the layout store shows, and its accessible name follows them", () => {
+    const stub = renderPopoverForm("inline");
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app(), owners: [owner({})] }));
+    });
+
+    // Shipped default: cpu + processes on, memory + ramShare off.
+    const button = screen.getByTestId("resource-monitor-header-button");
+    expect(
+      within(button).getByTestId("status-bar-resource-metric-cpu"),
+    ).not.toBeNull();
+    expect(
+      within(button).getByTestId("status-bar-resource-metric-processes"),
+    ).not.toBeNull();
+    expect(
+      within(button).queryByTestId("status-bar-resource-metric-memory"),
+    ).toBeNull();
+    expect(button.getAttribute("aria-label")).toBe(
+      "Resources: cpu 1.0%, procs 1",
+    );
+
+    // The Metrics checkboxes (the resource monitor's fine-tune row) are the
+    // one place that list is picked - swap cpu for memory and confirm both
+    // the readings drawn and the name that reads them out follow.
+    act(() => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: false,
+        memory: true,
+      });
+    });
+
+    expect(
+      within(button).queryByTestId("status-bar-resource-metric-cpu"),
+    ).toBeNull();
+    expect(
+      within(button).getByTestId("status-bar-resource-metric-memory"),
+    ).not.toBeNull();
+    expect(button.getAttribute("aria-label")).toBe(
+      "Resources: mem 20.0 MB, procs 1",
+    );
+  });
+
+  it("is not w-full in the header's own form, unlike the strip's readout", () => {
+    renderPopoverForm("inline");
+    const inlineButton = screen.getByTestId("resource-monitor-header-button");
+    expect(inlineButton.className).not.toMatch(/\bw-full\b/);
+    cleanup();
+
+    renderPopoverForm("readout");
+    const readoutButton = screen.getByTestId("resource-monitor-header-button");
+    expect(readoutButton.className).toMatch(/\bw-full\b/);
+  });
+
+  it("stays icon-only in the glyph form, whatever the metrics say", () => {
+    const stub = renderPopoverForm("glyph");
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app(), owners: [owner({})] }));
+    });
+
+    const button = screen.getByTestId("resource-monitor-header-button");
+    expect(
+      within(button).queryByTestId("status-bar-resource-metric-cpu"),
+    ).toBeNull();
+    expect(button.getAttribute("aria-label")).toBe("Resources");
+
+    // Even with every metric on, the glyph draws nothing about them - it is
+    // the same fixed Cpu icon regardless.
+    act(() => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: true,
+        memory: true,
+        processes: true,
+        ramShare: true,
+      });
+    });
+
+    expect(
+      within(button).queryByTestId("status-bar-resource-metric-memory"),
+    ).toBeNull();
+    expect(button.getAttribute("aria-label")).toBe("Resources");
+  });
+});
+
+/**
+ * A closed trigger holds the global stream only while it draws live readings.
+ * The glyph and the tile are a bare icon, and so is any trigger with every
+ * metric switched off; the status bar's segment and the header's `readout` /
+ * `inline` forms print numbers while closed and keep their background lease.
+ * The rule is the same on every shell.
  */
 describe.each([false, true])(
   "ResourceMonitorPopover · global stream lease (installed app: %s)",
   (mobileApp) => {
-    function renderHeader(): void {
+    afterEach(() => {
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
+
+    function renderHeader(form: BarReadingForm): void {
       render(
         <TooltipProvider>
           <ResourceMonitorPopover
             trigger="header-button"
-            className={undefined}
+            form={form}
             claimsOpenAction
           />
         </TooltipProvider>,
       );
     }
 
-    it("holds a header glyph's global stream only while its panel is open", () => {
-      setMobileApp(mobileApp);
-      installStubFactory();
-      renderHeader();
-
-      expect(resourcesRegistry.getGlobal()).toBeNull();
-
-      fireEvent.click(screen.getByRole("button", { name: "Resources" }));
-      expect(resourcesRegistry.getGlobal()).not.toBeNull();
-
-      fireEvent.keyDown(document.activeElement ?? document.body, {
-        key: "Escape",
-      });
-      expect(screen.queryByRole("dialog")).toBeNull();
-      expect(resourcesRegistry.getGlobal()).toBeNull();
-    });
-
-    it("keeps a readout trigger's background stream while closed", () => {
-      setMobileApp(mobileApp);
-      installStubFactory();
+    function renderStatusBarTrigger(): void {
       render(
         <TooltipProvider>
           <ResourceMonitorPopover
@@ -5429,7 +5535,83 @@ describe.each([false, true])(
           />
         </TooltipProvider>,
       );
+    }
 
+    function switchEveryMetricOff(): void {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: false,
+        memory: false,
+        processes: false,
+        ramShare: false,
+      });
+    }
+
+    it.each<BarReadingForm>(["glyph", "tile"])(
+      "holds a bare %s button's global stream only while its panel is open",
+      (form) => {
+        setMobileApp(mobileApp);
+        installStubFactory();
+        renderHeader(form);
+
+        expect(resourcesRegistry.getGlobal()).toBeNull();
+
+        fireEvent.click(screen.getByTestId("resource-monitor-header-button"));
+        expect(resourcesRegistry.getGlobal()).not.toBeNull();
+
+        fireEvent.keyDown(document.activeElement ?? document.body, {
+          key: "Escape",
+        });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(resourcesRegistry.getGlobal()).toBeNull();
+      },
+    );
+
+    it.each<BarReadingForm>(["readout", "inline"])(
+      "keeps the %s button's background stream while closed",
+      (form) => {
+        setMobileApp(mobileApp);
+        installStubFactory();
+        renderHeader(form);
+
+        expect(resourcesRegistry.getGlobal()).not.toBeNull();
+      },
+    );
+
+    it("keeps a readout trigger's background stream while closed", () => {
+      setMobileApp(mobileApp);
+      installStubFactory();
+      renderStatusBarTrigger();
+
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    });
+
+    it("lets a closed readout's stream go once every metric is switched off, and takes it back with the first one on", () => {
+      setMobileApp(mobileApp);
+      installStubFactory();
+      renderStatusBarTrigger();
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+
+      act(() => {
+        switchEveryMetricOff();
+      });
+      expect(resourcesRegistry.getGlobal()).toBeNull();
+
+      act(() => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("resourceMonitor", { memory: true });
+      });
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    });
+
+    it("still streams for the panel of a trigger with every metric off", () => {
+      setMobileApp(mobileApp);
+      installStubFactory();
+      switchEveryMetricOff();
+      renderHeader("inline");
+      expect(resourcesRegistry.getGlobal()).toBeNull();
+
+      fireEvent.click(screen.getByTestId("resource-monitor-header-button"));
       expect(resourcesRegistry.getGlobal()).not.toBeNull();
     });
   },

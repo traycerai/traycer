@@ -1,9 +1,11 @@
+import { SAMPLE_USAGE_USED_PERCENT } from "@/components/sample-workspace/sample-workspace-scene";
+import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
 import type { ReactNode } from "react";
 import { PopoverTrigger } from "@/components/ui/popover";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import {
   STATUS_BAR_USAGE_CONTENT_CLASS,
-  statusBarSegmentName,
+  statusBarUsageTriggerName,
   useStatusBarUsageDisplay,
   type StatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
@@ -27,8 +29,7 @@ import {
   type RateLimitPopoverRevealTarget,
 } from "@/stores/rate-limits/rate-limit-popover-store";
 import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
-import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
-import type { PercentMode } from "@/stores/settings/layout-store";
+import { cn } from "@/lib/utils";
 
 /**
  * The strip's left cluster: every visible provider's usage, the one control
@@ -54,8 +55,11 @@ export function StatusBarRateLimitCluster(props: {
   readonly hostId: string | null;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
+  /** Whether a Customize session is live - hidden providers stay clickable. */
+  readonly editing: boolean;
 }): ReactNode {
   const display = useStatusBarUsageDisplay();
+  const sampleCold = useSampleScene();
   const requestRevealProfile = useRateLimitPopoverStore(
     (state) => state.requestRevealProfile,
   );
@@ -66,8 +70,9 @@ export function StatusBarRateLimitCluster(props: {
     // lane polls here, the ephemeral lane takes its cold start here, and the `↻`
     // below fans out from here. Every other reader observes what this one wrote.
     mode: "live",
+    editing: props.editing,
+    sample: sampleCold,
   });
-
   return (
     <>
       {/*
@@ -87,6 +92,7 @@ export function StatusBarRateLimitCluster(props: {
       >
         <StatusBarUsageTrigger
           cluster={cluster}
+          sampleLabel={sampleCold ? cluster.kind !== "hidden" : false}
           display={display}
           onRevealProfile={requestRevealProfile}
         />
@@ -98,7 +104,9 @@ export function StatusBarRateLimitCluster(props: {
         scroller takes the room and this stays pinned beside its right edge.
         The `pl-1` is the gap between the two.
       */}
-      <span className="flex shrink-0 items-center pl-1">
+      {/* The refresh affordance is not a customizable region, so it dims with
+          the rest of the passive chrome while a layout session is live (4.2). */}
+      <span data-layout-passive className="flex shrink-0 items-center pl-1">
         <StatusBarRateLimitRefresh
           refresh={refresh}
           // Nothing to refresh is not the same as a refresh that failed, so
@@ -128,6 +136,7 @@ export function StatusBarRateLimitCluster(props: {
  * It must sit inside a `Popover`: `PopoverTrigger` throws outside one.
  */
 export function StatusBarUsageTrigger(props: {
+  readonly sampleLabel?: boolean;
   readonly cluster: StatusBarRateLimitClusterModel;
   readonly display: StatusBarUsageDisplay;
   readonly onRevealProfile: (target: RateLimitPopoverRevealTarget) => void;
@@ -142,7 +151,11 @@ export function StatusBarUsageTrigger(props: {
         // they are not reachable at all. Kept to one reading per segment:
         // the whole window list is what the panel this opens is for, and
         // a segment scrolled out of view is still in the name.
-        aria-label={triggerAccessibleName(cluster, display.percentMode)}
+        aria-label={
+          props.sampleLabel && cluster.kind === "no-providers"
+            ? `Sample usage · ${SAMPLE_USAGE_USED_PERCENT}% used, ${100 - SAMPLE_USAGE_USED_PERCENT}% remaining`
+            : `${props.sampleLabel ? "Sample readings · " : ""}${statusBarUsageTriggerName(cluster, display.percentMode)}`
+        }
         data-testid="status-bar-rate-limit-trigger"
         // The bar's own right-click menu stands down over a control that is
         // itself a way into the surface the menu summarises.
@@ -160,13 +173,27 @@ export function StatusBarUsageTrigger(props: {
         // shrank would hide readings the scroller exists to reach. No
         // padding either - the readings inside carry it, so the hover
         // fill and focus ring end where the last reading does.
-        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        // On a phone it may shrink as far as the readings' own floor (see
+        // the scroller), which is where the account names truncate.
+        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 max-md:shrink"
       >
         <span
           data-testid="status-bar-rate-limit-content"
-          className={STATUS_BAR_USAGE_CONTENT_CLASS}
+          className={cn(STATUS_BAR_USAGE_CONTENT_CLASS, "max-md:shrink")}
         >
-          <StatusBarUsageReadings cluster={cluster} display={display} />
+          {props.sampleLabel ? (
+            <span className="text-ui-xs">Sample</span>
+          ) : null}
+          {props.sampleLabel && cluster.kind === "no-providers" ? (
+            <span>
+              Usage ·{" "}
+              {display.percentMode === "remaining"
+                ? `${100 - SAMPLE_USAGE_USED_PERCENT}% left`
+                : `${SAMPLE_USAGE_USED_PERCENT}% used`}
+            </span>
+          ) : (
+            <StatusBarUsageReadings cluster={cluster} display={display} />
+          )}
         </span>
       </button>
     </PopoverTrigger>
@@ -194,37 +221,6 @@ function statusBarSegmentAtClick(
     providerId: providerId.data,
     profileId: profileId === "" ? null : profileId,
   };
-}
-
-/**
- * What a screen reader hears on the trigger: the strip's headline, then the
- * tightest reading for each segment it is showing - named by provider, and by
- * account too where the provider has more than one.
- *
- * One reading per segment rather than every window, because this is a control
- * name and a name is read in full before anything else can happen. The tightest
- * window is the one the segment model selects by default for the same reason -
- * it is the number that decides whether the panel is worth opening. Every
- * segment is in the name whether or not it is currently scrolled into view:
- * what a screen reader hears cannot depend on where the strip is scrolled to.
- */
-function triggerAccessibleName(
-  cluster: StatusBarRateLimitClusterModel,
-  percentMode: PercentMode,
-): string {
-  if (cluster.kind !== "segments") return "Usage limits";
-  const readings = cluster.segments.flatMap((segment) =>
-    segment.tightest === null
-      ? []
-      : [
-          `${statusBarSegmentName(segment)} ${windowPercentText(
-            segment.tightest.usedPercent,
-            percentMode,
-          )}`,
-        ],
-  );
-  if (readings.length === 0) return "Usage limits";
-  return `Usage limits: ${readings.join(", ")}`;
 }
 
 /**
@@ -279,6 +275,9 @@ function StatusBarRateLimitRefresh(props: {
 /**
  * One target's cold-start pull, through `fetchProviderRateLimits`.
  *
+ * Exported for the tab strip's usage reading, which owns the fetching the
+ * same way whenever the reading lives there instead (G6).
+ *
  * Its own component so the hook count stays fixed while the provider list
  * changes. This is the only automatic fetch the cluster initiates for the
  * ephemeral lane, and it is deliberate: those observers are disabled by lane,
@@ -287,7 +286,7 @@ function StatusBarRateLimitRefresh(props: {
  * direct refetch would send no `force`, which the wire reads as forced, and
  * spawn a probe the host could have answered from its gauge.
  */
-function StatusBarProviderMountRefresh(props: {
+export function StatusBarProviderMountRefresh(props: {
   readonly target: StatusBarRateLimitMountTarget;
 }): ReactNode {
   useRefreshProviderRateLimitsOnMount({

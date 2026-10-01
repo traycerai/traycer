@@ -1,4 +1,4 @@
-import type { PercentMode } from "@/stores/settings/layout-store";
+import type { AmountMode } from "@/lib/layout/layout-values";
 
 /**
  * One rate-limit reading as the status bar words it: `57% used`, or
@@ -15,7 +15,7 @@ import type { PercentMode } from "@/stores/settings/layout-store";
  */
 export function windowPercentText(
   usedPercent: number,
-  percentMode: PercentMode,
+  percentMode: AmountMode,
 ): string {
   return `${windowPercentValueText(usedPercent, percentMode)} ${percentMode}`;
 }
@@ -40,7 +40,7 @@ export function windowPercentText(
  */
 export function windowPercentValueText(
   usedPercent: number,
-  percentMode: PercentMode,
+  percentMode: AmountMode,
 ): string {
   const used = Math.min(100, Math.max(0, Math.round(usedPercent)));
   return `${percentMode === "used" ? used : 100 - used}%`;

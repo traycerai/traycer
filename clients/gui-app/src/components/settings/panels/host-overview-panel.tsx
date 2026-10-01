@@ -11,8 +11,11 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
+import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
+import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
 import {
@@ -198,7 +201,10 @@ export function HostOverviewPanel(props: {
   readonly scope: HostScope;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
-  readonly onLocalDoctorFix: (issue: HostDoctorIssue) => void;
+  readonly onLocalDoctorFix: (
+    issue: HostDoctorIssue,
+    onApplied: () => void,
+  ) => void;
   readonly localDoctorFixPendingCode: string | null;
   /**
    * The selected tab, held by `HostSettingsPanel` ABOVE this page's per-host
@@ -321,7 +327,7 @@ export function HostOverviewPanel(props: {
   const {
     identity: identityDegrade,
     identitySet: identitySetDegrade,
-    restart: restartDegrade,
+    restart: capabilityRestartDegrade,
     restartViaForceFallback,
     restartSupported,
     logsSupported,
@@ -336,6 +342,24 @@ export function HostOverviewPanel(props: {
     maintenanceFallback: scope.localMaintenanceFallback,
     restartForceRoute: forceRestartLocalHostId !== null,
   });
+  // THIS machine's host started in a terminal: the app never restarts a run it
+  // did not start. One gate, read wherever the capability's is - the header's
+  // Restart shows the reason, and every open restart dialog closes (the
+  // render-time rules on `restartDegrade`, the bridge route's and the offers'
+  // included) - so a run that starts under an open page stands those restarts
+  // down at once. The card's controls take it at their props
+  // (`foregroundHeldFinish`).
+  const localForegroundRun =
+    useLocalHostForegroundRun() && (host?.isLocalMachine ?? false);
+  // What this page's update surfaces say in place of their controls during
+  // that run - one picker, so the version card, the update card and the
+  // version rows name the same step (`hostForegroundUpdateLine`).
+  const foregroundUpdateLine = useLocalHostForegroundUpdateLine();
+  const localForegroundUpdateLine =
+    (host?.isLocalMachine ?? false) ? foregroundUpdateLine : null;
+  const restartDegrade: OverviewDegradeReason | null = localForegroundRun
+    ? "terminal-run"
+    : capabilityRestartDegrade;
   // Every surface that opens the restart confirm - the header's Restart, the
   // card's Restart and its attempt-park Force, the Doctor sheet's bridge
   // restart - arms it for the route the page routes Restart to at that
@@ -857,6 +881,7 @@ export function HostOverviewPanel(props: {
     registerDegrade: serviceRegisterDegrade,
     deregisterDegrade: serviceDeregisterDegrade,
     busy: corePending,
+    foregroundRun: localForegroundRun,
     hostId: scope.hostId,
     scopeUsable: usable,
     settledBusy: view.settledBusy,
@@ -1030,6 +1055,7 @@ export function HostOverviewPanel(props: {
     checkDegrade: updateCheckDegrade,
     installDegrade: updateInstallDegrade,
     busy: updateGatePending,
+    foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,
   });
   const anyPending = updateGatePending || updates.summary.installing;
@@ -1219,7 +1245,14 @@ export function HostOverviewPanel(props: {
     // mid-flight, the attempt parks, the first `seen` frame arrives, and
     // without this the one shot is spent on a dialog closed in the same pass
     // for a retirement that ends a few seconds later.
-    gateArmed: anyPending || updates.degrade !== null,
+    //
+    // A foreground run on this machine too: the rule after the restart
+    // confirm's closes any offer opened under one, so firing now would spend
+    // the one shot on a dialog nobody sees.
+    gateArmed:
+      anyPending ||
+      updates.degrade !== null ||
+      restartDegrade === "terminal-run",
     supported: updates.activate !== null,
     dispatch: updateDispatch,
     incarnation,
@@ -1260,13 +1293,36 @@ export function HostOverviewPanel(props: {
   }
   // A COOPERATIVE confirm answers a `host.restart` the handshake can withdraw
   // while it is open (`restartDegrade`, the header's own gate); the bridge
-  // route needs no method and is unaffected.
+  // route needs no method, so only a foreground run reaches it (below).
   if (
     restartConfirm === "cooperative" &&
     restartDegrade !== null &&
     !restartDialogOwnDispatch
   ) {
     closeRestartConfirm();
+  }
+  // A host started in a terminal on this machine, begun under an open
+  // dialog, withdraws every dialog here that would restart it - whichever
+  // route or offer armed it. The cooperative confirm closed above
+  // (`terminal-run` is a `restartDegrade`); these are the bridge respawn's two
+  // dialogs, which no method degrade reaches, and the two update-finish
+  // offers whose openers the card withholds under the same fact
+  // (`foregroundHeldFinish`). Each keeps a dispatch of its OWN already in
+  // flight, as the page-wide rules do: that click was answered before the run
+  // began, and the CLI's refusal is its backstop.
+  if (restartDegrade === "terminal-run") {
+    if (restartConfirm === "bridge" && !restartDialogOwnDispatch) {
+      closeRestartConfirm();
+    }
+    if (forceRestartOffer !== null && !forceRestartInFlight) {
+      setForceRestartOffer(null);
+    }
+    if (forceUpdateOffer !== null && !updates.summary.installing) {
+      setForceUpdateOffer(null);
+    }
+    if (boundOffer !== null && !updates.summary.installing) {
+      setBoundOffer(null);
+    }
   }
   // The force offer has the same window and a sharper reason to close in it: no
   // lifecycle write on this page may dispatch beside a bridge respawn, and an
@@ -1378,11 +1434,13 @@ export function HostOverviewPanel(props: {
   // attempt-first choice and the legacy fallback each read as one decision,
   // and so the gates the card documents are stated once. All three carry the
   // page-wide gates the header's Restart and the region's Update now carry
-  // (`restartDegrade` / `updates.degrade`, `anyPending`) on top of a LIVE
-  // status read.
+  // (the restart capability / `updates.degrade`, `anyPending`) on top of a
+  // LIVE status read. A foreground run is applied once, where the card's
+  // props are built (`foregroundHeldFinish`), so the card can say what it
+  // withheld rather than simply lose its controls.
   const legacyDebtRestart =
     !statusLive ||
-    restartDegrade !== null ||
+    capabilityRestartDegrade !== null ||
     anyPending ||
     (legacyFacts?.activationDebt ?? null) === null
       ? null
@@ -1429,6 +1487,31 @@ export function HostOverviewPanel(props: {
   // expression inline; naming it is what keeps the two from disagreeing.
   const parkForceControl =
     attemptControl?.intent === "continue" ? openBoundOffer : legacyStagedForce;
+  // Restart cannot activate a stage, so the attempt-park Force restart is
+  // offered only when no stage waits; see the card's `onForceRestart`.
+  const parkForceRestart =
+    statusLive &&
+    capabilityRestartDegrade === null &&
+    !anyPending &&
+    legacyFacts !== null &&
+    legacyFacts.stagedWait === null
+      ? () => {
+          // Attempt parks keep the existing cooperative restart
+          // confirmation and its fresh live-work check.
+          openRestartConfirm();
+        }
+      : null;
+  const cardRestart =
+    attemptControl?.intent === "activate" ? openBoundOffer : legacyDebtRestart;
+  // A host started in a terminal on this machine: every control that would
+  // finish the update (restart, force restart, force update) reaches the CLI
+  // and is refused, so the card withholds them and says what finishes it.
+  const foregroundHeldFinish =
+    cardRestart !== null ||
+    parkForceRestart !== null ||
+    parkForceControl !== null
+      ? localForegroundUpdateLine
+      : null;
 
   // THE REMEDY ROW'S OWN RENDER DECISION, named once and read twice.
   //
@@ -1606,21 +1689,11 @@ export function HostOverviewPanel(props: {
               // subsumes `usable`): an offer made off a failed or aged read
               // would act on a park the host may have left. (The projection
               // withholds the whole force control under a demoted view
-              // already, but the dispatch gate belongs here, not in the
-              // card's layout.) The confirm it opens is armed for whichever
-              // route the page routes Restart to, like the header's.
-              onForceRestart:
-                statusLive &&
-                restartDegrade === null &&
-                !anyPending &&
-                legacyFacts !== null &&
-                legacyFacts.stagedWait === null
-                  ? () => {
-                      // Attempt parks keep the existing cooperative restart
-                      // confirmation and its fresh live-work check.
-                      openRestartConfirm();
-                    }
-                  : null,
+              // already, but the dispatch gate belongs with the handler,
+              // `parkForceRestart`, not in the card's layout.) The confirm it
+              // opens is armed for whichever route the page routes Restart
+              // to, like the header's.
+              onForceRestart: localForegroundRun ? null : parkForceRestart,
               // The card's three controls sit behind the SAME capability and
               // page-wide gates as the header's Restart and the region's
               // Update now (`restartDegrade`, `updates.degrade`,
@@ -1654,10 +1727,7 @@ export function HostOverviewPanel(props: {
               // and still gets the way forward. Same confirm the header's
               // Restart opens, so the transition id, the busy verdict and the
               // force/defer dialog are all the existing ones.
-              onRestart:
-                attemptControl?.intent === "activate"
-                  ? openBoundOffer
-                  : legacyDebtRestart,
+              onRestart: localForegroundRun ? null : cardRestart,
               // ATTEMPT FIRST here too. A `waiting-for-work` attempt resumes
               // through `host.update.continue`, which needs no catalog gate at
               // all: the bytes were authorized when the attempt was created,
@@ -1666,14 +1736,17 @@ export function HostOverviewPanel(props: {
               // is exactly the case `installForce` cannot express.
               //
               // Otherwise today's staged-wait force.
-              onForceUpdate: parkForceControl,
+              onForceUpdate: localForegroundRun ? null : parkForceControl,
+              foregroundHeldFinish,
             }
       }
       // ONE WAIT ON SCREEN. The account's wait shows only while the host has
       // not reported one of its own: once the view is `waiting-for-work`
       // (retained phase included), the update card above says it, with Force
       // update… as its control. Withheld too while the host can't be reached:
-      // it names live work, so it needs the host's own count.
+      // it names live work, so it needs the host's own count. Its Apply now
+      // finishes the update on the host, so a foreground run on this machine
+      // withholds it for the line Update now shows.
       drainGate={
         registryItem === null || !usable || inFlightKind === "waiting-for-work"
           ? null
@@ -1684,6 +1757,7 @@ export function HostOverviewPanel(props: {
               liveBusyBreakdown: view.busyBreakdown,
               settledBusySessionCount: view.settledBusySessionCount,
               settledBusyBreakdown: view.settledBusyBreakdown,
+              foregroundUpdateLine: localForegroundUpdateLine,
             }
       }
     />
@@ -1731,6 +1805,7 @@ export function HostOverviewPanel(props: {
                     degrade: updates.degrade,
                     desktopBridge: desktopUpdates.bridge,
                     onInstallationHelp: () => setDoctorOpen(true),
+                    foregroundUpdateLine: localForegroundUpdateLine,
                   },
               inFlight: inFlightKind !== null,
             }
@@ -1872,6 +1947,7 @@ export function HostOverviewPanel(props: {
         healthAction={
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
+        lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
       >
         {notices}
         {/* The tab bar and the one body showing, pinned under the header.

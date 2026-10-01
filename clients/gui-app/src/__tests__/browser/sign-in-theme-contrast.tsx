@@ -29,7 +29,7 @@ import "@/index.css";
  * The page paints a fixed dark ground while its controls resolve colours from
  * theme tokens, so whether a label is legible is a question about the RENDERED
  * colours under a given theme - which jsdom, with no cascade and no pixels,
- * cannot answer. `scripts/sign-in-theme-contrast-browser.mjs` drives this
+ * cannot answer. `browser-tests/sign-in-theme-contrast.spec.ts` drives this
  * fixture, reads each label's colour against the pixels behind it, and
  * asserts the contrast under every preset in both appearances.
  *

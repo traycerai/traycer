@@ -19,6 +19,7 @@ import {
 } from "@/hooks/auth/use-link-login-watch";
 import { useRespondLinkLoginMutation } from "@/hooks/auth/use-respond-link-login-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * Seconds until the query's interval mints the next code. The rotation
@@ -34,12 +35,13 @@ function useRotationCountdown(props: {
 }): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const timer = setInterval(() => {
-      setNowMs(Date.now());
-    }, 1_000);
-    return () => {
-      clearInterval(timer);
-    };
+    return startVisibleInterval({
+      tick: () => {
+        setNowMs(Date.now());
+      },
+      intervalMs: 1_000,
+      fireOnShow: true,
+    });
   }, []);
   const rotationLeadMs = props.expiresInSeconds * 1_000 - LINK_LOGIN_REMINT_MS;
   const nextCodeAtMs = props.expiresAtEpochSeconds * 1_000 - rotationLeadMs;
@@ -64,12 +66,13 @@ function formatRemaining(remainingMs: number): string {
 function useClaimCountdown(expiresAtMs: number): string {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const timer = setInterval(() => {
-      setNowMs(Date.now());
-    }, 1_000);
-    return () => {
-      clearInterval(timer);
-    };
+    return startVisibleInterval({
+      tick: () => {
+        setNowMs(Date.now());
+      },
+      intervalMs: 1_000,
+      fireOnShow: true,
+    });
   }, []);
   return formatRemaining(expiresAtMs - nowMs);
 }

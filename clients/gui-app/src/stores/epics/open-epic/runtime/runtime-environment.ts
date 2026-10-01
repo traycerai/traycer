@@ -11,11 +11,17 @@
  * module is the piece that gets REPLACED at that boundary; nothing else has to.
  */
 import type {
+  RuntimeClock,
   RuntimeEnvironment,
   RuntimeLogFields,
   RuntimeTimer,
 } from "@traycer-clients/shared/replica-runtime";
 import { appLogger } from "@/lib/logger";
+
+/** The renderer also supplies elapsed time, unaffected by wall-clock changes. */
+export interface RendererRuntimeEnvironment extends RuntimeEnvironment {
+  readonly clock: RuntimeClock & { monotonicNow(): number };
+}
 
 /**
  * The renderer environment.
@@ -24,11 +30,14 @@ import { appLogger } from "@/lib/logger";
  * suite's fake timers both patch the `window`-bound pair, and the existing
  * artifact-room cooldown tests depend on that binding.
  */
-export function createRendererRuntimeEnvironment(): RuntimeEnvironment {
+export function createRendererRuntimeEnvironment(): RendererRuntimeEnvironment {
   return {
     clock: {
       now(): number {
         return Date.now();
+      },
+      monotonicNow(): number {
+        return performance.now();
       },
     },
     scheduler: {

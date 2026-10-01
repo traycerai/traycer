@@ -1286,10 +1286,11 @@ export type WorktreeSubmoduleMergeFactV12 = z.infer<
  * housekeeping skill and the Settings ▸ Worktrees tab use, on top of every
  * v1.0 field.
  *
- * `includeActivity` gates ONLY the git probes - `lastActivityAt` and
- * `branchStatus` - which carry the per-worktree cost; both are `null` when the
- * flag is `false`. The other two fields are cheap and ALWAYS populated,
- * regardless of the flag:
+ * `includeActivity` gates fresh git and PR probes, not the cached facts in a
+ * resolved row. A base listing with the flag `false` may therefore return
+ * previously probed activity, PR and submodule facts; a never-probed row
+ * carries their null/empty sentinels. The following two fields are cheap and
+ * ALWAYS populated, regardless of the flag:
  *  - `owners` - a SQLite binding-table read (the same join `ensureIndexHydrated`
  *    already performs). Consumers rely on this being present even with
  *    `includeActivity: false`: the Task-delete dialog derives "unreferenced"
@@ -1300,14 +1301,13 @@ export type WorktreeSubmoduleMergeFactV12 = z.infer<
 export const worktreeHostEntrySchemaV11 = lazySchema(() =>
   worktreeHostEntrySchema.extend({
     // max(git HEAD reflog last entry, binding `updatedAt` for this path).
-    // Derived, never persisted. `null` when `includeActivity` is false or no
-    // signal is available.
+    // Derived, never persisted. `null` when no cached/probed signal is available.
     lastActivityAt: z.number().nullable(),
     // Persisted `WorktreeBindingV1` rows (this host) whose effective directory is
     // this worktree. `[]` = unreferenced.
     owners: z.array(worktreeHostEntryOwnerSchema),
     // `null` when detached / default branch unresolvable / probe failed /
-    // `includeActivity` false. A never-pushed branch is NOT null here: its
+    // no cached answer. A never-pushed branch is NOT null here: its
     // `mergedIntoDefault` is proved from local ancestry (with `ahead`/`behind`
     // null). Null therefore means "position unknown", never "no upstream".
     branchStatus: worktreeBranchStatusSchema.nullable(),
@@ -1317,9 +1317,10 @@ export const worktreeHostEntrySchemaV11 = lazySchema(() =>
     // Superproject PR facts from the host's best-effort `gh` probe. When the
     // branch WAS probed but no green PR resulted - no PR found, or `gh`
     // absent/unauth/failed (indistinguishable to the host) - `prState` is `"none"`
-    // and `prNumber`/`prUrl` are `null`. `prState` is `null` only when the branch
-    // was NOT probed (`includeActivity: false`). `mergedHeadShaMatches` is the
-    // host's live-HEAD comparison (HEAD === the merged head SHA) - the pure client
+    // and `prNumber`/`prUrl` are `null`. `prState: null` means no usable PR
+    // fact has been established; `includeActivity: false` can still serve a
+    // cached fact. `mergedHeadShaMatches` is the host's live-HEAD comparison
+    // (HEAD === the merged head SHA) - the pure client
     // classifier greens `Merged (PR)` on `prState === "merged" &&
     // mergedHeadShaMatches`, so it never needs the SHA. `false` whenever unproven.
     prState: worktreePrStateSchema.nullable(),
@@ -1327,7 +1328,7 @@ export const worktreeHostEntrySchemaV11 = lazySchema(() =>
     prUrl: z.string().nullable(),
     mergedHeadShaMatches: z.boolean(),
     // Per-owned-submodule merge facts for the True-AND Task rollup. `[]` when the
-    // worktree owns no submodule branches or `includeActivity` is false.
+    // worktree owns no submodule branches or none have been probed yet.
     submodules: z.array(worktreeSubmoduleMergeFactSchema),
     // Host-computed "At base commit" signal: the worktree is untouched - clean,
     // its HEAD is contained in the default branch, and its HEAD reflog carries no
@@ -1344,7 +1345,7 @@ export const worktreeHostEntrySchemaV11 = lazySchema(() =>
     // proven merged. An unproven owned submodule still forces Review.
     // FAILS CLOSED: an unknown reflog (`null`) is NOT at-base. `false` whenever
     // unproven: dirty, HEAD not contained in default, an authored-commit reflog
-    // entry, or `includeActivity` false (the probes are gated).
+    // entry, or no prior probe when `includeActivity` is false.
     atBaseCommit: z.boolean(),
   }),
 );
