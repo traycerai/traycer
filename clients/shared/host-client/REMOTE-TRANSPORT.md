@@ -280,9 +280,11 @@ word about its own host leg is host-transport-plane evidence; the authority
 confirms death on a streak, and this keeps the streak's cadence without an
 attach behind each report); parked `sendUnary` callers get the retryable
 pre-send failure a refused attach promises; the client re-auth loop is armed so
-the relay's 60-min client-leg deadline never sweeps the parked leg; a Noise
-responder that completes after the detach does not open; `forceReconnect`
-drops the parked leg and redials now. Before
+the relay's 60-min client-leg deadline never sweeps the parked leg; the
+host-standing watchdog (§10) a responder frame may have armed is cleared, since
+the relay has declared the host absent and the refusal cadence is that
+absence's evidence; a Noise responder that completes after the detach does not
+open; `forceReconnect` drops the parked leg and redials now. Before
 this a client of an offline host attached, sent its Noise initiator, was told
 `peer_gone{host_gone}`, backed off 1–30 s and attached again for as long as the
 host stayed away — 88,269 attaches a day across 20 hosts on 2026-09-24, each

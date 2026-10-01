@@ -3968,10 +3968,22 @@ export class RemoteSession<
     //    `handleOpenAck`, which this connection will not reach; without it
     //    the relay's 60-minute client deadline would close the leg and force
     //    the very redial the park removes.
+    //  - **The standing watchdog is not the exit.** A park entered during
+    //    `opening` has seen one host frame (the Noise responder), and that
+    //    frame armed the 15-minute host-standing watchdog. The watchdog is a
+    //    claim about a host that has stopped SPEAKING; this host has been
+    //    declared ABSENT by the relay, and the parked-refusal cadence above is
+    //    the evidence that absence produces. Left armed, it would lapse at 15
+    //    minutes, fail the connection and restart the redial loop. The
+    //    ready-phase park below keeps its watchdog on purpose (§9 of
+    //    REMOTE-TRANSPORT.md: a client that missed the detach has no other
+    //    exit); that costs one redial per detach, after which the redial
+    //    parks here, where nothing re-arms it.
     //  - The handshake continuation, `forceReconnect` and `runClientReauth`
     //    each consult the parked state at their own site.
     if (this.phase === "handshaking" || this.phase === "opening") {
       this.clearPhaseTimer();
+      this.clearStandingTimer();
       this.reportParkedRefusal(generation);
       this.settleReadyWaiters(false);
       if (this.reauthTimer === null) {

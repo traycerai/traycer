@@ -34,6 +34,7 @@ import type {
 } from "../../websocket";
 import type { RemoteSessionAuth } from "../auth";
 import {
+  HOST_STANDING_BOUND_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
   SESSION_OPEN_ACK_TIMEOUT_MS,
 } from "../config";
@@ -507,6 +508,16 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
       relay.sockets[0]?.deliverControl("host_detached");
       await advanceToSinceFirstRefusal(spies, 31_000);
       expect(refusalNumbers(spies, 1)).toEqual([1, 2, 3]);
+      expect(relay.sockets).toHaveLength(1);
+      expect(relay.sockets[0]?.closeCalls).toBe(0);
+      expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();
+      expect(session.isClosed()).toBe(false);
+
+      // The responder frame armed the 15-minute host-standing watchdog. A park
+      // entered during `opening` must clear it: the relay has declared the
+      // host absent and the cadence above is that absence's evidence, so a
+      // lapse here would be a redial for a host already known to be away.
+      await advanceToSinceFirstRefusal(spies, HOST_STANDING_BOUND_MS + MINUTE_MS);
       expect(relay.sockets).toHaveLength(1);
       expect(relay.sockets[0]?.closeCalls).toBe(0);
       expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();
