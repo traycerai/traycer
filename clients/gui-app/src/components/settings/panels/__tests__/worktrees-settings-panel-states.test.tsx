@@ -538,8 +538,16 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     // it replaced sat above the list and spent rows the list could not get
     // back, and the panel header lost its subtitle with it - so the list card
     // is the only thing under the title now.
-    screen.getByTestId("worktree-auto-cleanup-chip");
+    const cleanupChip = screen.getByTestId("worktree-auto-cleanup-chip");
     expect(screen.queryByTestId("worktree-auto-cleanup-section")).toBeNull();
+    // The agent-worktrees chip rides in the same leading slot, to the right of
+    // Automatic cleanup: the host's two worktree policies side by side.
+    const agentChip = screen.getByTestId("worktree-agent-create-chip");
+    expect(
+      cleanupChip.compareDocumentPosition(agentChip) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
+    expect(agentChip.parentElement).toBe(cleanupChip.parentElement);
     expect(
       screen.queryByText("Traycer-created worktrees on this host."),
     ).toBeNull();
