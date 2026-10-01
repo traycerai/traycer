@@ -55,8 +55,10 @@ interface AnswerCardLook {
  *
  * "Latest" is quiet because the page already says it twice: the version
  * list's installed row wears `latest` beside `installed`, and the header's
- * health line names the version. "Checking" is quiet because Check now, on
- * the version list's heading, spins for exactly that span.
+ * health line names the version. "Checking" is the FIRST load only, with no
+ * answer in hand yet (`describeCheckState`), and the version list says it is
+ * asking; a re-check keeps the answer already on screen, so the card never
+ * leaves for the span of one.
  */
 const ANSWER_CARD_LOOK: Record<HostOverviewAnswerKind, AnswerCardLook | null> =
   {
@@ -137,9 +139,9 @@ const TONE_CLASSES: Record<
 /**
  * Updates ▸ Answer card: the update answer, only when it has something to
  * say. It leads the Updates tab, above the auto-update switch and the version
- * list, and draws NOTHING for a host that is current or mid-check: the
- * version is the header's, "latest" is the installed row's, and Check now is
- * the version list's.
+ * list, and draws NOTHING for a host that is current or still on its first
+ * check: the version is the header's, "latest" is the installed row's, and
+ * Check now is the version list's.
  *
  * Every other answer is a card: an icon tile, a title, the answer's own
  * sentence under it, and the answer's one control (Update now, or the
@@ -348,9 +350,9 @@ function answerCardActions(answer: HostOverviewVersionAnswer): ReactNode {
 
 /**
  * The card itself: icon tile, title, body, controls and the red footer. A
- * `@container`, so the controls sit under the text on a phone and move to
- * the right edge from `@lg` up - the settings pane is fluid, so its width,
- * not the viewport's, is the one that decides.
+ * `@container`, so the controls stack under the text at its full width on a
+ * phone and move to the right edge from `@lg` up - the settings pane is
+ * fluid, so its width, not the viewport's, is the one that decides.
  */
 function AnswerCardFrame(props: {
   readonly look: AnswerCardLook;
@@ -413,7 +415,7 @@ function AnswerCardFrame(props: {
             {props.body}
           </div>
           {props.actions === null ? null : (
-            <div className="flex flex-wrap items-center gap-2 @lg:shrink-0 @lg:justify-end">
+            <div className="flex flex-col gap-2 @lg:shrink-0 @lg:flex-row @lg:flex-wrap @lg:items-center @lg:justify-end">
               {props.actions}
             </div>
           )}

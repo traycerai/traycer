@@ -83,6 +83,8 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
@@ -227,6 +229,37 @@ function multiVersionManifest(
   };
 }
 
+/** A successful `host.update.check` answer listing the given versions. */
+function okAnswer(
+  versions: readonly string[],
+  includePreReleases: boolean,
+): ResponseOfMethod<HostRpcRegistry, "host.update.check"> {
+  return {
+    outcome: "ok" as const,
+    effectiveIncludePreReleases: includePreReleases,
+    includePreReleasesSource: includePreReleases
+      ? ("explicit-include" as const)
+      : ("stable-default" as const),
+    manifest: multiVersionManifest(versions),
+  };
+}
+
+/** A promise a test holds open, and the one call that lets it go. */
+interface Gate {
+  readonly promise: Promise<void>;
+  readonly release: () => void;
+}
+
+function makeGate(): Gate {
+  let release: () => void = () => {
+    throw new Error("gate was not initialized");
+  };
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release: () => release() };
+}
+
 function panelElement(
   client: QueryClient,
   runnerHost: IRunnerHost,
@@ -367,7 +400,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(screen.getByTestId("host-auto-update-host-a")).toBeTruthy();
   });
 
-  it("a transient refused install shows under the version list and as the answer card's footer, and every row unfreezes once it resolves", async () => {
+  it("a transient refused install shows under the version list and, for a current host, as a failed-attempt card of its own, and every row unfreezes once it resolves", async () => {
     let releaseInstall: () => void = () => {
       throw new Error("install gate was not initialized");
     };
@@ -447,11 +480,15 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
         screen.getByTestId("host-overview-version-install-refused").textContent,
       ).toContain("host-a's CLI can't downgrade to v1.5.0");
     });
-    // … and once as the answer card's red footer, from the SAME failure — the
-    // answer card leads this same Updates tab, directly above the list, so it
-    // stays mounted right alongside it.
+    // … and once above it, from the SAME failure. This host is current
+    // (1.6.0 is the latest), so the answer is quiet and there is no answer
+    // for the failure to sit under: it is drawn as a card of its own, the
+    // `failed-attempt` kind, and its title carries the reason.
+    const failedCard = screen.getByTestId("host-overview-answer-card");
+    expect(failedCard.getAttribute("data-answer")).toBe("failed-attempt");
     expect(
-      screen.getByTestId("host-overview-update-attempt-failed").textContent,
+      within(failedCard).getByTestId("host-overview-update-attempt-failed")
+        .textContent,
     ).toContain("host-a's CLI can't downgrade to v1.5.0");
 
     // The rows unfreeze; nothing switched tabs.
@@ -467,6 +504,62 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
         .getByTestId("host-overview-tab-panel-updates")
         .getAttribute("data-state"),
     ).toBe("active");
+  });
+
+  it("a refused install under an available answer shows as the footer inside that card, not as a card of its own", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve(okAnswer(["1.6.0", "1.5.0"], false)),
+        "host.update.install": () =>
+          Promise.resolve({
+            outcome: "cli-failed" as const,
+            reason: "host-a's CLI can't install v1.6.0",
+            storeFloor: null,
+          }),
+      },
+    });
+    // @1.3 install negotiated so the mock's `reason`/`storeFloor` fields
+    // actually decode, as in the refused-install test above.
+    recordOverviewHostMethods("host-a", ALL_OVERVIEW_METHODS, 3, 4);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(
+      "host-a",
+      fixture,
+      registryItemFor("host-a", "manual"),
+      {},
+    );
+    render(
+      panelElement(
+        new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        }),
+        makeRunnerHost(),
+      ),
+    );
+
+    await selectHostOverviewTab("updates");
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("available");
+    fireEvent.click(await screen.findByTestId("host-overview-update-now"));
+
+    // The refusal lands as the red footer INSIDE the answer that is still
+    // showing: the card keeps its `available` kind, and there is only one.
+    await waitFor(() => {
+      expect(
+        within(card).getByTestId("host-overview-update-attempt-failed")
+          .textContent,
+      ).toContain("host-a's CLI can't install v1.6.0");
+    });
+    expect(screen.getAllByTestId("host-overview-answer-card")).toHaveLength(1);
+    expect(
+      screen
+        .getByTestId("host-overview-answer-card")
+        .getAttribute("data-answer"),
+    ).toBe("available");
   });
 
   it("Check now, with no list to show, runs the exact check the answer card uses, refreshing both from one request", async () => {
@@ -682,5 +775,195 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(
       updatesPane.queryByTestId("host-overview-version-picker"),
     ).toBeNull();
+  });
+});
+
+// A RE-CHECK IS NOT AN ANSWER (`describeCheckState`): the answer card must not
+// unmount for the span of a re-check. Each case below holds the second
+// `host.update.check` open and asserts, in that window, that the SAME card
+// node is still on screen; on the old behaviour the in-flight fetch answered
+// "checking", which draws no card, so `getByTestId` throws and `toBe` fails.
+describe("<HostSettingsPanel /> Overview ▸ Updates tab — a re-check leaves the answer standing", () => {
+  async function openUpdatesTab(fixture: OverviewHostFixture): Promise<void> {
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(
+      "host-a",
+      fixture,
+      registryItemFor("host-a", "manual"),
+      {},
+    );
+    render(
+      panelElement(
+        new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        }),
+        makeRunnerHost(),
+      ),
+    );
+    await selectHostOverviewTab("updates");
+  }
+
+  function checkNow(): HTMLElement {
+    return screen.getByTestId("host-overview-update-check");
+  }
+
+  it("Check now over an available answer keeps the card mounted (same node) with Update now disabled, and Update now returns when it settles", async () => {
+    // Pins: the card must not unmount for the span of a re-check.
+    const gate = makeGate();
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return Promise.resolve(okAnswer(["1.6.0"], false));
+          }
+          return gate.promise.then(() => okAnswer(["1.6.0"], false));
+        },
+      },
+    });
+    await openUpdatesTab(fixture);
+
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("available");
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(false);
+    });
+    expect(
+      screen.getByTestId("host-overview-update-now").hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(checkNow());
+    await waitFor(() => expect(checkCalls).toBe(2));
+    // The render of the in-flight re-check is on screen once Check now spins.
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("available");
+    expect(
+      screen.getByTestId("host-overview-update-now").hasAttribute("disabled"),
+    ).toBe(true);
+
+    gate.release();
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(false);
+    });
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("available");
+    expect(
+      screen.getByTestId("host-overview-update-now").hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("ticking Include release candidates keeps the card mounted (same node) while the new check is held", async () => {
+    // Pins: the card must not unmount while a query-key change re-asks the
+    // host with the previous catalog kept on screen (`keepPreviousData`).
+    const gate = makeGate();
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return Promise.resolve(okAnswer(["1.6.0"], false));
+          }
+          return gate.promise.then(() => okAnswer(["1.6.0"], true));
+        },
+      },
+    });
+    await openUpdatesTab(fixture);
+
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("available");
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Include release candidates",
+    });
+    await waitFor(() => {
+      expect(checkbox.hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(checkCalls).toBe(2));
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("available");
+    expect(
+      screen.getByTestId("host-overview-update-now").hasAttribute("disabled"),
+    ).toBe(true);
+
+    gate.release();
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(false);
+    });
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("available");
+    expect(
+      screen.getByTestId("host-overview-update-now").hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("a retry of a check that failed with no catalog keeps the unreachable card, and a current answer then retires it", async () => {
+    // Pins: the card must not unmount for the span of the retry. With no
+    // catalog behind it TanStack drops `isError` the instant the retry starts
+    // (`status` returns to pending), so only `checkSettledUnreachable`'s
+    // settle counter keeps this answer from falling to the first load's
+    // "checking", which draws no card.
+    const gate = makeGate();
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return Promise.reject(new Error("host unreachable"));
+          }
+          return gate.promise.then(() => okAnswer(["1.5.0"], false));
+        },
+      },
+    });
+    await openUpdatesTab(fixture);
+
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+    expect(checkCalls).toBe(1);
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(checkNow());
+    await waitFor(() => expect(checkCalls).toBe(2));
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+
+    // The retry answers with the version the host already runs: latest, which
+    // is quiet, so the card goes away for the RIGHT reason and not before.
+    gate.release();
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("host-version-rows")).getByText("v1.5.0"),
+      ).toBeTruthy();
+    });
   });
 });

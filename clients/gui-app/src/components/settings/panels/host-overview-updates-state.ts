@@ -529,8 +529,11 @@ export function useHostOverviewUpdates(input: {
   });
   const answer = describeCheckState({
     manifest,
-    checking,
-    unreachable: checkQuery.isError,
+    unreachable: checkSettledUnreachable({
+      isError: checkQuery.isError,
+      hasData: checkQuery.data !== undefined,
+      errorUpdateCount: checkQuery.errorUpdateCount,
+    }),
     checkFailed: check.transient !== null,
     hostName,
     upToDate,
@@ -2121,6 +2124,25 @@ export type HostOverviewAnswerKind =
   | "not-installable"
   | "available";
 
+/**
+ * Whether the check's last word is a transport failure with no catalog since.
+ *
+ * NOT bare `isError`, which goes false the instant a retry starts with no
+ * catalog behind it: TanStack returns `status` to `pending` whenever a fetch
+ * begins without data, and the answer would fall through to the first load's
+ * "checking" - which draws no card - for the span of every retry the error
+ * lane makes. `errorUpdateCount` is the settle counter the reducer never
+ * resets, so "no data, and it has settled in error" holds the answer until a
+ * catalog actually arrives.
+ */
+function checkSettledUnreachable(query: {
+  readonly isError: boolean;
+  readonly hasData: boolean;
+  readonly errorUpdateCount: number;
+}): boolean {
+  return query.isError || (!query.hasData && query.errorUpdateCount > 0);
+}
+
 interface CheckStateAnswer {
   readonly text: string;
   readonly kind: HostOverviewAnswerKind;
@@ -2142,8 +2164,10 @@ interface CheckStateAnswer {
  */
 function describeCheckState(input: {
   readonly manifest: HostAvailableManifest | null;
-  readonly checking: boolean;
-  /** The RPC itself failed — a transport fault, not an answer from the host. */
+  /**
+   * The RPC itself failed — a transport fault, not an answer from the host —
+   * and no catalog has arrived since. Held through the retry of that failure.
+   */
   readonly unreachable: boolean;
   /**
    * The host answered the check with a failure (`cli-failed`,
@@ -2170,9 +2194,13 @@ function describeCheckState(input: {
   readonly strandedOnLine: string | null;
   readonly installedVersion: string | null;
 }): CheckStateAnswer {
-  // Ordered so a stale answer never outranks what is happening NOW: a refetch
-  // keeps the previous manifest on screen, so "vX is available." would otherwise
-  // sit there unchanged while a re-check ran.
+  // A RE-CHECK IS NOT AN ANSWER. Only the first load, with nothing in hand,
+  // answers "checking"; a check over an answer already on screen leaves that
+  // answer standing until the new one settles. "Checking" draws no card, so
+  // an arm for every fetch took the card off the screen for the span of each
+  // re-check - Check now, the release-candidate checkbox, the error lane's
+  // own retry - and the rows under it jumped up and back. What says a check
+  // is running is Check now's spinner, with Update now disabled beside it.
   //
   // Debt outranks everything the CATALOG can say, including "checking": it is
   // a fact about this host's own disk, true whether or not the registry
@@ -2196,9 +2224,6 @@ function describeCheckState(input: {
   // it when that check fails or returns a catalog that clears the refusal.
   if (input.remedy !== null) {
     return { text: input.remedy.sentence, kind: "needs-cli" };
-  }
-  if (input.checking) {
-    return { text: "Checking for updates…", kind: "checking" };
   }
   if (input.unreachable) {
     // Deliberately NOT a toast, which is what the imperative check's `onError`

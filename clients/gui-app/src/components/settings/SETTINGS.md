@@ -5467,25 +5467,32 @@ set-state-in-effect` forbids the effect form, and an effect would also
     `host-overview-updates.tsx`), first on Updates, and ONLY when the update
     answer has news or an action. There is no version heading and no tag: the
     running version is the header health line's, and "latest" is the version
-    list's installed row (`latest` beside `installed`). So a current host, a
-    check in progress (Check now spins on the version list's heading), a host
-    that can't be reached or is still connecting (the offline notice and the
-    list's loading shape speak then), and an update in flight all draw no
-    card. Otherwise the card is an icon tile, a title, the answer's own
-    sentence, and the answer's one control on the right (under the text below
-    the `@lg` container width). Tone and title come from `ANSWER_CARD_LOOK`,
+    list's installed row (`latest` beside `installed`). So a current host,
+    the FIRST check (no answer in hand yet; the version list says it is
+    asking), a host that can't be reached or is still connecting (the offline
+    notice and the list's loading shape speak then), and an update in flight
+    all draw no card. A RE-CHECK is not one of them: `describeCheckState`
+    answers "checking" only with no catalog and no settled failure, so Check
+    now, the release-candidate checkbox and the error lane's own retry all
+    leave the card already on screen in place (Check now spins and Update now
+    is disabled for that span) instead of removing it and jumping the rows
+    under it. For the same reason `unreachable` is "settled in error with no
+    catalog" (`errorUpdateCount`), not bare `isError`, which drops the moment
+    a no-data retry starts. Otherwise the card is an icon tile, a title, the
+    answer's own sentence, and the answer's one control on the right (stacked
+    under the text at full width below the `@lg` container width). Tone and title come from `ANSWER_CARD_LOOK`,
     keyed by `answerKind`:
 
-    | Answer              | Tone    | Title                                 | Line                                            | Control                    |
-    | ------------------- | ------- | ------------------------------------- | ----------------------------------------------- | -------------------------- |
-    | `available`         | info    | Update available                      | `v1.4.0 → v1.5.1` (sentence sr-only)            | Update now                 |
-    | `needs-cli`         | warning | Needs newer CLI tools                 | the remedy sentence                             | the command-line-tools fix |
-    | `restart-to-finish` | warning | Restart to finish                     | "v1.5.1 is installed — restart host to finish." | none                       |
-    | `stranded`          | info    | Newer version on another release line | the stranded sentence                           | none                       |
-    | `not-installable`   | neutral | Update unavailable for this host      | the not-installable sentence                    | none                       |
-    | `unreachable`       | neutral | Update check failed                   | "Couldn't ask … which versions …"               | none                       |
-    | `check-failed`      | neutral | Update check failed                   | the failure reason                              | none                       |
-    | degrade             | neutral | Updates aren't managed here           | `describeOverviewDegrade`                       | none                       |
+    | Answer              | Tone    | Title                                 | Line                                            | Control                                                                              |
+    | ------------------- | ------- | ------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------ |
+    | `available`         | info    | Update available                      | `v1.4.0 → v1.5.1` (sentence sr-only)            | Update now                                                                           |
+    | `needs-cli`         | warning | Needs newer CLI tools                 | the remedy sentence                             | the command-line-tools fix                                                           |
+    | `restart-to-finish` | warning | Restart to finish                     | "v1.5.1 is installed — restart host to finish." | none, or Update now when the catalog offers something newer than the installed bytes |
+    | `stranded`          | info    | Newer version on another release line | the stranded sentence                           | none                                                                                 |
+    | `not-installable`   | neutral | Update unavailable for this host      | the not-installable sentence                    | none                                                                                 |
+    | `unreachable`       | neutral | Update check failed                   | "Couldn't ask … which versions …"               | none                                                                                 |
+    | `check-failed`      | neutral | Update check failed                   | the failure reason                              | none                                                                                 |
+    | degrade             | neutral | Updates aren't managed here           | `describeOverviewDegrade`                       | none                                                                                 |
 
     The neutral tone is `bg-foreground/5`, never `bg-muted` (raised surface).
     - **In flight, quiet.** While an update runs, waits or restarts
@@ -6127,9 +6134,10 @@ set-state-in-effect` forbids the effect form, and an effect would also
       this remedy pins the host's required floor, the answer to "this host
       refuses the CLI it has". Version rows on Updates retain their reasons.
       Sentence precedence preserves the record-derived parks: **activation
-      debt → CLI remedy → checking → unreachable → check failed → no
-      manifest → stranded on its release line / up to date → unavailable /
-      available**. A failed or refused attempt is not in this chain: it is the
+      debt → CLI remedy → unreachable → check failed → no manifest (the first
+      load, "checking") → stranded on its release line / up to date →
+      unavailable / available**. A check in flight is not a step: a re-check
+      leaves the standing answer in place. A failed or refused attempt is not in this chain: it is the
       one line under the answer (`failureDescription`), so the answer beside
       it stays what the catalog says instead of repeating the failure. "Check
       failed" is the chain's one step about a failure, and only as a fact

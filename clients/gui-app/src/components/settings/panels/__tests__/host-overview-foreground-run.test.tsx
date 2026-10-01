@@ -290,6 +290,28 @@ function updatableManifestHandlers(): MockHandlerMap<HostRpcRegistry> {
   };
 }
 
+/**
+ * A catalog whose only (newer) version is yanked: the answer is
+ * `not-installable` — a card with a sentence and nothing to install.
+ */
+function unofferableManifestHandlers(): MockHandlerMap<HostRpcRegistry> {
+  const manifest = updateCheckManifest("1.6.0");
+  return {
+    "host.update.check": () => ({
+      outcome: "ok" as const,
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
+      manifest: {
+        ...manifest,
+        versions: manifest.versions.map((entry) => ({
+          ...entry,
+          yanked: true,
+        })),
+      },
+    }),
+  };
+}
+
 describe("the answer card's Update now during a foreground run", () => {
   it("RED: hides Update now and shows the foreground reason when a newer version exists", async () => {
     renderOverview({
@@ -325,7 +347,34 @@ describe("the answer card's Update now during a foreground run", () => {
     expect(screen.queryByTestId("host-overview-update-foreground")).toBeNull();
   });
 
-  it("GREEN control: foreground with no newer version — no reason anywhere", async () => {
+  it("GREEN control: foreground with nothing to install — the card draws, but no reason and no Update now", async () => {
+    // A card that DRAWS with nothing to install: the one newer version in the
+    // catalog is yanked, so the answer is `not-installable`. That reaches the
+    // foreground sentence's own guard (`updatableVersion !== null`), which a
+    // current host never does (its card is null before getting there).
+    const { queryClient } = renderOverview({
+      hostId: "host-local",
+      isLocalMachine: true,
+      admittedAs: "foreground",
+      hostVersion: "1.5.0",
+      overrideHandlers: unofferableManifestHandlers(),
+    });
+
+    await screen.findByTestId("host-identity-name-row");
+    await selectHostOverviewTab("updates");
+    // The card is the positive to settle on; then wait for every query this
+    // render started (the lifecycle read that feeds the foreground sentence
+    // included) to finish before asserting the negatives.
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("not-installable");
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+    expect(screen.queryByTestId("host-overview-update-foreground")).toBeNull();
+    expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
+  });
+
+  it("GREEN control: foreground with no newer version — no card and no reason anywhere", async () => {
     const { queryClient } = renderOverview({
       hostId: "host-local",
       isLocalMachine: true,
