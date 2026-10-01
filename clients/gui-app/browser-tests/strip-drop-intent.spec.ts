@@ -455,13 +455,12 @@ test.describe("the top bar", () => {
     if (second === null) throw new Error("no layout");
 
     await dragThirdIntoGroup(page, tabIds, second.width / 2 - 20);
-    // On the first painted frames, with no pause for it.
+    // On the first painted frames, with no pause for it, naming the dragged
+    // task in the half it will take.
     await nextFrames(page, 2);
-    expect(
-      await page
-        .locator('[data-testid^="tab-strip-pair-preview-"]')
-        .isVisible(),
-    ).toBe(true);
+    const preview = page.locator('[data-testid^="tab-strip-pair-preview-"]');
+    expect(await preview.isVisible()).toBe(true);
+    expect(await preview.textContent()).toBe("Task 3");
     await page.mouse.up();
 
     const strip = await readStrip(page);

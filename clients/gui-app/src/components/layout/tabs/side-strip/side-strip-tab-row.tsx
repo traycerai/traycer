@@ -34,7 +34,7 @@ import {
   type SideTabRowShape,
   type SideTabRowVariant,
 } from "./side-tab-row";
-import { SidePairPreview } from "./side-pair-preview";
+import { SplitPairPreview } from "../split-pair-preview";
 import { SideTabHoverCardBody } from "./side-tab-hover-card";
 import { joinedAttribute, type SheetJoin } from "./side-tab-join";
 import { sideTabTileOf, sideTabTitleIconOf } from "../tab-identity";
@@ -203,7 +203,12 @@ export function SideStripTabRow(props: {
           dropIndicator={props.dropIndicator}
           pairPreview={
             pairPreview === null ? null : (
-              <SidePairPreview side={pairPreview} title={item.displayName} />
+              <SplitPairPreview
+                placement="side"
+                side={pairPreview}
+                title={item.displayName}
+                testId="side-tab-pair-preview"
+              />
             )
           }
           dragSource={item.isDragging}

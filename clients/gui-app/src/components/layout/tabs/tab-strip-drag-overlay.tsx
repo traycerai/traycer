@@ -29,13 +29,16 @@ interface HeaderTabDragOverlayProps {
 /** Captured appearance and notifications with live activity status. */
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
   const tab = props.tab;
-  // While a split preview shows the overlay fades out: the preview sits on the
-  // approach half of the target tab, which is exactly where this overlay is,
-  // and says where the tab goes. Even ghosted, its label drew over the
-  // target's own.
+  // While a split preview shows the overlay fades out: it covers the preview,
+  // which names the dragged task and says where it goes, and even ghosted its
+  // label drew over the target's own.
   const mergeTargeted = useEpicDndStore(
     (state) => state.topLevelStripPairPreview !== null,
   );
+  // Faded out over a split preview, it does not join the sheet either: the
+  // bridge is drawn outside this overlay, so it would stay painted under the
+  // faded box with no tab above it.
+  const joined = props.isActive && !mergeTargeted;
   const fade = useHeaderTabOverlayFadeTransition();
   return (
     <m.div
@@ -60,7 +63,7 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
         ghost={props.ghost}
         chrome="own"
         isActive={props.isActive}
-        joined={props.isActive}
+        joined={joined}
       />
     </m.div>
   );

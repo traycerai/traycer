@@ -62,6 +62,12 @@ interface HeaderTabVisualProps {
    * pointer.
    */
   readonly enabled: boolean;
+  /**
+   * While a drop over this tab would split with it: what the tab draws in
+   * place of its icon and title, the pair it will become (`SplitPairPreview`).
+   * The tab's own box stays, joined when the tab is the active one.
+   */
+  readonly pairPreview: ReactNode | null;
 }
 
 /** Shared tab paint; activation, drag registration and controls belong to callers. */
@@ -89,77 +95,79 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
       {sessionColor === null ? null : (
         <SessionTabMark color={sessionColor} isActive={props.isActive} />
       )}
-      <span
-        className={cn(
-          "relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none group-data-[tab-layout=shrink]/strip:overflow-hidden",
-          sessionColor !== null && props.isActive && SESSION_TAB_LABEL_CLASS,
-        )}
-      >
-        <TabLeadingIcon
-          icon={props.tab.icon}
-          identity={props.appearance}
-          titleGenerationPending={titleGenerationPending}
-          activityStatus={activityStatus}
-          indicatorState={props.indicatorState}
-          tabId={props.tab.id}
-        />
-        {props.titleControl ?? (
-          <span
-            className="header-tab-label relative flex min-w-0 flex-1 items-center gap-1.5 text-left"
-            data-leader-visible={props.leaderVisible}
-          >
-            <HoverCard
-              trigger={
-                <span className="block min-w-0 flex-1">
-                  <span
-                    data-testid={`tab-title-${props.tab.kind}-${props.tab.id}`}
-                    className="header-tab-title block"
-                  >
-                    <span className="header-tab-title-text">
-                      {props.displayName}
+      {props.pairPreview ?? (
+        <span
+          className={cn(
+            "relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none group-data-[tab-layout=shrink]/strip:overflow-hidden",
+            sessionColor !== null && props.isActive && SESSION_TAB_LABEL_CLASS,
+          )}
+        >
+          <TabLeadingIcon
+            icon={props.tab.icon}
+            identity={props.appearance}
+            titleGenerationPending={titleGenerationPending}
+            activityStatus={activityStatus}
+            indicatorState={props.indicatorState}
+            tabId={props.tab.id}
+          />
+          {props.titleControl ?? (
+            <span
+              className="header-tab-label relative flex min-w-0 flex-1 items-center gap-1.5 text-left"
+              data-leader-visible={props.leaderVisible}
+            >
+              <HoverCard
+                trigger={
+                  <span className="block min-w-0 flex-1">
+                    <span
+                      data-testid={`tab-title-${props.tab.kind}-${props.tab.id}`}
+                      className="header-tab-title block"
+                    >
+                      <span className="header-tab-title-text">
+                        {props.displayName}
+                      </span>
                     </span>
                   </span>
-                </span>
-              }
-              content={
-                props.tab.kind === "sample-workspace" ? (
-                  // A mode, not a task: no agents, so no "Idle" (matches the
-                  // side strip's own sample-workspace body, F2).
-                  <div
-                    data-testid="side-tab-hover-card-body"
-                    className="flex flex-col gap-2"
-                  >
-                    <div className="text-ui-sm font-medium text-foreground">
-                      {props.displayName}
+                }
+                content={
+                  props.tab.kind === "sample-workspace" ? (
+                    // A mode, not a task: no agents, so no "Idle" (matches the
+                    // side strip's own sample-workspace body, F2).
+                    <div
+                      data-testid="side-tab-hover-card-body"
+                      className="flex flex-col gap-2"
+                    >
+                      <div className="text-ui-sm font-medium text-foreground">
+                        {props.displayName}
+                      </div>
+                      <div className="text-muted-foreground">
+                        Sample workspace
+                      </div>
                     </div>
-                    <div className="text-muted-foreground">
-                      Sample workspace
-                    </div>
-                  </div>
-                ) : (
-                  <SideTabHoverCardBody
-                    title={props.displayName}
-                    epicId={epicId}
-                    badge={badge}
-                    agents={agents}
-                  />
-                )
-              }
-              appearance="preview"
-              semantics={{ role: "tooltip" }}
-              side="bottom"
-              align="center"
-              sideOffset={4}
-              enabled={props.enabled}
-              open={null}
-              onOpenChange={null}
-              testId="header-tab-hover-card"
-              className="w-[min(90vw,18rem)] p-3 text-ui-xs"
-            />
-            {props.trailingControl}
-          </span>
-        )}
-      </span>
+                  ) : (
+                    <SideTabHoverCardBody
+                      title={props.displayName}
+                      epicId={epicId}
+                      badge={badge}
+                      agents={agents}
+                    />
+                  )
+                }
+                appearance="preview"
+                semantics={{ role: "tooltip" }}
+                side="bottom"
+                align="center"
+                sideOffset={4}
+                enabled={props.enabled}
+                open={null}
+                onOpenChange={null}
+                testId="header-tab-hover-card"
+                className="w-[min(90vw,18rem)] p-3 text-ui-xs"
+              />
+              {props.trailingControl}
+            </span>
+          )}
+        </span>
+      )}
     </>
   );
 }
@@ -227,6 +235,7 @@ export function HeaderTabPreview(props: {
       // A drag ghost / split-preview visual, never a real tab: no hover
       // card, it would only fight the drag overlay for the pointer.
       enabled={false}
+      pairPreview={null}
     />
   );
 }

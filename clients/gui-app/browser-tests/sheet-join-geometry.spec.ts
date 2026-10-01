@@ -24,7 +24,7 @@ import {
   type JoinSide,
   type SheetJoinRead,
 } from "./support/canvas-geometry.ts";
-import { nextFrames } from "./support/fixtures.ts";
+import { centreOf, nextFrames } from "./support/fixtures.ts";
 
 // Every test here runs in one worker, so the worker-scoped pages boot once
 // per run instead of once per worker that gets a test (the config is
@@ -334,6 +334,46 @@ test.describe("corners: an arc never extends past the surface frame", () => {
       );
     });
   }
+});
+
+test.describe("the top strip's split preview", () => {
+  // Over another tab's middle the dragged tab's overlay fades out, since the
+  // preview names the task. Its join must go with it: the bridge is drawn
+  // outside the overlay, so left anchored to the faded box it painted the
+  // sheet's notch and feet into the strip with no tab above them.
+  test("the dragged active tab's join goes while the preview names the task", async ({
+    topCanvas,
+  }) => {
+    const { page, setWindow } = topCanvas;
+    await setWindow(DESKTOP_WINDOW.width, DESKTOP_WINDOW.height, 1);
+    await prepareCanvas(page, "top", "left");
+    await activateEpsilon(page);
+    await readRenderedJoin(page, "top", "split preview, baseline");
+
+    const epsilon = await centreOf(
+      page.getByTestId("tab-epic-fixture-epsilon"),
+    );
+    const delta = await centreOf(page.getByTestId("tab-epic-fixture-delta"));
+    await page.mouse.move(epsilon.x, epsilon.y);
+    await page.mouse.down();
+    await page.mouse.move(delta.x, delta.y, { steps: 12 });
+
+    await expect(
+      page.getByTestId("tab-strip-pair-preview-epic-fixture-delta"),
+    ).toHaveText("Epsilon cleanup");
+    await expect
+      .poll(() => joinState(page), {
+        message: "no joined box and no bridge while the split preview shows",
+      })
+      .toEqual({ joined: false, bridgeVisible: false });
+
+    // Back where it began, so the release reorders nothing, and then off the
+    // strip: the page is shared, and a tab's hover card left opening under
+    // the pointer would cover the join a later test measures.
+    await page.mouse.move(epsilon.x, epsilon.y, { steps: 12 });
+    await page.mouse.up();
+    await page.mouse.move(1, 1);
+  });
 });
 
 test.describe("the top strip's overflow", () => {

@@ -164,7 +164,7 @@ export interface SideTabRowProps {
   readonly dropIndicator: "before" | "after" | null;
   /**
    * While a drop over this tab would split with it: what the row draws in place
-   * of its own content, the pair it will become (`SidePairPreview`). The rail's
+   * of its own content, the pair it will become (`SplitPairPreview`). The rail's
    * tile is outlined instead.
    */
   readonly pairPreview: ReactNode | null;
