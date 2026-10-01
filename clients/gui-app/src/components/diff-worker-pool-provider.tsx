@@ -14,6 +14,7 @@ import {
   subscribeDiffWorkerPool,
   unregisterDiffWorkerPoolCreator,
 } from "@/lib/diff/diff-worker-pool-demand";
+import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 import {
   use,
   useEffect,
@@ -25,20 +26,30 @@ import {
 } from "react";
 
 const MIN_POOL = 2;
-/**
- * Three, down from six. Every pool worker is a full highlighter isolate
- * (Oniguruma WASM engine, both themes, every grammar it has ever been asked
- * for), so the pool's size is a memory figure first and a throughput figure
- * second. Three workers keep a multi-file diff rendering in parallel; six
- * bought little beyond that on a desktop that rarely has more than a handful
- * of diffs visible at once, and cost a highlighter isolate each.
- */
-const MAX_POOL = 3;
 
+/**
+ * The pool's size is a MEMORY figure first and a throughput figure second:
+ * every worker in it is a full highlighter isolate (Oniguruma WASM engine,
+ * both themes, every grammar it has ever been asked for).
+ *
+ * Two inputs, and the smaller wins. The core count is the machine's opinion -
+ * there is no point holding more isolates than there are cores to run them on.
+ * `maxDiffHighlightWorkers` is the SHELL's, and it is the one that moved: three
+ * on desktop (down from six, which bought little on a window that rarely shows
+ * more than a handful of diffs at once), one in the installed phone app, where
+ * a phone-layout shell can only ever show a single diff and the two extra
+ * isolates would idle at an isolate's price each.
+ *
+ * The floor is not applied to the cap: an iPhone reports 6 cores, so the
+ * `Math.max` arm would otherwise raise the phone back to two.
+ */
 function computePoolSize(): number {
   const cores =
     typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 4 : 4;
-  return Math.min(MAX_POOL, Math.max(MIN_POOL, Math.floor(cores / 2)));
+  return Math.min(
+    getRetentionProfile().maxDiffHighlightWorkers,
+    Math.max(MIN_POOL, Math.floor(cores / 2)),
+  );
 }
 
 export interface DiffWorkerPoolProviderProps {
@@ -47,7 +58,7 @@ export interface DiffWorkerPoolProviderProps {
 
 /**
  * Provides `@pierre/diffs`' worker pool to the tree WITHOUT building it at
- * mount. The pool is created on the first `requestDiffWorkerPool()` (see
+ * mount. The pool is created on the first `acquireDiffWorkerPool()` (see
  * `lib/diff/diff-worker-pool-demand.ts` for why), and this provider is what
  * knows the recipe: the pool size, the worker factory Vite must see literally,
  * and the theme the highlighter should start with.
