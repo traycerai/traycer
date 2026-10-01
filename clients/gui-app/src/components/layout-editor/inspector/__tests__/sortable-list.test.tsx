@@ -1040,6 +1040,35 @@ describe("a pointer press inside the grab arms the drag (G6)", () => {
     expect(onMove).toHaveBeenCalledWith("A", 1);
   });
 
+  it("leaves a finger on the row to scroll and arms it only from the grip", () => {
+    // A phone's Settings > Layout is one long list of these rows: a touch that
+    // armed a drag wherever it landed left nothing but the gutters to scroll by.
+    const items = ["A", "B"].map((id) =>
+      pointerItem({
+        id,
+        label: id,
+        movable: true,
+        divider: false,
+        onRemove: null,
+        onStack: null,
+      }),
+    );
+    render(bareList(items, vi.fn()));
+    const rowA = row("A", document);
+    const line = rowA.querySelector("[data-row-line]");
+    const grip = rowA.querySelector("[data-row-grip]");
+    if (line === null || grip === null) throw new Error("row A has no grip");
+    const touch = { button: 0, pointerId: 1, pointerType: "touch" };
+
+    fireEvent.pointerDown(within(rowA).getByText("A"), touch);
+    expect(armSpy).not.toHaveBeenCalled();
+    expect(line.className).toContain("touch-pan-y");
+
+    fireEvent.pointerDown(grip, touch);
+    expect(armSpy).toHaveBeenCalledTimes(1);
+    expect(grip.className).toContain("touch-none");
+  });
+
   it("does not arm a press on the row's own control button", () => {
     const onMove = vi.fn();
     const items = [

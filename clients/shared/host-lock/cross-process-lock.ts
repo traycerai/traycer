@@ -5,14 +5,16 @@ import type { Stats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
 import { dirname, join } from "node:path";
+import { windowsRenameRetryDelayMs } from "@traycer/protocol/config/credentials-fs";
 import {
   isProcessStartIdentity,
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
 import {
-  ownProcessStartIdentity,
-  ownProcessStartTimeMs,
+  ownProcessStartIdentityAsync,
+  ownProcessStartTimeMsAsync,
   verifyProcessIdentity,
+  verifyProcessIdentityAsync,
   type ProcessIdentityVerdict,
 } from "./process-identity";
 
@@ -472,7 +474,7 @@ async function tryRecoverCrashedBreakLock(
   if (read.kind !== "present") return false;
   const payload = parseBreakLockPayload(read.raw);
   if (payload !== null) {
-    const identity = verifyProcessIdentity({
+    const identity = await verifyProcessIdentityAsync({
       pid: payload.pid,
       startedAtMs: payload.processStartedAtMs,
       startIdentity: payload.processStartIdentity,
@@ -497,8 +499,8 @@ async function acquireBreakLock(
   const payload: BreakLockPayload = {
     pid: process.pid,
     startedAt: nowIso(),
-    processStartedAtMs: ownProcessStartTimeMs(),
-    processStartIdentity: ownProcessStartIdentity(),
+    processStartedAtMs: await ownProcessStartTimeMsAsync(),
+    processStartIdentity: await ownProcessStartIdentityAsync(),
     token,
   };
   if ((await createBreakLockFile(breakLockPath, payload)) === "created") {
@@ -694,7 +696,7 @@ export async function probeLockBreakArbitration(
       ? null
       : { pid: payload.pid, startedAt: payload.startedAt };
   if (payload !== null) {
-    const identity = verifyProcessIdentity({
+    const identity = await verifyProcessIdentityAsync({
       pid: payload.pid,
       startedAtMs: payload.processStartedAtMs,
       startIdentity: payload.processStartIdentity,
@@ -762,7 +764,29 @@ export async function rewriteLockLivenessIfToken(
       } finally {
         await temporary.close().catch(() => undefined);
       }
-      await rename(temporaryPath, path);
+      // Retried on win32: any process reading the canonical lock at this
+      // instant (a contender's poll, a `readLockHolder`, the host's holder
+      // probe) holds a handle on it, and `MoveFileExW` will not replace a file
+      // with an open handle. One failed rebind at the hand-back leaves a
+      // retain-on-death record that `release` refuses to unlink - a lock no
+      // one can break. Ownership is re-proven before EVERY retry: the rename
+      // replaces whatever is at `path`, so a reader's EPERM and a genuine
+      // ownership change must never be confused - the first is retried, the
+      // second is the same refusal as a token mismatch above.
+      for (let retryIndex = 0; ; retryIndex += 1) {
+        try {
+          await rename(temporaryPath, path);
+          break;
+        } catch (err) {
+          const retryDelay = windowsRenameRetryDelayMs(err, retryIndex);
+          if (retryDelay === null) throw err;
+          await sleep(retryDelay);
+          const again = await readLockRaw(path);
+          if (again.kind !== "present") return false;
+          const owner = parseLockMetadata(again.raw);
+          if (owner === null || owner.token !== expectedToken) return false;
+        }
+      }
       // The temp fsync above makes the CONTENT durable; the directory entry
       // the rename swapped is separate metadata with its own flush. On a
       // power loss before the directory flushes, the entry reverts to the
@@ -798,19 +822,62 @@ export async function rewriteLockLivenessIfToken(
 }
 
 /**
- * Conservative holder liveness used by both acquisition and read-side
- * projections. A supervisor that died is not stale while a detached POSIX
- * actuator group survives. On platforms where Node cannot prove the group
- * gone, `retainOnPublisherDeath` fails closed rather than guessing.
+ * Conservative holder liveness used by read-side projections. A supervisor
+ * that died is not stale while a detached POSIX actuator group survives. On
+ * platforms where Node cannot prove the group gone, `retainOnPublisherDeath`
+ * fails closed rather than guessing.
+ *
+ * SYNCHRONOUS: on Windows the publisher read is a `tasklist` spawn plus a
+ * PowerShell one, blocking the calling thread for seconds on a loaded machine.
+ * Only for a one-shot command; anything that lives on - the host supervisor,
+ * Electron main, and acquisition itself, which runs in both - takes
+ * {@link verifyLockHolderLivenessAsync}.
  */
 export function verifyLockHolderLiveness(
   holder: LockMetadata,
 ): ProcessIdentityVerdict {
-  const publisher = verifyProcessIdentity({
-    pid: holder.pid,
-    startedAtMs: holder.processStartedAtMs,
-    startIdentity: holder.processStartIdentity,
-  });
+  return lockHolderLivenessGivenPublisher(
+    holder,
+    verifyProcessIdentity({
+      pid: holder.pid,
+      startedAtMs: holder.processStartedAtMs,
+      startIdentity: holder.processStartIdentity,
+    }),
+  );
+}
+
+/**
+ * {@link verifyLockHolderLiveness} without blocking the event loop: the same
+ * verdict, from the async publisher read. What acquisition uses: the lock is
+ * taken by long-lived processes too (the host supervisor's lifecycle
+ * teardown, Electron main), and a contended acquisition re-judges the holder
+ * on every poll.
+ */
+export async function verifyLockHolderLivenessAsync(
+  holder: LockMetadata,
+): Promise<ProcessIdentityVerdict> {
+  return lockHolderLivenessGivenPublisher(
+    holder,
+    await verifyProcessIdentityAsync({
+      pid: holder.pid,
+      startedAtMs: holder.processStartedAtMs,
+      startIdentity: holder.processStartIdentity,
+    }),
+  );
+}
+
+/**
+ * {@link verifyLockHolderLiveness} once the publisher's own verdict is known:
+ * the supplemental group and retain-on-death rules alone. Exported for a
+ * READER that already judged the publisher and needs to know whether this
+ * rule will ever let a contender break the record - `traycer host doctor`
+ * names a lock whose publisher is gone but which answers `indeterminate`
+ * here, because no acquisition will ever remove it.
+ */
+export function lockHolderLivenessGivenPublisher(
+  holder: LockMetadata,
+  publisher: ProcessIdentityVerdict,
+): ProcessIdentityVerdict {
   if (publisher === "alive-same" || publisher === "indeterminate") {
     return publisher;
   }
@@ -870,6 +937,25 @@ async function tryAcquireOnce(
     }
     throw err;
   }
+  // Closed as soon as the record is written, never held for the lock's life.
+  // Nothing reads through this handle - it is write-only, and `release` and
+  // every break decision re-read the PATH - and on win32 an open handle is
+  // exactly what makes `rewriteLockLivenessIfToken`'s rename onto this path
+  // fail with EPERM: `MoveFileExW` will not replace a file that has an open
+  // handle, the caller's own included. Holding it excluded nothing there
+  // either. Measured on Windows Server 2022 / NTFS with Node 24 (libuv 1.52):
+  // another process can unlink the path and create a new file at it while the
+  // handle is open, just as on POSIX. So holding it bought only that failure.
+  try {
+    await handle.close();
+  } catch (err) {
+    try {
+      await unlink(path);
+    } catch {
+      // Best effort.
+    }
+    throw err;
+  }
   let released = false;
   return {
     path,
@@ -877,11 +963,6 @@ async function tryAcquireOnce(
     release: async () => {
       if (released) return;
       released = true;
-      try {
-        await handle.close();
-      } catch {
-        // Closing twice is a no-op for callers; ignore.
-      }
       // Compare-and-delete: unlink ONLY on positive proof this handle
       // still owns the file - a successful, parseable read whose token
       // matches the one this handle wrote. Every lock this code writes
@@ -992,7 +1073,7 @@ async function acquireLockAtPath(
         // age ceiling here - a genuinely alive, genuinely
         // identity-verified holder is never broken out from under itself
         // no matter how long its operation takes.
-        const identity = verifyLockHolderLiveness(holder);
+        const identity = await verifyLockHolderLivenessAsync(holder);
         shouldBreak = identity === "dead" || identity === "alive-different";
       } else {
         // Empty or corrupt lock file - no PID to probe. A crashed holder
@@ -1038,16 +1119,21 @@ async function acquireLockAtPath(
   }
 }
 
-function newAcquisitionMetadata(reason: string): LockMetadata {
+async function newAcquisitionMetadata(reason: string): Promise<LockMetadata> {
+  // Cached own-process reads, so an acquisition costs no spawn once warm.
+  // Async, because the FIRST acquisition in a process fills that cache: a
+  // synchronous fill would block a long-lived caller's event loop on a `ps`
+  // (macOS) or PowerShell (Windows) spawn.
+  const processStartedAtMs = await ownProcessStartTimeMsAsync();
+  const processStartIdentity = await ownProcessStartIdentityAsync();
   return {
     pid: process.pid,
     reason,
     startedAt: nowIso(),
     hostname: hostnameSafe(),
     token: randomUUID(),
-    // Cached own-process reads: an acquisition must not cost a spawn.
-    processStartedAtMs: ownProcessStartTimeMs(),
-    processStartIdentity: ownProcessStartIdentity(),
+    processStartedAtMs,
+    processStartIdentity,
   };
 }
 
@@ -1056,7 +1142,7 @@ export async function acquireLock(
 ): Promise<AcquireLockOutcome> {
   return acquireLockAtPath(
     opts.lockPath,
-    newAcquisitionMetadata(opts.reason),
+    await newAcquisitionMetadata(opts.reason),
     opts.waitMs,
     opts.pollIntervalMs,
   );

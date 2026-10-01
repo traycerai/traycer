@@ -1,4 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
+import { useRef } from "react";
 
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
@@ -16,6 +17,7 @@ const testState: {
   signOut: () => Promise<void>;
   openSettings: () => void;
   isPending: boolean;
+  historyQueryMounts: number;
   cloudPagePending: boolean;
   hostRequiresCloudToList: boolean;
   /** Live agent activity per epic id; anything unlisted is idle. */
@@ -38,6 +40,7 @@ const testState: {
   signOut: () => Promise.resolve(),
   openSettings: () => undefined,
   isPending: false,
+  historyQueryMounts: 0,
   cloudPagePending: false,
   hostRequiresCloudToList: false,
   activity: {},
@@ -82,23 +85,30 @@ vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 const trackMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
-    data: {
-      items: testState.items,
-      totalCount: testState.items.length,
-      hostRequiresCloudToList: testState.hostRequiresCloudToList,
-    },
-    isPending: testState.isPending,
-    cloudPagePending: testState.cloudPagePending,
-    isFetching: false,
-    error: null,
-    refetch: () => Promise.resolve(),
-    refetchTasks: () => Promise.resolve(),
-    fetchNextPage: () => undefined,
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    currentUserId: "u1",
-  }),
+  useHistoryQuery: () => {
+    const hasMountedQuery = useRef(false);
+    if (!hasMountedQuery.current) {
+      hasMountedQuery.current = true;
+      testState.historyQueryMounts += 1;
+    }
+    return {
+      data: {
+        items: testState.items,
+        totalCount: testState.items.length,
+        hostRequiresCloudToList: testState.hostRequiresCloudToList,
+      },
+      isPending: testState.isPending,
+      cloudPagePending: testState.cloudPagePending,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+      refetchTasks: () => Promise.resolve(),
+      fetchNextPage: () => undefined,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      currentUserId: "u1",
+    };
+  },
 }));
 
 // Mock the shared activity projection inputs at their boundaries: turn ids
@@ -173,9 +183,17 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { domMax, LazyMotion } from "motion/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
+import {
+  MobileDrawerHistoryGateProvider,
+  MobileDrawerVisibleTilePaintReporter,
+} from "@/components/layout/shell/mobile-drawer-history-gate";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -251,6 +269,12 @@ function backfillTask(overrides: {
   };
 }
 
+// The drawer asks the mutation cache whether a row's task is being deleted
+// (`useEpicDeleteInFlightReader`) when a row is tapped, so it mounts in a client.
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
+
 /**
  * Returns the Testing Library container, which is a direct child of the
  * document body and therefore stands in for "the rest of the app" when the
@@ -262,13 +286,49 @@ function backfillTask(overrides: {
  */
 function renderDrawer(): HTMLElement {
   const { container } = render(
-    <LazyMotion features={domMax}>
-      <TestRouterProvider>
-        <MobileNavDrawer />
-      </TestRouterProvider>
-    </LazyMotion>,
+    <QueryClientProvider client={queryClient}>
+      <MobileDrawerHistoryGateProvider>
+        <LazyMotion features={domMax}>
+          <TestRouterProvider>
+            <MobileNavDrawer />
+          </TestRouterProvider>
+        </LazyMotion>
+      </MobileDrawerHistoryGateProvider>
+    </QueryClientProvider>,
   );
   return container;
+}
+
+function drawerWithVisibleTileReporter(props: {
+  readonly metadataReady: boolean;
+  readonly selectedContentReporterMounted: boolean;
+  readonly selectedContentReady: boolean;
+  readonly selected: boolean;
+  readonly paneVisible: boolean;
+}) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <MobileDrawerHistoryGateProvider>
+        <LazyMotion features={domMax}>
+          <TestRouterProvider>
+            {props.metadataReady ? (
+              <span data-testid="epic-metadata-ready" />
+            ) : null}
+            <TabBodySelectedContext.Provider value={props.selected}>
+              <PaneVisibilityContext.Provider value={props.paneVisible}>
+                {props.selectedContentReporterMounted ? (
+                  <MobileDrawerVisibleTilePaintReporter
+                    ready={props.selectedContentReady}
+                  />
+                ) : null}
+                <MobileNavDrawer />
+              </PaneVisibilityContext.Provider>
+            </TabBodySelectedContext.Provider>
+          </TestRouterProvider>
+        </LazyMotion>
+      </MobileDrawerHistoryGateProvider>
+    </QueryClientProvider>
+  );
 }
 
 describe("MobileNavDrawer", () => {
@@ -287,6 +347,7 @@ describe("MobileNavDrawer", () => {
     testState.signOut = () => Promise.resolve();
     testState.openSettings = () => undefined;
     testState.isPending = false;
+    testState.historyQueryMounts = 0;
     testState.cloudPagePending = false;
     testState.hostRequiresCloudToList = false;
     openLink.mockClear();
@@ -301,6 +362,7 @@ describe("MobileNavDrawer", () => {
       },
     });
     useDesktopDialogStore.getState().close();
+    queryClient.clear();
   });
   afterEach(() => {
     cleanup();
@@ -311,6 +373,129 @@ describe("MobileNavDrawer", () => {
     setMobileApp(false);
     useDesktopDialogStore.getState().close();
   });
+
+  it("loads the task list when the drawer opens before the first task paint", async () => {
+    testState.items = [
+      historyItem({
+        id: "cold-task",
+        title: "Task opened before paint",
+        updatedAtMs: NOW_MS,
+      }),
+    ];
+    setMobileApp(true);
+    useMobileNavStore.setState({ open: false });
+    renderDrawer();
+
+    await screen.findByTestId("mobile-nav-drawer");
+    expect(testState.historyQueryMounts).toBe(0);
+    expect(screen.queryByText("Task opened before paint")).toBeNull();
+
+    // The hamburger's one opening gesture commits the nav store before the
+    // landing route has reported its first task paint. That request alone must
+    // mount and load the list; opening it a second time must not be necessary.
+    act(() => {
+      useMobileNavStore.getState().setOpen(true);
+    });
+
+    expect(await screen.findByText("Task opened before paint")).not.toBeNull();
+    expect(testState.historyQueryMounts).toBe(1);
+
+    // The request stays latched while the selected content is still pending.
+    // Closing and reopening keeps the task list mounted and does not issue a
+    // second query.
+    act(() => {
+      useMobileNavStore.getState().setOpen(false);
+    });
+    expect(testState.historyQueryMounts).toBe(1);
+    expect(screen.queryByText("Task opened before paint")).not.toBeNull();
+
+    act(() => {
+      useMobileNavStore.getState().setOpen(true);
+    });
+    expect(await screen.findByText("Task opened before paint")).not.toBeNull();
+    expect(testState.historyQueryMounts).toBe(1);
+  });
+
+  it.each([
+    { label: "selected chat transcript", reporterMounted: false },
+    { label: "selected artifact editor", reporterMounted: true },
+  ] as const)(
+    "waits for the $label reporter after epic metadata is ready",
+    async ({ reporterMounted }) => {
+      testState.items = [
+        historyItem({
+          id: "metadata-ready-task",
+          title: "Task content ready",
+          updatedAtMs: NOW_MS,
+        }),
+      ];
+      setMobileApp(true);
+      useMobileNavStore.setState({ open: false });
+      const renderTree = (selectedContentReady: boolean) =>
+        drawerWithVisibleTileReporter({
+          metadataReady: true,
+          selectedContentReporterMounted:
+            reporterMounted || selectedContentReady,
+          selectedContentReady,
+          selected: true,
+          paneVisible: true,
+        });
+      const view = render(renderTree(false));
+
+      await screen.findByTestId("mobile-nav-drawer");
+      expect(screen.getByTestId("epic-metadata-ready")).not.toBeNull();
+      expect(testState.historyQueryMounts).toBe(0);
+
+      // Chat's reporter mounts only when its transcript does; the artifact's
+      // reporter stays mounted while its editor is still pending. Neither a
+      // ready Epic snapshot nor an unready selected-content reporter counts as
+      // the first paint. The gate opens when that surface's reporter commits.
+      view.rerender(renderTree(true));
+      expect(testState.historyQueryMounts).toBe(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(testState.historyQueryMounts).toBe(1);
+    },
+  );
+
+  it.each([
+    { label: "unselected tab", selected: false, paneVisible: true },
+    { label: "hidden pane", selected: true, paneVisible: false },
+  ] as const)(
+    "does not release the gate for a $label even when ready is true",
+    async ({ selected, paneVisible }) => {
+      testState.items = [
+        historyItem({
+          id: "unreleased-task",
+          title: "Task content ready",
+          updatedAtMs: NOW_MS,
+        }),
+      ];
+      setMobileApp(true);
+      useMobileNavStore.setState({ open: false });
+      render(
+        drawerWithVisibleTileReporter({
+          metadataReady: true,
+          selectedContentReporterMounted: true,
+          selectedContentReady: true,
+          selected,
+          paneVisible,
+        }),
+      );
+
+      await screen.findByTestId("mobile-nav-drawer");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      // The reporter's own `ready` prop is true, but it is not the SELECTED,
+      // VISIBLE tile - an unselected tab or a hidden pane must not count as
+      // the first paint, so the gate stays closed and history stays unmounted.
+      expect(testState.historyQueryMounts).toBe(0);
+      expect(screen.queryByText("Task content ready")).toBeNull();
+    },
+  );
 
   describe("platform branch", () => {
     // Distinguished by markers neither branch sets by hand: the Sheet path
@@ -1071,6 +1256,53 @@ describe("MobileNavDrawer", () => {
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
       fireEvent.click(rows[0]);
+
+      expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+    });
+
+    // The drawer lists the same tasks History does, so a delete confirmed there
+    // and still running refuses the open here too: the drawer stays up and the
+    // first-task guide is not finished by a tap that opened nothing.
+    it("refuses to open a task whose deletion is in flight, and opens it again once that settles", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({ id: "b", title: "other", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      useFirstTaskGuideStore.getState().activate();
+      const held = holdEpicBatchDelete(queryClient, ["a"]);
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+      const rowA = rows.find((row) => row.textContent.includes("hello"));
+      if (rowA === undefined)
+        throw new Error("expected the deleting task's row");
+
+      fireEvent.click(rowA);
+
+      expect(useMobileNavStore.getState().open).toBe(true);
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+
+      await act(async () => {
+        await held.settle();
+      });
+      fireEvent.click(rowA);
+
+      expect(useMobileNavStore.getState().open).toBe(false);
+      expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+    });
+
+    it("opens a task other than the one being deleted", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({ id: "b", title: "other", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      useFirstTaskGuideStore.getState().activate();
+      void holdEpicBatchDelete(queryClient, ["a"]);
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+      const rowB = rows.find((row) => row.textContent.includes("other"));
+      if (rowB === undefined) throw new Error("expected the other task's row");
+
+      fireEvent.click(rowB);
 
       expect(useFirstTaskGuideStore.getState().status).toBe("finished");
     });

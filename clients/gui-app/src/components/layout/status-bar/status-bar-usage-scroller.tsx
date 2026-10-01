@@ -15,7 +15,8 @@ import { cn } from "@/lib/utils";
  *
  * Nothing is hidden to make the readings fit: every drawn account prints
  * every part the preferences ask for, at every width, and what the strip has
- * no room for is a scroll away. The affordance is the fade rather than a
+ * no room for is a scroll away. The one give is on a phone, where account
+ * names truncate to a short floor before the row overflows. The affordance is the fade rather than a
  * scrollbar - `no-scrollbar` because a 6px bar under a 24px row would be most
  * of the row - and it fades ONLY the edge that hides something
  * (`useHorizontalScrollEdges`): the right edge while the tail is off-screen,
@@ -119,7 +120,11 @@ export function StatusBarUsageScroller(props: {
         horizontalScrollFadeClass(edges),
       )}
     >
-      <span ref={setRow} className="flex shrink-0 items-center">
+      {/* A phone lets the row give first: account names shorten to a floor
+        (`StatusBarProviderSegment`) before anything scrolls, since a strip
+        one reading too wide there fades the last reading's tail against the
+        refresh control rather than showing a scroll worth taking. */}
+      <span ref={setRow} className="flex shrink-0 items-center max-md:shrink">
         {props.children}
       </span>
     </span>

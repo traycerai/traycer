@@ -4,6 +4,8 @@ import {
 } from "../host/free-port-kill";
 import { portRepairFailure } from "../host/free-port-outcome";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
+import { refuseForegroundHostRun } from "../host/foreground-host-run";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   describeNonterminalRecordRecovery,
   parkedActivationRelaunchable,
@@ -57,6 +59,13 @@ import { createServiceController, serviceLabelFor } from "../service";
 // with. Desktop's non-macOS path maps the thrown error onto its `failed`
 // outcome after `reloadAfterServiceCycleFailure()`, which is correct here
 // because no service cycle was attempted.
+//
+// A DESKTOP-origin request over a host started by `traycer host start` in a
+// terminal (a `foreground` run) is refused `E_HOST_NOT_SERVICE_RUN` first
+// inside the lock - before the `--pid` kill, the restart or the stop - the
+// same refusal `host stop` and `host restart` give (`refuseForegroundHostRun`):
+// the app never tears down a terminal-started host. A terminal request is
+// unchanged.
 export interface HostFreePortAndRestartArgs {
   readonly pid: number | null;
   readonly port: number | null;
@@ -70,6 +79,8 @@ export interface HostFreePortAndRestartArgs {
    * point rather than a separate concern.
    */
   readonly deferIfParked: boolean;
+  /** Who asked: `desktop` for every repair the app issues. */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export function buildHostFreePortAndRestartCommand(
@@ -132,6 +143,13 @@ export function buildHostFreePortAndRestartCommand(
     } = await withCliUpdateContenderContext(
       contenderOptions,
       async (capability, _cliLock, contenderContext) => {
+        if (args.lifecycleOrigin === "desktop") {
+          await refuseForegroundHostRun(
+            "host free-port-and-restart",
+            ctx.runtime.environment,
+            args.lifecycleOrigin,
+          );
+        }
         let killInner: KillConflictingPortOwnerResult | null = null;
         if (args.pid !== null && args.port !== null) {
           ctx.progress({
@@ -209,6 +227,8 @@ export function buildHostFreePortAndRestartCommand(
           await restartHostServiceWithAttempt(
             capability,
             contenderOptions,
+            // A restart's relaunch leg, whoever asked for it.
+            "maintenance",
             controller,
             label,
           );
@@ -219,6 +239,7 @@ export function buildHostFreePortAndRestartCommand(
             controller,
             label,
             { force: false },
+            "unconditional",
           );
         }
         return {

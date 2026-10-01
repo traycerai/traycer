@@ -39,6 +39,7 @@ import type {
   TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { useTerminalThemeHint } from "@/lib/terminal-theme-hint";
 // Last-resort opening grid when the measurement probe never reported (its
@@ -103,6 +104,11 @@ export interface UseTerminalTileBootstrapInput {
    */
   readonly preparePayload: () => Promise<TerminalCreatePayload | null>;
   /**
+   * Attachment intent, forwarded to {@link useTerminalSessionHandle}: a tile
+   * that stays mounted off screen passes `cache`, every other `presentation`.
+   */
+  readonly viewer: TerminalSubscribeViewer;
+  /**
    * Gate the create effect (defaults to true). Tui-agent tiles set
    * this to false until the agent record is in projection.
    *
@@ -132,7 +138,17 @@ export interface UseTerminalTileBootstrapInput {
 }
 
 export interface TerminalTileBootstrapResult {
+  /** Fresh presence: `null` while `terminal.list` is loading OR refetching. */
   readonly hostHasSession: boolean | null;
+  /**
+   * The last SETTLED list's verdict, held across background refetches; `null`
+   * only until the first list settles. A render branch that states a settled
+   * fact about the session (asleep, not running remotely) must key on this,
+   * not on `hostHasSession`: that one drops to `null` on every refetch, so the
+   * branch flips to the loading body and back - and a child that invalidates
+   * `terminal.list` on mount turns that flip into an endless loop.
+   */
+  readonly hostSessionSettled: boolean | null;
   /** A host-grace-window exit; callers must not treat it as a missing session. */
   readonly hostSessionExited: boolean;
   readonly handle: TerminalSessionStoreHandle | null;
@@ -235,6 +251,8 @@ export function useTerminalTileBootstrap(
 
   const hostHasSession =
     list.data === undefined || list.isFetching ? null : sessionListedRunning;
+  const hostSessionSettled =
+    list.data === undefined ? null : sessionListedRunning;
 
   // The host still reports a session it has seen EXIT for ~60s (its
   // grace window) with `status: "exited"`. For a plain terminal that is
@@ -426,6 +444,7 @@ export function useTerminalTileBootstrap(
     reattachMode,
     kind: input.sessionKind,
     enabled: sessionReady && gridReady,
+    viewer: input.viewer,
   });
 
   // The session store handle resolving marks the end of the bootstrap leg:
@@ -460,6 +479,7 @@ export function useTerminalTileBootstrap(
 
   return {
     hostHasSession,
+    hostSessionSettled,
     hostSessionExited,
     handle,
     createIsError: create.isError,

@@ -299,6 +299,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly migration: null = null;
   readonly hostManagement: IHostManagement | null;
   readonly hostTray: null = null;
+  readonly hostLifecycle: null = null;
   readonly zoom: null = null;
   readonly pushPermission: null = null;
   readonly systemBack: null = null;
@@ -1011,6 +1012,8 @@ export class MockRunnerHost implements IRunnerHost {
  * gui-app tests can drive a tray click through the mocked surface.
  */
 export class MockTrayState implements ITrayState {
+  // Tests flip it to model a shell whose tray is a no-op.
+  showsEpics = true;
   epics: readonly TrayEpic[] = [];
   indicator: TrayIndicatorState = "idle";
 

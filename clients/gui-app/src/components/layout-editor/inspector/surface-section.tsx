@@ -1,4 +1,9 @@
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import {
+  isMinimapSideRowAvailable,
+  type SettingsAvailabilityContext,
+} from "@/lib/settings/settings-availability";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import type { ReactNode } from "react";
 import { RevertButton } from "@/components/layout-editor/inspector/inspector-row";
@@ -31,6 +36,7 @@ import {
 import { SortableList } from "@/components/layout-editor/inspector/sortable-list";
 import { useSortableRowPadding } from "@/components/layout-editor/inspector/sortable-row-padding";
 import { LAYOUT_REGIONS } from "@/components/layout-editor/regions/layout-regions";
+import { HOME_TAB_PHONE_HINT } from "@/components/layout-editor/regions/top-bar-regions";
 import {
   LAYOUT_REGION_LIST,
   regionFacts,
@@ -62,6 +68,8 @@ import {
   type LayoutChange,
 } from "@/lib/layout/layout-diff";
 import {
+  asBarRegionId,
+  barPlacement,
   DEFAULT_ARRANGEMENT,
   type LayoutArrangement,
   type OrderGroupId,
@@ -111,6 +119,7 @@ export function SurfaceSection(props: {
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
   const arrangement = snapshot.arrangement;
   const narrow = useIsMobileViewport();
+  const availability = useSettingsAvailabilityContext();
 
   function selectHandler(regionId: RegionId): (() => void) | null {
     if (onSelectRow === null) return null;
@@ -125,11 +134,15 @@ export function SurfaceSection(props: {
       return providerRowDecoration(id, arrangement, openRows, onToggleRow);
     }
     const changed = regionRowChanged(snapshot, regionId);
-    const hint = regionFacts(regionId).hint;
+    const hint =
+      narrow && regionId === "homeTab"
+        ? HOME_TAB_PHONE_HINT
+        : regionFacts(regionId).hint;
     // A disclosure only where opening it shows something: the region's own
     // detail rows, or its presence rule (G6).
     const discloses =
-      hint !== null || regionDetailRows(regionId, narrow).length > 0;
+      hint !== null ||
+      regionDetailRows(regionId, narrow, availability).length > 0;
     return {
       ...BARE_ROW,
       hint,
@@ -332,8 +345,9 @@ function RegionRowDetail(props: {
 }): ReactNode {
   const { regionId, snapshot, values } = props;
   const narrow = useIsMobileViewport();
+  const availability = useSettingsAvailabilityContext();
   const gutter = useSortableRowPadding();
-  const rows = regionDetailRows(regionId, narrow);
+  const rows = regionDetailRows(regionId, narrow, availability);
   if (rows.length === 0) return null;
   const hidden = regionValuesHidden(values[regionId]);
   const someLive =
@@ -387,6 +401,7 @@ function DetailRowView(props: {
 }): ReactNode {
   const { row, regionId, values, snapshot } = props;
   const arrangement = snapshot.arrangement;
+  const narrow = useIsMobileViewport();
   switch (row.kind) {
     case "position-host":
       return (
@@ -417,21 +432,48 @@ function DetailRowView(props: {
           arrangement={arrangement}
         />
       );
-    case "fine-tune":
+    case "fine-tune": {
+      // The Display row (icon-only) only means something in the Tab strip
+      // (F6): the Status bar has the room for the full reading, so a Status
+      // bar region drops the row rather than showing it with nothing to do.
+      const rows = tabStripHosted(regionId, arrangement, narrow)
+        ? row.rows
+        : row.rows.filter((detail) => detail.id !== "display");
       return (
         <FineTuneRows
-          rows={row.rows}
+          rows={rows}
           regionId={regionId}
           regionValues={values[regionId]}
           regionHidden={regionValuesHidden(values[regionId])}
         />
       );
+    }
     case "position-order":
     case "children":
       return null;
     default:
       return assertNever(row);
   }
+}
+
+/**
+ * Whether this region's reading is placed in the Tab strip right now - the
+ * one Location the Display row (icon-only) does anything for (F6). Neither a
+ * bar region nor placed there: the row is dropped by `DetailRowView` above.
+ * Never on a narrow viewport, whose one bar is the footer (L-162) and whose
+ * header draws every reading as its glyph anyway.
+ */
+function tabStripHosted(
+  regionId: RegionId,
+  arrangement: LayoutArrangement,
+  narrow: boolean,
+): boolean {
+  const barRegion = asBarRegionId(regionId);
+  return (
+    !narrow &&
+    barRegion !== null &&
+    barPlacement(arrangement, barRegion).host === "header"
+  );
 }
 
 /** The grammar row kinds a row's disclosure draws. */
@@ -445,6 +487,7 @@ const DETAIL_ROW_KINDS: ReadonlyArray<string> = [
 function regionDetailRows(
   regionId: RegionId,
   narrow: boolean,
+  availability: SettingsAvailabilityContext,
 ): ReadonlyArray<AnyGrammarRow> {
   // Annotated rather than inferred: indexing the registry with a UNION of ids
   // gives a union of arrays, and a `filter` on one of those has no single
@@ -453,7 +496,10 @@ function regionDetailRows(
   return declared.filter(
     (row) =>
       DETAIL_ROW_KINDS.includes(row.kind) &&
-      regionRowAvailable(regionId, row, narrow),
+      regionRowAvailable(regionId, row, narrow) &&
+      (regionId !== "minimap" ||
+        row.kind !== "position-side" ||
+        isMinimapSideRowAvailable(availability)),
   );
 }
 

@@ -2,6 +2,7 @@ import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type { TraycerUninstallResult } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { runnerMutationKeys } from "@/lib/query-keys";
+import { toastHostRepairDeclined } from "@/lib/host-restart-toast";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
 /**
@@ -28,6 +29,15 @@ export function useRunnerUninstallTraycer(): UseMutationResult<
         );
       }
       return hostManagement.uninstallTraycer();
+    },
+    // `declined` is main's refusal - a host started in a terminal, another
+    // Traycer process holding the lock - and it removed NOTHING (not even the
+    // removed-by-user mark), so it is a notice with main's own words rather
+    // than a failure, and the row stays on Remove Traycer.
+    onSuccess: (result) => {
+      if (result.kind === "declined") {
+        toastHostRepairDeclined("Remove Traycer", result.message);
+      }
     },
     onError: (error) =>
       toastFromRunnerError(error, "Couldn't remove Traycer's components."),

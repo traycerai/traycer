@@ -45,7 +45,6 @@
  */
 
 export const NESTED_FOCUS_BOUNDARY_ACTION_NAMES = [
-  "restoreCanvasForRecovery",
   "openTileInTab",
   "openTilePreviewInTab",
   "openTileInBackgroundTab",

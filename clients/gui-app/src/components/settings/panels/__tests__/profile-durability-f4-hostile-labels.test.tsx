@@ -101,7 +101,11 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
   };
 });
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
-  const useProvidersCancelLogin = () => ({ mutate: vi.fn(), isPending: false });
+  const useProvidersCancelLogin = () => ({
+    mutate: vi.fn(),
+    mutateAsync: () => Promise.resolve({ cancelled: true }),
+    isPending: false,
+  });
   return {
     useProvidersCancelLogin,
     useProvidersCancelLoginForClient: useProvidersCancelLogin,

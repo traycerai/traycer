@@ -35,7 +35,7 @@ import {
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
 import { PRESET_VALUES } from "@/lib/layout/layout-presets";
-import { isAutoRailRegionId } from "@/lib/layout/rail";
+import { isAutoRailRegionId, RAIL_REGION_IDS } from "@/lib/layout/rail";
 import {
   regionValuesHidden,
   type LayoutValues,
@@ -82,12 +82,20 @@ export function RegionDisplayControl(props: {
   if (regionId === "access" && narrow) return null;
   const ariaLabel = `${facts.name} display`;
 
+  // A phone has no rail: a panel switched off there moves into the tab
+  // switcher's More menu rather than disappearing, so the off state says so.
+  const inMore = narrow && RAIL_REGION_IDS.some((id) => id === regionId);
+
   if (isAutoRailRegionId(regionId)) {
     return (
       <SegmentedControl
         ariaLabel={ariaLabel}
         value={String(readControlValue(regionValues, "shown"))}
-        options={AUTO_SHOWN_HIDDEN_OPTIONS}
+        options={
+          inMore
+            ? inMoreOptions(AUTO_SHOWN_HIDDEN_OPTIONS)
+            : AUTO_SHOWN_HIDDEN_OPTIONS
+        }
         onChange={(next) => {
           writeAutoRailVisibility(regionId, next);
         }}
@@ -118,11 +126,22 @@ export function RegionDisplayControl(props: {
     <SegmentedControl
       ariaLabel={ariaLabel}
       value={hidden ? "hidden" : "shown"}
-      options={SHOWN_HIDDEN_OPTIONS}
+      options={
+        inMore ? inMoreOptions(SHOWN_HIDDEN_OPTIONS) : SHOWN_HIDDEN_OPTIONS
+      }
       onChange={(next) => {
         setRegionShown(regionId, next === "shown");
       }}
     />
+  );
+}
+
+/** A rail panel's options on a phone, where `hidden` means "in More". */
+function inMoreOptions(
+  options: ReadonlyArray<SegmentOption>,
+): ReadonlyArray<SegmentOption> {
+  return options.map((option) =>
+    option.value === "hidden" ? { ...option, label: "In More" } : option,
   );
 }
 

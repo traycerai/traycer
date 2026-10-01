@@ -47,6 +47,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
@@ -262,6 +263,8 @@ function buildControllerStatus(): HostControllerStatus {
     reachable: true,
     localAttempt: null,
     removedByUser: false,
+    lastEnsureFailure: null,
+    updateDeferral: null,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
 }
@@ -329,6 +332,7 @@ class FakeHostController implements IpcHostController {
         removedInstallDir: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
       },
     };
   }
@@ -339,12 +343,18 @@ class FakeHostController implements IpcHostController {
         removedHost: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
         removedLoginItem: false,
       },
     };
   }
   isPendingRevisionRefreshQuarantined(): boolean {
     return false;
+  }
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return { kind: "ok", value: { result: "current", appliesAt: null } };
   }
   onMutationProgress(
     _listener: (progress: MutationProgress) => void,

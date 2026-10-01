@@ -9,16 +9,21 @@ import {
 } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { createContext, useContext, type ReactNode } from "react";
-import type { SetupWorkerPoolProps } from "@pierre/diffs/worker";
+import type { SetupWorkerPoolProps, WorkerStats } from "@pierre/diffs/worker";
 import { useWorkerPool } from "@pierre/diffs/react";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import type { ResolvedThemeContextValue } from "@/providers/use-resolved-theme";
 import {
   __resetDiffWorkerPoolForTests,
+  acquireDiffWorkerPool,
   getDiffWorkerPool,
-  requestDiffWorkerPool,
 } from "@/lib/diff/diff-worker-pool-demand";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 
 interface RenderOptionsArg {
   readonly theme: "pierre-light" | "pierre-dark";
@@ -27,10 +32,32 @@ interface RenderOptionsArg {
 
 interface FakeWorkerPoolManager {
   readonly setRenderOptions: Mock<(options: RenderOptionsArg) => Promise<void>>;
+  readonly getStats: () => WorkerStats;
+  readonly subscribeToStatChanges: () => () => void;
+  readonly terminate: Mock<() => void>;
 }
 
+/** Reports one live, idle worker until `terminate` runs. */
 function fakeWorkerPoolManager(): FakeWorkerPoolManager {
-  return { setRenderOptions: vi.fn(() => Promise.resolve()) };
+  let totalWorkers = 1;
+  return {
+    setRenderOptions: vi.fn(() => Promise.resolve()),
+    getStats: () => ({
+      managerState: totalWorkers === 0 ? "waiting" : "initialized",
+      workersFailed: false,
+      totalWorkers,
+      busyWorkers: 0,
+      queuedTasks: 0,
+      activeTasks: 0,
+      themeSubscribers: 0,
+      fileCacheSize: 0,
+      diffCacheSize: 0,
+    }),
+    subscribeToStatChanges: () => () => {},
+    terminate: vi.fn(() => {
+      totalWorkers = 0;
+    }),
+  };
 }
 
 const workerPoolMocks = vi.hoisted(() => ({
@@ -88,6 +115,8 @@ describe("DiffWorkerPoolProvider", () => {
   afterEach(() => {
     cleanup();
     __resetDiffWorkerPoolForTests();
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    vi.useRealTimers();
   });
 
   it("renders children", () => {
@@ -119,7 +148,7 @@ describe("DiffWorkerPoolProvider", () => {
     expect(getDiffWorkerPool()).toBeUndefined();
   });
 
-  it("creates the pool on requestDiffWorkerPool() and the consumer then sees it via context", () => {
+  it("creates the pool on acquireDiffWorkerPool() and the consumer then sees it via context", () => {
     const manager = fakeWorkerPoolManager();
     workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
 
@@ -134,7 +163,7 @@ describe("DiffWorkerPoolProvider", () => {
     expect(screen.getByTestId("pool-state").textContent).toBe("none");
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
 
     expect(screen.getByTestId("pool-state").textContent).toBe("present");
@@ -167,7 +196,7 @@ describe("DiffWorkerPoolProvider", () => {
     expect(manager.setRenderOptions).not.toHaveBeenCalled();
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
 
     expect(manager.setRenderOptions).toHaveBeenCalledWith({
@@ -189,7 +218,7 @@ describe("DiffWorkerPoolProvider", () => {
     );
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
 
     expect(manager.setRenderOptions).toHaveBeenCalledWith({
@@ -198,11 +227,36 @@ describe("DiffWorkerPoolProvider", () => {
     });
   });
 
-  it("honors a request made before the provider mounts", () => {
+  it("sizes the pool at one worker under the mobile profile", () => {
+    // An iPhone reports 6 hardware threads, so the core-count arm alone would
+    // hand the phone the desktop's cap. The profile is what holds it to one
+    // highlighter isolate.
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
     const manager = fakeWorkerPoolManager();
     workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
 
-    requestDiffWorkerPool();
+    render(
+      <ResolvedThemeContext.Provider value={lightTheme()}>
+        <DiffWorkerPoolProvider>
+          <PoolConsumerProbe />
+        </DiffWorkerPoolProvider>
+      </ResolvedThemeContext.Provider>,
+    );
+
+    act(() => {
+      acquireDiffWorkerPool();
+    });
+
+    const [options] =
+      workerPoolMocks.getOrCreateWorkerPoolSingleton.mock.calls[0];
+    expect(options.poolOptions.poolSize).toBe(1);
+  });
+
+  it("honors a lease taken before the provider mounts", () => {
+    const manager = fakeWorkerPoolManager();
+    workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
+
+    acquireDiffWorkerPool();
     expect(getDiffWorkerPool()).toBeUndefined();
 
     render(
@@ -220,6 +274,46 @@ describe("DiffWorkerPoolProvider", () => {
     expect(getDiffWorkerPool()).toBe(manager);
   });
 
+  it("an idle release terminates the manager's workers but keeps the singleton, and the same pool stays in context", () => {
+    vi.useFakeTimers();
+    setRetentionProfile(MOBILE_RETENTION_PROFILE);
+    const manager = fakeWorkerPoolManager();
+    workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
+
+    render(
+      <ResolvedThemeContext.Provider value={lightTheme()}>
+        <DiffWorkerPoolProvider>
+          <PoolConsumerProbe />
+        </DiffWorkerPoolProvider>
+      </ResolvedThemeContext.Provider>,
+    );
+    let release: () => void = () => {};
+    act(() => {
+      release = acquireDiffWorkerPool();
+    });
+
+    act(() => {
+      release();
+      vi.advanceTimersByTime(MOBILE_RETENTION_PROFILE.diffWorkerPoolIdleMs);
+    });
+
+    // Forgetting the singleton would leave every mounted `<FileDiff>` holding
+    // a manager the library no longer knows, which respawns its workers on
+    // the next highlight with nothing left able to terminate them.
+    expect(manager.terminate).toHaveBeenCalledTimes(1);
+    expect(workerPoolMocks.terminateWorkerPoolSingleton).not.toHaveBeenCalled();
+    expect(getDiffWorkerPool()).toBe(manager);
+    expect(screen.getByTestId("pool-state").textContent).toBe("present");
+
+    act(() => {
+      acquireDiffWorkerPool();
+    });
+
+    expect(
+      workerPoolMocks.getOrCreateWorkerPoolSingleton,
+    ).toHaveBeenCalledTimes(1);
+  });
+
   it("terminates the pool on unmount and clears the store", () => {
     const manager = fakeWorkerPoolManager();
     workerPoolMocks.getOrCreateWorkerPoolSingleton.mockReturnValue(manager);
@@ -233,7 +327,7 @@ describe("DiffWorkerPoolProvider", () => {
     );
 
     act(() => {
-      requestDiffWorkerPool();
+      acquireDiffWorkerPool();
     });
     expect(getDiffWorkerPool()).toBe(manager);
 

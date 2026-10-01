@@ -136,6 +136,87 @@ function reconstructGrep(record: Record<string, unknown>): string | null {
   ].join(" ");
 }
 
+// Each flag `reconstructGrep` writes, with how many words follow it.
+const GREP_FLAG_ARITY: ReadonlyMap<string, number> = new Map([
+  ["-i", 0],
+  ["-n", 0],
+  ["-C", 1],
+  ["-B", 1],
+  ["-A", 1],
+  ["--type", 1],
+  ["--glob", 1],
+]);
+
+interface ReconstructedWord {
+  readonly text: string;
+  readonly quoted: boolean;
+}
+
+// Space-separated words, a double-quoted word unescaped the way
+// `escapeDoubleQuoted` escaped it, each marked quoted or not (a quoted `"-i"`
+// is a pattern, never the flag); null for an unterminated quote.
+function reconstructedWords(line: string): ReconstructedWord[] | null {
+  const words: ReconstructedWord[] = [];
+  let index = 0;
+  while (index < line.length) {
+    if (line[index] === " ") {
+      index += 1;
+      continue;
+    }
+    let word = "";
+    const quoted = line[index] === '"';
+    if (quoted) {
+      index += 1;
+      while (index < line.length && line[index] !== '"') {
+        if (line[index] === "\\" && index + 1 < line.length) index += 1;
+        word += line[index];
+        index += 1;
+      }
+      if (index >= line.length) return null;
+      index += 1;
+    } else {
+      while (index < line.length && line[index] !== " ") {
+        word += line[index];
+        index += 1;
+      }
+    }
+    words.push({ text: word, quoted });
+  }
+  return words;
+}
+
+function flagArity(word: ReconstructedWord | undefined): number | undefined {
+  return word === undefined || word.quoted
+    ? undefined
+    : GREP_FLAG_ARITY.get(word.text);
+}
+
+/**
+ * The `pattern` and `path` back out of a {@link reconstructGrep} line, for the
+ * header's uncapped summary (`toolHeaderLine`); null when the line is not one
+ * this module wrote. Its caller checks the result reproduces the persisted
+ * summary, so a misread only keeps that summary.
+ */
+export function parseReconstructedGrep(
+  command: string,
+): Record<string, string> | null {
+  const words = reconstructedWords(command);
+  if (words === null || words[0]?.text !== "grep") return null;
+  let index = 1;
+  for (
+    let arity = flagArity(words[index]);
+    arity !== undefined;
+    arity = flagArity(words[index])
+  ) {
+    index += 1 + arity;
+  }
+  const [pattern, path, ...extra] = words.slice(index);
+  if (pattern === undefined || extra.length > 0) return null;
+  return path === undefined
+    ? { pattern: pattern.text }
+    : { pattern: pattern.text, path: path.text };
+}
+
 function prettifyKey(key: string): string {
   // CLI flags (`-n`, `-C`) read best left exactly as the harness sent them.
   if (key.startsWith("-")) return key;

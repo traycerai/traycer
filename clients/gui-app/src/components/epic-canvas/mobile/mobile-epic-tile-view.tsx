@@ -7,6 +7,8 @@ import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-ter
 import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
+import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import {
   useEpicHostTransportStatus,
@@ -65,6 +67,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // absence makes what they are showing stale.
   const epicTransportStatus = useEpicHostTransportStatus();
   const epicSnapshotLoaded = useEpicSnapshotLoaded();
+  const paneVisible = usePaneVisible();
   // Before the empty-pane early return, like the insets above: hooks are
   // unconditional, and this one owns a clock that must not be re-timed by a
   // render path changing under it.
@@ -99,8 +102,10 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   // switcher mounts alongside it: on an empty pane the sheet's create row is
   // how the user gets a tab back, so the header trigger has to stay live.
   if (selection === null) {
+    const emptyPanePainted = paneVisible && epicSnapshotLoaded;
     return (
       <>
+        <MobileDrawerTaskPaintReporter ready={emptyPanePainted} />
         <MobileEmptyEpicPane epicId={epicId} tabId={tabId} root={canvas.root} />
         <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
       </>
@@ -110,6 +115,14 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   const isTerminalTile =
     selection.ref.type === "terminal" ||
     selection.ref.type === "terminal-agent";
+  // Chat and artifact tiles report once their own payload commits; for every
+  // other kind the selected tile's chrome is the first content.
+  const tileChromePainted =
+    paneVisible &&
+    epicSnapshotLoaded &&
+    selection.ref.type !== "chat" &&
+    selection.ref.type !== "published-chat" &&
+    !isEpicArtifactKind(selection.ref.type);
 
   return (
     <div
@@ -128,6 +141,7 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
           : undefined
       }
     >
+      <MobileDrawerTaskPaintReporter ready={tileChromePainted} />
       {/* No bar here. The Epic's stream reports upward and the app shell renders
           the only one, so a hand-off between surfaces changes what it says
           rather than which element is saying it.

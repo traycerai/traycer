@@ -177,6 +177,7 @@ function makeTerminalHandle(opts: {
     rows: 24,
     reattachMode: "fresh",
     kind: opts.kind ?? "terminal",
+    viewer: "presentation",
     streamClientFactory: () => ({
       sendAction: () => undefined,
       close: () => undefined,

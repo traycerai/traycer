@@ -42,6 +42,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -66,7 +67,10 @@ import {
   openPhaseMigrationIntent,
 } from "@/lib/tab-navigation";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import type { TaskOrganization } from "@traycer/protocol/host/organization/schemas";
+import type { OrganizationDialog } from "@/components/organization/organization-dialogs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -114,6 +118,14 @@ interface SetEpicPinnedVariables {
   readonly pinned: boolean;
 }
 
+/** What `useOrganization()` answers while a case has staged a context. */
+interface StagedOrganization {
+  readonly supported: boolean;
+  readonly userId: string | null;
+  readonly view: undefined;
+  readonly openDialog: (dialog: OrganizationDialog) => void;
+}
+
 const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   completeness: null as ListTasksCompleteness | null,
@@ -129,7 +141,25 @@ const testState = vi.hoisted(() => ({
   backfillTasks: new Map<string, ListTaskLight>(),
   /** The id lists the in-progress lift asked that batch about. */
   backfillIdCalls: [] as ReadonlyArray<string>[],
+  /**
+   * What `useOrganization()` answers. `null` is the no-provider reading every
+   * case here predates, under which a row's organization dropdown is not
+   * rendered at all - so only a case that stages a supported one sees it.
+   */
+  organization: null as StagedOrganization | null,
+  /** What a row's organization chip opens, so a case reads the `canEdit` it asked for. */
+  openOrganizationDialog: vi.fn<(dialog: OrganizationDialog) => void>(),
 }));
+
+vi.mock(
+  "@/hooks/organization/organization-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/organization/organization-context")
+    >()),
+    useOrganization: () => testState.organization,
+  }),
+);
 
 // The desktop scope bar names the host through the directory, which needs a
 // runtime provider this fixture does not mount.
@@ -188,13 +218,21 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   },
 }));
 
-vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
-  useEpicBatchDelete: () => ({
-    isPending: false,
-    mutate: testState.mutate,
+// Only the dispatch is replaced (it needs a host runtime this suite does not
+// mount). The pending-delete readers stay REAL and read the `queryClient`'s
+// mutation cache, so an in-flight delete is staged as a held `epic.batchDelete`.
+vi.mock(
+  "@/hooks/epic/use-epic-batch-delete-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-batch-delete-mutation")
+    >()),
+    useEpicBatchDelete: () => ({
+      isPending: false,
+      mutate: testState.mutate,
+    }),
   }),
-  usePendingDeleteEpicIds: () => new Set<string>(),
-}));
+);
 
 vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   useTaskDeleteWorktreeCandidates: () => ({
@@ -251,6 +289,24 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     permissionRole: "owner",
     isPinned: false,
     ...overrides,
+  };
+}
+
+function supportedOrganization(): StagedOrganization {
+  return {
+    supported: true,
+    userId: "user-test",
+    view: undefined,
+    openDialog: testState.openOrganizationDialog,
+  };
+}
+
+/** A task that sits in a group, so its row draws an organization chip. */
+function groupedOrganization(taskId: string): TaskOrganization {
+  return {
+    labels: [],
+    appearance: { taskId, version: "0", color: null, icon: null },
+    group: { groupId: "group-1", name: "Backend", color: "#445566" },
   };
 }
 
@@ -468,6 +524,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     testState.workingEpicIds = new Set<string>();
     testState.backfillTasks = new Map<string, ListTaskLight>();
     testState.backfillIdCalls = [];
+    testState.organization = null;
+    testState.openOrganizationDialog.mockReset();
     tabNavigationMocks.activateTabIntent.mockReset();
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -1070,6 +1128,232 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       firePointerUp(card, 300, 112);
 
       expect(screen.queryByTestId("epics-list-row-select")).toBeNull();
+    });
+  });
+
+  describe("a Task whose deletion is in flight", () => {
+    function seedDeletingAndLiveRows(): void {
+      testState.items = [
+        historyItem({}),
+        historyItem({
+          id: "history-epic-2",
+          epicId: "epic-two",
+          title: "Second history item",
+        }),
+      ];
+    }
+
+    function cardTitled(title: string): HTMLElement {
+      const card = screen
+        .getAllByTestId("epics-list-row-card")
+        .find((el) => el.textContent.includes(title));
+      if (card === undefined) throw new Error(`expected a row card: ${title}`);
+      return card;
+    }
+
+    it("shows the delete in progress on its row only", async () => {
+      seedDeletingAndLiveRows();
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      await screen.findAllByTestId("epics-list-row-card");
+
+      const deleting = cardTitled("Open from landing");
+      const live = cardTitled("Second history item");
+
+      expect(deleting.getAttribute("data-deleting")).toBe("true");
+      expect(deleting.getAttribute("aria-busy")).toBe("true");
+      expect(
+        within(deleting).getByRole("status", {
+          name: "Deleting Open from landing",
+        }),
+      ).not.toBeNull();
+      expect(live.getAttribute("data-deleting")).toBeNull();
+      expect(within(live).queryByTestId("epics-list-row-deleting")).toBeNull();
+    });
+
+    it("does not call onOpen on a tap", async () => {
+      const onOpenItem = vi.fn();
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
+
+      fireEvent.click(
+        await screen.findByRole("link", {
+          name: "Open task Open from landing",
+        }),
+      );
+
+      expect(onOpenItem).not.toHaveBeenCalled();
+      expect(tabNavigationMocks.activateTabIntent).not.toHaveBeenCalled();
+    });
+
+    it("does not mount the action tray, and a swipe reveals nothing", async () => {
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      const card = await screen.findByTestId("epics-list-row-card");
+
+      expect(screen.queryByTestId("epics-list-row-tray-delete")).toBeNull();
+      expect(screen.queryByTestId("epics-list-row-tray-pin")).toBeNull();
+      expect(screen.queryByTestId("epics-list-row-tray-rename")).toBeNull();
+
+      openTrayByDrag(card);
+
+      expect(
+        screen.getByTestId("epics-list-row").getAttribute("data-tray-open"),
+      ).toBeNull();
+    });
+
+    it("offers no organization dropdown, and keeps the other rows' controls", async () => {
+      seedDeletingAndLiveRows();
+      testState.organization = supportedOrganization();
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      await screen.findAllByTestId("epics-list-row-card");
+
+      const deleting = cardTitled("Open from landing");
+      const live = cardTitled("Second history item");
+
+      expect(
+        within(live).queryByRole("button", {
+          name: "Organize Second history item",
+        }),
+      ).not.toBeNull();
+      expect(
+        within(deleting).queryByRole("button", {
+          name: "Organize Open from landing",
+        }),
+      ).toBeNull();
+      // The neighbour's tray is mounted, so the deleting row's absence of one
+      // is the row's own decision rather than a page that has no trays.
+      expect(screen.getAllByTestId("epics-list-row-tray-delete")).toHaveLength(
+        1,
+      );
+    });
+
+    it("takes the destination off its open link, so the browser has nothing to open or drag", async () => {
+      seedDeletingAndLiveRows();
+      const held = holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      const deletingLink = await screen.findByRole("link", {
+        name: "Open task Open from landing",
+      });
+      const liveLink = screen.getByRole("link", {
+        name: "Open task Second history item",
+      });
+
+      // The real router `Link`: a disabled one renders no `href`, and the row
+      // stays a keyboard stop because `tabindex` is stated on it.
+      expect(deletingLink.hasAttribute("href")).toBe(false);
+      expect(deletingLink.getAttribute("aria-disabled")).toBe("true");
+      expect(deletingLink.getAttribute("tabindex")).toBe("0");
+      // The neighbour is the control: the same page does render a destination.
+      expect(liveLink.getAttribute("href")).toContain("/epics/epic-two/");
+      expect(liveLink.hasAttribute("aria-disabled")).toBe(false);
+      expect(liveLink.hasAttribute("tabindex")).toBe(false);
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(
+          screen
+            .getByRole("link", { name: "Open task Open from landing" })
+            .getAttribute("href"),
+        ).toContain("/epics/epic-from-history/");
+      });
+      const settledLink = screen.getByRole("link", {
+        name: "Open task Open from landing",
+      });
+      expect(settledLink.hasAttribute("aria-disabled")).toBe(false);
+      expect(settledLink.hasAttribute("tabindex")).toBe(false);
+    });
+
+    it("opens its organization chip read-only, and a live row's editable, until the delete settles", async () => {
+      testState.organization = supportedOrganization();
+      testState.items = [
+        historyItem({ organization: groupedOrganization("epic-from-history") }),
+        historyItem({
+          id: "history-epic-2",
+          epicId: "epic-two",
+          title: "Second history item",
+          organization: groupedOrganization("epic-two"),
+        }),
+      ];
+      const held = holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      await screen.findAllByTestId("epics-list-row-card");
+      const chipOf = (title: string): HTMLElement =>
+        within(cardTitled(title)).getByRole("button", {
+          name: /^Task organization/,
+        });
+
+      fireEvent.click(chipOf("Second history item"));
+      expect(testState.openOrganizationDialog).toHaveBeenLastCalledWith({
+        kind: "labels",
+        taskId: "epic-two",
+        canEdit: true,
+      });
+
+      fireEvent.click(chipOf("Open from landing"));
+      expect(testState.openOrganizationDialog).toHaveBeenLastCalledWith({
+        kind: "labels",
+        taskId: "epic-from-history",
+        canEdit: false,
+      });
+      expect(testState.openOrganizationDialog).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("epics-list-row-deleting")).toBeNull();
+      });
+      fireEvent.click(chipOf("Open from landing"));
+      expect(testState.openOrganizationDialog).toHaveBeenLastCalledWith({
+        kind: "labels",
+        taskId: "epic-from-history",
+        canEdit: true,
+      });
+    });
+
+    it("does not enter selection mode on a long press", async () => {
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      const card = await screen.findByTestId("epics-list-row-card");
+
+      vi.useFakeTimers();
+      firePointerDown(card, 300, 100);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(460);
+      });
+      vi.useRealTimers();
+      firePointerUp(card, 300, 100);
+
+      expect(screen.queryByTestId("epics-list-row-select")).toBeNull();
+    });
+
+    it("returns the row to normal once the delete settles", async () => {
+      const onOpenItem = vi.fn();
+      const held = holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
+      await screen.findByTestId("epics-list-row-deleting");
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("epics-list-row-deleting")).toBeNull();
+      });
+      expect(
+        screen.getByTestId("epics-list-row-card").getAttribute("data-deleting"),
+      ).toBeNull();
+      expect(screen.getByTestId("epics-list-row-tray-delete")).not.toBeNull();
+      fireEvent.click(
+        screen.getByRole("link", { name: "Open task Open from landing" }),
+      );
+      expect(onOpenItem).toHaveBeenCalledTimes(1);
     });
   });
 

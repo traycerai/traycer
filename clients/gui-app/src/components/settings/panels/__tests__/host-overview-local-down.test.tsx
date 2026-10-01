@@ -253,6 +253,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
         return Promise.resolve({
           kind: "failed",
           message: "installer could not write to the prefix",
+          errorCode: null,
         });
       },
     );
@@ -337,6 +338,7 @@ describe("Overview — this machine's own host, down (LocalHostDownActions)", ()
           return {
             kind: "failed",
             message: "installer could not write to the prefix",
+            errorCode: null,
           };
         }
         await secondConvergeGate;

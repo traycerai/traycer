@@ -350,7 +350,7 @@ export interface SessionRegistryPolicy<TSession> {
 
   /**
    * A warm session has just been re-acquired. The terminal plane retags it
-   * `presentation` - "a tile looking again is presentation".
+   * with the acquiring tile's intent: `presentation` for one on screen.
    */
   onRevived(session: TSession): void;
 }
@@ -927,7 +927,7 @@ export function createSessionRegistry<TSession>(
           } catch (error) {
             // FAIL TOWARD DISPOSAL, the same answer `park` gives a failed
             // `onParked`, and for a sharper reason. The terminal plane's
-            // `onRevived` retags the session `presentation`, and that
+            // `onRevived` can retag the session `presentation`, and that
             // `setViewer` reconstructs the stream synchronously - which throws
             // when the captured transport or directory has since disappeared.
             //

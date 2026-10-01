@@ -262,7 +262,7 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     id: "tab.reopen",
     label: "Reopen closed tab",
     description:
-      "Restore the last closed task, draft, inner tab, or group of tabs in this window.",
+      "Restore the last closed task, draft, or group of tabs in this window.",
     category: "tabs",
     kind: "chord",
     defaultChord: "mod+shift+t",

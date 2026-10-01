@@ -34,8 +34,8 @@ export function codexRetryVisibility(
 }
 
 export function codexRetryTitle(message: string): string {
-  if (!/^Reconnecting(?:\.{3}|…|\s|$)/i.test(message)) return "Retrying";
-  const attempt = /^Reconnecting(?:\.{3}|…)?\s*(\d+\s*\/\s*\d+)/i.exec(
+  if (!/^Reconnecting(?:\.{3}|\u2026|\s|$)/i.test(message)) return "Retrying";
+  const attempt = /^Reconnecting(?:\.{3}|\u2026)?\s*(\d+\s*\/\s*\d+)/i.exec(
     message,
   )?.[1];
   return attempt === undefined

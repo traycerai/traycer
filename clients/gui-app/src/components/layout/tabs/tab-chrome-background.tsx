@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { usePublishSheetJoin } from "./sheet-join-context";
 import { cn } from "@/lib/utils";
-import { TAB_BOX_CLASS, TAB_COLOR_MARK_CLASS } from "./tab-chrome-tokens";
+import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
 import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
 
 /**
@@ -9,8 +9,12 @@ import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
  * sheet join in `index.css`, which supersedes staging round 1's F4 "boxy"
  * ruling): from md the box takes the canvas fill and the sheet's border,
  * opens at the bottom, and the column's bridge runs it down onto the sheet.
- * Unjoined - the layout editor's session tab or below md - it
- * is the self-contained box in the sheets' own material.
+ * Joined, the whole outline - the box's sides and top, then the bridge's sides
+ * and its two feet - is drawn in `borderColor` (`--join-outline`), so a
+ * coloured tab traces its full silhouette in its colour exactly as an
+ * uncoloured one does in the sheets' border. Unjoined - the layout editor's
+ * session tab, or below md - it is the self-contained box in the sheets' own
+ * material.
  */
 export function TabChromeBackground(props: {
   readonly fill: string;
@@ -20,7 +24,10 @@ export function TabChromeBackground(props: {
 }) {
   const [node, setNode] = useState<HTMLSpanElement | null>(null);
   const inStrip = useWhollyInTabStrip(node, props.joined);
-  usePublishSheetJoin(props.joined && inStrip ? "canvas" : null);
+  usePublishSheetJoin(
+    props.joined && inStrip ? "canvas" : null,
+    props.borderColor,
+  );
   return (
     <span
       ref={setNode}
@@ -36,19 +43,27 @@ export function TabChromeBackground(props: {
         {
           "--swatch": props.fill,
           "--swatch-border": props.borderColor,
+          "--join-outline": props.borderColor,
         } as CSSProperties
       }
     />
   );
 }
 
-/** A tab's colour where no box wears it: see `TAB_COLOR_MARK_CLASS`. */
-export function TabColorMark(props: { readonly color: string }) {
+/**
+ * A coloured tab's colour where the tab has no box of its own to wear it: an
+ * edge-to-edge line along the tab's bottom, the treatment every coloured tab
+ * had before #2021 swapped it for a short centred dash. Restored for every
+ * coloured tab - lone, group member or split member - because the dash is what
+ * the owner reported as the regression on a lone tab. Adjacent group members'
+ * lines also sit flush, which is what still reads a group as one unit.
+ */
+export function TabColorEdgeLine(props: { readonly color: string }) {
   return (
     <span
       aria-hidden
-      data-testid="tab-color-mark"
-      className={TAB_COLOR_MARK_CLASS}
+      data-testid="tab-color-edge-line"
+      className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.5px] bg-(--swatch)"
       style={{ "--swatch": props.color } as CSSProperties}
     />
   );

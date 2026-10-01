@@ -992,36 +992,13 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
     expectFullReadings();
   });
 
-  it("leaves app.rate-limits.open to the header it is sharing the screen with", () => {
-    // The slot holds ONE handler and an unregister clears only its own, so a
-    // strip that registered here would displace the mobile header's and then
-    // - unmounting for the keyboard or the drawer - take the chord away
-    // outright, with the header button still on screen and its effect long
-    // past re-running. Nothing is lost: the cluster's own trigger is a tap
-    // away, and it opens the same panel.
+  it("holds app.rate-limits.open on a mobile viewport, where the header draws no gauge beside it", () => {
+    // The phone header gives its usage glyph up while this footer is on, and
+    // this footer only mounts there while it is on - so the footer is the
+    // chord's one owner rather than a rival for it.
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
 
     render(<AppStatusBar />);
-
-    act(() => {
-      expect(
-        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER),
-      ).toBe(false);
-    });
-
-    expect(screen.queryByTestId("rate-limit-popover-stub")).toBeNull();
-  });
-
-  it("takes the chord back when the window is no longer narrow", () => {
-    // The registration follows the viewport rather than the mount, so a
-    // desktop window narrowed and widened again is not left chordless.
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-    const view = render(<AppStatusBar />);
-
-    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-    act(() => {
-      view.rerender(<AppStatusBar />);
-    });
 
     act(() => {
       expect(
@@ -1037,10 +1014,9 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
  * Which mount holds `app.resources.open`, decided by the strip and handed to
  * the popover as a prop (the popover's own suite owns honouring it).
  *
- * The resource popover is mounted by the HEADER as well as by the strip, so
- * unlike the usage chord this cannot be a flat "stand down when narrow": with
- * the header's monitor switched off there is no other mount, and standing
- * down would leave the action with no owner at all.
+ * The resource popover is mounted by the HEADER as well as by the strip, but
+ * never both at once: on desktop placement keeps them apart, and the phone
+ * header draws no monitor while the footer is on.
  */
 describe("<AppStatusBar /> resource action ownership", () => {
   const DESKTOP_VIEWPORT_WIDTH = 1280;
@@ -1084,37 +1060,18 @@ describe("<AppStatusBar /> resource action ownership", () => {
     expect(claimsOpenAction()).toBe("true");
   });
 
-  it("stands down on a mobile viewport while the header draws its own monitor", () => {
-    // Both are on screen there - the header keeps its monitor whatever the
-    // footer does - and the header is the one that survives an open keyboard
-    // or nav drawer, so the strip must not displace its handler and then
-    // delete the slot on the way out. `resourceMonitor.shown` is one switch
-    // now (L-48): the default "shown" is what both mounts read, so no
-    // explicit set is needed to put the header's monitor on screen.
+  it("claims it on a mobile viewport too, where the header gives its monitor up to the footer", () => {
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
 
     render(<AppStatusBar />);
 
-    expect(claimsOpenAction()).toBe("false");
+    expect(claimsOpenAction()).toBe("true");
   });
 
   // The old "header off, strip on" case is gone with it: `resourceMonitor` is
   // ONE switch (L-48) now, so turning the header's monitor off also drops the
   // strip's own segment - there is no longer a state where the strip has a
   // popover to claim ownership of while the header draws none.
-
-  it("takes it back when the window is no longer narrow", () => {
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-    const view = render(<AppStatusBar />);
-    expect(claimsOpenAction()).toBe("false");
-
-    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-    act(() => {
-      view.rerender(<AppStatusBar />);
-    });
-
-    expect(claimsOpenAction()).toBe("true");
-  });
 });
 
 // The rest of the old "Customize editing" / "disabled-usage provider ghosts
@@ -1233,6 +1190,20 @@ describe("<AppStatusBar /> reading placement (L-156)", () => {
 
     expect(stripOrder()).toEqual(["usage", "grower", "resource"]);
     expect(useLayoutStore.getState().arrangement.usageHost).toBe("header");
+  });
+
+  it("fixes the ends on a narrow viewport whatever side either reading names", () => {
+    // L-162: the phone footer has fixed ends - usage at the start, resources
+    // at the end - and the usage panel opens over the start. The stored sides
+    // are a desktop window's and are left as they were.
+    setViewportWidth(390);
+    place({ usageSide: "right", resourceSide: "left", mobileFooter: true });
+    render(<AppStatusBar />);
+
+    expect(stripOrder()).toEqual(["usage", "grower", "resource"]);
+    expect(lastPopoverProps).toEqual({ side: "top", align: "start" });
+    expect(useLayoutStore.getState().arrangement.usageSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.resourceSide).toBe("left");
   });
 
   it("opens the usage panel at the end the cluster is on", () => {

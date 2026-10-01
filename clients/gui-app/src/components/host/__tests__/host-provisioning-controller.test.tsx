@@ -57,6 +57,8 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 function makeHostManagement(
@@ -82,7 +84,8 @@ function makeHostManagement(
     registerService: notImplemented("registerService"),
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
-    freePortAndRestart: (input) => Promise.resolve(input),
+    freePortAndRestart: (input) =>
+      Promise.resolve({ kind: "applied" as const, ...input }),
     runDoctorRepairQueued: () => Promise.resolve({ kind: "applied" as const }),
     freePortAndRestartIfIdle: () =>
       Promise.resolve({
@@ -95,6 +98,9 @@ function makeHostManagement(
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
     restartHostIfIdle: notImplemented("restartHostIfIdle"),
+    restartHostServiceIfHostIdle: notImplemented(
+      "restartHostServiceIfHostIdle",
+    ),
     runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
     getHostName: () =>
       Promise.resolve({
@@ -935,7 +941,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     expect(readLifecycle()?.provisioning.lastProgress).toBeNull();
 
     await act(async () => {
-      deferred.resolve({ kind: "failed", message: "ensure failed" });
+      deferred.resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await deferred.promise.catch(() => undefined);
     });
 
@@ -1045,7 +1055,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     });
 
     await act(async () => {
-      settles[0].resolve({ kind: "failed", message: "ensure failed" });
+      settles[0].resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await settles[0].promise.catch(() => undefined);
     });
     await waitFor(() => {
@@ -1081,7 +1095,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     // Second attempt fails with no progress events: must not revive the old
     // stage (proves run() cleared the retained snapshot).
     await act(async () => {
-      settles[1].resolve({ kind: "failed", message: "ensure failed again" });
+      settles[1].resolve({
+        kind: "failed",
+        message: "ensure failed again",
+        errorCode: null,
+      });
       await settles[1].promise.catch(() => undefined);
     });
     await waitFor(() => {
@@ -1136,7 +1154,11 @@ describe("useHostProvisioning lastProgress producer", () => {
           },
         },
       );
-      deferred.resolve({ kind: "failed", message: "ensure failed" });
+      deferred.resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await deferred.promise.catch(() => undefined);
     });
 
@@ -1195,7 +1217,11 @@ describe("useHostProvisioning lastProgress producer", () => {
     });
 
     await act(async () => {
-      settles[0].resolve({ kind: "failed", message: "ensure failed" });
+      settles[0].resolve({
+        kind: "failed",
+        message: "ensure failed",
+        errorCode: null,
+      });
       await settles[0].promise.catch(() => undefined);
     });
     await waitFor(() => {
@@ -1218,7 +1244,11 @@ describe("useHostProvisioning lastProgress producer", () => {
 
     // Second attempt fails with no new progress push - only the leftover lane.
     await act(async () => {
-      settles[1].resolve({ kind: "failed", message: "ensure failed again" });
+      settles[1].resolve({
+        kind: "failed",
+        message: "ensure failed again",
+        errorCode: null,
+      });
       await settles[1].promise.catch(() => undefined);
     });
     await waitFor(() => {
@@ -1561,4 +1591,54 @@ describe("HostProvisioningController - the staged wait versus live progress", ()
    * touching it should reach for a real-browser or integration-level measurement
    * rather than trusting these arms.
    */
+});
+
+// When Force resolves the terminal-host refusal
+// (`{ kind: "deferred", message }`), does the person's own recovery flow
+// (`presentation.forceProvisioning` -> `run(true, ...)` -> the shared
+// `useRunnerConvergeReady` mutation) end up with SENTENCE, verbatim, on
+// `provisioning.error`? Nothing existing pins this: the `force()`/`retry()`
+// tests above only ever resolve `"ok"`/`"busy"`/a bare `"failed"` with no
+// message assertion, and `default-host-ready-gate.test.tsx:671-675`/`:745-759`
+// hand-feed `provisioningError` directly rather than deriving it from a real
+// `convergeReady` call. The gate's OWN verbatim rendering of that message is
+// already covered there, so this pin stops at the field the real hook
+// produces.
+describe("a deferred (terminal-host) convergeReady outcome reaches provisioning.error verbatim", () => {
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    vi.restoreAllMocks();
+  });
+
+  it("Force -> deferred -> provisioning.error.message === SENTENCE", async () => {
+    const SENTENCE =
+      "A host started in a terminal is running; the desktop won't update it.";
+    const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>
+      Promise.resolve({ kind: "deferred", message: SENTENCE }),
+    );
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+      hostManagement: makeHostManagement(convergeReady),
+    });
+    const { readLifecycle } = mountProvisioningLifecycle(host);
+
+    act(() => {
+      readLifecycle()?.provisioning.force();
+    });
+
+    await waitFor(() => {
+      expect(convergeReady).toHaveBeenCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(readLifecycle()?.provisioning.error).not.toBeNull();
+    });
+    expect(readLifecycle()?.provisioning.error?.message).toBe(SENTENCE);
+  });
 });

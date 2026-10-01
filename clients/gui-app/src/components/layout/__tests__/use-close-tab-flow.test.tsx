@@ -521,7 +521,7 @@ describe("useCloseTabFlow", () => {
 
     expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (recovery === undefined || recovery.kind !== "header") {
+    if (recovery === undefined) {
       throw new Error("expected one bulk header recovery entry");
     }
     expect(recovery.bulk).toBe(true);
@@ -550,7 +550,7 @@ describe("useCloseTabFlow", () => {
 
     expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (recovery === undefined || recovery.kind !== "header") {
+    if (recovery === undefined) {
       throw new Error("expected one bulk header recovery entry");
     }
     expect(recovery.bulk).toBe(true);
@@ -588,10 +588,7 @@ describe("useCloseTabFlow", () => {
 
     expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
     const unrelatedRecovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (
-      unrelatedRecovery === undefined ||
-      unrelatedRecovery.kind !== "header"
-    ) {
+    if (unrelatedRecovery === undefined) {
       throw new Error("expected unrelated header recovery entry");
     }
     expect(unrelatedRecovery.bulk).toBe(false);
@@ -605,7 +602,7 @@ describe("useCloseTabFlow", () => {
     fireEvent.click(screen.getByTestId("epic-tab-unsynced-discard"));
     expect(useTabRecoveryHistory.getState().entries).toHaveLength(2);
     const groupRecovery = useTabRecoveryHistory.getState().entries.at(1);
-    if (groupRecovery === undefined || groupRecovery.kind !== "header") {
+    if (groupRecovery === undefined) {
       throw new Error("expected group header recovery entry");
     }
     expect(groupRecovery.bulk).toBe(true);

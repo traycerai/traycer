@@ -8,6 +8,7 @@ import {
   type SessionLivenessProbe,
 } from "@traycer/protocol/host-transport/remote/session";
 import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
+import type { RemoteTrafficSnapshot } from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import { extractBearerForOpenFrame } from "../ws-rpc-client";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
 import { recordNegotiatedStreamMethodVersions } from "../negotiated-stream-version-registry";
@@ -35,6 +36,109 @@ export const HOST_STATUS_LIVENESS_PROBE: SessionLivenessProbe = {
   method: "host.status",
   params: {},
 };
+
+/** Set to `1` in sessionStorage for reloads or localStorage for app relaunches. */
+export const REMOTE_TRAFFIC_DEBUG_STORAGE_KEY = "traycer:remote-traffic-debug";
+
+/** Backstop for live sessions; a closed session leaves on its own. */
+const MAX_DEBUG_READERS = 32;
+
+/**
+ * Live sessions' readers by capture id, oldest first. An id is never reused,
+ * so two samples of one capture line up even after an earlier session leaves.
+ */
+const debugReaders = new Map<number, () => RemoteTrafficSnapshot>();
+let nextDebugCaptureSession = 0;
+let droppedDebugSessions = 0;
+
+/** Sessions that closed while registered, and what their rows had received. */
+export interface RemoteTrafficDebugClosedSessions {
+  readonly sessions: number;
+  readonly receivedBytes: number;
+  readonly receivedFrames: number;
+}
+
+/**
+ * A closed session's reader leaves with it, so a session opened and closed
+ * between two samples would otherwise leave no trace in either: no row, no
+ * ID gap, no drop. These totals are what a capture checks for that loss.
+ */
+let closedDebugSessions: RemoteTrafficDebugClosedSessions = {
+  sessions: 0,
+  receivedBytes: 0,
+  receivedFrames: 0,
+};
+
+export function readRemoteTrafficDebugClosedSessions(): RemoteTrafficDebugClosedSessions {
+  return closedDebugSessions;
+}
+
+export function readRemoteTrafficDebugSnapshots(): ReadonlyArray<
+  RemoteTrafficSnapshot & { readonly captureSession: number }
+> {
+  return Array.from(debugReaders, ([captureSession, read]) => ({
+    ...read(),
+    captureSession,
+  }));
+}
+
+function registerRemoteTrafficDebugReader(
+  read: () => RemoteTrafficSnapshot,
+): number {
+  const captureSession = nextDebugCaptureSession;
+  nextDebugCaptureSession += 1;
+  debugReaders.set(captureSession, read);
+  if (debugReaders.size > MAX_DEBUG_READERS) {
+    const oldest = debugReaders.keys().next();
+    if (!oldest.done) debugReaders.delete(oldest.value);
+    droppedDebugSessions += 1;
+  }
+  return captureSession;
+}
+
+function releaseRemoteTrafficDebugReader(captureSession: number): void {
+  const read = debugReaders.get(captureSession);
+  // Already evicted by the cap, and counted there.
+  if (read === undefined) return;
+  debugReaders.delete(captureSession);
+  const final = read();
+  closedDebugSessions = {
+    sessions: closedDebugSessions.sessions + 1,
+    receivedBytes: closedDebugSessions.receivedBytes + final.receivedBytes,
+    receivedFrames: closedDebugSessions.receivedFrames + final.receivedFrames,
+  };
+}
+
+function remoteTrafficDebugEnabled(): boolean {
+  try {
+    if (sessionStorage.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY) === "1") {
+      return true;
+    }
+  } catch {
+    // A denied session store must not hide a persistent diagnostic opt-in.
+  }
+  try {
+    return localStorage.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function installRemoteTrafficDebugSurface(): void {
+  try {
+    Object.defineProperty(globalThis, "__traycerRemoteTraffic", {
+      configurable: true,
+      value: Object.freeze({
+        snapshot: readRemoteTrafficDebugSnapshots,
+        droppedSessions: () => droppedDebugSessions,
+        closedSessions: readRemoteTrafficDebugClosedSessions,
+      }),
+    });
+  } catch {
+    // A hardened embed may refuse globals. Keep the transport usable; the
+    // exported reader remains available to a local diagnostic harness.
+  }
+}
 
 export interface RemoteSessionOptions<
   RpcRegistry extends
@@ -81,6 +185,19 @@ export class RemoteSession<
       servedStreamMajors: CLIENT_SERVED_STREAM_MAJORS,
       unaryResponseMs: UNARY_RESPONSE_TIMEOUT_MS,
     });
+    if (remoteTrafficDebugEnabled() && this.enableTrafficAccounting()) {
+      const reader = this.trafficSnapshotReader();
+      if (reader !== null) {
+        const captureSession = registerRemoteTrafficDebugReader(reader);
+        // Caller close and terminal fatal both end here. A closed session's
+        // accounting is final, so keeping its reader would only pin its rows
+        // and crowd live sessions out of the cap; its totals stay counted.
+        this.onClosed(() => {
+          releaseRemoteTrafficDebugReader(captureSession);
+        });
+        installRemoteTrafficDebugSurface();
+      }
+    }
   }
 }
 

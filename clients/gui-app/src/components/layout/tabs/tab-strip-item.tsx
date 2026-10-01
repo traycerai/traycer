@@ -10,6 +10,7 @@ import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-q
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
 import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import type { MergeSide } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { HeaderTabVisual } from "./header-tab-visual";
 import {
   useStripTabItem,
@@ -27,6 +28,9 @@ import {
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
+import { tabRefKey } from "@/stores/tabs/layout";
+import { useConcealedForTravel } from "./strip-selection-travel";
+import { useStripEntrance } from "./use-strip-entrance";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
 const TITLE_INPUT_CLASS =
@@ -72,7 +76,20 @@ interface TabItemProps {
 export const TabItem = memo(function TabItem(props: TabItemProps) {
   const { tab, dnd, chrome, includeMotionFrame, isActive } = props;
   const { rootRef, ...item } = useStripTabItem(props);
-  const joined = isActive && chrome === "own" && !item.isDragging;
+  // While the selection slides here, the traveller draws the joined box.
+  const concealed = useConcealedForTravel(dnd?.stripItemId ?? null);
+  const joined = isActive && chrome === "own" && !item.isDragging && !concealed;
+  const pairPreviewSide = useTopLevelStripPairPreview(tab.kind, tab.id);
+  // The same gate the vertical strip's hover card applies
+  // (`hoverCardAllowed`, `side-tab-row.tsx`): shut while renaming, a drag
+  // source, a drop indicator sits on this tab, or a pair-merge preview is
+  // active - each one already fights the pointer for something else.
+  const hoverCardEnabled =
+    !item.rename.isEditing &&
+    !item.isDragging &&
+    !props.showDropIndicatorBefore &&
+    !props.showDropIndicatorAfter &&
+    pairPreviewSide === null;
   const control = (
     <StripTabContextMenu item={item} input={props}>
       <div
@@ -97,6 +114,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           chrome={chrome}
           isActive={isActive}
           joined={joined}
+          concealed={concealed}
           titleControl={
             item.rename.isEditing ? (
               <StripTabTitleInput
@@ -116,8 +134,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             />
           }
           leaderVisible={item.leaderBadge !== null}
+          enabled={hoverCardEnabled}
         />
-        <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
+        <StripPairPreview
+          tabKind={tab.kind}
+          tabId={tab.id}
+          side={pairPreviewSide}
+        />
         <HeaderTabSeparator visible={props.showSeparatorAfter} />
         <HeaderTabDropIndicator
           visible={props.showDropIndicatorAfter}
@@ -132,6 +155,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       isDragging={item.isDragging}
       offsetX={props.offsetX}
       dnd={dnd}
+      entranceKeys={tabRefKey(tab)}
     >
       {control}
     </HeaderTabMotionFrame>
@@ -177,10 +201,13 @@ function HeaderTabMotionFrame(props: {
   readonly offsetX: number;
   /** Drag config; its `stripItemId` is the drag model's measurement anchor. */
   readonly dnd: HeaderTabDndConfig | null;
+  /** The tab's ref key, the mark an open or a reopen leaves for it. */
+  readonly entranceKeys: string;
   readonly children: React.ReactNode;
 }) {
   const transition = useHeaderTabDisplacementTransition();
   const frameRef = useRef<HTMLDivElement | null>(null);
+  useStripEntrance(frameRef, props.entranceKeys, "tab");
   const x = useStripItemDisplacement({
     nodeRef: frameRef,
     offset: props.offsetX,
@@ -300,8 +327,9 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
 function StripPairPreview(props: {
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
+  readonly side: MergeSide | null;
 }) {
-  const side = useTopLevelStripPairPreview(props.tabKind, props.tabId);
+  const { side } = props;
   if (side === null) return null;
   return (
     <span

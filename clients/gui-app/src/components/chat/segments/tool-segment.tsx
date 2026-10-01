@@ -21,7 +21,9 @@ import {
   type ToolInputDetail,
 } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
-import { cn, formatSingleLine } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
+import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { AgentHeaderLink } from "./agent-header-link";
 import { AgentMessageBody } from "./agent-message-body";
 import { ReplyExpectedIcon, ReplyExpectedNote } from "./reply-expected";
@@ -339,6 +341,10 @@ function GenericToolSegment(props: ToolSegmentProps) {
   const setToolOpen = useToolOpenStore((state) => state.setOpen);
   const setOpen = (next: boolean): void => setToolOpen(openScope, id, next);
   const summary = inputSummary;
+  // The header shows the whole input on one line and its span truncates it at
+  // the row's width (see `toolHeaderLine`); `summary` stays the persisted,
+  // capped line for everything that compares against it below.
+  const headerLine = toolHeaderLine(toolName, inputSummary, inputDetail);
   const stackedHeader = variant === "card" && isStreaming;
   const headerLayout: ToolHeaderLayout = stackedHeader ? "stacked" : "inline";
   const headerElapsed = resolveToolHeaderElapsed({
@@ -356,7 +362,7 @@ function GenericToolSegment(props: ToolSegmentProps) {
   const header = (
     <GenericToolHeader
       toolName={toolName}
-      summary={summary}
+      summary={headerLine}
       progress={progress}
       badgeState={badgeState}
       endState={endState}
@@ -794,10 +800,8 @@ function AgentMessagePreview(props: {
   readonly tone: "default" | "primary";
 }) {
   const { message, tone } = props;
-  const preview = formatSingleLine(message, {
-    maxLength: 180,
-    ellipsis: "…",
-  });
+  // Uncapped: `line-clamp-2` below cuts it at two lines of the row's width.
+  const preview = collapseToSingleLine(message);
   if (preview.length === 0) return null;
   return (
     <p

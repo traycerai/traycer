@@ -1,3 +1,4 @@
+import { publishHostStartAdoption } from "@traycer-clients/shared/host-start-adoption";
 import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -60,6 +61,33 @@ export async function registerHostLoginItemWithAttempt(
   });
   await requireLiveCapability(capability, hostHomeDir);
   return result;
+}
+
+/** Keep the restart's grant and update capability live through supervisor spawn. */
+export async function registerHostLoginItemWithStartGrant(
+  capability: UpdateMutationCapability,
+  hostHomeDir: string,
+  serviceLabel: string,
+): Promise<RegisterHostLoginItemResult> {
+  await requireLiveCapability(capability, hostHomeDir);
+  const lease = await publishHostStartAdoption(
+    capability,
+    hostHomeDir,
+    serviceLabel,
+    "desktop",
+  );
+  try {
+    const result = await registerHostLoginItemWithAttempt(
+      capability,
+      hostHomeDir,
+      async () => true,
+    );
+    // A parked, refused or approval-gated registration cannot spawn a child.
+    if (result === "enabled") await lease.waitForSpawn();
+    return result;
+  } finally {
+    await lease.cancel();
+  }
 }
 
 /** Capability-consuming SMAppService deregistration/bootout. */

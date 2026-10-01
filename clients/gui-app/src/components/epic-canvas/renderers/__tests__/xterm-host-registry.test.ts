@@ -72,6 +72,7 @@ function createOwnedHandle(sessionId: string): {
     rows: 24,
     reattachMode: "fresh",
     kind: "terminal",
+    viewer: "presentation",
     streamClientFactory: () => ({
       sendAction: () => undefined,
       close: () => {
@@ -132,7 +133,7 @@ describe("xterm host fleet identity", () => {
   it("does not let host B adopt, rekey, or release host A's warm engine or stream", () => {
     const registry = __getTerminalSessionRegistryForTests();
     const ownedA = createOwnedHandle(SHARED_ID);
-    registry.acquire("inst-a", () => ownedA.handle, HOST_A);
+    registry.acquire("inst-a", () => ownedA.handle, HOST_A, "presentation");
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
     );
@@ -156,7 +157,7 @@ describe("xterm host fleet identity", () => {
   it("keeps host A's retained stream and engine after host B opens the same id", () => {
     const registry = __getTerminalSessionRegistryForTests();
     const ownedA = createOwnedHandle(SHARED_ID);
-    registry.acquire("inst-a", () => ownedA.handle, HOST_A);
+    registry.acquire("inst-a", () => ownedA.handle, HOST_A, "presentation");
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
     );
@@ -164,7 +165,7 @@ describe("xterm host fleet identity", () => {
     registry.release("inst-a", ownedA.handle, true);
 
     const ownedB = createOwnedHandle(SHARED_ID);
-    registry.acquire("inst-b", () => ownedB.handle, HOST_B);
+    registry.acquire("inst-b", () => ownedB.handle, HOST_B, "presentation");
     const engineB = acquireXtermHost("inst-b", () =>
       makeEntry(SHARED_ID, HOST_B),
     );
@@ -227,7 +228,7 @@ describe("xterm host fleet identity", () => {
     vi.useFakeTimers();
     const registry = __getTerminalSessionRegistryForTests();
     const ownedA = createOwnedHandle(SHARED_ID);
-    registry.acquire("inst-a", () => ownedA.handle, HOST_A);
+    registry.acquire("inst-a", () => ownedA.handle, HOST_A, "presentation");
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
     );
@@ -250,6 +251,7 @@ describe("xterm host fleet identity", () => {
         throw new Error("must reuse the adopted same-host handle");
       },
       HOST_A,
+      "presentation",
     );
     expect(revived).toBe(ownedA.handle);
     registry.release("inst-reopen", ownedA.handle, true);

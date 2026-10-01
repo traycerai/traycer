@@ -2,9 +2,14 @@ import { lazy, Suspense, type RefObject } from "react";
 import { useLayoutLitMoment } from "@/components/layout-editor/lit-moment";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { setupGuide } from "@/stores/onboarding/setup-guides";
+import {
+  clampOnboardingStep,
+  useOnboardingStore,
+} from "@/stores/onboarding/onboarding-store";
+import { setupGuideStepsFor } from "@/stores/onboarding/setup-guides";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
 
 const Coachmark = lazy(() =>
@@ -23,9 +28,22 @@ export function SettingsSetupGuide(props: {
   // screen and its Escape, and a coachmark pointing into Settings would float
   // over it. The guide resumes at the same step when the session ends.
   const customizing = useLayoutEditorStore((state) => state.session !== null);
-  const guide = active === null ? null : setupGuide(active.id);
-  const step =
-    guide === null || active === null ? null : guide.steps[active.step];
+  // Where the editor can never open, the guide ends on the page before its
+  // door (`requiresLayoutEditor`) rather than pointing at a missing control.
+  const availability = useSettingsAvailabilityContext();
+  const editorAvailable = isLayoutEditorAvailable(availability);
+  const steps =
+    active === null
+      ? []
+      : setupGuideStepsFor(active.id, { layoutEditor: editorAvailable });
+  // Resumed progress is stored against the guide's FULL step count
+  // (`setupGuideLength`), but a shell that cannot open the layout editor
+  // filters that door's trailing step out of `steps`. A step persisted at or
+  // past that point clamps to the last step this shell actually shows,
+  // rather than indexing past the filtered array and vanishing.
+  const displayStep =
+    active === null ? 0 : clampOnboardingStep(active.step, steps.length);
+  const step = active === null ? null : (steps[displayStep] ?? null);
   // Resolved above the early returns, because it is a hook: the lit moment
   // belongs to the step that asked for it and ends when that step does,
   // however it ends - Continue, Escape, or the surface closing (L-50).
@@ -40,24 +58,24 @@ export function SettingsSetupGuide(props: {
   // moment it started. `activeSetup` is session-local presence, so a closed
   // Settings simply resumes the same step when it reopens - and closing the
   // surface is not a user skip, so it must not finish the card either.
-  if (active === null || guide === null || step === null) return null;
+  if (active === null || step === null) return null;
   if (customizing) return null;
   if (step.section !== props.section) return null;
-  const last = active.step + 1 === guide.steps.length;
+  const last = displayStep + 1 === steps.length;
   const go = (index: number): void => {
-    const target = guide.steps[index];
+    const target = steps[index];
     if (target.section !== step.section)
       navigateToSettingsSection(target.section);
   };
   return (
     <Suspense fallback={null}>
       <Coachmark
-        id={`${active.id}-${active.step}`}
+        id={`${active.id}-${displayStep}`}
         title={step.title}
         content={step.content}
         progress={{
-          step: active.step + 1,
-          total: guide.steps.length,
+          step: displayStep + 1,
+          total: steps.length,
         }}
         rootRef={props.rootRef}
         selector={step.selector}
@@ -68,10 +86,10 @@ export function SettingsSetupGuide(props: {
         onClose={() => complete(active.id)}
         onTarget={revealSetting}
         back={
-          active.step > 0
+          displayStep > 0
             ? () => {
-                useOnboardingStore.getState().retreatSetup();
-                go(active.step - 1);
+                useOnboardingStore.getState().retreatSetup(steps.length);
+                go(displayStep - 1);
               }
             : null
         }
@@ -83,9 +101,15 @@ export function SettingsSetupGuide(props: {
             : {
                 label: last ? "Done" : "Continue",
                 onClick: () => {
-                  useOnboardingStore.getState().advanceSetup();
-                  if (last) navigateToSettingsSection("getting-started");
-                  else go(active.step + 1);
+                  // Completing rather than advancing: the last step SHOWN
+                  // is not the stored last one where a step was left out.
+                  if (last) {
+                    complete(active.id);
+                    navigateToSettingsSection("getting-started");
+                  } else {
+                    useOnboardingStore.getState().advanceSetup();
+                    go(displayStep + 1);
+                  }
                 },
               }
         }

@@ -142,6 +142,9 @@ export type HostUpdateAttemptError = {
  */
 export const HOST_UPDATE_REFUSES_RPC_CODE = "host-refuses-rpc";
 
+/** CLI refusal when the selected host cannot safely read this machine's stores. */
+export const HOST_STORE_FORMAT_FLOOR_CODE = "E_HOST_STORE_FORMAT_FLOOR";
+
 /**
  * Durable provenance for a terminal conclusion written by crash recovery.
  *

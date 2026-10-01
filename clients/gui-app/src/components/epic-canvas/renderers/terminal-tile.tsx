@@ -367,6 +367,7 @@ function LegacyTerminalTileLive(
     instanceId,
     sessionKind: "terminal",
     preparePayload,
+    viewer: "presentation",
     // `adoptOnly`, not `enabled: false`: the create must never fire, but the
     // measure-grid wait still has to arm or a probe that never reports (a
     // stalled xterm chunk, a zero-sized container) strands the tile on
@@ -665,6 +666,7 @@ function HostTerminalTileLive(
     reattachMode: runtimeRunning ? "live" : "fresh",
     kind: "terminal",
     enabled: gridReady && (runtimeRunning || lifecycle.requestSettled),
+    viewer: "presentation",
   });
   // Centered session-ended Close is presentation-only, matching tab X and
   // the directory-offline dead banner. Explicit lifetime deletion stays on

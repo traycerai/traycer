@@ -51,6 +51,12 @@ export interface EpicTaskContexts {
    */
   readonly localHomedTaskIds: ReadonlySet<string>;
   readonly isFetching: boolean;
+  /**
+   * Some batch has not answered yet. Unlike `isFetching`, a background
+   * refetch of a batch that already answered does not count, so a caller can
+   * tell "no answer yet" apart from "answered, and refreshing".
+   */
+  readonly isPending: boolean;
   readonly error: Error | null;
 }
 
@@ -162,6 +168,7 @@ function combineTaskContextResults(
     batchRefetches,
     localHomedTaskIds,
     isFetching: results.some((result) => result.isFetching),
+    isPending: results.some((result) => result.isPending),
     // Older host: method unsupported → degrade silently to an empty map.
     error:
       results

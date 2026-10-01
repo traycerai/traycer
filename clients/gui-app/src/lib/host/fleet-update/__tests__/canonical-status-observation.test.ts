@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
-  HostStatusUpdateOperation,
+  HostStatusUpdateOperationV2,
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -38,8 +38,8 @@ const TRANSACTION: HostUpdateTransactionCapability = {
 };
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -61,7 +61,7 @@ function attemptOperation(
 }
 
 function status(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,

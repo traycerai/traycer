@@ -56,6 +56,7 @@ function makeEnsureOptions(
     keepInstalled: false,
     onProgress: null,
     adoption: undefined,
+    lifecycleOrigin: "terminal",
     beforeMutate: null,
     ...overrides,
   };

@@ -1,10 +1,14 @@
 # Closed-tab recovery
 
-`tab.reopen` (Cmd/Ctrl+Shift+T), the command palette, and both tab-strip
-context menus share `reopenClosedTab`. History is per account and desktop
-window and persists in IndexedDB. Application-window closes and landing
-terminals never enter this history. Empty Start Pages and blank inner picker
-tabs are excluded at capture. Text and
+`tab.reopen` (Cmd/Ctrl+Shift+T), the command palette, and the header tab
+strip's context menu share `reopenClosedTab`. History is per account and
+desktop window and persists in IndexedDB. Only top-level task and draft tabs
+are recorded (`kind: "header"` entries). Tabs and panes closed inside a task
+are not; a reopened task still brings back the inner tabs and splits saved in
+its own canvas. Journals written before that change can hold entries of
+another kind, and the loader drops any entry that fails the schema, so they
+disappear on the next load. Application-window closes and landing terminals
+never enter this history. Empty Start Pages are excluded at capture. Text and
 image-only drafts remain recoverable; task tabs remain recoverable even when
 their canvases are empty.
 
@@ -25,10 +29,9 @@ opens itself. Exhausted reads leave persistence disabled for that bucket until a
 successful hydration. Retrying configuration merges pending closes and applies
 pending deletions without overwriting the unread journal.
 
-Single recovery selects the restored view. Bulk recovery in the current task
-preserves focus; bulk recovery in another task selects that task. Bulk header
-recovery retains the current top-level selection. Exact view identities are
-restored: another view of the same content does not count as already recovered.
+Single recovery selects the restored view. Bulk recovery retains the current
+top-level selection. Exact view identities are restored: another view of the
+same content does not count as already recovered.
 A single recovery replaces the active empty standalone Start Page, so closing
 and recovering the last task does not leave an extra placeholder. Text drafts,
 image-only drafts, and deliberate split slots are preserved. Bulk header
@@ -49,28 +52,6 @@ name, color and collapsed state are restored; an existing group's newer state
 wins. The normal single/bulk navigation rules still decide selection. Plain
 tabs without placement metadata retain standalone recovery, and
 invalid optional placement metadata does not discard recoverable content.
-
-`restore-canvas.ts` reconstructs the smallest recognizable changed region of
-an ID-addressed split tree. It ignores tab edits and size changes when checking
-structure, preserves surviving pane contents and unrelated sizes, and falls
-back to the owning task's active pane when the original region was moved or
-restructured. Explicitly closing an empty non-root pane records its layout;
-recovery reconstructs that pane only while its structural anchor is recognizable.
-An unreconstructable empty pane is skipped, without an active-pane fallback.
-Restored content tabs are permanent, not previews. Before reconstruction, recovery
-releases a focused pane opener so cmdk cannot autofocus a remounted empty
-sibling and reclaim the active pane. Bulk recovery restores a surviving
-opener's keyboard focus after the render unless the user has moved focus.
-
-The initial empty-task fallback creates an empty pane showing the picker, not a
-blank tab. New Tab gestures focus the existing picker in an empty pane; in a
-populated pane they reuse its blank tab (even if inactive) or create one.
-Explicit New Tab focus is delivered by the active picker when its input mounts,
-without frame retries. Requests are scoped to the task tab and pane, and user
-interaction cancels a pending request.
-Closing a blank tab, including a blank-only Close All, leaves its pane intact.
-Explicit Close Group removes the pane. Loading older canvases retires blank-only
-tabs and duplicate picker tabs without removing their panes or changing splits.
 
 Draft recovery stores the saved draft ID, owner host, and header placement.
 The saved-draft store owns content and image retention; reopening a closed row
@@ -117,17 +98,16 @@ bun scripts/tab-recovery-browser-regression.mjs
 The browser regression launches a disposable Chrome profile and Vite fixture.
 It uses real tab stores, coordinator, split restoration, navigation, TabStrip,
 and IndexedDB; authentication and host services are in-memory fixtures. It
-covers empty history, draft and task recovery, bulk recovery, collapsed inner
-splits, top-level split recovery across reload, named-group recovery, reload
-persistence, and duplicate recovery. Set `CHOKIDAR_USEPOLLING=true` if
-the machine has exhausted native file watchers.
+covers empty history, draft and task recovery, bulk recovery, top-level split
+recovery across reload, named-group recovery, reload persistence, and
+duplicate recovery. Set `CHOKIDAR_USEPOLLING=true` if the machine has
+exhausted native file watchers.
 
-For live authenticated browser validation, also exercise keyboard and both
-context menus, command-palette recovery, navigation from landing/another task,
-preserved bulk focus (including an active pane opener), nested splits,
-changed-split fallback, duplicate task views, typed and
-image-only draft preservation, the 50-action limit after 55 UI closes, and
-landing-terminal exclusion. Restart the full browser process to exercise
+For live authenticated browser validation, also exercise keyboard and the
+header context menu, command-palette recovery, navigation from landing/another
+task, preserved bulk focus, duplicate task views, typed and image-only draft
+preservation, the 50-action limit after 55 UI closes, and landing-terminal
+exclusion. Restart the full browser process to exercise
 persisted history and retained image bytes.
 
 Confirmed deletion pruning, partial recovery failures, account/window isolation,
@@ -143,13 +123,11 @@ Capacity failure preserves the saved drafts and the recovery entry. Direct
 canvas-store closes capture their position from the full header strip, including
 drafts and split items.
 
-Reconstruction aligns surviving child IDs with their original branches before
-recursing, because closing a sibling shifts array positions. It never replaces
-a live sibling with the removed pane. Host draft list absence remains retryable;
-only a matching tombstone proves deletion. Tile deletions use scoped recovery
+Host draft list absence remains retryable; only a matching tombstone proves
+deletion. Tile deletions use scoped recovery
 pruners and record liveness, not the legacy global bare-ID deletion set.
 
-Confirmed deletion callbacks suppress close recording, and successful terminal-agent
-deletion prunes recovery using its task, type, host and content ID. Buffered closes
+Successful terminal-agent deletion prunes recovery using its task, type, host
+and content ID. Buffered closes
 and deletion prunes remain keyed to their original account/window while hydration
 is unavailable; switching back merges them with that bucket's unread journal.

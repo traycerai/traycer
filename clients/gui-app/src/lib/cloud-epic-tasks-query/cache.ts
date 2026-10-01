@@ -222,6 +222,37 @@ export function updateEpicTitleInTaskContextsCaches(
   }
 }
 
+export interface CachedTaskContext {
+  readonly task: ListTaskLight;
+  readonly localHomed: boolean;
+}
+
+/**
+ * A task's context from whichever cached `epic.getTaskContexts` batch already
+ * resolved it. Several surfaces batch the same lookup under different id sets
+ * (the tab strip asks for every open tab at once), so a single-task reader
+ * can start from their answer instead of waiting on its own round trip.
+ */
+export function findCachedTaskContext(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  taskId: string,
+): CachedTaskContext | null {
+  const cachedBatches = queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  });
+  for (const [, response] of cachedBatches) {
+    const resolution = response?.tasks[taskId];
+    if (response === undefined || !isFoundTaskContext(resolution)) continue;
+    return {
+      task: resolution.task,
+      localHomed: response.localHomedTaskIds?.includes(taskId) === true,
+    };
+  }
+  return null;
+}
+
 export function setEpicPinnedInCloudTaskCaches(
   queryClient: QueryClient,
   scope: CloudEpicTasksCacheScope,

@@ -61,7 +61,8 @@ import {
 } from "@/lib/composer/image-atoms";
 import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
-import { cn, formatSingleLine } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
   chatFindA2AReceivedBodyUnitId,
@@ -310,7 +311,8 @@ function AgentMessageDisplayView({
 
   const preview = (
     <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
-      {formatSingleLine(messageText, { maxLength: 180, ellipsis: "…" })}
+      {/* Uncapped: `line-clamp-2` cuts it at two lines of the card's width. */}
+      {collapseToSingleLine(messageText)}
     </p>
   );
 
@@ -326,7 +328,7 @@ function AgentMessageDisplayView({
   ) : null;
 
   return (
-    <div className="w-full max-w-[min(100%,48rem)]">
+    <div className="w-full">
       <SegmentCard
         open={open}
         onOpenChange={handleOpenChange}
@@ -415,7 +417,7 @@ function UserMessageDisplayView({
 
   return (
     <div
-      className="group/user-message flex min-w-0 max-w-[min(100%,48rem)] flex-col items-end"
+      className="group/user-message flex min-w-0 w-full flex-col items-end"
       data-user-message-display=""
     >
       {visibleSteerBadge !== null ? (

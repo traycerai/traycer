@@ -11,10 +11,11 @@
  *
  * Multiple clients may attach to the same `sessionId` simultaneously. Every
  * subscriber sees the same `data`/`binaryData` fanout from the PTY. The host
- * enforces `effectiveCols = min(cols across attached clients)` (and rows
- * similarly) so no viewer's grid overflows; whenever the effective size
- * changes, the host broadcasts a `resized` server frame and every client
- * locks its xterm to those dimensions.
+ * enforces `effectiveCols = min(cols across attached presentation viewers)`
+ * (and rows similarly) so no viewer's grid overflows; whenever the effective
+ * size changes, the host broadcasts a `resized` server frame and every client
+ * locks its xterm to those dimensions. A `cache` attachment (see `@1.6`
+ * below) holds a size and never counts toward it.
  *
  * The open request MUST carry the client's current `cols`/`rows` so the
  * `min()` recompute on attach completes before the initial `snapshot` is
@@ -74,6 +75,18 @@
  * attachments gate host reap (`viewersAbsentSince`). Degrade: a 1.5-or-older
  * peer's open schema strips `viewer`, so an old host treats every subscriber
  * as a presentation viewer — the compatible failure mode.
+ *
+ * `terminal.subscribe@1.7`: adds the client frame `viewer`, which restates
+ * that intent on the live stream. A view that stays mounted while it goes on
+ * and off screen (a collapsed panel, a background tab) changes intent far
+ * more often than a lease does, and a reopen costs it a full snapshot replay
+ * each time. The host applies the frame exactly as it would a detach of the
+ * old intent and an attach of the new one: the grid, the `resized` broadcast
+ * and the unwatched clock all follow. A host that negotiated 1.7 also sizes
+ * the grid from `presentation` attachments only, so the minor is the client's
+ * evidence for both. Fire-and-forget, no `actionAck`. Degrade: a client on a
+ * 1.6-or-older connection must not send it (that host's frame schema cannot
+ * parse it) and keeps the intent its open request carried.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -284,6 +297,27 @@ export type TerminalSubscribeClientFrame = z.infer<
   typeof terminalSubscribeClientFrameSchema
 >;
 
+/**
+ * `terminal.subscribe@1.7` client frames: everything a 1.6 client sends, plus
+ * `viewer`. A separate schema rather than a new arm on the one above, which
+ * the released 1.1-1.6 contracts bind and must keep parsing exactly as they
+ * shipped.
+ */
+export const terminalSubscribeClientFrameSchemaV17 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...terminalSubscribeClientFrameSchema.def.options,
+    z.object({
+      kind: z.literal("viewer"),
+      ...textFrameFields,
+      ...sessionReferenceFields,
+      viewer: terminalSubscribeViewerSchema,
+    }),
+  ]),
+);
+export type TerminalSubscribeClientFrameV17 = z.infer<
+  typeof terminalSubscribeClientFrameSchemaV17
+>;
+
 // `terminal.subscribe@1.4` deliberately replaces the nested `session` shape
 // from `epicId` to `scope`, even though the general minor-version rule is
 // additive. This is wire-safe because TerminalSessionManager emits frames for
@@ -427,6 +461,14 @@ export const terminalSubscribeServerFrameSchemaV15 = lazySchema(() =>
 export type TerminalSubscribeServerFrameV15 = z.infer<
   typeof terminalSubscribeServerFrameSchemaV15
 >;
+
+export const terminalSubscribeV17 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 7 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchemaV16,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV15,
+  clientFrameSchema: terminalSubscribeClientFrameSchemaV17,
+});
 
 export const terminalSubscribeV16 = defineStreamRpcContract({
   method: "terminal.subscribe",

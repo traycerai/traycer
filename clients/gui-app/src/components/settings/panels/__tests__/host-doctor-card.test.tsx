@@ -19,6 +19,7 @@ import type {
   QueuedDoctorRepair,
   QueuedDoctorRepairResult,
   FreePortAndRestartInput,
+  FreePortAndRestartResult,
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -32,6 +33,7 @@ vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
+    info: vi.fn(),
     message: vi.fn(),
   },
 }));
@@ -47,7 +49,7 @@ interface ManagementOverrides {
   }) => Promise<QueuedDoctorRepairResult>;
   readonly freePortAndRestart?: (
     input: FreePortAndRestartInput & { readonly expectedHostId: string },
-  ) => Promise<FreePortAndRestartInput>;
+  ) => Promise<FreePortAndRestartResult>;
   readonly getHostLogs?: (input: {
     readonly tailLines: number;
     readonly expectedHostId: string;
@@ -82,7 +84,8 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
     freePortAndRestart:
-      overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
+      overrides.freePortAndRestart ??
+      vi.fn((input) => Promise.resolve({ kind: "applied" as const, ...input })),
     runDoctorRepairQueued:
       overrides.runDoctorRepairQueued ??
       vi.fn(() => Promise.resolve({ kind: "applied" as const })),
@@ -102,6 +105,9 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       notImplemented("maintenanceInstallVersion"),
     ),
     restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    restartHostServiceIfHostIdle: vi.fn(
+      notImplemented("restartHostServiceIfHostIdle"),
+    ),
     runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
@@ -183,6 +189,18 @@ function renderCard(
   return queryClient;
 }
 
+function serviceNotRegisteredIssue(): HostDoctorIssue {
+  return {
+    code: "SERVICE_NOT_REGISTERED",
+    severity: "warning",
+    title: "Host service isn't registered",
+    message: "The host has no OS service registration.",
+    fixAction: "service-install",
+    terminalCommand: "traycer host service register",
+    details: null,
+  };
+}
+
 function hostLogsIssue(): HostDoctorIssue {
   return {
     code: "RECENT_CRASH_MARKERS",
@@ -230,7 +248,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   it("opens the Free Port + Restart confirmation when PORT_CONFLICT carries process identity", async () => {
     const freePortAndRestart = vi.fn(
       (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
-        Promise.resolve(input),
+        Promise.resolve({ kind: "applied" as const, ...input }),
     );
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
@@ -299,7 +317,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   it("allows Free Port + Restart when PID and process name are unknown", async () => {
     const freePortAndRestart = vi.fn(
       (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
-        Promise.resolve(input),
+        Promise.resolve({ kind: "applied" as const, ...input }),
     );
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
@@ -350,7 +368,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
   it("never presents Free Port + Restart with port 0", async () => {
     const freePortAndRestart = vi.fn(
       (input: FreePortAndRestartInput & { readonly expectedHostId: string }) =>
-        Promise.resolve(input),
+        Promise.resolve({ kind: "applied" as const, ...input }),
     );
     const restartHost = vi.fn(() =>
       Promise.resolve({ kind: "restarted" as const }),
@@ -532,6 +550,91 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     second.release();
     expect(await screen.findByText("Doctor: no issues detected.")).toBeTruthy();
     expect(screen.queryByText(/Doctor could not run:/)).toBeNull();
+  });
+});
+
+describe("HostDoctorCard re-queries the report only on an applied fix", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("an applied fix invalidates the report query, so it re-fetches beyond the initial mount", async () => {
+    let runDoctorCalls = 0;
+    const runDoctor = vi.fn((): Promise<HostDoctorReport> => {
+      runDoctorCalls += 1;
+      return Promise.resolve({
+        issues: runDoctorCalls === 1 ? [pendingUpgradeIssue()] : [],
+        ranAt: "2026-05-15T00:00:00Z",
+      });
+    });
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    );
+    const management = makeManagement({ runDoctor, runDoctorRepairQueued });
+    renderCard(makeHostWithManagement(management), undefined);
+
+    const button = await screen.findByRole("button", {
+      name: /Restart host/i,
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "restart",
+        expectedHostId: "local-host",
+      });
+    });
+    // `fixMutation.onSuccess` invalidates `runnerQueryKeys.hostDoctor(...)`
+    // only on the applied arm — mount plus one refetch, not a loop.
+    await waitFor(() => {
+      expect(runDoctor).toHaveBeenCalledTimes(2);
+    });
+    expect(toast.success).toHaveBeenCalledWith("Fix applied");
+    expect(await screen.findByText("Doctor: no issues detected.")).toBeTruthy();
+  });
+
+  it("a declined fix does not invalidate the report query", async () => {
+    const runDoctor = vi.fn(() =>
+      Promise.resolve<HostDoctorReport>({
+        issues: [serviceNotRegisteredIssue()],
+        ranAt: "2026-05-15T00:00:00Z",
+      }),
+    );
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({
+        kind: "declined" as const,
+        message: "Host is busy.",
+      }),
+    );
+    const management = makeManagement({ runDoctor, runDoctorRepairQueued });
+    renderCard(makeHostWithManagement(management), undefined);
+
+    const button = await screen.findByRole("button", {
+      name: /Register service/i,
+    });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "register-service",
+        expectedHostId: "local-host",
+      });
+    });
+    // Wait for the declined toast to settle before asserting the negative,
+    // so a late refetch isn't mistaken for none.
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Register service didn't run",
+        expect.objectContaining({ description: "Host is busy." }),
+      );
+    });
+    expect(runDoctor).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByText("Host service isn't registered")).toBeTruthy();
   });
 });
 
