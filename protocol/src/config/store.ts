@@ -26,6 +26,9 @@ import {
   type EffectiveShellConfig,
   type LogsConfig,
   type ShellEntry,
+  worktreesOnlyConfigSchema,
+  type AgentWorktreeCreatePolicy,
+  type WorktreesConfig,
 } from "./schema";
 import { defaultShellArgs } from "./shell-family";
 import { annotateWslHealth, probeWslHealthCached } from "./wsl-health";
@@ -1033,6 +1036,46 @@ export async function setAgentBrowserAccess(enabled: boolean): Promise<void> {
   await writeCliConfig({
     ...current,
     browser: { ...current.browser, agentAccess: enabled },
+  });
+}
+
+/** The policy for worktrees agents create (`allow` when unset). */
+export async function readWorktreesConfig(): Promise<WorktreesConfig> {
+  return (await readCliConfig()).worktrees;
+}
+
+/**
+ * Best-effort synchronous read for the per-call gate on an agent's
+ * `traycer_create_worktree`. Fails OPEN to `allow`, for the reason
+ * `readBrowserConfigSync` does: agents had this capability before the policy
+ * existed, and a corrupt config that silently refused every worktree would
+ * read as a broken tool. It validates `worktreesOnlyConfigSchema`, so an
+ * explicit `never` or `ask` still governs beside an unrelated defect elsewhere
+ * in the file.
+ */
+export function readWorktreesConfigSync(): WorktreesConfig {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = worktreesOnlyConfigSchema.safeParse(JSON.parse(raw));
+    if (result.success) return result.data.worktrees;
+  } catch {
+    // An unreadable config must not revoke a capability the user never
+    // restricted - fall through to the permissive default.
+  }
+  return { agentCreate: "allow" };
+}
+
+/**
+ * Sets the policy for worktrees agents create while preserving the rest of the
+ * config.
+ */
+export async function setAgentWorktreeCreatePolicy(
+  policy: AgentWorktreeCreatePolicy,
+): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    ...current,
+    worktrees: { ...current.worktrees, agentCreate: policy },
   });
 }
 

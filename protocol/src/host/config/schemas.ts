@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LOG_LEVELS } from "@traycer/protocol/config/log-level";
+import { AGENT_WORKTREE_CREATE_POLICIES } from "@traycer/protocol/config/schema";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
@@ -330,4 +331,39 @@ export type ConfigBrowserSetRequest = z.infer<
 export const configBrowserSetResponseSchema = configBrowserResponseSchema;
 export type ConfigBrowserSetResponse = z.infer<
   typeof configBrowserSetResponseSchema
+>;
+
+/**
+ * Reads the machine-user-global policy for worktrees agents create. Like the
+ * browser switch it is not keyed by host id or deploy slot: the file is one per
+ * OS user, so the answer covers every host environment that user runs on this
+ * machine, and it governs the agents running there.
+ */
+export const configWorktreesGetRequestSchema = emptyRequestSchema;
+export type ConfigWorktreesGetRequest = z.infer<
+  typeof configWorktreesGetRequestSchema
+>;
+
+export const configWorktreesResponseSchema = lazySchema(() =>
+  z.object({
+    agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES),
+  }),
+);
+export type ConfigWorktreesResponse = z.infer<
+  typeof configWorktreesResponseSchema
+>;
+
+/** Sets the machine-user-global policy for worktrees agents create. */
+export const configWorktreesSetRequestSchema = lazySchema(() =>
+  z.object({
+    agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES),
+  }),
+);
+export type ConfigWorktreesSetRequest = z.infer<
+  typeof configWorktreesSetRequestSchema
+>;
+
+export const configWorktreesSetResponseSchema = configWorktreesResponseSchema;
+export type ConfigWorktreesSetResponse = z.infer<
+  typeof configWorktreesSetResponseSchema
 >;

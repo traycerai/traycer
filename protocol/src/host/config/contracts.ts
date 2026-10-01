@@ -18,6 +18,10 @@ import {
   configLogLevelsSetRequestSchema,
   configLogLevelsSetResponseSchema,
   configShellAddRequestSchema,
+  configWorktreesGetRequestSchema,
+  configWorktreesResponseSchema,
+  configWorktreesSetRequestSchema,
+  configWorktreesSetResponseSchema,
   configShellAddResponseSchema,
   configShellGetRequestSchema,
   configShellGetResponseSchema,
@@ -176,4 +180,20 @@ export const configBrowserSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configBrowserSetRequestSchema,
   responseSchema: configBrowserSetResponseSchema,
+});
+
+/** Reads the machine-user-global policy for worktrees agents create. */
+export const configWorktreesGetV10 = defineRpcContract({
+  method: "config.worktrees.get",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configWorktreesGetRequestSchema,
+  responseSchema: configWorktreesResponseSchema,
+});
+
+/** Writes the machine-user-global policy for worktrees agents create. */
+export const configWorktreesSetV10 = defineRpcContract({
+  method: "config.worktrees.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: configWorktreesSetRequestSchema,
+  responseSchema: configWorktreesSetResponseSchema,
 });

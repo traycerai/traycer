@@ -10,20 +10,14 @@ import {
   useState,
 } from "react";
 import { Link } from "@tanstack/react-router";
-import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
-import {
-  ArrowDownToLine,
-  Check,
-  ExternalLink,
-  Paintbrush,
-  Pencil,
-  Search,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Check, Paintbrush, Pencil, Search, Trash2, X } from "lucide-react";
 import { ContextMenuItem } from "@/components/ui/context-menu";
-import { openEpicInBackground } from "@/lib/commands/actions/open-epic-in-background";
+import {
+  HistoryOpenInBackgroundMenuItem,
+  HistoryOpenInNewWindowMenuItem,
+} from "@/components/epics/history-row-open-menu-items";
+import { openHistoryItemInBackground } from "@/components/epics/open-history-item-in-background";
 import {
   useHistoryOpenInNewWindowFlow,
   type HistoryNewWindowFlow,
@@ -1601,16 +1595,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const linkTabId = useEpicCanvasStore(
     (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
   );
-  const openInBackground = useCallback(() => {
-    if (isOpen) {
-      toast("Task already open", {
-        id: "history-task-already-open",
-        description: displayTitle,
-      });
-      return;
-    }
-    openEpicInBackground(item.epicId, item.title);
-  }, [isOpen, displayTitle, item.epicId, item.title]);
   const openInNewWindow = useCallback(() => {
     onOpenInNewWindow(item);
   }, [onOpenInNewWindow, item]);
@@ -1697,7 +1681,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       openEpic();
       return;
     }
-    openInBackground();
+    openHistoryItemInBackground(item, isOpen);
   };
   const blockUnavailableDeleteAction = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
@@ -1763,34 +1747,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
     />
   );
-  // Phases have no background-open: a phase only opens through its migration
-  // route (migrationSource=phase), which a plain canvas tab can't carry, so it
-  // would activate into the wrong (non-migration) surface. New Window stays
-  // available - it goes through the route.
-  const backgroundMenuItem = isPhase ? null : (
-    <ContextMenuItem
-      onSelect={openInBackground}
-      disabled={isOpen}
-      data-testid="epics-list-row-open-background"
-    >
-      <ArrowDownToLine className="mt-0.5 self-start" />
-      <span className="flex flex-col">
-        <span>Open in Background</span>
-        <span hidden={!isOpen} className="text-ui-xs">
-          Already open
-        </span>
-      </span>
-    </ContextMenuItem>
-  );
-  const newWindowMenuItem = openInNewWindowAvailable ? (
-    <ContextMenuItem
-      onSelect={openInNewWindow}
-      data-testid="epics-list-row-open-new-window"
-    >
-      <ExternalLink />
-      Open in New Window
-    </ContextMenuItem>
-  ) : null;
   return (
     <HistoryTaskRow
       item={item}
@@ -1857,17 +1813,19 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       }
       hasSweepControl={rowSweep.isVisible}
       contextMenuItems={
-        isPhase ? (
-          backgroundMenuItem
-        ) : (
+        isPhase ? null : (
           <>
             <HistoryTaskOrganizationMenu item={item} canEdit={canEditTitle} />
-            {backgroundMenuItem}
+            <HistoryOpenInBackgroundMenuItem item={item} isOpen={isOpen} />
           </>
         )
       }
       organization={{ canEdit: canEditTitle }}
-      openInNewWindowControl={newWindowMenuItem}
+      openInNewWindowControl={
+        openInNewWindowAvailable ? (
+          <HistoryOpenInNewWindowMenuItem onSelect={openInNewWindow} />
+        ) : null
+      }
       onSetPinned={onSetPinned}
       isPinPending={isPinPending}
       pinAlwaysVisible={false}
