@@ -244,6 +244,58 @@ test.describe("the vertical strip", () => {
   });
 });
 
+test.describe("an organization's group, as the owner reported it", () => {
+  // Idle holds Cookie, the account organization's group "group" with GUI alone
+  // in it, React and Start, every task the organization's. React is dragged up
+  // until its centre is over the group's header, just above GUI.
+  for (const view of [
+    { name: "the Activity view", query: "&scene=sections" },
+    { name: "the Layered view", query: "" },
+  ]) {
+    test(`joins a task dragged up into a one-task group in ${view.name}`, async ({
+      page,
+    }) => {
+      await page.goto(
+        `${fixture("side-tab-strip")}?edge=left&tasks=idle-group${view.query}`,
+      );
+      await page.waitForFunction("window.__sideTabStripProbe?.ready === true");
+      await nextFrames(page, 4);
+      const react = await centreOf(page.getByTestId("tab-epic-fixture-react"));
+      const gui = await page.getByTestId("tab-epic-fixture-gui").boundingBox();
+      if (gui === null) throw new Error("no layout");
+
+      await dragTo(page, react, { x: react.x, y: gui.y - 6 });
+      // The block brightens and the line is drawn inside it, as it is drawn
+      // around the room the drop opens.
+      const block = page.getByTestId("side-tab-group-block-fixture-group");
+      await expect(block).toHaveAttribute("data-joining", "true");
+      await nextFrames(page, 30);
+      const blockBox = await block
+        .getByTestId("side-tab-group-fill")
+        .boundingBox();
+      const lineBox = await page
+        .getByTestId("tab-drop-indicator")
+        .boundingBox();
+      if (blockBox === null || lineBox === null) throw new Error("no layout");
+      expect(lineBox.y).toBeGreaterThan(blockBox.y);
+      expect(lineBox.y + lineBox.height).toBeLessThan(
+        blockBox.y + blockBox.height,
+      );
+      await page.mouse.up();
+
+      // React is GUI's group's first task.
+      const strip = await readStrip(page);
+      expect(strip.groups["fixture-react"]).toBe("fixture-group");
+      expect(strip.items.map((item) => item[0])).toEqual([
+        "fixture-cookie",
+        "fixture-react",
+        "fixture-gui",
+        "fixture-start",
+      ]);
+    });
+  }
+});
+
 test.describe("the Activity view", () => {
   test("joins a task dropped between a group's tasks in its own section", async ({
     page,
@@ -397,6 +449,50 @@ test.describe("the top bar", () => {
     // and does not pass under it.
     expect(chip.x + chip.width).toBeLessThanOrEqual(second.x + 0.5);
     await page.mouse.up();
+  });
+
+  test("joins a task dropped into an organization's one-task group, the owner's case", async ({
+    page,
+  }) => {
+    const tabIds = await openTopBar(page);
+    // Signed in, the group and every task are the account organization's.
+    await page.evaluate(`(async () => {
+      const { useTabsStore } = await import("/src/stores/tabs/store.ts");
+      const { groups, customizations } = useTabsStore.getState();
+      const stamp = (entry) => ({ ...entry, organizationOwnerId: "fixture-user" });
+      useTabsStore.setState({
+        groups: Object.fromEntries(Object.entries(groups).map(([id, g]) => [id, stamp(g)])),
+        customizations: Object.fromEntries(
+          ${JSON.stringify(tabIds)}.map((id) => {
+            const key = "epic:" + id;
+            return [key, stamp(customizations[key] ?? { color: null, icon: null, groupId: null })];
+          }),
+        ),
+      });
+    })()`);
+    await nextFrames(page, 4);
+    const third = await centreOf(page.getByTestId(`tab-epic-${tabIds[2]}`));
+    const second = await page
+      .getByTestId(`tab-epic-${tabIds[1]}`)
+      .boundingBox();
+    if (second === null) throw new Error("no layout");
+
+    // Left until the third's centre is over the second's leading part.
+    await dragTo(page, third, {
+      x: second.x + second.width * 0.15,
+      y: third.y,
+    });
+    await page.mouse.up();
+
+    const strip = await readStrip(page);
+    expect(strip.groups[tabIds[2]]).toBe(strip.groups[tabIds[1]]);
+    expect(strip.groups[tabIds[2]]).not.toBeNull();
+    expect(strip.items.map((item) => item[0])).toEqual([
+      tabIds[0],
+      tabIds[2],
+      tabIds[1],
+      tabIds[3],
+    ]);
   });
 
   test("joins a task dropped on a group's chip, as the group's first task", async ({

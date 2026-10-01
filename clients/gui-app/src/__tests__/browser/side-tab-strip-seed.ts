@@ -309,6 +309,57 @@ export function seedSideStripSections(): void {
   });
 }
 
+/**
+ * The owner's grouping report: the Activity view with only Idle, holding
+ * Cookie sync perf, a group of one (GUI sidebar redesign, the current task),
+ * React UI performance and Start page, in that order. No task is working or
+ * waiting, so every one is idle. Signed in, the group is the account
+ * organization's and so is every task, stamped the way the organization view's
+ * projection stamps them.
+ */
+export function seedSideStripIdleGroup(): void {
+  const refs = [
+    epicRef("Cookie sync perf"),
+    epicRef("GUI sidebar redesign"),
+    epicRef("React UI performance"),
+    epicRef("Start page"),
+  ];
+  const gui = refs[1];
+  const owner = "fixture-user";
+  useTabsStore.setState({
+    version: 2,
+    items: refs.map(loneItem),
+    activeItemId: tabItemId(gui),
+    stripOrder: refs,
+    systemTabs: { history: null, settings: null },
+    groups: {
+      [SEED_GROUP_ID]: {
+        name: "group",
+        color: "#ff8bcb",
+        collapsed: false,
+        organizationOwnerId: owner,
+      },
+    },
+    customizations: Object.fromEntries(
+      refs.map((ref) => [
+        tabRefKey(ref),
+        {
+          color: null,
+          icon: null,
+          groupId: ref === gui ? SEED_GROUP_ID : null,
+          organizationOwnerId: owner,
+        },
+      ]),
+    ),
+  });
+  __setAgentActivityStateForTests({}, "local", "connected");
+  useCloudNotificationsStore.getState().applySnapshot({
+    rows: [],
+    summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+    version: 1,
+  });
+}
+
 // ── Movement and long lists ─────────────────────────────────────────────────
 
 /** Where a task of the long list sits: which Activity-view section the stores put it in. */

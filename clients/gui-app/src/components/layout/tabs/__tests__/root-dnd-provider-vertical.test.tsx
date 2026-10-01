@@ -51,6 +51,16 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import {
+  OrganizationContext,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
 import { tabRefKey } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
@@ -227,20 +237,26 @@ function seedVerticalStrip(): void {
 async function mountVerticalStrip(
   edge: "left" | "right",
 ): Promise<RenderResult> {
-  return mountStrip(edge, ROWS, []);
+  return mountStrip(edge, ROWS, [], null);
 }
 
-/** The strip drawing `rows` (a collapsed group's tabs are not drawn) and `blocks`. */
+/**
+ * The strip drawing `rows` (a collapsed group's tabs are not drawn) and
+ * `blocks`, under the account's organization when there is one.
+ */
 async function mountStrip(
   edge: "left" | "right",
   rows: ReadonlyArray<Row>,
   blocks: ReadonlyArray<Block>,
+  organization: OrganizationContextValue | null,
 ): Promise<RenderResult> {
   const router = withRouter(() => (
     <QueryClientProvider client={new QueryClient()}>
-      <RootDndProvider>
-        <VerticalStrip edge={edge} rows={rows} blocks={blocks} />
-      </RootDndProvider>
+      <OrganizationContext value={organization}>
+        <RootDndProvider>
+          <VerticalStrip edge={edge} rows={rows} blocks={blocks} />
+        </RootDndProvider>
+      </OrganizationContext>
     </QueryClientProvider>
   ));
   const view = await act(async () => {
@@ -610,23 +626,87 @@ describe("RootDndProvider on a vertical strip", () => {
     }
     const groupOf = (ref: TabRef): string | null =>
       useTabsStore.getState().customizations?.[tabRefKey(ref)]?.groupId ?? null;
-    /** The group "g" as an organization's: the drag never changes who is in it. */
-    function seedOrganizationGroup(members: ReadonlyArray<TabRef>) {
+    /**
+     * The group "g" as the account organization's, with `kept` the tabs the
+     * organization keeps (cloud tasks), stamped as its view's projection
+     * stamps them.
+     */
+    function seedOrganizationGroup(
+      members: ReadonlyArray<TabRef>,
+      kept: ReadonlyArray<TabRef>,
+    ) {
       seedGroup(members, false);
       act(() => {
-        const group = useTabsStore.getState().groups?.g;
+        const { groups, customizations } = useTabsStore.getState();
+        const group = groups?.g;
         if (group === undefined) throw new Error("no group");
         useTabsStore.setState({
-          groups: { g: { ...group, organizationOwnerId: "org" } },
+          groups: { g: { ...group, organizationOwnerId: "user-1" } },
+          customizations: {
+            ...customizations,
+            ...Object.fromEntries(
+              kept.map((ref) => [
+                tabRefKey(ref),
+                {
+                  color: null,
+                  icon: null,
+                  groupId: groupOf(ref),
+                  organizationOwnerId: "user-1",
+                },
+              ]),
+            ),
+          },
         });
       });
     }
+    const organizationBlock = [{ groupId: "g", top: 130, height: 108 }];
+    /** The organization, whose view has the group's members with a closed task between B and the pair. */
+    function organizationOf(
+      command: OrganizationContextValue["command"],
+    ): OrganizationContextValue {
+      const members = ["row-b-epic", "closed-epic", "row-x-epic", "row-y-epic"];
+      return {
+        client: new HostClient<HostRpcRegistry>({
+          registry: hostRpcRegistry,
+          invalidator: { invalidateHostScope: () => undefined },
+          messenger: new MockHostMessenger<HostRpcRegistry>({
+            registry: hostRpcRegistry,
+            requestId: () => "request-1",
+            handlers: {},
+          }),
+        }),
+        supported: true,
+        userId: "user-1",
+        view: {
+          catalog: [],
+          groups: {
+            version: "1",
+            groups: [
+              { groupId: "g", name: "Work", color: "#8ab4f8", position: 0 },
+            ],
+            memberships: members.map((taskId, position) => ({
+              taskId,
+              groupId: "g",
+              position,
+            })),
+          },
+          appearances: [],
+          taskLabels: {},
+          ready: true,
+          authenticationRequired: false,
+          pending: [],
+          failures: [],
+        },
+        register: () => () => undefined,
+        command,
+        refresh: () => Promise.resolve(),
+        openDialog: () => undefined,
+      };
+    }
 
-    it("never joins an organization's group, and goes past it whole", async () => {
-      seedOrganizationGroup([B, X, Y]);
-      const view = await mountStrip("left", ROWS, [
-        { groupId: "g", top: 130, height: 108 },
-      ]);
+    it("never joins an organization's group with a tab the organization does not keep, and goes past it whole", async () => {
+      seedOrganizationGroup([B, X, Y], [B, X, Y]);
+      const view = await mountStrip("left", ROWS, organizationBlock, null);
       const drag = pressAndActivate(view, ROW_A, inBand, 25);
       // Over the group's block, short of its centre: next to it, not in it.
       moveTo(drag, inBand, 170);
@@ -648,11 +728,9 @@ describe("RootDndProvider on a vertical strip", () => {
       ]);
     });
 
-    it("keeps a task in an organization's group, moving it to the run's nearest edge when it is dropped outside", async () => {
-      seedOrganizationGroup([B, X, Y]);
-      const view = await mountStrip("left", ROWS, [
-        { groupId: "g", top: 130, height: 108 },
-      ]);
+    it("keeps a tab the organization does not keep in an organization's group, moving it to the run's nearest edge when it is dropped outside", async () => {
+      seedOrganizationGroup([B, X, Y], [X, Y]);
+      const view = await mountStrip("left", ROWS, organizationBlock, null);
       const drag = pressAndActivate(view, ROW_B, inBand, 26);
       // Below the block, past C: out of the group's run.
       moveTo(drag, inBand, 300);
@@ -668,11 +746,84 @@ describe("RootDndProvider on a vertical strip", () => {
       ]);
     });
 
+    it("joins an organization's group with a task the organization keeps, and saves it with the menu's command at its place among all members", async () => {
+      seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+      const command = vi.fn(() => Promise.resolve());
+      const view = await mountStrip(
+        "left",
+        ROWS,
+        organizationBlock,
+        organizationOf(command),
+      );
+      const drag = pressAndActivate(view, ROW_A, inBand, 27);
+      // Past B, short of the pair: between them, inside the block.
+      moveTo(drag, inBand, 170);
+      expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+        groupId: "g",
+        joinsGroup: true,
+      });
+
+      releaseAt(drag, inBand, 170);
+
+      expect(groupOf(A)).toBe("g");
+      // After B, so before the closed task the account keeps after B.
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [
+          {
+            operation: "moveTask",
+            taskId: "row-a-epic",
+            groupId: "g",
+            position: 1,
+          },
+          {
+            operation: "reorderMembers",
+            groupId: "g",
+            taskIds: [
+              "row-b-epic",
+              "row-a-epic",
+              "closed-epic",
+              "row-x-epic",
+              "row-y-epic",
+            ],
+          },
+        ],
+      });
+    });
+
+    it("takes a task the organization keeps out of its group with the menu's command, keeping the local move when the command fails", async () => {
+      seedOrganizationGroup([B, X, Y], [A, B, X, Y]);
+      const command = vi.fn(() => Promise.reject(new Error("offline")));
+      const view = await mountStrip(
+        "left",
+        ROWS,
+        organizationBlock,
+        organizationOf(command),
+      );
+      const drag = pressAndActivate(view, ROW_B, inBand, 28);
+      // Past A's centre (116), above the block's top (130).
+      moveTo(drag, inBand, 112);
+
+      releaseAt(drag, inBand, 112);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [{ operation: "removeTask", taskId: "row-b-epic" }],
+      });
+      expect(groupOf(B)).toBeNull();
+    });
+
     it("joins a task dropped between a group's tasks", async () => {
       seedGroup([B, X, Y], false);
-      const view = await mountStrip("left", ROWS, [
-        { groupId: "g", top: 130, height: 108 },
-      ]);
+      const view = await mountStrip(
+        "left",
+        ROWS,
+        [{ groupId: "g", top: 130, height: 108 }],
+        null,
+      );
       const drag = pressAndActivate(view, ROW_A, inBand, 20);
       // Past B's centre (150), short of the pair's (201): between them.
       moveTo(drag, inBand, 170);
@@ -695,9 +846,12 @@ describe("RootDndProvider on a vertical strip", () => {
 
     it("moves a split pair into a group as one unit", async () => {
       seedGroup([A], false);
-      const view = await mountStrip("left", ROWS, [
-        { groupId: "g", top: 96, height: 40 },
-      ]);
+      const view = await mountStrip(
+        "left",
+        ROWS,
+        [{ groupId: "g", top: 96, height: 40 }],
+        null,
+      );
       const drag = pressAndActivate(view, ROW_SPLIT, inBand, 24);
       // Past A's centre (116) and short of B's (150), inside the block (to 136).
       moveTo(drag, inBand, 130);
@@ -716,9 +870,12 @@ describe("RootDndProvider on a vertical strip", () => {
 
     it("takes a task out of its group when it is dropped outside the group's block", async () => {
       seedGroup([B, X, Y], false);
-      const view = await mountStrip("left", ROWS, [
-        { groupId: "g", top: 130, height: 108 },
-      ]);
+      const view = await mountStrip(
+        "left",
+        ROWS,
+        [{ groupId: "g", top: 130, height: 108 }],
+        null,
+      );
       const drag = pressAndActivate(view, ROW_B, inBand, 21);
       // Past A's centre (116), above the block's top (130).
       moveTo(drag, inBand, 112);
@@ -742,9 +899,12 @@ describe("RootDndProvider on a vertical strip", () => {
 
     it("removes a group whose last task is dropped out of it, without moving the task", async () => {
       seedGroup([B], false);
-      const view = await mountStrip("left", ROWS, [
-        { groupId: "g", top: 130, height: 40 },
-      ]);
+      const view = await mountStrip(
+        "left",
+        ROWS,
+        [{ groupId: "g", top: 130, height: 40 }],
+        null,
+      );
       const drag = pressAndActivate(view, ROW_B, inBand, 22);
       // Below the block's bottom (170), short of the pair's centre (201): the
       // row keeps its place and leaves the group.
@@ -769,6 +929,7 @@ describe("RootDndProvider on a vertical strip", () => {
         "left",
         ROWS.filter((row) => row !== ROW_B),
         [{ groupId: "g", top: 134, height: 28 }],
+        null,
       );
       const drag = pressAndActivate(view, ROW_C, inBand, 23);
       moveTo(drag, inBand, 148);

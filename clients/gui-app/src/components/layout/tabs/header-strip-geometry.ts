@@ -24,6 +24,7 @@ import {
   type StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { useTabsStore } from "@/stores/tabs/store";
+import { flattenStripItemRefs, tabRefKey } from "@/stores/tabs/layout";
 import { stripItemGroupId } from "@/stores/tabs/tab-groups";
 
 export const HEADER_STRIP_SCROLL_TEST_ID = "header-tab-strip-scroll";
@@ -190,12 +191,33 @@ function mainAxisGap(element: HTMLElement, axis: StripAxis): number {
 }
 
 /**
- * Whether a drag may not change a group's membership: an organization's group,
- * the same ones the appearance menu will not add a tab to.
+ * Whether the account's organization keeps every tab of a strip item: the
+ * organization view has stamped it (a cloud task), so its group is one of the
+ * organization's.
  */
-function groupIsLocked(groupId: string): boolean {
+function stripItemInOrganization(itemId: string): boolean {
+  const { items, customizations } = useTabsStore.getState();
+  const item = items.find((candidate) => candidate.id === itemId);
+  return (
+    item !== undefined &&
+    flattenStripItemRefs(item).every((ref) =>
+      Boolean(customizations?.[tabRefKey(ref)]?.organizationOwnerId),
+    )
+  );
+}
+
+/**
+ * Whether dragging `sourceItemId` may not change a group's membership: the
+ * group is the organization's and the tab is not, or the other way round. The
+ * task's menu offers the same groups: a cloud task the organization's, any
+ * other tab the local ones.
+ */
+function groupIsLocked(groupId: string, sourceItemId: string): boolean {
   const group = useTabsStore.getState().groups?.[groupId];
-  return Boolean(group?.organizationOwnerId);
+  return (
+    Boolean(group?.organizationOwnerId) !==
+    stripItemInOrganization(sourceItemId)
+  );
 }
 
 /**
@@ -210,6 +232,7 @@ function groupIsLocked(groupId: string): boolean {
 export function readHeaderStripGroups(
   axis: StripAxis,
   slots: ReadonlyArray<StripSlot>,
+  sourceItemId: string,
 ): ReadonlyArray<StripGroupExtent> {
   const strip = stripElement();
   if (strip === null) return [];
@@ -227,7 +250,7 @@ export function readHeaderStripGroups(
       end: axis.mainEnd(rect) - origin,
       lane: block.dataset.stripLane ?? null,
       rowGap: mainAxisGap(block, axis),
-      locked: groupIsLocked(groupId),
+      locked: groupIsLocked(groupId, sourceItemId),
     });
   }
   for (const frame of strip.querySelectorAll<HTMLElement>(
@@ -244,7 +267,7 @@ export function readHeaderStripGroups(
       end: Math.max(rect.end - origin, ...membersEnd),
       lane: null,
       rowGap: 0,
-      locked: groupIsLocked(groupId),
+      locked: groupIsLocked(groupId, sourceItemId),
     });
   }
   return extents;
@@ -294,7 +317,7 @@ export function measureHeaderStripGeometry(input: {
   const origin = axis.mainStart(stripRect) - axis.scrollOffset(strip);
   return {
     slots,
-    groups: readHeaderStripGroups(axis, stripSlots),
+    groups: readHeaderStripGroups(axis, stripSlots, input.stripItemId),
     runGap: mainAxisGap(strip, axis),
     sourceIndex,
     grabOffset: input.pointer - (origin + source.contentStart),

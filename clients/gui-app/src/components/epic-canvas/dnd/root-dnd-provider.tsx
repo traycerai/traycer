@@ -87,7 +87,20 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import { type SplitStripItem } from "@/stores/tabs/layout";
+import {
+  flattenStripItemRefs,
+  type SplitStripItem,
+  type StripItem,
+} from "@/stores/tabs/layout";
+import { stripItemGroupId } from "@/stores/tabs/tab-groups";
+import type {
+  OrganizationAction,
+  OrganizationView,
+} from "@traycer/protocol/host/organization/contracts";
+import {
+  useOrganization,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
@@ -897,7 +910,7 @@ function publishHeaderStripDragState(input: {
       : remapGeometryToSlots(
           session.geometry,
           slots,
-          readHeaderStripGroups(session.axis, slots),
+          readHeaderStripGroups(session.axis, slots, headerTab.stripItemId),
         );
   activeHeaderStripSession =
     session === null || geometry === null ? null : { ...session, geometry };
@@ -1038,6 +1051,7 @@ function commitHeaderTabDrop(input: {
   readonly navigate: UseNavigateResult<string>;
   readonly geometry: StripDragGeometry | null;
   readonly dragState: StripDragState | null;
+  readonly organization: OrganizationContextValue | null;
 }): void {
   const headerTab = readHeaderTabDragData(input.event.active.data.current);
   const target =
@@ -1105,6 +1119,102 @@ function commitHeaderTabDrop(input: {
     targetIndex,
     groupId: input.dragState.groupId,
   });
+  saveOrganizationGroupMove(input.organization, headerTab.stripItemId, {
+    from: input.geometry.slots[input.geometry.sourceIndex]?.groupId ?? null,
+    to: input.dragState.groupId,
+  });
+}
+
+/**
+ * Sends the menu's own command for a drop that changed an organization group,
+ * so the account keeps it. A failure is reported by the command, as the menu's
+ * is, and the organization's next view puts the tab back.
+ */
+function saveOrganizationGroupMove(
+  organization: OrganizationContextValue | null,
+  stripItemId: string,
+  groups: { readonly from: string | null; readonly to: string | null },
+): void {
+  const view = organization?.supported ? organization.view : undefined;
+  if (organization === null || view === undefined) return;
+  const action = organizationGroupAction(view, stripItemId, groups);
+  if (action !== null) void organization.command(action).catch(() => undefined);
+}
+
+/**
+ * The organization command a drop that was just written needs, the same one
+ * the task's menu sends: its tasks moved into an organization's group at their
+ * new place among its members (all of them, open or not), or out of the one
+ * they left. Null when no organization group is involved.
+ */
+function organizationGroupAction(
+  view: OrganizationView,
+  stripItemId: string,
+  groups: { readonly from: string | null; readonly to: string | null },
+): OrganizationAction | null {
+  const state = useTabsStore.getState();
+  const isOrganizations = (groupId: string | null): groupId is string =>
+    groupId !== null && Boolean(state.groups?.[groupId]?.organizationOwnerId);
+  const taskIdsOf = (item: StripItem): ReadonlyArray<string> =>
+    flattenStripItemRefs(item).flatMap((ref) => {
+      const epicId =
+        ref.kind === "epic"
+          ? useEpicCanvasStore.getState().tabsById[ref.id]?.epicId
+          : undefined;
+      return epicId === undefined ? [] : [epicId];
+    });
+  const moved = state.items.find((item) => item.id === stripItemId);
+  const taskIds = moved === undefined ? [] : taskIdsOf(moved);
+  if (taskIds.length === 0) return null;
+  const { to } = groups;
+  if (!isOrganizations(to)) {
+    return isOrganizations(groups.from)
+      ? {
+          kind: "groups",
+          operations: taskIds.map((taskId) => ({
+            operation: "removeTask",
+            taskId,
+          })),
+        }
+      : null;
+  }
+  const members = view.groups.memberships
+    .filter((m) => m.groupId === to && !taskIds.includes(m.taskId))
+    .sort((a, b) => a.position - b.position)
+    .map((m) => m.taskId);
+  // Beside the nearest member drawn before it, else before the nearest after it.
+  const drawn = state.items.filter(
+    (item) => stripItemGroupId(item, state.customizations) === to,
+  );
+  const at = drawn.findIndex((item) => item.id === stripItemId);
+  const before = drawn
+    .slice(0, at)
+    .flatMap(taskIdsOf)
+    .findLast((id) => members.includes(id));
+  const after = drawn
+    .slice(at + 1)
+    .flatMap(taskIdsOf)
+    .find((id) => members.includes(id));
+  let index = members.length;
+  if (before !== undefined) index = members.indexOf(before) + 1;
+  else if (after !== undefined) index = members.indexOf(after);
+  const order = [
+    ...members.slice(0, index),
+    ...taskIds,
+    ...members.slice(index),
+  ];
+  return {
+    kind: "groups",
+    operations: [
+      ...taskIds.map((taskId) => ({
+        operation: "moveTask" as const,
+        taskId,
+        groupId: to,
+        position: order.indexOf(taskId),
+      })),
+      { operation: "reorderMembers", groupId: to, taskIds: order },
+    ],
+  };
 }
 
 /**
@@ -1356,6 +1466,7 @@ function commitOrdinaryDrop(input: {
   readonly navigate: UseNavigateResult<string>;
   readonly navigateNested: NavigateNestedFocus;
   readonly resolvedDrop: ResolvedEpicCanvasDrop | null;
+  readonly organization: OrganizationContextValue | null;
 }): boolean {
   const dndStore = useEpicDndStore.getState();
   const headerStripIndex = dndStore.headerStripDropIndex;
@@ -1366,6 +1477,7 @@ function commitOrdinaryDrop(input: {
       navigate: input.navigate,
       geometry: activeHeaderStripSession?.geometry ?? null,
       dragState: headerDragState,
+      organization: input.organization,
     });
     return false;
   }
@@ -1407,6 +1519,7 @@ interface RootDndProviderProps {
 export function RootDndProvider(props: RootDndProviderProps) {
   const navigate = useNavigate();
   const navigateNested = useEpicNestedFocusNavigation();
+  const organization = useOrganization();
   // No detach hook here, deliberately. `useTabOpenInNewWindowFlow` reaches
   // `useRouterState`, which THROWS without a router where `useNavigate` above
   // only warns - calling it from this provider made the whole provider
@@ -1782,6 +1895,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         navigate,
         navigateNested,
         resolvedDrop: lastResolvedDropRef.current,
+        organization,
       });
       if (!committed) restorePromotedPreview();
       endGesture();
@@ -1791,6 +1905,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       hostBinding,
       navigate,
       navigateNested,
+      organization,
       queryClient,
       updateDropPreview,
     ],

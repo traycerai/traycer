@@ -37,6 +37,7 @@ import { tabItemId, tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   moveSideStripLongListTask,
+  seedSideStripIdleGroup,
   seedSideStripLongList,
   seedSideStripSections,
   seedSideStripTabs,
@@ -80,6 +81,10 @@ import "@/index.css";
  * `?scene=sections&tasks=20` is that view over twenty tasks, enough to overflow
  * the list, and `moveTask` puts one of them in another section as its state
  * changing would.
+ *
+ * `?tasks=idle-group` is the owner's grouping report instead: four idle tasks,
+ * the second alone in an organization's group, in either view (add
+ * `scene=sections` for the Activity view).
  *
  * `&rail=1` collapses the strip to the rail, which in the sections scene runs
  * the same tasks as tiles in the same sections.
@@ -126,20 +131,22 @@ const SECTIONS_SCENE =
 const LONG_LIST =
   new URLSearchParams(window.location.search).get("tasks") === "20";
 const RAIL = new URLSearchParams(window.location.search).get("rail") === "1";
+const IDLE_GROUP =
+  new URLSearchParams(window.location.search).get("tasks") === "idle-group";
 
 function seedScene(): void {
-  if (!SECTIONS_SCENE) {
-    seedSideStripTabs(false);
-    return;
+  if (SECTIONS_SCENE) {
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: EDGE,
+        sideStripView: "activity",
+      },
+    });
   }
-  useLayoutStore.setState({
-    arrangement: {
-      ...DEFAULT_ARRANGEMENT,
-      tabStripPlacement: EDGE,
-      sideStripView: "activity",
-    },
-  });
-  if (LONG_LIST) seedSideStripLongList();
+  if (IDLE_GROUP) seedSideStripIdleGroup();
+  else if (!SECTIONS_SCENE) seedSideStripTabs(false);
+  else if (LONG_LIST) seedSideStripLongList();
   else seedSideStripSections();
 }
 const detachRequests: string[] = [];

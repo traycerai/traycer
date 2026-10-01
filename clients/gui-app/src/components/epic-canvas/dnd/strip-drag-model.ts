@@ -106,9 +106,10 @@ export interface StripGroupExtent {
   /** The gap between the group's own tabs. */
   readonly rowGap: number;
   /**
-   * Whether the group's membership is not the drag's to change (an
-   * organization's group, which the menu cannot add to either): nothing joins
-   * it and none of its tabs leaves it.
+   * Whether the group's membership is not this drag's to change, because the
+   * dragged tab's menu does not offer the group either (an organization's group
+   * for a tab the organization does not keep, or the other way round): the
+   * dragged tab does not join it and, when in it, does not leave it.
    */
   readonly locked: boolean;
 }
