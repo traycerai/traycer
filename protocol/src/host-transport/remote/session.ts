@@ -3897,11 +3897,35 @@ export class RemoteSession<
       return;
     }
     const connection = this.connection;
-    if (connection === null) {
+    if (connection === null || !connection.hostAttached) {
+      // Already parked. The relay answers every frame sent while it has no
+      // host with another `host_detached` (the Noise initiator this session
+      // sent right after `attach_ack` earns one), and a second pass here would
+      // report a second refusal for the same absence.
       return;
     }
     connection.hostAttached = false;
     connection.scheduler.pause();
+    // Before the ready boundary this frame means "there is no host to
+    // handshake with": the relay sends it right after `attach_ack` when no
+    // host leg is attached, and in reply to any data frame while that holds.
+    // The phase timer that would otherwise fire (`handshake-timeout`,
+    // `open-ack-timeout`) did two jobs — tell the authority the host refused,
+    // and redial. The first is done here, now, with the provenance the timeout
+    // carried: the relay's word about its host leg is host-transport-plane
+    // evidence. The second is not done at all. The socket parks exactly as it
+    // does after a mid-session detach, and `host_attached` — sent from the one
+    // site that knows the host is back — rebuilds it. Redialling instead
+    // (15 s timeout, 1–30 s backoff, repeat) cost one host's clients 16,891
+    // attaches on 2026-09-24, each minting a grant and waking the relay
+    // object, for a host that was simply off.
+    if (this.phase === "handshaking" || this.phase === "opening") {
+      this.clearPhaseTimer();
+      this.reportEvidenceOutcome(
+        `${this.evidenceScope}#${generation}-no-host`,
+        "refusal",
+      );
+    }
     this.markStreamsReconnecting(null);
     this.retractSession();
     // A detach is a DOWN edge even though the socket survives, so the two

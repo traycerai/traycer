@@ -245,7 +245,7 @@ sequenceDiagram
   participant CS as Coordination
   participant R as Relay
   participant H as Host
-  Note over C,R: socket drop (relay deploy / error / peer_gone:host_gone|reauth_timeout)
+  Note over C,R: socket drop (relay deploy / error / peer_gone:reauth_timeout)
   C->>CS: POST /hosts/:id/attach-grant (fresh, one-time)
   C->>R: attach(grant) → attach_ack{sid}
   C->>H: Noise-NK (new ephemerals → new session keys)
@@ -267,6 +267,20 @@ sequenceDiagram
 
 `host_detached` (relay control) → the client **pauses** the scheduler (holding
 frames, not losing them to a host-less relay) and marks streams reconnecting.
+
+The same frame is the relay's answer to a client that has **no host to reach**:
+it is sent right after `attach_ack` when no host leg is attached, and in reply
+to any data frame while that holds. Received before the ready boundary (phase
+`handshaking` / `opening`) it clears the phase timer, reports **one** dial
+refusal (the relay's word about its own host leg is host-transport-plane
+evidence, the same the handshake timeout used to produce — 15 s sooner) and
+parks exactly as above; a repeat while parked is a no-op. The client does **not**
+redial: `host_attached` is the one frame that says the host is back. Before
+this a client of an offline host attached, sent its Noise initiator, was told
+`peer_gone{host_gone}`, backed off 1–30 s and attached again for as long as the
+host stayed away — 88,269 attaches a day across 20 hosts on 2026-09-24, each
+minting a grant and waking the relay object. Relays no longer emit
+`peer_gone{host_gone}`; the reason stays in the enum for older relays.
 
 `host_attached` → **full attach, always**: fresh `NoiseChannel`, fresh relay
 dial, fresh `open{bearer}`. The host discards every client Noise session on any
