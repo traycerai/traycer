@@ -155,6 +155,7 @@ function setup() {
         reattachMode: "live",
         kind: "terminal",
         enabled: true,
+        viewer: "presentation",
       }),
     { wrapper },
   );

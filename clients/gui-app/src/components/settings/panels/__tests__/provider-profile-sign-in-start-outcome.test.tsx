@@ -13,7 +13,10 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostClient,
+  HostRequestDispatchOptions,
+} from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -24,10 +27,21 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // start-login hook itself, and a fake `mutate` that calls its per-call
 // `onError` synchronously can never show what went wrong here - TanStack
 // dropping that callback while its own mutation-level toast still fires.
+//
+// `providers.awaitLogin` is the one call here that is not a plain `request`:
+// the login flow hands each wait its attempt's `AbortSignal`, and a wait with a
+// signal is dispatched through `requestWithOptions` (a wait without one stays
+// on `requestWithResponseTimeout`, which no flow in this suite uses).
 const host = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
-  requestWithResponseTimeout:
-    vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+  requestWithOptions:
+    vi.fn<
+      (
+        method: string,
+        params: unknown,
+        options: HostRequestDispatchOptions,
+      ) => Promise<unknown>
+    >(),
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => {
@@ -36,7 +50,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     getActiveHostId: () => "host-local",
     request: host.request,
     requestWithSignal: host.request,
-    requestWithResponseTimeout: host.requestWithResponseTimeout,
+    requestWithOptions: host.requestWithOptions,
   });
   return { ...actual, useHostClient: () => client };
 });
@@ -236,7 +250,7 @@ beforeEach(() => {
   );
   // The long-poll that follows a started login: it stays open for the whole
   // browser leg, which is exactly the state a started sign-in should show.
-  host.requestWithResponseTimeout.mockImplementation(
+  host.requestWithOptions.mockImplementation(
     () => new Promise<unknown>(() => undefined),
   );
 });
@@ -308,11 +322,21 @@ describe.each(MOUNT_MODES)(
         await screen.findByText("Approve sign-in in your browser"),
       ).toBeTruthy();
       expect(screen.queryByText("Opening the sign-in page…")).toBeNull();
-      expect(host.requestWithResponseTimeout).toHaveBeenCalledWith(
-        "providers.awaitLogin",
-        { providerId: PROVIDER_ID, profileId: PROFILE_ID },
-        expect.any(Number),
+      const awaitCall = host.requestWithOptions.mock.calls.find(
+        ([method]) => method === "providers.awaitLogin",
       );
+      if (awaitCall === undefined) {
+        throw new Error("Expected a providers.awaitLogin dispatch.");
+      }
+      const [, awaitParams, awaitOptions] = awaitCall;
+      expect(awaitParams).toEqual({
+        providerId: PROVIDER_ID,
+        profileId: PROFILE_ID,
+      });
+      expect(typeof awaitOptions.responseTimeoutMs).toBe("number");
+      expect(awaitOptions.idempotencyKey).toBeNull();
+      expect(awaitOptions.requiredHostMethodVersion).toBeNull();
+      expect(awaitOptions.signal).toBeInstanceOf(AbortSignal);
     });
 
     it("consumes a refusal that lands after the dialog unmounted", async () => {
@@ -365,7 +389,7 @@ describe("the Switch account panel through a providers refresh", () => {
           })
         : Promise.resolve({}),
     );
-    host.requestWithResponseTimeout.mockImplementation(
+    host.requestWithOptions.mockImplementation(
       () =>
         new Promise<unknown>((resolve) => {
           resolveAwait = (result) => resolve(result);
@@ -448,7 +472,7 @@ function answerSignInWith(awaitAnswer: {
         })
       : Promise.resolve({}),
   );
-  host.requestWithResponseTimeout.mockImplementation((method) =>
+  host.requestWithOptions.mockImplementation((method) =>
     method === "providers.awaitLogin"
       ? Promise.resolve(awaitAnswer)
       : new Promise<unknown>(() => undefined),
@@ -494,7 +518,7 @@ function renderAntigravityAddDialog(
     getActiveHostId: () => "host-local",
     request: host.request,
     requestWithSignal: host.request,
-    requestWithResponseTimeout: host.requestWithResponseTimeout,
+    requestWithOptions: host.requestWithOptions,
   });
   return render(
     <QueryClientProvider client={queryClient}>

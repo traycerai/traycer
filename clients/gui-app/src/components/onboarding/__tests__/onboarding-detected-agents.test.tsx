@@ -39,9 +39,15 @@ type StartLoginMutate = (
   options: StartLoginOptions,
 ) => void;
 
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the caller's `AbortSignal`, `undefined` for a wait that
+// only ever runs to the end (onboarding's).
 type AwaitLoginVariables = {
-  readonly providerId: string;
-  readonly profileId: string | null;
+  readonly request: {
+    readonly providerId: string;
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
 };
 type AwaitLoginCompletion = {
   // Absent from a host before `providers.awaitLogin@2.2`.
@@ -721,7 +727,10 @@ describe("SignInToEnableButton declined sign-in", () => {
     if (awaitCall === undefined) {
       throw new Error("Expected an awaitLogin call.");
     }
-    expect(awaitCall[0]).toEqual({ providerId: "codex", profileId: null });
+    expect(awaitCall[0]).toStrictEqual({
+      request: { providerId: "codex", profileId: null },
+      signal: undefined,
+    });
     // The options object carries the enable-on-authenticated chain; its
     // behaviour is pinned by the next test.
     expect(typeof awaitCall[1].onSuccess).toBe("function");
@@ -884,7 +893,10 @@ describe("SignInToEnableButton declined sign-in", () => {
     if (awaitCall === undefined) {
       throw new Error("Expected an awaitLogin call.");
     }
-    expect(awaitCall[0]).toEqual({ providerId: "codex", profileId: null });
+    expect(awaitCall[0]).toStrictEqual({
+      request: { providerId: "codex", profileId: null },
+      signal: undefined,
+    });
   });
 
   // The pack failure travels on the answer itself, not on `failure` - see

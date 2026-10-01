@@ -325,6 +325,7 @@ function createLiveSessionHandle(
     rows: 24,
     reattachMode: "fresh",
     kind: "terminal",
+    viewer: "presentation",
     streamClientFactory: () => ({
       sendAction: () => undefined,
       close: () => undefined,
@@ -458,6 +459,7 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
       instanceId,
       () => createLiveSessionHandle(`${instanceId}-session`),
       "host-1",
+      "presentation",
     );
 
     const rendered = render(

@@ -141,15 +141,12 @@ Both install the `traycer` command. Check it with `traycer --version`. See the [
 
 Traycer checks for new versions in the background, but doesn't download them on its own.
 
-1. When an update is available, a download button appears in the app header. Its tooltip reads "Download update v&lt;version&gt;".
-2. Click it to download. The button shows "Downloading N%".
-3. When the download finishes, the button reads "Restart to update to v&lt;version&gt;". Click it to install and restart.
-
 To check yourself, choose **Help › Check for Updates**, or **Check for Updates** in the tray menu.
 
 Traycer installs stable releases. It offers a release candidate only when a host you use needs one, and asks you first.
 
 - **macOS:** Traycer has to run from your Applications folder to update. If you open it from somewhere else, such as the disk image, it offers **Move to Applications Folder**.
+- **Windows:** once an update is downloaded, restart Traycer from the update button to install it.
 - **Linux `.deb` and `.rpm`:** installing an update asks for your administrator password. In WSL, or when the package manager doesn't own the install, the button reads **Finish update** instead. It opens **Finish updating Traycer**, which gives you a `sudo dpkg -i` or `sudo rpm -U` command to run in a terminal; restart Traycer when it finishes.
 
 ### Hosts
@@ -188,4 +185,4 @@ Some host updates need a newer CLI first. The host's Overview then shows **Needs
 
 Your local data stays in `~/.traycer` (`%USERPROFILE%\.traycer` on Windows). Delete that folder only if you also want to remove local chats, settings and credentials from this computer.
 
-**A host on another machine.** **Remove from account** on that host's Overview only takes it off your account; nothing on that machine is uninstalled. To uninstall there, run `traycer host uninstall --all` on that machine, which stops the host, removes its service registration and removes the install.
+**A host on another machine:** **Remove from account** on that host's Overview only takes it off your account; nothing on that machine is uninstalled. To uninstall there, run `traycer host uninstall --all` on that machine, which stops the host, removes its service registration and removes the install.
