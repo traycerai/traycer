@@ -14,7 +14,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
-import type { ComposerExpansion } from "@/components/home/composer/composer-expand-handle";
+import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
@@ -23,6 +23,7 @@ import { TerminalLaunchPanel } from "@/components/home/composer/terminal-launch-
 import type { ComposerMode } from "@/components/home/data/landing-options";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { ComposerToolbar } from "@/components/home/toolbar/composer-toolbar";
+import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { cn } from "@/lib/utils";
@@ -245,11 +246,13 @@ export function ComposerBody({
         toolbar={
           <div className={hiddenInTerminal}>
             <SurfaceActivityProvider active={composerMode === "chat"}>
-              {toolbarLayout === "collapsed" ? (
-                <ComposerMobileToolbar {...sharedToolbarProps} />
-              ) : (
-                <ComposerToolbar {...sharedToolbarProps} />
-              )}
+              <ComposerTileIdProvider tileId="landing">
+                {toolbarLayout === "collapsed" ? (
+                  <ComposerMobileToolbar {...sharedToolbarProps} />
+                ) : (
+                  <ComposerToolbar {...sharedToolbarProps} />
+                )}
+              </ComposerTileIdProvider>
             </SurfaceActivityProvider>
           </div>
         }

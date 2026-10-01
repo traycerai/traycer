@@ -31,6 +31,7 @@ import {
 import {
   commitExecutorAttemptMutation,
   commitExecutorRecoveryMutation,
+  parkedActivationMatchesInstall,
   verifyUpdateMutationCapability,
   withSupervisorRelaunchContender,
   withUpdateContender,
@@ -160,6 +161,24 @@ async function waitForFile(path: string, maxWaitMs: number): Promise<void> {
   throw new Error(`timed out waiting for ${path}`);
 }
 
+// The fixtures now write every barrier file atomically (temp path + a
+// same-directory rename), so a stat-visible file is never a
+// truncated-but-not-yet-written one - but this content check is a second,
+// independent guard for `term-grace-started`, the one caller actually seen
+// failing on that race (`readFile` returning "" and `Number("")` being 0).
+async function waitForNonEmptyFile(
+  path: string,
+  maxWaitMs: number,
+): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const content = await readFile(path, "utf8").catch(() => "");
+    if (content.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for non-empty ${path}`);
+}
+
 function spawnAttemptCompetitor(
   hostHomeDir: string,
   barrierDir: string,
@@ -190,7 +209,12 @@ afterEach(async () => {
   __resetHeldInProcessForTest();
   for (const pid of supervisedPids.splice(0)) {
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Not a group leader, or already gone.
+    }
+    try {
+      process.kill(pid, "SIGKILL");
     } catch {
       // The actuator normally exits through its release barrier; cleanup is
       // best effort when an assertion fails before that point.
@@ -606,7 +630,7 @@ describe("withUpdateContender - canonical first-run boundary", () => {
 
     process.kill(rebound.supervisorPid, "SIGTERM");
     await waitForFile(join(barrierDir, "descendant-term-received"), 10_000);
-    await waitForFile(join(barrierDir, "term-grace-started"), 10_000);
+    await waitForNonEmptyFile(join(barrierDir, "term-grace-started"), 10_000);
     const graceStartedAt = Number(
       await readFile(join(barrierDir, "term-grace-started"), "utf8"),
     );
@@ -621,6 +645,27 @@ describe("withUpdateContender - canonical first-run boundary", () => {
         () => false,
       ),
     ).toBe(false);
+
+    // Pins "TERM-resistant" through the grace window. The supervisor's reap
+    // has already sent the descendant two SIGTERMs, one to the group and one
+    // to its pid; a third, sent from here, must not kill it either. With a
+    // `once` listener the first TERM reset the disposition to SIG_DFL, so a
+    // later one killed the descendant this case calls TERM-resistant, and no
+    // barrier below could show it: the supervisor writes `descendant-exited
+    // {kind: "sigkill"}` however the descendant died. The probe runs after the
+    // window check above so it adds nothing to that window, and it stops short
+    // of the window's end, before the supervisor escalates at
+    // `graceStartedAt` + TERM_GRACE_MS (2_100 ms), so the SIGKILL is never
+    // what it sees.
+    process.kill(rebound.descendantPid, "SIGTERM");
+    const probeEnd = Math.min(Date.now() + 200, graceStartedAt + 2_000);
+    let probes = 0;
+    while (Date.now() < probeEnd) {
+      expect(() => process.kill(rebound.descendantPid, 0)).not.toThrow();
+      probes += 1;
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+    expect(probes).toBeGreaterThan(0);
     forgetChild(blocked);
     await waitForFile(join(barrierDir, "descendant-killed"), 10_000);
     await waitForFile(join(barrierDir, "group-absent"), 10_000);
@@ -1584,6 +1629,110 @@ describe("withSupervisorRelaunchContender - the parked-record admission exemptio
     // caller cannot select a wider exemption while supplying install evidence.
     forced.admission = "recovery-maintenance";
     expect(forced.reason).toBe("contender-test");
+  });
+});
+
+// `parkedActivationMatchesInstall` - the pure predicate `host restart`
+// (traycer-cli) and `supervisorRelaunchDisposition` (above) both call to
+// decide whether a `waiting-to-activate` park describes exactly the bytes
+// installed right now. ONE function for both, deliberately (see the
+// docstring in `../contender.ts`) - these are its own direct unit tests,
+// independent of either caller's admission machinery.
+describe("parkedActivationMatchesInstall", () => {
+  const INSTALL_GENERATION = "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3";
+
+  function claim(
+    overrides: Partial<HostUpdateAttemptClaimBaseline>,
+  ): HostUpdateAttemptClaimBaseline {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      stageFingerprint: null,
+      allowDowngrade: false,
+      acceptStoreFormatLoss: false,
+      ...overrides,
+    };
+  }
+
+  function installed(
+    overrides: Partial<SupervisorRelaunchInstalledIdentity>,
+  ): SupervisorRelaunchInstalledIdentity {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      ...overrides,
+    };
+  }
+
+  function activatablePark(
+    overrides: Partial<HostUpdateAttemptRecord>,
+  ): HostUpdateAttemptRecord {
+    return record({
+      phase: "waiting-to-activate",
+      execution: "parked",
+      continuation: "activate",
+      claim: claim({}),
+      ...overrides,
+    });
+  }
+
+  it("true for a full match: phase, claim, and installed identity all agree", () => {
+    expect(
+      parkedActivationMatchesInstall(activatablePark({}), installed({})),
+    ).toBe(true);
+  });
+
+  it("false for the wrong phase, even with a claim that would otherwise match", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        record({
+          phase: "restarting",
+          execution: "active",
+          continuation: "activate",
+          claim: claim({}),
+          targetVersion: "1.2.3",
+        }),
+        installed({}),
+      ),
+    ).toBe(false);
+  });
+
+  it("false for a claim-less park - unverifiable is refused, never admitted", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        record({
+          phase: "waiting-to-activate",
+          execution: "parked",
+          continuation: "activate",
+          targetVersion: "1.2.3",
+        }),
+        installed({}),
+      ),
+    ).toBe(false);
+  });
+
+  it("false for a null installed identity", () => {
+    expect(parkedActivationMatchesInstall(activatablePark({}), null)).toBe(
+      false,
+    );
+  });
+
+  it("false when the installed version disagrees with the claim/target", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        activatablePark({}),
+        installed({ installedVersion: "9.9.9" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("false when the install generation disagrees, even with matching versions", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        activatablePark({}),
+        installed({ installGeneration: "install-9|later|def456|1.2.3" }),
+      ),
+    ).toBe(false);
   });
 });
 

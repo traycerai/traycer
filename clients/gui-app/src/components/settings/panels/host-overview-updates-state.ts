@@ -10,6 +10,7 @@ import {
   describeHostStoreFloorRpcRefusal,
 } from "./host-overview-store-formats";
 import { useQueryClient } from "@tanstack/react-query";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -62,7 +63,10 @@ import {
   type NegotiatedMethodVersion,
 } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { toastFromHostError } from "@/lib/host-error-toast";
+import {
+  toastFromHostError,
+  toastFromHostErrorWithDetail,
+} from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { FleetUpdateAttemptPosition } from "@/lib/host/fleet-update/fleet-update-view";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -165,6 +169,11 @@ export function useHostOverviewUpdates(input: {
   readonly checkDegrade: OverviewDegradeReason | null;
   readonly installDegrade: OverviewDegradeReason | null;
   readonly busy: boolean;
+  /**
+   * THIS machine's host was started in a terminal: the version picker's line
+   * in place of its installs (`hostForegroundUpdateLine`), or `null`.
+   */
+  readonly foregroundUpdateLine: string | null;
   /**
    * The dispatching panel mount's token (D8), threaded to all three update
    * dispatches so an `accepted` answer can be attributed to the mount that
@@ -347,8 +356,12 @@ export function useHostOverviewUpdates(input: {
             onAccepted: () => setInstallFailure(null),
           });
         },
+        // WITH the detail: on the local-maintenance fallback a lane refusal
+        // (`deferred`, `busy`) arrives as a plain `RPC_ERROR` whose message IS
+        // the reason - a host started in a terminal, say - and the bare
+        // fallback sentence would drop it.
         onError: (error) =>
-          toastFromHostError(error, "Couldn't start the update."),
+          toastFromHostErrorWithDetail(error, "Couldn't start the update."),
       },
     );
   };
@@ -460,13 +473,16 @@ export function useHostOverviewUpdates(input: {
   const { hostId } = input;
   useEffect(() => {
     if (!recheckFloor || hostId === null) return;
-    const timer = setInterval(() => {
-      void queryClient.invalidateQueries(
-        { queryKey: hostQueryKeys.methodScope(hostId, "host.update.check") },
-        { cancelRefetch: false },
-      );
-    }, CLI_FLOOR_RECHECK_MS);
-    return () => clearInterval(timer);
+    return startVisibleInterval({
+      tick: () => {
+        void queryClient.invalidateQueries(
+          { queryKey: hostQueryKeys.methodScope(hostId, "host.update.check") },
+          { cancelRefetch: false },
+        );
+      },
+      intervalMs: CLI_FLOOR_RECHECK_MS,
+      fireOnShow: true,
+    });
   }, [recheckFloor, hostId, queryClient]);
   // Read off the resolved target rather than `manifest.latest`, which for an
   // installed-RC catalog is the WRONG pointer: `latest` tracks the stable
@@ -623,6 +639,7 @@ export function useHostOverviewUpdates(input: {
       ),
       installingVersion,
       disabled: input.busy,
+      foregroundUpdateLine: input.foregroundUpdateLine,
       onInstall: (version, acceptStoreFormatLoss) =>
         install(version, false, acceptStoreFormatLoss, null),
       awaitingFirstCheck: actionableManifest === null,
@@ -2089,14 +2106,6 @@ function handleBoundDispatchOutcome(input: {
 }
 
 /**
- * The words the version card uses for "Pick it in Updates", which select the
- * Updates tab. Exported so the card can find them in the sentence and draw
- * them as the link they are. The sentence stays one string for everything
- * that reads it as text: the live region, and every test pinning it.
- */
-export const PICK_IN_UPDATES = "Pick it in Updates";
-
-/**
  * Which answer the update sentence gives, for the version card's tag. One
  * value per arm of {@link describeCheckState}, so the tag and the sentence
  * cannot describe two different states.
@@ -2216,12 +2225,12 @@ function describeCheckState(input: {
   if (input.upToDate) {
     // Honest about BOTH halves: the newer version exists, and this host will
     // not take it on its own. Naming the installed version names the line, and
-    // pointing at the Updates list is not decoration — those rows are enabled,
-    // and they are the only way across. The version card draws
-    // `PICK_IN_UPDATES` as a link to that tab.
+    // pointing at the version list is not decoration — those rows are enabled,
+    // and they are the only way across. The version card leads the Updates
+    // tab, so the list is directly below the sentence.
     if (input.strandedOnLine !== null && input.installedVersion !== null) {
       return {
-        text: `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. ${PICK_IN_UPDATES} to move.`,
+        text: `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. Pick it from the versions below to move.`,
         kind: "stranded",
       };
     }

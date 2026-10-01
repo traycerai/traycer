@@ -4,6 +4,7 @@ import {
   getDesktopDiagnosticsBridge,
   type DesktopAppResourceUsage,
 } from "@/lib/resources/desktop-app-resource-usage";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * This desktop shell's own process usage, sampled from the Electron
@@ -21,7 +22,7 @@ import {
 const DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS = 1000;
 const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
-let desktopAppResourceTimer: number | null = null;
+let desktopAppResourceStop: (() => void) | null = null;
 let desktopAppResourceInFlight = false;
 // Identifies the sampler a request belongs to, so a reply that arrives after
 // its sampler stopped can be told from one that is still wanted.
@@ -57,19 +58,20 @@ function subscribeDesktopAppResourceUsage(listener: () => void): () => void {
   desktopAppResourceListeners.add(listener);
   if (desktopAppResourceListeners.size === 1) {
     sampleDesktopAppResourceUsage();
-    desktopAppResourceTimer = window.setInterval(
-      sampleDesktopAppResourceUsage,
-      DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS,
-    );
+    desktopAppResourceStop = startVisibleInterval({
+      tick: sampleDesktopAppResourceUsage,
+      intervalMs: DESKTOP_RESOURCE_SAMPLE_INTERVAL_MS,
+      fireOnShow: true,
+    });
   }
   return () => {
     desktopAppResourceListeners.delete(listener);
     if (
       desktopAppResourceListeners.size === 0 &&
-      desktopAppResourceTimer !== null
+      desktopAppResourceStop !== null
     ) {
-      window.clearInterval(desktopAppResourceTimer);
-      desktopAppResourceTimer = null;
+      desktopAppResourceStop();
+      desktopAppResourceStop = null;
       // The snapshot dies with the sampler, and that is the same promise the
       // `enabled` gate above makes: a reading nothing is refreshing is not a
       // reading. Kept, it would be handed to the NEXT subscriber synchronously

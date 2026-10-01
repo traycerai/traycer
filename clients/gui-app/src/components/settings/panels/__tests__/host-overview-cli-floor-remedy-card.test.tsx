@@ -127,9 +127,9 @@ function regionElement(
           degrade: null,
           desktopBridge: bridge,
           onInstallationHelp: vi.fn(),
+          foregroundUpdateLine: null,
         }}
         inFlight={false}
-        autoUpdate={null}
       />
     </TooltipProvider>
   );

@@ -26,6 +26,7 @@ import {
   MAX_RETAINED_TOP_LEVEL_SURFACES,
   TopLevelTabHost,
 } from "@/components/layout/top-level-tab-host";
+import { ROUTE_PENDING_MS } from "@/components/loading/route-pending-screen";
 import {
   HostReadinessControllerContext,
   type HostReadinessController,
@@ -38,6 +39,7 @@ import { activateHostedTopLevelSurface } from "@/components/epic-canvas/surface-
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
@@ -110,6 +112,27 @@ const hostedSurfaceBodyTestState = vi.hoisted(() => ({
 const epicSurfaceExtraTestState = vi.hoisted(() => ({
   render: null as ((tabId: string) => ReactNode) | null,
 }));
+const deferredTabBodyImports = vi.hoisted(() => ({
+  history: {
+    hold: false,
+    started: false,
+    onStarted: null as (() => void) | null,
+    release: null as (() => void) | null,
+  },
+  settings: {
+    hold: false,
+    started: false,
+    onStarted: null as (() => void) | null,
+    release: null as (() => void) | null,
+  },
+}));
+
+/** Read through a call so the test's own reset does not narrow it to null. */
+function releaseHeldTabBodyImport(load: {
+  readonly release: (() => void) | null;
+}): void {
+  load.release?.();
+}
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
@@ -245,13 +268,39 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
   },
 }));
 
-vi.mock("@/components/epics/history-surface", () => ({
-  HistorySurface: () => <div data-testid="history-surface-body" />,
-}));
+vi.mock("@/components/epics/history-surface", async () => {
+  const React = await import("react");
+  const load = deferredTabBodyImports.history;
+  if (load.hold) {
+    load.started = true;
+    load.onStarted?.();
+    await new Promise<void>((resolve) => {
+      load.release = resolve;
+    });
+    load.release = null;
+  }
+  return {
+    HistorySurface: () =>
+      React.createElement("div", { "data-testid": "history-surface-body" }),
+  };
+});
 
-vi.mock("@/components/settings/settings-surface", () => ({
-  SettingsSurface: () => <div data-testid="settings-surface-body" />,
-}));
+vi.mock("@/components/settings/settings-surface", async () => {
+  const React = await import("react");
+  const load = deferredTabBodyImports.settings;
+  if (load.hold) {
+    load.started = true;
+    load.onStarted?.();
+    await new Promise<void>((resolve) => {
+      load.release = resolve;
+    });
+    load.release = null;
+  }
+  return {
+    SettingsSurface: () =>
+      React.createElement("div", { "data-testid": "settings-surface-body" }),
+  };
+});
 
 // The host wraps the panel in the gesture provider (the single live-value
 // reader); project the draft the host resolved onto the provider so this test
@@ -310,6 +359,7 @@ const UNAVAILABLE_DEFAULT_HOST_CONTROLLER: HostReadinessController = {
     progress: null,
     lastProgress: null,
     provisioningError: null,
+    ensureFailure: null,
     provisioning: false,
     removed: false,
     hostBusy: false,
@@ -478,6 +528,73 @@ describe("<TopLevelTabHost />", () => {
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
   });
+
+  it.each([
+    {
+      label: "History",
+      kind: "history",
+      ref: HISTORY,
+      bodyTestId: "history-surface-body",
+    },
+    {
+      label: "Settings",
+      kind: "settings",
+      ref: SETTINGS,
+      bodyTestId: "settings-surface-body",
+    },
+  ] as const)(
+    "shows delayed loading feedback while the visible $label body import is pending",
+    async ({ label, kind, ref, bodyTestId }) => {
+      const load = deferredTabBodyImports[kind];
+      load.hold = true;
+      load.started = false;
+      load.release = null;
+      let signalStarted: (() => void) | null = null;
+      const importStarted = new Promise<void>((resolve) => {
+        signalStarted = resolve;
+      });
+      load.onStarted = () => signalStarted?.();
+      vi.useFakeTimers();
+
+      try {
+        seedSources([ref]);
+        setSingle(ref, [ref]);
+        render(<TopLevelTabHost />);
+
+        expect(surfaceRef(ref).dataset.visible).toBe("true");
+        await importStarted;
+        expect(load.started).toBe(true);
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(ROUTE_PENDING_MS - 1);
+        });
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(screen.getByTestId("route-pending-screen")).toBeTruthy();
+
+        await act(async () => {
+          const release = load.release;
+          if (release === null) {
+            throw new Error(`expected the ${label} body import to be held`);
+          }
+          load.hold = false;
+          release();
+          await Promise.resolve();
+        });
+        expect(screen.getByTestId(bodyTestId)).toBeTruthy();
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+      } finally {
+        load.hold = false;
+        releaseHeldTabBodyImport(load);
+        load.onStarted = null;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     ["Epic/Epic", EPIC_A, EPIC_B],
@@ -829,6 +946,60 @@ describe("<TopLevelTabHost />", () => {
         .getByTestId(`landing-terminal-anchor-${DRAFT_B.id}`)
         .contains(screen.getByTestId("landing-terminal-panel-body")),
     ).toBe(true);
+  });
+});
+
+/**
+ * Sheet shell (ticket 02, D1/D2): `TopLevelSurfaceMount` is the single sheet
+ * for every non-epic surface (Home/History/Settings/draft) and carries no
+ * sheet marker of its own for an epic tab - the epic surface paints its own
+ * two sheets (panel/content) internally, proven separately in
+ * `epic-sidebar-side.test.tsx` against the REAL (unmocked) `EpicSurface`.
+ * `EpicSurface` is mocked here, so this suite can only speak to the mount
+ * wrapper's own marker, not the epic surface's internal structure. The
+ * surface frame around the mount is `app-column-frame.test.tsx`'s, and Home's
+ * retained marker is `home-surface-mount-latch.test.tsx`'s.
+ */
+describe("TopLevelSurfaceMount: single-sheet route marker (D1/D2)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+  });
+
+  it.each([
+    ["draft", DRAFT_A],
+    ["history", HISTORY],
+    ["settings", SETTINGS],
+  ] as const)(
+    "stamps data-shell-sheet=route on a %s tab's mount",
+    (_kind, ref) => {
+      seedSources([EPIC_A, ref]);
+      setSplit(EPIC_A, ref, "left");
+
+      render(<TopLevelTabHost />);
+
+      expect(surfaceRef(ref).dataset.shellSheet).toBe("route");
+    },
+  );
+
+  it("leaves data-shell-sheet unset on an epic tab's own mount", () => {
+    seedSources([EPIC_A, HISTORY]);
+    setSplit(EPIC_A, HISTORY, "left");
+
+    render(<TopLevelTabHost />);
+
+    expect(surfaceRef(EPIC_A).hasAttribute("data-shell-sheet")).toBe(false);
   });
 });
 

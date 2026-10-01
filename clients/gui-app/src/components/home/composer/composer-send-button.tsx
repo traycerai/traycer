@@ -140,7 +140,9 @@ function SendButton(props: SendButtonProps) {
       sideOffset={undefined}
       align={undefined}
     >
-      <span className="inline-flex">
+      {/* The send/stop control is non-editable chrome and dims while a
+          layout session is live (4.2). */}
+      <span data-layout-passive className="inline-flex">
         <Button
           type="button"
           size="icon"
@@ -189,7 +191,7 @@ function StopButton(props: StopButtonProps) {
       sideOffset={undefined}
       align={undefined}
     >
-      <span className="inline-flex">
+      <span data-layout-passive className="inline-flex">
         <Button
           type="button"
           size="icon"

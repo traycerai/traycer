@@ -4,6 +4,7 @@ import {
   contentBlockSchema,
   contentBlockSchemaPreFallback,
   contentBlockSchemaPreBrowser,
+  contentBlockSchemaPreReceipt,
   contentBlockSchemaV18,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
@@ -469,9 +470,15 @@ export const messageSchema = lazySchema(() =>
 );
 export type Message = z.infer<typeof messageSchema>;
 
-/** The message union shipped on chat.subscribe through 1.14. */
+/**
+ * The message union shipped on chat.subscribe through 1.14. Its assistant arm
+ * is the pre-receipt freeze, not the live one: `1.13`/`1.14` predate `1.18`.
+ */
 export const messageSchemaPreMessageDelivery = lazySchema(() =>
-  z.discriminatedUnion("role", [userMessageSchemaV18, assistantMessageSchema]),
+  z.discriminatedUnion("role", [
+    userMessageSchemaV18,
+    assistantMessageSchemaPreReceipt,
+  ]),
 );
 
 // ── Wire-freeze variants (pre-Reasonix, LIVE shape) ─────────────────────────
@@ -791,6 +798,40 @@ export const messageSchemaPreBrowser = lazySchema(() =>
   z.discriminatedUnion("role", [
     userMessageSchemaV18,
     assistantMessageSchemaPreBrowser,
+  ]),
+);
+
+// ── Wire-freeze variant (pre-receipt, `chat.subscribe@1.13`-`@1.17`) ───────
+// Hand-frozen copy of `assistantMessageSchema` as those lines ship it: the
+// complete live shape, `turnProfile` included, with `blocks` swapped for
+// `contentBlockSchemaPreReceipt` so a settled notice's `receipt` (`1.18`)
+// cannot reach them. Same key order as the live `.extend()` result, because the
+// order is part of the captured digest. Bound by `messageSchemaPreReceipt`
+// (`1.15`-`1.17`) and `messageSchemaPreMessageDelivery` (`1.13`/`1.14`).
+export const assistantMessageSchemaPreReceipt = lazySchema(() =>
+  z.object({
+    role: z.literal("assistant"),
+    messageId: z.string().min(1),
+    sender: agentSenderSchema,
+    blocks: z.array(contentBlockSchemaPreReceipt),
+    startedAt: z.number().nullable().default(null),
+    blocksVersion: z.number().int().nonnegative().optional(),
+    timestamp: z.number(),
+    turnId: z.string().nullable(),
+    usage: tokenUsageSchema.nullable(),
+    reasoningEffort: z.string().nullable().default(null),
+    serviceTier: z.string().nullable().default(null),
+    envCredentialVar: z.string().nullable().default(null),
+    imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+    turnProfile: assistantTurnProfileSchema.optional(),
+  }),
+);
+
+/** The message union shipped on chat.subscribe `1.15` through `1.17`. */
+export const messageSchemaPreReceipt = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    userMessageSchema,
+    assistantMessageSchemaPreReceipt,
   ]),
 );
 

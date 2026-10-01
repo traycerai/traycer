@@ -48,7 +48,22 @@ import {
   getHardwareAccelerationPreference,
   setHardwareAccelerationPreference,
 } from "../app/gpu-acceleration";
-import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
+import {
+  RunnerHostEvent,
+  RunnerHostInvoke,
+  RunnerHostSync,
+} from "../../ipc-contracts/ipc-channels";
+import {
+  HOST_LIFECYCLE_MODES,
+  type HostLifecycleMode,
+} from "@traycer/protocol/config/host-lifecycle-policy";
+import type {
+  HostLifecycleSetRequest,
+  HostLifecycleSetResult,
+  HostLifecycleStopChoice,
+  HostLifecycleView,
+  LocalHostCapability,
+} from "../../ipc-contracts/host-lifecycle-types";
 import type {
   FileSaveInput,
   FileSaveResult,
@@ -543,6 +558,79 @@ async function readLogLevelsSnapshot(): Promise<LogLevelsSnapshot> {
     hostLogLevel: levels.hostLogLevel,
     desktopLogLevel,
   };
+}
+
+/** The slice of `HostLifecycleService` the host-lifecycle handlers call. */
+export interface HostLifecycleIpcService {
+  getView(): Promise<HostLifecycleView>;
+  setMode(request: HostLifecycleSetRequest): Promise<HostLifecycleSetResult>;
+  onChange(listener: (view: HostLifecycleView) => void): () => void;
+}
+
+/**
+ * `runnerHost.hostLifecycle` (get / set / change) and the boot-pinned
+ * `localHostCapability` sync read, beside the GPU and log-level handlers
+ * above because it is the same kind of surface: a machine-local setting main
+ * owns.
+ *
+ * A capability of its OWN, deliberately not part of `hostManagement`: the
+ * renderer nulls `hostManagement` on a desktop that runs no local host, and
+ * this is the one surface that must stay live there - it is how the mode is
+ * switched back. Registered by `RunnerIpcBridge.installHostLifecycle` rather
+ * than `registerPlatformIpc`, because the service exists only once desktop
+ * startup has read the policy; the bridge's dispose sweep removes these
+ * channels with every other one.
+ */
+export function registerHostLifecycleIpc(
+  bridge: Pick<
+    RunnerIpcBridge,
+    "handleInvoke" | "handleSync" | "fanOut" | "disposeFns"
+  >,
+  service: HostLifecycleIpcService,
+  localHostCapability: LocalHostCapability,
+): void {
+  bridge.handleSync(
+    RunnerHostSync.localHostCapability,
+    () => localHostCapability,
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostLifecycleGet,
+    (): Promise<HostLifecycleView> => service.getView(),
+  );
+  bridge.handleInvoke(
+    RunnerHostInvoke.hostLifecycleSet,
+    (_event, input: unknown): Promise<HostLifecycleSetResult> =>
+      service.setMode(parseHostLifecycleSetInput(input)),
+  );
+  bridge.disposeFns.push(
+    service.onChange((view) => {
+      bridge.fanOut(RunnerHostEvent.hostLifecycleChange, view);
+    }),
+  );
+}
+
+function isHostLifecycleMode(value: unknown): value is HostLifecycleMode {
+  return HOST_LIFECYCLE_MODES.some((mode) => mode === value);
+}
+
+function parseHostLifecycleSetInput(input: unknown): HostLifecycleSetRequest {
+  if (!isRecord(input)) {
+    throw new Error("hostLifecycle:set requires an object payload");
+  }
+  const mode = input.mode;
+  if (!isHostLifecycleMode(mode)) {
+    throw new Error("hostLifecycle:set requires a known lifecycle mode");
+  }
+  const stop = input.stop;
+  let stopChoice: HostLifecycleStopChoice | null;
+  if (stop === null || stop === undefined) {
+    stopChoice = null;
+  } else if (stop === "if-idle" || stop === "force") {
+    stopChoice = stop;
+  } else {
+    throw new Error("hostLifecycle:set requires stop if-idle|force|null");
+  }
+  return { mode, stop: stopChoice };
 }
 
 function parseLogLevelsSetInput(input: unknown): {

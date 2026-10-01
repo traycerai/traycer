@@ -10,6 +10,7 @@ import {
   rateLimitPollTargets,
 } from "@/lib/rate-limits/rate-limit-poll-targets";
 import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * The long-lived app-shell owner of background usage freshness for the
@@ -26,13 +27,12 @@ import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-li
  * 2. OpenCode's HTTP-lane turn refresh, kept mounted even while its popover
  *    and Settings surfaces are closed.
  *
- * The timer PAUSES on `document.visibilityState === "hidden"` (window truly
- * minimized/backgrounded) and resumes when the window is shown again - matching
- * the same visibility signal TanStack's `focusManager` uses for the httpFetch
- * lane's `refetchIntervalInBackground: false`. It deliberately does NOT key off
- * window focus (`blur` / `document.hasFocus()`): the core scenario this feature
- * exists for is glancing at the icon while Traycer sits visible-but-unfocused on
- * a second monitor, and pausing on mere focus-loss would break exactly that.
+ * The timer PAUSES while `isDocumentVisible()` is false (Page Visibility AND
+ * the desktop shell's on-screen bit) and resumes when the window is shown
+ * again. It deliberately does NOT key off window focus (`blur` /
+ * `document.hasFocus()`): the core scenario this feature exists for is
+ * glancing at the icon while Traycer sits visible-but-unfocused on a second
+ * monitor, and pausing on mere focus-loss would break exactly that.
  *
  * `httpFetch` providers are intentionally absent here - their observers opt
  * into table-owned polling directly.
@@ -70,40 +70,11 @@ export function RateLimitPollProvider(): null {
   // this timer only does the periodic background refresh.
   useEffect(() => {
     if (hostId === null) return;
-    let intervalHandle: number | null = null;
-
-    const tick = (): void => {
-      // Defensive: the timer is cleared while hidden, but guard the body too so
-      // a tick that races a `visibilitychange` cannot ask the host for work.
-      if (document.visibilityState === "hidden") return;
-      pollTargets();
-    };
-    const start = (): void => {
-      if (intervalHandle !== null) return;
-      intervalHandle = window.setInterval(
-        tick,
-        EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS,
-      );
-    };
-    const stop = (): void => {
-      if (intervalHandle === null) return;
-      window.clearInterval(intervalHandle);
-      intervalHandle = null;
-    };
-    const syncToVisibility = (): void => {
-      if (document.visibilityState === "hidden") {
-        stop();
-      } else {
-        start();
-      }
-    };
-
-    syncToVisibility();
-    document.addEventListener("visibilitychange", syncToVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", syncToVisibility);
-      stop();
-    };
+    return startVisibleInterval({
+      tick: pollTargets,
+      intervalMs: EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS,
+      fireOnShow: true,
+    });
   }, [hostId]);
 
   return null;

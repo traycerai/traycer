@@ -1,0 +1,161 @@
+---
+title: "Worktrees"
+description: "Manage Traycer worktrees, choose whether agents may create them, configure automatic cleanup, and inspect cleanup history for each host."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+Worktrees settings list the git worktrees Traycer created on a selected host: every worktree under that host's `~/.traycer/worktrees` folder, including ones whose Task was deleted.
+
+For how worktrees affect agents and Git Diff, see [Worktrees](/concepts/worktrees). The branch prefix for new worktrees is under **Settings › General › Worktrees**; see [Branch Prefix](/concepts/worktrees/scripts#branch-prefix).
+
+To clean up worktrees for particular Tasks, open [Sweep](/concepts/sweep) from the Task or History. The Sweep guide explains selection, shared worktrees, and stopping active work.
+
+## Controls
+
+| Control | What it changes |
+|---|---|
+| **Host** | The host whose worktrees are shown. Change it with the [host switcher](/settings#host-picker) in the Settings sidebar. |
+| **Cleanup** | Opens [automatic cleanup](#automatic-cleanup) for the host. Reads **Cleanup off** or the inactivity threshold. |
+| **Agent worktrees** | Chooses whether [agents may create worktrees](#agent-worktrees) on the host: **Allow**, **Ask first**, or **Never**. |
+| **Select all** | Selects every visible worktree you can delete, except **In use** ones. |
+| **Expand all** / **Collapse all** | Opens or closes every repository group. |
+| **Refresh** | Reloads the list. The "Updated" time next to it says how old the list is. |
+| Search | Finds worktrees by repo, branch, path, PR number, or Task title ("Search repo, branch, path, PR, or Task"). |
+| Status filter | Shows only the [statuses](#worktree-rows) you check; check several to see all of them. **All** clears the filter. Only statuses present in the list are offered. |
+| Sort | **Newest** or **Oldest**, by when the worktree was created, within each repository. |
+
+If the selected host is offline, worktrees can only be managed after that host is reachable again.
+
+## Worktree Rows
+
+Worktrees are grouped by repository. Click a repository's header to collapse or expand it; the number on the right counts its worktrees.
+
+Each row shows:
+
+- A status pill (see below). Hover it for the reason.
+- Pull request chips, such as "#128 Merged". Click one to open the PR. A submodule branch with commits that never landed shows a chip like "api · 2 unmerged commits".
+- The branch, or "detached HEAD".
+- A line of facts, such as uncommitted changes, and **Last active** time.
+- The Tasks that use the worktree. Click a Task to open it. "Task Merged" or "Task Merged 1/2" shows how many of that Task's branches have merged PRs. A worktree no Task uses reads "Not used by any Task".
+
+| Status | Meaning |
+|---|---|
+| **Landed** | The work provably landed: a merged PR matches the current commit, or the branch's commits are in the default branch. |
+| **At base commit** | The worktree never moved from the commit it was created on and has no uncommitted changes. |
+| **Unreferenced** | Clean, fully pushed, and no Task or agent uses it. |
+| **Review** | Not proven safe: uncommitted changes, unmerged or unpushed commits, unmerged submodule work, a detached HEAD, or unknown branch status. |
+| **Orphaned** | Git can't remove it normally because its folder or metadata is missing or broken. Deleting it uses a forced cleanup. |
+| **In use** | An agent, or a command an agent started, is using it. Plain terminals don't count; see the warning under [Delete Worktrees](#delete-worktrees). |
+| **Checking…** | Traycer is still checking the branch and PR state. You can't delete it until the check finishes. |
+| **Unknown** | The check failed. Refresh to retry, or delete it through the unknown-status confirmation. |
+
+Each row's **⋯** menu has:
+
+| Item | What it does |
+|---|---|
+| **Copy path** | Copies the worktree's folder path. |
+| **Manage script** | Opens "Manage setup and teardown scripts" for this worktree. Changes you save are used when you delete it from this page. See [Setup and Teardown Scripts](/concepts/worktrees/scripts). |
+| **Delete worktree** | Deletes this worktree after a confirmation. |
+
+## Delete Worktrees
+
+Delete one worktree from its **⋯** menu, or check several rows and click **Delete N worktrees** in the bar that appears (**Clear** empties the selection). Any row can be deleted once its status check has finished. The confirmation gets stronger when work could be lost:
+
+| Confirmation | When | Button |
+|---|---|---|
+| "Delete worktree?" | Nothing would be lost. | **Delete worktree** |
+| "Discard N uncommitted changes?" | The worktree has uncommitted changes. They will be lost. | **Delete and discard** |
+| "Delete worktree with N unpushed commits?" or "…with unpushed local commits?" | The branch has commits that aren't on the default branch. The branch is kept, but this machine may be the only copy. | **Delete worktree** |
+| "Delete worktree with unknown status?" | Traycer couldn't check the worktree. | **Delete anyway** |
+| "Delete worktree" and the branch name, for example "Delete worktree fix-login?" | The worktree is **In use**. Anything working in it when the delete runs will be stopped. | **Stop all & delete** |
+| "Delete N worktrees?" | Several worktrees. Lists what they are, any uncommitted changes that will be lost, and every path. | **Delete worktrees** or **Delete and discard** |
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/settings-worktrees.mp4" label="Select finished worktrees and delete them together" />
+
+Deleting runs the worktree's [teardown script](/concepts/worktrees/scripts#how-teardown-runs), then removes the worktree. A single delete opens a progress dialog with **Run teardown script** and **Remove worktree** steps; **Show output** reveals the teardown output. Click **Run in background** to keep working while it runs; the row shows "Deleting…". Several deletes run in the background, with progress above the list. Traycer runs up to two deletes at a time; the rest wait as **Delete queued**.
+
+Deleting keeps the worktree's branch. The exception is a submodule checked out on its own branch for that worktree: that branch is deleted with the worktree, along with any commits that exist only there.
+
+<Warning>
+  Deleting a worktree closes every terminal open inside it, including terminals that are still running a command, even when the row isn't marked **In use**. Automatic cleanup skips such worktrees instead.
+</Warning>
+
+## Agent Worktrees
+
+An agent can create worktrees itself, for example when it splits work across [child agents](/guides/parallel-agents-on-worktrees) that each need their own checkout. **Agent worktrees** in the worktree toolbar decides what happens when an agent running on the selected host asks for one:
+
+| Setting | What happens |
+|---|---|
+| **Allow** (default) | The agent creates the worktree. |
+| **Ask first** | The agent's chat shows a question naming each repository and branch. **Allow** creates the worktree; **Don't allow**, or a typed answer, refuses it and passes your words to the agent. |
+| **Never** | The request is refused, and the agent keeps working in the workspace it was given. |
+
+With **Ask first**, an agent that another agent started, in a chat nobody has open, can't reach you, so its request is refused and it reports back to the agent that started it. Open the agent's chat before it asks if you want to approve worktrees for it, or ask the coordinating agent to create them.
+
+The setting applies from an agent's next request, including agents already running. It doesn't affect worktrees you create yourself, or agents started on a worktree that already exists. An agent can still run `git worktree add` in a shell; a refusal tells it not to.
+
+## Automatic Cleanup
+
+Automatic cleanup removes inactive, proven-safe Traycer-managed worktrees on the selected host without asking you to confirm each deletion. It is **off by default**, with a default inactivity threshold of **30 days**.
+
+The setting applies across that host's managed worktrees, not just the current Task. Configure each host separately. Cleanup runs on the host, so it does not require an open desktop window or Task.
+
+### Enable, Adjust, Or Disable
+
+1. Open **Settings › Worktrees** and select the host you want to manage.
+2. Click **Cleanup** in the worktree toolbar, then turn on **Automatic cleanup**.
+3. Under **Inactive for**, choose **7**, **14**, **30**, **60**, or **90 days**, or enter a whole number from **1 to 365**. A custom value saves when you leave the field or press Enter.
+4. Check the toolbar label and the popover's **Last checked** and **next check** times.
+
+Toggle and preset changes save immediately. To disable cleanup, open the same control and turn the switch off. The host rechecks the setting before removing worktrees; disabling it cannot undo a removal already underway or completed.
+
+If another window changes the setting while you edit, Traycer shows the current setting and asks you to apply your change again. If the control says the host does not support automatic cleanup, update that host first.
+
+### Which Worktrees Qualify?
+
+**Age alone never makes a worktree safe to delete.** It must pass both the inactivity threshold and current safety checks.
+
+| Eligible status | Required evidence |
+|---|---|
+| **Landed** | The current work is proven landed, for example through a merged PR matching the current commit or commits contained in the default branch. |
+| **At base commit** | No committed work has been added beyond the starting point, with no uncommitted changes or unproven owned-submodule work. |
+| **Unreferenced** | The checkout is clean, fully pushed, and referenced by no Task or agent. Automatic cleanup also requires a successful check that no PR exists, or proof that a merged PR covers the current commit. |
+
+Automatic cleanup leaves worktrees alone when they have uncommitted changes, unproven work, a detached HEAD, unreadable Git data, or orphaned metadata. It also skips worktrees with active agents, tasks, shells, terminals, or sessions holding them. It does not stop that activity to make a worktree eligible.
+
+Missing activity information or an inconclusive required PR check also prevents deletion. A green status in the list is therefore not, by itself, a promise that automatic cleanup will remove the worktree.
+
+Inactivity is measured from the most recent available creation time, Git reflog activity, and activity recorded by Traycer. Missing required activity records do not count as inactivity. A worktree can qualify while an idle Task still references it; the Task, conversations, and artifacts remain, but its saved worktree location becomes missing and must be replaced through the run-location picker.
+
+### When Cleanup Runs
+
+While enabled and ready, the host normally checks every **24–26 hours**. Enabling cleanup or changing its threshold schedules a check about **30 seconds** later; the threshold measures existing inactivity, not time since you enabled the setting. Large inventories may take several passes, with history showing **more to do next pass**.
+
+If the host is stopped or asleep, cleanup resumes when it runs again. Cleanup pauses when host credentials need attention, the signed-in account does not match the account that authorized the setting, or startup and activity checks cannot establish that worktrees are unused. The popover explains the pause. The host resumes checks when the condition clears.
+
+### What Gets Removed
+
+Cleanup removes the eligible worktree directories. The removal operation does not delete local or remote branch refs or clear saved Task and agent bindings. Those bindings can point to a missing checkout afterward; choose an available run location before continuing work. Tasks, conversations, and artifacts remain available.
+
+A configured teardown script can perform additional actions, so check its contents when deciding what cleanup will remove.
+
+<Warning>
+  There is no undo in Traycer. Keep anything you need outside a checkout before allowing it to be cleaned up, including ignored files: a clean Git status does not mean the directory contains nothing worth keeping.
+</Warning>
+
+The host checks eligibility before running a configured teardown script and checks again afterward, before removal. If the worktree becomes active or unsafe, or the policy changes, it is skipped. A teardown error or timeout is recorded but does not itself guarantee that removal stops; deletion can still proceed if the safety checks pass.
+
+### Cleanup History
+
+While automatic cleanup is enabled, open **Cleanup › History**. Runs are listed newest first for the selected host, each with a summary such as "2 removed, 1 skipped, 0 failed" and the threshold it used. Expand a run to see its worktrees, paths, branches, status at selection, and outcome explanations. Automatic-cleanup notifications also link to the relevant run.
+
+| Outcome | Meaning |
+|---|---|
+| **Removed** | The worktree was removed. |
+| **No longer eligible** | The worktree no longer qualified when cleanup reached it, or authorization changed. Read the explanation; skipping protects work. The run summary counts these as skipped. |
+| **Failed** | Cleanup could not remove the worktree. Read the reason and any teardown details. |
+| **Unconfirmed** | The host stopped before recording a confirmed outcome. Check the worktree rather than assuming it was removed or that removal failed. |
+| **Queued** | The run hasn't reached this worktree yet. |
+
+History records automatic runs only; manual deletion and [Sweep](/concepts/sweep) do not appear here. Records stay on the host and are retained for up to **90 days**, with a maximum of **200 runs**. Turning cleanup off hides the History link but does not immediately erase those records.

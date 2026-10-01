@@ -7,6 +7,7 @@ import {
   providerIdToGuiHarnessId,
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
+import { settingsRailRowClassName } from "@/components/settings/settings-rail-row";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
@@ -308,14 +309,7 @@ function innerClassName(): string {
 }
 
 function rowClassName(variant: ProviderListVariant, active: boolean): string {
-  if (variant === "settings") {
-    return cn(
-      "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-ui-sm transition-colors",
-      active
-        ? "bg-accent text-accent-foreground"
-        : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
-    );
-  }
+  if (variant === "settings") return settingsRailRowClassName(active);
   if (variant === "diorama") {
     return cn(
       "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-ui-xs",

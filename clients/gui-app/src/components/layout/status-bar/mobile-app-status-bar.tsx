@@ -28,14 +28,11 @@ import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
  * mount would still hold whichever chords it claimed while the surface that
  * is actually on screen has none.
  *
- * That cuts the other way too, and both of the strip's chords are shaped by
- * it. Unmounting here is not a quiet no-op: an unregister clears the slot, so
- * anything this subtree had claimed goes away with it and its rival's effect
- * does not re-run to take it back. Which is exactly why, on this viewport,
- * the strip claims `app.rate-limits.open` never (`ScopedAppStatusBar`) and
- * `app.resources.open` only when the mobile header is drawing no resource
- * monitor of its own - so what this component takes away is a surface, never
- * a keyboard shortcut the header is still offering.
+ * Unmounting here takes the strip's two chords with it, and that is safe
+ * because nothing else is offering them: the mobile header draws neither
+ * reading while the footer is switched on, and it follows the SETTING rather
+ * than this transient hide, so the readings never hop up into the header for
+ * the length of a keystroke. The chords come back with the strip.
  */
 export function MobileAppStatusBar(): ReactNode {
   const keyboardOpen = useSoftwareKeyboardOpen();

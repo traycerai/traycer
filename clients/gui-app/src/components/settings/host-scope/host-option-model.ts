@@ -28,6 +28,14 @@ import type {
 export type HostPickIntent = "view" | "bind" | "pin";
 
 /**
+ * What an Activate does, said where it is offered (Settings' Activate button
+ * and the account menu's Host rows). Not "tabs stay on the host they started
+ * on" - the active-host switch still reloads open tabs today (F2/F3/F7), so
+ * that promise would be false. This only says what IS true.
+ */
+export const ACTIVATE_HOST_HINT = "Switching changes where new work starts.";
+
+/**
  * A refusal the SURFACE holds against a host, keyed by `hostId` and carrying
  * the one word the row shows for it ("needs update").
  *
@@ -323,12 +331,8 @@ const RETAINED_BADGE_WORD: Record<FleetUpdateViewKind, string | null> = {
   unknown: null,
 };
 
-/**
- * Exported for the Overview's live update pill, which states a retained phase
- * in the picker's own words ("Last seen: updating") so the two surfaces cannot
- * describe one unreachable host differently.
- */
-export function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
+/** The picker's words for a retained phase ("Last seen: updating"). */
+function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
   return RETAINED_BADGE_WORD[kind];
 }
 

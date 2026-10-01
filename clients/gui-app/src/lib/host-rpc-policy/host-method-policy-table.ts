@@ -667,8 +667,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The countdown card's "Switch now" (the verb runs whatever step the host
+  // planned), on the same terms as `cancel`: it names the revision it expects,
+  // so two rapid presses are two requests.
+  "chat.fallback.proceed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The destination menu's candidate list, and the ONE fallback method that is
-  // not `fifo`. The other four mutate and name the revision they expect, so two
+  // not `fifo`. The other five mutate and name the revision they expect, so two
   // rapid answers must stay two ordered requests. This one is read-only - no
   // probe, no gauge write, no record write - so a later read supersedes an
   // earlier one and `LATEST_SCHEDULING` is the honest scheduling: a user who
@@ -1448,6 +1456,10 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: null,
   },
+  "epic.getChatRunSettingsBatch": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   // The terminal-agent RECORD read (TUI eviction), the sibling of
   // `epic.listChatRecords` above and polled at its exact cadence for its
   // exact reasons: the facts it serves are committed to the host's registry
@@ -2136,6 +2148,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
   "config.browser.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.worktrees.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.worktrees.set": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

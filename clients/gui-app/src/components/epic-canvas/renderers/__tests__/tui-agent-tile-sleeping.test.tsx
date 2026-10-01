@@ -303,6 +303,7 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", async (importOriginal) => {
       tileMocks.adoptOnly = input.adoptOnly;
       return {
         hostHasSession: tileMocks.hostHasSession,
+        hostSessionSettled: tileMocks.hostHasSession,
         hostSessionExited: false,
         handle: null,
         createIsError: false,

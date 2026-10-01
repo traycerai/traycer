@@ -1,0 +1,45 @@
+---
+title: "Undo a turn"
+description: "Restore the files and artifacts an assistant turn changed, or undo everything an agent changed."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/restore-checkpoint.mp4" label="Restore the files changed by an assistant turn" />
+
+A turn that changes files or artifacts shows a **Changes** card beneath the assistant response, for example "Changes · 3 files · 1 artifact". Its **Undo** button opens **Undo this turn?**.
+
+Restore returns those files to their state at the start of the turn. If later turns changed the same files, those later changes are reverted too.
+
+1. Click **Undo** on the Changes card.
+2. Review the files listed in the dialog. A file that can't be restored is marked **Skipped**; hover it to see why.
+3. Leave **Also revert N artifacts** checked to restore the turn's artifacts as well, or clear it to restore files only.
+4. Click **Restore** and wait for progress to finish.
+5. Check the result toast for restored, skipped, and failed counts. **Show details** lists any files that were skipped or failed.
+
+Undo leaves the conversation as it is; no messages are removed. Check [Git Diff](/panels/git-diff) afterward, since skipped or failed files may still need attention.
+
+To go back to an earlier message and send something different instead, edit that message. See [Message actions](/panels/agents#message-actions).
+
+## When Undo Is Unavailable
+
+The **Undo** button is disabled, and its tooltip says why, when:
+
+- you are not the agent's owner. Only the owner can restore files.
+- you are on a different device. Changes can be restored only on the host that captured them.
+- a turn is running. Wait for it to finish, or stop it, first.
+- the turn has nothing left to restore.
+
+## Undo All Of An Agent's Changes
+
+The **Files changed** panel above the composer lists every file the agent has changed, with its line counts.
+
+| Control          | What it does                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Review all**   | Opens every changed file in one diff view. It is hidden while a turn is running.                                                      |
+| **Undo all**     | Asks **Undo all changes?**, then reverts every changed file to its state before this agent first edited it. Artifacts are included unless you clear the checkbox. |
+| Per-file undo    | Hover a file and click its undo icon to revert only that file. It does not ask for confirmation.                                     |
+
+The same limits apply: only the agent's owner can revert, only on the host that captured the changes, and not while a turn is running.
+
+To fold the panel into a small chip, set **Files changed** in [Layout](/settings/layout) › **Composer**.

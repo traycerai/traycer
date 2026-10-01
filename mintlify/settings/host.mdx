@@ -1,0 +1,165 @@
+---
+title: "Overview"
+description: "Check a host's health, update it, manage the data and ports it holds, and see how it is installed."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+**Settings › Host › Overview** is one page about one host: the host chosen in the [host picker](/settings#host-picker) at the top of the Host group. The same page describes a host on this computer and a host on another machine.
+
+Choosing a host in the picker only changes what Settings shows. When it isn't your active host, the sidebar says "Viewing — the active host is &lt;name&gt;." To make it the active host, click **Activate** in the header. See [Hosts](/concepts/hosts#the-active-host).
+
+The page has a header, a notices strip and four tabs: **Installation**, **Updates**, **Data** and **Ports**. It opens on **Installation**.
+
+## Header
+
+The header stays at the top on every tab.
+
+| Item | What it shows |
+|---|---|
+| Name | The host's name. Click the pencil (**Edit name**) to rename it. |
+| **Local** / **Remote** | Whether the host runs on this computer or on another machine. |
+| **Activate** / **Active** | **Activate** makes this host the active host. Its tooltip reads "Switching changes where new work starts." Once it is the active host, the button becomes an **Active** tag. |
+| Health | A status word, such as **Online**, **Offline** or **Restarting…**, with a detail such as when the host was last seen. See [Host Status](/reference/troubleshooting#host-status). |
+| Platform and version | The host's operating system, architecture and version. |
+| Work chip | What is running on the host, such as "2 agents · 1 terminal working", or **Idle**. Check it before you restart. |
+
+The **⋯** menu holds **Restart**, **Run doctor**, **Reset name to default** (only when the host has a custom name) and **Copy host ID**.
+
+If this computer's host isn't running, the header offers **Run doctor**. After you remove Traycer from this computer, it also offers **Reinstall Traycer**.
+
+## Notices
+
+Between the header and the tabs, the page shows what is happening to the host right now. It shows nothing when the host is reachable and no update is in progress.
+
+| Notice | What it means |
+|---|---|
+| Offline notice | The host can't be reached, for example "Can't reach build-box — last seen 3h ago. Auto-update settings still apply at its next check-in; everything else here needs a connection." |
+| Update card | An update in progress: downloading, installing, restarting or verifying. It also reports a wait, such as "Update waits for 2 sessions to finish", a failure, or "Updated to v1.5.1" when it is done. Its button is **Restart**, **Force update…** or **Force restart…**. |
+| Waiting for work | An update that is waiting for running work, such as "Waiting for 2 agents", with **Apply now — ends 2 agents**. |
+
+**Force update…**, **Force restart…** and **Apply now** end the running agents and terminals on that host. Each asks you to confirm and names what it will end.
+
+## Installation
+
+| Group | What it shows |
+|---|---|
+| **About this host** | **Host ID** (with a copy button), **Added to account**, **Last seen**, **Last reported version** and **Platform**. These come from your account, so they show even when the host is offline. |
+| **Install record** | How the host was installed: **Version**, **Build**, **Source**, **Installed**, **Verification**, **SHA-256** and **Platform**. |
+| **OS service** | Whether the host is registered to start when you log in, with **Re-register** and **Deregister**. |
+| **Command-line tools** | This computer only. Appears when the `traycer` command you installed with a package manager (such as Homebrew, npm or winget) is older than the one bundled with the app. It shows the upgrade command to copy, and the **Installation** tab shows a dot. |
+| **Danger zone** | **Remove Traycer from this computer** for this computer's host, or **Remove from account** for a host on another machine. |
+
+The install record and OS service are read from the host, so they need a connection to it.
+
+### OS Service
+
+The OS service starts the host when you log in, so agents keep running after you close the app.
+
+| Platform | How the host is registered |
+|---|---|
+| macOS | A login item that Traycer Desktop registers and manages. The page reads "Registered and managed by Traycer Desktop, which owns this host's service registration." A host installed with the CLI alone uses a launch agent instead. |
+| Linux | A systemd user service. Traycer also enables lingering, so the host keeps running after you log out. |
+| Windows | A per-user scheduled task that starts the host at logon. |
+
+- **Re-register** registers the service again. It restarts the host.
+- **Deregister** stops the host and removes the registration. Nothing is uninstalled and no data is deleted, but Traycer can't start the host again from Settings. To bring it back, run `traycer host service install` on that machine.
+
+When Traycer Desktop manages the service, these buttons aren't offered.
+
+### Danger Zone
+
+**Remove Traycer from this computer** stops and removes Traycer's background host and services. Click **Remove Traycer**, then confirm in "Remove Traycer from this computer?". Your agents, history and credentials stay on this computer, and the host won't reinstall itself. When it finishes, the row reads **Traycer removed** with **Quit Traycer**. To finish uninstalling, see [Uninstall](/install#uninstall).
+
+If the background service is still registered afterwards, the row reads **Traycer removal incomplete** with **Try again**. If Traycer couldn't check, it reads **Traycer removal unverified**; run `traycer host service status` in a terminal to see what is left.
+
+**Remove from account** removes a host on another machine from your host list. Nothing on that machine changes: Traycer stays installed and no agents, history or credentials are deleted. The host won't rejoin on its own, and signing in again on that machine won't bring it back; you have to set it up again there. Its host ID is kept, so setting it up again restores the same name and settings.
+
+## Updates
+
+### Version
+
+The first card shows the version the host is running, with one tag:
+
+| Tag | Meaning |
+|---|---|
+| **Latest** | The host is up to date. |
+| **Update available** | A newer version can be installed. |
+| **Checking…** | Traycer is checking for updates. |
+| **Restart to finish** | An update is installed and the host needs a restart to use it. |
+| **Needs newer CLI tools** | The update needs a newer version of Traycer's command-line tools first. The card shows what to do. |
+| **Last reported** | The host is offline, so this is the last version it reported. |
+
+Under the version, a sentence gives the answer, such as "v1.5.1 is available." Click **Update now** to install it, or **Check now** to check again. If the check fails, the card reads "Couldn't check for updates on &lt;host&gt;."
+
+While an update is in progress, the card shows only the version, and the update card above the tabs reports progress.
+
+**Needs newer CLI tools.** In place of **Update now**, the card gives the fix: a command to copy and run on that machine (**Copy command**), the steps to update Traycer Desktop, or **Show installation help**. While the page is open it checks again every 30 seconds, and **Update now** appears once the host accepts the update.
+
+### Auto-Update
+
+The **Auto-update** switch installs new host versions for you. They are "Applied on this host's next check-in — within ~10 minutes, and only when no sessions are running." The setting is stored in your account, so you can change it while the host is offline. An **Update pending** tag shows while an update waits to be applied.
+
+When an update is waiting for running work, the notices strip shows the wait. The start page also shows a "Traycer host update available" banner while a host update is pending, with **Update now** or **Restart host**. Dismissing the banner reminds you later.
+
+If you restart or update a host that is busy, a **Host is busy** dialog names the work that is still running. Choose **Defer** to wait, or **Force restart** / **Force update** to end that work now.
+
+### Pick A Different Version
+
+**Pick a different version** installs a specific host version: a release candidate, a hotfix, or an earlier release.
+
+- Check **Include release candidates** to list release candidates too.
+- Click **Install** next to a version.
+- A version too old to open this device's chat stores shows **Install anyway**. It asks "Install v&lt;version&gt; and lose access to newer chats?", because those chats can't be opened until you update the host again.
+
+## Data
+
+The Data tab covers what this host keeps on its disk. It needs a connection to the host.
+
+### Import & Migration
+
+| Row | What it does |
+|---|---|
+| **Import your work** | **Import** brings work you started in Claude Code, Codex or OpenCode into Traycer as Tasks. See [First run and importing](/first-run). |
+| **Data migration** | **Re-attempt migration** retries moving this host's local Tasks to the cloud. |
+
+### Version History
+
+Version history keeps restorable versions of artifact edits made on this host. See [Version history and recovery](/panels/artifacts/version-history).
+
+| Row | What it does |
+|---|---|
+| **Capture versions** | Turns version capture on or off for this host. Turning it off asks "Turn off version history?"; edits made while it is off can't be recovered. |
+| **Retention** | Limits per artifact: **Days**, **Versions** and **MB**. History is pruned when any limit is reached. Click **Save retention**. Tightening a limit asks "Tighten retention?" and prunes older versions right away. |
+| **Clear version history** | **Clear version history…** removes every saved version from this host and from the cloud. Undo for agent turns isn't affected. |
+
+### File Edit Snapshots
+
+**File edit snapshots** are the copies of files taken before an agent edits them, which [Undo a turn](/panels/agents/undo-a-turn) restores, plus cached long plan content. They stay on this host and are never synced. The row shows how much space they use.
+
+**Clear snapshots…** deletes them. Conversation history stays, but Undo is disabled for past turns on that host.
+
+## Ports
+
+The Ports tab lists the port forwards on this host. **Forwards on this host** lists forwards this host's agents created, with **Stop** or **Clear**. **Ports other machines hold here** lists ports that other machines' forwards use on this host, with **Cut**. **Refresh** reads the lists again.
+
+When anything is forwarded or held, the **Ports** tab shows a count. See [Port forwarding](/concepts/hosts/port-forwarding).
+
+## Doctor
+
+**⋯ › Run doctor** opens the **Host doctor** sheet. It lists any issues it finds, each with a fix button where Traycer can apply one:
+
+| Button | What it does |
+|---|---|
+| **Install host** | Installs the host when it is missing. |
+| **Register service** | Registers the OS service. |
+| **Start host** | Starts a registered host that isn't running. |
+| **Restart host** | Restarts the host. |
+| **Show logs** | Shows the host's recent log. |
+| **Free port + restart** | Asks the process holding the host's port to exit, then restarts the host. It confirms first. |
+
+For an issue fixed from a terminal, the card offers **Open in Terminal** on this computer, or **Copy command** for a host on another machine. Click **Re-run Doctor** to check again. Common issues are listed in [Troubleshooting](/reference/troubleshooting#doctor).
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/settings-host-doctor.mp4" label="Run host diagnostics and fix an issue" />
+
+Host environment variables live in [Shell](/settings/shell). Log levels live in [Diagnostics](/settings/host-diagnostics).

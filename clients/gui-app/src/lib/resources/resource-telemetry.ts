@@ -260,6 +260,10 @@ export function createResourceTelemetrySampler(
     const firstTimer = window.setTimeout(() => {
       sampleOnce();
     }, RESOURCE_FIRST_SAMPLE_DELAY_MS);
+    // Plain interval: this sampler exists to catch heap growth over long
+    // sessions, including ones that sit minimised. A 15-minute tick is
+    // cheap, and `fireOnShow` would cluster samples on restore and skew
+    // `heapSlopeMbPerHour`.
     const repeatTimer = window.setInterval(() => {
       sampleOnce();
     }, RESOURCE_SAMPLE_INTERVAL_MS);

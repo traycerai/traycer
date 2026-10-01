@@ -1,0 +1,118 @@
+---
+title: "Browsers"
+description: "Open web pages inside Traycer, watch and guide agents that use the in-app browser, and view browser tabs that run on other machines."
+keywords: ['browser', 'in-app browser', 'browser tab', 'browsers panel', 'website sessions', 'picture in picture', 'annotate', 'driven by', 'open natively']
+---
+
+Traycer has its own browser. Browser tabs open as tiles on the canvas, next to your agents, terminals and artifacts. Agents use the same browser, so you can watch what they do and step in.
+
+The **Browsers** panel lists the browser tabs in the open Task.
+
+## Open A Browser Tab
+
+| Where | How |
+|---|---|
+| **Browsers** panel | Click **Add browser** in the panel header, or in the empty panel. |
+| Pane opener | Press ⌘T / Ctrl+T, or click into an empty group. Choose **Browser**, then **New browser**. See [Pane opener](/panels#pane-opener). |
+| Pasting an address | Paste an address that starts with `http://` or `https://` into the pane opener, then choose **Open** followed by the address. |
+| Links | Links you click in chats, artifacts and terminals open in the in-app browser. To send them to your default browser instead, change **Open links** in [Opening behavior](/settings/opening-behavior). |
+| Start page | ⌘⌥B / Ctrl+Alt+B opens a browser tab in the start page panel, or choose **Browser** in the panel's **New tab** chooser. See [Start page panel](/panels#start-page-panel). |
+
+A new tab starts on a blank page. Type in the address bar ("Search or enter a website address"). Search terms go to your **Default search engine**. Under **Local servers**, the page also lists dev servers that terminals have printed, so you can open one with a click.
+
+New tabs open in a new split by default. To open them in the current pane or in a floating picture-in-picture window, change **Open browser tabs** in [Browser settings](/settings/browser#browser-placement).
+
+## The Browsers Panel
+
+The panel lists the Task's browser tabs on one host. By default that is the Task's host.
+
+| Control | What it does |
+|---|---|
+| **Search browsers** | Filter the list by title or address. |
+| **Add browser** | Open a new browser tab. |
+| **Filter browsers by host** | Under **Show browsers from**, choose **Follow task host** or a specific host. |
+
+Click a row to preview the tab. Double-click it, or press Shift+Enter, to keep it open. You can also drag a row onto the canvas. The row's close button closes the browser tab.
+
+A row can show one of these icons:
+
+| Icon | Meaning |
+|---|---|
+| Robot, "Driven by …" | An agent is using this tab. Click the icon to open that agent's chat. |
+| Moon, "Browser asleep" | The tab isn't running. It keeps its address and starts again when you open it. |
+| Warning, "Browser failed. Open to recover." | Open the tab to recover it. |
+
+Browser tabs belong to the Task and are kept when the app or the host restarts.
+
+When the panel has nothing to show, it reads "No browsers yet." If the Task has browser tabs on another host, it reads "No browsers on this host." and offers a button for each of those hosts, such as "2 browsers on …". Click one to switch the panel to that host.
+
+## The Tab Toolbar
+
+| Control | What it does |
+|---|---|
+| **Back**, **Forward**, **Reload** | Move through the page history, or reload. **Stop** appears while a page loads. |
+| Address bar | Type an address or search terms. ⌘L / Ctrl+L focuses it. |
+| **Open in default browser** | Open the page in your computer's default browser. The button appears when you hover the address bar. |
+| **Responsive viewport** | Size the page like a device. Pick a preset such as **Pixel 7** or **Desktop**, or type a width and height. You can also **Lock aspect ratio**, **Rotate viewport**, change the preview scale, and **Reset to Fit**. A new tab fits the pane. |
+| **Private session** | A mask icon shown only in a private session. See [Private Sessions](#private-sessions). |
+| **Annotate page** | Mark up the page and send it to an agent. See [Annotate A Page](#annotate-a-page). |
+| **Convert to picture-in-picture** | Move the tab into a small floating window over the canvas. |
+| **More browser controls** | **Zoom** the page, view **Site information**, **Clear cookies for** the current site, and **Open DevTools**. |
+
+**Clear cookies for** a site asks you to confirm. You are signed out of that site in Traycer, everywhere your account is signed in. Other sites are untouched. Private sessions don't offer it.
+
+### Annotate A Page
+
+Click **Annotate page**, then **Select** a part of the page or **Draw** on it. Describe the change you want, then click **Send to chat**. The annotation goes to an agent's composer, where you can add to it before you send. By default it goes to the agent that last used this browser. If no agent has, it goes to the composer you used last.
+
+Click the button again, now labeled **Stop annotating**, to finish.
+
+## Website Sessions
+
+Browser tabs share one signed-in browser profile, so a site you sign in to stays signed in, including in the tabs agents use.
+
+In [Browser settings](/settings/browser#website-sessions) you can:
+
+- Stop saving website sessions on this computer.
+- Review and remove saved sessions. Saved sessions are shared with your connected Traycer hosts.
+- Bring in sign-ins from another browser or a cookie file, so you don't have to sign in again.
+
+The **Browser sign-ins** guide in [Getting started](/settings/getting-started) walks you through bringing in your sign-ins.
+
+### Private Sessions
+
+A private session has its own cookies. It starts signed out, shares no cookies with your other tabs, and everything in it is discarded when the session closes. Its toolbar shows the **Private session** mask icon; click it for the details.
+
+Agents open a private session when you ask them for privacy or isolation.
+
+## Agents In The Browser
+
+When **Let agents use the in-app browser** is on in [Browser settings](/settings/browser), agents get Traycer's browser as a tool. It is on by default, and it is set per host. When it's off, agents use their own browser tooling instead.
+
+- **Watch an agent.** A tab an agent is using shows the robot icon in the Browsers panel, with the tooltip "Driven by" and the agent's name. Click the row to watch the tab, or click the icon to open the agent's chat.
+- **Where agent tabs go.** Tabs an agent opens stay in the Browsers panel without opening on the canvas. To open them like any other browser tab, set **Agent-opened tabs** to **Like any browser tile** in [Browser settings](/settings/browser#agent-opened-tabs).
+- **Risky actions.** Before an action that is visible to others, destructive, paid, or hard to reverse, such as posting a form publicly, sending a message, paying or deleting, an agent asks you to confirm. It waits until you confirm or cancel. Agents on the Terminal interface can't ask, so these requests are refused for them.
+
+## Tabs On Another Machine
+
+A browser tab runs on the host that opened it. When that host is this computer, the tab runs in the desktop app itself. When it runs on another machine, Traycer streams the page into the tile.
+
+- A badge in the toolbar shows the stream's state: **Live**, **Connecting**, **Stale**, or **Disconnected**.
+- Click the page to control it. The toolbar shows **Controlling**; click **Release** to give the keyboard back to Traycer.
+- A tab that is open in the Traycer desktop app on another machine can't be streamed. The tile shows **Open natively** and names the machine it is open on.
+- In the web app and the mobile app, streamed tabs are **View only**.
+
+## Shortcuts In A Browser Tile
+
+While a browser tile has keyboard focus, these shortcuts act on the browser instead of Traycer:
+
+| Shortcut | What it does |
+|---|---|
+| ⌘W / Ctrl+W | Close the browser tab. |
+| ⌘T / Ctrl+T | Open a new browser tab next to this one. |
+| ⌘L / Ctrl+L | Focus the address bar. |
+| ⌘= / ⌘- / ⌘0 (Ctrl+= / Ctrl+- / Ctrl+0) | Zoom the page instead of the app. |
+
+In a tab streamed from another machine, only ⌘L / Ctrl+L is taken over; ⌘W and ⌘T go to the page.
+
+Every other key goes to the page, except a few Traycer shortcuts that keep working: the command palette, **Reopen closed tab**, **Close active tab**, and the next and previous tab shortcuts. If you rebind one of these, your new shortcut is the one that works. [Keybindings](/settings/keybindings) warns you when a shortcut you choose would be taken over by a focused browser tile.

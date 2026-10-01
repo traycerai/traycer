@@ -11,6 +11,11 @@ import type { Mock } from "vitest";
 import type { ReactNode } from "react";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
+import {
+  OpenSubagentAsChatContext,
+  queryOpenAsChatControl,
+  type OpenSubagentAsChat,
+} from "@/components/chat/segments/subagent-open-as-chat";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type {
@@ -19,6 +24,7 @@ import type {
   ChatMessageStoppedInfo,
   ApprovalSegment,
   MessageSegment,
+  SubagentSegment as SubagentSegmentModel,
   ToolSegment,
 } from "@/stores/composer/chat-store";
 
@@ -98,6 +104,33 @@ const ERROR_SEGMENT: MessageSegment = {
   failure: null,
 };
 
+const PROMOTED_SUBAGENT_SEGMENT: SubagentSegmentModel = {
+  id: "subagent-from-transcript",
+  kind: "subagent",
+  name: "reviewer",
+  agentType: null,
+  task: "Review the implementation",
+  progressUpdates: [],
+  result: null,
+  isStreaming: false,
+  endState: null,
+  stopped: false,
+  startedAt: null,
+  durationMs: null,
+  spawnToolCallId: null,
+  parentId: null,
+  workflowMeta: null,
+  children: [
+    {
+      id: "subagent-transcript-text",
+      kind: "text",
+      markdown: "Child transcript",
+      isStreaming: false,
+      parentId: "subagent-from-transcript",
+    },
+  ],
+};
+
 const STOPPED: ChatMessageStoppedInfo = {
   stoppedAt: 1_700_000_000_000,
   reason: "Stop requested by owner.",
@@ -166,6 +199,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     nextStepActions: null,
     forkAction: null,
     interviewDeliveryRetry: null,
+    routingSettledNoticeId: null,
   };
 }
 
@@ -220,6 +254,35 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     const footer = screen.getByTestId("assistant-elapsed-footer");
     expect(footer.textContent).toMatch(/ for 5s$/);
     expect(footer.textContent).not.toContain("Resumed · no response");
+  });
+});
+
+describe("AssistantMessageBody promoted subagent controls", () => {
+  it("opens by the transcript id and exposes that id's control for focus restoration", () => {
+    const open = vi.fn<OpenSubagentAsChat>();
+    const { container } = render(
+      <OpenSubagentAsChatContext.Provider value={open}>
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({ segments: [PROMOTED_SUBAGENT_SEGMENT] })}
+        />
+      </OpenSubagentAsChatContext.Provider>,
+    );
+
+    const button = screen.getByRole("button", { name: "Open as chat" });
+    fireEvent.click(button);
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect({
+      openedId: open.mock.calls[0]?.[0],
+      focusControl: queryOpenAsChatControl(
+        container,
+        PROMOTED_SUBAGENT_SEGMENT.id,
+      ),
+    }).toEqual({
+      openedId: PROMOTED_SUBAGENT_SEGMENT.id,
+      focusControl: button,
+    });
   });
 });
 

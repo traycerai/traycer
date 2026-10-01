@@ -11,6 +11,7 @@ import {
   type SkillsListData,
 } from "@/hooks/providers/native-response-map";
 import { nativeSkillsListParams } from "@/lib/query-keys/providers-native-query-keys";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /** Matches this query's `staleTime`: refresh exactly when it goes stale. */
 const SKILLS_LIST_REFRESH_MS = 30_000;
@@ -59,11 +60,13 @@ export function useProvidersSkillsList(args: {
   const enabled = args.enabled;
   useEffect(() => {
     if (!enabled || !readiness.isReady) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState === "hidden") return;
-      void refetch();
-    }, SKILLS_LIST_REFRESH_MS);
-    return () => clearInterval(timer);
+    return startVisibleInterval({
+      tick: () => {
+        void refetch();
+      },
+      intervalMs: SKILLS_LIST_REFRESH_MS,
+      fireOnShow: true,
+    });
   }, [enabled, readiness.isReady, refetch]);
 
   return query;

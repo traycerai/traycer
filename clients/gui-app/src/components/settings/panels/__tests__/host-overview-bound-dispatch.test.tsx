@@ -85,7 +85,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import type {
   HostInstallRecord,
@@ -219,8 +219,8 @@ function renderPanel(): RenderResult & { readonly queryClient: QueryClient } {
 }
 
 function attempt(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "a1",
@@ -244,7 +244,7 @@ function attempt(
 /** The (a)/(b)/(c) sequence's three `host.status` frames, by phase. */
 function sequencePinOperation(
   phase: "idle" | "preparing" | "parked",
-): HostStatusUpdateOperation {
+): HostStatusUpdateOperationV2 {
   if (phase === "idle") return { kind: "none" };
   if (phase === "preparing") return attempt({});
   return attempt({
@@ -258,7 +258,7 @@ function sequencePinOperation(
 /** Pin (d)'s three `host.status` frames: idle, a stale a0, then a1 parked. */
 function ackRaceOperation(
   phase: "idle" | "a0" | "a1-parked",
-): HostStatusUpdateOperation {
+): HostStatusUpdateOperationV2 {
   if (phase === "idle") return { kind: "none" };
   if (phase === "a0") return attempt({ attemptId: "a0", phase: "preparing" });
   return attempt({
@@ -394,6 +394,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     // (a), first half: the preparing frames release the accepted latch and
@@ -506,6 +507,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await waitFor(() => {
@@ -615,6 +617,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await waitFor(() => {
@@ -760,6 +763,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
       defaultOptions: { queries: { retry: false } },
     });
     const firstMount = render(panelElement(queryClient));
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     // Dispatched, still pending — `host.update.install` has not answered.
@@ -855,7 +859,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
     // is armed, seen, and the only thing standing between this page and an
     // auto-open is the clear under test.
     let phase: "idle" | "preparing" | "quiet" | "parked" = "idle";
-    const statusOperation = (): HostStatusUpdateOperation => {
+    const statusOperation = (): HostStatusUpdateOperationV2 => {
       if (phase === "quiet") return { kind: "none" };
       return sequencePinOperation(phase);
     };
@@ -903,6 +907,7 @@ describe("HostOverviewPanel — an accepted host-service deregister clears the d
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
     await waitFor(() => {
@@ -1112,8 +1117,15 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
     // No auto-open and no bound dispatch reachable: `updates.activate` /
     // `updates.continueAttempt` are both `null` for this host, and this
     // legacy-facts park carries no `attemptId` at all, so
-    // `deriveAttemptControl` returns `null` regardless.
-    await screen.findByText("v1.2.1 is installed — restart host to finish.");
+    // `deriveAttemptControl` returns `null` regardless. T2's notices strip
+    // carries the debt sentence while it is in-flight - the version card
+    // withholds its own answer for any in-flight kind (see
+    // host-overview-notices.test.tsx's duplication regression).
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("host-overview-operation-card").textContent,
+      ).toContain("Update installed — restart host to finish");
+    });
     expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
 
     fireEvent.click(screen.getByTestId("host-overview-operation-restart"));
@@ -1579,6 +1591,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
+      await selectHostOverviewTab("updates");
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Update now" }),
@@ -2080,6 +2093,7 @@ describe("update dispatch onError — a transport drop keeps the accepted latch 
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       const panel = renderPanel();
+      await selectHostOverviewTab("updates");
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Update now" }),
@@ -2401,6 +2415,7 @@ describe("HostOverviewPanel — reason vocabularies are partitioned per wire fie
       hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel();
+      await selectHostOverviewTab("updates");
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Update now" }),

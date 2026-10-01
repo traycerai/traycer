@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
@@ -6,7 +6,12 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
 
 /** Groups shaped like the real ones; the section id is incidental. */
 const GROUPS = defineSettingsSection("appearance", {
-  page: { label: "Appearance", description: "Page.", keywords: ["page"] },
+  page: {
+    availableWhen: alwaysAvailable,
+    label: "Appearance",
+    description: "Page.",
+    keywords: ["page"],
+  },
   general: {
     kind: "group",
     search: { contributesTo: "page" },
@@ -171,6 +176,40 @@ describe("SettingsGroup", () => {
     });
     expect(anchored?.contains(heading)).toBe(false);
     expect(anchored?.textContent).toBe("row");
+  });
+
+  it("renders titleStatus beside the heading when given, and omits it otherwise", () => {
+    render(
+      <SettingsGroup
+        group={GROUPS.definitions.general}
+        showTitle
+        titleStatus={<span data-testid="status-chip">Experimental</span>}
+        tone="default"
+        dataTestId="settings-group-general-status"
+        fill={false}
+      >
+        <div>row</div>
+      </SettingsGroup>,
+    );
+
+    const heading = screen.getByRole("heading", { name: /General/ });
+    expect(within(heading).getByTestId("status-chip")).not.toBeNull();
+
+    cleanup();
+
+    render(
+      <SettingsGroup
+        group={GROUPS.definitions.general}
+        showTitle
+        tone="default"
+        dataTestId="settings-group-general-no-status"
+        fill={false}
+      >
+        <div>row</div>
+      </SettingsGroup>,
+    );
+
+    expect(screen.queryByTestId("status-chip")).toBeNull();
   });
 
   it("omits the group heading when the page title already names the card", () => {

@@ -20,6 +20,7 @@ import {
 import {
   activityChildLabel,
   hidesSoleReasoningHeader,
+  isReasoningOnlyRun,
   type ActivityGroupModel,
   type ActivityGroupDetailSegment,
 } from "@/components/chat/chat-activity-groups";
@@ -27,6 +28,8 @@ import { distinctRenderKeys } from "@/components/chat/segment-render-keys";
 import { LiveActivityPromoteContext } from "./live-activity-promote-context";
 import { Shimmer } from "@/components/ui/shimmer";
 import { cn } from "@/lib/utils";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useRegionValue } from "@/lib/layout-overrides";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
 import {
   useActivityGroupEverHeaded,
@@ -45,9 +48,17 @@ import { FileChangeSegment } from "./file-change-segment";
 import { LiveActivityWindow } from "./live-activity-window";
 import { useLiveActivityWindowMounted } from "./live-activity-window-mount";
 import { ReasoningSegment } from "./reasoning-segment";
+import { ThinkingTokensEstimate } from "@/components/chat/thinking-tokens-estimate";
 import { LiveElapsed } from "./segment-elapsed";
 import { SubagentSegment } from "./subagent-segment";
 import { ToolSegment } from "./tool-segment";
+
+/** Whether the group's only segment is a reasoning block still streaming. */
+function soleSegmentIsStreaming(group: ActivityGroupModel): boolean {
+  if (group.segments.length !== 1) return false;
+  const sole = group.segments[0];
+  return sole.kind === "reasoning" && sole.isStreaming;
+}
 
 interface ActivityGroupSegmentProps {
   readonly group: ActivityGroupModel;
@@ -60,7 +71,18 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
     () => deriveActivityGroupCollapsibleKey(tileInstanceId, group.id),
     [group.id, tileInstanceId],
   );
-  const userOpen = useActivityGroupOpen(group.id);
+  // Which Chat setting this row belongs to: a run of reasoning alone is
+  // Thinking's, anything with a tool call in it is Tool activity's. The
+  // setting is how an untouched row opens; the reader's own click wins.
+  const layoutRegion = isReasoningOnlyRun(group.segments)
+    ? "thinking"
+    : "toolActivity";
+  const defaultOpen = useRegionValue(layoutRegion, "size") === "full";
+  const { ref: regionRef } = useLayoutRegion({
+    regionId: layoutRegion,
+    instanceId: group.id,
+  });
+  const userOpen = useActivityGroupOpen(group.id, defaultOpen);
   const summaryFindUnitId = chatFindActivityGroupSummaryUnitId(group.id);
   const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
   const open = userOpen || findForcedOpen;
@@ -118,6 +140,11 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   const soleReasoningId = shapeHeaderless ? group.segments[0].id : null;
   const everHeaded = useActivityGroupEverHeaded(soleReasoningId);
   const soleReasoningHeaderless = shapeHeaderless && !everHeaded;
+  // When the lone reasoning block drops its header, THIS label is its
+  // streaming "Thinking" label verbatim, so the thinking-token estimate is
+  // drawn here instead of on the (visually hidden) block header.
+  const showsThinkingTokens =
+    soleReasoningHeaderless && group.isActive && soleSegmentIsStreaming(group);
   // The children only EXIST in two containers: the bounded live window, and
   // `CollapsibleContent`, which unmounts its subtree when closed. A settled,
   // collapsed group renders neither - so a shrink that happens before anyone
@@ -208,6 +235,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger
+        ref={regionRef}
         data-find-include="true"
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}
@@ -237,14 +265,15 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
             {group.label}
           </span>
         )}
+        {showsThinkingTokens ? <ThinkingTokensEstimate /> : null}
         {group.isActive && group.activeStartedAt !== null ? (
           <span data-find-skip className="contents">
             <LiveElapsed startedAt={group.activeStartedAt} />
           </span>
         ) : null}
         {/* Trailing, and revealed only on hover/focus/open. A leading caret
-            beside the Box icon gave every collapsed run two glyphs before its
-            first word, so the row read as decorated rather than as a title. */}
+          beside the Box icon gave every collapsed run two glyphs before its
+          first word, so the row read as decorated rather than as a title. */}
         <ChevronRight
           className={cn(
             "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
@@ -457,6 +486,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
       return (
         <SubagentSegment
           id={segment.id}
+          cardId={segment.id}
           name={segment.name}
           agentType={segment.agentType}
           task={segment.task}

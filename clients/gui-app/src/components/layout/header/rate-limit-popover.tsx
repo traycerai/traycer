@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   useCallback,
   useEffect,
@@ -95,11 +96,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
-import {
-  Analytics,
-  AnalyticsEvent,
-  trackSettingChanged,
-} from "@/lib/analytics";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   isRateLimitProfileFetchEligible,
@@ -131,9 +128,11 @@ import {
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
 import {
-  useLayoutStore,
-  useStatusBarShown,
-} from "@/stores/settings/layout-store";
+  statusBarShownProfileIds,
+  type StatusBarShownProfiles,
+} from "@/lib/layout/layout-arrangement";
+import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -460,10 +459,11 @@ export function RateLimitPopover({
   readonly side: "top" | "bottom";
   readonly align: "start" | "end";
 }): ReactNode {
+  const placement = useColumnOverlayPlacement("foot");
   return (
     <PopoverContent
-      side={side}
-      align={align}
+      side={placement?.side ?? side}
+      align={placement?.align ?? align}
       sideOffset={8}
       collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
@@ -1011,11 +1011,11 @@ function RateLimitHostPickerRow({
             // implementation, shared with the provider CTAs.
             carryViewedHostIntoSettingsScope(scope.hostId);
             // Named rather than left null: an Overview already open on
-            // another tab comes back to Status, as every host link does.
+            // another tab comes back to Updates, as every host link does.
             openSettings({
               section: "host",
               resetToGeneral: false,
-              tab: "status",
+              tab: "updates",
               draft: null,
               hostId: null,
             });
@@ -1465,9 +1465,7 @@ function RateLimitRefreshAllButton({
   // Every httpFetch provider resolves to the exact same lane options (the
   // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
   // provider id) - reusing the first one's is safe without the "verify every
-  // request shares one lane" check `useHeaderRateLimitBars` needs (that hook's
-  // provider list isn't pre-filtered to a single lane the way `httpFetchProviders`
-  // is here). Passing this through (rather than `null`) matters:
+  // request shares one lane" check a mixed-lane batch would need. Passing this through (rather than `null`) matters:
   // `RateLimitProviderBlock`'s own query for these same providers sets
   // `retry: false`, and TanStack keys retry/staleTime/refetchOnMount per query
   // key - an unset `options` here would silently inherit the global
@@ -1842,27 +1840,24 @@ function ProfileRateLimitProviderBlock({
   // highlighted as "on the strip" while its eye stays off, since nothing
   // was asked for and flipping the eye is how to ask.
   //
-  // Neither means anything while the strip is not on screen (header
-  // placement, or a mobile viewport with the footer off): there is no segment
+  // Neither means anything while the reading is hidden: there is no segment
   // for the highlight to point at and none for the eye to govern, so both go
-  // until the strip returns. The checks themselves stay in the store and take
-  // effect again when it does.
-  const stripShown = useStatusBarShown();
-  const shownProfileIds = stripShown
+  // until it returns. Wherever it lives - the status bar, the tab strip or the
+  // phone header - it draws through the same selector, so the checks apply to
+  // every placement (G6). The checks stay in the store meanwhile.
+  const readingShown = useRegionShown("usageLimits");
+  const shownProfileIds = readingShown
     ? resolveStatusBarProfileIds(profileSelection, providerId, profiles)
     : NO_PROFILE_IDS;
   const checkedProfileIds = profileSelection.shownProfiles[providerId] ?? [];
   // A provider hidden from the strip has no segment for the eye to govern;
   // the eye goes with it rather than toggling a preference nothing shows.
-  const providerHiddenFromStrip = useLayoutStore((state) =>
-    state.statusBar.rateLimits.hiddenProviders.includes(providerId),
-  );
+  const hiddenProviders = useArrangementValue("hiddenProviders");
+  const providerHiddenFromStrip = hiddenProviders.includes(providerId);
   // The host the eye writes for, or `null` when there is no eye to draw.
   const eyeHostId =
-    stripShown && !providerHiddenFromStrip ? displayedHostId : null;
-  const setProfileShown = useLayoutStore(
-    (state) => state.setStatusBarProfileShown,
-  );
+    readingShown && !providerHiddenFromStrip ? displayedHostId : null;
+  const setArrangement = useLayoutStore((state) => state.setArrangement);
   const targets = profiles.map((profile) => ({
     profile,
     profileId: rateLimitProfileId(profile),
@@ -1981,16 +1976,21 @@ function ProfileRateLimitProviderBlock({
                 eyeHostId === null
                   ? null
                   : (shown) => {
-                      trackSettingChanged(
-                        "layout",
-                        "layout.statusBar.shownProfiles",
-                      );
-                      setProfileShown(
-                        eyeHostId,
-                        providerId,
-                        target.profileId,
-                        shown,
-                      );
+                      // Read at write time rather than subscribed: this row
+                      // needs the whole arrangement only to spread it, and a
+                      // subscription to it re-renders the popover on every
+                      // dock reorder and divider drag (G1-14).
+                      const current = useLayoutStore.getState().arrangement;
+                      setArrangement({
+                        ...current,
+                        shownProfiles: withProfileShown({
+                          shownProfiles: current.shownProfiles,
+                          hostId: eyeHostId,
+                          providerId,
+                          profileId: target.profileId,
+                          shown,
+                        }),
+                      });
                     }
               }
               variant={variant}
@@ -2002,6 +2002,7 @@ function ProfileRateLimitProviderBlock({
               )}
               profileEnablementDisabledReason={profileEligibilityToggleDisabledReason(
                 true,
+                providerDisplayName(providerId),
                 target.profile,
                 profiles,
               )}
@@ -3069,4 +3070,37 @@ function RateLimitZeroState({
       </button>
     </div>
   );
+}
+
+/**
+ * One account checked or unchecked for the strip, on one host.
+ *
+ * An emptied entry is REMOVED rather than left as `[]`, matching what the
+ * arrangement's resolver does on rehydration: one shape for "nothing checked",
+ * so the same selection can never read as two different arrangements.
+ */
+function withProfileShown(input: {
+  readonly shownProfiles: StatusBarShownProfiles;
+  readonly hostId: string;
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+  readonly shown: boolean;
+}): StatusBarShownProfiles {
+  const { shownProfiles, hostId, providerId, profileId, shown } = input;
+  const current = statusBarShownProfileIds(shownProfiles, hostId, providerId);
+  if (current.includes(profileId) === shown) return shownProfiles;
+  const next = shown
+    ? [...current, profileId]
+    : current.filter((candidate) => candidate !== profileId);
+  const hostShown: Record<string, ReadonlyArray<string | null>> = {
+    ...shownProfiles[hostId],
+  };
+  if (next.length === 0) delete hostShown[providerId];
+  else hostShown[providerId] = next;
+  const nextShownProfiles: Record<string, StatusBarShownProfiles[string]> = {
+    ...shownProfiles,
+  };
+  if (Object.keys(hostShown).length === 0) delete nextShownProfiles[hostId];
+  else nextShownProfiles[hostId] = hostShown;
+  return nextShownProfiles;
 }

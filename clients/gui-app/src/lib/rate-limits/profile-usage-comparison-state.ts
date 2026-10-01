@@ -85,13 +85,13 @@ export interface ProfileUsageComparisonEntry {
   readonly refresh: () => Promise<void>;
   /** Non-forced sibling of `refresh` for AUTOMATIC callers (the composer
    *  banner's single unknown-destination check). On the `ephemeralProcess`
-   *  lane (claude-code / codex / grok - the providers with managed profiles,
-   *  so the only ones this automatic check ever runs on) it passes
-   *  `force: false`, so it no-ops on still-fresh cache and lets the host serve
-   *  its gauge inside its floors - including the long one it keeps after a
-   *  Claude `usage_fetch_failed` - instead of re-tripping a server-side penalty
-   *  window. The httpFetch lane (openrouter / kilocode) always refetches, but
-   *  its call is a cheap direct HTTP GET. */
+   *  lane (claude-code / codex / grok) it passes `force: false`, so it no-ops
+   *  on still-fresh cache and lets the host serve its gauge inside its floors -
+   *  including the long one it keeps after a Claude `usage_fetch_failed` -
+   *  instead of re-tripping a server-side penalty window. The httpFetch lane
+   *  always refetches, but its call is a cheap direct HTTP read; antigravity is
+   *  the one provider there with managed profiles, so the only one this
+   *  automatic check reaches on that lane. */
   readonly ensureFresh: () => Promise<void>;
 }
 

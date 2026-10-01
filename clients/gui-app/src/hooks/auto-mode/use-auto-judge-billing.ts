@@ -21,6 +21,8 @@ import {
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import {
   autoJudgeBillingForRun,
+  autoJudgeEffortLabel,
+  autoJudgeGetKnowsReasoningEffort,
   autoJudgeTarget,
   harnessHasNativeAutoJudge,
   providerRunsItsOwnJudge,
@@ -443,6 +445,10 @@ export function useAutoJudgeBilling(
     resolvedHostId,
     "providers.list",
   );
+  const judgeGetVersion = useHostMethodSchemaVersion(
+    resolvedHostId,
+    "autoJudge.get",
+  );
   const providerJudgeUnknown =
     harnessHasNativeAutoJudge(harnessId, harnesses) &&
     !providersListReportsAutoJudge(providersListVersion);
@@ -521,6 +527,14 @@ export function useAutoJudgeBilling(
       judgeModelsQuery.isSuccess,
     );
   const judgeModelLabel = targetModelLabel(target, judgeModelsQuery.data);
+  // Named only on a host that runs the judge at an effort of its own; an older
+  // host runs the model's default, and the row must not promise otherwise.
+  const judgeEffortLabel = autoJudgeEffortLabel({
+    target,
+    selection,
+    hostKnowsEffort: autoJudgeGetKnowsReasoningEffort(judgeGetVersion),
+    models: offeredJudgeModels(judgeModelsQuery.data),
+  });
   // The provider-native answer needs the two catalog reads and nothing else;
   // every other answer needs the host-wide record as well. Splitting them is
   // what lets a host without `autoJudge.get` still publish "no extra cost" -
@@ -542,6 +556,7 @@ export function useAutoJudgeBilling(
             isProviderNative,
             target,
             judgeModelLabel,
+            judgeEffortLabel,
             judgeRecordUnrunnable:
               storedProfileUnavailable || storedModelUnavailable,
           })
@@ -552,6 +567,7 @@ export function useAutoJudgeBilling(
       isProviderNative,
       target,
       judgeModelLabel,
+      judgeEffortLabel,
       storedProfileUnavailable,
       storedModelUnavailable,
     ],

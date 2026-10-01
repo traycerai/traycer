@@ -2,6 +2,7 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import { addWithFifoEviction } from "@/lib/bounded-set";
 import {
   MAX_ACTIVITY_GROUP_OPEN_IDS,
+  type ActivityGroupOpenChoices,
   type ActivityGroupOpenState,
 } from "./activity-group-open-store-context";
 import { createChatDurableCache } from "@/stores/chats/chat-durable-cache";
@@ -11,21 +12,23 @@ import {
 } from "@/stores/chats/chat-tab-persistence-key";
 
 export function createActivityGroupOpenStore(
-  initialOpenIds: ReadonlySet<string> | null,
+  initialChoices: ActivityGroupOpenChoices | null,
 ): StoreApi<ActivityGroupOpenState> {
   return createStore<ActivityGroupOpenState>((set) => ({
-    openIds: initialOpenIds ?? new Set<string>(),
+    openIds: initialChoices?.openIds ?? new Set<string>(),
+    closedIds: initialChoices?.closedIds ?? new Set<string>(),
     setOpen: (groupId, open) =>
       set((state) => {
-        const wasOpen = state.openIds.has(groupId);
-        if (wasOpen === open) return state;
-        const next = new Set(state.openIds);
-        if (open) {
-          addWithFifoEviction(next, groupId, MAX_ACTIVITY_GROUP_OPEN_IDS);
-        } else {
-          next.delete(groupId);
-        }
-        return { openIds: next };
+        const chosen = open ? state.openIds : state.closedIds;
+        const other = open ? state.closedIds : state.openIds;
+        if (chosen.has(groupId) && !other.has(groupId)) return state;
+        const nextChosen = new Set(chosen);
+        addWithFifoEviction(nextChosen, groupId, MAX_ACTIVITY_GROUP_OPEN_IDS);
+        const nextOther = new Set(other);
+        nextOther.delete(groupId);
+        return open
+          ? { openIds: nextChosen, closedIds: nextOther }
+          : { openIds: nextOther, closedIds: nextChosen };
       }),
     // Deliberately NOT seeded from the durable mirror, and entries are never
     // deleted or evicted once added.
@@ -81,7 +84,7 @@ const activityGroupOpenStoreRegistry = new Map<
 // a2a-open-store-context.ts for why (covers active AND inactive/
 // never-mounted views alike).
 const durableActivityGroupOpenCache =
-  createChatDurableCache<ReadonlySet<string>>(200);
+  createChatDurableCache<ActivityGroupOpenChoices>(200);
 
 export function getOrCreateActivityGroupOpenStore(
   identity: ChatTabPersistenceIdentity,
@@ -113,7 +116,8 @@ export function promoteActivityGroupOpenStoreToDurable(
     chatTabPersistenceTabKey(identity),
   );
   if (store === undefined) return;
-  durableActivityGroupOpenCache.set(identity, store.getState().openIds);
+  const { openIds, closedIds } = store.getState();
+  durableActivityGroupOpenCache.set(identity, { openIds, closedIds });
 }
 
 /** Drops the durable chat-key entry - called when the CHAT itself is

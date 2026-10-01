@@ -1,5 +1,5 @@
 /**
- * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Status ▸ Version card).
+ * Docs: see ../SETTINGS.md (Host ▸ Overview ▸ Updates ▸ Version card).
  * Update that file whenever this settings surface changes.
  */
 import type { ReactNode } from "react";
@@ -11,15 +11,11 @@ import {
   describeOverviewDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
-import {
-  PICK_IN_UPDATES,
-  type HostOverviewUpdatesSummary,
-} from "@/components/settings/panels/host-overview-updates-state";
+import type { HostOverviewUpdatesSummary } from "@/components/settings/panels/host-overview-updates-state";
 import {
   HOST_OVERVIEW_VERSION_TAG,
   type HostOverviewVersionTag,
 } from "@/components/settings/panels/host-overview-status-model";
-import { useHostOverviewSelectTab } from "@/components/settings/panels/host-overview-tab-state";
 import { CliFloorRemedyActions } from "@/components/settings/panels/host-overview-cli-floor-remedy-actions";
 import { formatHostVersion } from "@/components/settings/host-scope/host-scope-model";
 import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
@@ -31,20 +27,28 @@ export interface HostOverviewVersionAnswer {
   readonly degrade: OverviewDegradeReason | null;
   readonly desktopBridge: DesktopAppUpdatesBridge | null;
   readonly onInstallationHelp: () => void;
+  /**
+   * THIS machine's host was started in a terminal: nothing here can finish an
+   * update over it, so Update now gives way to this sentence saying what does
+   * (`hostForegroundUpdateLine`). `null` otherwise.
+   */
+  readonly foregroundUpdateLine: string | null;
 }
 
 /**
- * Status ▸ Version card: the running version, one tag, the update answer and
- * at most two buttons.
+ * Updates ▸ Version card: the running version, one tag, the update answer and
+ * at most two buttons. It leads the Updates tab, above the auto-update switch
+ * and the version list.
  *
  * The buttons (Update now, Check now) show only while nothing is in flight.
- * While an update runs, waits or restarts the card shows its version and tag
- * and nothing to press - HIDDEN, not disabled, so the tab never shows a
- * button that cannot be pressed. They come back when the update finishes or
- * fails. The answer sentence goes with them, because the catalog's answer
- * mid-update ("v1.5.1 is available.") contradicts the update card above it.
- * Activation debt's answer stays ("v1.5.1 is installed — restart host to
- * finish."), since it is about the wait itself.
+ * While an update runs, waits or restarts the card shows its version and
+ * nothing to press - HIDDEN, not disabled, so the tab never shows a button
+ * that cannot be pressed. They come back when the update finishes or fails.
+ * The tag and the answer sentence go with them: the update card in the
+ * notices strip above the tab bar is on screen for exactly that span and is
+ * the one place that describes the update. The catalog's answer mid-update
+ * ("v1.5.1 is available.") would contradict it, and activation debt's
+ * ("v1.5.1 is installed — restart host to finish.") would repeat it.
  *
  * The CLI-tools fix replaces Update now, here and only here: the update
  * card's floor sentence points at this card's Show installation help and
@@ -66,12 +70,6 @@ export function HostOverviewVersionCard(props: {
   readonly answer: HostOverviewVersionAnswer | null;
   /** An update is running, waiting or restarting. */
   readonly inFlight: boolean;
-  /**
-   * The auto-update caption, or `null` for none. The page withholds it when
-   * the account does not know this host, when updates are not manageable
-   * here, and while an update is in flight on a reachable host.
-   */
-  readonly autoUpdate: "on" | "off" | null;
 }): ReactNode {
   const version = formatHostVersion(props.version);
   const tag = props.tag === null ? null : HOST_OVERVIEW_VERSION_TAG[props.tag];
@@ -109,9 +107,6 @@ export function HostOverviewVersionCard(props: {
       {props.answer === null ? null : (
         <VersionCardAnswer answer={props.answer} inFlight={props.inFlight} />
       )}
-      {props.autoUpdate === null ? null : (
-        <AutoUpdateCaption state={props.autoUpdate} />
-      )}
     </section>
   );
 }
@@ -132,7 +127,10 @@ function VersionCardControls(props: {
           onHelp={props.answer.onInstallationHelp}
         />
       ) : (
-        <UpdateNowControl summary={summary} />
+        <UpdateNowControl
+          summary={summary}
+          foregroundUpdateLine={props.answer.foregroundUpdateLine}
+        />
       )}
       {props.inFlight ? null : (
         <Button
@@ -160,9 +158,22 @@ function VersionCardControls(props: {
 /** Update now, only when there is a newer version this host can install. */
 function UpdateNowControl(props: {
   readonly summary: HostOverviewUpdatesSummary;
+  readonly foregroundUpdateLine: string | null;
 }): ReactNode {
   const { summary } = props;
   if (summary.updatableVersion === null) return null;
+  // The install would reach the CLI and be refused (`E_HOST_NOT_SERVICE_RUN`),
+  // so say what finishes it instead of offering a button that cannot.
+  if (props.foregroundUpdateLine !== null) {
+    return (
+      <p
+        className="min-w-0 text-right text-ui-sm text-muted-foreground"
+        data-testid="host-overview-update-foreground"
+      >
+        {props.foregroundUpdateLine}
+      </p>
+    );
+  }
   return (
     <Button
       type="button"
@@ -200,10 +211,8 @@ function VersionCardAnswer(props: {
       </CardNote>
     );
   }
-  const answerShown =
-    !props.inFlight ||
-    summary.answerKind === "restart-to-finish" ||
-    summary.remedy !== null;
+  // In flight, only the fix's sentence survives, with the fix itself.
+  const answerShown = !props.inFlight || summary.remedy !== null;
   return (
     <div className="flex flex-col" data-testid="host-overview-updates">
       {/* `role="status"`: the check runs on its own now, so this sentence
@@ -214,7 +223,7 @@ function VersionCardAnswer(props: {
           role="status"
           className="border-t border-border/40 px-4 py-2.5 text-ui-sm text-muted-foreground"
         >
-          <AnswerSentence summary={summary} />
+          {summary.description}
         </p>
       ) : null}
       {/* The one line a refused or failed attempt adds under the answer. It
@@ -254,70 +263,5 @@ function CardNote(props: {
       <Info className="mt-px size-3.5 shrink-0" aria-hidden />
       <span className="max-w-[68ch]">{props.children}</span>
     </div>
-  );
-}
-
-/**
- * The answer, with "Pick it in Updates" drawn as the link to that tab when
- * the sentence carries it. The text stays one string, so the live region reads
- * the same sentence the summary states.
- */
-function AnswerSentence(props: {
-  readonly summary: HostOverviewUpdatesSummary;
-}): ReactNode {
-  const selectTab = useHostOverviewSelectTab();
-  const text = props.summary.description;
-  const at = text.indexOf(PICK_IN_UPDATES);
-  if (props.summary.answerKind !== "stranded" || at < 0 || selectTab === null) {
-    return text;
-  }
-  return (
-    <>
-      {text.slice(0, at)}
-      <Button
-        type="button"
-        variant="link"
-        size="inline"
-        data-testid="host-overview-pick-in-updates"
-        onClick={() => selectTab("updates")}
-      >
-        {PICK_IN_UPDATES}
-      </Button>
-      {text.slice(at + PICK_IN_UPDATES.length)}
-    </>
-  );
-}
-
-/**
- * The read-only auto-update caption. The switch is on Updates; "Change in
- * Updates" selects that tab. Account-backed, so it stays while the host can't
- * be reached.
- */
-function AutoUpdateCaption(props: { readonly state: "on" | "off" }): ReactNode {
-  const selectTab = useHostOverviewSelectTab();
-  return (
-    <p
-      className="border-t border-border/40 px-4 py-2.5 text-ui-xs text-muted-foreground"
-      data-testid="host-overview-auto-update-caption"
-      data-state={props.state}
-    >
-      {props.state === "on"
-        ? "Auto-update is on — applied at this host's next check-in, only when no sessions are running."
-        : "Auto-update is off."}
-      {selectTab === null ? null : (
-        <>
-          {" "}
-          <Button
-            type="button"
-            variant="link"
-            size="inline-xs"
-            data-testid="host-overview-change-in-updates"
-            onClick={() => selectTab("updates")}
-          >
-            Change in Updates
-          </Button>
-        </>
-      )}
-    </p>
   );
 }

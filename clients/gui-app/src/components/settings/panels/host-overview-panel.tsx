@@ -11,33 +11,28 @@ import {
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
+import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
+import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
 import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
-import {
-  HostOverviewSelectTabProvider,
-  HostOverviewTabs,
-} from "@/components/settings/panels/host-overview-tabs";
+import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
   type HostOverviewSelectTab,
 } from "@/components/settings/panels/host-overview-tab-state";
-import { HostOverviewStatusTab } from "@/components/settings/panels/host-overview-status-tab";
+import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
 import {
   describeHostOfflineNotice,
   deriveHostOverviewVersionTag,
   inFlightUpdateKind,
 } from "@/components/settings/panels/host-overview-status-model";
-import { deriveHostOverviewUpdatePill } from "@/components/settings/panels/host-overview-update-pill-model";
-import {
-  HostOverviewUpdatePillButton,
-  HostOverviewUpdateStrip,
-} from "@/components/settings/panels/host-overview-update-pill";
 import { useHostUpdateCompletion } from "@/hooks/host/use-host-update-completion";
 import {
   HostOverviewUpdatesTab,
@@ -178,14 +173,16 @@ const LOCAL_RECORD_TICK_MS = 1_000;
  * machine, so no surface built on it can be part of a page that promises to
  * describe any host.
  *
- * A PINNED HEADER OVER FIVE TABS. The header is who this host is and the verbs
+ * A PINNED HEADER OVER FOUR TABS. The header is who this host is and the verbs
  * that act on it - name, tag, Activate, the `⋯` menu, the health line, what is
  * working now - and it never moves, so switching tabs never hides Restart or
- * Activate. Under it, Status · Updates · Ports · Data · Installation, most used
- * first and destructive last, one body at a time (`host-overview-tabs.tsx`).
- * Each tab body is its own component (`host-overview-*-tab.tsx`) and draws what
- * it is handed: the queries, the mutations and every dialog stay HERE, so the
- * update answer on Status and the version list on Updates are still one hook
+ * Activate. Under it, the notices strip - the update in flight, the account's
+ * wait on open work, the offline notice, each only while it applies
+ * (`host-overview-notices.tsx`) - and then Installation · Updates · Data ·
+ * Ports, one body at a time (`host-overview-tabs.tsx`). Each tab body is its
+ * own component (`host-overview-*-tab.tsx`) and draws what it is handed: the
+ * queries, the mutations and every dialog stay HERE, so the update card in the
+ * strip, the version card and the version list on Updates are still one hook
  * instance, and a dialog opens over whichever tab is showing.
  *
  * Every button degrades on its OWN capability. An old host can support
@@ -204,7 +201,10 @@ export function HostOverviewPanel(props: {
   readonly scope: HostScope;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
-  readonly onLocalDoctorFix: (issue: HostDoctorIssue) => void;
+  readonly onLocalDoctorFix: (
+    issue: HostDoctorIssue,
+    onApplied: () => void,
+  ) => void;
   readonly localDoctorFixPendingCode: string | null;
   /**
    * The selected tab, held by `HostSettingsPanel` ABOVE this page's per-host
@@ -327,7 +327,7 @@ export function HostOverviewPanel(props: {
   const {
     identity: identityDegrade,
     identitySet: identitySetDegrade,
-    restart: restartDegrade,
+    restart: capabilityRestartDegrade,
     restartViaForceFallback,
     restartSupported,
     logsSupported,
@@ -342,6 +342,24 @@ export function HostOverviewPanel(props: {
     maintenanceFallback: scope.localMaintenanceFallback,
     restartForceRoute: forceRestartLocalHostId !== null,
   });
+  // THIS machine's host started in a terminal: the app never restarts a run it
+  // did not start. One gate, read wherever the capability's is - the header's
+  // Restart shows the reason, and every open restart dialog closes (the
+  // render-time rules on `restartDegrade`, the bridge route's and the offers'
+  // included) - so a run that starts under an open page stands those restarts
+  // down at once. The card's controls take it at their props
+  // (`foregroundHeldFinish`).
+  const localForegroundRun =
+    useLocalHostForegroundRun() && (host?.isLocalMachine ?? false);
+  // What this page's update surfaces say in place of their controls during
+  // that run - one picker, so the version card, the update card and the
+  // version rows name the same step (`hostForegroundUpdateLine`).
+  const foregroundUpdateLine = useLocalHostForegroundUpdateLine();
+  const localForegroundUpdateLine =
+    (host?.isLocalMachine ?? false) ? foregroundUpdateLine : null;
+  const restartDegrade: OverviewDegradeReason | null = localForegroundRun
+    ? "terminal-run"
+    : capabilityRestartDegrade;
   // Every surface that opens the restart confirm - the header's Restart, the
   // card's Restart and its attempt-park Force, the Doctor sheet's bridge
   // restart - arms it for the route the page routes Restart to at that
@@ -790,11 +808,9 @@ export function HostOverviewPanel(props: {
     hostId: scope.hostId,
     view: operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
   });
-  // The success acknowledgement, held HERE rather than in the Status tab's
-  // update card: the header's "Updated to vX" pill leaves on the same 8 s
-  // timer or dismissal, and Status mounts only once it is visited - so a timer
-  // living in the card would never start for someone who stayed on Ports, and
-  // the pill would never leave.
+  // The success acknowledgement, held HERE rather than in the update card: the
+  // card unmounts whenever the view goes quiet or the host goes offline, and a
+  // timer living in it would restart from zero each time it came back.
   const completion = useHostUpdateCompletion(
     operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
   );
@@ -865,6 +881,7 @@ export function HostOverviewPanel(props: {
     registerDegrade: serviceRegisterDegrade,
     deregisterDegrade: serviceDeregisterDegrade,
     busy: corePending,
+    foregroundRun: localForegroundRun,
     hostId: scope.hostId,
     scopeUsable: usable,
     settledBusy: view.settledBusy,
@@ -981,11 +998,11 @@ export function HostOverviewPanel(props: {
     return () => clearTimeout(timer);
   }, [scope.hostId, dispatchedAt, dispatchSeen]);
 
-  // The update story lives at PAGE level because its two halves render on two
-  // different tabs: the answer — is there an update, install it — on Status,
-  // and the decisions behind it on Updates. One instance of each hook, so the
-  // two halves cannot disagree about what the last check returned or which
-  // write is in flight.
+  // The update story lives at PAGE level because it renders in two places: the
+  // update in flight in the notices strip above the tab bar, on every tab, and
+  // the answer and the decisions behind it on Updates. One instance of each
+  // hook, so the two cannot disagree about what the last check returned or
+  // which write is in flight.
   //
   // This is also the single `useHostRegistryUpdateMutation`, which BOTH the
   // drain gate and the auto-update switch write through. Two instances would
@@ -1038,6 +1055,7 @@ export function HostOverviewPanel(props: {
     checkDegrade: updateCheckDegrade,
     installDegrade: updateInstallDegrade,
     busy: updateGatePending,
+    foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,
   });
   const anyPending = updateGatePending || updates.summary.installing;
@@ -1227,7 +1245,14 @@ export function HostOverviewPanel(props: {
     // mid-flight, the attempt parks, the first `seen` frame arrives, and
     // without this the one shot is spent on a dialog closed in the same pass
     // for a retirement that ends a few seconds later.
-    gateArmed: anyPending || updates.degrade !== null,
+    //
+    // A foreground run on this machine too: the rule after the restart
+    // confirm's closes any offer opened under one, so firing now would spend
+    // the one shot on a dialog nobody sees.
+    gateArmed:
+      anyPending ||
+      updates.degrade !== null ||
+      restartDegrade === "terminal-run",
     supported: updates.activate !== null,
     dispatch: updateDispatch,
     incarnation,
@@ -1268,13 +1293,36 @@ export function HostOverviewPanel(props: {
   }
   // A COOPERATIVE confirm answers a `host.restart` the handshake can withdraw
   // while it is open (`restartDegrade`, the header's own gate); the bridge
-  // route needs no method and is unaffected.
+  // route needs no method, so only a foreground run reaches it (below).
   if (
     restartConfirm === "cooperative" &&
     restartDegrade !== null &&
     !restartDialogOwnDispatch
   ) {
     closeRestartConfirm();
+  }
+  // A host started in a terminal on this machine, begun under an open
+  // dialog, withdraws every dialog here that would restart it - whichever
+  // route or offer armed it. The cooperative confirm closed above
+  // (`terminal-run` is a `restartDegrade`); these are the bridge respawn's two
+  // dialogs, which no method degrade reaches, and the two update-finish
+  // offers whose openers the card withholds under the same fact
+  // (`foregroundHeldFinish`). Each keeps a dispatch of its OWN already in
+  // flight, as the page-wide rules do: that click was answered before the run
+  // began, and the CLI's refusal is its backstop.
+  if (restartDegrade === "terminal-run") {
+    if (restartConfirm === "bridge" && !restartDialogOwnDispatch) {
+      closeRestartConfirm();
+    }
+    if (forceRestartOffer !== null && !forceRestartInFlight) {
+      setForceRestartOffer(null);
+    }
+    if (forceUpdateOffer !== null && !updates.summary.installing) {
+      setForceUpdateOffer(null);
+    }
+    if (boundOffer !== null && !updates.summary.installing) {
+      setBoundOffer(null);
+    }
   }
   // The force offer has the same window and a sharper reason to close in it: no
   // lifecycle write on this page may dispatch beside a bridge respawn, and an
@@ -1386,11 +1434,13 @@ export function HostOverviewPanel(props: {
   // attempt-first choice and the legacy fallback each read as one decision,
   // and so the gates the card documents are stated once. All three carry the
   // page-wide gates the header's Restart and the region's Update now carry
-  // (`restartDegrade` / `updates.degrade`, `anyPending`) on top of a LIVE
-  // status read.
+  // (the restart capability / `updates.degrade`, `anyPending`) on top of a
+  // LIVE status read. A foreground run is applied once, where the card's
+  // props are built (`foregroundHeldFinish`), so the card can say what it
+  // withheld rather than simply lose its controls.
   const legacyDebtRestart =
     !statusLive ||
-    restartDegrade !== null ||
+    capabilityRestartDegrade !== null ||
     anyPending ||
     (legacyFacts?.activationDebt ?? null) === null
       ? null
@@ -1437,11 +1487,36 @@ export function HostOverviewPanel(props: {
   // expression inline; naming it is what keeps the two from disagreeing.
   const parkForceControl =
     attemptControl?.intent === "continue" ? openBoundOffer : legacyStagedForce;
+  // Restart cannot activate a stage, so the attempt-park Force restart is
+  // offered only when no stage waits; see the card's `onForceRestart`.
+  const parkForceRestart =
+    statusLive &&
+    capabilityRestartDegrade === null &&
+    !anyPending &&
+    legacyFacts !== null &&
+    legacyFacts.stagedWait === null
+      ? () => {
+          // Attempt parks keep the existing cooperative restart
+          // confirmation and its fresh live-work check.
+          openRestartConfirm();
+        }
+      : null;
+  const cardRestart =
+    attemptControl?.intent === "activate" ? openBoundOffer : legacyDebtRestart;
+  // A host started in a terminal on this machine: every control that would
+  // finish the update (restart, force restart, force update) reaches the CLI
+  // and is refused, so the card withholds them and says what finishes it.
+  const foregroundHeldFinish =
+    cardRestart !== null ||
+    parkForceRestart !== null ||
+    parkForceControl !== null
+      ? localForegroundUpdateLine
+      : null;
 
   // THE REMEDY ROW'S OWN RENDER DECISION, named once and read twice.
   //
   // The card's CLI-floor sentence ends in "see installation help", and that
-  // button belongs to the Status tab's version card — which does NOT render it
+  // button belongs to the Updates tab's version card — which does NOT render it
   // merely because a floor exists. The card shows the degraded sentence on
   // `degrade` and its answer only under `usable`, and the update card is
   // behind neither, so a floor read while healthy could leave the sentence
@@ -1546,8 +1621,9 @@ export function HostOverviewPanel(props: {
     );
   }
 
-  // STATUS, top to bottom: the offline notice, the update card, the account's
-  // wait, the version card. The decisions behind each are stated here once.
+  // THE NOTICES STRIP, top to bottom: the offline notice, the update card, the
+  // account's wait. Then the Updates tab's version card. The decisions behind
+  // each are stated here once.
   //
   // Offline is "can't be reached, for a reason other than a restart". A
   // restart is the update card's to narrate ("Restarting host to v1.5.1") and
@@ -1558,36 +1634,16 @@ export function HostOverviewPanel(props: {
   // The update in flight, retained phase included: the version card's
   // in-flight rule and the one-wait rule both read it.
   const inFlightKind = inFlightUpdateKind(operationView);
-  // The caption is account-backed, so it stays while the host can't be
-  // reached. It is withheld where it would contradict the card: a host whose
-  // updates are not managed here ignores the switch, and an update in flight
-  // on a reachable host is the card's whole story until it ends.
-  let autoUpdateCaption: "on" | "off" | null = null;
-  if (
-    registryItem !== null &&
-    updates.degrade === null &&
-    (offline || inFlightKind === null)
-  ) {
-    autoUpdateCaption = registryItem.updatePolicy === "auto" ? "on" : "off";
-  }
-  // The live update pill. Never on Status (the update card is the answer
-  // there), and never while the health word reads "Restarting…".
-  const updatePill = deriveHostOverviewUpdatePill({
-    view: operationView,
-    restarting,
-    completionDismissed: completion.dismissed,
-    cliFloorBlocked,
-  });
-  const pillShown = updatePill !== null && props.tab !== "status";
   const operationShown =
     !offline && operationView !== null && !isQuietUpdateView(operationView);
 
-  // The five tab bodies, each handed what it draws. Built on every render
-  // and cheap to build - a body MOUNTS only once its tab is first visited.
-  const statusTab = (
-    <HostOverviewStatusTab
+  // Drawn between the header and the tab bar, so it is on every tab: nothing
+  // else on the page reports an update in flight, and its controls are the
+  // page's only ones with deadlines.
+  const notices = (
+    <HostOverviewNotices
       // One notice carrying what the page last knew, in place of every other
-      // unreachable wording on this tab - including the update card's
+      // unreachable wording in the strip - including the update card's
       // retained "Last seen: …", whose phase the notice carries instead.
       offlineNotice={
         offline
@@ -1623,7 +1679,7 @@ export function HostOverviewPanel(props: {
               // Resolved above, where the three conditions behind it are
               // stated.
               cliFloorBlocked,
-              // Panel-level, shared with the header pill.
+              // Panel-level: see `completion`.
               completion,
               // Restart cannot activate a stage. A floor gate must not turn a
               // staged wait's Force update into a different, ineffective
@@ -1633,21 +1689,11 @@ export function HostOverviewPanel(props: {
               // subsumes `usable`): an offer made off a failed or aged read
               // would act on a park the host may have left. (The projection
               // withholds the whole force control under a demoted view
-              // already, but the dispatch gate belongs here, not in the
-              // card's layout.) The confirm it opens is armed for whichever
-              // route the page routes Restart to, like the header's.
-              onForceRestart:
-                statusLive &&
-                restartDegrade === null &&
-                !anyPending &&
-                legacyFacts !== null &&
-                legacyFacts.stagedWait === null
-                  ? () => {
-                      // Attempt parks keep the existing cooperative restart
-                      // confirmation and its fresh live-work check.
-                      openRestartConfirm();
-                    }
-                  : null,
+              // already, but the dispatch gate belongs with the handler,
+              // `parkForceRestart`, not in the card's layout.) The confirm it
+              // opens is armed for whichever route the page routes Restart
+              // to, like the header's.
+              onForceRestart: localForegroundRun ? null : parkForceRestart,
               // The card's three controls sit behind the SAME capability and
               // page-wide gates as the header's Restart and the region's
               // Update now (`restartDegrade`, `updates.degrade`,
@@ -1681,10 +1727,7 @@ export function HostOverviewPanel(props: {
               // and still gets the way forward. Same confirm the header's
               // Restart opens, so the transition id, the busy verdict and the
               // force/defer dialog are all the existing ones.
-              onRestart:
-                attemptControl?.intent === "activate"
-                  ? openBoundOffer
-                  : legacyDebtRestart,
+              onRestart: localForegroundRun ? null : cardRestart,
               // ATTEMPT FIRST here too. A `waiting-for-work` attempt resumes
               // through `host.update.continue`, which needs no catalog gate at
               // all: the bytes were authorized when the attempt was created,
@@ -1693,46 +1736,17 @@ export function HostOverviewPanel(props: {
               // is exactly the case `installForce` cannot express.
               //
               // Otherwise today's staged-wait force.
-              onForceUpdate: parkForceControl,
-            }
-      }
-      // The version card, always - except while the scope is still connecting
-      // with no update to show, when the loading shape stands in for it.
-      versionCard={
-        scope.status === "connecting" && !operationShown
-          ? null
-          : {
-              // Same two-layer rule as the header's version.
-              version: view.hostVersion ?? host.version,
-              tag: deriveHostOverviewVersionTag({
-                offline,
-                unmanaged: updates.degrade !== null,
-                view: operationView,
-                cliFloorBlocked,
-                answerKind: usable ? updates.summary.answerKind : null,
-              }),
-              // The update ANSWER — "is there an update, and install it" is a
-              // fact about this host in the same register as its version and
-              // its session count. Everything that is a decision rather than
-              // an answer is on Updates. It needs the host, so an unreachable
-              // or restarting host's card is its version, tag and caption.
-              answer: !usable
-                ? null
-                : {
-                    summary: updates.summary,
-                    degrade: updates.degrade,
-                    desktopBridge: desktopUpdates.bridge,
-                    onInstallationHelp: () => setDoctorOpen(true),
-                  },
-              inFlight: inFlightKind !== null,
-              autoUpdate: autoUpdateCaption,
+              onForceUpdate: localForegroundRun ? null : parkForceControl,
+              foregroundHeldFinish,
             }
       }
       // ONE WAIT ON SCREEN. The account's wait shows only while the host has
       // not reported one of its own: once the view is `waiting-for-work`
       // (retained phase included), the update card above says it, with Force
       // update… as its control. Withheld too while the host can't be reached:
-      // it names live work, so it needs the host's own count.
+      // it names live work, so it needs the host's own count. Its Apply now
+      // finishes the update on the host, so a foreground run on this machine
+      // withholds it for the line Update now shows.
       drainGate={
         registryItem === null || !usable || inFlightKind === "waiting-for-work"
           ? null
@@ -1743,13 +1757,14 @@ export function HostOverviewPanel(props: {
               liveBusyBreakdown: view.busyBreakdown,
               settledBusySessionCount: view.settledBusySessionCount,
               settledBusyBreakdown: view.settledBusyBreakdown,
+              foregroundUpdateLine: localForegroundUpdateLine,
             }
       }
-      // The Connecting row's loading shape. Only `connecting`: an unreachable
-      // host has an answer to give (it cannot be reached), not one to wait for.
-      connectingHostName={scope.status === "connecting" ? displayName : null}
     />
   );
+
+  // The four tab bodies, each handed what it draws. Built on every render
+  // and cheap to build - a body MOUNTS only once its tab is first visited.
   const versionConnecting =
     scope.status === "connecting" ||
     restarting ||
@@ -1762,15 +1777,39 @@ export function HostOverviewPanel(props: {
     versionFallback = { kind: "connecting", hostName: displayName };
   } else if (!usable) {
     versionFallback = { kind: "unreachable", hostName: displayName };
-  } else if (updates.degrade !== null) {
-    versionFallback = {
-      kind: "degraded",
-      hostName: displayName,
-      reason: updates.degrade,
-    };
   }
   const updatesTab = (
     <HostOverviewUpdatesTab
+      // The version card, always - except while the scope is still connecting
+      // with no update to show, when the version list's loading shape below
+      // stands in for it.
+      versionCard={
+        scope.status === "connecting" && !operationShown
+          ? null
+          : {
+              // Same two-layer rule as the header's version.
+              version: view.hostVersion ?? host.version,
+              tag: deriveHostOverviewVersionTag({
+                offline,
+                unmanaged: updates.degrade !== null,
+                view: operationView,
+                answerKind: usable ? updates.summary.answerKind : null,
+              }),
+              // The update ANSWER — "is there an update, and install it". It
+              // needs the host, so an unreachable or restarting host's card is
+              // its version and tag.
+              answer: !usable
+                ? null
+                : {
+                    summary: updates.summary,
+                    degrade: updates.degrade,
+                    desktopBridge: desktopUpdates.bridge,
+                    onInstallationHelp: () => setDoctorOpen(true),
+                    foregroundUpdateLine: localForegroundUpdateLine,
+                  },
+              inFlight: inFlightKind !== null,
+            }
+      }
       // An account write: no route needed, so it survives an outage.
       autoUpdate={
         registryItem === null
@@ -1780,8 +1819,14 @@ export function HostOverviewPanel(props: {
       // Gated on the ROUTE as well as the capability. Picking a version means
       // asking the host which ones exist, so an unreachable host gets no
       // picker at all rather than a checkbox and an invitation to press a
-      // Check now that is not on screen.
-      versions={versionFallback === null ? updates.picker : null}
+      // Check now that is not on screen. Withheld too when updates are not
+      // manageable here: the version card above already says why, in the one
+      // sentence the list would otherwise repeat under it.
+      versions={
+        versionFallback === null && updates.degrade === null
+          ? updates.picker
+          : null
+      }
       versionFallback={versionFallback}
     />
   );
@@ -1838,7 +1883,7 @@ export function HostOverviewPanel(props: {
   );
 
   return (
-    <HostOverviewSelectTabProvider selectTab={props.onSelectTab}>
+    <>
       <HostIdentityCard
         host={host}
         displayName={displayName}
@@ -1902,23 +1947,15 @@ export function HostOverviewPanel(props: {
         healthAction={
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
-        // Last on the health line, off Status. A phone draws it as the strip
-        // above the section dropdown instead.
-        updatePill={
-          pillShown && !isMobile ? (
-            <HostOverviewUpdatePillButton pill={updatePill} />
-          ) : null
-        }
+        lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
       >
+        {notices}
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
           tab={props.tab}
           onSelectTab={props.onSelectTab}
           isMobile={isMobile}
-          phoneStrip={
-            pillShown ? <HostOverviewUpdateStrip pill={updatePill} /> : null
-          }
           badges={{
             ...NO_HOST_OVERVIEW_TAB_BADGES,
             ports:
@@ -1932,11 +1969,10 @@ export function HostOverviewPanel(props: {
             ) : null,
           }}
           bodies={{
-            status: statusTab,
-            updates: updatesTab,
-            ports: portsTab,
-            data: dataTab,
             installation: installationTab,
+            updates: updatesTab,
+            data: dataTab,
+            ports: portsTab,
           }}
         />
       </HostIdentityCard>
@@ -2254,7 +2290,7 @@ export function HostOverviewPanel(props: {
               }
         }
       />
-    </HostOverviewSelectTabProvider>
+    </>
   );
 }
 

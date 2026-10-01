@@ -62,6 +62,26 @@ const TRANSIENT_WINDOWS_RENAME_ERROR_CODES: ReadonlySet<string> = new Set([
   "EPERM",
 ]);
 
+/**
+ * How long to wait before retry `retryIndex` of a rename that failed with
+ * `error`, or `null` when it must surface now: off win32, on a non-transient
+ * code, or once the bounded schedule is spent. The one policy every retrying
+ * rename shares, so a loop that must re-check a precondition between
+ * attempts (the cross-process lock's liveness rewrite) retries exactly as
+ * {@link renameWithWindowsRetry} does.
+ */
+export function windowsRenameRetryDelayMs(
+  error: unknown,
+  retryIndex: number,
+): number | null {
+  if (process.platform !== "win32") return null;
+  const code = errorCode(error);
+  if (code === null || !TRANSIENT_WINDOWS_RENAME_ERROR_CODES.has(code)) {
+    return null;
+  }
+  return WINDOWS_RENAME_RETRY_DELAYS_MS[retryIndex] ?? null;
+}
+
 export async function renameWithWindowsRetry(
   source: string,
   target: string,
@@ -70,16 +90,8 @@ export async function renameWithWindowsRetry(
   try {
     await rename(source, target);
   } catch (err) {
-    const code = errorCode(err);
-    const retryDelay = WINDOWS_RENAME_RETRY_DELAYS_MS[retryIndex];
-    if (
-      process.platform !== "win32" ||
-      code === null ||
-      !TRANSIENT_WINDOWS_RENAME_ERROR_CODES.has(code) ||
-      retryDelay === undefined
-    ) {
-      throw err;
-    }
+    const retryDelay = windowsRenameRetryDelayMs(err, retryIndex);
+    if (retryDelay === null) throw err;
     await new Promise<void>((resolve) => {
       setTimeout(resolve, retryDelay);
     });

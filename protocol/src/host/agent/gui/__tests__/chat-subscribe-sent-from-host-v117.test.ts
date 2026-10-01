@@ -8,6 +8,9 @@ import {
   chatSubscribeV115,
   chatSubscribeV116,
   chatSubscribeV117,
+  chatSubscribeV118,
+  chatSubscribeV119,
+  chatSubscribeV120,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -40,20 +43,51 @@ const PRE_KEY_LINES = [
   { label: "1.16", contract: chatSubscribeV116 },
 ] as const;
 
-describe("chat.subscribe registry: 1.17 the head, 1.16 still installed", () => {
-  it("advances latestMinor to 17 and binds the new and previous lines", () => {
+describe("chat.subscribe registry: 1.17 installed below the 1.18, 1.19 and 1.20 lines, 1.16 still installed", () => {
+  it("binds 1.17 and 1.16 to their own contracts - the head has since moved to 1.20", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(17);
+    expect(line.latestMinor).toBe(20);
+    expect(line.versions[20].contract).toBe(chatSubscribeV120);
+    expect(line.versions[19].contract).toBe(chatSubscribeV119);
+    expect(line.versions[18].contract).toBe(chatSubscribeV118);
     expect(line.versions[17].contract).toBe(chatSubscribeV117);
     expect(line.versions[16].contract).toBe(chatSubscribeV116);
   });
 
-  it("1.17 binds the live windowed schemas on both sides", () => {
-    expect(chatSubscribeV117.serverFrameSchema).toBe(
+  it("1.17, 1.18 and 1.19 keep the live client frames and frozen server frames since 1.20 opened above them", () => {
+    // None of `1.18`, `1.19` or `1.20` adds anything a client sends on the
+    // stream (`1.19`'s claim is on the open request), so every line from
+    // `1.17` binds the live client schema; their server frames are
+    // host-authored, so `1.17`'s, `1.18`'s and `1.19`'s froze.
+    expect(chatSubscribeV118.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV118.serverFrameSchema).not.toBe(
       chatSubscribeWindowedServerFrameSchema,
     );
     expect(chatSubscribeV117.clientFrameSchema).toBe(
       chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV119.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV119.serverFrameSchema).not.toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV120.clientFrameSchema).toBe(
+      chatSubscribeWindowedClientFrameSchema,
+    );
+    expect(chatSubscribeV117.serverFrameSchema).not.toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+    expect(chatSubscribeV120.serverFrameSchema).toBe(
+      chatSubscribeWindowedServerFrameSchema,
+    );
+  });
+
+  it("1.20 still carries the sender host on its server frames", () => {
+    expect(schemaText(chatSubscribeV120.serverFrameSchema)).toContain(
+      SENT_FROM_HOST_NEEDLE,
     );
   });
 

@@ -157,6 +157,8 @@ function mountSubmit(args: {
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
 }) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "browser-annotation-submit",
     values: {
       permission: "supervised",

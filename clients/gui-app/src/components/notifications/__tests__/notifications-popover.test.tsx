@@ -282,6 +282,7 @@ function PopoverShell(props: { readonly onNavigate: () => void }): ReactNode {
   const shellRef = useRef<HTMLDivElement>(null);
   return (
     <NotificationsPopover
+      variant="center"
       onNavigate={props.onNavigate}
       headingRef={headingRef}
       shellRef={shellRef}
@@ -347,6 +348,97 @@ function buildRouterWithCapture(target: TargetCapture, onNavigate: () => void) {
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   return { router };
+}
+
+/** The Notifications drawer's own shell - `variant="inbox"` alongside `PopoverShell`'s
+ * `"center"`, rather than a shared parameter: `PopoverShell` and
+ * `buildRouterWithCapture` have 50+ call sites across this file, and every one
+ * of them is a `center` case - threading a required variant through all of
+ * them for two suites' worth of `inbox` cases is a bigger, riskier diff than
+ * the near-duplicate below. */
+function InboxPopoverShell(props: {
+  readonly onNavigate: () => void;
+}): ReactNode {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  return (
+    <NotificationsPopover
+      variant="inbox"
+      onNavigate={props.onNavigate}
+      headingRef={headingRef}
+      shellRef={shellRef}
+      shellStyle={{}}
+      onFilterMenuOpenChange={() => undefined}
+    />
+  );
+}
+
+/** {@link buildRouterWithCapture}, mounting {@link InboxPopoverShell}. */
+function buildInboxRouterWithCapture(
+  target: TargetCapture,
+  onNavigate: () => void,
+) {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        <InboxPopoverShell onNavigate={onNavigate} />
+        <Outlet />
+      </>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => null,
+  });
+  const epicRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "epics/$epicId/$tabId",
+    validateSearch: (search: Record<string, unknown>) => ({
+      focusedAt:
+        typeof search.focusedAt === "number" ? search.focusedAt : undefined,
+      focusArtifactId:
+        typeof search.focusArtifactId === "string"
+          ? search.focusArtifactId
+          : undefined,
+      focusThreadId:
+        typeof search.focusThreadId === "string"
+          ? search.focusThreadId
+          : undefined,
+    }),
+    component: function EpicCaptureRouteComponent() {
+      const location = useRouterState({ select: (state) => state.location });
+      const parts = location.pathname.split("/");
+      const epicId = parts[2];
+      const tabId = parts[3];
+      target.epicId = epicId.length > 0 ? epicId : null;
+      target.tabId = tabId.length > 0 ? tabId : null;
+      target.focusArtifactId =
+        typeof location.search.focusArtifactId === "string"
+          ? location.search.focusArtifactId
+          : null;
+      target.focusThreadId =
+        typeof location.search.focusThreadId === "string"
+          ? location.search.focusThreadId
+          : null;
+      return <div data-testid="epic-route">epic:{epicId}</div>;
+    },
+  });
+  const routeTree = rootRoute.addChildren([indexRoute, epicRoute]);
+  const router = createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+  return { router };
+}
+
+function freshCapture(): TargetCapture {
+  return {
+    epicId: null,
+    tabId: null,
+    focusArtifactId: null,
+    focusThreadId: null,
+  };
 }
 
 function createTestQueryClient(): QueryClient {
@@ -424,7 +516,7 @@ function hostPrompt(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationEntry {
+): Extract<HostNotificationEntry, { kind: "approval.requested" }> {
   return {
     id,
     updatedAt,
@@ -443,6 +535,33 @@ function hostPrompt(
       chatTitle: "Deploy checkout fix",
       taskTitle: TASK_TITLE,
       approvalId: id,
+    },
+  };
+}
+
+function hostInterviewPrompt(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "interview.requested",
+    sourceRef: id,
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "interview",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Ship the release",
+      taskTitle: TASK_TITLE,
+      interviewBlockId: `block-${id}`,
     },
   };
 }
@@ -2968,5 +3087,133 @@ describe("NotificationsPopover", () => {
     // mutates chat workflow state.
     const retained = useHostNotificationsStore.getState().byId["prompt-read"];
     expect("resolvedAt" in retained ? retained.resolvedAt : null).toBeNull();
+  });
+
+  // D10: the Notifications drawer's own group of prompts waiting on the person, on
+  // top of the ordinary Updates/Recent sections it otherwise shares with the
+  // center.
+  it("titles the shell 'Notifications' in both the inbox and center variants", async () => {
+    const { router: inboxRouter } = buildInboxRouterWithCapture(
+      freshCapture(),
+      () => undefined,
+    );
+    renderRouter(inboxRouter);
+    expect(
+      await screen.findByRole("heading", { name: "Notifications" }),
+    ).not.toBeNull();
+    cleanup();
+
+    const { router: centerRouter } = buildRouterWithCapture(
+      freshCapture(),
+      () => undefined,
+    );
+    renderRouter(centerRouter);
+    expect(
+      await screen.findByRole("heading", { name: "Notifications" }),
+    ).not.toBeNull();
+  });
+
+  it("shows the Needs you group newest first, with a heading count matching its items", async () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("approval-old", 100, null),
+        hostInterviewPrompt("interview-new", 200, null),
+      ],
+      { unreadCount: 2, attentionCount: 2 },
+    );
+    const { router } = buildInboxRouterWithCapture(
+      freshCapture(),
+      () => undefined,
+    );
+    renderRouter(router);
+
+    const group = await screen.findByTestId("needs-you-group");
+    expect(group.textContent).toContain("Needs you · 2");
+    const items = within(group).getAllByTestId("needs-you-item");
+    expect(items.map((item) => item.dataset.notificationId)).toEqual([
+      "host:interview-new",
+      "host:approval-old",
+    ]);
+    expect(items[0]?.dataset.needsYouReason).toBe("reply");
+    expect(items[1]?.dataset.needsYouReason).toBe("approval");
+  });
+
+  it("keeps a needs-you row out of Updates and Recent, while an ordinary failure still shows under Updates", async () => {
+    applyHostSnapshot(
+      [hostPrompt("approval-1", 100, null), hostFailure("fail-1", 90, null)],
+      { unreadCount: 2, attentionCount: 2 },
+    );
+    const { router } = buildInboxRouterWithCapture(
+      freshCapture(),
+      () => undefined,
+    );
+    renderRouter(router);
+
+    await screen.findByTestId("needs-you-group");
+    expect(screen.getByText("Updates")).not.toBeNull();
+    expect(screen.queryByText("Needs attention")).toBeNull();
+    expect(
+      notificationIds(screen.getAllByTestId("notification-entry")),
+    ).toEqual(["host:fail-1"]);
+    const needsYouIds = within(screen.getByTestId("needs-you-group"))
+      .getAllByTestId("needs-you-item")
+      .map((item) => item.dataset.notificationId);
+    expect(needsYouIds).toEqual(["host:approval-1"]);
+  });
+
+  it("activates a Needs you item the same way a feed row activates", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostPrompt("approval-click", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const captured = freshCapture();
+    const onNavigate = vi.fn();
+    const { router } = buildInboxRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const item = await screen.findByTestId("needs-you-item");
+    expect(item.dataset.notificationId).toBe("host:approval-click");
+
+    await act(async () => {
+      fireEvent.click(item);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(captured.epicId).toBe("epic-1");
+    await waitFor(() => {
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      useHostNotificationsStore.getState().byId["approval-click"]?.readAt,
+    ).toBeTypeOf("number");
+  });
+
+  it("shows no Needs you group once the prompt is resolved", async () => {
+    applyHostSnapshot(
+      [{ ...hostPrompt("resolved-1", 100, null), resolvedAt: 150 }],
+      { unreadCount: 0, attentionCount: 0 },
+    );
+    const { router } = buildInboxRouterWithCapture(
+      freshCapture(),
+      () => undefined,
+    );
+    renderRouter(router);
+
+    await screen.findByTestId("notifications-popover");
+    expect(screen.queryByTestId("needs-you-group")).toBeNull();
+  });
+
+  it("never shows the Needs you group in center mode, even with an unresolved prompt", async () => {
+    applyHostSnapshot([hostPrompt("unresolved-1", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const { router } = buildRouterWithCapture(freshCapture(), () => undefined);
+    renderRouter(router);
+
+    await screen.findByTestId("notification-entry");
+    expect(screen.queryByTestId("needs-you-group")).toBeNull();
   });
 });

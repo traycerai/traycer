@@ -8,7 +8,7 @@ import { usePressStartActivation } from "@/lib/host/press-start-activation";
  * jsdom has no input pipeline: it dispatches whatever event you name, so it
  * cannot reproduce the defect this hook exists for (a press whose element is
  * removed before release, which emits no click in a real browser). That case
- * belongs to `scripts/boot-escape-hatch-press-browser.mjs` and is asserted
+ * belongs to `browser-tests/boot-escape-hatch-press.spec.ts` and is asserted
  * there against real Chromium input.
  *
  * What is testable here is the ACTIVATION ALGEBRA - which combinations of

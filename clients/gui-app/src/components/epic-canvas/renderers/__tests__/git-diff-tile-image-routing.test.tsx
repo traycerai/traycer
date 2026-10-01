@@ -446,6 +446,7 @@ beforeEach(() => {
     url: "blob:image",
     meta: null,
     reason: null,
+    missing: false,
     totalBytes: 1,
     servedFromCache: false,
   };
@@ -478,6 +479,7 @@ describe("<GitDiffTile /> image routing", () => {
       url: null,
       meta: null,
       reason: "This image could not be loaded.",
+      missing: false,
       totalBytes: 42,
       servedFromCache: false,
     };
@@ -510,6 +512,7 @@ describe("<GitDiffTile /> image routing", () => {
       url: null,
       meta: null,
       reason: "This image could not be loaded.",
+      missing: false,
       totalBytes: 42,
       servedFromCache: false,
     };
@@ -590,6 +593,7 @@ describe("<GitDiffTile /> image routing", () => {
         height: 80,
       },
       reason: null,
+      missing: false,
       totalBytes: 12,
       servedFromCache: false,
     };

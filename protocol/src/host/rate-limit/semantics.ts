@@ -124,6 +124,11 @@ export function providerRateLimitWindows(
       return [rateLimits.cursorModels, rateLimits.otherModels].filter(
         (window): window is ProviderRateLimitWindow => window !== null,
       );
+    case "antigravity":
+      // Every group's windows, 5-hour and weekly alike. None is scoped to the
+      // models Traycer runs: each is the account's usage, the same as every
+      // other windowed provider's.
+      return rateLimits.groups.flatMap((group) => group.windows);
     case "opencode":
       return [rateLimits.fiveHour, rateLimits.weekly, rateLimits.monthly];
     case "openrouter":

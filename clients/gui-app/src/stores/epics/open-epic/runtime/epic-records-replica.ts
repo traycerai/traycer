@@ -85,6 +85,7 @@ import {
   type EpicLaneStateSlices,
 } from "./epic-lane-state-replica";
 import { createChatRecordTable } from "./chat-record-table";
+import type { RetainedValueSize } from "@/stores/replica-memory/retained-value-size";
 import { createTuiAgentRecordTable } from "./tui-agent-record-table";
 import {
   createMetadataOverlayStore,
@@ -114,6 +115,10 @@ const STREAM_ORIGIN = "stream";
 export const LOCAL_ORIGIN = "local";
 
 export interface EpicRecordsReplicaSources {
+  readonly onRootDocChanged?: (updateBytes: number) => void;
+  readonly onRootDocReplaced?: () => void;
+  readonly onRetainedRowsChanged?: (size: RetainedValueSize) => void;
+  readonly onRetainedOverlayChanged?: (size: RetainedValueSize) => void;
   /**
    * Fires when the set of held attachment hashes changes.
    *
@@ -513,6 +518,7 @@ export function createEpicRecordsReplica(
 
   const overlay: MetadataOverlayStore = createMetadataOverlayStore({
     environment,
+    onRetainedStateChanged: (size) => sources.onRetainedOverlayChanged?.(size),
     republish: () => republishForOverlay(),
     isProjectorAttached: () => projector.isAttached(),
     hasFreshRootSnapshotForOpenCycle: () =>
@@ -631,10 +637,18 @@ export function createEpicRecordsReplica(
     apply: () => TPublication | null,
     patchOf: (publication: TPublication) => Partial<EpicRecordsProjection>,
   ): void {
+    const sizeBefore = retainedRecordSize();
     const ingestSeqBefore = table.ingestSeq();
     const incompleteSeqBefore = table.snapshotIncompleteSeq();
     const deltaIncompleteSeqBefore = table.deltaIncompleteSeq();
     const publication = apply();
+    const sizeAfter = retainedRecordSize();
+    if (
+      sizeBefore.rawBytes !== sizeAfter.rawBytes ||
+      sizeBefore.estimatedHeapBytes !== sizeAfter.estimatedHeapBytes
+    ) {
+      sources.onRetainedRowsChanged?.(sizeAfter);
+    }
     if (publication !== null) {
       publishRecordSlice(patchOf(publication));
       return;
@@ -647,6 +661,15 @@ export function createEpicRecordsReplica(
       return;
     }
     publish({});
+  }
+
+  function retainedRecordSize(): RetainedValueSize {
+    const chat = chatTable.retainedRowSize();
+    const tui = tuiTable.retainedRowSize();
+    return {
+      rawBytes: chat.rawBytes + tui.rawBytes,
+      estimatedHeapBytes: chat.estimatedHeapBytes + tui.estimatedHeapBytes,
+    };
   }
 
   /**
@@ -687,6 +710,7 @@ export function createEpicRecordsReplica(
   // ── Replica lifecycle ─────────────────────────────────────────────────────
 
   const handleDocUpdate = (updateBytes: Uint8Array, origin: unknown): void => {
+    sources.onRootDocChanged?.(updateBytes.byteLength);
     if (origin === STREAM_ORIGIN) return;
     publish({
       isDirty: true,
@@ -1516,6 +1540,7 @@ export function createEpicRecordsReplica(
         awareness.setLocalState(localAwarenessState);
       }
       destroyReplica(previousDoc, previousAwareness);
+      sources.onRootDocReplaced?.();
       if (attachedHead === "lane") {
         // The lane populations are part of what is being replaced: the arm's
         // own reset republishes them empty a step later, but this replica must

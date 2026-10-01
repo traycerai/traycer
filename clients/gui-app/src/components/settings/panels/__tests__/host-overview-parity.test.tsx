@@ -335,8 +335,8 @@ async function renderOverviewSnapshot(options: {
   // Visit every tab so its body force-mounts: the comparison below reads the
   // WHOLE container, and an unvisited tab's body is not in the DOM at all
   // (`host-overview-tabs.tsx`'s `forceMount={visited.has(value) ? true :
-  // undefined}`) — without this, only the default Status tab's controls would
-  // ever reach the snapshot, and the Danger Zone's local/remote removal split
+  // undefined}`) — without this, only the default Installation tab's
+  // controls would ever reach the snapshot, and the Danger Zone's local/remote removal split
   // (the whole point of `removalTestIds`) would silently compare two empty
   // lists.
   for (const tab of HOST_OVERVIEW_TABS) {
@@ -543,7 +543,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     // The account's figure has ONE sanctioned place now: Installation ▸ About
     // this host shows what the account last heard, labelled "Last reported
     // version" (a recorded product decision). Everywhere that states the
-    // version the host is RUNNING — the header's health line and the Status
+    // version the host is RUNNING — the header's health line and the Updates
     // tab's version card — must still say "1.5.0" and never "1.4.2", for both
     // variants, and "1.4.2" must appear nowhere but that one labelled row.
     const local = await renderOverviewSnapshot({
@@ -615,7 +615,7 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
 
 /**
  * The version invariant, read off the page currently rendered: the RPC's
- * `running` version on the header's health line and on the Status tab's
+ * `running` version on the header's health line and on the Updates tab's
  * version card, the registry's `reported` one on neither, and `reported`
  * exactly once on the whole page — as the value of About this host's "Last
  * reported version" row.

@@ -1,7 +1,7 @@
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { defineStreamRpcContract } from "../../framework/versioned-stream-rpc";
 import { z } from "zod";
-import { defineRpcContract } from "../../framework/index";
+import { defineRpcContract, defineUpgradePath } from "../../framework/index";
 import {
   labelCatalogCommandSchema,
   groupOperationSchema,
@@ -11,6 +11,7 @@ import {
   personalAppearanceSchema,
   taskLabelStateSchema,
   cloudListTasksRequestSchema,
+  cloudListTasksResponseSchemaV10,
   cloudListTasksResponseSchema,
 } from "./schemas";
 
@@ -76,7 +77,7 @@ export const organizationReadSchema = lazySchema(() =>
     taskIds: z.array(id).max(100),
   }),
 );
-export const organizationViewSchema = lazySchema(() =>
+export const organizationViewSchemaV10 = lazySchema(() =>
   z.object({
     catalog: z.array(labelDefinitionSchema),
     groups: personalGroupsSchema,
@@ -112,18 +113,54 @@ export const organizationViewSchema = lazySchema(() =>
     ),
   }),
 );
+// Opaque cache invalidation token, not a cloud data version. Older hosts omit it.
+export const organizationViewSchema = lazySchema(() =>
+  organizationViewSchemaV10.extend({
+    historyInvalidation: z.string().optional(),
+  }),
+);
 export type OrganizationView = z.infer<typeof organizationViewSchema>;
 export const organizationReadV10 = defineRpcContract({
   method: "organization.read",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: organizationReadSchema,
-  responseSchema: organizationViewSchema,
+  responseSchema: organizationViewSchemaV10,
 });
 export const organizationRefreshV10 = defineRpcContract({
   method: "organization.refresh",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: organizationReadSchema,
+  responseSchema: organizationViewSchemaV10,
+});
+export const organizationReadV11 = defineRpcContract({
+  method: "organization.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: organizationReadSchema,
   responseSchema: organizationViewSchema,
+});
+export const organizationReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof organizationReadV10,
+  typeof organizationReadV11
+>({
+  from: organizationReadV10.schemaVersion,
+  to: organizationReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => organizationViewSchema.parse(response),
+});
+export const organizationRefreshV11 = defineRpcContract({
+  method: "organization.refresh",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: organizationReadSchema,
+  responseSchema: organizationViewSchema,
+});
+export const organizationRefreshUpgradeV10ToV11 = defineUpgradePath<
+  typeof organizationRefreshV10,
+  typeof organizationRefreshV11
+>({
+  from: organizationRefreshV10.schemaVersion,
+  to: organizationRefreshV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => organizationViewSchema.parse(response),
 });
 export const organizationCommandV10 = defineRpcContract({
   method: "organization.command",
@@ -141,7 +178,22 @@ export const organizationHistoryV10 = defineRpcContract({
   method: "organization.history",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: cloudListTasksRequestSchema,
+  responseSchema: cloudListTasksResponseSchemaV10,
+});
+export const organizationHistoryV11 = defineRpcContract({
+  method: "organization.history",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: cloudListTasksRequestSchema,
   responseSchema: cloudListTasksResponseSchema,
+});
+export const organizationHistoryUpgradeV10ToV11 = defineUpgradePath<
+  typeof organizationHistoryV10,
+  typeof organizationHistoryV11
+>({
+  from: organizationHistoryV10.schemaVersion,
+  to: organizationHistoryV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 export const organizationSubscribeV10 = defineStreamRpcContract({
   method: "organization.subscribe",
@@ -151,7 +203,7 @@ export const organizationSubscribeV10 = defineStreamRpcContract({
     z.object({
       kind: z.literal("snapshot"),
       hasBinaryPayload: z.literal(false),
-      view: organizationViewSchema,
+      view: organizationViewSchemaV10,
     }),
   ),
   clientFrameSchema: lazySchema(() =>
@@ -160,4 +212,18 @@ export const organizationSubscribeV10 = defineStreamRpcContract({
       hasBinaryPayload: z.literal(false),
     }),
   ),
+});
+
+export const organizationSubscribeV11 = defineStreamRpcContract({
+  method: "organization.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: organizationReadSchema,
+  serverFrameSchema: lazySchema(() =>
+    z.object({
+      kind: z.literal("snapshot"),
+      hasBinaryPayload: z.literal(false),
+      view: organizationViewSchema,
+    }),
+  ),
+  clientFrameSchema: organizationSubscribeV10.clientFrameSchema,
 });

@@ -1,86 +1,49 @@
 import { tabRefKey } from "@/stores/tabs/layout";
+import { useLayoutSurface } from "@/components/layout-editor/use-layout-surface";
 import { HiddenTabsMenu } from "./hidden-tabs-menu";
 import { useHiddenHeaderTabs } from "./use-hidden-header-tabs";
 import { TabGroupChip } from "./tab-group-chip";
-import { stripItemGroupId } from "@/stores/tabs/tab-groups";
+import { stripRowsOf, taskPinReadOf } from "./tab-strip-rows";
 import {
   memo,
   Fragment,
   useCallback,
-  useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   type ReactNode,
 } from "react";
-import { runHeaderStripCommitHandoff } from "./header-strip-commit-handoff";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
-import { LayoutGroup } from "motion/react";
-import { useDroppable } from "@dnd-kit/core";
-import { toast } from "sonner";
-import {
-  HEADER_TAB_SLOT_DND_TYPE,
-  HEADER_TAB_TRAILING_SLOT_DROP_ID,
-  type HeaderTabSlotDropData,
-} from "@/components/layout/tabs/header-tab-dnd";
-import {
-  useHeaderStripDropIndex,
-  useHeaderStripOffsets,
-} from "@/components/epic-canvas/dnd/dnd-store";
-import { useTabOpenInNewWindowFlow } from "@/components/layout/tabs/use-tab-open-in-new-window";
-import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
-import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
-import {
-  useAnySystemOverlayActive,
-  useSystemTabModalActions,
-} from "@/stores/tabs/use-system-tab-modal";
-import {
-  getHeaderTabs,
-  useAppearanceHeaderStripItem,
-  useHeaderStripItemIds,
-  useHeaderTabs,
-} from "@/stores/tabs/use-header-tabs";
+import { HORIZONTAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
+import { useNavigate } from "@tanstack/react-router";
+import { revealSelectedMember, useStripScroller } from "./use-strip-scroller";
+import { useOpenStripEntrances } from "./use-strip-entrance";
+import { useAppearanceHeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
-import { useHostClient } from "@/lib/host";
-import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
+import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
-import type { TabRef } from "@/stores/tabs/types";
-import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
-import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { TabStripSkeleton } from "@/components/layout/tabs/tab-strip-skeleton";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
-import { homeTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
+import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
-import { TabStripHomeItem } from "@/components/layout/tabs/tab-strip-home-item";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { HomeStripSlot } from "@/components/layout/tabs/tab-strip-home-item";
+import { useHomeTabDrawn } from "@/components/layout/tabs/use-home-tab-drawn";
+import { useTabStripController } from "@/components/layout/tabs/tab-strip-controller";
+import { TabStripIndicatorScope } from "@/components/layout/tabs/tab-strip-indicator-scope";
+import { useArrangementValue } from "@/lib/layout-overrides";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useHeaderTabIndicators } from "./header-tab-presentation";
-import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
-import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
-import {
-  executeTabSplitCommand,
-  preparePairTabsCommand,
-  resolveTabSplitCommandAvailability,
-  type TabSplitCommandId,
-} from "@/stores/tabs/tab-split-commands";
-import { activatePreparedPairTabIntent } from "@/lib/tab-navigation";
-import type { StripItem } from "@/stores/tabs/layout";
-import {
-  epicPinDispatchAdmitted,
-  useEpicSetPinned,
-  usePendingSetPinnedEpicIds,
-} from "@/hooks/epic/use-epic-set-pinned-mutation";
-import {
-  useEpicTaskPinnedStates,
-  type TaskPinnedState,
-} from "@/hooks/epic/use-epic-task-pinned-states-query";
+import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
+import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useStripExitGhosts, type StripExitGhost } from "./strip-exit-ghosts";
+import { StripExitGhostSpacer } from "./strip-exit-ghost-spacer";
+import { useSelectionTravel } from "./strip-selection-travel";
+import { StripSelectionTraveller } from "./strip-selection-traveller";
+import { useJoinGlowStore } from "./join-glow";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
   const persistedStripCount = useTabsStore((s) => s.stripOrder.length);
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useHomeTabDrawn();
   if (!hasHydrated) {
     return (
       <TabStripSkeleton
@@ -94,18 +57,19 @@ export function TabStrip() {
 
 function TabStripBody() {
   const tabListRef = useRef<HTMLDivElement | null>(null);
-  const headerItemIds = useHeaderStripItemIds();
-  const layoutItems = useTabsStore((state) => state.items);
-  const groups = useTabsStore((state) => state.groups);
-  const customizations = useTabsStore((state) => state.customizations);
-  const allTabs = useHeaderTabs();
+  const controller = useTabStripController();
+  const {
+    headerItemIds,
+    layoutItems,
+    groups,
+    customizations,
+    activeItemId,
+    dropIndicatorIndex,
+  } = controller;
+  const allTabs = controller.tabs;
   const navigate = useNavigate();
-  const openInNewWindowFlow = useTabOpenInNewWindowFlow();
-  const closeTabFlow = useCloseTabFlow();
-  const { close: closeModal } = useSystemTabModalActions();
-  const modalActive = useAnySystemOverlayActive();
   const handleWheel = useHorizontalWheelScroll();
-  const taskTabLayout = useSettingsStore((state) => state.taskTabLayout);
+  const taskTabLayout = useArrangementValue("taskTabLayout");
   const { setScrollElement, hiddenTabKeys, hasOverflow, revealTab } =
     useHiddenHeaderTabs(taskTabLayout);
   const hiddenTabs = useMemo(() => {
@@ -123,363 +87,204 @@ function TabStripBody() {
     },
     [navigate, revealTab],
   );
-  const activeItemId = useTabsStore((state) => state.activeItemId);
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
-  // `activeItemId === null` over a populated strip means Home holds the
-  // selection; over an empty one it means the same thing, since Home is the
-  // only surface left to hold it.
-  const homeIsActive = homeTabEnabled && activeItemId === null;
-  const activePathname = useRouterState({
-    select: (s) => s.location.pathname,
+  const rows = useMemo(
+    () => stripRowsOf(headerItemIds, layoutItems, groups, customizations),
+    [headerItemIds, layoutItems, groups, customizations],
+  );
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const travellerRef = useRef<HTMLSpanElement | null>(null);
+  const setScrollExtras = useCallback(
+    (node: HTMLDivElement | null) => {
+      scrollerRef.current = node;
+      setScrollElement(node);
+    },
+    [setScrollElement],
+  );
+  // Before `useStripScroller`: the slots it opens are measured and held shut
+  // before the activation reveal runs, and it keeps the selection in view
+  // while they grow, which that one-off reveal cannot.
+  const revealSelection = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (scroller !== null)
+      revealSelectedMember(scroller, HORIZONTAL_STRIP_AXIS);
+  }, []);
+  useOpenStripEntrances(revealSelection);
+  const setScrollerNode = useStripScroller({
+    axis: HORIZONTAL_STRIP_AXIS,
+    activeItemId,
+    itemCount: headerItemIds.length,
+    extraRef: setScrollExtras,
   });
-  // Single insertion index covering header-tab reorder AND canvas tear-off
-  // hovers - both flow through the root DndContext into the drag store.
-  const dropIndicatorIndex = useHeaderStripDropIndex();
-  // Explicit per-item displacement resolved by the drag model - the same
-  // mechanism the tile strip uses. No provisional CSS `order`, no layout
-  // projection, so no projection can be stranded mid-flight.
-  const headerOffsets = useHeaderStripOffsets();
-  // Parent layout effects run AFTER every child's, so by here every strip item
-  // has registered and published its current target. Driving the re-base from
-  // this one boundary is what makes it reach EVERY item whose baseline moved -
-  // an earlier per-item version reached only the items React happened to
-  // re-render, which is one tab per commit.
-  useLayoutEffect(() => {
-    runHeaderStripCommitHandoff();
-  });
-
-  const isLandingPage = activePathname === "/";
-  const {
-    epicIds: indicatorEpicIds,
-    indicators: notificationIndicators,
-    chatEpicIds: indicatorChatEpicIds,
-    chatScopes: indicatorChatScopes,
-  } = useHeaderTabIndicators(allTabs);
-  const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
-  const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
-  const { mutate: setEpicPinned } = useEpicSetPinned();
-  const hostClient = useHostClient();
-  const handleSetTaskPinned = useCallback(
-    (epicId: string, pinned: boolean, displayName: string) => {
-      // The same reading the menu rendered its label and availability from -
-      // NOT a second derivation, which is how a control and its dispatch come
-      // to disagree. A local-homed epic on a `@1.1` host is served off that
-      // host's disk and spends no cloud capability, so it is admissible with
-      // no verdict; everything else still needs one.
-      const reading = taskPinnedStates.get(epicId);
-      const isLocalHome = reading?.home === "local";
-      // The epic's host, from that SAME reading. A local-homed pin is served
-      // off the owning host's disk, so the write has to go there: sent to the
-      // window's host instead, `epicHomeVerdict` answers not-local and the
-      // request falls through to a cloud write for an epic the cloud has no row
-      // for. `null` for a cloud-homed row means "follow the window", which is
-      // right - any host proxies a cloud pin.
-      const hostId = reading?.hostId ?? null;
-      const variables = { epicId, pinned, isLocalHome, hostId };
-      // Fail closed on the CAPABILITY, not just in the menu. This is the one
-      // dispatch site for the whole tab tree, and the Undo action below is a
-      // second entry into it that no menu gate can reach: the toast outlives
-      // the click, so a verdict withdrawn - or a host rolled back to `@1.0` -
-      // in between would let Undo spend a cloud capability the session no
-      // longer holds. `epicPinDispatchAdmitted` is the mutation's own gate, so
-      // this edge and `onMutate` cannot answer differently; it re-reads both
-      // the verdict and the negotiation rather than closing over either.
-      if (!epicPinDispatchAdmitted(variables, hostClient.getActiveHostId())) {
-        return;
-      }
-      setEpicPinned(variables, {
-        onSuccess: () => {
-          toast.success(pinConfirmationMessage(displayName, pinned), {
-            action: {
-              label: "Undo",
-              onClick: () => {
-                // `hostId` rides the closure exactly as `isLocalHome` does,
-                // and that is what lets the pin host be per-dispatch at all:
-                // this toast outlives the row's menu, so a host resolved from a
-                // mounted row would be gone by now.
-                const undo = { epicId, pinned: !pinned, isLocalHome, hostId };
-                if (
-                  !epicPinDispatchAdmitted(undo, hostClient.getActiveHostId())
-                ) {
-                  return;
-                }
-                setEpicPinned(undo);
-              },
-            },
-          });
-        },
-      });
-    },
-    [hostClient, setEpicPinned, taskPinnedStates],
+  // After `useStripScroller`, whose reveal has by then scrolled the
+  // destination into view for the travel to measure.
+  useSelectionTravel({ scrollerRef, travellerRef, activeItemId, layoutItems });
+  // The rows as drawn, so a group that collapses or expands counts as well as
+  // a close: a spacer whose row it hid is not drawn to finish closing.
+  const drawnRowsKey = useMemo(
+    () =>
+      rows
+        .map((row) =>
+          [
+            row.groupStart === null ? "" : `chip:${row.groupStart.groupId}`,
+            `${row.hidden ? "hidden" : "item"}:${row.itemId}`,
+          ].join(" "),
+        )
+        .join("\n"),
+    [rows],
   );
-
-  // Trailing slot: the strip's empty space after the last tab accepts drops
-  // at index `allTabs.length` (both reorder and tear-off).
-  const trailingSlotData = useMemo<HeaderTabSlotDropData>(
-    () => ({
-      kind: HEADER_TAB_SLOT_DND_TYPE,
-      index: headerItemIds.length,
-      isTrailing: true,
-    }),
-    [headerItemIds.length],
-  );
-  const { setNodeRef: trailingSlotRef } = useDroppable({
-    id: HEADER_TAB_TRAILING_SLOT_DROP_ID,
-    data: trailingSlotData,
-  });
-
-  const setStripRef = useCallback(
-    (element: HTMLDivElement | null) => {
-      trailingSlotRef(element);
-      setScrollElement(element);
-    },
-    [trailingSlotRef, setScrollElement],
-  );
-
-  const handleNewTab = useCallback(() => {
-    navigateToTabIntent(navigate, openNewEpicIntent(), undefined);
-  }, [navigate]);
-
-  const handleHomeTab = useCallback(() => {
-    navigateToTabIntent(navigate, homeTabIntent(), undefined);
-  }, [navigate]);
-
-  const handleDuplicateTab = useCallback(
-    (tab: HeaderTab) => {
-      const intent = tabDuplicate(tab);
-      if (intent === null) return;
-      navigateToTabIntent(navigate, intent, undefined);
-    },
-    [navigate],
-  );
-
-  const handleSplitCommand = useCallback(
-    (id: TabSplitCommandId, tab: HeaderTab): void => {
-      const ref: TabRef = { kind: tab.kind, id: tab.id };
-      const availability = resolveTabSplitCommandAvailability(ref);
-      if (id === "close-left" || id === "close-right") {
-        const closeRef =
-          id === "close-left"
-            ? availability.closeLeft
-            : availability.closeRight;
-        if (closeRef === null) return;
-        const closeTab = getHeaderTab(closeRef);
-        if (closeTab !== null) closeTabFlow.requestCloseTab(closeTab);
-        return;
-      }
-      if (id === "pair") {
-        const prepared = preparePairTabsCommand(ref);
-        if (prepared === null) return;
-        activatePreparedPairTabIntent(
-          navigate,
-          prepared.command,
-          tabResolveIntent(tab),
-          undefined,
-        );
-        return;
-      }
-      executeTabSplitCommand(id, ref);
-    },
-    [closeTabFlow, navigate],
-  );
-
-  const executeActiveSplitCommand = useCallback(
-    (id: TabSplitCommandId): void => {
-      const availability = resolveTabSplitCommandAvailability(null);
-      if (id === "close-left" || id === "close-right") {
-        const closeRef =
-          id === "close-left"
-            ? availability.closeLeft
-            : availability.closeRight;
-        if (closeRef === null) return;
-        const closeTab = getHeaderTab(closeRef);
-        if (closeTab !== null) closeTabFlow.requestCloseTab(closeTab);
-        return;
-      }
-      executeTabSplitCommand(id, null);
-    },
-    [closeTabFlow],
-  );
-
-  useEffect(() => {
-    const unregisterAdd = registerDynamicActionHandler("tab.split.add", () => {
-      executeActiveSplitCommand("add");
-    });
-    const unregisterSwap = registerDynamicActionHandler(
-      "tab.split.swap",
-      () => {
-        executeActiveSplitCommand("swap");
-      },
+  const { ghosts, settleGhost } = useStripExitGhosts(scrollerRef, drawnRowsKey);
+  const ghostBefore = useMemo(() => {
+    const byAnchor = new Map<string | null, StripExitGhost>();
+    for (const ghost of ghosts) byAnchor.set(ghost.beforeAnchor, ghost);
+    return byAnchor;
+  }, [ghosts]);
+  const renderGhost = (anchor: string | null): ReactNode => {
+    const ghost = ghostBefore.get(anchor);
+    return ghost === undefined ? null : (
+      <StripExitGhostSpacer
+        key={ghost.key}
+        ghost={ghost}
+        onSettled={settleGhost}
+      />
     );
-    const unregisterSeparate = registerDynamicActionHandler(
-      "tab.split.separate",
-      () => {
-        executeActiveSplitCommand("separate");
-      },
-    );
-    const unregisterCloseLeft = registerDynamicActionHandler(
-      "tab.split.close-left",
-      () => {
-        executeActiveSplitCommand("close-left");
-      },
-    );
-    const unregisterCloseRight = registerDynamicActionHandler(
-      "tab.split.close-right",
-      () => {
-        executeActiveSplitCommand("close-right");
-      },
-    );
-    return () => {
-      unregisterAdd();
-      unregisterSwap();
-      unregisterSeparate();
-      unregisterCloseLeft();
-      unregisterCloseRight();
-    };
-  }, [executeActiveSplitCommand]);
+  };
+  const joinGlowing = useJoinGlowStore((state) => state.glowing);
+  const surfaceRef = useLayoutSurface("topBar");
+  const stripRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      tabListRef.current = node;
+      surfaceRef(node);
+    },
+    [surfaceRef],
+  );
 
-  // The strip mounts inside every signed-in route, so it's the right
-  // home for the universal "close active strip tab" chord. Registers
-  // a dynamic handler for `epic.close` (default ⇧⌘W) so the chord
-  // closes the active strip tab regardless of kind - epic, draft,
-  // history, or settings - by routing through the close-flow. The
-  // system-tab modal takes precedence: if it's open, the chord closes
-  // the modal first instead of the underlying strip tab.
-  const closeActiveStripTab = closeTabFlow.closeActiveTab;
-  useEffect(() => {
-    return registerDynamicActionHandler("epic.close", () => {
-      if (modalActive) {
-        closeModal();
-        return;
-      }
-      closeActiveStripTab();
-    });
-  }, [closeActiveStripTab, closeModal, modalActive]);
-
-  // The empty strip used to be nothing at all on the landing route. Home is a
-  // fixed tab, so with it on there is always something to render and the strip
-  // must not collapse - otherwise the one control that gets the user back to
-  // Home disappears exactly when it is the only surface open.
-  if (!homeTabEnabled && allTabs.length === 0 && isLandingPage) {
+  // On the empty landing route the strip draws nothing; the header's own
+  // actions stay, so no control is lost.
+  if (controller.isEmptyLanding) {
     return null;
   }
 
-  const canCloseOtherTabs = headerItemIds.length > 1;
-
   return (
-    <NotificationIndicatorsProvider indicators={notificationIndicators}>
-      <ChatIndicatorHostScopes
-        scopes={indicatorChatScopes}
-        chatEpicIds={indicatorChatEpicIds}
+    <TabStripIndicatorScope indicators={controller.indicators}>
+      <div
+        ref={stripRef}
+        tabIndex={-1}
+        role="tablist"
+        aria-label="Open tabs"
+        data-testid="tab-strip"
+        data-tab-layout={taskTabLayout}
+        data-join-glow={joinGlowing ? "" : undefined}
+        className="group/strip relative flex min-w-0 flex-1 items-end"
       >
-        <div
-          ref={tabListRef}
-          role="tablist"
-          tabIndex={-1}
-          aria-label="Open tabs"
-          data-testid="tab-strip"
-          data-tab-layout={taskTabLayout}
-          className="group/strip relative flex min-w-0 flex-1 items-end"
-        >
-          {/* Outside the scrollable list and before it: Home is fixed, so it
-              must not scroll away with the task tabs, and it must not sit
-              inside the `LayoutGroup` whose reorder animations belong to
-              draggable items. */}
-          {homeTabEnabled ? (
-            <TabStripHomeItem
-              isActive={homeIsActive}
-              onActivate={handleHomeTab}
+        {/* Outside the scrollable list and before it: Home is fixed, so it
+            must not scroll away with the task tabs. */}
+        {controller.homeTabDrawn ? (
+          <HomeStripSlot
+            isActive={controller.homeIsActive}
+            onActivate={controller.onHomeTab}
+          />
+        ) : null}
+        <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
+          {hasOverflow ? (
+            <HiddenTabsMenu
+              tabs={hiddenTabs.left}
+              side="left"
+              fallbackFocusRef={tabListRef}
+              onActivate={handleActivateHiddenTab}
             />
           ) : null}
-          <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
-            {hasOverflow ? (
-              <HiddenTabsMenu
-                tabs={hiddenTabs.left}
-                side="left"
-                onActivate={handleActivateHiddenTab}
-                fallbackFocusRef={tabListRef}
-              />
-            ) : null}
-            <LayoutGroup id="header-tabs">
-              <div
-                ref={setStripRef}
-                data-testid="header-tab-strip-scroll"
-                onWheel={handleWheel}
-                className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
-              >
-                {headerItemIds.map((itemId, index) => {
-                  const layoutItem = layoutItems.at(index);
-                  const groupId =
-                    layoutItem === undefined
-                      ? null
-                      : stripItemGroupId(layoutItem, customizations);
-                  const group =
-                    groupId === null ? undefined : groups?.[groupId];
-                  const previousItem =
-                    index === 0 ? undefined : layoutItems.at(index - 1);
-                  const firstInGroup =
-                    groupId !== null &&
-                    (previousItem === undefined ||
-                      stripItemGroupId(previousItem, customizations) !==
-                        groupId);
-                  return (
-                    <Fragment key={itemId}>
-                      {firstInGroup && group !== undefined ? (
-                        <TabGroupChip
-                          groupId={groupId}
-                          group={group}
-                          onClose={closeTabFlow.closeGroup}
-                        />
-                      ) : null}
-                      {group?.collapsed !== true ? (
-                        <HeaderStripItemRenderer
-                          itemId={itemId}
-                          stripIndex={index}
-                          offsetX={headerOffsets.get(itemId) ?? 0}
-                          memberOffset={memberOffsetBefore(layoutItems, index)}
-                          isActive={itemId === activeItemId}
-                          isNextActive={
-                            headerItemIds[index + 1] === activeItemId
-                          }
-                          nextIsSplit={layoutItems[index + 1]?.kind === "split"}
-                          isLastItem={index === headerItemIds.length - 1}
-                          showDropIndicatorBefore={dropIndicatorIndex === index}
-                          showDropIndicatorAfter={
-                            dropIndicatorIndex === index + 1 &&
-                            index === headerItemIds.length - 1
-                          }
-                          onClose={closeTabFlow.requestCloseTab}
-                          onCloseOtherTabs={closeTabFlow.closeOtherTabs}
-                          onDuplicateTab={handleDuplicateTab}
-                          canCloseOtherTabs={canCloseOtherTabs}
-                          onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-                          canOpenInNewWindow={openInNewWindowFlow.isAvailable}
-                          onSplitCommand={handleSplitCommand}
-                          taskPinnedStates={taskPinnedStates}
-                          pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-                          onSetTaskPinned={handleSetTaskPinned}
-                        />
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-              </div>
-            </LayoutGroup>
-            {hasOverflow ? (
-              <HiddenTabsMenu
-                tabs={hiddenTabs.right}
-                side="right"
-                onActivate={handleActivateHiddenTab}
-                fallbackFocusRef={tabListRef}
-              />
-            ) : null}
-            <TabStripNewButton onNewTab={handleNewTab} />
+          {/* The task tabs are non-editable chrome and dim while a layout
+              session is live (4.2). The marker is on the scroller rather
+              than on the strip root, which is an ancestor of the Home
+              item's region.
+
+              The `-members` spelling dims each tab rather than the
+              scroller's own box, because one of those tabs is the
+              session's own chrome: the sample workspace tab, which draws
+              itself as the customizing mark (L-87, L-138). `opacity` on
+              this box could not be undone below it, so the one mark that
+              says "you are customizing" was drawn at 45% of itself
+              (L-132). */}
+          <div
+            // Two owners, one node: dnd-kit's trailing drop slot, and the
+            // reveal above, which needs the scrolling box itself.
+            ref={setScrollerNode}
+            data-layout-passive-members
+            data-testid="header-tab-strip-scroll"
+            data-strip-axis="x"
+            data-strip-edge="top"
+            onWheel={handleWheel}
+            // `relative` so the selection traveller is placed in the strip's
+            // own scrolling content, scrolled and clipped with the tabs.
+            className="no-scrollbar relative flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
+          >
+            <StripSelectionTraveller ref={travellerRef} />
+            {rows.map((row) => {
+              const { itemId, stripIndex: index } = row;
+              return (
+                <Fragment key={itemId}>
+                  {row.groupStart !== null ? (
+                    <>
+                      {renderGhost(`chip:${row.groupStart.groupId}`)}
+                      <TabGroupChip
+                        groupId={row.groupStart.groupId}
+                        group={row.groupStart.group}
+                        onClose={controller.onCloseGroup}
+                      />
+                    </>
+                  ) : null}
+                  {!row.hidden ? renderGhost(`item:${itemId}`) : null}
+                  {!row.hidden ? (
+                    <HeaderStripItemRenderer
+                      itemId={itemId}
+                      stripIndex={index}
+                      offsetX={controller.offsets.get(itemId) ?? 0}
+                      memberOffset={row.memberOffset}
+                      isActive={itemId === activeItemId}
+                      isNextActive={headerItemIds[index + 1] === activeItemId}
+                      nextIsSplit={layoutItems[index + 1]?.kind === "split"}
+                      isLastItem={index === headerItemIds.length - 1}
+                      showDropIndicatorBefore={dropIndicatorIndex === index}
+                      showDropIndicatorAfter={
+                        dropIndicatorIndex === index + 1 &&
+                        index === headerItemIds.length - 1
+                      }
+                      onClose={controller.onClose}
+                      onCloseOtherTabs={controller.onCloseOtherTabs}
+                      onDuplicateTab={controller.onDuplicateTab}
+                      canCloseOtherTabs={controller.canCloseOtherTabs}
+                      onOpenInNewWindow={controller.onOpenInNewWindow}
+                      canOpenInNewWindow={controller.canOpenInNewWindow}
+                      onSplitCommand={controller.onSplitCommand}
+                      taskPinnedStates={controller.taskPinnedStates}
+                      pendingSetPinnedEpicIds={
+                        controller.pendingSetPinnedEpicIds
+                      }
+                      onSetTaskPinned={controller.onSetTaskPinned}
+                      onTaskPinMenuOpen={controller.onTaskPinMenuOpen}
+                    />
+                  ) : null}
+                </Fragment>
+              );
+            })}
+            {renderGhost(null)}
           </div>
-          {closeTabFlow.unsyncedDialog}
-          <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
+          {hasOverflow ? (
+            <HiddenTabsMenu
+              tabs={hiddenTabs.right}
+              side="right"
+              onActivate={handleActivateHiddenTab}
+              fallbackFocusRef={tabListRef}
+            />
+          ) : null}
+          {/* Placed by the strip: 4px after the last tab, centred on the row. */}
+          <div className="ml-1 flex shrink-0 self-center">
+            <TabStripNewButton onNewTab={controller.onNewTab} />
+          </div>
         </div>
-      </ChatIndicatorHostScopes>
-    </NotificationIndicatorsProvider>
+        {controller.dialogs}
+      </div>
+    </TabStripIndicatorScope>
   );
 }
 
@@ -512,6 +317,8 @@ interface HeaderStripItemRendererProps {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
 
 const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
@@ -555,6 +362,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
         taskPinnedStates={props.taskPinnedStates}
         pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
         onSetTaskPinned={props.onSetTaskPinned}
+        onTaskPinMenuOpen={props.onTaskPinMenuOpen}
       />
     );
   }
@@ -579,6 +387,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
       taskPinnedStates={props.taskPinnedStates}
       pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
       onSetTaskPinned={props.onSetTaskPinned}
+      onTaskPinMenuOpen={props.onTaskPinMenuOpen}
     />
   );
 });
@@ -607,7 +416,14 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** See `useRetryUnansweredTaskPinReading`: re-asks when a tab's menu opens. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }): ReactNode {
+  const pinRead = taskPinReadOf(
+    props.tab,
+    props.taskPinnedStates,
+    props.pendingSetPinnedEpicIds,
+  );
   const dnd = useMemo(
     () => ({
       stripItemId: props.itemId,
@@ -635,43 +451,10 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       onOpenInNewWindow={props.onOpenInNewWindow}
       canOpenInNewWindow={props.canOpenInNewWindow}
       onSplitCommand={props.onSplitCommand}
-      taskPinnedState={
-        props.tab.kind === "epic"
-          ? (props.taskPinnedStates.get(props.tab.epicId) ?? null)
-          : null
-      }
-      isTaskPinPending={
-        props.tab.kind === "epic" &&
-        props.pendingSetPinnedEpicIds.has(props.tab.epicId)
-      }
+      taskPinnedState={pinRead.taskPinnedState}
+      isTaskPinPending={pinRead.isTaskPinPending}
       onSetTaskPinned={props.onSetTaskPinned}
+      onTaskPinMenuOpen={props.onTaskPinMenuOpen}
     />
   );
 });
-
-function memberOffsetBefore(
-  items: ReadonlyArray<StripItem>,
-  index: number,
-): number {
-  return items.slice(0, index).reduce((total, item) => {
-    if (item.kind === "tab") return total + 1;
-    return (
-      total +
-      Number(item.left.kind === "tab") +
-      Number(item.right.kind === "tab")
-    );
-  }, 0);
-}
-
-function getHeaderTab(ref: TabRef): HeaderTab | null {
-  return (
-    getHeaderTabs().find((tab) => tab.kind === ref.kind && tab.id === ref.id) ??
-    null
-  );
-}
-
-function pinConfirmationMessage(displayName: string, pinned: boolean): string {
-  return pinned
-    ? `Pinned “${displayName}” to the top of History`
-    : `Unpinned “${displayName}” from History`;
-}

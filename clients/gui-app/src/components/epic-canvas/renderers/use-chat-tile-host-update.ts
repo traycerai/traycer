@@ -29,8 +29,8 @@ export interface ChatTileHostUpdate {
  * the resource monitor, the rate-limit popover and the workspace host switcher
  * make - `carryViewedHostIntoSettingsScope` first, so the page opens scoped to
  * the host the reader was looking at rather than the app-wide one - and it
- * names the Status tab, where the update is, so an Overview already open on
- * another tab comes back to it.
+ * names the Updates tab, where the version and the update answer are, so an
+ * Overview already open on another tab comes back to it.
  *
  * The version is read from THIS TAB's host row (`useTabHostId`), never the
  * app-wide host: a tile is bound to its host for life, and on a machine with
@@ -45,7 +45,7 @@ export function useChatTileHostUpdate(): ChatTileHostUpdate {
     openSettings({
       section: "host",
       resetToGeneral: false,
-      tab: "status",
+      tab: "updates",
       draft: null,
       hostId: null,
     });

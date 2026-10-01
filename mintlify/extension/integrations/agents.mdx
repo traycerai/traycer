@@ -1,0 +1,89 @@
+---
+title: "Agents"
+description: "Supported AI coding agents and how Traycer works with them. Traycer is designed to hand off clean and actionable prompts to your preferred AI coding agents."
+keywords: ['agents', 'add additional agents', 'supported agents', 'AI coding agents', 'cursor', 'claude code', 'claude code extension', 'windsurf', 'antigravity', 'augment', 'cline', 'codex', 'codex extension', 'gemini', 'kilocode', 'roocode', 'amp', 'zen coder', 'zencoder', 'cli', 'traycer agent', 'export markdown', 'copy prompts', 'file implementation', 'file threads', 'parallel processing', 'diff view', 'code generation']
+---
+
+## Supported agents
+
+The following agents work seamlessly with Traycer Tasks:
+
+- [Custom CLI Agents](/extension/integrations/custom-cli-agents) <Tooltip tip="Supports automated execution with YOLO Mode" href="/extension/tasks/yolo-mode"><Icon icon="bolt" size={16} /></Tooltip>
+- Cursor
+- Claude Code CLI <Tooltip tip="Supports automated execution with YOLO Mode" href="/extension/tasks/yolo-mode"><Icon icon="bolt" size={16} /></Tooltip>
+- Claude Code Extension
+- Windsurf
+- Antigravity
+- Augment
+- Cline
+- Codex CLI <Tooltip tip="Supports automated execution with YOLO Mode" href="/extension/tasks/yolo-mode"><Icon icon="bolt" size={16} /></Tooltip>
+- Codex Extension
+- Gemini CLI <Tooltip tip="Supports automated execution with YOLO Mode" href="/extension/tasks/yolo-mode"><Icon icon="bolt" size={16} /></Tooltip>
+- KiloCode
+- RooCode
+- Amp
+- ZenCoder
+
+<Info>
+  **<Icon icon="bolt" size={16} /> YOLO Mode compatible:** Agents marked with <Icon icon="bolt" size={16} /> support automated execution with [YOLO Mode](/extension/tasks/yolo-mode). Other agents require manual interaction. More agents are coming soon. If your preferred agent isn't listed, please contact us at support@traycer.ai.
+</Info>
+
+## Export options
+
+You can also export the prompts as markdown or copy them directly:
+
+- **Copy** - Copy the prompts directly to your clipboard for immediate use with any AI coding agent. (Always available in the execute dropdown)
+
+<Frame style={{ maxHeight: '900px', maxWidth: '350px', margin: '0 auto' }}>
+<img
+  src="/images/execute-dropdown.png"
+  alt="Execute dropdown"
+  className="rounded-lg"
+/>
+</Frame>
+
+- **Export as markdown** - Generate a clean markdown file containing your complete prompts that can be shared with any AI coding agent or used as documentation.
+
+The "Copy" option is always available. The "Export as markdown" option can be added through the same "Additional agents" configuration section described below.
+
+<Info>
+  **Need more control?** You can create [Custom CLI Agents](/extension/integrations/custom-cli-agents) with custom arguments and permissions for any CLI-based coding agent.
+</Info>
+
+---
+
+## Adding additional agents
+
+<Frame>
+<iframe
+  className="w-full aspect-video rounded-xl"
+  src="https://www.youtube.com/embed/DRw7C-iNHSs?rel=0"
+  title="Adding additional agents"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+></iframe>
+</Frame>
+
+Configure additional AI coding agents in Traycer settings:
+
+<Steps>
+<Step title="1. Go to Traycer settings">
+Click the gear-shaped icon on the top right in Traycer's sidebar.
+
+</Step>
+
+<Step title="2. Find Additional agents section">
+Scroll down below and find the "Additional agents" settings section.
+
+</Step>
+
+<Step title="3. Click Add item">
+Click the "Add item" button to add a new agent configuration.
+
+</Step>
+
+<Step title="4. Select and configure">
+Select the agent from the dropdown list and click "OK" to save the configuration.
+
+</Step>
+</Steps>

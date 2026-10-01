@@ -1,17 +1,30 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import {
   isServiceMutationAuthorityError,
   verifyServiceMutationAuthority,
+  withServiceMutationAuthority,
 } from "../mutation-authority";
-import { markRegistrationCommitted } from "../cli-invocation-record";
+import {
+  CLI_INVOCATION_TXN_POLL_MS,
+  CLI_INVOCATION_TXN_WAIT_MS,
+  markRegistrationCommitted,
+  runServiceRegistrationWithInvocationRecord,
+} from "../cli-invocation-record";
 import {
   atServiceInstallEdge,
   atServiceSpawnEdge,
   atServiceSpawnEdgeReporting,
   type RefusedSpawnEdgeReport,
+  withdrawServiceSpawnEdge,
 } from "../spawn-edge";
-import { WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS } from "../spawn-edge-bounds";
+import {
+  WINDOWS_ACCOUNT_SID_LOOKUP_TIMEOUT_MS,
+  WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
+} from "../spawn-edge-bounds";
 import { createCliLogger } from "../../logger";
+import { requestCooperativeShutdownReporting } from "./desktop-agent-shutdown";
+import type { ShutdownClaimIntent } from "@traycer/protocol/host/lifecycle/schemas";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -41,15 +54,53 @@ import {
   WINDOWS_START_SPAWN_POLL_MS,
   WINDOWS_START_SPAWN_VERIFY_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
+import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import {
   CLI_ERROR_CODES,
   cliError,
   isErrnoException,
 } from "../../runner/errors";
-import type { CliInvocation } from "../cli-binary";
-import { escapeXml } from "../escape-xml";
-import { windowsTaskName, type ServiceLabel } from "../label";
-import { ProcessRunError, runCommand } from "../process-runner";
+import {
+  predictServiceCliInvocation,
+  resolveServiceCliInvocation,
+  type CliInvocation,
+} from "../cli-binary";
+import { escapeXml, unescapeXml } from "../escape-xml";
+import { serviceLabelFor, windowsTaskName, type ServiceLabel } from "../label";
+import {
+  ProcessRunError,
+  runCommand,
+  runCommandForBytes,
+  type RunBytesResult,
+  type RunResult,
+} from "../process-runner";
+import {
+  isExplicitRegistrationRepair,
+  reportServiceInstallKeptDisabled,
+} from "../registration-repair";
+import {
+  gateWindowsTaskVerb,
+  isServiceRegistrationKeptChangingError,
+  isServiceTaskNotOwnedError,
+  isSidShaped,
+  readWindowsTaskOwnership,
+  serviceTaskNotOwnedError,
+  type PermittedWindowsTask,
+  type ScheduledTaskXmlQuery,
+  type WindowsTaskCreateStager,
+  type WindowsTaskOwnership,
+  type WindowsTaskOwnershipDeps,
+} from "./windows-task-gate";
+import {
+  replaceDefinitionFile,
+  SERVICE_REFRESH_COMMAND,
+  SERVICE_REINSTALL_COMMAND,
+  serviceDefinitionRefreshFailed,
+  type ServiceDefinitionAppliesAt,
+  type ServiceDefinitionForm,
+  type ServiceDefinitionRefresh,
+  type ServiceDefinitionState,
+} from "../service-definition";
 import { cliInstallHomeDir, hostHomeDir } from "../../store/paths";
 import type {
   InstallServiceOptions,
@@ -109,21 +160,34 @@ export function createWindowsController(
     uninstall: (options) => uninstallService(options, run, deps),
     status: (label) => statusService(label),
     stop: (label, options) =>
-      stopService(label, run, deps, options.onHostAddressed ?? null),
+      stopService(label, run, deps, {
+        force: options.force,
+        standDown: { intent: "shutdown", operation: "stop" },
+        onHostAddressed: options.onHostAddressed ?? null,
+      }),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run, deps),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
     // No Desktop/SMAppService split on Windows, so the restart halves are the
     // stop and start `host restart` already performed - the named seam exists
     // so the command has one shape on every platform. `forcedRecycle` is
-    // never set: `stopService` kills the tree and waits, so nothing survives
-    // to need a recycle.
-    stopForRestart: async (label) => {
-      await stopService(label, run, deps, null);
+    // never set: `stopService` ends with the sweep, which kills the tree and
+    // waits, so nothing survives to need a recycle.
+    stopForRestart: async (label, options) => {
+      await stopService(label, run, deps, {
+        force: options.force,
+        standDown: { intent: "restart", operation: "restart" },
+        onHostAddressed: null,
+      });
       return { forcedRecycle: false };
     },
     relaunchAfterRestart: (label) =>
-      runTaskAndVerifyStart(label, run, relaunchRefusedReport(label)),
+      runTaskAndVerifyStart(
+        label,
+        run,
+        relaunchRefusedReport(label),
+        taskOwnershipDeps(),
+      ),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with the Scheduled Task here.
     retireCompetingRegistration: () =>
@@ -170,19 +234,30 @@ interface StagedWindowsTaskDefinition {
 }
 
 export interface WindowsTaskInstallDeps {
+  /**
+   * `userId` is the Task XML `<UserId>`, resolved in front of the install
+   * edge. `settingsEnabled` is the task-level `<Settings><Enabled>`: `false`
+   * only when the install carries over a task its owner disabled.
+   */
   stageTaskDefinition(
     options: InstallServiceOptions,
+    userId: string,
+    settingsEnabled: boolean,
   ): Promise<StagedWindowsTaskDefinition>;
   removeStagedTaskDefinition(tmpDir: string): Promise<void>;
 }
 
 const defaultTaskInstallDeps: WindowsTaskInstallDeps = {
-  stageTaskDefinition: async (options) => {
+  stageTaskDefinition: async (options, userId, settingsEnabled) => {
     await verifyServiceMutationAuthority();
     const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
     const xmlPath = join(tmpDir, "task.xml");
     await writeHiddenHostLauncher(options);
-    const xmlBody = buildTaskXml({ label: options.label, cli: options.cli });
+    const xmlBody = buildTaskXmlForUser(
+      { label: options.label, cli: options.cli },
+      userId,
+      settingsEnabled,
+    );
     await verifyServiceMutationAuthority();
     await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
     return { tmpDir, xmlPath };
@@ -207,12 +282,56 @@ async function installService(
   run: ProcessRunner,
 ): Promise<void> {
   const taskName = windowsTaskName(options.label);
+  // The ownership gate, first and in front of the edge: a task another user
+  // owns refuses the install before anything - the grant, the launcher, the
+  // task - is touched, and the read runs on no grant's clock. The same read
+  // answers the carry-over below, so ownership and `<Enabled>` come from one
+  // `/Query /XML`. It is not the read the write is decided by: the gate's
+  // `/Create` reads again once the definition is staged, immediately before
+  // the verb (`createGatedTask`), and the definition follows that read.
+  //
+  // The caller's SID is read ONCE, here, in front of everything, and every
+  // ownership read this install makes uses that answer: the gate's, the
+  // confirm-reads after the install edge, and the `/Run` gate's. So no read
+  // after the edge spends the grant's clock on a `whoami`
+  // (`WINDOWS_TASK_OWNERSHIP_READ_BOUND_MS` counts none). A read that failed
+  // stays failed for this install, and a task that is present then refuses as
+  // unconfirmed.
+  const callerSid = taskUserSidReader();
+  const ownershipDeps = taskOwnershipDepsWithCallerSid(callerSid);
+  const create = await gateWindowsTaskVerb(
+    options.label,
+    "create",
+    ownershipDeps,
+  );
+  if (create.kind === "not-owned") throw create.error;
+  // A task its owner disabled in Task Scheduler stays disabled: the setting is
+  // theirs, and only the explicit repair (`traycer host service install`)
+  // writes it back on. Carried, the task is redefined and NOT started - a
+  // disabled task refuses `/Run` - so the install reaches no spawn edge,
+  // publishes no grant and leaves no lease waiting for a child. A task whose
+  // `<Enabled>` cannot be read is not one the user is known to have disabled:
+  // ownership already passed on this same read, so it registers enabled.
+  // Asked of whichever read a definition is staged from - the gate's, then
+  // the confirm-read's when the task changed in between.
+  const keepsDisabled = (task: PermittedWindowsTask): boolean =>
+    task.kind === "caller" &&
+    taskXmlEnabledState(task.xml).kind === "disabled" &&
+    !isExplicitRegistrationRepair();
+  // The Task XML `<UserId>`, resolved BEFORE the install edge from the SID
+  // read above: that read is a synchronous `whoami` with a 10s timeout, and
+  // after the edge it ran on the grant's clock, ending the install's lease 10s
+  // past the documented bound (`spawn-edge-bounds.ts`) - the Linux install's
+  // `enable-linger` moved in front of its edge for the same reason. An account
+  // nothing can name now refuses before anything is published or written.
+  const userId = resolveTaskUserIdFrom(callerSid);
   // The install edge: the grant is published here, in front of the first
   // write - staging writes the persistent VBS launcher an existing task runs -
   // so a publication that cannot be made leaves the launcher, the task and a
   // running host exactly as they were. The `/Run` edge below returns this same
   // publication.
-  await atServiceInstallEdge();
+  const publishedAtInstallEdge = !keepsDisabled(create.task);
+  if (publishedAtInstallEdge) await atServiceInstallEdge();
   // What the launcher held before staging overwrites it, or `null` when there
   // was none. A re-register overwrites the launcher an EXISTING task runs, and
   // an install that fails before `/Create` succeeds leaves that task
@@ -224,48 +343,60 @@ async function installService(
   // schtasks /Create /XML reads a UTF-16LE task definition from a private,
   // per-invocation staging directory. Keep staging separate from the runner so
   // the controller's install → verified `/Run` composition can be unit-tested
-  // without touching a real user service surface.
-  let staged: StagedWindowsTaskDefinition;
-  try {
-    staged = await taskInstallDeps.stageTaskDefinition(options);
-  } catch (cause) {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
-    const restoreFailure = await restorePreviousLauncher(
-      launcherPath,
-      previousLauncher,
-    );
-    if (restoreFailure === null) throw cause;
-    throw cliError({
-      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `staging the task definition for ${taskName} failed: ${describeCause(cause)}. ${launcherRestoreFailed(taskName, previousLauncher, restoreFailure)}`,
-      details: {
-        task: taskName,
-        cause: describeCause(cause),
-        launcherRestoreFailure: restoreFailure,
-      },
-      exitCode: 1,
-    });
-  }
+  // without touching a real user service surface. The gate's `/Create` calls
+  // this once, and again for each confirm-read that found the task changed;
+  // every directory it made is removed below.
+  const stagedDirs: string[] = [];
+  // A staging failure this install already reported (launcher put back, cause
+  // named), so the `/Create` failure path below rethrows it as itself.
+  let stagingFailure: unknown = null;
+  const stage: WindowsTaskCreateStager = async (task) => {
+    try {
+      const staged = await taskInstallDeps.stageTaskDefinition(
+        options,
+        userId,
+        !keepsDisabled(task),
+      );
+      stagedDirs.push(staged.tmpDir);
+      return staged.xmlPath;
+    } catch (cause) {
+      stagingFailure = await stagingFailedAfterLauncherRestore(
+        cause,
+        taskName,
+        launcherPath,
+        previousLauncher,
+      );
+      throw stagingFailure;
+    }
+  };
   // Set the moment `/Create` returns: from here the task exists with its
   // logon trigger, and any throw - the staging cleanup below included, whose
   // default verifies mutation authority first - is post-registration and must
   // reach a lease-holding caller as such (`didServiceRegistrationCommit`).
   let created = false;
   let createFailure: unknown = null;
+  // The task as the confirm-read found it immediately before the write: what
+  // the definition was staged from, so what was written.
+  let written: PermittedWindowsTask = create.task;
   try {
-    await run(
-      "schtasks",
-      ["/Create", "/TN", taskName, "/XML", staged.xmlPath, "/F"],
-      {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
-        tolerateNonZeroExit: false,
-      },
-    );
+    written = await create.exec(run, stage, {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
+      tolerateNonZeroExit: false,
+    });
     created = true;
   } catch (cause) {
     createFailure = cause;
+  }
+  // A disabled registration launches nothing: its `/Run` is refused and its
+  // logon trigger does not fire. So a grant published at the install edge is
+  // withdrawn the moment that task is written, before the cleanup below can
+  // throw. A throw from there is marked registration-committed, and the lease
+  // honours the withdrawal ahead of that mark rather than waiting out its
+  // acknowledgement window for a child that is not coming.
+  if (created && publishedAtInstallEdge && keepsDisabled(written)) {
+    withdrawServiceSpawnEdge();
   }
   // Staging cleanup runs whether `/Create` succeeded or not, and it runs
   // BEFORE the `/Create` failure is classified, because the two outcomes are
@@ -287,17 +418,23 @@ async function installService(
   // identity. Thrown from here rather than from a `finally` so the ranking is
   // explicit in the control flow instead of relying on a `finally` throw
   // replacing an in-flight one.
-  const cleanupAuthorityLoss = await removeStagedTaskDefinition(
-    staged.tmpDir,
-    taskName,
-    options.label.environment,
-  );
+  let cleanupAuthorityLoss: unknown = null;
+  for (const tmpDir of stagedDirs) {
+    const loss = await removeStagedTaskDefinition(
+      tmpDir,
+      taskName,
+      options.label.environment,
+    );
+    if (cleanupAuthorityLoss === null) cleanupAuthorityLoss = loss;
+  }
   if (cleanupAuthorityLoss !== null) {
     throw created
       ? markRegistrationCommitted(cleanupAuthorityLoss)
       : cleanupAuthorityLoss;
   }
   if (createFailure !== null) {
+    // Already reported by the stager, with the launcher put back.
+    if (createFailure === stagingFailure) throw createFailure;
     if (isServiceMutationAuthorityError(createFailure)) throw createFailure;
     // Put the launcher back as it was: `stageTaskDefinition` wrote the
     // persistent VBS before `/Create` ran. On a fresh install there was none,
@@ -310,6 +447,21 @@ async function installService(
       launcherPath,
       previousLauncher,
     );
+    // The confirm-read (or the create-if-absent's re-read) found the task
+    // another account's: nothing was written to it, and the refusal reaches
+    // the caller as itself. The launcher is this account's own file; one the
+    // restore could not put back runs no task of anyone's now.
+    if (isServiceTaskNotOwnedError(createFailure)) throw createFailure;
+    // The create failed closed - the task kept changing, or its reads ran past
+    // the create's budget - and says so in its own words, which name no
+    // account. A launcher that could not be put back still needs naming, so
+    // that case keeps the full message below.
+    if (
+      restoreFailure === null &&
+      isServiceRegistrationKeptChangingError(createFailure)
+    ) {
+      throw createFailure;
+    }
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message:
@@ -324,11 +476,57 @@ async function installService(
       exitCode: 1,
     });
   }
+  // Whether the host starts follows the task as it was written, not as the
+  // gate first read it. A disable that landed during staging came after the
+  // install edge published a grant, and nothing is coming for it: withdrawn
+  // above, so the lease is cancelled instead of waited out, and the install
+  // ends as a carried-over disable does. An enable that landed instead
+  // registers the task enabled and starts it; its `/Run` edge is the first
+  // this call reaches, so that is where the grant publishes.
+  if (keepsDisabled(written)) {
+    createCliLogger(options.label.environment).info(
+      "Registered the host's Scheduled Task and kept it disabled, as its owner left it; not starting it",
+      { task: taskName },
+    );
+    reportServiceInstallKeptDisabled();
+    return;
+  }
   // Registration is also the recovery launch. Verify this exact `/Run` so
   // callers never baseline after it and mistake IgnoreNew's suppressed second
   // run for a failed repair. Its edge was published at the install edge, so
-  // it cannot refuse here.
-  await runTaskAndVerifyStart(options.label, run, null);
+  // it cannot refuse here unless the gate's first read found the task
+  // disabled and the write found it enabled. Its gate read uses this
+  // install's SID, like every other read after the edge.
+  await runTaskAndVerifyStart(options.label, run, null, ownershipDeps);
+}
+
+/**
+ * What a failed `stageTaskDefinition` throws: an authority loss as itself;
+ * otherwise the cause, once the launcher it may have half-written is put
+ * back, or - when that restore fails too - both, named.
+ */
+async function stagingFailedAfterLauncherRestore(
+  cause: unknown,
+  taskName: string,
+  launcherPath: string,
+  previousLauncher: Buffer | null,
+): Promise<unknown> {
+  if (isServiceMutationAuthorityError(cause)) return cause;
+  const restoreFailure = await restorePreviousLauncher(
+    launcherPath,
+    previousLauncher,
+  );
+  if (restoreFailure === null) return cause;
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    message: `staging the task definition for ${taskName} failed: ${describeCause(cause)}. ${launcherRestoreFailed(taskName, previousLauncher, restoreFailure)}`,
+    details: {
+      task: taskName,
+      cause: describeCause(cause),
+      launcherRestoreFailure: restoreFailure,
+    },
+    exitCode: 1,
+  });
 }
 
 // The launcher's bytes before this install touches it, or `null` when there is
@@ -435,55 +633,88 @@ async function uninstallService(
   run: ProcessRunner,
   deps: WindowsControllerDeps,
 ): Promise<void> {
-  const taskName = windowsTaskName(options.label);
-  await run("schtasks", ["/End", "/TN", taskName], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: 30_000,
-    tolerateNonZeroExit: true,
-  });
+  // A task another user owns is never ended, deleted or emptied out of its
+  // folder here: each of those three verbs asks the ownership gate on its own
+  // read and is skipped when it is not this account's task. Everything else
+  // this uninstall does is the caller's own and still runs - the stand-down
+  // ask and the sweep reach only this account's host (`callerOnlyKillScope`),
+  // and the launcher and `pid.json` live under this account's profile. A
+  // command whose only effect would be the write (`host service uninstall`)
+  // refuses before it gets here (`readServiceRegistrationOwnership`).
+  //
+  // Asked first, as a stop is (`askHostToStandDown`), and never beside a host
+  // started in a terminal: that host is not the service's to stop.
+  if (options.leaveForegroundRun === null) {
+    await askHostToStandDown(
+      options.label,
+      run,
+      { intent: "shutdown", operation: "uninstall" },
+      null,
+    );
+  }
+  // Ends only the task's own instance, which a supervisor started in a
+  // terminal never is.
+  await endOwnedTask(options.label, run, 30_000);
   // Reap the orphaned host tree so the host doesn't keep running (and serving
-  // its port) after the task is deleted.
-  await killHostProcessTree(options.label, run, deps);
-  await run("schtasks", ["/Delete", "/TN", taskName, "/F"], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: 30_000,
-    tolerateNonZeroExit: true,
-  });
-  await verifyServiceMutationAuthority();
-  await rm(hiddenHostLauncherPath(options.label), { force: true });
-  // `schtasks /Delete` removes only the task; the `\Traycer` FOLDER it was
-  // auto-created in stays behind forever (probed live on Windows 11: the
-  // empty folder remains visible in Task Scheduler Library - and folders
-  // show even though the task itself was hidden). schtasks has no verb for
-  // folders, so ask the Schedule.Service COM API - and ONLY when the
-  // folder is genuinely empty: other environments' tasks (`Host-Dev`,
-  // `Host-Staging`) live in the same folder and must survive this
-  // uninstall. Best-effort: a missing folder or denied delete changes
-  // nothing about the uninstall's outcome.
-  await run(
-    "powershell",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "$s=New-Object -ComObject Schedule.Service;$s.Connect();$f=$s.GetFolder('\\Traycer');if((@($f.GetTasks(1)).Count -eq 0) -and (@($f.GetFolders(0)).Count -eq 0)){$s.GetFolder('\\').DeleteFolder('Traycer',0)}",
-    ],
-    {
+  // its port) after the task is deleted. Not beside a host started in a
+  // terminal: the slot match finds it by its install path and would end it,
+  // and the service has no host of its own there to reap
+  // (`UninstallServiceOptions.leaveForegroundRun`). macOS and Linux reach no
+  // host process on this path either way.
+  if (options.leaveForegroundRun === null) {
+    await killVerifiedProcessTree(
+      options.label,
+      run,
+      deps,
+      callerOnlyKillScope(),
+    );
+  }
+  const remove = await gateWindowsTaskVerb(
+    options.label,
+    "delete",
+    taskOwnershipDeps(),
+  );
+  if (remove.kind === "permitted") {
+    await remove.exec(run, {
       env: undefined,
       cwd: undefined,
       timeoutMs: 30_000,
       tolerateNonZeroExit: true,
-    },
-  ).catch((cause) => {
-    if (isServiceMutationAuthorityError(cause)) throw cause;
-  });
-  // Same rationale as stopService: the force-kill above skips the host's
+    });
+  }
+  await verifyServiceMutationAuthority();
+  await rm(hiddenHostLauncherPath(options.label), { force: true });
+  // The emptied `\Traycer` folder goes too (the verb's own note, in the gate),
+  // and only when this uninstall's task is gone or this account's: a folder
+  // still holding another user's task is theirs to keep, and the verb's own
+  // emptiness check would leave it anyway. Best-effort: a missing folder or
+  // denied delete changes nothing about the uninstall's outcome.
+  const folder = await gateWindowsTaskVerb(
+    options.label,
+    "delete-empty-folder",
+    taskOwnershipDeps(),
+  );
+  if (folder.kind === "permitted") {
+    await folder
+      .exec(run, {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: 30_000,
+        tolerateNonZeroExit: true,
+      })
+      .catch((cause: unknown) => {
+        if (isServiceMutationAuthorityError(cause)) throw cause;
+      });
+  }
+  // Same rationale as stopService: a host the sweep killed skips its
   // graceful pid.json cleanup, and metadata surviving an uninstall reads as
   // a crashed (rather than removed) host to anything that finds it later.
-  await verifyServiceMutationAuthority();
-  await removeHostPidMetadata(options.label.environment);
+  // Beside a host started in a terminal nothing was killed, and `pid.json`
+  // is that live host's.
+  if (options.leaveForegroundRun === null) {
+    await verifyServiceMutationAuthority();
+    await removeHostPidMetadata(options.label.environment);
+  }
 }
 
 async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
@@ -498,13 +729,42 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
     });
     registered = true;
   } catch (err) {
-    if (err instanceof ProcessRunError) {
+    // Unregistered only when schtasks SAYS the task is missing - or that its
+    // stored image is corrupt, which only a re-registration repairs. Any
+    // other failure (access denied, this query's timeout, a Task Scheduler
+    // that is not running, schtasks not launching) says nothing about the
+    // task, and reading it as "not installed" sent `host ensure` down the
+    // register path, whose `/Create /F` replaced a task that exists and every
+    // setting on it - re-enabling one the user had disabled.
+    if (
+      err instanceof ProcessRunError &&
+      (schtasksNamesMissingTask(err.stderr) ||
+        schtasksNamesCorruptTask(err.stderr))
+    ) {
       registered = false;
     } else {
       throw err;
     }
   }
   if (!registered) {
+    return statusNotInstalled();
+  }
+  // The task name is machine-global, so a task that exists may be another
+  // user's. One whose principal names another account is no registration of
+  // THIS account's: reported `not-installed`, so nothing reads that user's
+  // task as this account's stopped service (`host ensure` once `/Run` it, then
+  // re-registered it under this account's SID). What a write does with it is
+  // the gate's decision, not this read's. A principal that could not be
+  // confirmed either way keeps the answer this probe always gave - a read
+  // does not fail closed; every write still does.
+  const ownership = await readWindowsServiceTaskOwnership(label);
+  if (ownership.kind === "not-owned" && ownership.reason === "other-owner") {
+    // DEBUG: a status read runs on every poll, and saying this at INFO each
+    // time would grow the log with the reads. The refused WRITES say it.
+    createCliLogger(label.environment).debug(
+      "The host's Scheduled Task is owned by another user; this account has no service registration",
+      { task: taskName },
+    );
     return statusNotInstalled();
   }
   const pidMetadata = await readHostPidMetadata(label.environment);
@@ -519,31 +779,194 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
   return { state: "stopped", version: null, listenUrl: null, pid: null };
 }
 
+/** What a Windows stop that is not forced asks the running host first. */
+interface WindowsStandDownRequest {
+  /**
+   * What the host is told happens after it exits: `restart` publishes the
+   * restart tombstone to every attached client, so the bounce does not read as
+   * a death (`requestCooperativeShutdown`).
+   */
+  readonly intent: ShutdownClaimIntent;
+  /** A diagnostic label only, carried in the claim's `transitionId`. */
+  readonly operation: "stop" | "restart" | "uninstall";
+}
+
+interface WindowsHostStop {
+  /** `--force`: no ask and no scan for one, only the sweep. */
+  readonly force: boolean;
+  readonly standDown: WindowsStandDownRequest;
+  /**
+   * See `StopServiceOptions.onHostAddressed`: reported at most once, from the
+   * first of this route's own reads that finds the live host - the ask's, or
+   * the one in front of the sweep.
+   */
+  readonly onHostAddressed: (() => void) | null;
+}
+
 async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
   deps: WindowsControllerDeps,
-  // See `StopServiceOptions.onHostAddressed`: reported from this route's own
-  // read of the record, immediately before the task is ended.
-  onHostAddressed: (() => void) | null,
+  stop: WindowsHostStop,
 ): Promise<void> {
+  const reportAddressed = onceOnly(stop.onHostAddressed);
+  if (!stop.force) {
+    await askHostToStandDown(label, run, stop.standDown, reportAddressed);
+  }
   const before = await readHostPidMetadataEvidence(label.environment);
   if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
-    onHostAddressed?.();
+    reportAddressed?.();
   }
-  await run("schtasks", ["/End", "/TN", windowsTaskName(label)], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: WINDOWS_SCHTASKS_END_TIMEOUT_MS,
-    tolerateNonZeroExit: true,
-  });
-  await killHostProcessTree(label, run, deps);
-  // The force-kill above never lets the host honor its "remove pid.json on
+  await endTaskAndSweepTree(label, run, deps);
+  // The sweep proved the slot empty, so a record still here is one the host
+  // did not remove itself. A killed host never honors its "remove pid.json on
   // graceful shutdown" contract, and metadata left behind makes this
   // deliberate stop indistinguishable from a crash - the desktop's health
-  // watchdog would resurrect the host the user just stopped.
+  // watchdog would resurrect the host the user just stopped. After a host
+  // that stood down, the record is already gone and this removes nothing.
   await verifyServiceMutationAuthority();
   await removeHostPidMetadata(label.environment);
+}
+
+/**
+ * The cooperative half of every Windows stop that is not forced: ask the
+ * running host to stand down through its own lifecycle claim, so its graceful
+ * close - the terminal teardown and the durable store close - runs before
+ * anything is killed. Without it every Windows stop was a kill, and a killed
+ * host interrupts whatever its stores were writing.
+ *
+ * A `busy` answer refuses a `stop` or `restart` with `HOST_BUSY`, as the
+ * Desktop-managed macOS restart and takeover refuse it: only `--force`, which
+ * never asks, ends a host with work in progress. `uninstall` does not refuse,
+ * and neither does a stop that asked nothing (below). Every other outcome goes
+ * on to the sweep (`endTaskAndSweepTree`); what differs is what the sweep
+ * finds. After `stopped`, `no-host` or `no-metadata` it confirms an empty
+ * slot, or ends a supervisor already on its way out. After `unreachable` or
+ * `hung` it is the kill it always was. Losing the service mutation authority
+ * during the ask throws out of it (`requestCooperativeShutdownReporting`), so
+ * it aborts the stop instead of falling back to the kill.
+ *
+ * NEVER ASKED FROM INSIDE THE HOST'S OWN TREE. A granted claim runs the host's
+ * graceful close, and that close kills the process group of every running
+ * managed command, while a live managed shell does not make the host busy, so
+ * nothing denies the claim. A `host restart` or `host service uninstall` typed
+ * into an idle agent's shell would be killed by the stop it asked for, before
+ * its `/Run` or `/Delete`. The supervisor then exits 77 (restart owed), and on
+ * Windows nothing relaunches on that: Task Scheduler's `RestartOnFailure`
+ * covers a failed launch, not a non-zero exit, and the launcher re-runs only
+ * on 75. So the host would stay down, or its task stay registered. POSIX
+ * survives the same death only because launchd and systemd relaunch on 77. The
+ * sweep spares this CLI's own branch (`computeWindowsHostKillSet`), so a CLI
+ * with any slot process above it keeps exactly the stop it had before this
+ * ask existed. That includes the update reconciler's detached `host update`,
+ * which a cooperative close would not kill: the table cannot tell it from a
+ * shell, and the uniform answer is the one that regresses no caller. The check
+ * reads the same table the sweep reads. A scan that cannot run asks nothing,
+ * and the sweep's own scan then fails as it always did.
+ */
+async function askHostToStandDown(
+  label: ServiceLabel,
+  run: ProcessRunner,
+  request: WindowsStandDownRequest,
+  onHostAddressed: (() => void) | null,
+): Promise<void> {
+  const logger = createCliLogger(label.environment);
+  const table = await scanSlotProcessTable(label, run);
+  if (table === null) {
+    logger.info(
+      "Not asking the host to stand down: the process table could not be read; ending its task instead",
+      { operation: request.operation },
+    );
+    return;
+  }
+  if (slotProcessIsAncestorOf(table, process.pid)) {
+    logger.info(
+      "Not asking the host to stand down: this command runs inside the host's own process tree, which its close would end; ending its task instead",
+      { operation: request.operation },
+    );
+    return;
+  }
+  const outcome = await requestCooperativeShutdownReporting(
+    label.environment,
+    request.operation,
+    request.intent,
+    onHostAddressed,
+  );
+  logger.info("Asked the host to stand down before ending its task", {
+    operation: request.operation,
+    intent: request.intent,
+    outcome: outcome.kind,
+  });
+  if (outcome.kind === "busy" && request.operation !== "uninstall") {
+    throw cliError({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+      message:
+        "The host has work in progress. Retry once it finishes, or use --force to stop it anyway.",
+      details: { label: label.id },
+      exitCode: 1,
+    });
+  }
+}
+
+// The sweep every stop ends with, asked or forced: end the task's own
+// instance, then kill whatever the slot still holds, until a scan proves it
+// empty (`killVerifiedProcessTree`).
+async function endTaskAndSweepTree(
+  label: ServiceLabel,
+  run: ProcessRunner,
+  deps: WindowsControllerDeps,
+): Promise<void> {
+  await endOwnedTask(label, run, WINDOWS_SCHTASKS_END_TIMEOUT_MS);
+  await killVerifiedProcessTree(label, run, deps, callerOnlyKillScope());
+}
+
+/**
+ * `/End` the task's running instance, through the ownership gate. A task that
+ * is not this account's is not ended - a stop then means only "nothing of
+ * this account's is left running", which the caller-scoped sweep after it
+ * still makes true - and that is not an error.
+ */
+async function endOwnedTask(
+  label: ServiceLabel,
+  run: ProcessRunner,
+  timeoutMs: number,
+): Promise<void> {
+  const end = await gateWindowsTaskVerb(label, "end", taskOwnershipDeps());
+  if (end.kind === "not-owned") return;
+  await end.exec(run, {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs,
+    tolerateNonZeroExit: true,
+  });
+}
+
+/**
+ * Whether any slot process - the host, its supervisor, anything the slot
+ * match names - sits above `pid`, over the scan's validated parent edges only
+ * (`ancestorsOf` stops at an edge the scan could not vouch for).
+ */
+function slotProcessIsAncestorOf(
+  table: readonly WindowsProcessTableRow[],
+  pid: number,
+): boolean {
+  const parents = new Map<number, number>();
+  const slot = new Set<number>();
+  for (const row of table) {
+    parents.set(row.processId, row.parentProcessId);
+    if (row.slot) slot.add(row.processId);
+  }
+  return ancestorsOf(pid, parents).some((ancestor) => slot.has(ancestor));
+}
+
+function onceOnly(callback: (() => void) | null): (() => void) | null {
+  if (callback === null) return null;
+  let fired = false;
+  return () => {
+    if (fired) return;
+    fired = true;
+    callback();
+  };
 }
 
 // `schtasks /End` terminates the task's root process but can leave the host's
@@ -617,11 +1040,30 @@ async function stopService(
 // loop converges normally). If the live Windows run shows this flaking, the
 // lever is a short settle before the re-scan, NOT a wider bound: more rounds
 // would only spend more time re-killing the same pids.
-async function killHostProcessTree(
+//
+// ONE implementation for every caller, told apart only by `scope`
+// (`WindowsTreeKillScope`): `stopService` and the install swap's escalation
+// pass no root, exclude this CLI and seed every slot-matched process; the
+// supervisor's lifecycle teardown (`killSupervisedHostTree`) passes its own
+// host child as the root, excludes itself and seeds NOTHING else, so the tree
+// under it dies while the supervisor - which is that tree's parent, and would
+// otherwise spare all of it as "the CLI's own branch" - survives to exit on
+// its own terms, and so does every process the slot match would name that the
+// supervisor did not spawn.
+async function killVerifiedProcessTree(
   label: ServiceLabel,
   run: ProcessRunner,
   deps: WindowsControllerDeps,
+  scope: WindowsTreeKillScope,
 ): Promise<void> {
+  // The root's identity, fixed at its first sighting: the creation time the
+  // first scan that placed it recorded. A pid is only a name, and a root that
+  // exits mid-loop can hand its number on; later rounds seed the root only
+  // while the row still carries this birth. Unplaced (`null`) until a scan
+  // shows the root as a VALIDATED child of an excluded process - the edge the
+  // scan itself vouches for (`PARENT_EDGE_VALIDATION_SCRIPT_LINES`) is what
+  // proves the row is the process the caller spawned.
+  let rootCreated: number | null = null;
   // What earlier rounds placed in the host's tree - killed, or spared as one of
   // this CLI's own ancestors - with the age each had when it was seen. The
   // loop's memory: once a parent is dead the table can no longer prove its
@@ -666,6 +1108,11 @@ async function killHostProcessTree(
     suspects: priorSuspects,
     protectedAncestors: priorProtected,
   };
+  // The previous round's kills that threw, for a handle-bound probe to confirm
+  // or clear once that round is over (`reportFailedKillsStillRunning`). Every
+  // kill round is followed by a scan - the loop scans once more than it kills -
+  // and the probe runs beside it, so none goes unchecked.
+  let failedKills: readonly WindowsFailedKill[] = [];
   for (let round = 0; round <= WINDOWS_KILL_CONVERGENCE_ROUNDS; round += 1) {
     // BEFORE the scan, and that ordering is the soundness argument for the
     // whole carry-over: every victim this round selects is one the scan below
@@ -680,6 +1127,8 @@ async function killHostProcessTree(
     // that pid rather than admitting one it cannot support.
     const seenAliveAt = deps.now();
     const table = await scanSlotProcessTable(label, run);
+    await reportFailedKillsStillRunning(failedKills, label, run);
+    failedKills = [];
     if (table === null) {
       // Before the first kill this refuses to start; after one it refuses to
       // claim the tree came down. Both are the same statement - we cannot see
@@ -697,8 +1146,28 @@ async function killHostProcessTree(
     // The kill boundary, and the only place a pid has to be POSITIVE: the scan
     // and its algebra work over an unfiltered table that includes pid 0, and
     // `isKillableProcessId` is what keeps 0 - and our own pid - out of an argv.
-    const killSet = computeWindowsHostKillSet(table, process.pid, memory);
-    const pids = uniqueProcessIds(killSet.kill);
+    const placedRoot = placeKillRoot(table, scope, rootCreated);
+    if (placedRoot !== null) rootCreated = placedRoot.created;
+    const killSet = computeWindowsTreeKillSet(
+      table,
+      {
+        placedRoot: placedRoot === null ? null : placedRoot.processId,
+        excludedPids: scope.excludedPids,
+        seedSlotMatches: scope.seedSlotMatches,
+      },
+      memory,
+    );
+    const listed = uniqueProcessIds(killSet.kill);
+    // At the round bound a listing is about to fail the stop, and a listing is
+    // no proof: an exited process can stay in the table while another process
+    // still holds a handle to it. So there, and
+    // only there, each listed process is asked through its own handle first
+    // (`killSetStillRunning`); what has exited drops out, and a kill set that
+    // empties converges below exactly as an empty scan does.
+    const pids =
+      round === WINDOWS_KILL_CONVERGENCE_ROUNDS && listed.length > 0
+        ? await killSetStillRunning(listed, table, run)
+        : listed;
     const unattributed = uniqueProcessIds(killSet.unattributed);
     const undecided = uniqueProcessIds(killSet.undecided);
     const protectedAncestors = uniqueProcessIds(killSet.protectedAncestors);
@@ -777,7 +1246,7 @@ async function killHostProcessTree(
     // refuses to act on and the next round refuses to link anything to, which
     // is the right way for it to be wrong.
     const created = new Map(table.map((row) => [row.processId, row.created]));
-    await killProcessIdentities(
+    failedKills = await killProcessIdentities(
       orderWindowsKillsDescendantsFirst(pids, table).map((pid) => ({
         processId: pid,
         created: created.get(pid) ?? 0,
@@ -843,6 +1312,62 @@ async function killHostProcessTree(
   }
 }
 
+/**
+ * Who a verified tree kill is FOR, as opposed to what the slot scan finds.
+ *
+ * - `excludedPids` - the processes issuing the kill. Never killed; their own
+ *   descendant branches (the scan and kill PowerShell subprocesses) and their
+ *   non-slot ancestors are spared, exactly as `computeWindowsHostKillSet`
+ *   has always spared the CLI.
+ * - `rootPid` - a process the caller SPAWNED and wants gone with everything
+ *   under it, or `null` when the slot scan alone decides. It hangs below an
+ *   excluded process by construction, so without it the whole tree would be
+ *   spared as that process's own branch. Seeded only once a scan shows it as
+ *   a validated child of an excluded process, and afterwards only while it
+ *   keeps the birth that scan recorded (`placeKillRoot`).
+ * - `seedSlotMatches` - whether every slot-matched process is a victim too.
+ *   `true` for a stop of the service's host, which is not the caller's child:
+ *   the slot match (an executable under the slot's install paths, or a command
+ *   line naming its `host.log` / `pid.json`) is the only way to find it.
+ *   `false` for a caller that spawned the host and names it as `rootPid`: the
+ *   match is a path test and also names processes nobody spawned for the host
+ *   (an editor or a `Get-Content -Wait` on `host.log`), so an UNATTENDED
+ *   teardown ends its own root's tree and nothing else.
+ */
+export interface WindowsTreeKillScope {
+  readonly rootPid: number | null;
+  readonly excludedPids: ReadonlySet<number>;
+  readonly seedSlotMatches: boolean;
+}
+
+// `stopService` and the install swap's escalation: no root, only this CLI
+// excluded, and the slot match decides. Built per call so it reads
+// `process.pid` when the kill runs.
+function callerOnlyKillScope(): WindowsTreeKillScope {
+  return {
+    rootPid: null,
+    excludedPids: new Set([process.pid]),
+    seedSlotMatches: true,
+  };
+}
+
+// The root's row in this round's table, when it may be seeded: at its first
+// sighting only as a validated child of an excluded process with a readable
+// birth, and afterwards only under that same birth. `null` otherwise - the
+// root has exited (its children are the carry-over memory's to find), or the
+// row wearing its number is a different process.
+function placeKillRoot(
+  table: readonly WindowsProcessTableRow[],
+  scope: WindowsTreeKillScope,
+  rootCreated: number | null,
+): WindowsProcessTableRow | null {
+  if (scope.rootPid === null) return null;
+  const row = table.find((candidate) => candidate.processId === scope.rootPid);
+  if (row === undefined || row.created === 0) return null;
+  if (rootCreated !== null) return row.created === rootCreated ? row : null;
+  return scope.excludedPids.has(row.parentProcessId) ? row : null;
+}
+
 function rememberIncarnation<T>(
   memory: Map<number, T[]>,
   pid: number,
@@ -859,17 +1384,19 @@ function rememberIncarnation<T>(
 // One process the round decided to kill: the pid the scan listed and the
 // creation time it listed beside it, in the scan's epoch microseconds. The pair
 // is the identity; the pid alone is not (see the header of
-// `killHostProcessTree`).
+// `killVerifiedProcessTree`).
 export interface WindowsKillTarget {
   readonly processId: number;
   readonly created: number;
 }
 
 // The kill script's report on one target. Diagnostic only: the loop never acts
-// on it, because the next scan is the only evidence of what is still running.
-// `reused` is the case this mechanism exists for - the pid the scan selected
-// now belongs to a process born at a different time - and `unverifiable` is a
-// target whose creation time the scan could not read, which is never killed.
+// on it, because the next scan is what it selects victims from - and a
+// `failed` report waits for a handle-bound probe after that scan before it is
+// logged as a survivor (`WindowsFailedKill`). `reused` is the case this mechanism exists for - the
+// pid the scan selected now belongs to a process born at a different time -
+// and `unverifiable` is a target whose creation time the scan could not read,
+// which is never killed.
 export interface WindowsKillOutcome {
   readonly processId: number;
   readonly outcome: string;
@@ -908,8 +1435,9 @@ async function killProcessIdentities(
   targets: readonly WindowsKillTarget[],
   label: ServiceLabel,
   run: ProcessRunner,
-): Promise<void> {
+): Promise<WindowsFailedKill[]> {
   const startedAt = performance.now();
+  const failed: WindowsFailedKill[] = [];
   for (
     let start = 0;
     start < targets.length;
@@ -923,14 +1451,141 @@ async function killProcessIdentities(
         "Windows host kill round ran out of time; the targets not yet sent wait for the next scan",
         { targets: targets.length, unsent: targets.length - start },
       );
-      return;
+      return failed;
     }
-    await runHandleBoundKillScript(
-      targets.slice(start, start + WINDOWS_KILL_TARGETS_PER_SCRIPT),
-      remainingMs,
-      label,
-      run,
+    failed.push(
+      ...(await runHandleBoundKillScript(
+        targets.slice(start, start + WINDOWS_KILL_TARGETS_PER_SCRIPT),
+        remainingMs,
+        label,
+        run,
+      )),
     );
+  }
+  return failed;
+}
+
+// A target whose kill threw, with the identity it was targeted by. Not a
+// survivor on the script's word: `Kill()` on a process that is already
+// terminating throws a `Win32Exception` (TerminateProcess answers
+// STATUS_PROCESS_IS_TERMINATING as access denied), and killing a client hands
+// its console host exactly that state - it starts to exit on its own once its
+// last client is gone, while the script is still on its way to it. Seen on
+// Windows Server 2022: a `host restart` whose round reported
+// `failed: Win32Exception` for one of five targets completed with no survivor
+// refusal, so no later round selected that pid, and nothing held it later.
+// The host's own tree kill gates its WARN the same way
+// (`windowsFailedStillRunning` in traycer-host).
+interface WindowsFailedKill {
+  readonly processId: number;
+  readonly created: number;
+  readonly outcome: string;
+}
+
+// What the handle-bound script does to each target it pins and matches.
+type WindowsHandleBoundAction = "kill" | "probe";
+
+// The kill set's processes still running, asked through their own handles
+// (`buildHandleBoundKillScript`'s "probe"): `gone` (exited, or no process wears
+// the pid) and `reused` (a later process does) drop out. A probe that did not
+// run or did not report keeps every one, so the stop refuses as it did.
+// Measured on Windows Server 2022: an exited process whose launcher held its
+// handle stayed listed until the launcher saw the exit, seconds later.
+async function killSetStillRunning(
+  pids: readonly number[],
+  table: readonly WindowsProcessTableRow[],
+  run: ProcessRunner,
+): Promise<number[]> {
+  const created = new Map(table.map((row) => [row.processId, row.created]));
+  const gone = await probeProcessesGone(
+    pids.map((pid) => ({ processId: pid, created: created.get(pid) ?? 0 })),
+    run,
+  );
+  return pids.filter((pid) => !gone.has(pid));
+}
+
+// The previous round's failed kills, asked again through their own handles
+// once that round is over: WARN only the targets still running under the
+// identity they were targeted by. Not the scan: an exited process can stay
+// listed while another process holds a handle to it
+// (`buildHandleBoundKillScript`), so a row is no proof it runs. A probe that reports `gone` (exited, or no
+// process wears the pid) or `reused` (a later process does) clears its target,
+// which exited on its own - what the kill was for. A probe that did not run or
+// did not report keeps every target, since none is then proven gone.
+async function reportFailedKillsStillRunning(
+  failed: readonly WindowsFailedKill[],
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  if (failed.length === 0) return;
+  const cleared = await probeProcessesGone(
+    failed.map(({ processId, created }) => ({ processId, created })),
+    run,
+  );
+  const running = failed.filter((kill) => !cleared.has(kill.processId));
+  if (running.length === 0) return;
+  createCliLogger(label.environment).warn(
+    "Windows host kill round left targets running after a failed kill",
+    {
+      targets: running.length,
+      outcomes: running.map((kill) => `${kill.processId}=${kill.outcome}`),
+    },
+  );
+}
+
+// The targets a handle-bound probe proves gone, by pid. The probe is chunked
+// like the kill (`WINDOWS_KILL_TARGETS_PER_SCRIPT` targets per script, under
+// the same command-line cap), but its chunks run side by side, so the whole
+// probe still costs one `WINDOWS_PROCESS_KILL_TIMEOUT_MS`.
+async function probeProcessesGone(
+  targets: readonly WindowsKillTarget[],
+  run: ProcessRunner,
+): Promise<ReadonlySet<number>> {
+  const chunks: WindowsKillTarget[][] = [];
+  for (
+    let start = 0;
+    start < targets.length;
+    start += WINDOWS_KILL_TARGETS_PER_SCRIPT
+  ) {
+    chunks.push(targets.slice(start, start + WINDOWS_KILL_TARGETS_PER_SCRIPT));
+  }
+  const gone = await Promise.all(
+    chunks.map((chunk) => probeChunkGone(chunk, run)),
+  );
+  return new Set(gone.flat());
+}
+
+// One probe script's `gone` and `reused` pids. Empty when it did not run or
+// did not report, which keeps exactly this chunk's targets; the authority
+// error is the one exception, as everywhere in this module.
+async function probeChunkGone(
+  targets: readonly WindowsKillTarget[],
+  run: ProcessRunner,
+): Promise<number[]> {
+  try {
+    const result = await run(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        buildHandleBoundKillScript(targets, "probe"),
+      ],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: WINDOWS_PROCESS_KILL_TIMEOUT_MS,
+        tolerateNonZeroExit: true,
+      },
+    );
+    const outcomes = parseKillOutcomeJson(result.stdout);
+    if (outcomes === null) return [];
+    return outcomes
+      .filter((entry) => entry.outcome === "gone" || entry.outcome === "reused")
+      .map((entry) => entry.processId);
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    return [];
   }
 }
 
@@ -939,7 +1594,7 @@ async function runHandleBoundKillScript(
   timeoutMs: number,
   label: ServiceLabel,
   run: ProcessRunner,
-): Promise<void> {
+): Promise<WindowsFailedKill[]> {
   try {
     const result = await run(
       "powershell.exe",
@@ -947,7 +1602,7 @@ async function runHandleBoundKillScript(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        buildHandleBoundKillScript(targets),
+        buildHandleBoundKillScript(targets, "kill"),
       ],
       {
         env: undefined,
@@ -971,21 +1626,36 @@ async function runHandleBoundKillScript(
         exitCode: result.exitCode,
         stderr: result.stderr.trim().slice(0, 500),
       });
-      return;
+      return [];
     }
     const rendered = outcomes.map(
       (outcome) => `${outcome.processId}=${outcome.outcome}`,
     );
+    const outcomeOf = new Map(
+      outcomes.map((outcome) => [outcome.processId, outcome.outcome]),
+    );
+    const failed: WindowsFailedKill[] = [];
+    for (const target of targets) {
+      const outcome = outcomeOf.get(target.processId);
+      if (outcome !== undefined && outcome.startsWith("failed")) {
+        failed.push({ ...target, outcome });
+      }
+    }
     const unreached = outcomes.filter(
-      (outcome) => outcome.outcome !== "killed" && outcome.outcome !== "gone",
+      (outcome) =>
+        outcome.outcome !== "killed" &&
+        outcome.outcome !== "gone" &&
+        !outcome.outcome.startsWith("failed"),
     );
     if (unreached.length > 0) {
       // A target the kill did not reach and that may still be alive: a
-      // reused pid (the case this exists for, and rare), no identity to
-      // check, or a refused handle. EVERY target `reused` is the signature
-      // of the two creation-time sources disagreeing, which the live Windows
-      // run exists to rule out - and the one thing the survivor refusal the
-      // user sees cannot tell them.
+      // reused pid (the case this exists for, and rare), or no identity to
+      // check. EVERY target `reused` is the signature of the two
+      // creation-time sources disagreeing, which the live Windows run exists
+      // to rule out - and the one thing the survivor refusal the user sees
+      // cannot tell them. A refused kill (`failed: <type>`) is not named
+      // here: the probe after the next scan says whether it survived
+      // (`WindowsFailedKill`).
       logger.warn("Windows host kill round left targets unreached", {
         targets: targets.length,
         outcomes: rendered,
@@ -996,12 +1666,14 @@ async function runHandleBoundKillScript(
         outcomes: rendered,
       });
     }
+    return failed;
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     createCliLogger(label.environment).debug(
       "Windows host kill round did not complete; the next scan decides",
       { targets: targets.length, cause: describeCause(cause) },
     );
+    return [];
   }
 }
 
@@ -1058,9 +1730,24 @@ async function runHandleBoundKillScript(
  * The literal holds only integers this module produced (`WindowsKillTarget`
  * from the scan's own JSON), never text, so there is nothing to quote and no
  * argument-injection surface.
+ *
+ * `action` "kill" terminates the matched process. "probe" acts on nothing: the
+ * matched process is `gone` when its handle says it has exited, `running`
+ * otherwise. An exited process can stay in the process table - pid,
+ * creation time and all - while another process still holds a handle to it,
+ * so neither a scan row nor a successful pin proves it is running; only the
+ * handle does. The same rule decides a kill that threw (`Kill()` on a process
+ * already exiting throws): a matched process whose handle reports `HasExited`
+ * is `gone`, and `failed` only otherwise. Measured on Windows Server 2022: an
+ * orphan codex whose launcher held its handle was listed for seconds after it
+ * exited, and a kill round's table re-check named it a survivor. A handle
+ * opened by an unrelated process did not keep a killed child listed (4 of 4
+ * runs), so which holders do is not established; this rule does not depend on
+ * it. traycer-host's handle-bound script carries the same rule.
  */
 function buildHandleBoundKillScript(
   targets: readonly WindowsKillTarget[],
+  action: WindowsHandleBoundAction,
 ): string {
   const literal = targets
     .map(
@@ -1068,6 +1755,13 @@ function buildHandleBoundKillScript(
         `  @{ ProcessId = ${killTargetInteger(target.processId)}; Created = ${killTargetInteger(target.created)} }`,
     )
     .join(",\n");
+  const act =
+    action === "probe"
+      ? [
+          "        if ($process.HasExited) { $outcome = 'gone' }",
+          "        else { $outcome = 'running' }",
+        ]
+      : ["        $process.Kill()", "        $outcome = 'killed'"];
   return [
     "$ErrorActionPreference = 'Stop'",
     "$targets = @(",
@@ -1075,6 +1769,7 @@ function buildHandleBoundKillScript(
     ")",
     "$results = foreach ($target in $targets) {",
     "  $process = $null",
+    "  $matched = $false",
     "  $outcome = 'unverifiable'",
     "  try {",
     "    if ([long]$target.Created -gt 0) {",
@@ -1083,8 +1778,8 @@ function buildHandleBoundKillScript(
     "      $ticks = ($process.StartTime.ToUniversalTime() - [datetime]'1970-01-01').Ticks",
     "      $started = [long](($ticks - ($ticks % 10)) / 10)",
     "      if ([math]::Abs($started - [long]$target.Created) -le 1) {",
-    "        $process.Kill()",
-    "        $outcome = 'killed'",
+    "        $matched = $true",
+    ...act,
     "      } else {",
     "        $outcome = 'reused'",
     "      }",
@@ -1095,7 +1790,12 @@ function buildHandleBoundKillScript(
     "      $reason = $reason.InnerException",
     "    }",
     "    if ($reason -is [System.ArgumentException]) { $outcome = 'gone' }",
-    "    else { $outcome = 'failed: ' + $reason.GetType().Name }",
+    "    else {",
+    "      $outcome = 'failed: ' + $reason.GetType().Name",
+    "      if ($matched) {",
+    "        try { if ($process.HasExited) { $outcome = 'gone' } } catch { }",
+    "      }",
+    "    }",
     "  } finally {",
     "    if ($null -ne $process) { $process.Dispose() }",
     "  }",
@@ -1154,7 +1854,7 @@ async function startService(
 ): Promise<void> {
   // Writes nothing before its edge - the task is already registered - so a
   // refused publication has nothing to roll back.
-  await runTaskAndVerifyStart(label, run, null);
+  await runTaskAndVerifyStart(label, run, null, taskOwnershipDeps());
 }
 
 async function runTaskAndVerifyStart(
@@ -1165,8 +1865,17 @@ async function runTaskAndVerifyStart(
   // start) or the grant was already published (an install), and a refusal
   // then propagates as itself.
   edgeRefusal: RefusedSpawnEdgeReport | null,
+  // The gate's seams: an install passes its own, with the SID it read in
+  // front of its install edge, since this read then runs after that edge.
+  ownershipDeps: WindowsTaskOwnershipDeps,
 ): Promise<void> {
   const taskName = windowsTaskName(label);
+  // The ownership gate, in front of the baseline and the edge: a task another
+  // user owns is never started for them, and a refusal here has published no
+  // grant and issued no `/Run`, so nothing is coming and nothing is marked
+  // committed.
+  const start = await gateWindowsTaskVerb(label, "run", ownershipDeps);
+  if (start.kind === "not-owned") throw start.error;
   // Capture evidence baseline BEFORE /Run so a pre-existing pid.json or
   // stale host.log residue cannot count as "spawned this attempt".
   const baseline = await startEvidenceDeps.captureBaseline(label.environment);
@@ -1181,7 +1890,7 @@ async function runTaskAndVerifyStart(
     await atServiceSpawnEdgeReporting(edgeRefusal);
   }
   try {
-    await run("schtasks", ["/Run", "/TN", taskName], {
+    await start.exec(run, {
       env: undefined,
       cwd: undefined,
       timeoutMs: WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
@@ -1197,13 +1906,26 @@ async function runTaskAndVerifyStart(
     if (isServiceMutationAuthorityError(cause)) {
       throw markRegistrationCommitted(cause);
     }
+    // Except a task its owner disabled in Task Scheduler: it refuses this
+    // `/Run` and its logon trigger does not fire, so no child is coming.
+    // Marked committed, the lease waited its whole acknowledgement window for
+    // that child and the start was retried into the same refusal - about
+    // 100 s on a real host before the disabled-task refusal reached anyone.
+    // Answered from the gate's own `/Query /XML` - one read for this verb -
+    // and carried as `registrationDisabled`, so the caller deciding what to
+    // do about the refusal does not query again either. A setting that
+    // cannot be read keeps the committed answer.
+    const disabled =
+      start.task.kind === "caller" &&
+      taskXmlEnabledState(start.task.xml).kind === "disabled";
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
       details: {
         task: taskName,
         cause: describeCause(cause),
-        registrationCommitted: true,
+        registrationCommitted: !disabled,
+        registrationDisabled: disabled,
       },
       exitCode: 1,
     });
@@ -1335,20 +2057,34 @@ async function restartService(
   run: ProcessRunner,
   deps: WindowsControllerDeps,
 ): Promise<void> {
-  const taskName = windowsTaskName(label);
-  await run("schtasks", ["/End", "/TN", taskName], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: WINDOWS_SCHTASKS_END_TIMEOUT_MS,
-    tolerateNonZeroExit: true,
-  });
-  // Reap the orphaned host tree before re-running, otherwise the old node keeps
-  // its port + install dir and the fresh task races a stale host.
-  await killHostProcessTree(label, run, deps);
+  // A restart's start half is a write on the task, so a task another user owns
+  // refuses the restart here, before its stop half has taken anything down:
+  // the only effect it could have had is the one it may not make. The start
+  // below asks the gate again on its own read.
+  const owner = await readWindowsServiceTaskOwnership(label);
+  if (owner.kind === "not-owned") {
+    throw serviceTaskNotOwnedError(label, "run", owner.reason);
+  }
+  // Asked first, as a stop is (`askHostToStandDown`); `restart` has the host
+  // publish its restart tombstone. The sweep then reaps the orphaned host tree
+  // before re-running, otherwise the old node keeps its port + install dir and
+  // the fresh task races a stale host.
+  await askHostToStandDown(
+    label,
+    run,
+    { intent: "restart", operation: "restart" },
+    null,
+  );
+  await endTaskAndSweepTree(label, run, deps);
   // Restart reuses the verified start path (baseline + post-/Run evidence)
   // so a stop-then-start that the scheduler accepts but never spawns fails
   // with Last Run Result instead of a silent no-op.
-  await runTaskAndVerifyStart(label, run, relaunchRefusedReport(label));
+  await runTaskAndVerifyStart(
+    label,
+    run,
+    relaunchRefusedReport(label),
+    taskOwnershipDeps(),
+  );
 }
 
 function statusNotInstalled(): ServiceStatus {
@@ -1579,7 +2315,7 @@ function processPathPrefix(value: string): string {
 }
 
 function powershellStringArray(values: readonly string[]): string {
-  return values.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
+  return values.map((value) => powershellSingleQuoted(value)).join(", ");
 }
 
 // One row of the scanned process table.
@@ -1620,7 +2356,7 @@ export interface WindowsProcessTableRow {
  * All-or-nothing on purpose. A partially-parsed table produces a kill set built
  * from a partial ancestry, and a missing edge there does not read as an error -
  * it reads as "this process has no parent", which spares nothing and kills a
- * branch that should have been spared. `null` makes `killHostProcessTree`
+ * branch that should have been spared. `null` makes `killVerifiedProcessTree`
  * refuse: before its first kill it refuses to start, after one it refuses to
  * report the tree down. There is no weaker path to fall back to - the
  * pid.json `taskkill` that used to be one was removed for being unverified.
@@ -1743,10 +2479,58 @@ function parseProcessTableJson(
  * even when its slot-matched scan lands in the closure under an undecided CLI.
  * `unattributed` is `undecided` minus the CLI's uncertain ancestors as well -
  * what the loop reports, as opposed to what it remembers.
+ *
+ * The CLI-only form of {@link computeWindowsTreeKillSet}: no root, and the CLI
+ * the only excluded process.
  */
 export function computeWindowsHostKillSet(
   table: readonly WindowsProcessTableRow[],
   cliPid: number,
+  memory: WindowsKillMemory,
+): WindowsHostKillSet {
+  return computeWindowsTreeKillSet(
+    table,
+    {
+      placedRoot: null,
+      excludedPids: new Set([cliPid]),
+      seedSlotMatches: true,
+    },
+    memory,
+  );
+}
+
+/**
+ * {@link computeWindowsTreeKillSet}'s view of a {@link WindowsTreeKillScope}
+ * once the loop has placed the root for this round: `placedRoot` is the root's
+ * pid when this table's row may be seeded (`placeKillRoot`), else `null`.
+ */
+export interface WindowsKillSetScope {
+  readonly placedRoot: number | null;
+  readonly excludedPids: ReadonlySet<number>;
+  readonly seedSlotMatches: boolean;
+}
+
+/**
+ * {@link computeWindowsHostKillSet}'s algebra with the caller generalised:
+ *
+ *   seeds   = slot ∪ {root}   (just {root} when `seedSlotMatches` is false)
+ *   victims = seeds ∪ descendants(seeds)
+ *   spared  = (excluded ∪ descendants(excluded)) − subtree(root)
+ *             ∪ excluded ∪ (ancestors(excluded) − slot)
+ *             (all of ancestors(excluded) when `seedSlotMatches` is false)
+ *   kill    = victims − spared
+ *
+ * With no root, `excluded = {cli}` and the slot seeded this is exactly the
+ * CLI form. The root
+ * is what lets a SUPERVISOR kill its own host: the host is the supervisor's
+ * child, so "the caller's own branch" is the whole host tree, and only
+ * removing the root's subtree from that branch puts it back in the kill set.
+ * The excluded processes themselves are re-added after the subtraction, so no
+ * shape of table can put the caller in its own kill set.
+ */
+export function computeWindowsTreeKillSet(
+  table: readonly WindowsProcessTableRow[],
+  scope: WindowsKillSetScope,
   memory: WindowsKillMemory,
 ): WindowsHostKillSet {
   const children = new Map<number, number[]>();
@@ -1762,7 +2546,11 @@ export function computeWindowsHostKillSet(
     }
     if (row.slot) slot.add(row.processId);
   }
-  const seeds = new Set<number>(slot);
+  // Only a scope that asks for it seeds the slot match: a root-only scope
+  // (the supervisor teardown's) kills its root's tree and what the carry-over
+  // memory ties to it, never a stranger that merely names the slot's paths.
+  const seeds = new Set<number>(scope.seedSlotMatches ? slot : []);
+  if (scope.placedRoot !== null) seeds.add(scope.placedRoot);
   const undecided = new Set<number>();
   for (const row of table) {
     const claim = classifyCarryOverClaim(row, memory);
@@ -1777,8 +2565,16 @@ export function computeWindowsHostKillSet(
   const suspects = withDescendants(undecided, children);
   // The CLI's own branch: itself and everything under it over validated edges.
   // Positively identified, and never the host's - it is this process's scan
-  // and kill subprocesses.
-  const cliBranch = withDescendants(new Set([cliPid]), children);
+  // and kill subprocesses. Minus the root's subtree, which is what the caller
+  // asked to end; plus the excluded processes themselves whatever the table
+  // says.
+  const cliBranch = withDescendants(scope.excludedPids, children);
+  if (scope.placedRoot !== null) {
+    for (const pid of withDescendants(new Set([scope.placedRoot]), children)) {
+      cliBranch.delete(pid);
+    }
+  }
+  for (const pid of scope.excludedPids) cliBranch.add(pid);
   const spared = new Set(cliBranch);
   // The CLI's non-slot ancestors are spared from the kill, and the ones the
   // scan has placed in the host's tree are ALSO reported as lineage to
@@ -1798,7 +2594,12 @@ export function computeWindowsHostKillSet(
   // remembered pid inside a remembered window, is seeded and killed as an
   // ordinary host descendant. A row that is slot-matched THIS round is killed
   // either way, and a reused pid with a different birth matches nothing.
-  const ancestors = new Set<number>(ancestorsOf(cliPid, parents));
+  const ancestors = new Set<number>();
+  for (const excluded of scope.excludedPids) {
+    for (const ancestor of ancestorsOf(excluded, parents)) {
+      ancestors.add(ancestor);
+    }
+  }
   for (const row of table) {
     if (row.created === 0 || cliBranch.has(row.processId)) continue;
     const incarnations = memory.protectedAncestors.get(row.processId);
@@ -1808,7 +2609,10 @@ export function computeWindowsHostKillSet(
   }
   const protectedAncestors: number[] = [];
   for (const ancestor of ancestors) {
-    if (slot.has(ancestor)) continue;
+    // A slot-matched ancestor is killed when the slot is seeded (it is the
+    // host the CLI runs under); a root-only scope never kills its caller's
+    // ancestors, slot-matched or not.
+    if (scope.seedSlotMatches && slot.has(ancestor)) continue;
     spared.add(ancestor);
     if (victims.has(ancestor)) protectedAncestors.push(ancestor);
   }
@@ -2238,7 +3042,50 @@ export async function killLingeringSlotProcesses(
   runner: ProcessRunner | null,
   deps: WindowsControllerDeps,
 ): Promise<void> {
-  await killHostProcessTree(label, runner ?? runCommand, deps);
+  await killVerifiedProcessTree(
+    label,
+    runner ?? runCommand,
+    deps,
+    callerOnlyKillScope(),
+  );
+}
+
+/**
+ * The supervisor's lifecycle teardown on Windows (`host/lifecycle-teardown.ts`):
+ * end `rootPid` - the host child THIS process spawned - and everything under
+ * it, through the same verified scan-and-kill loop `stopService` runs, with
+ * this process excluded.
+ *
+ * Why not `stopService`: its `schtasks /End` ends the task instance this
+ * supervisor belongs to, and its CLI-only scope spares everything below the
+ * calling process - which, called from the supervisor, is the entire host
+ * tree. Here the task is left alone (the supervisor's own exit 0 ends the
+ * instance) and the root's subtree is put back in the kill set.
+ *
+ * Every subprocess re-proves `verifyAuthority` first - the caller's hold on
+ * the lifecycle lock - and a lost hold propagates as itself rather than
+ * degrading into a scan failure. Throws, like `stopService`, when the tree
+ * cannot be proved down; nothing about `pid.json` is decided here.
+ */
+export async function killSupervisedHostTree(
+  environment: ServiceLabel["environment"],
+  rootPid: number,
+  verifyAuthority: () => Promise<void>,
+  runner: ProcessRunner | null,
+  deps: WindowsControllerDeps,
+): Promise<void> {
+  const unverifiedRun: ProcessRunner = runner ?? runCommand;
+  const run: ProcessRunner = async (command, args, options) => {
+    await verifyServiceMutationAuthority();
+    return unverifiedRun(command, args, options);
+  };
+  await withServiceMutationAuthority(verifyAuthority, () =>
+    killVerifiedProcessTree(serviceLabelFor(environment), run, deps, {
+      rootPid,
+      excludedPids: new Set([process.pid]),
+      seedSlotMatches: false,
+    }),
+  );
 }
 
 // The install swap's post-mortem (`SwapLockRecovery.describeLockHolders`):
@@ -2491,7 +3338,19 @@ function buildTaskAction(label: ServiceLabel): TaskExecAction {
   };
 }
 
-function buildTaskXml(options: BuildTaskXmlOptions): string {
+/**
+ * The Task XML `/Create` registers, for a `<UserId>` the caller already
+ * resolved (`resolveTaskUserId`): the install reads it in front of its install
+ * edge, so the builder never spends the grant's clock on `whoami`.
+ */
+function buildTaskXmlForUser(
+  options: BuildTaskXmlOptions,
+  userId: string,
+  // The task-level switch Task Scheduler's "Disable" writes. `false` only when
+  // an install carries over a task its owner disabled; the logon trigger's own
+  // `<Enabled>` is not that switch and stays on.
+  settingsEnabled: boolean,
+): string {
   // Task Scheduler shows console-subsystem executables launched directly from
   // an interactive task. Use the GUI Windows Script Host as the root process,
   // then have the generated launcher run the CLI hidden.
@@ -2505,7 +3364,6 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   // then Standard->Interactive once `Standard` turned out to be launchd's
   // throttled default rather than an unthrottled middle band).
   const action = buildTaskAction(options.label);
-  const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -2537,7 +3395,7 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
       <RestartOnIdle>false</RestartOnIdle>
     </IdleSettings>
     <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
+    <Enabled>${settingsEnabled ? "true" : "false"}</Enabled>
     <Hidden>true</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <DisallowStartOnRemoteAppSession>false</DisallowStartOnRemoteAppSession>
@@ -2560,44 +3418,837 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
 `;
 }
 
-// Resolve the Task XML `<UserId>` value. schtasks requires a fully
-// qualified `<domain>\<name>` for domain-joined machines and accepts a
-// bare `<name>` for local accounts. We can't easily distinguish the two
-// from inside Node without Win32 API calls, so we lean on the env vars
-// that the shell sets at logon:
-//   - USERDOMAIN + USERNAME both set, non-empty → `<domain>\<name>`
-//   - USERNAME only → bare `<name>` (local-account path)
-//   - neither → fail closed; missing identity would produce a Task XML
-//     that schtasks rejects with a confusing error
+// Resolve the Task XML `<UserId>` value: the SID of the account this CLI
+// runs as, and a name from the environment only when that cannot be read.
 //
-// TODO(microsoft-account-sid): For users signed in with a Microsoft
-// account, Windows exposes the identity as a SID
-// (`S-1-12-1-...`) reached through the LookupAccountName / NetUserGetInfo
-// Win32 APIs. That requires a native helper out of scope for this fix.
-// The current heuristic is correct for the local + domain-joined
-// majority; MSA users will see the bare USERNAME fallback, which
-// schtasks usually accepts for their local profile.
+// The SID first, because it is the one form that does not depend on how
+// the session was logged on. `USERDOMAIN` does: an interactive logon on a
+// workgroup machine sets it to the machine name, but an OpenSSH session
+// sets it to `WORKGROUP`, and schtasks rejects `WORKGROUP\<name>` from
+// EVERY session ("No mapping between account names and security IDs was
+// done") - so a registration run over ssh swapped the host's bytes and then
+// failed. Measured on the Windows VM: the SID from `whoami /user` is
+// identical in both sessions, schtasks accepts it from both, the task it
+// stores carries the
+// same `<UserId>` pair as the task Traycer registers interactively (SID
+// principal, `<machine>\<name>` logon trigger - schtasks canonicalises every
+// accepted form to that pair), and it runs in the console session. It is
+// also account-type independent: the token's SID is what
+// schtasks resolves every name to, so a Microsoft-account sign-in needs no
+// name at all (the old `TODO(microsoft-account-sid)`; not measured on an
+// MSA-linked account, since no lane has one).
 function resolveTaskUserId(): string {
-  const domain = process.env.USERDOMAIN ?? "";
-  const name = process.env.USERNAME ?? "";
-  if (domain.length > 0 && name.length > 0) {
-    return `${domain}\\${name}`;
+  return resolveTaskUserIdFrom(taskUserSidReader());
+}
+
+/** `resolveTaskUserId` for a caller that has already read its SID. */
+function resolveTaskUserIdFrom(callerSid: string | null): string {
+  if (callerSid !== null) return callerSid;
+  return resolveTaskUserIdFromEnvironment();
+}
+
+/**
+ * The SID of the account this process runs as, from `whoami /user`, or `null`
+ * when it cannot be read (not Windows, `whoami` missing or refused, output
+ * not in the expected shape). Spawned once per process at most: see
+ * {@link readCurrentUserSidMemoised}.
+ */
+function readCurrentUserSidFromWhoami(): string | null {
+  if (process.platform !== "win32") return null;
+  let stdout: string;
+  try {
+    stdout = execFileSync(
+      windowsSystemExecutable("whoami.exe"),
+      ["/user", "/fo", "csv", "/nh"],
+      // execFileSync copies a failing child's stderr into this process's
+      // stderr unless `stdio` is given; captured here, never forwarded.
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } catch {
+    return null;
   }
+  // `"<domain>\<name>","S-1-5-21-..."`: the SID is the last CSV field.
+  const match = /"(S-1-[0-9]+(?:-[0-9]+)+)"\s*$/.exec(stdout.trim());
+  return match === null ? null : (match[1] ?? null);
+}
+
+// The account a process runs as cannot change under it, so its SID is read
+// once and kept: the ownership gate asks for it before every task verb. A
+// failed read is not kept - the next ask tries `whoami` again - and the task's
+// PRINCIPAL is never cached anywhere (`readWindowsTaskOwnership`).
+let memoisedCallerSid: string | null = null;
+
+function readCurrentUserSidMemoised(): string | null {
+  if (memoisedCallerSid !== null) return memoisedCallerSid;
+  const sid = readCurrentUserSidFromWhoami();
+  if (sid !== null) memoisedCallerSid = sid;
+  return sid;
+}
+
+let taskUserSidReader: () => string | null = readCurrentUserSidMemoised;
+
+/** Test-only override for the SID reader; `null` restores `whoami`. */
+export function setWindowsTaskUserSidReaderForTests(
+  reader: (() => string | null) | null,
+): void {
+  memoisedCallerSid = null;
+  taskUserSidReader = reader ?? readCurrentUserSidMemoised;
+}
+
+// The OS name lookup a task written from an account NAME needs: a W1 task
+// (`cli-v1.0.0`-`v1.1.4`) was registered from `USERDOMAIN\name` or
+// `COMPUTERNAME\name`, and although Task Scheduler stores a SID principal for
+// every form it accepts, a `<UserId>` that reads back as a name is resolved to
+// its SID here rather than compared as text. The name travels in the
+// environment, never on the command line, so no argv log can carry it. Its
+// timeout, `WINDOWS_ACCOUNT_SID_LOOKUP_TIMEOUT_MS`, is one term of the
+// ownership read's bound (`spawn-edge-bounds.ts`).
+
+async function resolveAccountSidViaPowerShell(
+  account: string,
+): Promise<string | null> {
+  if (process.platform !== "win32") return null;
+  let result: RunResult;
+  try {
+    result = await runCommand(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "try{(New-Object System.Security.Principal.NTAccount($env:TRAYCER_TASK_PRINCIPAL_ACCOUNT)).Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{exit 3}",
+      ],
+      {
+        env: { ...process.env, TRAYCER_TASK_PRINCIPAL_ACCOUNT: account },
+        cwd: undefined,
+        timeoutMs: WINDOWS_ACCOUNT_SID_LOOKUP_TIMEOUT_MS,
+        tolerateNonZeroExit: true,
+      },
+    );
+  } catch {
+    return null;
+  }
+  if (result.exitCode !== 0) return null;
+  const sid = result.stdout.trim();
+  return isSidShaped(sid) ? sid : null;
+}
+
+let accountSidResolver: (account: string) => Promise<string | null> =
+  resolveAccountSidViaPowerShell;
+
+/** Test-only override for the account-name lookup; `null` restores the OS's. */
+export function setWindowsAccountSidResolverForTests(
+  resolver: ((account: string) => Promise<string | null>) | null,
+): void {
+  accountSidResolver = resolver ?? resolveAccountSidViaPowerShell;
+}
+
+/**
+ * The ownership gate's seams with the caller's SID fixed at `callerSid`, for
+ * an install: it reads the SID once, in front of its install edge, and its
+ * reads after that edge must not ask `whoami` again on the grant's clock. A
+ * `null` stays `null` - the fail-closed answer for a task that is present.
+ */
+function taskOwnershipDepsWithCallerSid(
+  callerSid: string | null,
+): WindowsTaskOwnershipDeps {
+  return { ...taskOwnershipDeps(), callerSid: () => callerSid };
+}
+
+/**
+ * The ownership gate's seams, read at call time so a test's replacement of any
+ * of them reaches the next verb.
+ */
+function taskOwnershipDeps(): WindowsTaskOwnershipDeps {
+  return {
+    queryTaskXml: windowsDefinitionDeps.queryTaskXml,
+    callerSid: () => taskUserSidReader(),
+    resolveAccountSid: (account) => accountSidResolver(account),
+  };
+}
+
+/**
+ * Read-only: whether the host's task is this account's, another user's, or
+ * absent - the gate's one decision, for callers that report it (`host
+ * doctor`, `host uninstall`) or refuse on it before doing anything
+ * (`host service uninstall`, a restart, a refresh).
+ */
+export function readWindowsServiceTaskOwnership(
+  label: ServiceLabel,
+): Promise<WindowsTaskOwnership> {
+  return readWindowsTaskOwnership(windowsTaskName(label), taskOwnershipDeps());
+}
+
+// The fallback when no SID could be read, from the variables the logon
+// sets:
+//   - USERDNSDOMAIN set → a domain logon: `<USERDOMAIN>\<name>`
+//   - otherwise the account is local to this machine: `<COMPUTERNAME>\<name>`,
+//     never `<USERDOMAIN>\<name>`, which names the WORKGROUP in an ssh
+//     session. At an interactive logon the two are the same value, so that
+//     form is unchanged.
+//   - no COMPUTERNAME either → `<USERDOMAIN>\<name>` as before, then bare
+//     `<name>`
+//   - no USERNAME → fail closed; missing identity would produce a Task XML
+//     that schtasks rejects with a confusing error
+function resolveTaskUserIdFromEnvironment(): string {
+  const domain = process.env.USERDOMAIN ?? "";
+  const dnsDomain = process.env.USERDNSDOMAIN ?? "";
+  const computer = process.env.COMPUTERNAME ?? "";
+  const name = process.env.USERNAME ?? "";
   if (name.length > 0) {
+    if (dnsDomain.length > 0 && domain.length > 0) return `${domain}\\${name}`;
+    if (computer.length > 0) return `${computer}\\${name}`;
+    if (domain.length > 0) return `${domain}\\${name}`;
     return name;
   }
   throw cliError({
     code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     message:
-      "schtasks: cannot resolve a Task XML <UserId>; neither USERDOMAIN nor USERNAME is set in the environment. " +
+      "schtasks: cannot resolve a Task XML <UserId>; `whoami /user` gave no SID and USERNAME is not set in the environment. " +
       "Run `traycer host service install` from an interactive logon session.",
     details: { USERDOMAIN: domain, USERNAME: name },
     exitCode: 1,
   });
 }
 
+// ---- Definition refresh (see ../service-definition.ts) ----------------------
+//
+// A task's definition is its action plus the launcher script that action
+// runs. Both refresh legs leave a running host alone (on a throwaway task
+// cloned from Traycer's own): renaming a new `.vbs` over
+// the one a running `wscript` executes succeeds first time, because WSH
+// compiles the whole script at start and does not hold it open or read it
+// incrementally; and `schtasks /Create /F` redefining a RUNNING task returns
+// 0 with the instance, its children and its Running state untouched. Neither
+// leg runs `/Run`, `/End` or `/Change`.
+
+export type { ScheduledTaskXmlQuery } from "./windows-task-gate";
+
+export interface WindowsDefinitionDeps {
+  /** Read-only: the registered task's XML. */
+  readonly queryTaskXml: (taskName: string) => Promise<ScheduledTaskXmlQuery>;
+  /**
+   * The invocation a re-registration would emit, PREDICTED without staging
+   * (`predictServiceCliInvocation`). Every plan - `host doctor`'s read-only
+   * inspect, and a refresh deciding whether it has anything to write - is
+   * made against this, so neither copies the CLI into its slot, renames the
+   * running image aside, or spawns a `--version` probe.
+   */
+  readonly predictCli: (label: ServiceLabel) => Promise<CliInvocation>;
+  /**
+   * The invocation a re-registration emits, resolved for real - staging the
+   * slot, exactly as `host update` re-resolves on Windows
+   * (`install-lifecycle.ts`). Only a refresh's write leg calls it, once the
+   * plan says there is something to write.
+   */
+  readonly resolveCli: (label: ServiceLabel) => Promise<CliInvocation>;
+}
+
+const defaultWindowsDefinitionDeps: WindowsDefinitionDeps = {
+  queryTaskXml: queryScheduledTaskXml,
+  predictCli: (label) =>
+    predictServiceCliInvocation({
+      environment: label.environment,
+      override: null,
+      allowSelfInvocation: false,
+    }),
+  resolveCli: (label) =>
+    resolveServiceCliInvocation({
+      environment: label.environment,
+      override: null,
+      allowSelfInvocation: false,
+    }),
+};
+
+let windowsDefinitionDeps: WindowsDefinitionDeps = defaultWindowsDefinitionDeps;
+
+/** Test-only replacement for the task query and CLI resolution seams. */
+export function setWindowsDefinitionDepsForTests(
+  deps: WindowsDefinitionDeps | null,
+): void {
+  windowsDefinitionDeps = deps ?? defaultWindowsDefinitionDeps;
+}
+
+// How `schtasks` names a task that does not exist, in its (English) error
+// text: `/Query /TN` answers "The system cannot find the file specified."
+// and some builds "The specified task name ... does not exist in the system."
+const SCHTASKS_MISSING_TASK = [
+  /cannot find the file specified/i,
+  /does not exist in the system/i,
+];
+
+function schtasksNamesMissingTask(stderr: string): boolean {
+  return SCHTASKS_MISSING_TASK.some((pattern) => pattern.test(stderr));
+}
+
+// A task whose stored definition Task Scheduler cannot load (0x80041321, "The
+// task image is corrupt or has been tampered with."). Only a re-registration
+// replaces it, so the status probe reads it as unregistered; the refresh
+// planner, which writes no registration, reports it instead.
+function schtasksNamesCorruptTask(stderr: string): boolean {
+  return /task image is corrupt/i.test(stderr);
+}
+
+// Exits 2 only when Task Scheduler says the task, or the folder it would live
+// in, does not exist (HRESULT 0x80070002 / 0x80070003 - PowerShell wraps the
+// COM error, hence the InnerException); 0 when the task exists; 4 for every
+// other answer, access denied included. Read-only. The task name travels in
+// the environment.
+const SCHEDULED_TASK_ABSENCE_PROBE =
+  "try{$s=New-Object -ComObject Schedule.Service;$s.Connect()}catch{exit 4};try{$null=$s.GetFolder('\\').GetTask($env:TRAYCER_TASK_NAME);exit 0}catch{$e=$_.Exception;if($e.InnerException){$e=$e.InnerException};if(($e.HResult -eq -2147024894) -or ($e.HResult -eq -2147024893)){exit 2};exit 4}";
+
+async function scheduledTaskProvedAbsent(taskName: string): Promise<boolean> {
+  if (process.platform !== "win32") return false;
+  try {
+    const result = await runCommand(
+      "powershell",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        SCHEDULED_TASK_ABSENCE_PROBE,
+      ],
+      {
+        env: { ...process.env, TRAYCER_TASK_NAME: taskName },
+        cwd: undefined,
+        timeoutMs: WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
+        tolerateNonZeroExit: true,
+      },
+    );
+    return result.exitCode === 2;
+  } catch {
+    return false;
+  }
+}
+
+async function queryScheduledTaskXml(
+  taskName: string,
+): Promise<ScheduledTaskXmlQuery> {
+  let result: RunBytesResult;
+  try {
+    result = await runCommandForBytes(
+      "schtasks",
+      ["/Query", "/TN", taskName, "/XML"],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
+      },
+    );
+  } catch (cause) {
+    return {
+      kind: "failed",
+      reason: `schtasks /Query could not run (${describeCause(cause)})`,
+    };
+  }
+  if (result.exitCode !== 0) {
+    // A non-zero exit is "no such task" only when schtasks SAYS so. Access
+    // denied, a Task Scheduler that is not running, a timeout inside the
+    // service - each is a query that failed, and reading those as absence
+    // turned a refresh into "nothing to refresh" and left the stale task
+    // standing. A failure the text does not name is reported as one, which
+    // on a non-English Windows includes a genuinely missing task: a refresh
+    // that fails loudly there asks for a re-registration, which is right for
+    // a service that is not registered.
+    const stderr = result.stderr.trim();
+    if (schtasksNamesMissingTask(stderr)) return { kind: "absent" };
+    // schtasks words "no such task" in the system's language, so on a
+    // non-English Windows the text check above cannot recognise one - and the
+    // ownership gate reads every failed query as a task it cannot confirm,
+    // which would refuse a first registration outright. Task Scheduler's own
+    // answer is a code: the task (0x80070002) or its folder (0x80070003) not
+    // found is absence in every language. Asked only here, for a failure the
+    // text did not name, so an English query pays nothing for it.
+    if (await scheduledTaskProvedAbsent(taskName)) return { kind: "absent" };
+    return {
+      kind: "failed",
+      reason: `schtasks /Query failed (exit ${String(result.exitCode)}${stderr.length > 0 ? `: ${stderr.split(/\r?\n/)[0] ?? ""}` : ""})`,
+    };
+  }
+  const xml = decodeSchtasksXml(result.stdout);
+  return xml === null
+    ? { kind: "failed", reason: "schtasks /Query /XML output is not text" }
+    : { kind: "xml", xml };
+}
+
+/**
+ * `schtasks /XML` writes UTF-16LE, with a BOM or without depending on how
+ * stdout is redirected; decide from the bytes. Strict decoders: a repaired
+ * sequence would be a path the task never named.
+ */
+function decodeSchtasksXml(bytes: Buffer): string | null {
+  try {
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+      return new TextDecoder("utf-16le", { fatal: true }).decode(
+        bytes.subarray(2),
+      );
+    }
+    if (bytes.length >= 2 && bytes[1] === 0x00) {
+      return new TextDecoder("utf-16le", { fatal: true }).decode(bytes);
+    }
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(
+      bytes,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the host's task is switched off in Task Scheduler. */
+export type WindowsTaskEnabledState =
+  | { readonly kind: "enabled" }
+  | { readonly kind: "disabled" }
+  | { readonly kind: "not-registered" }
+  | { readonly kind: "unknown"; readonly reason: string };
+
+/**
+ * Read-only: whether the task is disabled - its TASK-level
+ * `<Settings><Enabled>`, which Task Scheduler's "Disable" writes. A trigger's
+ * own `<Enabled>` is not it: a task whose logon trigger is off still starts
+ * on `/Run`. One read-only query, the one the definition refresh plans from
+ * (`WindowsDefinitionDeps.queryTaskXml`); nothing is written. The schema's
+ * default is enabled, so a `<Settings>` without `<Enabled>` is enabled.
+ */
+export async function readWindowsTaskEnabledState(
+  label: ServiceLabel,
+): Promise<WindowsTaskEnabledState> {
+  const query = await windowsDefinitionDeps.queryTaskXml(
+    windowsTaskName(label),
+  );
+  if (query.kind === "absent") return { kind: "not-registered" };
+  if (query.kind === "failed") return { kind: "unknown", reason: query.reason };
+  return taskXmlEnabledState(query.xml);
+}
+
+/**
+ * The task-level `<Settings><Enabled>` of a task's own XML - the parse
+ * `readWindowsTaskEnabledState` makes of its read, for a caller that already
+ * holds the XML from the ownership gate's read (an install carrying the
+ * setting over), so the two questions are answered from one `/Query /XML`.
+ */
+function taskXmlEnabledState(xml: string): WindowsTaskEnabledState {
+  const settings = xml.match(/<Settings>([\s\S]*?)<\/Settings>/)?.[1];
+  if (settings === undefined) {
+    return { kind: "unknown", reason: "the task has no Settings element" };
+  }
+  // No element under `<Settings>` has an `<Enabled>` of its own, so the
+  // first one is the task's.
+  const enabled = settings.match(/<Enabled>\s*([^<]*?)\s*<\/Enabled>/)?.[1];
+  if (enabled === undefined || enabled === "true" || enabled === "1") {
+    return { kind: "enabled" };
+  }
+  if (enabled === "false" || enabled === "0") return { kind: "disabled" };
+  return {
+    kind: "unknown",
+    reason: `the task's Settings Enabled value '${enabled}' is not a boolean`,
+  };
+}
+
+/** The task's single `<Exec>` action, or `null` for any other shape. */
+function parseTaskExecAction(xml: string): TaskExecAction | null {
+  const execs = [...xml.matchAll(/<Exec>([\s\S]*?)<\/Exec>/g)];
+  if (execs.length !== 1) return null;
+  const body = execs[0]?.[1];
+  if (body === undefined) return null;
+  const command = body.match(/<Command>([\s\S]*?)<\/Command>/)?.[1];
+  if (command === undefined) return null;
+  const argumentsLine = body.match(/<Arguments>([\s\S]*?)<\/Arguments>/)?.[1];
+  return {
+    command: unescapeXml(command.trim()),
+    argumentsLine: unescapeXml(argumentsLine ?? ""),
+  };
+}
+
+function sameWindowsPath(a: string, b: string): boolean {
+  const normalize = (value: string): string =>
+    value.replace(/\//g, "\\").toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
+function isAbsoluteWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+}
+
+// The launcher-less generation (W1, `cli-v1.0.0`-`v1.1.4`): the CLI is the
+// task's `<Command>` and its arguments end in `host start`, each token
+// optionally quoted.
+const DIRECT_HOST_START_TAIL = /(^|\s)"?host"?\s+"?start"?\s*$/;
+
+/** The initial `<cli...> host start` line the launcher assigns, as emitted. */
+function launcherCommandLine(cli: CliInvocation): string {
+  return [cli.command, ...cli.args, "host", "start"]
+    .map(quoteWindowsArg)
+    .join(" ");
+}
+
+/**
+ * Whether the launcher on disk already runs `cli`. Every launcher
+ * generation assigns its initial command line as one VBScript literal
+ * (`commandLine = <literal>`, or the run-only generations'
+ * `exitCode = shell.Run(<literal>, 0, True)`), so finding the literal this
+ * CLI would emit is proof the invocation is unchanged. Anything else -
+ * including no launcher at all - is treated as a change, which only costs
+ * the invocation record's transaction.
+ */
+function launcherRunsInvocation(
+  previous: Buffer | null,
+  cli: CliInvocation,
+): boolean {
+  if (previous === null) return false;
+  const text = previous.toString("utf16le").replace(/^﻿/, "");
+  const literal = quoteVbsString(launcherCommandLine(cli));
+  return (
+    text.includes(`commandLine = ${literal}\r\n`) ||
+    text.includes(`exitCode = shell.Run(${literal}, 0, True)`)
+  );
+}
+
+type WindowsDefinitionPlan =
+  | Exclude<ServiceDefinitionState, { readonly kind: "stale" }>
+  | {
+      readonly kind: "stale";
+      readonly form: ServiceDefinitionForm;
+      readonly appliesAt: ServiceDefinitionAppliesAt;
+      readonly cli: CliInvocation;
+      readonly launcherBytes: Buffer;
+      /**
+       * The action itself is not today's: the task's own XML with only its
+       * action replaced, for `/Create /F` (no `/Run`); `null` when the
+       * action is current and only the launcher is written.
+       */
+      readonly redefinedTaskXml: string | null;
+      /** The registered invocation is `cli` already: no record transaction. */
+      readonly invocationUnchanged: boolean;
+    };
+
+/** The registered task, read back: what every plan below is made against. */
+type WindowsRegisteredDefinition =
+  | { readonly kind: "not-registered" }
+  | { readonly kind: "unrecognized"; readonly reason: string }
+  | {
+      readonly kind: "registered";
+      /** The task's own XML, as `schtasks /Query /XML` returned it. */
+      readonly xml: string;
+      readonly action: TaskExecAction;
+      /** The action is exactly today's launcher action. */
+      readonly actionCurrent: boolean;
+      /** The action runs the launcher (today's, or a variant spelling). */
+      readonly launcherAction: boolean;
+      /** The launcher file's bytes, or `null` when there is none. */
+      readonly previous: Buffer | null;
+    };
+
+async function readWindowsDefinition(
+  label: ServiceLabel,
+  queryTaskXml: WindowsDefinitionDeps["queryTaskXml"],
+): Promise<WindowsRegisteredDefinition> {
+  const query = await queryTaskXml(windowsTaskName(label));
+  if (query.kind === "absent") return { kind: "not-registered" };
+  if (query.kind === "failed") {
+    return { kind: "unrecognized", reason: query.reason };
+  }
+  const action = parseTaskExecAction(query.xml);
+  if (action === null) {
+    return {
+      kind: "unrecognized",
+      reason: "the task does not have exactly one Exec action",
+    };
+  }
+  const launcherPath = hiddenHostLauncherPath(label);
+  const expectedAction = buildTaskAction(label);
+  const actionCurrent =
+    sameWindowsPath(action.command, expectedAction.command) &&
+    action.argumentsLine === expectedAction.argumentsLine;
+  const launcherAction =
+    actionCurrent ||
+    (sameWindowsPath(
+      action.command.slice(action.command.lastIndexOf("\\") + 1),
+      "wscript.exe",
+    ) &&
+      action.argumentsLine.toLowerCase().includes(launcherPath.toLowerCase()));
+  const directAction =
+    !launcherAction &&
+    isAbsoluteWindowsPath(action.command) &&
+    DIRECT_HOST_START_TAIL.test(action.argumentsLine);
+  if (!launcherAction && !directAction) {
+    return {
+      kind: "unrecognized",
+      reason: "its action is not a Traycer host start",
+    };
+  }
+  let previous: Buffer | null;
+  try {
+    previous = await readFile(launcherPath);
+  } catch (cause) {
+    if (!(isErrnoException(cause) && cause.code === "ENOENT")) {
+      return {
+        kind: "unrecognized",
+        reason: `the launcher cannot be read (${describeCause(cause)})`,
+      };
+    }
+    previous = null;
+  }
+  return {
+    kind: "registered",
+    xml: query.xml,
+    action,
+    actionCurrent,
+    launcherAction,
+    previous,
+  };
+}
+
+/** The registered task judged against the invocation `resolveCli` gives. */
+async function planWindowsDefinition(
+  label: ServiceLabel,
+  registered: Extract<
+    WindowsRegisteredDefinition,
+    { readonly kind: "registered" }
+  >,
+  resolveCli: (label: ServiceLabel) => Promise<CliInvocation>,
+): Promise<WindowsDefinitionPlan> {
+  let cli: CliInvocation;
+  try {
+    cli = await resolveCli(label);
+  } catch (cause) {
+    return {
+      kind: "unrecognized",
+      reason: `the CLI to register could not be resolved (${describeCause(cause)})`,
+    };
+  }
+  const { action, actionCurrent, launcherAction, previous } = registered;
+  const launcherBytes = Buffer.from(
+    `﻿${buildHiddenHostLauncher(cli, label)}`,
+    "utf16le",
+  );
+  if (actionCurrent && previous !== null && previous.equals(launcherBytes)) {
+    return { kind: "current" };
+  }
+  return {
+    kind: "stale",
+    form: launcherAction ? "launcher-vbs" : "direct-action",
+    appliesAt: "next-start",
+    cli,
+    launcherBytes,
+    redefinedTaskXml: actionCurrent
+      ? null
+      : redefinedTaskXml(registered.xml, buildTaskAction(label)),
+    invocationUnchanged: launcherAction
+      ? launcherRunsInvocation(previous, cli)
+      : sameWindowsPath(action.command, cli.command) &&
+        action.argumentsLine.trim() ===
+          [...cli.args, "host", "start"].map(quoteWindowsArg).join(" "),
+  };
+}
+
+/**
+ * The registered task's own XML with ONLY its action replaced by `action`.
+ * Everything else - `<Enabled>`, the triggers, the conditions and settings a
+ * user may have changed in Task Scheduler, the principal - is carried over
+ * byte-for-byte: this refresh brings the LAUNCHER to the current form, and a
+ * task the user disabled or tuned stays exactly as they left it. (A fresh
+ * `buildTaskXmlForUser` here re-enabled a disabled task and reset those
+ * settings, and no later refresh noticed, since "current" compares only the
+ * action and the launcher.) `readWindowsDefinition` has already proved there
+ * is exactly one `<Exec>`.
+ */
+function redefinedTaskXml(xml: string, action: TaskExecAction): string {
+  return xml.replace(
+    /<Exec>[\s\S]*?<\/Exec>/,
+    () =>
+      `<Exec>\n      <Command>${escapeXml(action.command)}</Command>\n      <Arguments>${escapeXml(action.argumentsLine)}</Arguments>\n    </Exec>`,
+  );
+}
+
+/**
+ * Read-only: what a refresh would find. One read-only `schtasks /Query` and
+ * one file read; the CLI invocation is PREDICTED, so nothing is staged,
+ * copied or spawned (`WindowsDefinitionDeps.predictCli`).
+ */
+export async function inspectWindowsServiceDefinition(
+  label: ServiceLabel,
+): Promise<ServiceDefinitionState> {
+  const registered = await readWindowsDefinition(
+    label,
+    windowsDefinitionDeps.queryTaskXml,
+  );
+  if (registered.kind !== "registered") return registered;
+  const plan = await planWindowsDefinition(
+    label,
+    registered,
+    windowsDefinitionDeps.predictCli,
+  );
+  if (plan.kind !== "stale") return plan;
+  return { kind: "stale", form: plan.form, appliesAt: plan.appliesAt };
+}
+
+/**
+ * Rewrite the launcher script and, when the task's action predates it,
+ * redefine the task with `/Create /F` from its own XML with only the action
+ * replaced (`redefinedTaskXml`) - and nothing else: no `/Run`, `/End` or
+ * `/Change`, no grant and no restore. A current task costs one read-only
+ * query and one file read, and stages nothing: the plan is made against the
+ * PREDICTED invocation, and only a stale one resolves - and stages - the CLI
+ * for the write.
+ *
+ * The invocation record (`cli-invocation.json`) is left alone while the
+ * launcher already runs the re-resolved CLI; when it would run a different
+ * one, the write goes through the record's transaction like any other
+ * registration.
+ */
+export async function refreshWindowsServiceDefinition(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<ServiceDefinitionRefresh> {
+  const taskName = windowsTaskName(label);
+  // ONE read, the gate's, and everything below is planned from it: refused
+  // before anything is planned or written when the task is not this
+  // account's (planned against another user's task, its action - their
+  // launcher, under their profile - reads as "not a Traycer host start" and
+  // the refresh would name a reinstall, the very write this refusal exists to
+  // prevent), and otherwise the definition and the plan come from the XML the
+  // ownership verdict was made on. The `/Create` below, the one task write,
+  // is decided by the gate's confirm-read immediately before it instead.
+  const create = await gateWindowsTaskVerb(
+    label,
+    "create",
+    taskOwnershipDeps(),
+  );
+  if (create.kind === "not-owned") throw create.error;
+  const gated = create.task;
+  const registered = await readWindowsDefinition(label, async () =>
+    gated.kind === "caller"
+      ? { kind: "xml", xml: gated.xml }
+      : { kind: "absent" },
+  );
+  if (registered.kind === "not-registered") return registered;
+  if (registered.kind === "unrecognized") {
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${taskName}'`,
+      reason: registered.reason,
+      remedy: SERVICE_REINSTALL_COMMAND,
+    });
+  }
+  const predicted = await planWindowsDefinition(
+    label,
+    registered,
+    windowsDefinitionDeps.predictCli,
+  );
+  // Something to write, or nothing: only now, for a write, is the CLI
+  // resolved for real - the write leg of a registration is the one place its
+  // slot staging belongs.
+  const plan =
+    predicted.kind === "stale"
+      ? await planWindowsDefinition(
+          label,
+          registered,
+          windowsDefinitionDeps.resolveCli,
+        )
+      : predicted;
+  switch (plan.kind) {
+    case "not-registered":
+    case "current":
+      return plan;
+    case "unrecognized":
+      throw serviceDefinitionRefreshFailed({
+        subject: `Scheduled Task '${taskName}'`,
+        reason: plan.reason,
+        remedy: SERVICE_REINSTALL_COMMAND,
+      });
+    case "stale":
+      break;
+  }
+  const launcherPath = hiddenHostLauncherPath(label);
+  const actionStale = plan.redefinedTaskXml !== null;
+  // The definition a `/Create` writes for `task`: that task's own XML with
+  // only its action replaced (`redefinedTaskXml`), so the principal,
+  // `<Enabled>` and every other setting are carried over as the read it is
+  // staged from found them. The gate stages it from its own read first, and
+  // again from the confirm-read immediately before the verb when the task
+  // changed in between - a task its owner disabled meanwhile is written
+  // disabled. One that is gone by then, or no longer has exactly one `<Exec>`,
+  // is not this refresh's to write.
+  const stagedDirs: string[] = [];
+  const stage: WindowsTaskCreateStager = async (task) => {
+    if (task.kind === "absent") {
+      throw new Error("the task was removed while it was being refreshed");
+    }
+    if (parseTaskExecAction(task.xml) === null) {
+      throw new Error(
+        "the task changed while it was being refreshed and no longer has exactly one Exec action",
+      );
+    }
+    await verifyServiceMutationAuthority();
+    const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
+    stagedDirs.push(tmpDir);
+    const xmlPath = join(tmpDir, "task.xml");
+    await writeFile(
+      xmlPath,
+      Buffer.from(
+        `\uFEFF${redefinedTaskXml(task.xml, buildTaskAction(label))}`,
+        "utf16le",
+      ),
+    );
+    return xmlPath;
+  };
+  const write = async (): Promise<void> => {
+    await verifyServiceMutationAuthority();
+    await mkdir(dirname(launcherPath), { recursive: true });
+    await replaceDefinitionFile(launcherPath, plan.launcherBytes, null);
+    // Only a stale ACTION is a task write. A launcher-only refresh rewrites
+    // this account's own `.vbs` under its own profile and issues no verb.
+    if (!actionStale) return;
+    await verifyServiceMutationAuthority();
+    try {
+      await create.exec(run, stage, {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: WINDOWS_SCHTASKS_CREATE_TIMEOUT_MS,
+        tolerateNonZeroExit: false,
+      });
+    } finally {
+      for (const tmpDir of stagedDirs) {
+        await rm(tmpDir, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+      }
+    }
+  };
+  try {
+    if (plan.invocationUnchanged) {
+      await write();
+    } else {
+      await runServiceRegistrationWithInvocationRecord({
+        environment: label.environment,
+        hostHomeDir: hostHomeDir(label.environment),
+        serviceLabel: label.id,
+        cli: plan.cli,
+        register: write,
+        waitMs: CLI_INVOCATION_TXN_WAIT_MS,
+        pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
+      });
+    }
+  } catch (cause) {
+    if (isServiceMutationAuthorityError(cause)) throw cause;
+    if (isServiceTaskNotOwnedError(cause)) throw cause;
+    throw serviceDefinitionRefreshFailed({
+      subject: `Scheduled Task '${taskName}'`,
+      reason: describeCause(cause),
+      remedy: SERVICE_REFRESH_COMMAND,
+    });
+  }
+  return { kind: "refreshed", form: plan.form, appliesAt: plan.appliesAt };
+}
+
 export {
-  buildTaskXml as buildScheduledTaskXml,
+  taskXmlEnabledState as windowsTaskXmlEnabledState,
+  buildTaskXmlForUser as buildScheduledTaskXml,
+  resolveTaskUserId as resolveScheduledTaskUserId,
   buildHiddenHostLauncher as buildWindowsHiddenHostLauncher,
   buildSlotProcessTableScanScript as buildWindowsSlotProcessTableScanScript,
   buildSlotProcessDetailScanScript as buildWindowsSlotProcessDetailScanScript,

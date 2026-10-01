@@ -31,6 +31,7 @@ import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-p
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { HoverCardGroup } from "@/components/ui/hover-card";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useRecordPrPresence } from "@/hooks/pr/use-pr-presence-probe";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -49,10 +50,7 @@ import {
   type PrRepoGroup,
 } from "@/lib/pr/pr-list-projection";
 import { cn } from "@/lib/utils";
-import {
-  useLeftPanelSectionCollapsed,
-  useMainPanelCollapsed,
-} from "@/stores/epics/left-panel-store";
+import { useMainPanelCollapsed } from "@/stores/epics/left-panel-store";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   clearSidebarNodeRevealRequest,
@@ -88,14 +86,11 @@ function PrPanelBodyLive(
 ): ReactNode {
   const hostId = props.pin.resolvedHostId;
   const mainCollapsed = useMainPanelCollapsed(props.tabId);
-  const sectionCollapsed = useLeftPanelSectionCollapsed("pull-requests");
   const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");
   const methodSupported = methodSupport !== "unsupported";
   const isMobileViewport = useIsMobileViewport();
 
-  const surfaceHidden = isMobileViewport
-    ? false
-    : mainCollapsed || sectionCollapsed;
+  const surfaceHidden = isMobileViewport ? false : mainCollapsed;
   const enabled = !surfaceHidden && methodSupported;
 
   const subscription = usePrListSubscription({
@@ -167,7 +162,11 @@ function PrPanelHostPicker(props: { readonly pin: SurfaceHostPin }): ReactNode {
   );
 }
 
-function PrPanelBodyContent(props: {
+/**
+ * The panel's list for rows already in hand. Exported for the sample
+ * workspace's sidebar, which draws the same list from sample rows (F3).
+ */
+export function PrPanelBodyContent(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly hostId: string | null;
@@ -326,21 +325,24 @@ function PrPanelBodyContent(props: {
           testId="pr-panel-error-notice"
         />
       ) : null}
-      {groups.map((group) => (
-        <PrRepoGroupSection
-          key={formatRepoGroupLabel(group.repoIdentifier)}
-          epicId={props.epicId}
-          tabId={props.tabId}
-          hostId={props.hostId}
-          group={group}
-          collapsed={
-            collapsedRepos.has(formatRepoGroupLabel(group.repoIdentifier)) &&
-            revealedRepoLabel !== formatRepoGroupLabel(group.repoIdentifier)
-          }
-          onToggle={toggleRepo}
-          buildEntry={buildEntry}
-        />
-      ))}
+      {/* One clock for every row's owners card, across repos. */}
+      <HoverCardGroup>
+        {groups.map((group) => (
+          <PrRepoGroupSection
+            key={formatRepoGroupLabel(group.repoIdentifier)}
+            epicId={props.epicId}
+            tabId={props.tabId}
+            hostId={props.hostId}
+            group={group}
+            collapsed={
+              collapsedRepos.has(formatRepoGroupLabel(group.repoIdentifier)) &&
+              revealedRepoLabel !== formatRepoGroupLabel(group.repoIdentifier)
+            }
+            onToggle={toggleRepo}
+            buildEntry={buildEntry}
+          />
+        ))}
+      </HoverCardGroup>
     </div>
   );
 }

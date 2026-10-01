@@ -53,8 +53,9 @@ import { stringValue } from "@/lib/composer/tiptap-json-content";
 import {
   hostWithholdsDraftBlobs,
   isDraftBlobConfirmed,
-  putDraftBlobs,
+  putDraftBlobsWithProgress,
   type DraftBlobClient,
+  type DraftBlobUploadProgressListener,
 } from "@/lib/drafts/draft-blob-transport";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
 
@@ -208,12 +209,24 @@ export async function confirmAttachmentsByHash(input: {
   readonly client: DraftBlobClient;
   readonly plan: AttachmentsByHashPlan;
   readonly ownerUserId: string | null;
+  /**
+   * Upload progress for the surface that is waiting on it, or `null`. The
+   * landing composer shows "k of N" from it; a surface with nowhere to put it
+   * passes `null`. Only the digests this call actually sends are counted.
+   */
+  readonly onProgress: DraftBlobUploadProgressListener | null;
 }): Promise<ConfirmedAttachmentsByHash> {
   const pending = input.plan.eligible.filter(
     (hash) => !isDraftBlobConfirmed(input.hostId, hash, input.ownerUserId),
   );
   if (pending.length > 0) {
-    await putDraftBlobs(input.hostId, input.client, pending, input.ownerUserId);
+    await putDraftBlobsWithProgress({
+      hostId: input.hostId,
+      client: input.client,
+      hashes: pending,
+      ownerUserId: input.ownerUserId,
+      onProgress: input.onProgress,
+    });
   }
   const byHash = new Set<string>();
   const inline: string[] = [...input.plan.ineligible];

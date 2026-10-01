@@ -177,6 +177,7 @@ function holdGate(): HoldGate {
 const TRAYCER_BILLING: AutoJudgeBilling = {
   kind: "traycer",
   modelLabel: TRAYCER_MODEL_SLUG,
+  effortLabel: null,
 };
 
 const PROVIDER_BILLING: AutoJudgeBilling = {
@@ -184,6 +185,7 @@ const PROVIDER_BILLING: AutoJudgeBilling = {
   harnessId: CLAUDE_HARNESS_ID,
   harnessLabel: "Claude Code",
   modelLabel: CLAUDE_MODEL_SLUG,
+  effortLabel: null,
 };
 
 /**
@@ -432,6 +434,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           harnessId: CLAUDE_HARNESS_ID,
           harnessLabel: "Claude Code",
           modelLabel: CLAUDE_MODEL_SLUG,
+          effortLabel: null,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -464,6 +467,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
         expect(result.current).toEqual({
           kind: "traycer",
           modelLabel: TRAYCER_MODEL_SLUG,
+          effortLabel: null,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -509,6 +513,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
         expect(result.current).toEqual({
           kind: "traycer",
           modelLabel: TRAYCER_MODEL_SLUG,
+          effortLabel: null,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -541,6 +546,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           harnessId: CLAUDE_HARNESS_ID,
           harnessLabel: "Claude Code",
           modelLabel: CLAUDE_MODEL_SLUG,
+          effortLabel: null,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -567,6 +573,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
         expect(result.current).toEqual({
           kind: "traycer",
           modelLabel: TRAYCER_MODEL_SLUG,
+          effortLabel: null,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -631,6 +638,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
         expect(seen.at(-1)).toEqual({
           kind: "traycer",
           modelLabel: TRAYCER_MODEL_SLUG,
+          effortLabel: null,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -640,6 +648,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
       harnessId: CLAUDE_HARNESS_ID,
       harnessLabel: "Claude Code",
       modelLabel: CLAUDE_MODEL_SLUG,
+      effortLabel: null,
     });
   });
 
@@ -699,6 +708,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
           harnessId: CLAUDE_HARNESS_ID,
           harnessLabel: "Claude Code",
           modelLabel: CLAUDE_MODEL_SLUG,
+          effortLabel: null,
         });
       },
       { timeout: WAIT_TIMEOUT_MS },
@@ -706,6 +716,7 @@ describe("useAutoJudgeBilling against the real query cache", () => {
     expect(seen).not.toContainEqual({
       kind: "traycer",
       modelLabel: TRAYCER_MODEL_SLUG,
+      effortLabel: null,
     });
   });
 

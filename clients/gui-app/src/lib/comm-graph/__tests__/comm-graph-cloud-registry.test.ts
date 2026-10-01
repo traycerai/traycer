@@ -6,14 +6,19 @@ import {
   releaseCommGraphCloudSubscription,
 } from "@/lib/comm-graph/comm-graph-cloud-registry";
 import type { CommGraphCloudSubscriptionOpener } from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
 
 describe("comm-graph cloud subscription registry", () => {
   beforeEach(() => {
+    // Frames publish as they are applied: these cases read the snapshot in
+    // the tick they push in.
+    __setCommGraphDataCommitWindowMsForTests(0);
     __resetCommGraphCloudRegistryForTests();
   });
 
   afterEach(() => {
     __resetCommGraphCloudRegistryForTests();
+    __setCommGraphDataCommitWindowMsForTests(null);
   });
 
   it("balances fake transport opens and closes across cleanup and remount", () => {

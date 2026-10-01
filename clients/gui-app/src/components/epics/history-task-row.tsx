@@ -55,9 +55,13 @@ import {
 } from "@/stores/auth/auth-store";
 
 const ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE = "data-history-row-target-own-tooltip";
+// The activity prefix plus the widest `formatUpdatedLabel` result for any
+// task younger than two years, measured in the UI font.
+const WIDEST_ACTIVITY_LABEL = "activity about 23 hours ago";
 
 export interface HistoryTaskRowProps {
   readonly item: HistoryItem;
+  readonly timeLabel: string;
   readonly organization: { readonly canEdit: boolean } | null;
   readonly selectionMode: boolean;
   readonly selectionDisabled: boolean;
@@ -196,7 +200,7 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
         <HistoryRowTrailingMetadata
           epicId={props.item.epicId}
           selectionMode={props.selectionMode}
-          updatedLabel={props.item.updatedLabel}
+          updatedLabel={props.timeLabel}
           worktrees={props.worktrees}
           provenance={historyRowProvenance(props.item)}
         />
@@ -247,6 +251,15 @@ function HistoryRowTrailingMetadata(props: {
     !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
   return (
     <span className="grid shrink-0 items-center justify-items-end text-ui-xs max-md:flex max-md:min-w-0 max-md:gap-2 max-md:pl-6">
+      {/* Holds the cell at the widest updated label, so every row's trailing
+          block is the same width and the organization labels sitting against
+          it line up down the list. */}
+      <span
+        aria-hidden
+        className="invisible col-start-1 row-start-1 whitespace-nowrap max-md:hidden"
+      >
+        {WIDEST_ACTIVITY_LABEL}
+      </span>
       <span
         className={cn(
           "col-start-1 row-start-1 text-muted-foreground",
@@ -254,7 +267,7 @@ function HistoryRowTrailingMetadata(props: {
             "transition-opacity md:group-hover/list-row:opacity-0 md:group-focus-within/list-row:opacity-0",
         )}
       >
-        updated {props.updatedLabel}
+        {props.updatedLabel}
         {props.provenance === null ? null : (
           <span
             data-testid={`epics-list-row-coarse-provenance-label-${props.provenance}`}
@@ -268,12 +281,16 @@ function HistoryRowTrailingMetadata(props: {
           </span>
         )}
       </span>
+      {/* The pills swap in over the timestamp on hover and must fit inside
+          the cell the timestamp sizes: `md:w-0 md:min-w-full` keeps them out
+          of the cell's width while still filling it, and a single pill plus
+          the overflow control is what fits without cutting a PR number. */}
       {hasPrPills ? (
         <WorktreePrPills
           worktrees={props.worktrees}
           detailOnHover
-          maximumVisible={2}
-          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
+          maximumVisible={1}
+          className="pointer-events-none col-start-1 row-start-1 justify-end overflow-hidden opacity-0 md:w-0 md:min-w-full transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
           openPrInApp={null}
         />

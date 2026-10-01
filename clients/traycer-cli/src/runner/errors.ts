@@ -1,3 +1,5 @@
+import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
+
 // Machine-readable error codes the runner emits in NDJSON `error` events
 // and on the human stderr line. The codebase should always raise CliError
 // with one of these so downstream consumers (Desktop, CI, scripts) can
@@ -48,6 +50,12 @@ export const CLI_ERROR_CODES = {
 
   // --- Host supervisor + lifecycle ---
   HOST_NOT_RUNNING: "E_HOST_NOT_RUNNING",
+  // The host's process is there and its endpoint is published, but the
+  // connection to it failed or went quiet: the socket errored, closed before
+  // a frame, or a frame did not arrive inside its timeout. Distinct from
+  // HOST_NOT_RUNNING (nothing to dial) and from every code the host itself
+  // answers with - here nothing answered.
+  HOST_UNREACHABLE: "E_HOST_UNREACHABLE",
   // A running host reported (or, fail-safe, was assumed to have) work in
   // progress, so the CLI refused to reinstall/restart it. The desktop maps
   // this to its "host busy" flow (surface the host, run the renderer's
@@ -80,6 +88,13 @@ export const CLI_ERROR_CODES = {
   // while the command reports success. Retryable once the directory is
   // writable.
   HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+  // A plain or `--if-idle` stop asked the service manager to stop the host,
+  // and the host running is not the service's: `traycer host start` in a
+  // terminal (a `foreground` run). The service stop reached nothing, so the
+  // command refuses rather than report a stop the host outlived, and names
+  // the two ways that do end it (Ctrl-C there, or `--force`). Expected: it
+  // describes where the host came from, not a broken machine.
+  HOST_NOT_SERVICE_RUN: "E_HOST_NOT_SERVICE_RUN",
 
   // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
   // All three replace what used to be an `exitCode: 0` result carrying a
@@ -149,7 +164,7 @@ export const CLI_ERROR_CODES = {
   // typically older on purpose, and the only remedies are to update forward or
   // to accept the loss explicitly with `--accept-store-format-loss`.
   // `--force` never reaches it - see `host/store-format-floor.ts`.
-  HOST_STORE_FORMAT_FLOOR: "E_HOST_STORE_FORMAT_FLOOR",
+  HOST_STORE_FORMAT_FLOOR: HOST_STORE_FORMAT_FLOOR_CODE,
   REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
   REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
   REGISTRY_NOT_IMPLEMENTED: "E_REGISTRY_NOT_IMPLEMENTED",
@@ -161,6 +176,27 @@ export const CLI_ERROR_CODES = {
   SERVICE_UNINSTALL_FAILED: "E_SERVICE_UNINSTALL_FAILED",
   SERVICE_CONTROL_FAILED: "E_SERVICE_CONTROL_FAILED",
   SERVICE_CLI_PATH_UNRESOLVED: "E_SERVICE_CLI_PATH_UNRESOLVED",
+  // The registered definition could not be brought to the current launcher
+  // form (`host service refresh`, or the lifecycle mode change that runs it).
+  // Nothing was started or stopped; the message names the repair.
+  SERVICE_DEFINITION_REFRESH_FAILED: "E_SERVICE_DEFINITION_REFRESH_FAILED",
+  // A start found the service's own supervisor alive and relaunching its
+  // host, so it started nothing, and the relaunch did not bring the host back
+  // within the supervisor's longest backoff plus a boot allowance. Nothing
+  // was changed; the supervisor may still succeed, or exhaust its budget and
+  // exit, after which a start takes the ordinary path. Deliberately not
+  // expected: a host its supervisor cannot bring back is a real failure.
+  SERVICE_SUPERVISOR_RELAUNCHING: "E_SERVICE_SUPERVISOR_RELAUNCHING",
+  // The registration exists but its owner turned it off (Windows: the Task
+  // Scheduler task is disabled), so a start was refused and the CLI did not
+  // re-register over that choice. Nothing was changed; the message names the
+  // two repairs. Expected: it is the user's setting, not a defect.
+  SERVICE_REGISTRATION_DISABLED: "E_SERVICE_REGISTRATION_DISABLED",
+  // The service registration is another account's (Windows: the machine-
+  // global Scheduled Task carries another user's principal, or its owner
+  // could not be confirmed), so a write on it was refused and nothing was
+  // changed. Expected: a second user on a shared PC, not a defect.
+  SERVICE_TASK_NOT_OWNED: "E_SERVICE_TASK_NOT_OWNED",
 
   // --- CLI install lifecycle (foundation only in NP-1) ---
   CLI_LOCK_BUSY: "E_CLI_LOCK_BUSY",
@@ -198,8 +234,10 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.AUTH_REJECTED,
     CLI_ERROR_CODES.AUTH_NETWORK,
     CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    CLI_ERROR_CODES.HOST_UNREACHABLE,
     CLI_ERROR_CODES.HOST_BUSY,
     CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
     CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
     CLI_ERROR_CODES.HOST_NOT_INSTALLED,
     CLI_ERROR_CODES.HOST_INCOMPATIBLE,
@@ -216,6 +254,8 @@ export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
     CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
     CLI_ERROR_CODES.CONFIG_MISSING_KEY,
     CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+    CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
     CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
     CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
   ]);

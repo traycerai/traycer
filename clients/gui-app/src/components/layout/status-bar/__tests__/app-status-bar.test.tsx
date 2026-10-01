@@ -16,10 +16,11 @@ import type { StatusBarRateLimitCluster as StatusBarRateLimitClusterModel } from
 import type { ConfiguredRateLimitProvider } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+} from "@/stores/layout/layout-store";
+import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import {
   dispatchAction,
   type KeybindingRouter,
@@ -72,12 +73,18 @@ vi.mock(
   },
 );
 
-vi.mock("@/hooks/rate-limits/use-rate-limit-profile-selection", () => ({
-  useRateLimitProfileSelection: () => ({
-    shownProfiles: {},
-    lastProfileByHarness: {},
+vi.mock(
+  "@/hooks/rate-limits/use-rate-limit-profile-selection",
+  async (original) => ({
+    ...(await original<
+      typeof import("@/hooks/rate-limits/use-rate-limit-profile-selection")
+    >()),
+    useRateLimitProfileSelection: () => ({
+      shownProfiles: {},
+      lastProfileByHarness: {},
+    }),
   }),
-}));
+);
 
 vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
   useProviderRateLimitFetchScope: () => null,
@@ -139,24 +146,46 @@ vi.mock("@/lib/host", async (importOriginal) => ({
 // The popover owns the always-mounted `resources.subscribe` stream and a
 // panel with its own host model; here it stands in for "the resource surface
 // is mounted", with the segment it was handed rendered as its trigger.
-vi.mock("@/components/resources/resource-monitor-popover", () => ({
-  ResourceMonitorPopover: (props: {
-    readonly trigger: string;
-    readonly triggerNode?: React.ReactNode;
-    readonly contentSide?: string;
-    readonly claimsOpenAction: boolean;
-  }) => (
-    <div
-      data-testid="resource-monitor-popover"
-      data-side={props.contentSide}
-      // Whether THIS mount registers `app.resources.open` is the strip's
-      // decision, made here and honoured there; the popover's own suite owns
-      // the honouring half.
-      data-claims-open-action={String(props.claimsOpenAction)}
-    >
-      {props.triggerNode}
-    </div>
-  ),
+//
+// The trigger SEAM is reproduced rather than stubbed out: the real popover
+// hands `triggerNode` to `PopoverTrigger asChild`, and that composition is
+// what a wrapper placed between the two would break - the segment would still
+// be on screen and would no longer open anything. So the stand-in opens a real
+// popover from the node it was handed, and the left-click test below is a test
+// of the strip's own composition.
+vi.mock("@/components/resources/resource-monitor-popover", async () => {
+  const { Popover, PopoverContent, PopoverTrigger } =
+    await import("@/components/ui/popover");
+  return {
+    ResourceMonitorPopover: (props: {
+      readonly trigger: string;
+      readonly triggerNode: React.ReactElement;
+      readonly contentSide?: string;
+      readonly claimsOpenAction: boolean;
+    }) => (
+      <div
+        data-testid="resource-monitor-popover"
+        data-side={props.contentSide}
+        // Whether THIS mount registers `app.resources.open` is the strip's
+        // decision, made here and honoured there; the popover's own suite owns
+        // the honouring half.
+        data-claims-open-action={String(props.claimsOpenAction)}
+      >
+        <Popover>
+          <PopoverTrigger asChild>{props.triggerNode}</PopoverTrigger>
+          <PopoverContent data-testid="resource-monitor-panel" />
+        </Popover>
+      </div>
+    ),
+  };
+});
+
+// The quick-verb menu the resource segment now carries (L-144) reaches the
+// router for "Customize layout...". Everything else in the module stays real.
+const navigateMock = vi.hoisted(() => vi.fn());
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => navigateMock,
 }));
 
 // A projection and a desktop reading are the segment's data sources. Empty by
@@ -260,7 +289,7 @@ describe("<AppStatusBar />", () => {
   beforeEach(() => {
     scope = hostScopeFixture({});
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -268,7 +297,7 @@ describe("<AppStatusBar />", () => {
   afterEach(() => {
     cleanup();
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -431,12 +460,9 @@ describe("<AppStatusBar />", () => {
   });
 
   it("hides the resource segment when the preference is off", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        resources: { ...DEFAULT_STATUS_BAR_LAYOUT.resources, enabled: false },
-      },
-    });
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { shown: "hidden" });
 
     render(<AppStatusBar />);
 
@@ -464,6 +490,7 @@ describe("<AppStatusBar />", () => {
           providerId: "codex",
           profileId: null,
           account: null,
+          hidden: false,
           state: "live",
           reason: null,
           windows: [],
@@ -472,12 +499,9 @@ describe("<AppStatusBar />", () => {
         },
       ],
     };
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: { ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits, enabled: false },
-      },
-    });
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { shown: "hidden" });
 
     render(<AppStatusBar />);
 
@@ -490,7 +514,7 @@ describe("<AppStatusBar /> usage panel chord", () => {
   beforeEach(() => {
     scope = hostScopeFixture({});
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -498,7 +522,7 @@ describe("<AppStatusBar /> usage panel chord", () => {
   afterEach(() => {
     cleanup();
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -507,13 +531,10 @@ describe("<AppStatusBar /> usage panel chord", () => {
   // it stays reachable in every state the segments themselves do not survive
   // - usage switched off in Settings, or a pick that cannot be reached.
 
-  it("opens the panel through the chord while statusBar.rateLimits.enabled is false, with the cluster absent", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: { ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits, enabled: false },
-      },
-    });
+  it("opens the panel through the chord while usageLimits.shown is hidden, with the cluster absent", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { shown: "hidden" });
 
     render(<AppStatusBar />);
 
@@ -598,7 +619,7 @@ describe("<AppStatusBar /> host controls", () => {
   beforeEach(() => {
     scope = hostScopeFixture({});
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -606,7 +627,7 @@ describe("<AppStatusBar /> host controls", () => {
   afterEach(() => {
     cleanup();
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -641,17 +662,20 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
   beforeEach(() => {
     scope = hostScopeFixture({});
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
+    useLayoutEditorStore.getState().endSession();
   });
 
   afterEach(() => {
     cleanup();
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
+    useLayoutEditorStore.getState().endSession();
+    navigateMock.mockClear();
   });
 
   function twoWindowedProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
@@ -696,13 +720,67 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("does not open from a right-click on the resource segment", () => {
+  /**
+   * The resource readout answers with its OWN verbs (L-144).
+   *
+   * The bar's menu stands down over it - it is the resource popover's trigger,
+   * and the bar's own quick verbs name `usageLimits`, the segment beside this
+   * one - so for as long as the segment had no menu of its own it was the one
+   * piece of the strip that answered no right-click at all.
+   *
+   * Nested Radix triggers do not both fire: the inner one defaults the shared
+   * event prevented before the outer trigger's composed opener runs.
+   */
+  it("answers a right-click on the resource segment with the resource monitor's verbs", () => {
     windowedProviders = twoWindowedProviders();
     render(<AppStatusBar />);
 
     fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
 
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(
+      screen.getByTestId("layout-quick-verb-resourceMonitor-hide"),
+    ).not.toBeNull();
+    expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
+    // The bar's menu, not the segment's: its provider checkboxes and its own
+    // region's verbs are what must NOT be on screen here.
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Codex" }),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("layout-quick-verb-usageLimits-hide"),
+    ).toBeNull();
+  });
+
+  it("answers the same right-click while the layout editor is open", () => {
+    // LV2-05 / L-129: the verbs are wanted in a session at least as much as at
+    // rest, and that is where they used to be firewalled.
+    windowedProviders = twoWindowedProviders();
+    useLayoutEditorStore.getState().beginSession({
+      entry: "pointer",
+      source: "direct_ui",
+      startedAt: 0,
+      origin: { kind: "tab" },
+    });
+    render(<AppStatusBar />);
+
+    fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
+
+    expect(
+      screen.getByTestId("layout-quick-verb-resourceMonitor-hide"),
+    ).not.toBeNull();
+  });
+
+  it("leaves the left click on the resource segment to the panel", () => {
+    // The menu wraps the POPOVER, never the node the popover hands to
+    // `PopoverTrigger asChild` - a Radix root in that slot would swallow the
+    // trigger's props and the readout would open nothing.
+    windowedProviders = twoWindowedProviders();
+    render(<AppStatusBar />);
+    expect(screen.queryByTestId("resource-monitor-panel")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("status-bar-resource-segment"));
+
+    expect(screen.getByTestId("resource-monitor-panel")).not.toBeNull();
   });
 
   it("offers no providers for an unresolved pick, but still opens", () => {
@@ -742,12 +820,9 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
     // With usage switched off there is no segment for a per-provider checkbox
     // to govern - it would toggle a preference with no visible effect.
     windowedProviders = twoWindowedProviders();
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: { ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits, enabled: false },
-      },
-    });
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { shown: "hidden" });
 
     render(<AppStatusBar />);
 
@@ -809,7 +884,7 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
   beforeEach(() => {
     scope = hostScopeFixture({});
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -818,7 +893,7 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
     cleanup();
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -862,6 +937,7 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
           providerId: "codex",
           profileId: null,
           account: null,
+          hidden: false,
           state: "live",
           reason: null,
           windows: [codexWindow],
@@ -872,6 +948,7 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
           providerId: "claude-code",
           profileId: null,
           account: null,
+          hidden: false,
           state: "live",
           reason: null,
           windows: [claudeWindow],
@@ -915,36 +992,13 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
     expectFullReadings();
   });
 
-  it("leaves app.rate-limits.open to the header it is sharing the screen with", () => {
-    // The slot holds ONE handler and an unregister clears only its own, so a
-    // strip that registered here would displace the mobile header's and then
-    // - unmounting for the keyboard or the drawer - take the chord away
-    // outright, with the header button still on screen and its effect long
-    // past re-running. Nothing is lost: the cluster's own trigger is a tap
-    // away, and it opens the same panel.
+  it("holds app.rate-limits.open on a mobile viewport, where the header draws no gauge beside it", () => {
+    // The phone header gives its usage glyph up while this footer is on, and
+    // this footer only mounts there while it is on - so the footer is the
+    // chord's one owner rather than a rival for it.
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
 
     render(<AppStatusBar />);
-
-    act(() => {
-      expect(
-        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER),
-      ).toBe(false);
-    });
-
-    expect(screen.queryByTestId("rate-limit-popover-stub")).toBeNull();
-  });
-
-  it("takes the chord back when the window is no longer narrow", () => {
-    // The registration follows the viewport rather than the mount, so a
-    // desktop window narrowed and widened again is not left chordless.
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-    const view = render(<AppStatusBar />);
-
-    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-    act(() => {
-      view.rerender(<AppStatusBar />);
-    });
 
     act(() => {
       expect(
@@ -960,10 +1014,9 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
  * Which mount holds `app.resources.open`, decided by the strip and handed to
  * the popover as a prop (the popover's own suite owns honouring it).
  *
- * The resource popover is mounted by the HEADER as well as by the strip, so
- * unlike the usage chord this cannot be a flat "stand down when narrow": with
- * the header's monitor switched off there is no other mount, and standing
- * down would leave the action with no owner at all.
+ * The resource popover is mounted by the HEADER as well as by the strip, but
+ * never both at once: on desktop placement keeps them apart, and the phone
+ * header draws no monitor while the footer is on.
  */
 describe("<AppStatusBar /> resource action ownership", () => {
   const DESKTOP_VIEWPORT_WIDTH = 1280;
@@ -985,8 +1038,7 @@ describe("<AppStatusBar /> resource action ownership", () => {
   beforeEach(() => {
     scope = hostScopeFixture({});
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
-    useSettingsStore.setState({ showGlobalResourceMonitor: true });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -995,8 +1047,7 @@ describe("<AppStatusBar /> resource action ownership", () => {
     cleanup();
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     useWatchHostStore.setState({ scopedHostId: null });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
-    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     resetRateLimitMocks();
     resourceProjection.value = null;
   });
@@ -1009,39 +1060,227 @@ describe("<AppStatusBar /> resource action ownership", () => {
     expect(claimsOpenAction()).toBe("true");
   });
 
-  it("stands down on a mobile viewport while the header draws its own monitor", () => {
-    // Both are on screen there - the header keeps its monitor whatever the
-    // footer does - and the header is the one that survives an open keyboard
-    // or nav drawer, so the strip must not displace its handler and then
-    // delete the slot on the way out.
+  it("claims it on a mobile viewport too, where the header gives its monitor up to the footer", () => {
     setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-
-    render(<AppStatusBar />);
-
-    expect(claimsOpenAction()).toBe("false");
-  });
-
-  it("takes it on a mobile viewport when the header draws no monitor", () => {
-    // Nothing to collide with: standing down here would leave the action with
-    // no owner at all.
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-    useSettingsStore.setState({ showGlobalResourceMonitor: false });
 
     render(<AppStatusBar />);
 
     expect(claimsOpenAction()).toBe("true");
   });
 
-  it("takes it back when the window is no longer narrow", () => {
-    setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-    const view = render(<AppStatusBar />);
-    expect(claimsOpenAction()).toBe("false");
+  // The old "header off, strip on" case is gone with it: `resourceMonitor` is
+  // ONE switch (L-48) now, so turning the header's monitor off also drops the
+  // strip's own segment - there is no longer a state where the strip has a
+  // popover to claim ownership of while the header draws none.
+});
 
-    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-    act(() => {
-      view.rerender(<AppStatusBar />);
+// The rest of the old "Customize editing" / "disabled-usage provider ghosts
+// follow segmentOrder" suites were about the overlay/ghost/proxy technique
+// the layout rework deleted outright: the editor decorates the app's OWN
+// elements now, so there is no overlay, proxy or per-ghost popover left to
+// assert about, and what replaced them is covered against the real canvas in
+// `components/layout-editor/`. This ordering assertion is the one survivor:
+// it never touched the ghost machinery, only where the two readings sit and
+// plain DOM position.
+describe("<AppStatusBar /> reading placement (L-156)", () => {
+  function setViewportWidth(width: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
     });
+  }
 
-    expect(claimsOpenAction()).toBe("true");
+  beforeEach(() => {
+    scope = hostScopeFixture({});
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  afterEach(() => {
+    cleanup();
+    // Restored HERE rather than at the end of the one case that narrows it:
+    // a failing assertion would otherwise leave every case after it on a
+    // phone, and the failure that follows names the wrong mechanism.
+    setViewportWidth(1280);
+    useWatchHostStore.setState({ scopedHostId: null });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    resetRateLimitMocks();
+    resourceProjection.value = null;
+  });
+
+  function place(patch: Partial<LayoutArrangement>): void {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      ...patch,
+    });
+  }
+
+  /** The strip's own children, as the two readings and the row's grower. */
+  function stripOrder(): ReadonlyArray<string> {
+    const row = screen.getByTestId("app-status-bar").firstElementChild;
+    return [...(row?.children ?? [])].map((child) => {
+      if (child.getAttribute("data-testid") === "status-bar-rate-limit-slot") {
+        return "usage";
+      }
+      return child.querySelector('[data-testid="status-bar-resource-segment"]')
+        ? "resource"
+        : "grower";
+    });
+  }
+
+  it("draws each reading at the end of the strip it names", () => {
+    render(<AppStatusBar />);
+    expect(stripOrder()).toEqual(["usage", "grower", "resource"]);
+    cleanup();
+
+    place({ resourceSide: "left", usageSide: "right" });
+    render(<AppStatusBar />);
+    expect(stripOrder()).toEqual(["resource", "grower", "usage"]);
+  });
+
+  it("puts usage limits first where the two share one end", () => {
+    place({ resourceSide: "left" });
+    render(<AppStatusBar />);
+    // Both are in the LEFT cluster, and the order is the model's: usage
+    // limits lead. Before L-156 the monitor led here, because `resourceSide`
+    // was read as "before or after the usage slot".
+    expect(stripOrder()).toEqual(["usage", "resource", "grower"]);
+    cleanup();
+
+    place({ resourceSide: "right", usageSide: "right" });
+    render(<AppStatusBar />);
+    expect(stripOrder()).toEqual(["grower", "usage", "resource"]);
+  });
+
+  it("leaves the reading that moved to the header out, and keeps the other", () => {
+    place({ usageHost: "header" });
+    render(<AppStatusBar />);
+    expect(screen.queryByTestId("status-bar-rate-limit-slot")).toBeNull();
+    expect(screen.getByTestId("status-bar-resource-segment")).not.toBeNull();
+    cleanup();
+
+    place({ usageHost: "status-bar", resourceHost: "header" });
+    render(<AppStatusBar />);
+    expect(screen.getByTestId("status-bar-rate-limit-slot")).not.toBeNull();
+    expect(screen.queryByTestId("status-bar-resource-segment")).toBeNull();
+  });
+
+  it("draws neither reading once both have named the header", () => {
+    // The shell does not mount a strip in this state (`statusBarShown`), but
+    // the strip must not draw half of one if something does: an empty row is
+    // a bordered 24px band holding a spacer.
+    place({ usageHost: "header", resourceHost: "header" });
+    render(<AppStatusBar />);
+
+    expect(stripOrder()).toEqual(["grower"]);
+    expect(screen.queryByTestId("status-bar-rate-limit-slot")).toBeNull();
+    expect(screen.queryByTestId("status-bar-resource-segment")).toBeNull();
+  });
+
+  it("draws both readings on a narrow viewport whatever bar they name", () => {
+    // L-162: a phone has one bar. The footer is opt-in (`mobileFooter`) and
+    // once it is on it draws both readings, because a footer that honoured a
+    // header pick would drop a readout the mobile header does not replace.
+    // The picks themselves survive for the next desktop window.
+    setViewportWidth(390);
+    place({ usageHost: "header", resourceHost: "header", mobileFooter: true });
+    render(<AppStatusBar />);
+
+    expect(stripOrder()).toEqual(["usage", "grower", "resource"]);
+    expect(useLayoutStore.getState().arrangement.usageHost).toBe("header");
+  });
+
+  it("fixes the ends on a narrow viewport whatever side either reading names", () => {
+    // L-162: the phone footer has fixed ends - usage at the start, resources
+    // at the end - and the usage panel opens over the start. The stored sides
+    // are a desktop window's and are left as they were.
+    setViewportWidth(390);
+    place({ usageSide: "right", resourceSide: "left", mobileFooter: true });
+    render(<AppStatusBar />);
+
+    expect(stripOrder()).toEqual(["usage", "grower", "resource"]);
+    expect(lastPopoverProps).toEqual({ side: "top", align: "start" });
+    expect(useLayoutStore.getState().arrangement.usageSide).toBe("right");
+    expect(useLayoutStore.getState().arrangement.resourceSide).toBe("left");
+  });
+
+  it("opens the usage panel at the end the cluster is on", () => {
+    function openPanelAlign(): string | undefined {
+      render(<AppStatusBar />);
+      act(() => {
+        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER);
+      });
+      return (
+        screen
+          .getByTestId("rate-limit-popover-stub")
+          .getAttribute("data-align") ?? undefined
+      );
+    }
+
+    expect(openPanelAlign()).toBe("start");
+    cleanup();
+
+    place({ usageSide: "right" });
+    expect(openPanelAlign()).toBe("end");
+  });
+
+  it("forgets an open usage panel when the cluster leaves the bar", () => {
+    const view = render(<AppStatusBar />);
+    act(() => {
+      dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER);
+    });
+    expect(screen.getByTestId("rate-limit-popover-stub")).not.toBeNull();
+
+    act(() => {
+      place({ usageHost: "header" });
+    });
+    view.rerender(<AppStatusBar />);
+    expect(screen.queryByTestId("rate-limit-popover-stub")).toBeNull();
+
+    // And the request does not come back with the reading: the anchor and the
+    // content unmount together, so Radix never reports the close, and a
+    // remembered `true` would reopen a panel nobody asked for.
+    act(() => {
+      place({ usageHost: "status-bar" });
+    });
+    view.rerender(<AppStatusBar />);
+    expect(screen.queryByTestId("rate-limit-popover-stub")).toBeNull();
+  });
+
+  it("owns each chord exactly while it draws the reading behind it", () => {
+    // One handler slot per chord and two possible owners, exclusive by
+    // placement on a desktop viewport: whatever this strip is not drawing,
+    // the header is, and a handler registered here would take the chord away
+    // from the button that owns the panel.
+    const cases: ReadonlyArray<{
+      readonly patch: Partial<LayoutArrangement>;
+      readonly usage: boolean;
+      readonly resources: boolean;
+    }> = [
+      { patch: {}, usage: true, resources: true },
+      { patch: { usageHost: "header" }, usage: false, resources: true },
+      { patch: { resourceHost: "header" }, usage: true, resources: false },
+    ];
+    for (const one of cases) {
+      place(one.patch);
+      render(<AppStatusBar />);
+
+      expect(
+        dispatchAction("app.rate-limits.open", DYNAMIC_ACTION_ROUTER),
+        JSON.stringify(one.patch),
+      ).toBe(one.usage);
+      // The resource panel's owner is the popover the strip mounts, so its
+      // presence IS the claim; the flag it carries is asserted beside it.
+      expect(
+        screen
+          .queryByTestId("resource-monitor-popover")
+          ?.getAttribute("data-claims-open-action") ?? null,
+        JSON.stringify(one.patch),
+      ).toBe(one.resources ? "true" : null);
+      cleanup();
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    }
   });
 });

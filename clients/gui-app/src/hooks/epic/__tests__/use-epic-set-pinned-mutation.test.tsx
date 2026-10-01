@@ -85,7 +85,7 @@ interface CapturedClient {
 }
 
 let capturedOptions: {
-  onMutate?: (variables: DispatchVariables) => MutationContext;
+  onMutate?: (variables: DispatchVariables) => Promise<MutationContext>;
   onSuccess?: (
     response: { pinned: boolean },
     variables: DispatchVariables,
@@ -216,7 +216,7 @@ describe("useEpicSetPinned", () => {
     useAuthStore.getState().setSignedOut();
   });
 
-  it("optimistically flips the row in the scoped first page and tails on mutate, leaving other scopes alone", () => {
+  it("optimistically flips the row in the scoped first page and tails on mutate, leaving other scopes alone", async () => {
     const queryClient = new QueryClient();
     const scopedQueryKey = cloudEpicTasksQueryKey(
       "host-1",
@@ -253,7 +253,9 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.(followingVars("epic-1", true));
+    const context = await capturedOptions.onMutate?.(
+      followingVars("epic-1", true),
+    );
 
     expect(context).toEqual({ hostId: "host-1", userId: "user-1" });
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
@@ -273,7 +275,7 @@ describe("useEpicSetPinned", () => {
     );
   });
 
-  it("reverts the optimistic patch and toasts when the RPC fails", () => {
+  it("reverts the optimistic patch and toasts when the RPC fails", async () => {
     const queryClient = new QueryClient();
     const scopedQueryKey = cloudEpicTasksQueryKey(
       "host-1",
@@ -296,7 +298,9 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.(followingVars("epic-1", true));
+    const context = await capturedOptions.onMutate?.(
+      followingVars("epic-1", true),
+    );
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": true,
     });
@@ -320,7 +324,7 @@ describe("useEpicSetPinned", () => {
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
   });
 
-  it("flips a Current-tasks pin-tail row on mutate and restores it when the RPC fails", () => {
+  it("flips a Current-tasks pin-tail row on mutate and restores it when the RPC fails", async () => {
     // The tail is a THIRD copy of the row (beside the first page and the
     // retained pages): a pin of a tail-only task has no first-page row to flip.
     const queryClient = new QueryClient();
@@ -346,7 +350,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.(
+    const context = await capturedOptions.onMutate?.(
       followingVars("tail-only", false),
     );
 
@@ -370,7 +374,7 @@ describe("useEpicSetPinned", () => {
     });
   });
 
-  it("refuses at dispatch without a cloud verdict, before the optimistic patch", () => {
+  it("refuses at dispatch without a cloud verdict, before the optimistic patch", async () => {
     // A row rendered while verified and activated after a demotion - or the
     // tab strip's Undo toast outliving its click - reaches this one shared
     // dispatch. It must refuse BEFORE touching a cache, so the refusal's
@@ -390,16 +394,16 @@ describe("useEpicSetPinned", () => {
     });
     useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
 
-    expect(() =>
+    await expect(
       capturedOptions.onMutate?.(followingVars("epic-1", true)),
-    ).toThrow(EPIC_PIN_UNAUTHORIZED_MESSAGE);
+    ).rejects.toThrow(EPIC_PIN_UNAUTHORIZED_MESSAGE);
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
     });
 
     // Non-vacuity: the verdict returning is what admits the same dispatch.
     useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
-    capturedOptions.onMutate?.(followingVars("epic-1", true));
+    await capturedOptions.onMutate?.(followingVars("epic-1", true));
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": true,
     });
@@ -460,7 +464,9 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.(followingVars("epic-1", true));
+    const context = await capturedOptions.onMutate?.(
+      followingVars("epic-1", true),
+    );
     expect(context).toEqual({ hostId: null, userId: "user-1" });
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
@@ -519,7 +525,7 @@ describe("useEpicSetPinned", () => {
    * Patching the window's scope instead would flip a row in a list the write
    * never touches, and leave the owning host's list showing the old bit.
    */
-  it("scopes the optimistic patch to the named host, not the window's", () => {
+  it("scopes the optimistic patch to the named host, not the window's", async () => {
     const queryClient = new QueryClient();
     const owningKey = cloudEpicTasksQueryKey(
       "host-owning",
@@ -539,7 +545,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.({
+    const context = await capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: true,
       isLocalHome: true,
@@ -567,7 +573,7 @@ describe("useEpicSetPinned", () => {
    * glyph kept the pre-click value indefinitely: `staleTime: Infinity` means
    * nothing refetches it on its own, and only a manual invalidation corrected it.
    */
-  it("patches the pin-reading cache for the dispatch host, and only that host's", () => {
+  it("patches the pin-reading cache for the dispatch host, and only that host's", async () => {
     const queryClient = new QueryClient();
     const ownerReadingKey = queryKeys.cloudEpicPinReading(
       "host-owning",
@@ -593,7 +599,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    capturedOptions.onMutate?.({
+    await capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: true,
       isLocalHome: true,
@@ -609,7 +615,7 @@ describe("useEpicSetPinned", () => {
     });
   });
 
-  it("patches every POPULATION's entry for the dispatch host", () => {
+  it("patches every POPULATION's entry for the dispatch host", async () => {
     // R8 put the local-homed open population in the reading key, so one host/user
     // can hold several entries at once - the page fetched for `{epic-1}` and the
     // one fetched after a second tab opened. The write must reach all of them:
@@ -635,7 +641,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    capturedOptions.onMutate?.({
+    await capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: true,
       isLocalHome: true,
@@ -650,7 +656,7 @@ describe("useEpicSetPinned", () => {
     });
   });
 
-  it("rolls the pin-reading cache back when the write fails", () => {
+  it("rolls the pin-reading cache back when the write fails", async () => {
     const queryClient = new QueryClient();
     const ownerReadingKey = queryKeys.cloudEpicPinReading(
       "host-owning",
@@ -672,7 +678,7 @@ describe("useEpicSetPinned", () => {
       hostId: "host-owning",
     };
 
-    const context = capturedOptions.onMutate?.(variables);
+    const context = await capturedOptions.onMutate?.(variables);
     expect(pinnedById(queryClient.getQueryData(ownerReadingKey))).toEqual({
       "epic-1": true,
     });
@@ -692,7 +698,7 @@ describe("useEpicSetPinned", () => {
     });
   });
 
-  it("patches an UNPIN into the pin-reading cache too", () => {
+  it("patches an UNPIN into the pin-reading cache too", async () => {
     // The pin direction is not symmetric by construction - the patch writes
     // `variables.pinned` through - so unpin gets its own case rather than being
     // assumed from the pin one.
@@ -711,7 +717,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    capturedOptions.onMutate?.({
+    await capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: false,
       isLocalHome: true,
@@ -723,7 +729,7 @@ describe("useEpicSetPinned", () => {
     });
   });
 
-  it("leaves another USER's pin reading on the same host alone", () => {
+  it("leaves another USER's pin reading on the same host alone", async () => {
     // The predicate checks `queryKey[4] === scope.userId`, one index earlier than
     // the History key's user. Host isolation is pinned above; this is the other
     // half of the scope, and the index is exactly what would make it silently
@@ -747,7 +753,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    capturedOptions.onMutate?.({
+    await capturedOptions.onMutate?.({
       epicId: "epic-1",
       pinned: true,
       isLocalHome: true,

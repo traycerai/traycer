@@ -159,6 +159,8 @@ function mountSubmit(args: {
   readonly onSubmitMessage: (input: ChatComposerSubmitInput) => boolean;
 }) {
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "hash-first-image-submit",
     values: {
       permission: "supervised",
@@ -270,7 +272,7 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
     expect(atoms[0]?.hash).toBeNull();
   });
 
-  it("(b) async IndexedDB fallback when the hash is session-cold - payload still carries b64content", async () => {
+  it("(b) reads session-cold bytes only on submit and waits before inlining them", async () => {
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     imageStoreMocks.getImageBytes.mockResolvedValue(IMAGE_BYTES);
 
@@ -281,6 +283,10 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
       onSubmitMessage: submit,
     });
 
+    // Recovery and rendering preserve the content hash without eagerly
+    // materializing bytes. The single byte source is consulted on demand only
+    // when the user submits this restored image-bearing draft.
+    expect(imageStoreMocks.getImageBytes).not.toHaveBeenCalled();
     act(() => {
       result.current.submitDraft("enter");
     });
@@ -298,6 +304,7 @@ describe("useChatComposerSubmit: hash-first image inline-at-submit", () => {
     expect(atoms[0]?.b64content).toBe(
       btoa(String.fromCharCode(...IMAGE_BYTES)),
     );
+    expect(atoms[0]?.hash).toBeNull();
     expect(result.current.annotationPreparationPending).toBe(false);
   });
 

@@ -74,6 +74,7 @@ interface TrayAction {
 
 export interface MobileHistoryRowProps {
   readonly item: HistoryItem;
+  readonly timeLabel: string;
   readonly selectionMode: boolean;
   readonly isSelected: boolean;
   readonly isTrayOpen: boolean;
@@ -336,7 +337,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
             canEdit={canRename}
             organizationVisible={!selectionMode}
             displayTitle={displayTitle}
-            updatedLabel={item.updatedLabel}
+            updatedLabel={props.timeLabel}
             isPinned={item.isPinned}
             provenance={historyRowProvenance(item)}
             isRenaming={isRenaming}
@@ -445,7 +446,7 @@ function RowTitleBlock(props: {
             fallback={props.item.organization}
           />
         ) : null}
-        <span className="truncate">updated {props.updatedLabel}</span>
+        <span className="truncate">{props.updatedLabel}</span>
         {props.provenance === null ? null : (
           <span
             data-testid={`epics-list-row-provenance-label-${props.provenance}`}

@@ -135,6 +135,7 @@ import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
 import { ComposerBody } from "@/components/home/composer/composer-body";
+import { VisibleDraftImagePrefetch } from "@/components/home/visible-draft-image-prefetch";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -220,7 +221,13 @@ async function confirmCreateAttachmentHashes(input: {
    */
   readonly ownerUserId: string | null;
 }): Promise<ReadonlySet<string>> {
-  const confirmed = await confirmAttachmentsByHash(input);
+  // No progress surface here: the modal disables its own Send and shows the
+  // attachment strip, and a create from it carries far fewer images than a
+  // landing submit does.
+  const confirmed = await confirmAttachmentsByHash({
+    ...input,
+    onProgress: null,
+  });
   return confirmed.byHash;
 }
 
@@ -250,19 +257,22 @@ function NewConversationModalAttachmentStrip(props: {
     props.hostId,
   );
   return (
-    <AttachmentStrip
-      content={content}
-      onRemoveImage={props.onRemoveImage}
-      fetcher={fetcher}
-      // This composer is hash-first now, so a just-pasted chip has no epic
-      // attachment to fetch - its bytes are in this window's composer store,
-      // and the session object-URL is what paints it without a placeholder
-      // frame. It also covers a restored draft, because pulling the blobs back
-      // off the host (`readDraftBlobsIntoLocalStore`) seeds the same session
-      // entry. The epic fetcher still answers for hashes that came from a quote
-      // seed, which address the epic store and were never local.
-      sessionObjectUrl={sessionObjectUrl}
-    />
+    <>
+      <VisibleDraftImagePrefetch content={content} active />
+      <AttachmentStrip
+        content={content}
+        onRemoveImage={props.onRemoveImage}
+        fetcher={fetcher}
+        // This composer is hash-first now, so a just-pasted chip has no epic
+        // attachment to fetch - its bytes are in this window's composer store,
+        // and the session object-URL is what paints it without a placeholder
+        // frame. It also covers a restored draft, because pulling the blobs back
+        // off the host (`readDraftBlobsIntoLocalStore`) seeds the same session
+        // entry. The epic fetcher still answers for hashes that came from a quote
+        // seed, which address the epic store and were never local.
+        sessionObjectUrl={sessionObjectUrl}
+      />
+    </>
   );
 }
 
@@ -278,7 +288,6 @@ interface NewConversationModalActionProps {
   readonly triggerLabel: string;
   readonly triggerTestId: string;
   readonly actionRevealClassName: string;
-  readonly onBeforeOpen: (() => void) | undefined;
 }
 
 /**
@@ -291,11 +300,10 @@ interface NewConversationModalActionProps {
 export function NewConversationModalAction(
   props: NewConversationModalActionProps,
 ) {
-  const { disabled, epicId, onBeforeOpen, parentId, tabId } = props;
+  const { disabled, epicId, parentId, tabId } = props;
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const handleOpen = useCallback((): void => {
     if (disabled) return;
-    onBeforeOpen?.();
     openModal({
       epicId,
       tabId,
@@ -308,7 +316,7 @@ export function NewConversationModalAction(
       // machine in mind.
       hostId: null,
     });
-  }, [disabled, epicId, onBeforeOpen, openModal, parentId, tabId]);
+  }, [disabled, epicId, openModal, parentId, tabId]);
   // Activation while aria-disabled stays blocked via `handleOpen`'s early
   // return; see `disabled-presentation.ts` for why native `disabled` can't
   // carry the tooltip.

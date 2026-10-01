@@ -196,4 +196,53 @@ describe("groupCurrentTasks", () => {
     ]);
     expect(groups.open.map(({ id }) => id)).toEqual(["open-b", "open-a"]);
   });
+
+  it("orders in-progress and pinned by activity while keeping open order", () => {
+    const groups = groupCurrentTasks(
+      [
+        {
+          ...item("working-activity-new", 1, false),
+          recentAtMs: 20,
+          recentLabel: "activity newer",
+        },
+        {
+          ...item("working-edit-new", 20, false),
+          recentAtMs: 1,
+          recentLabel: "activity older",
+        },
+        {
+          ...item("pinned-activity-new", 2, true),
+          recentAtMs: 200,
+          recentLabel: "activity newer",
+        },
+        {
+          ...item("pinned-edit-new", 200, true),
+          recentAtMs: 2,
+          recentLabel: "activity older",
+        },
+        {
+          ...item("open-a", 3, false),
+          recentAtMs: 300,
+          recentLabel: "activity newer",
+        },
+        {
+          ...item("open-b", 300, false),
+          recentAtMs: 3,
+          recentLabel: "activity older",
+        },
+      ],
+      new Set(["working-activity-new", "working-edit-new"]),
+      ["open-b", "open-a"],
+    );
+
+    expect(groups.inProgress.map(({ id }) => id)).toEqual([
+      "working-activity-new",
+      "working-edit-new",
+    ]);
+    expect(groups.pinned.map(({ id }) => id)).toEqual([
+      "pinned-activity-new",
+      "pinned-edit-new",
+    ]);
+    expect(groups.open.map(({ id }) => id)).toEqual(["open-b", "open-a"]);
+  });
 });

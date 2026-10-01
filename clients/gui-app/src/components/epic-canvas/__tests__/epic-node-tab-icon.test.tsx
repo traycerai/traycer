@@ -67,9 +67,11 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
     const indicator = screen.getByRole("status", {
       name: "Task needs attention",
     });
-    const terminalGlyph = indicator.querySelector(".lucide-square-terminal");
-    expect(terminalGlyph?.getAttribute("class")).toContain("text-destructive");
-    expect(indicator.querySelector(".lucide-message-square-x")).toBeNull();
+    // A terminal failure on the TUI surface draws its own TerminalSquare
+    // glyph, distinct from a chat failure's message-square-x.
+    const glyph = indicator.querySelector('[data-status-glyph="failure"]');
+    expect(glyph?.getAttribute("class")).toContain("text-destructive");
+    expect(glyph?.getAttribute("class")).toContain("lucide-square-terminal");
 
     act(() => {
       useAppLocalNotificationsStore
@@ -115,9 +117,11 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
     const completedIndicator = screen.getByRole("status", {
       name: "Task completed",
     });
-    expect(
-      completedIndicator.querySelector("svg")?.getAttribute("class"),
-    ).toContain("lucide-message-square-check");
+    const glyph = completedIndicator.querySelector(
+      '[data-status-glyph="done"]',
+    );
+    expect(glyph).not.toBeNull();
+    expect(glyph?.getAttribute("class")).toContain("text-success-foreground");
   });
 
   it("shows the terminal failure glyph for a failed TUI agent", () => {
@@ -149,8 +153,12 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
     const failure = screen.getByRole("status", {
       name: "Task needs attention",
     });
-    expect(failure.querySelector(".lucide-square-terminal")).not.toBeNull();
-    expect(failure.querySelector(".lucide-message-square-x")).toBeNull();
+    // The host's unreadFailure bit represents a terminal outcome for a chat.
+    const glyph = failure.querySelector('[data-status-glyph="failure"]');
+    expect(glyph?.getAttribute("class")).toContain("lucide-square-terminal");
+    expect(glyph?.getAttribute("class")).not.toContain(
+      "lucide-message-square-x",
+    );
   });
 });
 

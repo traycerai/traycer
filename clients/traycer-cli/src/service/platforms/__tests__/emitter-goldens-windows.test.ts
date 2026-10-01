@@ -70,8 +70,6 @@ const windowsCli: CliInvocation = {
 };
 
 beforeEach(() => {
-  vi.stubEnv("USERDOMAIN", "");
-  vi.stubEnv("USERNAME", "golden-user");
   vi.stubEnv("SystemRoot", "C:\\Windows");
   vi.stubEnv("SYSTEMROOT", "C:\\Windows");
 });
@@ -80,14 +78,21 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+// The `<UserId>` the golden file was written against. The builder takes it
+// from its caller - the install resolves it (`resolveTaskUserId`, covered by
+// `windows-task-user-id.test.ts`) in front of its install edge - so no machine
+// identity can reach this golden.
+const GOLDEN_TASK_USER_ID = "golden-user";
+
 describe("Windows: buildScheduledTaskXml and buildWindowsHiddenHostLauncher (win32 path semantics)", () => {
   it("matches emitter-goldens/task.xml byte-for-byte", async () => {
     const { buildScheduledTaskXml } = await import("../windows");
 
-    const xml = buildScheduledTaskXml({
-      label: productionLabel,
-      cli: windowsCli,
-    });
+    const xml = buildScheduledTaskXml(
+      { label: productionLabel, cli: windowsCli },
+      GOLDEN_TASK_USER_ID,
+      true,
+    );
 
     expect(xml).toBe(golden("task.xml"));
   });

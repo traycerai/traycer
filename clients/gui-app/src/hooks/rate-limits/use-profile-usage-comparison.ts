@@ -12,6 +12,7 @@ import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-
 import { PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useRunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 import type { HostRpcRegistry } from "@/lib/host";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import {
   isRateLimitCapableProvider,
   isRateLimitProfileFetchEligible,
@@ -75,8 +76,10 @@ const EMPTY_RATE_LIMIT_REQUESTS: ReadonlyArray<
  * `fetchProviderRateLimits` with `target.fetchScope` - the tab's pinned host,
  * never the default-host-bound `useProviderRateLimitFetchScope` - so a
  * refresh from a tab-scoped picker reads and writes the host that tab runs
- * on; the `httpFetch` lane (openrouter, kilocode) refetches this profile's own
- * passive query directly. Refresh is independent of profile selection and
+ * on; the `httpFetch` lane (openrouter, kilocode, huggingface, opencode,
+ * cursor, antigravity) refetches this profile's own passive query directly,
+ * keyed by its profile id - which only antigravity, among those, has more
+ * than one of. Refresh is independent of profile selection and
  * picker/menu open state - each entry's `refresh` is a plain function a
  * caller invokes for whichever profile it is previewing.
  */
@@ -111,8 +114,11 @@ export function useProfileUsageComparison({
   // this hook's mount time. Mirrors `useTrayEpicsSource`'s `nowMs` pattern.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
+    return startVisibleInterval({
+      tick: () => setNow(Date.now()),
+      intervalMs: 60_000,
+      fireOnShow: true,
+    });
   }, []);
 
   const requests = useMemo(() => {

@@ -1,0 +1,63 @@
+---
+title: "Remote hosts"
+description: "Add a host on another machine and make it your active host."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/remote-host-add.mp4" label="Connect and activate a remote host" />
+
+A host on another machine runs agents and works with files on that machine. To add one, open **Settings**, open the host picker, and choose **Add host…**.
+
+## Add A Host
+
+The **Add host** dialog lists the commands to run on the other machine:
+
+<Steps>
+  <Step title="Install the Traycer CLI">
+    ```bash
+    npm install -g @traycerai/cli
+    ```
+
+    The npm package needs Node.js 22.13 or newer. On macOS and Linux you can use Homebrew instead, which needs no Node.js:
+
+    ```bash
+    brew install traycerai/traycer/traycer
+    ```
+  </Step>
+  <Step title="Sign in">
+    ```bash
+    traycer login
+    ```
+
+    Open the link on any device, enter the code, and approve sign-in.
+  </Step>
+  <Step title="Install and start the host">
+    ```bash
+    traycer host ensure
+    ```
+
+    This installs, registers and starts the host. It is safe to run again.
+  </Step>
+</Steps>
+
+The dialog notices the host when it joins your account:
+
+| Card | Meaning |
+|---|---|
+| **Host connected** | "It registered itself and is ready to run agents." Choose **Set up host** to open its settings. |
+| **Host registered** | The host is in your account, but this window has no live connection to it. You can still manage it from Settings. |
+
+On Linux, the host runs as a systemd user service. If `traycer host ensure` can't register it, run `traycer host doctor` on that machine, or see [Doctor](/reference/troubleshooting#doctor).
+
+## Make It The Active Host
+
+On the host's **Overview**, click **Activate**. The button becomes an **Active** tag, and new work starts on that host by default in every window.
+
+Tabs that are already open stay on the host where they started. To continue a Chat-interface agent on another host, clone it; terminals and Terminal-interface agents can't move. See [Tabs and their host](/concepts/hosts#tabs-and-their-host).
+
+The host's health shows in its Overview header and in the host picker. See [Overview](/settings/host).
+
+## Remove A Host
+
+To take a host off your account, open its **Overview**, go to **Installation**, and use **Remove from account** in the **Danger zone**. Nothing on that machine is uninstalled. See [Danger Zone](/settings/host#danger-zone).

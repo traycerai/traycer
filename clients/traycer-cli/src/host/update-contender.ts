@@ -1,13 +1,21 @@
 import {
+  supervisorRelaunchInstalledIdentityOf,
   verifyUpdateMutationCapability,
+  withLifecycleTeardownContender,
+  withSupervisorRelaunchContender,
   withUpdateContender,
   withUpdateContenderAdoption,
+  type SupervisorRelaunchInstalledIdentity,
   type UpdateContenderAdmission,
   type UpdateContenderExecutionContext,
   type UpdateContenderOutcome,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
-import type { UpdateMutationCapabilityAdoption } from "@traycer-clients/shared/host-update";
+import type {
+  HostUpdateAttemptRecord,
+  UpdateMutationCapabilityAdoption,
+} from "@traycer-clients/shared/host-update";
+import { readHostInstallRecord } from "../manifest/host-install";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import {
@@ -132,6 +140,100 @@ export async function withCliUpdateExecutionSegment<T>(
   return unwrapContenderOutcome(options, outcome);
 }
 
+/**
+ * The installed identity the supervisor-relaunch admission judges a parked
+ * activation against (`supervisorRelaunchDisposition`): the install record's
+ * version and generation, read under the attempt lock, or `null` when there
+ * is no readable record.
+ *
+ * ONE reader for both callers of that admission - the supervisor's own
+ * relaunch (`host start`) and provisioning's start of the installed bytes
+ * (`host ensure`) - so the two can never disagree about whether the same
+ * record admits the same start.
+ */
+export async function readSupervisorRelaunchInstalledIdentity(
+  environment: Environment,
+): Promise<SupervisorRelaunchInstalledIdentity | null> {
+  // The CLI's own read, for its error on a malformed record; the mapping is
+  // the shared one the desktop's packaged-macOS start uses too.
+  const record = await readHostInstallRecord(environment);
+  return record === null ? null : supervisorRelaunchInstalledIdentityOf(record);
+}
+
+export interface WithCliSupervisorRelaunchSegmentOptions {
+  readonly environment: Environment;
+  readonly reason: string;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+}
+
+/**
+ * An execution segment admitted the way the supervisor's own relaunch is
+ * (`withSupervisorRelaunchContender`): a standing attempt record admits it
+ * exactly when that record would admit the supervisor spawning the installed
+ * bytes - parked for work, parked on an activation of the installed
+ * generation, or interrupted in a phase whose own next act is that start -
+ * and refuses it otherwise, as `host ensure`'s shadow admission does.
+ *
+ * For a caller whose mutation IS that start and nothing more. The
+ * disposition is the shared one, decided against the shared reader above, so
+ * it is never re-derived here.
+ */
+export async function withCliSupervisorRelaunchSegment<T>(
+  options: WithCliSupervisorRelaunchSegmentOptions,
+  run: (
+    capability: UpdateMutationCapability,
+    context: UpdateContenderExecutionContext,
+  ) => Promise<T>,
+): Promise<T> {
+  const outcome = await withSupervisorRelaunchContender(
+    {
+      hostHomeDir: hostHomeDir(options.environment),
+      reason: options.reason,
+      waitMs: options.waitMs,
+      pollIntervalMs: options.pollIntervalMs,
+      readInstalledIdentity: () =>
+        readSupervisorRelaunchInstalledIdentity(options.environment),
+    },
+    run,
+  );
+  return unwrapContenderOutcome(
+    { ...options, admission: "supervisor-relaunch-maintenance" },
+    outcome,
+  );
+}
+
+/**
+ * The supervisor's lifecycle teardown lock (`withLifecycleTeardownContender`)
+ * with the CLI lock inside it, as `withCliUpdateContender` takes both. Over
+ * `waiting-to-activate` it is admitted exactly where the relaunch above
+ * would be, judged by the same reader: a teardown never stops a host no
+ * start could bring back.
+ */
+export async function withCliLifecycleTeardownSegment<T>(
+  options: WithCliUpdateContenderOptions,
+  run: (
+    capability: UpdateMutationCapability,
+    cliLock: CliLockHandle,
+  ) => Promise<T>,
+): Promise<T> {
+  const outcome = await withLifecycleTeardownContender(
+    {
+      hostHomeDir: options.hostHomeDir ?? hostHomeDir(options.environment),
+      reason: options.reason,
+      waitMs: options.waitMs,
+      pollIntervalMs: options.pollIntervalMs,
+      readInstalledIdentity: () =>
+        readSupervisorRelaunchInstalledIdentity(options.environment),
+    },
+    (capability) =>
+      withCliAttemptMutation(capability, options, (cliLock) =>
+        run(capability, cliLock),
+      ),
+  );
+  return unwrapContenderOutcome(options, outcome);
+}
+
 /** Own the outer canonical capability for one schema-v2 executor segment. */
 export async function withCliAttemptExecutor<T>(
   options: WithCliAttemptExecutorOptions,
@@ -252,10 +354,11 @@ function unwrapContenderOutcome<T>(
     case "nonterminal-attempt":
       throw cliError({
         code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
-        message:
+        message: `${
           outcome.disposition === "yield"
             ? "a host update attempt is in progress; this operation yielded to it"
-            : "a host update attempt is in progress; this maintenance operation is refused",
+            : "a host update attempt is in progress; this maintenance operation is refused"
+        } (${describeNonterminalAttempt(outcome.record)})`,
         details: {
           reason: options.reason,
           disposition: outcome.disposition,
@@ -281,6 +384,36 @@ function unwrapContenderOutcome<T>(
         exitCode: 75,
       });
   }
+}
+
+/**
+ * The way out, named in the refusal itself.
+ *
+ * The service-shaped commands refuse while a nonterminal attempt record
+ * stands - `service install` and `host stop` over every one, `service start`
+ * and `host ensure` over every one the supervisor's own relaunch would refuse
+ * (`supervisorRelaunchDisposition`) - and the one command that resumes a
+ * record - `host update` - is not among them.
+ * Without this clause an operator whose host is down beside a parked record
+ * is sent from refusal to refusal (`host status` says "run host ensure", which
+ * yields to the same record), which is how the 2026-09-27 staging host stayed
+ * down for an hour with the recovery one command away.
+ *
+ * A PARKED record has no live updater by definition, so resuming it is always
+ * the right next move. An ACTIVE one may have a live holder momentarily
+ * outside the lock (the packaged-macOS executor releases between its spans),
+ * so the guidance is to wait first; `host update` still recovers an
+ * interrupted one, and says so when the holder is proven dead.
+ */
+function describeNonterminalAttempt(record: HostUpdateAttemptRecord): string {
+  const where = `attempt ${record.attemptId} is ${record.phase}/${record.execution} for host ${record.targetVersion}`;
+  // This site holds no install record to compare the park against, so the
+  // park sentence names the one branch a resume can take that does NOT start
+  // the host (`describeNonterminalRecordRecovery` in
+  // `host/parked-activation-relaunch.ts` has the per-record version).
+  return record.execution === "parked"
+    ? `${where}; it is parked with no updater running - run 'traycer host update' to resume it, which also starts the host if none is running; if it exits reporting that the installed host changed, the stale record is retired and 'traycer host ensure' starts the host`
+    : `${where}; wait for the running update to finish, or run 'traycer host update' to recover it if it was interrupted`;
 }
 
 function cliLockOptions(

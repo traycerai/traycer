@@ -1,0 +1,101 @@
+---
+title: "Sharing"
+description: "Invite people to a Task, manage their roles, share with a team, and choose which of your agents collaborators see."
+---
+
+The **Sharing** panel shows who has access to the Task and lets you invite people, change roles, and share the Task with a team.
+
+The top of the panel reads "Updated" with the time the list was last loaded. Click **Refresh** to load it again.
+
+## Roles
+
+Everyone with access to a Task has one of three roles:
+
+- **Owner**: the person who created the Task. The Owner role can't be given to someone else from the panel.
+- **Editor**: can change the Task's artifacts and invite people.
+- **Viewer**: can read and comment, but can't change artifacts.
+
+| Action                                                    | Owner | Editor | Viewer |
+| --------------------------------------------------------- | :---: | :----: | :----: |
+| Read artifacts, comments, and shared agent chats          | ✓     | ✓      | ✓      |
+| Create, edit, rename, move, and delete artifacts          | ✓     | ✓      |        |
+| Change a ticket's or story's status                       | ✓     | ✓      |        |
+| Start comment threads and reply                           | ✓     | ✓      | ✓      |
+| Resolve, reopen, or delete any thread                     | ✓     | ✓      | Own threads only |
+| View version history                                      | ✓     | ✓      | ✓      |
+| Restore versions and deleted artifacts                    | ✓     | ✓      |        |
+| Export artifacts                                          | ✓     | ✓      | ✓      |
+| Search artifacts                                          | ✓     | ✓      |        |
+| Keep the artifacts as files on disk                       | ✓     | ✓      |        |
+| Invite people                                             | ✓     | ✓      |        |
+| Change roles and remove people                            | ✓     |        |        |
+| Share with a team                                         | ✓     |        |        |
+
+For the files on disk, see [Artifacts on Disk](/panels/artifacts#artifacts-on-disk).
+
+## Invite People
+
+Owners and Editors see an invite box at the top of the panel.
+
+<Steps>
+  <Step title="Add people">
+    Type an email address or GitHub handle into "Enter email or GitHub handle" and click **Add**, or press Enter. Repeat to queue several people.
+  </Step>
+  <Step title="Choose a role">
+    Pick **Editor** (the default) or **Viewer**. The role applies to everyone in the queue.
+  </Step>
+  <Step title="Send">
+    Click **Invite 1 person**, or **Invite N people** for several.
+  </Step>
+</Steps>
+
+People invited by GitHub handle may not get an email about it.
+
+## People With Access
+
+**People with access** lists everyone who has direct access to the Task, with each person's role.
+
+Owners can:
+
+- Change a person between **Editor** and **Viewer** with the role menu on their row.
+- Remove a person with the remove button on their row. Removing someone ends their access right away and closes any sessions they have open on the Task.
+
+A Task always keeps an Owner: the last Owner's role can't be changed, and they can't be removed.
+
+Editors and Viewers see the list and each person's role, but can't change them.
+
+## Teams
+
+The **Teams** section lists the teams the Task is shared with, and, for the Owner, the teams it could be shared with. Only the Owner can share with a team.
+
+1. Find the team under **Teams**.
+2. Pick **Editor** or **Viewer** for the team.
+3. Click **Share**.
+
+Everyone on the team gets that role. The Owner can later change the team's role, or remove the team, which ends access for everyone who had it through the team.
+
+The team must be on the Sync plan. See [Share Tasks With a Team](/account/teams#share-tasks-with-a-team).
+
+## Share My Agents
+
+**Share my agents** controls whether collaborators can see the agent chats you run in this Task. Collaborators can view and clone a shared chat, but they can never act in it.
+
+- Turning it on asks "Share your agents with this task?" and shares your existing and future agent chats in the Task.
+- Turning it off asks "Make your agents private?" and makes all of your agents in the Task private, including future ones.
+
+To override it for one agent, open that agent's row menu in the [Agents](/panels/agents) panel and choose **Share with task** or **Make private**.
+
+Terminal agents are never shared.
+
+## Requirements
+
+- **Sign in.** Sharing works on your Traycer account. If your sign-in can't be confirmed, the panel says access can't be checked until you sign in again.
+- **The Task must be in the cloud.** Collaborators open the cloud copy of the Task. Cloud sync is included for every signed-in account, and new Tasks upload automatically. If you invite someone before the upload finishes, Traycer waits briefly; if it still hasn't finished, try again once the Task has synced. See [Sync and offline](/concepts/sync-and-offline).
+- **Plans.** Inviting individual people works on any plan. Sharing with a team needs the team to be on the Sync plan.
+
+There is no link sharing. People get access only by invitation or through a team.
+
+## What Collaborators See
+
+- The Task's artifacts, with their comment threads.
+- The agent chats that the Task's members share. See [Share My Agents](#share-my-agents).

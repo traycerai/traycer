@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/host";
 import { setMobileApp } from "@/lib/mobile-app";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
@@ -154,6 +156,7 @@ describe("<UserMenu />", () => {
     cleanup();
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     useTitleBarDragStore.setState({ suppressors: new Set() });
     useDesktopDialogStore.getState().close();
     restoreFetch();
@@ -168,6 +171,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -191,6 +195,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -217,6 +222,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings
+        trigger={null}
       />,
     );
 
@@ -238,6 +244,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -245,6 +252,66 @@ describe("<UserMenu />", () => {
     await screen.findByTestId("user-menu-identity");
 
     expect(screen.getByTestId("user-menu-manage-subscription")).toBeTruthy();
+    result.cleanupClient();
+  });
+
+  it("opens the personal Billing page from Manage subscription", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+        trigger={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    fireEvent.click(await screen.findByTestId("user-menu-manage-subscription"));
+
+    // The platform origin's root is the marketing homepage, so the item names
+    // the Billing page on the shell's configured origin.
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual([
+        "https://auth.traycer.invalid/billing",
+      ]);
+    });
+    result.cleanupClient();
+  });
+
+  it("opens the selected team's Billing page from Manage subscription", async () => {
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+        trigger={null}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    // Set once mounted: this harness's auth bootstrap settles on signed-out,
+    // which clears the projected teams it finds at mount.
+    act(() => {
+      useAuthStore.setState({
+        shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
+      });
+    });
+    fireEvent.click(await screen.findByTestId("user-menu-manage-subscription"));
+
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual([
+        "https://auth.traycer.invalid/team/acme/billing",
+      ]);
+    });
     result.cleanupClient();
   });
 
@@ -257,6 +324,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings
+        trigger={null}
       />,
     );
 
@@ -280,6 +348,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -314,6 +383,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -348,6 +418,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl={null}
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -399,6 +470,7 @@ describe("<UserMenu />", () => {
         email="ada@example.com"
         avatarUrl="https://example.com/ada.png"
         showAppSettings={false}
+        trigger={null}
       />,
     );
 
@@ -420,5 +492,35 @@ describe("<UserMenu />", () => {
         value: originalImage,
       });
     }
+  });
+
+  // The strip foot's account row passes its own trigger element; the menu
+  // must open it through Radix's own pointerdown handling rather than an
+  // onClick this component wires itself (jsdom has no PointerEvent capture,
+  // so a plain click on a trigger with no onClick of its own would not open
+  // it if Radix's mechanism were bypassed).
+  it("opens a custom trigger through Radix's own pointerdown handling", async () => {
+    const host = buildHost();
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+        trigger={
+          <button type="button" data-testid="custom-trigger">
+            Custom
+          </button>
+        }
+      />,
+    );
+
+    const trigger = await screen.findByTestId("custom-trigger");
+    expect(screen.queryByTestId("user-menu-content")).toBeNull();
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(await screen.findByTestId("user-menu-content")).toBeTruthy();
+
+    result.cleanupClient();
   });
 });

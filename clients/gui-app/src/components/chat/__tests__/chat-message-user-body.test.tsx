@@ -14,6 +14,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -27,6 +28,8 @@ import {
   type ChatMessageDeliveryPhase,
   type ChatMessageUserActions,
 } from "@/components/chat/chat-message";
+import { deliveringUserMessageActionsFor } from "@/components/epic-canvas/renderers/use-chat-message-actions";
+import { transcriptShowsSetupCard } from "@/stores/chats/rendered-messages";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
 import {
   chatTranscriptJumpKey,
@@ -39,6 +42,10 @@ import {
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
@@ -718,7 +725,12 @@ describe("<UserMessageBody /> agent messages", () => {
     const display = screen
       .getByLabelText("Attached Image#2: second.png")
       .closest("[data-user-message-display]");
-    expect(display?.className).toContain("max-w-[min(100%,48rem)]");
+    // No hardcoded cap of its own: it inherits the ancestor row's reading
+    // width, exactly like its sibling `InlineUserMessageEditor` (which is
+    // plain `w-full`) - a regression guard against either the old fixed
+    // 48rem cap or the even older 85% one reappearing.
+    expect(display?.className).toContain("w-full");
+    expect(display?.className).not.toContain("max-w-[min(100%,48rem)]");
     expect(display?.className).not.toContain("max-w-[85%]");
   });
 
@@ -1100,12 +1112,19 @@ describe("<UserMessageBody /> agent messages", () => {
   });
 
   it("renders received agent messages as an expandable A2A card", () => {
-    render(
+    const { container } = render(
       <UserMessageBody
         actions={null}
         message={agentMessage("Investigate this failure.")}
       />,
     );
+
+    // No hardcoded cap of its own (it used to carry
+    // `max-w-[min(100%,48rem)]`) - it inherits the ancestor row's reading
+    // width instead, matching the sent A2A card (`A2ASendToolSegment`),
+    // which has no width wrapper at all. `attachments: []` on this fixture
+    // leaves this wrapper as the render's only element.
+    expect(container.firstElementChild?.className).toBe("w-full");
 
     // The direction label is for assistive tech only: the icon plus "from"
     // already say it, and the visible words were crowding the sender name out
@@ -2013,11 +2032,94 @@ describe("<UserMessageBody /> message delivery footer", () => {
   });
 });
 
+describe("<UserMessageBody /> delivery footer beside the worktree setup card", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const openingPrompt = plainUserMessage("Fix the copy button");
+
+  function setupCardRow(state: SetupWorkspaceState): ChatMessageModel {
+    return {
+      ...plainUserMessage(""),
+      id: "setup-card:owner-1:0:1500",
+      role: "system",
+      segments: [
+        {
+          id: "setup-card:owner-1:0:1500:card",
+          kind: "setup-card",
+          model: {
+            aggregate: {
+              epicId: "epic-1",
+              ownerId: "owner-1",
+              ownerKind: "chat",
+              state,
+            },
+            workspaces: [],
+            createdAt: 1500,
+            isActive: true,
+          },
+          viewTabId: "tab-1",
+          anchorMessageId: null,
+          isGenesisPin: true,
+        },
+      ],
+      senderLabel: null,
+    };
+  }
+
+  function renderOpeningPrompt(
+    phase: ChatMessageDeliveryPhase,
+    transcript: ReadonlyArray<ChatMessageModel>,
+  ): void {
+    render(
+      <UserMessageBody
+        actions={deliveringUserMessageActionsFor(
+          phase,
+          transcriptShowsSetupCard(transcript),
+        )}
+        message={openingPrompt}
+      />,
+    );
+  }
+
+  it("preparing with the setup card showing: no 'Setting up' status, Copy only", () => {
+    renderOpeningPrompt("preparing", [
+      setupCardRow("setting-up"),
+      openingPrompt,
+    ]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Setting up")).toBeNull();
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
+    expect(screen.queryByLabelText("Delete message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("pending with the setup card showing: still reads 'Sending'", () => {
+    renderOpeningPrompt("pending", [setupCardRow("setting-up"), openingPrompt]);
+    expect(screen.getByRole("status").textContent).toContain("Sending");
+  });
+
+  // A ready card no longer spins. The pre-turn "Working…" row shows the wait
+  // from then on (`useRenderedMessages`'s setup gating), so this row still adds
+  // no status of its own.
+  it("preparing beside a ready setup card: still no 'Setting up' status", () => {
+    renderOpeningPrompt("preparing", [setupCardRow("ready"), openingPrompt]);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("preparing with no setup card: keeps its 'Setting up' status", () => {
+    renderOpeningPrompt("preparing", [openingPrompt]);
+    expect(screen.getByRole("status").textContent).toContain("Setting up");
+  });
+});
+
 describe("<ChatMessage /> sender overline timestamp", () => {
   const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
   afterEach(() => {
     cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("renders exactly one timestamp on a sent YOU row", () => {
@@ -2134,4 +2236,36 @@ describe("<ChatMessage /> sender overline timestamp", () => {
       expect(overline?.textContent).toBe("You");
     },
   );
+
+  // Layout > Chat > Timestamps (audit R1, R3): the stamp and the " · " that
+  // joins it to the sender label are one region, and hiding it must not
+  // strand the separator any more than an unrepresentable instant does above.
+  it("renders the stamp and its ' · ' separator when Timestamps is shown, neither when hidden", () => {
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+    expect(screen.getByTestId("chat-message-timestamp")).not.toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toContain(" · ");
+    cleanup();
+
+    useLayoutStore.getState().setRegionValues("timestamps", {
+      shown: "hidden",
+    });
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toBe("You");
+  });
 });

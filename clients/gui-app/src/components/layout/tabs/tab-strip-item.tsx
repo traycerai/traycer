@@ -1,89 +1,40 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  type KeyboardEvent,
-  type TouchEvent,
-} from "react";
+import { memo, useRef } from "react";
 import { X } from "lucide-react";
-import { useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence } from "motion/react";
-import { useHeaderTabDisplacement } from "./use-header-tab-displacement";
+import { useStripItemDisplacement } from "./use-strip-item-displacement";
 import * as m from "motion/react-m";
-import {
-  useDraggable,
-  useDroppable,
-  type DraggableSyntheticListeners,
-} from "@dnd-kit/core";
-import {
-  HEADER_TAB_DND_TYPE,
-  HEADER_TAB_SLOT_DND_TYPE,
-  getHeaderTabDragId,
-  getHeaderTabSlotDropId,
-  type HeaderTabDragData,
-  type HeaderTabSlotDropData,
-} from "@/components/layout/tabs/header-tab-dnd";
-import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { Button } from "@/components/ui/button";
-import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import { DropLine } from "@/components/ui/drop-line";
-import {
-  useRegisteredEpicLocalHome,
-  useRegisteredEpicPermissionRole,
-} from "@/lib/epic-selectors";
-import {
-  authorizesCloudCapability,
-  useAuthStore,
-} from "@/stores/auth/auth-store";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
-import { isEditableRole } from "@/lib/epic-permissions";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { getAppHostClientSnapshot } from "@/lib/host/runtime";
-import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { toastFromHostError } from "@/lib/host-error-toast";
-import { useInlineRename } from "@/hooks/ui/use-inline-rename";
-import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
-import {
-  settleDetachedEpicTitleCommit,
-  settleEpicTitleWrite,
-} from "@/lib/epic-title-write-settlement";
-import { useTabLeaderModifierForIndex } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
-import {
-  leaderDigitFor,
-  leaderHint,
-} from "@/components/ui/leader-digit-shortcuts";
-import {
-  useTopLevelStripPairPreview,
-  type HeaderTabDragGhost,
-} from "@/components/epic-canvas/dnd/dnd-store";
-import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
+import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import type { MergeSide } from "@/components/epic-canvas/dnd/strip-drag-model";
 import { HeaderTabVisual } from "./header-tab-visual";
-import { useHeaderTabTitle } from "./header-tab-presentation";
+import {
+  useStripTabItem,
+  type HeaderTabDndConfig,
+  type StripTabLeaderBadge,
+} from "./use-strip-tab-item";
+import {
+  StripTabContextMenu,
+  StripTabTitleInput,
+} from "./strip-tab-item-parts";
 import {
   useHeaderTabDisplacementTransition,
   headerTabClassName,
 } from "@/components/layout/tabs/tab-chrome-tokens";
-import { mergeRefs } from "@/lib/merge-refs";
-import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
-import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
-import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
-import { tabAppearance, type HeaderTab } from "@/stores/tabs/types";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcRegistry } from "@/lib/host";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
+import type { HeaderTab } from "@/stores/tabs/types";
 import { tabRefKey } from "@/stores/tabs/layout";
-import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useConcealedForTravel } from "./strip-selection-travel";
+import { useStripEntrance } from "./use-strip-entrance";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
-const LONG_PRESS_CONTEXT_MENU_MS = 500;
+const TITLE_INPUT_CLASS =
+  "min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-left text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]";
 
 interface TabItemProps {
   readonly tab: HeaderTab;
@@ -117,534 +68,101 @@ interface TabItemProps {
     pinned: boolean,
     displayName: string,
   ) => void;
+  /** Re-asks for this epic's pin reading when the menu opens without one. */
+  readonly onTaskPinMenuOpen: (epicId: string) => void;
 }
 
-export interface HeaderTabDndConfig {
-  readonly stripItemId: string;
-  readonly index: number;
-  readonly isDropSlot: boolean;
-}
-
-/**
- * The client an epic rename should be sent on.
- *
- * `null` host - no live session for that epic - keeps the app-wide client,
- * which is what this surface used before tabs carried a host at all. A NAMED
- * host resolves that host's own requester, and returning `null` when it cannot
- * be built is deliberate: the caller reports a failure rather than falling
- * back, because "rename the epic on the machine that holds it" and "rename it
- * on whichever machine this window happens to be pointed at" are different
- * requests, and silently substituting the second is how a rename lands against
- * a host that never had the epic.
- *
- * Built through `buildDialableHostClient` - the same builder every other
- * explicit-host consumer uses - rather than a second construction path.
- */
-function epicRenameClient(
-  hostId: string | null,
-): HostClient<HostRpcRegistry> | null {
-  const appClient = getAppHostClientSnapshot();
-  if (appClient === null) return null;
-  if (hostId === null || hostId === appClient.getActiveHostId()) {
-    return appClient;
-  }
-  const entry = appClient.resolveHostById(hostId);
-  if (entry === null) return null;
-  return buildDialableHostClient(appClient, entry);
-}
-
-/**
- * A cloud-homed epic's rename is a CLOUD write sent over the local-host
- * connection, which does not carry the renderer's verdict - so the role
- * alone is not admission once the session is `unverified`. A local-homed
- * epic renames on this machine's own disk and stays editable. Same rule and
- * exemption as the History rows and the mobile header.
- */
-function canEditEpicTabTitle(input: {
-  readonly isEpicTab: boolean;
-  readonly permissionRole: PermissionRole | null;
-  readonly localHome: boolean;
-  readonly cloudAuthorized: boolean;
-}): boolean {
-  return (
-    input.isEpicTab &&
-    isEditableRole(input.permissionRole) &&
-    (input.localHome || input.cloudAuthorized)
-  );
-}
-
+/** The top strip's presentation of a tab over `useStripTabItem`. */
 export const TabItem = memo(function TabItem(props: TabItemProps) {
-  const {
-    tab,
-    index,
-    dnd,
-    chrome,
-    includeMotionFrame,
-    isActive,
-    showSeparatorAfter,
-    showDropIndicatorBefore,
-    showDropIndicatorAfter,
-    onClose,
-    onCloseOtherTabs,
-    onDuplicateTab,
-    canCloseOtherTabs,
-    onOpenInNewWindow,
-    canOpenInNewWindow,
-    onSplitCommand,
-    taskPinnedState,
-    isTaskPinPending,
-    onSetTaskPinned,
-  } = props;
-  const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
-  const appearance = tabAppearance(tab);
-  // Read once here rather than inside `TabLeadingIcon`, so the SAME resolved
-  // value can also ride the drag payload below - the strip item is the drag
-  // source, and at the moment a drag starts it already holds everything the
-  // ghost needs.
-  const indicatorState = useSurfaceNotificationIndicatorState(
-    { epicId: tabEpicId ?? tab.id },
-    null,
-  );
-  // `selectNotificationIndicatorState` returns a fresh object on every render
-  // once any field is set, so a memo that closed over `indicatorState` itself
-  // would recompute - and cascade into the draggable's `data` - on every
-  // unrelated re-render. Destructured to locals here so the memo below closes
-  // over the primitives it actually depends on, which is the same thing
-  // `exhaustive-deps` then verifies rather than something it has to be told.
-  const {
-    unreadFailure,
-    unreadNonTerminalFailure,
-    unreadTerminalFailure,
-    pendingFork,
-    pendingApproval,
-    pendingInterview,
-    unreadDone,
-  } = indicatorState;
-  const dragGhost = useMemo<HeaderTabDragGhost>(
-    () => ({
-      appearance,
-      indicatorState: {
-        unreadFailure,
-        unreadNonTerminalFailure,
-        unreadTerminalFailure,
-        pendingFork,
-        pendingApproval,
-        pendingInterview,
-        unreadDone,
-      },
-    }),
-    [
-      appearance,
-      unreadFailure,
-      unreadNonTerminalFailure,
-      unreadTerminalFailure,
-      pendingFork,
-      pendingApproval,
-      pendingInterview,
-      unreadDone,
-    ],
-  );
-  const {
-    ref: dndRef,
-    listeners,
-    isDragging,
-  } = useHeaderTabDnd(tab.kind, tab.id, dnd, dragGhost);
-  const tabRef = useRef<HTMLDivElement | null>(null);
-  const scrollActiveTabIntoView = useCallback(
-    (element: HTMLDivElement | null) => {
-      if (element === null || !isActive) return;
-      element.scrollIntoView({ block: "nearest", inline: "nearest" });
-    },
-    [isActive],
-  );
-  const combinedRef = useMemo(
-    () => mergeRefs<HTMLDivElement>(dndRef, tabRef, scrollActiveTabIntoView),
-    [dndRef, scrollActiveTabIntoView],
-  );
-  const longPressTimerRef = useRef<number | null>(null);
-  const modifier = useTabLeaderModifierForIndex(index);
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { resolvedTabName, displayName } = useHeaderTabTitle(tab);
-  const registeredEpicId = tab.kind === "epic" ? tab.epicId : null;
-  const permissionRole = useRegisteredEpicPermissionRole(registeredEpicId);
-  const localHome = useRegisteredEpicLocalHome(registeredEpicId);
-  const cloudAuthorized = useAuthStore((state) =>
-    authorizesCloudCapability(state.status),
-  );
-  const canEditTitle = canEditEpicTabTitle({
-    isEpicTab: tab.kind === "epic",
-    permissionRole,
-    localHome,
-    cloudAuthorized,
-  });
-  const canClose = tab.kind !== "epic" || tab.canClose;
-  const displayTab = useMemo(
-    () =>
-      resolvedTabName === tab.name
-        ? tab
-        : {
-            ...tab,
-            name: resolvedTabName,
-          },
-    [resolvedTabName, tab],
-  );
-  const commitEpicTitle = useCallback(
-    async (next: string) => {
-      if (tab.kind !== "epic") return;
-      // Re-checked at COMMIT: an edit opened before a demotion must not land
-      // on the retained credential afterwards.
-      if (
-        !localHome &&
-        !authorizesCloudCapability(useAuthStore.getState().status)
-      ) {
-        return;
-      }
-      const epicId = tab.epicId;
-      const tabHostId = tab.hostId;
-      const handle = getOpenEpicRegistry().peek(epicId);
-      // The header strip is app-global and not guaranteed to sit inside a
-      // HostRuntimeProvider, so reach the host client through the snapshot
-      // rather than a render-time hook. It is the app-wide client, already
-      // pinned to the effective host: this rename used to be issued on the
-      // SPINE, which answered from the active slot, so the call landed on
-      // whichever host was bound at the instant it was dispatched. Post-P4.2
-      // the client addresses the host it resolved, and `hostId` below is that
-      // same resolution rather than a second, independently-timed read.
-      //
-      // HOST-SCOPED where the tab knows its host. An epic served by a session
-      // on host B was renamed through the app-wide client - host A - purely
-      // because the strip had no way to know about B. `tab.hostId` is that
-      // session's own answer projected onto the tab, so the rename now goes
-      // where the epic actually lives. `null` (no live session) keeps the
-      // app-wide client, which is all this surface ever had.
-      const client = epicRenameClient(tabHostId);
-      if (handle !== null) {
-        const hostId = client?.getActiveHostId() ?? null;
-        const userId = client?.getRequestContextUserId() ?? null;
-        const state = handle.store.getState();
-        const commandId = await state.enqueueWriteCommand({
-          kind: "update-epic-title",
-          title: next,
-          updatedAt: Date.now(),
-        });
-        if (commandId === null) return;
-        settleEpicTitleWrite(state.waitForWriteCommand(commandId), {
-          onCommitted: () => {
-            if (userId === null) return;
-            reconcileAuthoritativeEpicTitleInCloudTaskCaches(
-              queryClient,
-              { hostId, userId },
-              epicId,
-              next,
-            );
-          },
-          source: "Epic tabs",
-        });
-        return;
-      }
-      if (client === null) {
-        reportableErrorToast(
-          "Couldn't reach the host to rename the epic.",
-          undefined,
-          {
-            title: "Could not rename Epic",
-            message: "The host was unavailable.",
-            code: null,
-            source: "Epic tabs",
-          },
-        );
-        return;
-      }
-      const hostId = client.getActiveHostId();
-      const userId = client.getRequestContextUserId();
-      // RETURNED, not voided: a two-arm `.then` does not catch what its own
-      // handlers throw, so the cache update below - and the toast helper in the
-      // other arm - had no terminal handler at all. Returning the chain routes
-      // that into this callback's own promise, which the commit site now
-      // settles.
-      return client
-        .request("epic.updateTitle", {
-          epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
-        })
-        .then(
-          () => {
-            if (userId === null) return;
-            reconcileAuthoritativeEpicTitleInCloudTaskCaches(
-              queryClient,
-              { hostId, userId },
-              epicId,
-              next,
-            );
-          },
-          (error: unknown) => {
-            if (error instanceof HostRpcError) {
-              toastFromHostError(error, "Couldn't rename epic.");
-            } else {
-              reportableErrorToast("Couldn't rename epic.", undefined, {
-                title: "Could not rename Epic",
-                message: null,
-                code: null,
-                source: "Epic tabs",
-              });
-            }
-          },
-        );
-    },
-    // `resolvedTabName` is gone from here with the capture/rollback pair that
-    // read it - the overlay reveals the authoritative title on failure rather
-    // than restoring a captured one, so this callback no longer depends on it.
-    [localHome, queryClient, tab],
-  );
-  const rename = useInlineRename({
-    // Bind to the RAW title, not `displayName` - editing must never seed the
-    // "Untitled task" fallback into the input and persist it as a real title.
-    value: resolvedTabName,
-    canEdit: canEditTitle,
-    // Wrapped: the property is declared void-returning and the commit is a
-    // round trip now. Fire-and-forget, but SETTLED - the enqueue inside can
-    // reject on a real bridge fault, and unhandled that is a rename which
-    // silently did nothing.
-    onCommit: (next: string) => {
-      settleDetachedEpicTitleCommit(commitEpicTitle(next), "Epic tabs");
-    },
-  });
-
-  const activateTab = useCallback(() => {
-    if (rename.isEditing) return;
-    navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
-  }, [navigate, rename.isEditing, tab]);
-  // Chrome selects a tab the moment a drag picks it up, not on release - the
-  // tab travelling under the pointer must be the active one. Click activation
-  // cannot cover this: a completed drag suppresses the click. Runs only on the
-  // false→true edge (isActive flips right after, ending the effect's work).
-  useEffect(() => {
-    if (!isDragging || isActive) return;
-    activateTab();
-  }, [activateTab, isActive, isDragging]);
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>) => {
-      if (rename.isEditing) return;
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      activateTab();
-    },
-    [activateTab, rename.isEditing],
-  );
-  const cancelLongPress = useCallback(() => {
-    if (longPressTimerRef.current === null) return;
-    window.clearTimeout(longPressTimerRef.current);
-    longPressTimerRef.current = null;
-  }, []);
-  const handleTouchStart = useCallback(
-    (event: TouchEvent<HTMLDivElement>) => {
-      cancelLongPress();
-      if (event.touches.length !== 1) return;
-      const touch = event.touches[0];
-      longPressTimerRef.current = window.setTimeout(() => {
-        longPressTimerRef.current = null;
-        tabRef.current?.dispatchEvent(
-          new MouseEvent("contextmenu", {
-            bubbles: true,
-            cancelable: true,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-          }),
-        );
-      }, LONG_PRESS_CONTEXT_MENU_MS);
-    },
-    [cancelLongPress],
-  );
-  const handleSetTaskPinned = useCallback(
-    (pinned: boolean) => {
-      if (tab.kind !== "epic") return;
-      onSetTaskPinned(tab.epicId, pinned, displayName);
-    },
-    [displayName, onSetTaskPinned, tab],
-  );
-
-  const leaderBadge: LeaderBadge | null =
-    modifier === null
-      ? null
-      : {
-          modifier,
-          index,
-          hint: leaderHint(
-            leaderDigitFor(index),
-            modifier,
-            "to switch to",
-            displayName,
-          ),
-        };
+  const { tab, dnd, chrome, includeMotionFrame, isActive } = props;
+  const { rootRef, ...item } = useStripTabItem(props);
+  // While the selection slides here, the traveller draws the joined box.
+  const concealed = useConcealedForTravel(dnd?.stripItemId ?? null);
+  const joined = isActive && chrome === "own" && !item.isDragging && !concealed;
+  const pairPreviewSide = useTopLevelStripPairPreview(tab.kind, tab.id);
+  // The same gate the vertical strip's hover card applies
+  // (`hoverCardAllowed`, `side-tab-row.tsx`): shut while renaming, a drag
+  // source, a drop indicator sits on this tab, or a pair-merge preview is
+  // active - each one already fights the pointer for something else.
+  const hoverCardEnabled =
+    !item.rename.isEditing &&
+    !item.isDragging &&
+    !props.showDropIndicatorBefore &&
+    !props.showDropIndicatorAfter &&
+    pairPreviewSide === null;
   const control = (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          ref={combinedRef}
-          {...listeners}
-          role="tab"
-          tabIndex={0}
-          aria-selected={isActive}
-          data-testid={`tab-${tab.kind}-${tab.id}`}
-          data-header-tab-key={tabRefKey(tab)}
-          data-tab-kind={tab.kind}
-          data-tab-index={index}
-          onClick={activateTab}
-          onKeyDown={handleKeyDown}
-          onTouchCancel={cancelLongPress}
-          onTouchEnd={cancelLongPress}
-          onTouchMove={cancelLongPress}
-          onTouchStart={handleTouchStart}
-          className={cn(
-            headerTabClassName(chrome, isActive),
-            NO_DRAG_CLASS,
-            "cursor-pointer",
-          )}
-        >
-          <HeaderTabDropIndicator
-            visible={showDropIndicatorBefore}
-            side="left"
-          />
-          <HeaderTabVisual
-            tab={tab}
-            appearance={appearance}
-            indicatorState={indicatorState}
-            displayName={displayName}
-            chrome={chrome}
-            isActive={isActive}
-            titleControl={
-              rename.isEditing ? (
-                <input
-                  {...rename.inputProps}
-                  aria-label="Edit epic title"
-                  data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
-                  className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-left text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
-                />
-              ) : null
-            }
-            trailingControl={
-              <TabTrailingSlot
-                label={`Close ${displayName}`}
-                testId={`tab-close-${tab.kind}-${tab.id}`}
-                onClose={() => onClose(displayTab)}
-                leaderBadge={leaderBadge}
-                disabled={!canClose}
+    <StripTabContextMenu item={item} input={props}>
+      <div
+        ref={rootRef}
+        {...item.dragListeners}
+        {...item.rootProps}
+        className={cn(
+          headerTabClassName(chrome, isActive),
+          NO_DRAG_CLASS,
+          "cursor-pointer",
+        )}
+      >
+        <HeaderTabDropIndicator
+          visible={props.showDropIndicatorBefore}
+          side="left"
+        />
+        <HeaderTabVisual
+          tab={tab}
+          appearance={item.appearance}
+          indicatorState={item.indicatorState}
+          displayName={item.displayName}
+          chrome={chrome}
+          isActive={isActive}
+          joined={joined}
+          concealed={concealed}
+          titleControl={
+            item.rename.isEditing ? (
+              <StripTabTitleInput
+                item={item}
+                tab={tab}
+                className={TITLE_INPUT_CLASS}
               />
-            }
-            leaderVisible={leaderBadge !== null}
-          />
-          <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
-          <HeaderTabSeparator visible={showSeparatorAfter} />
-          <HeaderTabDropIndicator
-            visible={showDropIndicatorAfter}
-            side="right"
-          />
-        </div>
-      </ContextMenuTrigger>
-      <TabContextMenuContent
-        tab={displayTab}
-        canCloseOtherTabs={canCloseOtherTabs}
-        canOpenInNewWindow={canOpenInNewWindow}
-        canEditTitle={canEditTitle}
-        taskPinnedState={taskPinnedState}
-        isTaskPinPending={isTaskPinPending}
-        onCloseOtherTabs={onCloseOtherTabs}
-        onDuplicateTab={onDuplicateTab}
-        onOpenInNewWindow={onOpenInNewWindow}
-        onSplitCommand={onSplitCommand}
-        onEditTitle={rename.startEditing}
-        onSetTaskPinned={handleSetTaskPinned}
-      />
-    </ContextMenu>
+            ) : null
+          }
+          trailingControl={
+            <TabTrailingSlot
+              label={`Close ${item.displayName}`}
+              testId={`tab-close-${tab.kind}-${tab.id}`}
+              onClose={item.close}
+              leaderBadge={item.leaderBadge}
+              disabled={!item.canClose}
+            />
+          }
+          leaderVisible={item.leaderBadge !== null}
+          enabled={hoverCardEnabled}
+        />
+        <StripPairPreview
+          tabKind={tab.kind}
+          tabId={tab.id}
+          side={pairPreviewSide}
+        />
+        <HeaderTabSeparator visible={props.showSeparatorAfter} />
+        <HeaderTabDropIndicator
+          visible={props.showDropIndicatorAfter}
+          side="right"
+        />
+      </div>
+    </StripTabContextMenu>
   );
   if (!includeMotionFrame) return control;
   return (
     <HeaderTabMotionFrame
-      isDragging={isDragging}
+      isDragging={item.isDragging}
       offsetX={props.offsetX}
       dnd={dnd}
+      entranceKeys={tabRefKey(tab)}
     >
       {control}
     </HeaderTabMotionFrame>
   );
 });
 
-// Re-export for backwards compatibility with tests
 TabItem.displayName = "TabItem";
-
-interface UseHeaderTabDndReturn {
-  readonly ref: (element: HTMLElement | null) => void;
-  readonly listeners: DraggableSyntheticListeners;
-  readonly isDragging: boolean;
-}
-
-function useHeaderTabDnd(
-  tabKind: HeaderTabKind,
-  tabId: string,
-  config: HeaderTabDndConfig | null,
-  ghost: HeaderTabDragGhost,
-): UseHeaderTabDndReturn {
-  const dragData = useMemo<
-    HeaderTabDragData & { readonly ghost: HeaderTabDragGhost }
-  >(
-    () => ({
-      kind: HEADER_TAB_DND_TYPE,
-      stripItemId: config?.stripItemId ?? `member:${tabKind}:${tabId}`,
-      tabKind,
-      tabId,
-      index: config?.index ?? 0,
-      // Render-ready enrichment for the drag ghost - read once, right here,
-      // where the strip already holds it resolved. `root-dnd-provider.tsx`
-      // reads it back via `readHeaderTabDragGhost` at drag start, so the
-      // overlay never re-derives it with a host RPC / notifications query.
-      ghost,
-    }),
-    [config, tabId, tabKind, ghost],
-  );
-  // A `tab:` strip item is already unique per tab, so it keys on the tab id
-  // alone. A split member shares its tab id with nothing but must stay distinct
-  // per half, so it keys on `<splitId>:<tabId>`; an unconfigured (undraggable)
-  // item falls back to the same shape under `member`.
-  const stripItemId = config?.stripItemId ?? "member";
-  const dragKey = stripItemId.startsWith("tab:")
-    ? tabId
-    : `${stripItemId}:${tabId}`;
-  const dragDisabled = useDragSourceDisabled();
-  const {
-    listeners,
-    setNodeRef: dragRef,
-    isDragging,
-  } = useDraggable({
-    id: getHeaderTabDragId(tabKind, dragKey),
-    data: dragData,
-    disabled: config === null || dragDisabled,
-  });
-  const dropData = useMemo<HeaderTabSlotDropData>(
-    () => ({
-      kind: HEADER_TAB_SLOT_DND_TYPE,
-      index: config?.index ?? 0,
-      isTrailing: false,
-    }),
-    [config],
-  );
-  const { setNodeRef: dropRef } = useDroppable({
-    id: getHeaderTabSlotDropId(
-      tabKind,
-      `${config?.stripItemId ?? "member"}:${tabId}`,
-    ),
-    data: dropData,
-    // The source stays mounted as a full-width layout placeholder while the
-    // overlay follows the pointer. It must not remain a collision target: once
-    // provisional order moves that placeholder under the pointer it would
-    // steal `over` from the neighbour whose center actually opened the slot.
-    disabled: config === null || !config.isDropSlot || isDragging,
-  });
-  const ref = useMemo(
-    () => mergeRefs<HTMLElement>(dragRef, dropRef),
-    [dragRef, dropRef],
-  );
-  return { ref, listeners, isDragging };
-}
 
 function HeaderTabDropIndicator(props: {
   readonly visible: boolean;
@@ -683,13 +201,16 @@ function HeaderTabMotionFrame(props: {
   readonly offsetX: number;
   /** Drag config; its `stripItemId` is the drag model's measurement anchor. */
   readonly dnd: HeaderTabDndConfig | null;
+  /** The tab's ref key, the mark an open or a reopen leaves for it. */
+  readonly entranceKeys: string;
   readonly children: React.ReactNode;
 }) {
   const transition = useHeaderTabDisplacementTransition();
   const frameRef = useRef<HTMLDivElement | null>(null);
-  const x = useHeaderTabDisplacement({
+  useStripEntrance(frameRef, props.entranceKeys, "tab");
+  const x = useStripItemDisplacement({
     nodeRef: frameRef,
-    offsetX: props.offsetX,
+    offset: props.offsetX,
     transition,
   });
 
@@ -719,17 +240,11 @@ function HeaderTabMotionFrame(props: {
   );
 }
 
-interface LeaderBadge {
-  modifier: "alt";
-  index: number;
-  hint: string;
-}
-
 interface TabTrailingSlotProps {
   label: string;
   testId: string;
   onClose: () => void;
-  leaderBadge: LeaderBadge | null;
+  leaderBadge: StripTabLeaderBadge | null;
   disabled: boolean;
 }
 
@@ -812,8 +327,9 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
 function StripPairPreview(props: {
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
+  readonly side: MergeSide | null;
 }) {
-  const side = useTopLevelStripPairPreview(props.tabKind, props.tabId);
+  const { side } = props;
   if (side === null) return null;
   return (
     <span
@@ -821,8 +337,8 @@ function StripPairPreview(props: {
       data-testid={`tab-strip-pair-preview-${props.tabKind}-${props.tabId}`}
       data-side={side}
       className={cn(
-        "pointer-events-none absolute inset-y-1 z-30 rounded-sm bg-primary/20 ring-2 ring-primary",
-        side === "left" ? "left-1 right-1/2" : "left-1/2 right-1",
+        "pointer-events-none absolute inset-y-0.5 z-30 rounded-xl bg-primary/20 ring-2 ring-primary",
+        side === "left" ? "left-0.5 right-1/2" : "left-1/2 right-0.5",
       )}
     />
   );

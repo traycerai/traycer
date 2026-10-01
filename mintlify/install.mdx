@@ -1,0 +1,191 @@
+---
+title: "Install"
+description: "Get Traycer Desktop running on your machine, keep it updated, and remove it."
+keywords: ["install traycer", "download traycer", "macos", "windows", "linux", "wsl", "update", "uninstall", "mobile", "iphone", "android", "testflight", "google play"]
+---
+
+Download the Traycer Desktop app for your operating system. Links always point to the latest release.
+
+| Platform                  | Download                                                                                                                  | Notes                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **macOS** (Apple Silicon) | [Download .dmg](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-arm64.dmg)            | For M-series Macs (M1/M2/M3/M4).                 |
+| **macOS** (Intel)         | [Download .dmg](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-macos-x64.dmg)              | For Intel-based Macs.                            |
+| **Linux** (AppImage)      | [Download .AppImage](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage) | Portable; `chmod +x` then run.                   |
+| **Linux** (Debian/Ubuntu) | [Download .deb](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb)            | `sudo apt install ./traycer-desktop-linux-amd64.deb` |
+| **Linux** (Fedora/RHEL)   | [Download .rpm](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm)           | `sudo dnf install ./traycer-desktop-linux-x86_64.rpm` |
+| **Windows** (x64)         | [Download .exe](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.exe)            | Native installer for 64-bit Windows.             |
+| **Windows** (x64, MSI)    | [Download .msi](https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-windows-x64.msi)            | Windows Installer package.                       |
+| **Windows** (via WSL)     | [Install via WSL](#windows-via-wsl)                                                                                       | Run the Linux desktop app through WSL with WSLg. |
+
+All releases are published on [GitHub](https://github.com/traycerai/traycer/releases).
+
+## Requirements
+
+- **macOS:** macOS 12 or newer, on Apple Silicon or Intel.
+- **Windows and Linux:** 64-bit x86 only. There are no ARM64 builds for Windows or Linux.
+
+## Mobile App
+
+The Traycer mobile app lets you follow and steer your Tasks from your phone. It connects to the hosts on your other machines, so install Traycer Desktop first.
+
+| Platform    | Download                                                                                      | Notes                                 |
+| ----------- | --------------------------------------------------------------------------------------------- | ------------------------------------- |
+| **iPhone**  | [Join the TestFlight beta](https://testflight.apple.com/join/GrMtbuXk)                        | Install Apple's TestFlight app first. |
+| **Android** | [Get it on Google Play](https://play.google.com/store/apps/details?id=ai.traycer.app.android) |                                       |
+
+To sign the app in, see [Mobile App](/account/mobile-app#sign-in).
+
+## Windows via WSL
+
+If your Windows setup supports Linux GUI apps with WSLg, you can run the Linux desktop app through WSL instead of the native Windows app.
+
+<Note>
+Traycer inside WSL and Traycer on native Windows are separate hosts. Each has its own folders, tools and agents, and each appears in the host picker.
+</Note>
+
+Before installing Traycer in WSL:
+
+- Update WSL with `wsl --update`, then restart your Ubuntu distribution.
+- Use WSL 2 on a recent Windows build with WSLg enabled.
+- Turn on systemd. Traycer's host runs as a systemd user service, and it can't be installed without systemd. Add this to `/etc/wsl.conf` inside the distribution:
+
+  ```ini
+  [boot]
+  systemd=true
+  ```
+
+  Then run `wsl --shutdown` from Windows and open the distribution again.
+- Set a default browser inside WSL so Traycer can open its sign-in page. If no browser opens, use **Use code instead** and approve the sign-in from a browser on Windows. See [Sign In](/account/sign-in#if-the-browser-does-not-open).
+
+Then install the package that matches your WSL distribution:
+
+**Debian / Ubuntu (`.deb`)**
+
+```bash
+wget https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-amd64.deb
+sudo apt install ./traycer-desktop-linux-amd64.deb
+```
+
+**Fedora / RHEL (`.rpm`)**
+
+```bash
+wget https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.rpm
+sudo dnf install ./traycer-desktop-linux-x86_64.rpm
+```
+
+**Other distros (portable `.AppImage`)**
+
+```bash
+wget https://github.com/traycerai/traycer/releases/latest/download/traycer-desktop-linux-x86_64.AppImage
+chmod +x traycer-desktop-linux-x86_64.AppImage
+./traycer-desktop-linux-x86_64.AppImage
+```
+
+Launch Traycer from WSL (`.deb` / `.rpm` installs):
+
+```bash
+/opt/Traycer/traycer-desktop
+```
+
+You may also see Traycer in the Windows Start menu if WSLg has registered the desktop app.
+
+## Install With Homebrew
+
+On macOS you can also install the desktop app with [Homebrew](https://brew.sh):
+
+```bash
+brew install --cask traycerai/traycer/traycer-desktop
+```
+
+On Linux (x86_64), the same cask installs the AppImage.
+
+## CLI
+
+The desktop app bundles the command-line tools it needs, so most people don't need to install the CLI separately.
+
+To use the CLI on its own, for example to [add a host on another machine](/concepts/hosts/remote-hosts), install it with npm. The npm package needs Node.js 22.13 or newer:
+
+```bash
+npm install -g @traycerai/cli
+```
+
+Or with [Homebrew](https://brew.sh) on macOS and Linux. This installs a standalone binary that doesn't need Node.js:
+
+```bash
+brew install traycerai/traycer/traycer
+```
+
+Both install the `traycer` command. Check it with `traycer --version`. See the [CLI reference](/cli/commands).
+
+## After Install
+
+<Steps>
+  <Step title="Open Traycer">Launch the desktop app.</Step>
+  <Step title="Sign in">
+    Traycer opens a sign-in page in your browser. If the browser doesn't open, choose **Use code instead**. See [Sign In](/account/sign-in).
+  </Step>
+  <Step title="Let Traycer set up">
+    On first launch, **Setting up Traycer** prepares this machine's host. It runs once.
+  </Step>
+  <Step title="Choose your agents">
+    Onboarding asks which coding agents to use and can import your existing Claude Code, Codex and OpenCode chats. See [First run and importing](/first-run) and [Coding agents](/agents-and-models/coding-agents).
+  </Step>
+  <Step title="Run the Quickstart">
+    Continue with the [Quickstart](/quickstart) to start your first Task.
+  </Step>
+</Steps>
+
+## Updates
+
+### The App
+
+Traycer checks for new versions in the background, but doesn't download them on its own.
+
+1. When an update is available, a download button appears in the app header. Its tooltip reads "Download update v&lt;version&gt;".
+2. Click it to download. The button shows "Downloading N%".
+3. When the download finishes, the button reads "Restart to update to v&lt;version&gt;". Click it to install and restart.
+
+To check yourself, choose **Help › Check for Updates**, or **Check for Updates** in the tray menu.
+
+Traycer installs stable releases. It offers a release candidate only when a host you use needs one, and asks you first.
+
+- **macOS:** Traycer has to run from your Applications folder to update. If you open it from somewhere else, such as the disk image, it offers **Move to Applications Folder**.
+- **Linux `.deb` and `.rpm`:** installing an update asks for your administrator password. In WSL, or when the package manager doesn't own the install, the button reads **Finish update** instead. It opens **Finish updating Traycer**, which gives you a `sudo dpkg -i` or `sudo rpm -U` command to run in a terminal; restart Traycer when it finishes.
+
+### Hosts
+
+Each host updates separately from the app. Manage host updates in **Settings › Host › Overview › Updates**: install an update, turn **Auto-update** on or off, or pick a specific version. See [Overview](/settings/host#updates).
+
+Host updates wait for running work. With **Auto-update** on, an update is applied at the host's next check-in, within about 10 minutes, and only when no sessions are running. Until then the Overview shows the wait and offers to end the running work now.
+
+### The CLI
+
+The CLI bundled with the app updates with the app. If you installed the CLI yourself, update it with the same tool:
+
+```bash
+npm install -g @traycerai/cli@latest
+# or
+brew upgrade traycer
+```
+
+Some host updates need a newer CLI first. The host's Overview then shows **Needs newer CLI tools** with the command to run. If your npm or Homebrew install of `traycer` is older than the one bundled with the app, **Overview › Installation › Command-line tools** shows the upgrade command.
+
+## Uninstall
+
+<Steps>
+  <Step title="Remove Traycer's background host">
+    In Traycer, open **Settings › Host › Overview** for this computer, go to **Installation**, and click **Remove Traycer** in the **Danger zone**. This stops and removes the host and its service so it no longer starts at login. Your agents, history and credentials stay on this computer. When it finishes, click **Quit Traycer**.
+  </Step>
+  <Step title="Remove the app">
+    - **macOS:** drag Traycer from Applications to the Trash. If you installed it with Homebrew, run `brew uninstall --cask traycer-desktop`.
+    - **Windows:** uninstall Traycer from **Settings › Apps › Installed apps**. The `.exe` installer's uninstaller also removes the task that starts the host at logon.
+    - **Linux:** remove the package with `apt` or `dnf`, or delete the AppImage.
+  </Step>
+  <Step title="Remove the CLI, if you installed it">
+    Run `npm uninstall -g @traycerai/cli` or `brew uninstall traycer`.
+  </Step>
+</Steps>
+
+Your local data stays in `~/.traycer` (`%USERPROFILE%\.traycer` on Windows). Delete that folder only if you also want to remove local chats, settings and credentials from this computer.
+
+**A host on another machine.** **Remove from account** on that host's Overview only takes it off your account; nothing on that machine is uninstalled. To uninstall there, run `traycer host uninstall --all` on that machine, which stops the host, removes its service registration and removes the install.

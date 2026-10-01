@@ -1,0 +1,63 @@
+---
+title: "Plan a feature with artifacts"
+description: "Have agents frame, plan, and break down a feature as artifacts, review the plan with comments, then build from the tickets."
+---
+
+Use this guide when a feature is big enough that you want to agree on what to build before any code changes. Agents write the brief, the user flows, the technical plan, and the tickets as [artifacts](/panels/artifacts) in the Task. You review and comment on them, the agents revise them, and the approved tickets drive the build. For a small, obvious change, skip the planning and prompt an agent directly.
+
+## Before You Start
+
+- A Task with your repository added as a workspace folder, so agents can read the code. See [Quickstart](/quickstart).
+- A coding agent that can run skills, such as Claude Code or Codex.
+- The **Editor** or **Owner** role in the Task to edit artifacts. Anyone with access can comment.
+
+## Plan the Feature
+
+<Steps>
+  <Step title="Frame the feature">
+    In the composer, type `$` or `/`, pick `traycer-epic-brief`, and describe the feature. The agent asks about anything unclear and writes a short brief once you agree on the framing.
+
+    ```text
+    $traycer-epic-brief We want the mobile app to work offline. Frame the initiative.
+    ```
+  </Step>
+  <Step title="Map the flows and the technical plan">
+    Run `$traycer-core-flows` to settle what users do and see, then `$traycer-tech-plan` to work through the architecture. Answer the agent's questions as they come; see [Agent questions](/panels/agents/agent-questions). Before it drafts the tech plan, the agent tells you what is still open and waits for you to confirm.
+  </Step>
+  <Step title="Read the artifacts">
+    Open each one from the **Artifacts** panel. A bar beside a row marks an artifact that changed since you last opened it. You can edit the text directly; edits save as you type. See [Editing artifacts](/panels/artifacts/editing).
+  </Step>
+  <Step title="Comment where you disagree">
+    Select a passage, click **Comment** (⌘⌥M / Ctrl+Alt+M), write your note, and press ⌘Enter / Ctrl+Enter. The threads collect in the **Comments** panel. See [Comments](/panels/comments).
+  </Step>
+  <Step title="Have the agent address your comments">
+    Ask for it in the chat:
+
+    ```text
+    Address the open comments on the tech plan. Update the plan, and resolve each thread you've handled.
+    ```
+
+    The agent updates the artifact and resolves the threads it handled. The **Open** tab of the Comments panel shows what is left.
+  </Step>
+  <Step title="Pressure-test the plan (optional)">
+    Run `$traycer-artifact-critique` on the plan. It writes a **review** artifact with gaps, contradictions, and risks. Comment on it, or ask the agent to fold the findings into the plan.
+  </Step>
+  <Step title="Break the plan into tickets">
+    Run `$traycer-ticket-breakdown`. The agent writes one **ticket** per piece of work, with its dependencies, under a `tickets` folder, and revises the set until you approve it.
+  </Step>
+  <Step title="Build from the tickets">
+    Run `$traycer-execute`. It orders the tickets into batches by dependency and starts a child agent for each ticket; the children appear under it in the **Agents** panel. It reviews each batch against the plan, marks the tickets that pass **Done**, and stops to ask you when the work drifts from the product plan. To follow progress, open **Filter artifacts** in the Artifacts panel and set **Type** to **Ticket**.
+  </Step>
+</Steps>
+
+<Tip>
+  If an edit to an artifact goes wrong, click **Version history** (the clock button) in the artifact's tile, select an earlier version, and click **Restore this version**. See [Version history and recovery](/panels/artifacts/version-history).
+</Tip>
+
+## Related
+
+- [Artifact workflow](/concepts/artifact-workflow): every built-in skill and where its output lands.
+- [Artifacts](/panels/artifacts)
+- [Comments](/panels/comments)
+- [Run agents in parallel on worktrees](/guides/parallel-agents-on-worktrees)
+- [Review agent changes](/guides/review-agent-changes)

@@ -13,4 +13,7 @@ export * from "./paths";
 export * from "./store";
 export * from "./installation";
 export * from "./host-stop-intent";
+export * from "./host-lifecycle-policy";
+export * from "./desktop-presence";
+export * from "./supervisor-record";
 export * from "./cli-invocation-record";

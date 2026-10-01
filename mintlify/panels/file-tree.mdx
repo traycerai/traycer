@@ -1,0 +1,48 @@
+---
+title: "File Tree"
+description: "Use File Tree to browse workspace files."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+The **File Tree** panel lets you browse a workspace folder.
+
+Use it to inspect files, open files in an external editor, or copy file paths. It is read-only: you can't create, rename, move, or delete files from the tree.
+
+Open it from the **File Tree** icon in the sidebar rail. Click a folder to expand it. Click a file to open it in a preview tab; double-click to keep the tab open.
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/file-tree-panel.mp4" label="Open File Tree, expand folders, and preview a file" />
+
+Drag a file or folder into the agent composer to insert an inline mention. This works when the file is on the same host as the composer. See the [file context demo](/panels/agents#attachments-and-voice). You can also drag a file onto the canvas to open it there.
+
+## Workspace Picker
+
+The picker at the top of the panel chooses which folder the tree shows. It lists hosts and their workspace folders, with "Search repo, branch, or path…" to find one.
+
+## Filter Files
+
+Type in "Filter files by name…" to narrow the tree. If nothing matches, the panel says "No files match the filter." Very large result sets show only the first matches; narrow the filter to see more.
+
+In very large workspaces, some folders hold more files than the tree can show. The panel says so rather than listing them all.
+
+## Right-Click Menu
+
+Right-click a file or folder for:
+
+| Item | What it does |
+|---|---|
+| An editor name | Open the item in that editor. Traycer lists the editors it finds installed: VS Code, Cursor, Windsurf, Zed, and VSCodium. |
+| **Finder** | Show the item in Finder. macOS only. |
+| **Copy Path** | Copy the full path. |
+| **Copy Relative Path** | Copy the path relative to the workspace folder. |
+
+Editors and Finder appear only when the tree shows a folder on this computer. On a remote host, the menu offers only the copy actions.
+
+## When The Tree Can't Load
+
+| State | What you see |
+|---|---|
+| No folder selected | "No workspace linked." |
+| The host isn't responding | "Can't reach this host", with **Retry**. Pick another host in the picker, or try again. |
+| The host returned an error | "Couldn't load workspaces", with the error and **Retry**. |
+| The files couldn't be read | "Unable to load files." |

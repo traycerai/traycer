@@ -10,20 +10,14 @@ import {
   useState,
 } from "react";
 import { Link } from "@tanstack/react-router";
-import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
-import {
-  ArrowDownToLine,
-  Check,
-  ExternalLink,
-  Paintbrush,
-  Pencil,
-  Search,
-  Trash2,
-  X,
-} from "lucide-react";
+import { Check, Paintbrush, Pencil, Search, Trash2, X } from "lucide-react";
 import { ContextMenuItem } from "@/components/ui/context-menu";
-import { openEpicInBackground } from "@/lib/commands/actions/open-epic-in-background";
+import {
+  HistoryOpenInBackgroundMenuItem,
+  HistoryOpenInNewWindowMenuItem,
+} from "@/components/epics/history-row-open-menu-items";
+import { openHistoryItemInBackground } from "@/components/epics/open-history-item-in-background";
 import {
   useHistoryOpenInNewWindowFlow,
   type HistoryNewWindowFlow,
@@ -63,13 +57,14 @@ import {
 import { ClearFiltersButton } from "@/components/home/toolbar/clear-filters-button";
 import type {
   HistoryItem,
+  HistorySortOption,
   HistoryWorkspaceRef,
 } from "@/components/home/data/home-page.data";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   canDeleteHistoryItem,
   canEditHistoryItemTitle,
-  DEFAULT_SORT,
+  historyRowTimeLabel,
 } from "@/components/home/data/home-page.data";
 import {
   EpicsListChatHostFilterUnsupported,
@@ -83,6 +78,7 @@ import { HistoryTaskRow } from "@/components/epics/history-task-row";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { MobileHistoryList } from "@/components/epics/mobile/mobile-history-list";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
+import { useOptimisticActivityHistoryItems } from "@/hooks/home/use-optimistic-activity-history-items";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import type { HistoryMessageHitsInputs } from "@/components/epics/history-message-hits";
@@ -118,6 +114,7 @@ import {
 } from "@/stores/auth/auth-store";
 import {
   DEFAULT_HISTORY_SEARCH,
+  hasActiveHistoryFilters,
   patchHistorySearch,
   type HistorySearchPatch,
   type HistorySearchState,
@@ -368,11 +365,14 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     error,
     hostId,
     refetch,
+    refetchTasks,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
     cloudPagePending,
     isCountPending,
+    currentUserId,
+    activityRefreshScope,
   } = useHistoryQuery({
     search,
     nowMs: props.historyNowMs,
@@ -392,7 +392,20 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // settled page yet"), and spreading them through the body made the panel
   // body's branch count grow with every field the query gained.
   const view = historyPanelView(data);
-  const items = view.items;
+  const pageItems = view.items;
+  const hasActiveFilters = hasActiveHistoryFilters(search);
+  // The same bounded activity projection drives this panel and the drawer.
+  // Its active edge covers the short gap before the cloud record stamp lands.
+  const items = useOptimisticActivityHistoryItems({
+    items: pageItems,
+    userId: currentUserId,
+    hostId,
+    enabled:
+      variant !== "picker" && !hasActiveFilters && search.sort === "recent",
+    refreshEnabled: search.sort === "recent",
+    refreshScope: activityRefreshScope,
+    refetch: refetchTasks,
+  });
   const worktreesByEpicId = view.worktreesByEpicId;
   const indicatorEpicIds = useMemo(
     () => items.map((item) => item.epicId),
@@ -690,8 +703,6 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     closeDeleteDialog();
   };
 
-  const hasActiveFilters = hasActiveHistoryFilters(search);
-
   const handleClear = () => {
     clearSearch();
   };
@@ -801,6 +812,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       >
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <HistoryListBody
+            sort={search.sort}
             isCountPending={isCountPending}
             scope={selectionMode ? "tasks" : props.scope}
             onScopeChange={selectionMode ? () => {} : props.onScopeChange}
@@ -925,20 +937,6 @@ function useChatHostFilterGate(
     chatHostFilterSupported: support !== "unsupported",
     chatHostFilterUnsupported: data?.chatHostFilterUnsupported ?? false,
   };
-}
-
-function hasActiveHistoryFilters(search: HistorySearchState): boolean {
-  return (
-    (search.labelNames?.length ?? 0) > 0 ||
-    (search.groupIds?.length ?? 0) > 0 ||
-    !!search.includeUngrouped ||
-    search.repos.length > 0 ||
-    search.workspaces.length > 0 ||
-    search.chatHosts.length > 0 ||
-    search.ownershipScopes.length > 0 ||
-    (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
-    search.query.trim().length > 0
-  );
 }
 
 /**
@@ -1184,6 +1182,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         {props.pageSearch}
         {props.chrome}
         <MobileHistoryList
+          sort={props.sort}
           error={props.error}
           isPending={props.isPending}
           isFetching={props.isFetching}
@@ -1216,6 +1215,7 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
   const { messageHits, rowsScopeRef } = props;
   const taskList = (
     <EpicsListBody
+      sort={props.sort}
       error={props.error}
       isPending={props.isPending}
       isFetching={props.isFetching}
@@ -1294,6 +1294,7 @@ function historyTaskCount(props: HistoryListBodyProps): HistoryCount {
 }
 
 interface EpicsListBodyProps {
+  readonly sort: HistorySortOption;
   readonly error: Error | null;
   readonly isPending: boolean;
   readonly isFetching: boolean;
@@ -1342,6 +1343,7 @@ interface EpicsListBodyProps {
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   const {
+    sort,
     error,
     isPending,
     isFetching,
@@ -1421,6 +1423,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     );
   }
   const rowProps = {
+    sort,
     selectionMode,
     selectionEnabled,
     selectedIds,
@@ -1471,6 +1474,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
             <EpicsListRow
               key={item.id}
               item={item}
+              sort={sort}
               selectionMode={selectionMode}
               selectionEnabled={selectionEnabled}
               isSelected={selectedIds.has(item.epicId)}
@@ -1508,6 +1512,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
 
 interface EpicsListRowProps {
   readonly item: HistoryItem;
+  readonly sort: HistorySortOption;
   readonly selectionMode: boolean;
   /** False for the read-only `variant="picker"` embed - disables the sweep
    * affordance instead of leaving it live-looking but inert. */
@@ -1540,6 +1545,7 @@ const ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE = "data-history-row-target-own-tooltip";
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const {
     item,
+    sort,
     selectionMode,
     selectionEnabled,
     isSelected,
@@ -1589,16 +1595,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const linkTabId = useEpicCanvasStore(
     (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
   );
-  const openInBackground = useCallback(() => {
-    if (isOpen) {
-      toast("Task already open", {
-        id: "history-task-already-open",
-        description: displayTitle,
-      });
-      return;
-    }
-    openEpicInBackground(item.epicId, item.title);
-  }, [isOpen, displayTitle, item.epicId, item.title]);
   const openInNewWindow = useCallback(() => {
     onOpenInNewWindow(item);
   }, [onOpenInNewWindow, item]);
@@ -1685,7 +1681,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       openEpic();
       return;
     }
-    openInBackground();
+    openHistoryItemInBackground(item, isOpen);
   };
   const blockUnavailableDeleteAction = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
@@ -1751,37 +1747,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
     />
   );
-  // Phases have no background-open: a phase only opens through its migration
-  // route (migrationSource=phase), which a plain canvas tab can't carry, so it
-  // would activate into the wrong (non-migration) surface. New Window stays
-  // available - it goes through the route.
-  const backgroundMenuItem = isPhase ? null : (
-    <ContextMenuItem
-      onSelect={openInBackground}
-      disabled={isOpen}
-      data-testid="epics-list-row-open-background"
-    >
-      <ArrowDownToLine className="mt-0.5 self-start" />
-      <span className="flex flex-col">
-        <span>Open in Background</span>
-        <span hidden={!isOpen} className="text-ui-xs">
-          Already open
-        </span>
-      </span>
-    </ContextMenuItem>
-  );
-  const newWindowMenuItem = openInNewWindowAvailable ? (
-    <ContextMenuItem
-      onSelect={openInNewWindow}
-      data-testid="epics-list-row-open-new-window"
-    >
-      <ExternalLink />
-      Open in New Window
-    </ContextMenuItem>
-  ) : null;
   return (
     <HistoryTaskRow
       item={item}
+      timeLabel={historyRowTimeLabel(item, sort)}
       selectionMode={selectionMode}
       selectionDisabled={selectionDisabled}
       selectedForDelete={historySelectedForDelete({
@@ -1844,17 +1813,19 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       }
       hasSweepControl={rowSweep.isVisible}
       contextMenuItems={
-        isPhase ? (
-          backgroundMenuItem
-        ) : (
+        isPhase ? null : (
           <>
             <HistoryTaskOrganizationMenu item={item} canEdit={canEditTitle} />
-            {backgroundMenuItem}
+            <HistoryOpenInBackgroundMenuItem item={item} isOpen={isOpen} />
           </>
         )
       }
       organization={{ canEdit: canEditTitle }}
-      openInNewWindowControl={newWindowMenuItem}
+      openInNewWindowControl={
+        openInNewWindowAvailable ? (
+          <HistoryOpenInNewWindowMenuItem onSelect={openInNewWindow} />
+        ) : null
+      }
       onSetPinned={onSetPinned}
       isPinPending={isPinPending}
       pinAlwaysVisible={false}

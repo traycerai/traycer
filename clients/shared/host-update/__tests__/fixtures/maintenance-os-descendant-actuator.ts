@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   acquireUpdateAttemptLock,
@@ -27,6 +27,20 @@ if (
 const hostHomeDir: string = hostHomeDirValue;
 const barrierDir: string = barrierDirValue;
 const script: string = scriptPath;
+
+// See the node actuator's `writeBarrier`: a stat-visible barrier path is not
+// necessarily a complete one, since `writeFile` truncates-then-writes. A
+// same-directory temp path plus `rename` makes it atomic. The temp name is
+// per-CALL (not just per-process): `descendant()`'s SIGTERM handler and its
+// normal release path can both target `descendant-exited`, and a temp name
+// keyed only on the pid would let those two calls share one temp file.
+let barrierWriteSeq = 0;
+async function writeBarrier(path: string, content: string): Promise<void> {
+  barrierWriteSeq += 1;
+  const tmpPath = `${path}.tmp-${process.pid}-${barrierWriteSeq}`;
+  await writeFile(tmpPath, content);
+  await rename(tmpPath, path);
+}
 
 async function waitFor(path: string): Promise<void> {
   const deadline = Date.now() + MAX_WAIT_MS;
@@ -57,15 +71,23 @@ async function waitForProcessGone(pid: number): Promise<boolean> {
 }
 
 async function descendant(): Promise<void> {
-  process.once("SIGTERM", () => {
-    void writeFile(
+  // `on` + latch, not `once`: see the node actuator's `descendant()`. A
+  // repeated TERM must not hit the default action mid-write.
+  let termHandled = false;
+  process.on("SIGTERM", () => {
+    if (termHandled) return;
+    termHandled = true;
+    void writeBarrier(
       join(barrierDir, "descendant-exited"),
       String(process.pid),
     ).then(() => process.exit(0));
   });
-  await writeFile(join(barrierDir, "descendant-ready"), String(process.pid));
+  await writeBarrier(join(barrierDir, "descendant-ready"), String(process.pid));
   await waitFor(join(barrierDir, "descendant-release"));
-  await writeFile(join(barrierDir, "descendant-exited"), String(process.pid));
+  await writeBarrier(
+    join(barrierDir, "descendant-exited"),
+    String(process.pid),
+  );
 }
 
 async function actuatorWrapper(): Promise<void> {
@@ -145,11 +167,14 @@ async function supervisor(): Promise<void> {
     }
     // E normally writes this from its signal handler. C records the barrier
     // too so the handoff cannot disappear before the reap is observable.
-    await writeFile(
+    await writeBarrier(
       join(barrierDir, "descendant-exited"),
       String(descendantPid ?? -1),
     );
-    await writeFile(join(barrierDir, "supervisor-exited"), String(process.pid));
+    await writeBarrier(
+      join(barrierDir, "supervisor-exited"),
+      String(process.pid),
+    );
     process.exit(0);
   };
   process.once("SIGTERM", () => {
@@ -177,7 +202,7 @@ async function supervisor(): Promise<void> {
           // "bind-actuator" stdout line and then immediately reads this
           // file. Publishing first raced the write - the reader could
           // observe the stdout line before the file existed.
-          await writeFile(
+          await writeBarrier(
             join(barrierDir, "wrapper-bind"),
             JSON.stringify({
               wrapperPid,
@@ -270,7 +295,7 @@ async function helper(): Promise<void> {
               readonly wrapperPid: number;
               readonly descendantPid: number;
             };
-            await writeFile(
+            await writeBarrier(
               join(barrierDir, "helper-rebound"),
               JSON.stringify({
                 helperPid: process.pid,

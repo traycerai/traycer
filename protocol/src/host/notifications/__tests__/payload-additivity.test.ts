@@ -13,6 +13,7 @@ import {
   hostNotificationEpicStoppedPayloadSchema,
   hostNotificationInterviewPayloadSchema,
   hostNotificationKnownPayloadSchema,
+  hostNotificationManagedCommandDeliveryParkedPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
   hostNotificationWorktreeAutoCleanupPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
@@ -40,6 +41,8 @@ const LIVE_PAYLOAD_SCHEMAS: Record<
   interview: hostNotificationInterviewPayloadSchema,
   worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
   worktree_auto_cleanup: hostNotificationWorktreeAutoCleanupPayloadSchema,
+  managed_command_delivery_parked:
+    hostNotificationManagedCommandDeliveryParkedPayloadSchema,
   browser_human_needed: hostNotificationBrowserHumanNeededPayloadSchema,
 };
 
@@ -52,6 +55,7 @@ const KINDS = [
   "interview",
   "worktree_deletion",
   "worktree_auto_cleanup",
+  "managed_command_delivery_parked",
   "browser_human_needed",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 

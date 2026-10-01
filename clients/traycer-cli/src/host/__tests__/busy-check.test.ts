@@ -1,4 +1,40 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rmSync } from "node:fs";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { hostHomeDir } from "../../store/paths";
+
+// HOME is redirected to a private temp dir BEFORE anything reads it:
+// `store/paths` binds `homedir()` at module load, so without this the suite
+// would resolve this machine's REAL `~/.traycer`.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-busy-check-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+beforeAll(() => {
+  expect(osHome.current).not.toBe("");
+  expect(hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
 
 // `assertHostNotBusy` is the CLI's fail-safe gate before it reinstalls a
 // running host. It must (a) return when there is no LIVE host to protect
@@ -8,6 +44,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readHostPidMetadataMock: vi.fn(),
+  readHostPidMetadataEvidenceMock: vi.fn(),
   isProcessAliveMock: vi.fn(),
 }));
 
@@ -18,6 +55,7 @@ vi.mock("../pid-metadata", async () => {
   return {
     ...actual,
     readHostPidMetadata: mocks.readHostPidMetadataMock,
+    readHostPidMetadataEvidence: mocks.readHostPidMetadataEvidenceMock,
   };
 });
 
@@ -25,7 +63,7 @@ vi.mock("../../store/cli-lock", () => ({
   isProcessAlive: mocks.isProcessAliveMock,
 }));
 
-import { assertHostNotBusy } from "../busy-check";
+import { assertHostIdleForStop, assertHostNotBusy } from "../busy-check";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
 const VALID_META = {
@@ -60,12 +98,20 @@ describe("assertHostNotBusy", () => {
 
   it("resolves when a live host reports busy:false", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
     stubFetch(async () => jsonResponse({ busy: false }, 200));
     await expect(assertHostNotBusy("production")).resolves.toBeUndefined();
   });
 
   it("throws E_HOST_BUSY when a live host reports busy:true", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
     stubFetch(async () => jsonResponse({ busy: true }, 200));
     await expect(assertHostNotBusy("production")).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_BUSY,
@@ -74,6 +120,10 @@ describe("assertHostNotBusy", () => {
 
   it("treats a 404 from a pre-/activity (but live) host as busy", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
     stubFetch(async () => new Response("Not Found", { status: 404 }));
     await expect(assertHostNotBusy("production")).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_BUSY,
@@ -82,6 +132,10 @@ describe("assertHostNotBusy", () => {
 
   it("treats a malformed body from a live host as busy", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
     stubFetch(async () => jsonResponse({ nope: 1 }, 200));
     await expect(assertHostNotBusy("production")).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_BUSY,
@@ -90,6 +144,10 @@ describe("assertHostNotBusy", () => {
 
   it("treats a connect/abort error against a live host as busy", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
     stubFetch(async () => {
       throw new Error("ECONNREFUSED");
     });
@@ -100,6 +158,8 @@ describe("assertHostNotBusy", () => {
 
   it("resolves (no live host) when pid.json is missing - no probe attempted", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(null);
+    // Both mocks must agree - `absent` reads as `null`.
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({ kind: "absent" });
     const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
     await expect(assertHostNotBusy("production")).resolves.toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -107,9 +167,162 @@ describe("assertHostNotBusy", () => {
 
   it("resolves (no live host) for a stale pid.json whose process has exited", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    // Both mocks must agree - a `read(meta)` evidence beside the stale metadata.
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
     mocks.isProcessAliveMock.mockReturnValue(false);
     const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
     await expect(assertHostNotBusy("production")).resolves.toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // Reds for `assertHostNotBusy`'s sibling gate, same fail-closed evidence.
+  describe("fail-closed evidence the collapsed null-read hides", () => {
+    it("an unreadable pid.json rejects E_HOST_BUSY without probing - red on head, which resolves", async () => {
+      mocks.readHostPidMetadataMock.mockResolvedValue(null);
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "unreadable",
+        cause: "EBUSY",
+      });
+      const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+      await expect(assertHostNotBusy("production")).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("a live host advertised as ws://localhost:.../rpc rejects E_HOST_BUSY - red on head, which resolves 'no-host'", async () => {
+      const localhostMeta = {
+        ...VALID_META,
+        websocketUrl: "ws://localhost:54321/rpc",
+      };
+      mocks.readHostPidMetadataMock.mockResolvedValue(localhostMeta);
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "read",
+        metadata: localhostMeta,
+      });
+      const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+      await expect(assertHostNotBusy("production")).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("assertHostIdleForStop", () => {
+  beforeEach(() => {
+    mocks.isProcessAliveMock.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.resetAllMocks();
+  });
+
+  it("resolves when a live host reports busy:false", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
+    stubFetch(async () => jsonResponse({ busy: false }, 200));
+    await expect(assertHostIdleForStop("production")).resolves.toBeUndefined();
+  });
+
+  it("throws E_HOST_BUSY when a live host reports busy:true", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
+    stubFetch(async () => jsonResponse({ busy: true }, 200));
+    await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+  });
+
+  it("treats an unprobeable live host as busy", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
+    stubFetch(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+    stubFetch(async () => new Response("Not Found", { status: 404 }));
+    await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_BUSY,
+    });
+  });
+
+  it("resolves with no probe when there is no pid.json", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(null);
+    // Both mocks must agree - `absent` reads as `null`.
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({ kind: "absent" });
+    const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+    await expect(assertHostIdleForStop("production")).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolves with no probe for a stale pid.json", async () => {
+    mocks.readHostPidMetadataMock.mockResolvedValue(VALID_META);
+    // Both mocks must agree - a `read(meta)` evidence beside the stale metadata.
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: VALID_META,
+    });
+    mocks.isProcessAliveMock.mockReturnValue(false);
+    const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+    await expect(assertHostIdleForStop("production")).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // `assertHostIdleForStop` must fail closed on evidence a plain
+  // `readHostPidMetadata` null-read cannot express - an unreadable pid.json
+  // (not proof of absence) and a live host under a websocket URL the current
+  // validator wrongly waves through as "no host".
+  describe("fail-closed evidence the collapsed null-read hides", () => {
+    it("an unreadable pid.json rejects E_HOST_BUSY without probing - red on head, which resolves", async () => {
+      // `readHostPidMetadata` folds `unreadable` into `null` today, so head
+      // reads "no live host" and resolves; the evidence-aware fix must fail
+      // closed instead.
+      mocks.readHostPidMetadataMock.mockResolvedValue(null);
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "unreadable",
+        cause: "EBUSY",
+      });
+      const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+      await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("a live host advertised as ws://localhost:.../rpc rejects E_HOST_BUSY - red on head, which resolves 'no-host'", async () => {
+      // `isValidLocalHostWebsocketUrl` requires the literal `127.0.0.1`
+      // hostname today, so `localhost` fails validation and head reads
+      // "no live host" and resolves.
+      const localhostMeta = {
+        ...VALID_META,
+        websocketUrl: "ws://localhost:54321/rpc",
+      };
+      mocks.readHostPidMetadataMock.mockResolvedValue(localhostMeta);
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "read",
+        metadata: localhostMeta,
+      });
+      const fetchSpy = stubFetch(async () => jsonResponse({ busy: true }, 200));
+      await expect(assertHostIdleForStop("production")).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 });

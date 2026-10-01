@@ -40,8 +40,21 @@ function extractModuleSpecifiers(source: string): string[] {
 
 describe("spawn-edge-bounds.ts is a pinned leaf", () => {
   it("imports exactly one specifier: @traycer/protocol/host/lifecycle-constants", () => {
+    // The leaf itself now lives in `clients/shared/host-start-adoption/` (the
+    // #2267 host-start-adoption extraction); this project's own
+    // `service/spawn-edge-bounds.ts` is a thin `export *` of it, so the
+    // cycle-safety property this pins is a property of the shared file.
     const source = readFileSync(
-      join(HERE, "..", "spawn-edge-bounds.ts"),
+      join(
+        HERE,
+        "..",
+        "..",
+        "..",
+        "..",
+        "shared",
+        "host-start-adoption",
+        "spawn-edge-bounds.ts",
+      ),
       "utf8",
     );
 
@@ -111,9 +124,13 @@ describe("finiteDurationMs", () => {
       },
     );
 
-    await expect(import("../spawn-edge-bounds")).rejects.toThrow(
-      /HOST_START_ADOPTION_MAX_AGE_MS/,
-    );
+    // Retargeted to the shared leaf directly (was `../spawn-edge-bounds`,
+    // this project's now-thin `export *` wrapper around it): the module-load
+    // throw this proves lives in the shared file's own evaluation, not in
+    // the wrapper's re-export.
+    await expect(
+      import("@traycer-clients/shared/host-start-adoption/spawn-edge-bounds"),
+    ).rejects.toThrow(/HOST_START_ADOPTION_MAX_AGE_MS/);
 
     vi.doUnmock("@traycer/protocol/host/lifecycle-constants");
     vi.resetModules();

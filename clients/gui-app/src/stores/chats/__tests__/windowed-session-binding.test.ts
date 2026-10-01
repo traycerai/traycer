@@ -29,6 +29,7 @@ import {
   TRANSCRIPT_WINDOW_MAX_BYTES,
 } from "@/stores/chats/transcript-window";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { getProcessMemoryRuntime } from "@/stores/replica-memory/process-memory-accountant";
 
 /**
  * # The wait-for-tail rule
@@ -3705,6 +3706,8 @@ describe("accumulated-change chunks", () => {
           accumulatedFileChangeCount: 3,
         }),
       );
+      const ownedBeforeAssembly =
+        getProcessMemoryRuntime().chatWindows.estimatedOwnedStateHeapBytes();
 
       harness.callbacks().onAccumulatedChanges({
         kind: "accumulatedChanges",
@@ -3719,6 +3722,12 @@ describe("accumulated-change chunks", () => {
           isFinal: false,
         },
       });
+      expect(
+        harness.handle.store.getState().accumulatedFileChangeSummaries,
+      ).toEqual([]);
+      expect(
+        getProcessMemoryRuntime().chatWindows.estimatedOwnedStateHeapBytes(),
+      ).toBeGreaterThan(ownedBeforeAssembly);
       harness.callbacks().onAccumulatedChanges({
         kind: "accumulatedChanges",
         hasBinaryPayload: false,

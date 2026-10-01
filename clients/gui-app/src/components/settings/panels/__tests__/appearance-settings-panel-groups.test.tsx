@@ -40,7 +40,6 @@ function resetAppearanceSettings(): void {
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     pointerCursors: true,
-    chatTurnMinimapSide: "right",
     codeFontFamily: null,
     codeFontSize: DEFAULT_CODE_FONT_SIZE,
     terminalFontFamily: null,

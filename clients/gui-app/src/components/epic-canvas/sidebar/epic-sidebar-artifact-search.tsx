@@ -140,7 +140,7 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
   //
   // Closing the store flag rather than deriving an effective-open locally,
   // because the header reads that same flag independently
-  // (`PanelGroupSectionHeader`). A local derive would unmount this box while
+  // (`LeftPanelSectionHeader`). A local derive would unmount this box while
   // the header kept the search row, leaving an empty input with nothing
   // portaled into it - a worse version of the state being fixed.
   useEffect(() => {

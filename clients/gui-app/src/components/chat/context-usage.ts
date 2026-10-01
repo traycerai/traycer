@@ -1,3 +1,7 @@
+import {
+  CONTEXT_USAGE_ROW_KEYS,
+  type ContextUsageRowKey,
+} from "@/lib/context-usage-rows";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
 /**
@@ -55,20 +59,10 @@ export interface ContextUsageRow {
 }
 
 /**
- * Every row a breakdown can show, in the order the surfaces draw them. This
- * is the one list the pinned strip's field picker offers, so a row added to
- * `buildContextUsageRows` has to be added here to be selectable at all.
+ * What each row is called. The keys themselves are the persisted vocabulary and
+ * live in `lib/context-usage-rows.ts`, so a row added to
+ * `buildContextUsageRows` has to be added there to be selectable at all.
  */
-export const CONTEXT_USAGE_ROW_KEYS = [
-  "used",
-  "fresh",
-  "cacheRead",
-  "cacheWrite",
-  "output",
-] as const;
-
-export type ContextUsageRowKey = (typeof CONTEXT_USAGE_ROW_KEYS)[number];
-
 export const CONTEXT_USAGE_ROW_LABELS: Readonly<
   Record<ContextUsageRowKey, string>
 > = {
@@ -156,9 +150,10 @@ export function formatContextUsageRowValue(row: ContextUsageRow): string {
 /**
  * Compact token formatter for standalone counts: 1_234 → "1.2k",
  * 1_234_567 → "1.2M". Falls back to raw `toLocaleString` for values < 1k so
- * tiny output-only turns aren't misleadingly rounded.
+ * tiny output-only turns aren't misleadingly rounded. Also the thinking-token
+ * estimate's formatter (`thinking-tokens-estimate.tsx`).
  */
-function formatTokens(value: number): string {
+export function formatTokens(value: number): string {
   if (value < 1_000) return value.toLocaleString();
   if (value < 1_000_000) return `${(value / 1_000).toFixed(1)}k`;
   return `${(value / 1_000_000).toFixed(1)}M`;

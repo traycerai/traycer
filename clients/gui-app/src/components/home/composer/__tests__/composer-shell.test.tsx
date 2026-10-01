@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
-import type { ComposerExpansion } from "@/components/home/composer/composer-expand-handle";
+import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
 import { ComposerShell } from "../composer-shell";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
 
@@ -141,35 +141,216 @@ function classTokens(element: Element | null): ReadonlyArray<string> {
     .filter((token) => token !== "");
 }
 
+function grabber(): Element | null {
+  return document.querySelector("[data-composer-grabber]");
+}
+
+function grabberOrThrow(): Element {
+  const element = grabber();
+  if (element === null) throw new Error("grabber missing");
+  return element;
+}
+
+function pull(zone: Element, fromY: number, toY: number): void {
+  fireEvent.pointerDown(zone, { clientY: fromY, pointerId: 1 });
+  fireEvent.pointerMove(zone, { clientY: toY, pointerId: 1 });
+  fireEvent.pointerUp(zone, { clientY: toY, pointerId: 1 });
+}
+
+const FITTING_EDITOR = (
+  <div data-testid="composer-editor" data-composer-editor="" />
+);
+
+const PICKER_STORE = createComposerPickerStore();
+
+function shellWith(
+  expansion: ComposerExpansion | null,
+  editor: ReactNode,
+): ReactNode {
+  return (
+    <ComposerShell
+      pickerStore={PICKER_STORE}
+      onDragOver={() => undefined}
+      onDrop={() => undefined}
+      onDragEnter={() => undefined}
+      onDragLeave={() => undefined}
+      dragOverlayVariant="images"
+      utilityRail={null}
+      attachmentsStrip={null}
+      editor={editor}
+      toolbar={<div />}
+      expansion={expansion}
+    />
+  );
+}
+
+function renderShellWithEditor(
+  expansion: ComposerExpansion | null,
+  editor: ReactNode,
+): void {
+  render(shellWith(expansion, editor));
+}
+
 describe("ComposerShell phone expansion", () => {
+  // jsdom does not implement `setPointerCapture`, and the grabber calls it on
+  // every press.
+  beforeEach(() => {
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+  });
   afterEach(() => {
     viewportMock.phone = false;
   });
 
-  it("renders no handle on a desktop viewport, even when expansion is given", () => {
+  it("renders no pull zone on a desktop viewport", () => {
     viewportMock.phone = false;
-    renderComposerShell("images", null, null, makeExpansion(false));
+    renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
 
+    expect(grabber()).toBeNull();
+  });
+
+  it("renders no grabber and no hidden button on a phone viewport when expansion is null", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(null, FITTING_EDITOR);
+
+    expect(grabber()).toBeNull();
     expect(screen.queryByRole("button", { name: /composer/i })).toBeNull();
   });
 
-  it("renders the handle on a phone viewport", () => {
+  it("offers the pull zone on a phone whatever the draft's size, with nothing drawn in it", () => {
     viewportMock.phone = true;
-    renderComposerShell("images", null, null, makeExpansion(false));
+    renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
 
+    const zone = grabber();
+    expect(zone).not.toBeNull();
+    expect(zone?.getAttribute("aria-hidden")).toBe("true");
+    expect(zone?.childElementCount).toBe(0);
+    const button = screen.getByRole("button", { name: "Expand composer" });
+    expect(classTokens(button)).toContain("sr-only");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("toggles the sheet from the hidden button, which stays mounted across the collapse", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(true);
+    const view = render(shellWith(expansion, FITTING_EDITOR));
+    const button = screen.getByRole("button", { name: "Collapse composer" });
+    button.focus();
+
+    fireEvent.click(button);
+    expect(expansion.onExpandedChange).toHaveBeenCalledWith(false);
+
+    // The owner collapses; the button is the same element, still focused.
+    view.rerender(shellWith(makeExpansion(false), FITTING_EDITOR));
+    expect(screen.getByRole("button", { name: "Expand composer" })).toBe(
+      button,
+    );
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("opens the sheet on a pull up past the threshold, once", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(false);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const zone = grabberOrThrow();
+
+    fireEvent.pointerDown(zone, { clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(zone, { clientY: 76, pointerId: 1 });
+    fireEvent.pointerMove(zone, { clientY: 40, pointerId: 1 });
+    fireEvent.pointerUp(zone, { clientY: 40, pointerId: 1 });
+
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+    expect(expansion.onExpandedChange).toHaveBeenCalledWith(true);
+  });
+
+  it("closes the sheet on a pull down past the threshold while expanded", () => {
+    viewportMock.phone = true;
+    vi.useFakeTimers();
+    const expansion = makeExpansion(true);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+
+    pull(grabberOrThrow(), 100, 130);
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(200);
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+    expect(expansion.onExpandedChange).toHaveBeenCalledWith(false);
+    vi.useRealTimers();
+  });
+
+  it("ignores a press while the sheet is still settling shut", () => {
+    viewportMock.phone = true;
+    vi.useFakeTimers();
+    const expansion = makeExpansion(true);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const zone = grabberOrThrow();
+
+    pull(zone, 100, 130);
+    pull(zone, 100, 60);
+
+    // The second pull moved nothing: the top still rests on the card's place.
     expect(
-      screen.getByRole("button", { name: "Expand composer" }),
-    ).not.toBeNull();
+      zone.parentElement?.style.getPropertyValue("--composer-sheet-top"),
+    ).toBe("0px");
+    vi.advanceTimersByTime(200);
+    expect(expansion.onExpandedChange).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 
-  it("renders no handle on a phone viewport when expansion is null", () => {
+  it("holds the sheet's top under the finger while the pull lasts", () => {
     viewportMock.phone = true;
-    renderComposerShell("images", null, null, null);
+    const expansion = makeExpansion(true);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const zone = grabberOrThrow();
+    const sheet = zone.parentElement;
+    if (sheet === null) throw new Error("sheet missing");
 
-    expect(screen.queryByRole("button", { name: /composer/i })).toBeNull();
+    fireEvent.pointerDown(zone, { clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(zone, { clientY: 60, pointerId: 1 });
+    expect(sheet.hasAttribute("data-composer-pulling")).toBe(true);
+    expect(sheet.style.getPropertyValue("--composer-sheet-top")).not.toBe("");
+
+    fireEvent.pointerUp(zone, { clientY: 60, pointerId: 1 });
+    expect(sheet.hasAttribute("data-composer-pulling")).toBe(false);
+    expect(sheet.style.getPropertyValue("--composer-sheet-top")).toBe("");
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
   });
 
-  it("puts the shell into its fixed sheet state when expanded on phone", () => {
+  it("does nothing on a tap or a short wobble", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(false);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+    const zone = grabberOrThrow();
+
+    pull(zone, 100, 100);
+    pull(zone, 100, 90);
+    fireEvent.click(zone);
+
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
+  });
+
+  it("ignores a pull in the direction the sheet already is", () => {
+    viewportMock.phone = true;
+    const expansion = makeExpansion(false);
+    renderShellWithEditor(expansion, FITTING_EDITOR);
+
+    pull(grabberOrThrow(), 100, 160);
+
+    expect(expansion.onExpandedChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the press from moving focus off the editor", () => {
+    viewportMock.phone = true;
+    renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
+
+    const notCancelled = fireEvent.pointerDown(grabberOrThrow(), {
+      clientY: 100,
+      pointerId: 1,
+    });
+
+    expect(notCancelled).toBe(false);
+  });
+
+  it("puts the shell into its sheet state when expanded on phone", () => {
     viewportMock.phone = true;
     renderComposerShell(
       "images",
@@ -185,13 +366,17 @@ describe("ComposerShell phone expansion", () => {
     const editorFrame = editor.closest("[data-composer-editor-frame]");
 
     expect(shell?.hasAttribute("data-composer-expanded")).toBe(true);
-    expect(shell?.className).toContain("fixed");
+    // Not `fixed`: iOS draws no caret in a fixed sheet inside a chat tile.
+    expect(shell?.className).not.toContain("fixed");
     expect(classTokens(overlay)).toContain("hidden");
     expect(editorFrame?.className).toContain("overflow-y-auto");
     // The dim is a sibling painted before the sheet, not part of it.
     const backdrop = shell?.previousElementSibling;
     expect(backdrop?.hasAttribute("data-composer-sheet-backdrop")).toBe(true);
     expect(backdrop?.className).toContain("fixed");
+    expect(
+      backdrop?.querySelector("[data-composer-sheet-slot]"),
+    ).not.toBeNull();
   });
 
   it("keeps the shell in flow, collapsed, when not expanded on phone", () => {

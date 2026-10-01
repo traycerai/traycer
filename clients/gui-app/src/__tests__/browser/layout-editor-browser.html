@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- No favicon request: without this the browser asks for /favicon.ico, which the fixture server 404s into the console. -->
+    <link rel="icon" href="data:," />
+    <title>Layout editor - parity regression</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        margin: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./layout-editor-browser.tsx"></script>
+  </body>
+</html>

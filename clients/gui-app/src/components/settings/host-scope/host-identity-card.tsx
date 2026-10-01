@@ -122,19 +122,15 @@ export function HostIdentityCard(props: {
    */
   readonly healthAction: ReactNode;
   /**
-   * The live update pill, last on the health line, or `null`.
-   *
-   * A SLOT like `healthAction`, for the same reason: the pill reads the
-   * page's update projection, its completion timer and the selected tab,
-   * and all three are the panel's. The panel withholds it on Status (the
-   * update card is the answer there), while the health word reads
-   * "Restarting…", and on a phone, where it is a strip above the section
-   * dropdown instead.
+   * What happens to this host when the app quits ("keeps running after
+   * quit"), or `null`. A slot for the same reason `healthAction` is one: the
+   * line reads the desktop lifecycle bridge, which this presentational card
+   * must not reach for. Only this machine's own host has one.
    */
-  readonly updatePill: ReactNode;
+  readonly lifecycleLine: ReactNode;
   /**
-   * What sits under the header inside the same card: the Overview's tab bar
-   * and tab bodies. The header is PINNED - it never shrinks - and the card is
+   * What sits under the header inside the same card: the Overview's notices
+   * strip, tab bar and tab bodies. The header is PINNED - it never shrinks - and the card is
    * a column that gives up its automatic floor (`min-h-0`), so under a bounded
    * pane the children take what is left and scroll inside it. Unbounded (a
    * phone), the card is as tall as its contents and scrolls with the page.
@@ -235,6 +231,7 @@ export function HostIdentityCard(props: {
               </span>
             )}
             {props.healthAction}
+            {props.lifecycleLine}
             {facts.length === 0 ? null : (
               // Folded up from its own line. The card gained a footer verb bar,
               // and three stacked lines of identity above it pushed Host ID and
@@ -252,7 +249,6 @@ export function HostIdentityCard(props: {
               busySessionCount={props.busySessionCount}
               busyBreakdown={props.busyBreakdown}
             />
-            {props.updatePill}
           </div>
         </div>
       </div>

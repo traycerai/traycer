@@ -53,7 +53,15 @@ import type {
   ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerContentPreview } from "@/components/chat/composer/composer-content-preview";
-import { isReceivedAgentResponse } from "@/components/chat/chat-queue-utils";
+import {
+  isReceivedAgentResponse,
+  queuePausedAfterError,
+} from "@/components/chat/chat-queue-utils";
+import {
+  QUEUE_PAUSED_AFTER_ERROR_LABEL,
+  QUEUE_PAUSED_AFTER_ERROR_TOOLTIP,
+  QUEUE_PAUSED_BY_ROUTING_TOOLTIP,
+} from "@/components/chat/fallback/fallback-copy";
 import {
   QUEUED_MESSAGE_DND_MODIFIERS,
   useQueuedMessageReorderDnd,
@@ -74,6 +82,11 @@ import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-comman
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
+import {
+  CHAT_DOCK_PANEL_LIST,
+  CHAT_DOCK_PANEL_ROW,
+  CHAT_DOCK_PANEL_ROW_TEXT,
+} from "@/components/chat/chat-dock-panel-row";
 
 interface QueuedMessageRowActionState {
   readonly canReorder: boolean;
@@ -124,7 +137,9 @@ export interface QueuedMessagePanelProps {
   readonly readOnly: boolean;
   readonly editingQueueItemId: string | null;
   readonly scrollRegionMaxHeightClass: string;
-  readonly separated?: boolean;
+  /** A hairline above this panel, because a sibling drew before it in the
+   *  dock's shared frame (L-97). */
+  readonly separated: boolean;
   readonly onPause: () => string | null;
   readonly onResume: () => string | null;
   // Edit / steer are prompt-only by type: a managed-command item carries no
@@ -157,6 +172,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
     [items],
   );
   const queueStatus = props.queue.status;
+  const pausedAfterErrorTooltip = queuePausedAfterErrorTooltip(props.queue);
   const hasSteerRestartPending = useMemo(
     () =>
       items.some(
@@ -202,6 +218,53 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
 
   if (items.length === 0) return null;
 
+  const list = (
+    <DndContext
+      sensors={sensors}
+      autoScroll={false}
+      collisionDetection={reorderDnd.collisionDetection}
+      modifiers={QUEUED_MESSAGE_DND_MODIFIERS}
+      onDragStart={reorderDnd.handleDragStart}
+      onDragMove={reorderDnd.handleDragMove}
+      onDragOver={reorderDnd.handleDragOver}
+      onDragEnd={reorderDnd.handleDragEnd}
+      onDragCancel={reorderDnd.handleDragCancel}
+    >
+      <SortableContext
+        items={[...reorderDnd.sortableItemIds]}
+        strategy={verticalListSortingStrategy}
+      >
+        <div className={CHAT_DOCK_PANEL_LIST}>
+          {items.map((item, index) => {
+            return (
+              <QueuedMessageRow
+                key={item.queueItemId}
+                item={item}
+                index={index}
+                orderKey={reorderDnd.orderKey}
+                queueStatus={queueStatus}
+                pausedAfterErrorTooltip={pausedAfterErrorTooltip}
+                canReorder={reorderableCount > 1}
+                canAct={props.canAct}
+                readOnly={props.readOnly}
+                activeTurnStatus={props.activeTurnStatus}
+                hasSteerRestartPending={hasSteerRestartPending}
+                editing={props.editingQueueItemId === item.queueItemId}
+                dropPreview={reorderDnd.dropPreview}
+                itemCount={items.length}
+                registerRowElement={registerRowElement}
+                onEdit={props.onEdit}
+                onCancel={props.onCancel}
+                onAbortSteer={props.onAbortSteer}
+                onSteerNow={props.onSteerNow}
+              />
+            );
+          })}
+        </div>
+      </SortableContext>
+    </DndContext>
+  );
+
   return (
     <Collapsible
       open={open}
@@ -209,7 +272,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
       data-testid="queued-message-rows"
       className={cn(
         "@container",
-        props.separated === true ? "border-t border-border/50" : null,
+        props.separated ? "border-t border-border/50" : null,
         props.readOnly ? "opacity-95" : null,
       )}
       variant="panel"
@@ -236,53 +299,32 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
             props.scrollRegionMaxHeightClass,
           )}
         >
-          <DndContext
-            sensors={sensors}
-            autoScroll={false}
-            collisionDetection={reorderDnd.collisionDetection}
-            modifiers={QUEUED_MESSAGE_DND_MODIFIERS}
-            onDragStart={reorderDnd.handleDragStart}
-            onDragMove={reorderDnd.handleDragMove}
-            onDragOver={reorderDnd.handleDragOver}
-            onDragEnd={reorderDnd.handleDragEnd}
-            onDragCancel={reorderDnd.handleDragCancel}
-          >
-            <SortableContext
-              items={[...reorderDnd.sortableItemIds]}
-              strategy={verticalListSortingStrategy}
-            >
-              <div className="flex flex-col divide-y divide-border/40">
-                {items.map((item, index) => {
-                  return (
-                    <QueuedMessageRow
-                      key={item.queueItemId}
-                      item={item}
-                      index={index}
-                      orderKey={reorderDnd.orderKey}
-                      queueStatus={queueStatus}
-                      canReorder={reorderableCount > 1}
-                      canAct={props.canAct}
-                      readOnly={props.readOnly}
-                      activeTurnStatus={props.activeTurnStatus}
-                      hasSteerRestartPending={hasSteerRestartPending}
-                      editing={props.editingQueueItemId === item.queueItemId}
-                      dropPreview={reorderDnd.dropPreview}
-                      itemCount={items.length}
-                      registerRowElement={registerRowElement}
-                      onEdit={props.onEdit}
-                      onCancel={props.onCancel}
-                      onAbortSteer={props.onAbortSteer}
-                      onSteerNow={props.onSteerNow}
-                    />
-                  );
-                })}
-              </div>
-            </SortableContext>
-          </DndContext>
+          {list}
         </div>
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+/**
+ * The "Paused after an error" pill's tooltip, or `null` when the queue is not
+ * held after a failed turn (`queuePausedAfterError`) and the pill says plain
+ * "Paused".
+ *
+ * Read off the queue alone, like the pill. A routing pause gets one sentence
+ * for all of its states (`QUEUE_PAUSED_BY_ROUTING_TOOLTIP`): whether routing
+ * is still holding the queue is not something the absence of a routing card
+ * can prove - a retry draws no card, and the frame is withdrawn while the
+ * replacement runs - and even within one traversal a rejected row is not
+ * released with the rest (review F9/F10, 2026-09-27).
+ */
+function queuePausedAfterErrorTooltip(
+  queue: ChatSessionState["queue"],
+): string | null {
+  if (!queuePausedAfterError(queue)) return null;
+  return queue.pausedReason === "routing"
+    ? QUEUE_PAUSED_BY_ROUTING_TOOLTIP
+    : QUEUE_PAUSED_AFTER_ERROR_TOOLTIP;
 }
 
 function queueHeaderTooltip(input: {
@@ -369,7 +411,116 @@ function KeepPausedIcon(props: { readonly pending: boolean }) {
   return <Pause className="size-3.5" />;
 }
 
-function QueuedMessageHeader(props: {
+/**
+ * The queue's own controls: the live announcement, the viewer notice and
+ * Pause / Resume / Keep paused.
+ *
+ * A component rather than JSX inside the header because the queue is a dock
+ * member now (L-139) and can stand as a pill: while its pill is the open one
+ * the panel below has no header at all, and these controls are portalled to
+ * the right end of the pill row instead (L-142). One definition, two homes.
+ */
+function QueuedMessageQueueControls(props: {
+  readonly canAct: boolean;
+  readonly readOnly: boolean;
+  readonly resumeRequested: boolean;
+  readonly keepPausedRequested: boolean;
+  readonly showResumeQueueButton: boolean;
+  readonly showPauseQueueButton: boolean;
+  readonly onPause: () => string | null;
+  readonly onResume: () => string | null;
+}) {
+  const {
+    canAct,
+    readOnly,
+    resumeRequested,
+    keepPausedRequested,
+    showResumeQueueButton,
+    showPauseQueueButton,
+    onPause,
+    onResume,
+  } = props;
+  const showKeepPausedButton = resumeRequested || keepPausedRequested;
+  const resumePending = resumeRequested && !keepPausedRequested;
+  const announcement = queueHeaderAnnouncement({
+    resumeRequested,
+    keepPausedRequested,
+  });
+  return (
+    <>
+      <span className="sr-only" aria-live="polite">
+        {announcement}
+      </span>
+      {readOnly ? (
+        <span className="flex shrink-0 items-center px-3 text-ui-xs text-muted-foreground">
+          Owner manages queue
+        </span>
+      ) : null}
+      {showResumeQueueButton ? (
+        <div className="flex shrink-0 items-center gap-1 pr-1.5">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            className="h-7 shrink-0"
+            disabled={!canAct || showKeepPausedButton}
+            onClick={() => {
+              onResume();
+            }}
+            data-testid="resume-queue-button"
+          >
+            <QueueResumeIcon pending={resumePending} />
+            Resume
+          </Button>
+          {showKeepPausedButton ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="h-7 shrink-0"
+              disabled={!canAct || keepPausedRequested}
+              onClick={() => {
+                onPause();
+              }}
+              data-testid="keep-paused-queue-button"
+            >
+              <KeepPausedIcon pending={keepPausedRequested} />
+              Keep paused
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {showPauseQueueButton ? (
+        <div className="flex shrink-0 items-center pr-1.5">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            className="h-7 shrink-0"
+            disabled={!canAct}
+            onClick={() => {
+              onPause();
+            }}
+            data-testid="pause-queue-button"
+          >
+            <Pause className="size-3.5" />
+            Pause
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The queue row's header on its own - the collapsed strip with its count, its
+ * status word and its Pause/Resume controls.
+ *
+ * Exported for the layout editor's PICTURE of the Full-row queue, which wants
+ * the header and nothing under it: mounting the whole panel there would drag a
+ * `DndContext` and a sortable list into a specimen that can never be dragged.
+ */
+export function QueuedMessageHeader(props: {
   readonly open: boolean;
   readonly count: number;
   readonly queueStatus: ChatSessionState["queue"]["status"];
@@ -395,21 +546,9 @@ function QueuedMessageHeader(props: {
     onResume,
     open,
   } = props;
-  const handlePause = useCallback(() => {
-    onPause();
-  }, [onPause]);
-  const handleResume = useCallback(() => {
-    onResume();
-  }, [onResume]);
   const showResumeQueueButton = canResumeQueue && !readOnly;
   const showPauseQueueButton =
     !showResumeQueueButton && canPauseQueue && !readOnly;
-  const showKeepPausedButton = resumeRequested || keepPausedRequested;
-  const resumePending = resumeRequested && !keepPausedRequested;
-  const announcement = queueHeaderAnnouncement({
-    resumeRequested,
-    keepPausedRequested,
-  });
   const summary = queueHeaderSummary({
     count,
     resumeRequested,
@@ -425,9 +564,6 @@ function QueuedMessageHeader(props: {
 
   const header = (
     <div className="flex items-stretch" data-testid="queued-message-header">
-      <span className="sr-only" aria-live="polite">
-        {announcement}
-      </span>
       {/* On the collapse trigger, not the header strip: the strip also holds
           Resume/Pause, and a strip-wide trigger surfaced this queue-state text
           while hovering either of those buttons. */}
@@ -458,7 +594,7 @@ function QueuedMessageHeader(props: {
             />
           ) : null}
           <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
-            Message Queue
+            Message queue
           </span>
           <span
             aria-hidden
@@ -477,57 +613,16 @@ function QueuedMessageHeader(props: {
           </span>
         </CollapsibleTrigger>
       </TooltipWrapper>
-      {readOnly ? (
-        <span className="flex shrink-0 items-center px-3 text-ui-xs text-muted-foreground">
-          Owner manages queue
-        </span>
-      ) : null}
-      {showResumeQueueButton ? (
-        <div className="flex shrink-0 items-center gap-1 pr-1.5">
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            className="h-7 shrink-0"
-            disabled={!canAct || showKeepPausedButton}
-            onClick={handleResume}
-            data-testid="resume-queue-button"
-          >
-            <QueueResumeIcon pending={resumePending} />
-            Resume
-          </Button>
-          {showKeepPausedButton ? (
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className="h-7 shrink-0"
-              disabled={!canAct || keepPausedRequested}
-              onClick={handlePause}
-              data-testid="keep-paused-queue-button"
-            >
-              <KeepPausedIcon pending={keepPausedRequested} />
-              Keep paused
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      {showPauseQueueButton ? (
-        <div className="flex shrink-0 items-center pr-1.5">
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            className="h-7 shrink-0"
-            disabled={!canAct}
-            onClick={handlePause}
-            data-testid="pause-queue-button"
-          >
-            <Pause className="size-3.5" />
-            Pause
-          </Button>
-        </div>
-      ) : null}
+      <QueuedMessageQueueControls
+        canAct={canAct}
+        readOnly={readOnly}
+        resumeRequested={resumeRequested}
+        keepPausedRequested={keepPausedRequested}
+        showResumeQueueButton={showResumeQueueButton}
+        showPauseQueueButton={showPauseQueueButton}
+        onPause={onPause}
+        onResume={onResume}
+      />
     </div>
   );
 
@@ -539,6 +634,11 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
   readonly index: number;
   readonly orderKey: string;
   readonly queueStatus: ChatSessionState["queue"]["status"];
+  /**
+   * The "Paused after an error" pill's tooltip, or `null` when the queue is not
+   * held because the last turn failed (`queuePausedAfterErrorTooltip`).
+   */
+  readonly pausedAfterErrorTooltip: string | null;
   readonly canReorder: boolean;
   readonly canAct: boolean;
   readonly readOnly: boolean;
@@ -561,6 +661,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     index,
     orderKey,
     queueStatus,
+    pausedAfterErrorTooltip,
     canReorder,
     canAct,
     readOnly,
@@ -621,7 +722,12 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
     onAbortSteer(promptItem);
   }, [onAbortSteer, promptItem]);
   const editActionCopy = queuedMessageEditActionCopy(item);
-  const statusLabel = queuedMessageStatusLabel(item);
+  const statusLabel = queuedMessageStatusLabel(
+    item,
+    pausedAfterErrorTooltip !== null,
+  );
+  const statusTooltip =
+    item.status === "paused" ? pausedAfterErrorTooltip : null;
   const showDropIndicatorBefore = dropPreview?.index === index;
   const showDropIndicatorAfter = shouldShowDropIndicatorAfter({
     dropPreview,
@@ -641,7 +747,20 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
       ref={rowRef}
       style={rowSortable.style}
       className={cn(
-        "group relative flex min-w-0 items-start gap-2 px-3 py-1.5",
+        "group relative",
+        CHAT_DOCK_PANEL_ROW,
+        // The four sibling panels all reveal the row under the pointer; this
+        // one is the only list of PROSE, so it needs the fill most and had
+        // none (R6H-01).
+        // muted-fill-ok: row inside the canvas-surface panel above; --canvas never equals --muted
+        "hover:bg-muted/40",
+        // The hairline `divide-y` used to draw, moved OUT of flow into the
+        // list's `gap-0.5` so it costs no height: a 1px rule per boundary is
+        // what broke "N one-line rows measure the same in all five" at every
+        // N above one. Two wrapped messages would otherwise be separated by
+        // 1.875px while their own lines are 15px apart, and read as one
+        // paragraph.
+        "before:pointer-events-none before:absolute before:inset-x-2 before:-top-px before:h-px before:bg-border/40 first:before:hidden",
         editing ? "bg-primary/5" : null,
         actionState.isTransient ? "opacity-80" : null,
         rowSortable.isDragSource ? "opacity-50" : null,
@@ -665,6 +784,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
       <QueuedMessageRowContent
         item={item}
         statusLabel={statusLabel}
+        statusTooltip={statusTooltip}
         actionState={actionState}
         showOwnerActions={chrome.showOwnerActions}
         showManagedCommandCancel={chrome.showManagedCommandCancel}
@@ -686,6 +806,8 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
 function QueuedMessageRowContent(props: {
   readonly item: ChatQueuedItem;
   readonly statusLabel: string | null;
+  /** Why the status is what it is, where the label alone does not say. */
+  readonly statusTooltip: string | null;
   readonly actionState: QueuedMessageRowActionState;
   readonly showOwnerActions: boolean;
   readonly showManagedCommandCancel: boolean;
@@ -697,7 +819,6 @@ function QueuedMessageRowContent(props: {
   readonly handleSteerNow: () => void;
 }) {
   const item = props.item;
-  const receivedAgentItem = isReceivedAgentResponse(item) ? item : null;
   const framed =
     props.showOwnerActions ||
     props.showManagedCommandCancel ||
@@ -706,35 +827,27 @@ function QueuedMessageRowContent(props: {
 
   return (
     <div className="min-w-0 flex-1">
-      {receivedAgentItem !== null ? (
-        <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
-          <ReceivedAgentBadge sender={receivedAgentItem.sender} />
-        </div>
-      ) : null}
-      {item.kind === "managed-command" ? (
-        <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
-          <ManagedCommandBadge
-            commandId={item.commandId}
-            monitoring={item.monitoring}
-            hostId={item.hostId}
-          />
-        </div>
-      ) : null}
-      {item.kind === "port-forward" ? (
-        <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
-          <PortForwardBadge />
-        </div>
-      ) : null}
       <div
-        className="max-h-[3lh] overflow-y-auto pr-1 text-ui-sm leading-5 wrap-break-word"
+        className={cn(
+          // `-my-0.5 py-0.5`: the floated toolbar's frame overhangs its own
+          // margin box by `p-0.5` a side (see `QueuedMessageFloatingChrome`),
+          // and `overflow-y-auto` clips at the PADDING edge, so without room
+          // there the frame's bottom border was cut off. The padding is that
+          // room and the negative margin hands it back, so the row measures
+          // what it did.
+          "-my-0.5 max-h-[calc(3lh+--spacing(1))] overflow-y-auto py-0.5 pr-1 wrap-break-word",
+          CHAT_DOCK_PANEL_ROW_TEXT,
+        )}
         data-testid="queued-message-content-scroll"
         data-native-scrollbar="true"
       >
+        <QueuedMessageProvenanceChip item={item} />
         {showFloatingChrome ? (
           <QueuedMessageFloatingChrome framed={framed}>
             {props.statusLabel !== null ? (
               <QueuedMessageStatusBadge
                 label={props.statusLabel}
+                tooltip={props.statusTooltip}
                 pulsing={props.actionState.isSteering}
                 embedded={framed}
               />
@@ -776,19 +889,122 @@ function QueuedMessageRowContent(props: {
           <span className="text-muted-foreground">{item.description}</span>
         )}
       </div>
-      <QueuedMessageFallbackReason item={item} />
+      <QueuedMessageFallbackReason
+        item={item}
+        pillSaysPausedAfterError={
+          props.statusLabel === QUEUE_PAUSED_AFTER_ERROR_LABEL
+        }
+      />
     </div>
   );
 }
 
-function QueuedMessageFallbackReason(props: { readonly item: ChatQueuedItem }) {
+/**
+ * The host's queue-wide pause notes: the sentences a pause stamps on every held
+ * row that has no reason of its own, and that the "Paused after an error" pill
+ * or the routing card already say. The host's text, matched here to be LEFT
+ * OUT, never copy this client renders - which is why it lives beside the one
+ * comparison rather than in the fallback vocabulary module. The GUI's own
+ * copies, because the wire carries no kind for a row's `fallbackReason`: a
+ * sentence not listed here is drawn, never dropped.
+ *
+ * - The errored-turn pause: the host's `ERRORED_TURN_QUEUE_PAUSE_REASON`,
+ *   verbatim since #4505 (2026-07-18).
+ * - The routing hold: `FALLBACK_HOLD_QUEUE_PAUSE_REASON`, in this wording since
+ *   the routing rename (2026-09-27), the same host change that first publishes
+ *   `pausedReason`.
+ * - The routing hold as hosts from #5608 (2026-09-13) until that rename wrote
+ *   it (`LEGACY_FALLBACK_HOLD_QUEUE_PAUSE_REASON`), which a row held across an
+ *   upgrade in the middle of a traversal still carries.
+ */
+const QUEUE_WIDE_PAUSE_HOST_REASONS: ReadonlySet<string> = new Set([
+  "Queue paused because the previous turn ended with an error.",
+  "Queue paused while routing recovers the failed turn.",
+  "Queue paused while the host tries a fallback for the failed turn.",
+]);
+
+/**
+ * The host's per-row note on why the row is held (`item.fallbackReason`).
+ *
+ * Omitted only when it says what the pill already says (clutter cuts,
+ * 2026-09-27): under a "Paused after an error" pill, a queue-wide pause note -
+ * the errored-turn sentence, or the routing hold's while the routing card is
+ * on screen saying the same - is stamped on every held row, the same fact once
+ * per row. Every other reason is drawn there too - a pause keeps a row's
+ * earlier reason (a leftover steer, a downgrade), and a restamp the new
+ * provider rejected is stamped under a routing pause - since each says
+ * something the pill does not. The wire gives the reason no kind, so the
+ * queue-wide notes are recognised by the GUI's own copies of them.
+ */
+function QueuedMessageFallbackReason(props: {
+  readonly item: ChatQueuedItem;
+  readonly pillSaysPausedAfterError: boolean;
+}) {
   if (props.item.kind !== "prompt") return null;
   const reason = props.item.fallbackReason?.trim();
   if (!reason) return null;
+  if (
+    props.pillSaysPausedAfterError &&
+    QUEUE_WIDE_PAUSE_HOST_REASONS.has(reason)
+  ) {
+    return null;
+  }
   return (
     <p className="mt-1 text-ui-xs text-muted-foreground wrap-break-word">
       {reason}
     </p>
+  );
+}
+
+/**
+ * The row's provenance marker, as a chip the message wraps around (L-172).
+ *
+ * It used to be a line of its own above the message. That made a queue with
+ * one received agent response 54.5px against every other one-row panel's
+ * 41.25px, so switching the pill from Background to Queue moved the
+ * composer's upper edge by 13.25px - three times the jump this ticket was
+ * opened for. L-171 exempted the two-line case by fiat; L-172 narrows the
+ * exemption, because the exemption did not make the jump go away.
+ *
+ * A float rather than an inline span, and the mirror of the toolbar floating
+ * into the same scroll box from the other side: the message is a block
+ * (`ComposerContentPreview` renders paragraphs), so an in-flow inline chip
+ * before it would still start the text on a second line. Floated, the text
+ * wraps around it and a one-line message stays one line.
+ *
+ * `max-h-[3lh]` is untouched. A queued message is the user's own text and the
+ * one thing in the dock they may need to READ before deciding to edit or
+ * cancel it, so the answer to "one line or two" is neither: metadata gives up
+ * its line, content keeps its three.
+ */
+/** The one badge a queued row's provenance calls for, or `null` for none. */
+function queuedMessageProvenanceBadge(item: ChatQueuedItem): ReactNode {
+  if (isReceivedAgentResponse(item))
+    return <ReceivedAgentBadge sender={item.sender} />;
+  if (item.kind === "managed-command")
+    return (
+      <ManagedCommandBadge
+        commandId={item.commandId}
+        monitoring={item.monitoring}
+        hostId={item.hostId}
+      />
+    );
+  if (item.kind === "port-forward") return <PortForwardBadge />;
+  return null;
+}
+
+function QueuedMessageProvenanceChip(props: {
+  readonly item: ChatQueuedItem;
+}): ReactNode {
+  const badge = queuedMessageProvenanceBadge(props.item);
+  if (badge === null) return null;
+  return (
+    <span
+      className="float-left mr-1 inline-flex"
+      data-testid="queued-message-provenance-chip"
+    >
+      {badge}
+    </span>
   );
 }
 
@@ -889,9 +1105,9 @@ function ManagedCommandCancelButton(props: {
         <span className="inline-flex shrink-0">
           <Button
             type="button"
-            size="icon"
+            size="icon-xs"
             variant="muted"
-            className="size-7 shrink-0"
+            className="shrink-0"
             aria-label={
               props.kind === "shell"
                 ? "Cancel queued command output"
@@ -919,9 +1135,19 @@ function QueuedMessageFloatingChrome(props: {
   return (
     <div
       className={cn(
-        "sticky top-0 z-10 float-right ml-2 mb-1 flex shrink-0 items-center",
+        "sticky top-0 z-10 float-right ml-2 flex shrink-0 items-center",
+        // `gap-1` rather than `gap-0.5`: the buttons are `size-6`, which is
+        // 22.5px at this root, so 3.75px between them puts their centres
+        // 26.25px apart and the undersized-target spacing exception is not
+        // decided by a third of a pixel (R6H-05).
+        //
+        // `-my-0.5` pays for `p-0.5` out of the row's own padding: the frame's
+        // border box is 28.25px and its MARGIN box is what the float
+        // contributes to the message column, so cancelling 1.875px a side
+        // brings it to 24.5px, inside the row's 26.25px budget. The frame
+        // keeps its padding, which is what holds the buttons off its border.
         props.framed
-          ? "gap-1 rounded-md border border-border/60 bg-background/70 p-0.5 shadow-lg supports-backdrop-filter:bg-background/60"
+          ? "-my-0.5 gap-1 rounded-md border border-border/60 bg-background/70 p-0.5 shadow-lg supports-backdrop-filter:bg-background/60"
           : null,
       )}
       data-testid="queued-message-row-toolbar"
@@ -998,7 +1224,20 @@ function queuedMessageRowActionState(
   };
 }
 
-function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
+/**
+ * The row's status pill. A paused row says WHY when the queue is held after a
+ * failed turn ("Paused after an error") - the transcript draws no separate
+ * card for the held queue on a line that sends the reason
+ * (`queuePausedNoticeHidden`), so this pill is where it is said (user ruling,
+ * 2026-09-26). Any other pause keeps today's "Paused".
+ */
+function queuedMessageStatusLabel(
+  item: ChatQueuedItem,
+  pausedAfterError: boolean,
+): string | null {
+  const pausedLabel = pausedAfterError
+    ? QUEUE_PAUSED_AFTER_ERROR_LABEL
+    : "Paused";
   if (isOptimisticQueuedItem(item)) return "Queuing";
   if (item.kind !== "prompt") {
     // Both host-authored kinds (a shell's output, a forward's interruption)
@@ -1012,7 +1251,7 @@ function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
     // received-agent rows' "Will steer"), so the user knows the cancel
     // window is the current turn, not some later one.
     if (item.status === "steering") return "Delivering";
-    if (item.status === "paused") return "Paused";
+    if (item.status === "paused") return pausedLabel;
     return item.delivery === "same_turn" ? "Will deliver" : null;
   }
   if (item.status === "steer_requested") {
@@ -1023,7 +1262,7 @@ function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
   if (item.status === "steering") return "Steering";
   if (item.status === "injected") return "Embedding";
   if (item.status === "fallback") return "After turn";
-  if (item.status === "paused") return "Paused";
+  if (item.status === "paused") return pausedLabel;
   if (item.delivery === "same_turn") {
     // Received A2A responses ride the same `same_turn` (steer) delivery as user
     // follow-ups, but they are system-owned and read-only: the user can only
@@ -1036,26 +1275,41 @@ function queuedMessageStatusLabel(item: ChatQueuedItem): string | null {
 
 function QueuedMessageStatusBadge(props: {
   readonly label: string;
+  /** The reason behind the label, on hover and focus; `null` for none. */
+  readonly tooltip: string | null;
   readonly pulsing: boolean;
   readonly embedded: boolean;
 }) {
+  // `TooltipWrapper` degrades to a plain Slot on a `null` label, so the badge
+  // is the same element with or without a reason.
   return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
-        props.embedded ? null : "border border-border/60 bg-background/70",
-      )}
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.pulsing ? (
-        <LivePulse
-          size="xs"
-          tone="active"
-          ariaLabel={`${props.label} queued message`}
-          className={undefined}
-        />
-      ) : null}
-      {props.label}
-    </span>
+      <span
+        data-testid="queued-message-status-badge"
+        // Focusable only when there is a reason to reveal, so keyboard users
+        // reach the tooltip without every pill becoming a tab stop.
+        tabIndex={props.tooltip === null ? undefined : 0}
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
+          props.embedded ? null : "border border-border/60 bg-background/70",
+        )}
+      >
+        {props.pulsing ? (
+          <LivePulse
+            size="xs"
+            tone="active"
+            ariaLabel={`${props.label} queued message`}
+            className={undefined}
+          />
+        ) : null}
+        {props.label}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -1123,7 +1377,7 @@ function QueuedMessageDragHandle({
         aria-hidden
         data-testid="queued-message-drag-handle"
         data-disabled="true"
-        className="inline-flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-sm text-muted-foreground/40"
+        className="inline-flex size-6 shrink-0 self-start cursor-not-allowed items-center justify-center rounded-sm text-muted-foreground/40"
       >
         <GripVertical className="size-3.5" />
       </span>
@@ -1161,7 +1415,7 @@ function QueuedMessageDragHandle({
           {...listeners}
           aria-hidden
           className={cn(
-            "inline-flex size-7 shrink-0 cursor-grab items-center justify-center rounded-sm text-muted-foreground transition-colors",
+            "inline-flex size-6 shrink-0 self-start cursor-grab items-center justify-center rounded-sm text-muted-foreground transition-colors",
             "hover:bg-muted hover:text-foreground active:cursor-grabbing",
           )}
           data-testid="queued-message-drag-handle"
@@ -1183,7 +1437,7 @@ function QueuedMessageDropIndicator(props: {
     <span
       aria-hidden
       className={cn(
-        "pointer-events-none absolute right-3 left-3 z-20",
+        "pointer-events-none absolute right-2 left-2 z-20",
         props.edge === "top" ? "top-0" : "bottom-0",
       )}
     >
@@ -1212,9 +1466,9 @@ function QueuedMessageAbortSteerButton(props: {
         <span className="inline-flex shrink-0">
           <Button
             type="button"
-            size="icon"
+            size="icon-xs"
             variant="muted"
-            className="size-7 shrink-0"
+            className="shrink-0"
             aria-label="Cancel steer"
             onClick={props.onAbortSteer}
           >
@@ -1249,9 +1503,9 @@ function QueuedMessageRowActions(props: {
         >
           <Button
             type="button"
-            size="icon"
+            size="icon-xs"
             variant="muted"
-            className="size-7 shrink-0"
+            className="shrink-0"
             disabled={props.actionsDisabled}
             aria-label={props.editLabel}
             onClick={props.onEdit}
@@ -1267,9 +1521,9 @@ function QueuedMessageRowActions(props: {
         >
           <Button
             type="button"
-            size="icon"
+            size="icon-xs"
             variant="muted"
-            className="size-7 shrink-0"
+            className="shrink-0"
             disabled={props.actionsDisabled}
             aria-label="Delete queued message"
             onClick={props.onCancel}
@@ -1283,9 +1537,9 @@ function QueuedMessageRowActions(props: {
           <span className="inline-flex shrink-0">
             <Button
               type="button"
-              size="icon"
+              size="icon-xs"
               variant="muted"
-              className="size-7 shrink-0"
+              className="shrink-0"
               disabled={props.steerNowDisabled}
               aria-label="Steer queued message now"
               onClick={props.onSteerNow}

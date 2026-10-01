@@ -210,6 +210,65 @@ export function commGraphTransportMarkers(
 }
 
 /**
+ * The marker DRAWN nearest `fraction`, or `null` when the nearest one is
+ * farther away than `tolerance`.
+ *
+ * This is what a hover means, and it is a different question from the one
+ * {@link commGraphEventAtFraction} answers for a seek: a seek wants the row the
+ * graph is AS OF, a hover wants the tick under the pointer.
+ *
+ * AGAINST THE DRAWN POSITIONS, not the replay offsets. `marker.fraction` is
+ * what the bar spent on `left`, so it already carries every rule the drawing
+ * follows - the clamped ends, and a zero-length track putting every row at the
+ * live edge. Re-deriving a position from `offsets / totalMs` would divide by
+ * zero on exactly that track, and would disagree with the pixels everywhere
+ * the drawing clamps.
+ *
+ * `tolerance` is a fraction of the track. The caller owns the pixels and the
+ * track's width, so it is the one that turns a reach in pixels into this.
+ *
+ * TIES GO TO THE LATER ROW, both between two neighbours the pointer sits
+ * exactly between and among rows drawn on the same spot. That is what the
+ * per-tick tooltips resolved to as well: later ticks painted over earlier ones,
+ * so the one under the pointer was the last of the pile.
+ *
+ * `markers` must be non-decreasing in `fraction`, which is what
+ * {@link commGraphTransportMarkers} produces from a sorted log.
+ */
+export function commGraphMarkerIndexNearFraction(
+  markers: ReadonlyArray<CommGraphTransportMarker>,
+  fraction: number,
+  tolerance: number,
+): number | null {
+  if (markers.length === 0) return null;
+  // Upper bound: the first marker drawn strictly right of the pointer.
+  let low = 0;
+  let high = markers.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (markers[mid].fraction <= fraction) low = mid + 1;
+    else high = mid;
+  }
+  let nearest = low === 0 ? 0 : low - 1;
+  if (low > 0 && low < markers.length) {
+    const left = fraction - markers[low - 1].fraction;
+    const right = markers[low].fraction - fraction;
+    if (right <= left) nearest = low;
+  }
+  if (Math.abs(markers[nearest].fraction - fraction) > tolerance) return null;
+  // The last of a pile. Only the right-hand neighbour can have later rows on
+  // its spot: the left-hand one is already the last marker at or before the
+  // pointer.
+  while (
+    nearest + 1 < markers.length &&
+    markers[nearest + 1].fraction === markers[nearest].fraction
+  ) {
+    nearest += 1;
+  }
+  return nearest;
+}
+
+/**
  * Where the playhead sits. LIVE (`cursor === null`) is pinned to the right edge
  * - live is not a separate rendering mode, it is the playhead being at the end
  * of everything captured so far.

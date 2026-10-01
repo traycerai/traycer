@@ -10,6 +10,7 @@ import {
 import {
   fixedProviderWindowKeys,
   formatCompactWindowDuration,
+  isWindowedRateLimitProvider,
   providerWindowEntries,
 } from "@/lib/rate-limits/rate-limit-window-catalog";
 
@@ -149,6 +150,54 @@ const CURSOR: ProviderRateLimits = wire({
   displayMessage: null,
 });
 
+const ANTIGRAVITY: ProviderRateLimits = wire({
+  provider: "antigravity",
+  available: true,
+  planName: "Google AI Pro",
+  groups: [
+    {
+      displayName: "Gemini Models",
+      description: "Gemini 3 Pro and Gemini 3 Flash",
+      windows: [
+        {
+          usedPercent: 12,
+          resetsAt: 1_800_000,
+          durationMinutes: 300,
+          bucketId: "gemini-5h",
+          windowKind: "5h",
+        },
+        {
+          usedPercent: 40,
+          resetsAt: 2_000_000,
+          durationMinutes: 10_080,
+          bucketId: "gemini-weekly",
+          windowKind: "weekly",
+        },
+      ],
+    },
+    {
+      displayName: "Claude and GPT models",
+      description: null,
+      windows: [
+        {
+          usedPercent: 8,
+          resetsAt: 1_800_000,
+          durationMinutes: 300,
+          bucketId: "3p-5h",
+          windowKind: "5h",
+        },
+        {
+          usedPercent: 22,
+          resetsAt: 2_000_000,
+          durationMinutes: 10_080,
+          bucketId: "3p-weekly",
+          windowKind: "weekly",
+        },
+      ],
+    },
+  ],
+});
+
 const OPENROUTER: ProviderRateLimits = wire({
   provider: "openrouter",
   available: true,
@@ -207,6 +256,16 @@ describe("fixedProviderWindowKeys", () => {
     ["opencode", OPENCODE, []],
     ["grok", GROK, []],
     ["cursor", CURSOR, []],
+    [
+      "antigravity",
+      ANTIGRAVITY,
+      [
+        "antigravity:gemini-5h",
+        "antigravity:gemini-weekly",
+        "antigravity:3p-5h",
+        "antigravity:3p-weekly",
+      ],
+    ],
   ] as const)(
     "names exactly the fixed windows a full %s snapshot files, in its order",
     (providerId, rateLimits, discovered) => {
@@ -231,6 +290,41 @@ describe("fixedProviderWindowKeys", () => {
       expect(fixedProviderWindowKeys(providerId)).toEqual([]);
     },
   );
+
+  // Antigravity is windowed (unlike the credit providers above), but every
+  // bucket id is Google's own and cannot be named before a reading.
+  it("has none for antigravity - every window is discovered", () => {
+    expect(fixedProviderWindowKeys("antigravity")).toEqual([]);
+  });
+});
+
+describe("isWindowedRateLimitProvider", () => {
+  it("is true for antigravity", () => {
+    expect(isWindowedRateLimitProvider("antigravity")).toBe(true);
+  });
+
+  it("is true for every provider whose fixture reports windowed entries", () => {
+    for (const providerId of [
+      "claude-code",
+      "codex",
+      "opencode",
+      "grok",
+      "cursor",
+      "antigravity",
+    ] as const) {
+      expect(isWindowedRateLimitProvider(providerId)).toBe(true);
+    }
+  });
+
+  it("is false for the credit providers", () => {
+    for (const providerId of [
+      "openrouter",
+      "kilocode",
+      "huggingface",
+    ] as const) {
+      expect(isWindowedRateLimitProvider(providerId)).toBe(false);
+    }
+  });
 });
 
 describe("formatCompactWindowDuration", () => {
@@ -696,6 +790,67 @@ describe("providerWindowEntries", () => {
     ]);
   });
 
+  // Two groups can report windows of the same two durations, so the group
+  // name has to survive in the label - and the windows keep Google's wire
+  // order (Gemini first, each group's windows as reported).
+  it("keys and labels every Antigravity window by group and duration, in wire order", () => {
+    expect(
+      providerWindowEntries(ANTIGRAVITY).map((entry) => [
+        entry.windowKey,
+        entry.label,
+        entry.kind,
+      ]),
+    ).toEqual([
+      ["antigravity:gemini-5h", "Gemini Models · 5h", "model"],
+      ["antigravity:gemini-weekly", "Gemini Models · wk", "model"],
+      ["antigravity:3p-5h", "Claude and GPT models · 5h", "model"],
+      ["antigravity:3p-weekly", "Claude and GPT models · wk", "model"],
+    ]);
+  });
+
+  it("falls back to windowKind, then to the bucket id, when a window carries no duration", () => {
+    const entries = providerWindowEntries(
+      wire({
+        provider: "antigravity",
+        available: true,
+        planName: null,
+        groups: [
+          {
+            displayName: "Gemini Models",
+            description: null,
+            windows: [
+              {
+                usedPercent: 5,
+                resetsAt: null,
+                durationMinutes: null,
+                bucketId: "gemini-mystery",
+                windowKind: "beta",
+              },
+              {
+                usedPercent: 9,
+                resetsAt: null,
+                durationMinutes: null,
+                bucketId: "gemini-unknown",
+                windowKind: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(entries.map((entry) => [entry.windowKey, entry.label])).toEqual([
+      ["antigravity:gemini-mystery", "Gemini Models · beta"],
+      ["antigravity:gemini-unknown", "Gemini Models · gemini-unknown"],
+    ]);
+  });
+
+  it("is false for every Antigravity window - two groups can share a duration pair, so the group name must survive a countdown", () => {
+    const entries = providerWindowEntries(ANTIGRAVITY);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.every((entry) => !entry.labelIsDuration)).toBe(true);
+  });
+
   // Credit providers report money, never a percentage of a rolling window -
   // the same reason the protocol's own window accessor returns nothing.
   it.each([
@@ -718,6 +873,7 @@ describe("providerWindowEntries", () => {
     ["opencode", OPENCODE],
     ["grok", GROK],
     ["cursor", CURSOR],
+    ["antigravity", ANTIGRAVITY],
     ["openrouter", OPENROUTER],
     ["kilocode", KILOCODE],
     ["huggingface", HUGGINGFACE],
@@ -732,7 +888,14 @@ describe("providerWindowEntries", () => {
   );
 
   it("emits a unique key per window", () => {
-    for (const rateLimits of [CLAUDE_CODE, CODEX, OPENCODE, GROK, CURSOR]) {
+    for (const rateLimits of [
+      CLAUDE_CODE,
+      CODEX,
+      OPENCODE,
+      GROK,
+      CURSOR,
+      ANTIGRAVITY,
+    ]) {
       const keys = providerWindowEntries(rateLimits).map(
         (entry) => entry.windowKey,
       );

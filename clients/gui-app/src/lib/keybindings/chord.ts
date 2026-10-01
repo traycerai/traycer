@@ -122,6 +122,24 @@ export function chordFromEventCtrlAware(
 }
 
 /**
+ * The form every chord binding is compared in: the string `resolveMatchingChord`
+ * produces for the same keys. Modifiers in canonical order, and off macOS
+ * `ctrl` read as `mod`, because the encoder reads Control as the primary there.
+ * Matching and conflicts compare strings, so a binding in any other spelling
+ * (`alt+shift+m`, or `ctrl+alt+n` on Windows) would never fire. Declared
+ * defaults and persisted bindings both pass through here. A string that is not
+ * a chord is returned as it is.
+ */
+export function canonicalChord(chord: ChordString): ChordString {
+  const parts = parseChordString(chord);
+  if (parts === null) return chord;
+  if (parts.ctrl && !isMac()) {
+    return formatChord({ ...parts, mod: true, ctrl: false });
+  }
+  return formatChord(parts);
+}
+
+/**
  * The single chord an event should be matched against, applying the
  * ctrl-aware-vs-platform-primary precedence: when the Control-specific chord
  * (macOS ⌃, distinct from ⌘) differs from the platform-primary chord, the

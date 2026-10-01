@@ -27,22 +27,20 @@
  * which is exactly what makes the owner-offline case work - and the host neither
  * parses nor verifies anything it moves.
  *
- * ## Two entry points, one fetch
+ * ## Source registration and two byte readers
  *
- * - {@link recoverCloudDraftImages} is the eager pass the cloud ingest runs once
- *   a document has been applied: it warms the partition so a later submit is not
- *   paying for a round trip per image inside a held-open send.
+ * - Cloud ingest records addresses without reading image bytes. After the
+ *   visible landing draft paints, idle prefetch may warm its missing images.
+ * - {@link recoverCloudDraftImages} fetches the legacy stash before conversion,
+ *   because conversion requires verified bytes even when no row roots them yet.
  * - {@link readCloudDraftImageBytes} is the lazy leg `resolveDraftImageBytes`
  *   calls. It is what makes rendering deterministic rather than a race: a strip's
- *   own first fetch performs the cloud read, instead of hoping the eager pass
+ *   own first fetch performs the cloud read, instead of hoping an idle pass
  *   lands inside `useImageBlobUrlState`'s four-attempt retry ladder.
  *
- * Both go through {@link transferFor}, which is single-flight per hash so the
- * two never dial the same blob twice. What differs is how long each is willing
- * to WAIT: the eager pass holds its worker slot for the whole transfer, while a
- * lazy reader - which may be a submit held open - waits a bounded time and then
- * settles for a miss, leaving the transfer to finish and warm the partition for
- * whoever asks next.
+ * All byte readers go through {@link transferFor}, which is single-flight per
+ * hash. The stash and idle passes hold each worker slot for its whole transfer;
+ * a lazy render/submit reader waits a bounded time and then settles for a miss.
  *
  * ## Nothing here throws, and nothing unverified is kept
  *
@@ -52,10 +50,10 @@
  * fault, a host that predates the method - answers `null` and leaves the node
  * hash-only for the host's own dangling-hash guard to rule on.
  *
- * Verification is {@link putImageBytesAtHash}, which hashes the bytes and
- * refuses to write them under an address they do not answer to. Bytes reach a
- * caller only after that write has succeeded, so a digest mismatch is stored
- * nowhere and returned to nobody.
+ * A resident write reserves the landing-image budget and is digest-verified by
+ * {@link putImageBytesAtHash}. An unrooted or refused write remains ephemeral:
+ * {@link sha256Hex} verifies it before handing it to the waiting caller. A
+ * digest mismatch is stored nowhere and returned to nobody.
  */
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -66,11 +64,15 @@ import {
   MAX_RENDERED_PAYLOAD_BYTES,
 } from "@/lib/chats/cloud-chat-payloads";
 import { base64ToBytes } from "@/lib/composer/image-base64";
-import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
+import {
+  landingLiveImageRootHashes,
+  tryReserveLandingImageResidency,
+} from "@/lib/composer/landing-image-budget";
 import {
   getImageBytes,
   putImageBytesAtHash,
   releaseSession,
+  sha256Hex,
 } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -89,8 +91,9 @@ import type { DraftBlobClient } from "./draft-blob-transport";
  * `prepareDraftImageInlining`'s bounded reconcile loop while a submit is held
  * open: a send must not sit on the frame timeout once per unresolved image. The
  * request itself is not cancellable (`HostRequester.request` takes no signal),
- * so this stops the WAIT, not the transfer - a late answer simply arrives for
- * nobody, and the next ask finds the bytes local if it landed.
+ * so this stops the WAIT, not the transfer. A late answer may warm the partition
+ * if its budget admits it; an ephemeral answer remains available only to a
+ * caller still waiting on that transfer.
  */
 const CLOUD_DRAFT_IMAGE_READ_TIMEOUT_MS = 10_000;
 
@@ -98,8 +101,8 @@ const CLOUD_DRAFT_IMAGE_READ_TIMEOUT_MS = 10_000;
  * The transfer's own hard cap - a leak guard, not a responsiveness bound.
  *
  * Deliberately far above the caller's wait. Its only job is to stop a wedged
- * socket or a blocked IndexedDB from parking an eager worker (and the ingest
- * awaiting that pass) for the life of the renderer. If this ever fires on a
+ * socket or a blocked IndexedDB from parking a stash/idle worker for the life
+ * of the renderer. If this ever fires on a
  * healthy connection the constant is wrong, not the design.
  */
 const CLOUD_DRAFT_IMAGE_TRANSFER_TIMEOUT_MS = 60_000;
@@ -107,7 +110,7 @@ const CLOUD_DRAFT_IMAGE_TRANSFER_TIMEOUT_MS = 60_000;
 /** What {@link waitBounded} answers when the wait, not the work, ended. */
 const READ_TIMED_OUT = Symbol("cloud-draft-image-read-timed-out");
 
-/** Simultaneous blob reads in one eager pass. A draft holds a handful. */
+/** Simultaneous blob reads in one stash or idle visible-draft pass. */
 const CLOUD_DRAFT_IMAGE_RECOVERY_CONCURRENCY = 4;
 
 /**
@@ -149,6 +152,24 @@ interface CloudDraftImageSource {
 const CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH = 3;
 
 const sourcesByHash = new Map<string, CloudDraftImageSource[]>();
+let sourceVersion = 0;
+const sourceListeners = new Set<() => void>();
+
+export function subscribeCloudDraftImageSources(
+  listener: () => void,
+): () => void {
+  sourceListeners.add(listener);
+  return () => sourceListeners.delete(listener);
+}
+
+export function cloudDraftImageSourceVersion(): number {
+  return sourceVersion;
+}
+
+function publishCloudDraftImageSourcesChanged(): void {
+  sourceVersion += 1;
+  for (const listener of sourceListeners) listener();
+}
 interface CloudDraftImageFlight {
   /** The account that started it. A later owner never joins another's. */
   readonly owner: string | null;
@@ -183,18 +204,9 @@ export function resetCloudDraftImageRecoveryForTests(): void {
   inFlightByHash.clear();
   payloadUnsupportedHosts.clear();
   payloadCapabilityEpochs.clear();
+  sourceVersion += 1;
 }
 
-/**
- * Re-probe a host that answered `E_HOST_UNSUPPORTED`.
- *
- * Same signal and same reason as `forgetBlobUnsupportedHost`: a new mirror
- * session is a new host connection, so a host that UPGRADED while this renderer
- * stayed up must not be stuck payload-less until the app restarts. Kept as a
- * sibling of that call rather than folded into it - the two memos are about
- * different method families and a host can perfectly well have one and not the
- * other.
- */
 /**
  * Re-point every remembered address on `hostId` at a new requester.
  *
@@ -205,7 +217,7 @@ export function resetCloudDraftImageRecoveryForTests(): void {
  * The ingest hook cannot repair that on its own: `useCloudDraftsIngest` keeps
  * an already-applied head in its `ingested` set, so a client change does not
  * re-run the ingest for it and the registry keeps the closed requester until a
- * new head arrives or the tree remounts. Both the eager pass and later lazy
+ * new head arrives or the tree remounts. Both idle prefetch and later lazy
  * reads stay unavailable in between.
  *
  * Fresh records deliberately: the record object is the attempt identity in
@@ -220,8 +232,10 @@ export function rebindCloudDraftImageClientForHost(
 ): void {
   const stale = (source: CloudDraftImageSource): boolean =>
     source.hostId === hostId && source.client !== client;
+  let changed = false;
   for (const [hash, sources] of sourcesByHash) {
     if (!sources.some(stale)) continue;
+    changed = true;
     sourcesByHash.set(
       hash,
       sources.map((source) =>
@@ -231,11 +245,27 @@ export function rebindCloudDraftImageClientForHost(
       ),
     );
   }
+  if (changed) publishCloudDraftImageSourcesChanged();
 }
 
+/**
+ * Re-probe a host that answered `E_HOST_UNSUPPORTED`.
+ *
+ * Same signal and same reason as `forgetBlobUnsupportedHost`: a new mirror
+ * session is a new host connection, so a host that UPGRADED while this renderer
+ * stayed up must not be stuck payload-less until the app restarts. Kept as a
+ * sibling of that call rather than folded into it - the two memos are about
+ * different method families and a host can perfectly well have one and not the
+ * other.
+ */
 export function forgetCloudDraftPayloadUnsupportedHost(hostId: string): void {
   payloadCapabilityEpochs.set(hostId, payloadCapabilityEpochOf(hostId) + 1);
   payloadUnsupportedHosts.delete(hostId);
+  for (const sources of sourcesByHash.values()) {
+    if (!sources.some((source) => source.hostId === hostId)) continue;
+    publishCloudDraftImageSourcesChanged();
+    break;
+  }
 }
 
 export interface CloudDraftImageRecoveryInput {
@@ -309,6 +339,7 @@ export function recordCloudDraftImageSources(
     );
   }
   evictUnrootedOverflow();
+  publishCloudDraftImageSourcesChanged();
 }
 
 /**
@@ -383,15 +414,12 @@ export function readCloudDraftImageBytes(
 }
 
 /**
- * Fetch every hash this document names that the partition does not already
- * hold, bounded concurrency, best effort per image.
+ * Fetch hashes explicitly requested by a visible draft or the legacy stash
+ * conversion. Cloud ingest itself only registers sources.
  *
- * Called AFTER the document has been applied, and the order is load-bearing:
- * the applied row is what puts these hashes in `landingLiveImageRootHashes`, so
- * bytes written before it exist would be reachable by a reconcile. (The session
- * cache is itself a delete-root, which covers the window between a write and
- * the root appearing, but relying on that as the only protection would be
- * relying on an implementation detail of the GC.)
+ * Stash conversion calls this before apply and receives ephemeral verified
+ * bytes when the row has not yet rooted its hashes. The idle visible-draft
+ * path calls the sibling below after apply, when residency may be admitted.
  *
  * Never rejects. A draft whose blobs are all missing from the cloud - publication
  * is advisory, and it skips an image whose bytes its own host no longer held -
@@ -399,41 +427,91 @@ export function readCloudDraftImageBytes(
  */
 export async function recoverCloudDraftImages(
   input: CloudDraftImageRecoveryInput,
-): Promise<void> {
-  if (input.hashes.length === 0) return;
+): Promise<ReadonlyMap<string, ImageBytes>> {
+  if (input.hashes.length === 0) return new Map();
   recordCloudDraftImageSources(input);
-  const pending = [...input.hashes];
+  return fetchRecordedCloudDraftImages(input.hashes, null, null);
+}
+
+/** The idle visible-draft path joins lazy readers through the same flight. */
+export async function prefetchRecordedCloudDraftImages(
+  images: ReadonlyArray<{ readonly hash: string; readonly bytes: number }>,
+  signal: AbortSignal,
+): Promise<void> {
+  const liveRoots = landingLiveImageRootHashes();
+  const estimates = new Map(
+    images
+      .filter(({ hash }) => sourcesByHash.has(hash) && liveRoots.has(hash))
+      .map(({ hash, bytes }) => [hash, bytes] as const),
+  );
+  await fetchRecordedCloudDraftImages([...estimates.keys()], estimates, signal);
+}
+
+async function fetchRecordedCloudDraftImages(
+  hashes: ReadonlyArray<string>,
+  estimates: ReadonlyMap<string, number> | null,
+  signal: AbortSignal | null,
+): Promise<ReadonlyMap<string, ImageBytes>> {
+  const pending = [...new Set(hashes)];
+  const resolved = new Map<string, ImageBytes>();
   const width = Math.min(
     CLOUD_DRAFT_IMAGE_RECOVERY_CONCURRENCY,
     pending.length,
   );
   const workers: Promise<void>[] = [];
   for (let worker = 0; worker < width; worker += 1) {
-    workers.push(drainCloudDraftImages(pending));
+    workers.push(drainCloudDraftImages(pending, resolved, estimates, signal));
   }
   await Promise.all(workers);
+  return resolved;
 }
 
-async function drainCloudDraftImages(pending: string[]): Promise<void> {
+async function drainCloudDraftImages(
+  pending: string[],
+  resolved: Map<string, ImageBytes>,
+  estimates: ReadonlyMap<string, number> | null,
+  signal: AbortSignal | null,
+): Promise<void> {
   for (;;) {
     const hash = pending.shift();
     if (hash === undefined) return;
     // The partition first, exactly as the resolver's own leg order says. The
     // mirror leg may already have landed these bytes, and an ingest that ran
     // moments ago on another surface certainly may have.
-    if (await hasLocalImageBytes(hash)) continue;
+    const local = await readLocalImageBytes(hash);
+    if (local !== null) {
+      if (estimates === null) resolved.set(hash, local);
+      continue;
+    }
     // The TRANSFER, not a bounded wait on it: a worker that stopped waiting
     // early would take the next slot while its own download was still running,
     // so the pool would bound starts rather than concurrent work. This pass is
     // background warming with nobody blocked on it, so holding the slot for the
     // real transfer is exactly right.
-    await transferFor(hash);
+    // Idle warming may not spend relay bytes for a root the resident budget
+    // already refuses. A render/submit reader can still fetch verified bytes
+    // ephemerally on demand. The stash conversion deliberately has no early
+    // admission: it needs bytes before its row exists and its importer owns
+    // the eventual batch reservation.
+    const estimate = estimates?.get(hash);
+    const reservation =
+      estimate === undefined
+        ? null
+        : tryReserveLandingImageResidency([{ hash, bytes: estimate }]);
+    if (estimate !== undefined && reservation === null) continue;
+    // This is a preflight only. Holding an estimated slot while the exact
+    // writer reserves the same hash would dedupe its larger actual byte count
+    // against the estimate. The writer rechecks with exact bytes after fetch.
+    reservation?.release();
+    if (signal?.aborted) return;
+    const bytes = await transferFor(hash);
+    if (bytes !== null && estimates === null) resolved.set(hash, bytes);
   }
 }
 
-async function hasLocalImageBytes(hash: string): Promise<boolean> {
+async function readLocalImageBytes(hash: string): Promise<ImageBytes | null> {
   try {
-    return (await getImageBytes(hash)) !== undefined;
+    return (await getImageBytes(hash)) ?? null;
   } catch (error: unknown) {
     // A broken IndexedDB reads as "not here", which is the case this whole
     // module exists for - never as a reason to skip the fetch.
@@ -441,7 +519,7 @@ async function hasLocalImageBytes(hash: string): Promise<boolean> {
       hash,
       error: describeLogError(error),
     });
-    return false;
+    return null;
   }
 }
 
@@ -454,16 +532,16 @@ async function hasLocalImageBytes(hash: string): Promise<boolean> {
  * An RPC cannot be cancelled, so a deadline that ends the FLIGHT does not end
  * the transfer - it only forgets it. Bounding the flight meant the bytes were
  * still coming, nobody was listening, the next ask started a second transfer of
- * the same blob, and an eager worker took another slot while the first was
+ * the same blob, and a background worker took another slot while the first was
  * still on the wire. On a slow connection an eight-image draft ran every read
  * at once and stored none of them.
  *
  * So the flight lives until the work settles. A caller that has waited long
- * enough stops waiting ({@link awaitTransferBounded}); the transfer carries on,
- * verifies, and writes into the partition, which is what makes the next ask a
- * local hit rather than a second download.
+ * enough stops waiting ({@link awaitTransferBounded}); the transfer carries on
+ * and verifies. If residency is admitted, it writes into the partition for a
+ * later local hit; otherwise the verified bytes reach only a waiting caller.
  *
- * Single-flight and the eager pass's concurrency bound both apply HERE, to real
+ * Single-flight and the background pass's concurrency bound both apply HERE, to real
  * transfers, which is the only place a bound on concurrent work can mean
  * anything.
  *
@@ -487,8 +565,8 @@ function transferFor(hash: string): Promise<ImageBytes | null> {
   if (existing !== undefined && existing.owner === owner) return existing.work;
   // The transfer's OWN cap, and the reason it is not the caller's: a caller
   // gives up to keep a submit moving, while this exists only so a wedged socket
-  // or a blocked IndexedDB cannot park an eager worker - and with it the ingest
-  // that awaits the pass - for the life of the renderer. Far longer than the
+  // or a blocked IndexedDB cannot park a stash/idle worker for the life of the
+  // renderer. Far longer than the
   // caller's wait, so it never fires on the merely-slow path the caller's
   // deadline is for.
   const transfer = waitBounded(
@@ -657,6 +735,36 @@ async function readAndStoreFromAnyCloudSource(
   return null;
 }
 
+function decodeBoundedCloudImage(
+  byteLength: number,
+  bytesBase64: string,
+): ImageBytes | null {
+  if (byteLength > MAX_RENDERED_PAYLOAD_BYTES) return null;
+  if (bytesBase64.length > MAX_ENCODED_PAYLOAD_CHARS) return null;
+  const bytes = base64ToBytes(bytesBase64);
+  return bytes !== null && bytes.byteLength === byteLength ? bytes : null;
+}
+
+async function verifyAndMaybeStoreCloudImage(
+  hash: string,
+  bytes: ImageBytes,
+): Promise<"stored" | "ephemeral" | "invalid"> {
+  // Stash conversion has no root yet. A full partition also cannot gain a
+  // session/IDB entry. Both get verified bytes for the waiting caller only.
+  // Verify before reserving so a concurrent corrupt reply cannot claim this
+  // hash's residency at a smaller size than the valid bytes would need.
+  if ((await sha256Hex(bytes)) !== hash) return "invalid";
+  const reservation = landingLiveImageRootHashes().has(hash)
+    ? tryReserveLandingImageResidency([{ hash, bytes: bytes.byteLength }])
+    : null;
+  if (reservation === null) return "ephemeral";
+  try {
+    return (await putImageBytesAtHash(hash, bytes)) ? "stored" : "invalid";
+  } finally {
+    reservation.release();
+  }
+}
+
 async function readAndStoreCloudDraftImage(
   hash: string,
   source: CloudDraftImageSource,
@@ -667,7 +775,7 @@ async function readAndStoreCloudDraftImage(
   // the verdict this request is about to produce describes the connection that
   // is still live by the time it answers.
   const capabilityEpoch = payloadCapabilityEpochOf(source.hostId);
-  // Re-read at DISPATCH, not once at construction: the eager pass and the held
+  // Re-read at DISPATCH, not once at construction: the idle pass and the held
   // submit both run long after the ingest decided this device could read the
   // cloud, and a session demoted in between must not spend the retained host
   // credential. Same rule `createHostCloudChatReadPort` applies per call.
@@ -686,11 +794,11 @@ async function readAndStoreCloudDraftImage(
     // declared length is a claim by the same party that supplied the bytes, so
     // `atob` would expand an unbounded body before the length check could
     // disagree. Same two ceilings the transcript payload path applies.
-    if (outcome.byteLength > MAX_RENDERED_PAYLOAD_BYTES) return null;
-    if (outcome.bytesBase64.length > MAX_ENCODED_PAYLOAD_CHARS) return null;
-    const bytes = base64ToBytes(outcome.bytesBase64);
+    const bytes = decodeBoundedCloudImage(
+      outcome.byteLength,
+      outcome.bytesBase64,
+    );
     if (bytes === null) return null;
-    if (bytes.byteLength !== outcome.byteLength) return null;
     // Re-checked immediately before the write, against the identity captured
     // at dispatch. Both halves matter: a signed-out window must not write at
     // all, and a window that has moved to another account must not write THIS
@@ -707,14 +815,8 @@ async function readAndStoreCloudDraftImage(
       );
       return null;
     }
-    // The verification, and the store, in one step. `putImageBytesAtHash`
-    // hashes and refuses a mismatch, so bytes that are not the ones this hash
-    // names are never written - and, because the return is gated on the write,
-    // never handed to a caller either.
-    if (!(await putImageBytesAtHash(hash, bytes))) {
-      appLogger.warn("[cloud-draft-image] blob digest mismatch", { hash });
-      return null;
-    }
+    const disposition = await verifyAndMaybeStoreCloudImage(hash, bytes);
+    if (disposition === "invalid") return null;
     // And AGAIN, after the write. The check above is not the commit point:
     // `putImageBytesAtHash` awaits a SHA-256 digest and then IndexedDB, and it
     // seeds the window-global session cache on the way - so a switch landing
@@ -727,7 +829,7 @@ async function readAndStoreCloudDraftImage(
     // the same image, and deleting it then would take away bytes that are
     // properly theirs.
     if (!stillServingIdentity(owner)) {
-      retireCrossedWrite(hash);
+      if (disposition === "stored") retireCrossedWrite(hash);
       return null;
     }
     // This write can outlive the row it was fetched FOR. The payload request
@@ -742,7 +844,7 @@ async function readAndStoreCloudDraftImage(
     // write whose row IS still live costs nothing here: it finds the hash
     // rooted and leaves it. Same call the paste and migration paths make
     // after their own writes.
-    scheduleLandingImageReconcile();
+    if (disposition === "stored") scheduleLandingImageReconcile();
     return bytes;
   } catch (error: unknown) {
     if (error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED") {

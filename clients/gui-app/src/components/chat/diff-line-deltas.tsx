@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { RollingNumber } from "@/components/ui/rolling-number";
 import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,21 @@ export function DiffLineDeltas(props: {
   readonly counts: DiffLineCounts;
   /** Layout only - the wrapper's own spacing and type are fixed here. */
   readonly className: string | undefined;
+  /**
+   * Whether the two numbers ROLL their digits when they change.
+   *
+   * A per-call decision rather than a property of the component, because the
+   * same two numbers are a summary in one place and a list in another. The
+   * chip and the panel HEADER carry totals that move several times per turn
+   * while nothing else on the row does, which is exactly what a roll is for.
+   * A per-file ROW does not: a turn touching twelve files would roll twelve
+   * rows at once, which is the same failure this repo already recorded and
+   * fixed for the chip's pulse, so those pass `false` and print plain text.
+   *
+   * The `+` and the `−` are static text either way. They must not roll, and
+   * the `−` is U+2212 MINUS SIGN rather than a hyphen.
+   */
+  readonly rolling: boolean;
 }): ReactNode {
   const { additions, deletions } = props.counts;
   return (
@@ -29,10 +45,32 @@ export function DiffLineDeltas(props: {
       )}
     >
       {additions > 0 ? (
-        <span className="text-success-foreground">+{additions}</span>
+        <span data-diff-additions className="text-success-foreground">
+          +
+          {props.rolling ? (
+            <RollingNumber
+              value={additions}
+              className={undefined}
+              testId={undefined}
+            />
+          ) : (
+            additions
+          )}
+        </span>
       ) : null}
       {deletions > 0 ? (
-        <span className="text-destructive">−{deletions}</span>
+        <span data-diff-deletions className="text-destructive">
+          −
+          {props.rolling ? (
+            <RollingNumber
+              value={deletions}
+              className={undefined}
+              testId={undefined}
+            />
+          ) : (
+            deletions
+          )}
+        </span>
       ) : null}
     </span>
   );

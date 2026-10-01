@@ -72,6 +72,13 @@ describe("rateLimitFetchLane", () => {
     // ephemeral queue.
     expect(rateLimitFetchLane("cursor")).toBe("httpFetch");
   });
+
+  it("maps antigravity to the httpFetch lane despite its three round trips", () => {
+    // A token exchange followed by two Cloud Code POSTs - still
+    // credential-and-fetch, no subprocess, so it keeps the table-owned fixed
+    // cadence like the other httpFetch providers.
+    expect(rateLimitFetchLane("antigravity")).toBe("httpFetch");
+  });
 });
 
 describe("isRateLimitCapableProvider", () => {
@@ -81,6 +88,7 @@ describe("isRateLimitCapableProvider", () => {
     // Cursor became rate-limit-capable once its dashboard usage arm landed; it
     // used to be this test's negative example.
     expect(isRateLimitCapableProvider("cursor")).toBe(true);
+    expect(isRateLimitCapableProvider("antigravity")).toBe(true);
     expect(isRateLimitCapableProvider("traycer")).toBe(false);
     expect(isRateLimitCapableProvider("copilot")).toBe(false);
   });

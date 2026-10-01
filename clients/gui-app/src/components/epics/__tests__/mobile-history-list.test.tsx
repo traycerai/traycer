@@ -50,11 +50,17 @@ import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import type { EpicsListPanelVariant } from "@/components/epics/epics-list-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksCompleteness,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  patchHistorySearch,
+} from "@/lib/history-search";
 import {
   __resetTabNavigationControllerForTesting,
   openPhaseMigrationIntent,
@@ -117,6 +123,12 @@ const testState = vi.hoisted(() => ({
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   refetch: vi.fn<() => Promise<void>>(),
   fetchNextPage: vi.fn<() => void>(),
+  /** Epics an agent is working on right now, per the agent-activity store. */
+  workingEpicIds: new Set<string>() as ReadonlySet<string>,
+  /** Rows `epic.getTaskContexts` can answer, keyed by epic id. */
+  backfillTasks: new Map<string, ListTaskLight>(),
+  /** The id lists the in-progress lift asked that batch about. */
+  backfillIdCalls: [] as ReadonlyArray<string>[],
 }));
 
 // The desktop scope bar names the host through the directory, which needs a
@@ -145,7 +157,35 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     hasNextPage: false,
     isFetchingNextPage: false,
     cloudPagePending: testState.cloudPagePending,
+    currentUserId: "user-test",
   }),
+}));
+
+// The in-progress lift's two inputs, mocked at their own boundaries so the
+// real `useInProgressHistoryItems` / `withInProgressFirst` pair runs here: the
+// store says WHICH epics are running, and the by-id batch answers the running
+// epics no listed page carries.
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+}));
+
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: (taskIds: ReadonlyArray<string>) => {
+    testState.backfillIdCalls.push([...taskIds]);
+    return {
+      tasksById: new Map(
+        taskIds.flatMap((taskId) => {
+          const task = testState.backfillTasks.get(taskId);
+          return task === undefined ? [] : [[taskId, task] as const];
+        }),
+      ),
+      localHomedTaskIds: new Set<string>(),
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
+    };
+  },
 }));
 
 vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
@@ -211,6 +251,41 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     permissionRole: "owner",
     isPinned: false,
     ...overrides,
+  };
+}
+
+/**
+ * A row as `epic.getTaskContexts` hands it back - what the shared activity projection
+ * backfills a running epic from when no listed page carries it.
+ */
+function backfillTask(overrides: {
+  readonly id: string;
+  readonly title: string;
+  readonly updatedAtMs: number;
+}): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: overrides.id,
+        title: overrides.title,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: overrides.updatedAtMs,
+        createdBy: "user-test",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned: false,
   };
 }
 
@@ -390,6 +465,9 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     testState.fetchNextPage.mockReset();
     testState.refetch.mockReset();
     testState.refetch.mockResolvedValue(undefined);
+    testState.workingEpicIds = new Set<string>();
+    testState.backfillTasks = new Map<string, ListTaskLight>();
+    testState.backfillIdCalls = [];
     tabNavigationMocks.activateTabIntent.mockReset();
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -411,6 +489,77 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+
+  // Recent uses the shared durable/optimistic activity projection on every
+  // surface. Missing turn rows are fetched together; listed rows are not.
+  describe("optimistic activity ordering", () => {
+    it("puts a turn-active task no listed page carries at the top", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "b", epicId: "b", title: "listed two" }),
+      ];
+      testState.workingEpicIds = new Set(["z"]);
+      testState.backfillTasks = new Map([
+        ["z", backfillTask({ id: "z", title: "running", updatedAtMs: 1 })],
+      ]);
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(3);
+      expect(cards[0]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).toEqual(["z"]);
+    });
+
+    it("moves a listed turn-active task to the top without duplicating it", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "b", epicId: "b", title: "listed two" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(3);
+      expect(cards[0]?.textContent).toContain("running");
+      expect(
+        cards.filter((card) => card.textContent.includes("running")).length,
+      ).toBe(1);
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
+    });
+
+    it("leaves the order alone while a search is active", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "best match" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { query: "match" }),
+      });
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(2);
+      expect(cards[0]?.textContent).toContain("best match");
+      expect(cards[1]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+    });
+
+    it("uses the same activity ordering on desktop", async () => {
+      setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      renderPanel("page", "/");
+      const rows = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(rows[0]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
+    });
   });
 
   describe("swipe tray", () => {
@@ -937,17 +1086,22 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ];
       renderPanelWithOpenItem("page", "/", onOpenItem);
       const cards = await screen.findAllByTestId("epics-list-row-card");
+      const secondCard = cards.find((card) =>
+        card.textContent.includes("Second history item"),
+      );
+      if (secondCard === undefined)
+        throw new Error("second row was not rendered");
 
       // Long-press the second row to enter selection mode; the first row's
       // checkbox starts unselected, so clicking it below is the toggle under
       // test rather than a re-toggle of the row the hold already selected.
       vi.useFakeTimers();
-      firePointerDown(cards[1], 300, 100);
+      firePointerDown(secondCard, 300, 100);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(460);
       });
       vi.useRealTimers();
-      firePointerUp(cards[1], 300, 100);
+      firePointerUp(secondCard, 300, 100);
 
       const checkbox = screen.getByRole("checkbox", {
         name: "Select Open from landing",
@@ -975,17 +1129,22 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       ];
       renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
+      const firstCard = cards.find((card) =>
+        card.textContent.includes("Open from landing"),
+      );
+      if (firstCard === undefined)
+        throw new Error("first row was not rendered");
 
       // Long-press the first, deletable row to enter selection mode - a
       // viewer-only row's own long press is disabled, since a row nobody may
       // select has nothing to hold into selection mode.
       vi.useFakeTimers();
-      firePointerDown(cards[0], 300, 100);
+      firePointerDown(firstCard, 300, 100);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(460);
       });
       vi.useRealTimers();
-      firePointerUp(cards[0], 300, 100);
+      firePointerUp(firstCard, 300, 100);
 
       const viewerCheckbox = screen.getByRole("checkbox", {
         name: "Select Viewer only row",
@@ -1374,7 +1533,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         throw new Error("expected a preceding timestamp sibling span");
       }
       expect(timestamp.className).toMatch(/\btruncate\b/);
-      expect(timestamp.textContent).toMatch(/^updated/);
+      expect(timestamp.textContent).toMatch(/^activity/);
     });
 
     it("renders the preserved-orphan provenance label with a destructive tint", async () => {
@@ -1405,7 +1564,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         throw new Error("expected a preceding timestamp sibling span");
       }
       expect(timestamp.className).toMatch(/\btruncate\b/);
-      expect(timestamp.textContent).toMatch(/^updated/);
+      expect(timestamp.textContent).toMatch(/^activity/);
     });
 
     it("renders neither provenance label for an ordinary row carrying no marker", async () => {
@@ -1457,5 +1616,34 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(screen.getByTestId("epics-list-row-edit-title")).not.toBeNull();
       expect(screen.queryByTestId("epics-list-row-tray")).toBeNull();
     });
+  });
+
+  describe("oldest sort timestamp", () => {
+    it.each([
+      ["phone", MOBILE_VIEWPORT_WIDTH],
+      ["desktop", DESKTOP_VIEWPORT_WIDTH],
+    ] as const)(
+      "shows the updated timestamp on %s rows",
+      async (_label, width) => {
+        setViewportWidth(width);
+        testState.items = [
+          historyItem({
+            recentAtMs: 1_700_000_100_000,
+            recentLabel: "just now",
+            updatedLabel: "about 2 hours ago",
+          }),
+        ];
+        useHistorySearchStore.setState({
+          search: { ...DEFAULT_HISTORY_SEARCH, sort: "oldest" },
+        });
+
+        renderPanel("page", "/");
+
+        expect(
+          await screen.findByText("updated about 2 hours ago"),
+        ).not.toBeNull();
+        expect(screen.queryByText("activity just now")).toBeNull();
+      },
+    );
   });
 });

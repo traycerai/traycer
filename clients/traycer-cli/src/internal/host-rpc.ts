@@ -17,6 +17,7 @@ import {
 import { DEFAULT_DIAL_TIMEOUT_MS } from "../../../shared/host-transport/transport-config";
 import {
   HostRpcError,
+  HostTransportFailureError,
   type RequestOfMethod,
   type ResponseOfMethod,
   HostRequestAuthority,
@@ -550,6 +551,8 @@ function hostRpcToCliError(err: unknown): unknown {
  *     this host, actionable by updating the host.
  *   - `INCOMPATIBLE` / `DOWNGRADE_UNSUPPORTED` → `HOST_INCOMPATIBLE`: host/CLI
  *     protocol skew, actionable via `host restart` / updating the CLI.
+ *   - a `HostTransportFailureError` of any code → `HOST_UNREACHABLE`: the
+ *     connection failed or went quiet, so nothing below applies.
  *   - everything else, including `RPC_ERROR` → `UNEXPECTED`: `RPC_ERROR` is the
  *     host's catch-all for any resolver error (e.g. "agent not found"), so it
  *     must NOT be reported as "host not running" - the host answered. A
@@ -559,6 +562,21 @@ function hostRpcToCliError(err: unknown): unknown {
  *     is preserved so the user still sees what went wrong.
  */
 function mapHostRpcError(err: HostRpcError): CliError {
+  // First, and by class rather than by code: the transport raises its own
+  // failures as `RPC_ERROR` too, so the code cannot tell "the host answered
+  // with an error" from "nothing answered". The class can. A connection that
+  // errored, closed early or timed out is a state of the machine the command
+  // has already reported to the user, not a defect in the CLI, which is what
+  // `UNEXPECTED` tells the error reporter. The message is the transport's own
+  // and carries no host text.
+  if (err instanceof HostTransportFailureError) {
+    return cliError({
+      code: CLI_ERROR_CODES.HOST_UNREACHABLE,
+      message: err.message,
+      details: null,
+      exitCode: 1,
+    });
+  }
   if (err.code === "FORBIDDEN" || isAccessDenied(err)) {
     return cliError({
       code: CLI_ERROR_CODES.FORBIDDEN,

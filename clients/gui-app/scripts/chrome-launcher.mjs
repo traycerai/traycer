@@ -1,8 +1,10 @@
-// The shared headless-Chrome launcher for the browser regression drivers:
-// all four CI-gated scripts (see `run-tests.ts`) plus `toast-over-modal-
-// hittest.mjs`. The two manual instruments (`window-host-modal-alignment-
-// browser.mjs`, `host-boot-family-gallery-browser.mjs`) still carry their own
-// standalone launchers.
+// The shared headless-Chrome launcher for the manual browser drivers in this
+// directory, and for `cdp-client-browser.mjs`, which CI runs
+// (`.github/workflows/browser-regressions.yml`). The CI-run regressions are
+// Playwright specs in `browser-tests/` and launch Chrome through Playwright.
+// Two manual instruments (`window-host-modal-alignment-browser.mjs`,
+// `host-boot-family-gallery-browser.mjs`) still carry their own standalone
+// launchers.
 //
 // Each driver used to carry its own copy of "find Chrome, spawn it, wait for
 // DevTools", and the copies drifted: only one of them honoured `CHROME_BIN`,
@@ -12,8 +14,9 @@
 // runner had to reap exactly that orphan pile; it lives here so a fix lands
 // once instead of five times.
 //
-// Consumers own everything downstream of the DevTools endpoint (CDP client,
-// fixtures, assertions) - this module owns only the process.
+// Consumers own everything downstream of the DevTools endpoint (fixtures,
+// assertions) - this module owns only the process. The CDP client they talk
+// over is `cdp-client.mjs`.
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, rm } from "node:fs/promises";

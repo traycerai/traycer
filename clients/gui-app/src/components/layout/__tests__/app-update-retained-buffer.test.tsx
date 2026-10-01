@@ -374,7 +374,7 @@ describe("app update install vs a retained unsynced buffer", () => {
     assertRetainedPremise(live, false);
 
     const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
@@ -425,7 +425,7 @@ describe("app update install vs a retained unsynced buffer", () => {
     assertRetainedPremise(live, true);
 
     const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
@@ -458,7 +458,7 @@ describe("app update install vs a retained unsynced buffer", () => {
       expect(__getOpenEpicRegistryForTests().getUnsyncedEdits().length).toBe(0);
 
       const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
-      renderWithHost(<AppUpdateHeaderButton />, bridge);
+      renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
       fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
@@ -495,7 +495,7 @@ describe("app update install vs a retained unsynced buffer", () => {
       expect(__getOpenEpicRegistryForTests().getUnsyncedEdits().length).toBe(0);
 
       const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
-      renderWithHost(<AppUpdateHeaderButton />, bridge);
+      renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
       fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
@@ -535,7 +535,7 @@ describe("app update install vs a retained unsynced buffer", () => {
       expect(__getOpenEpicRegistryForTests().getUnsyncedEdits().length).toBe(0);
 
       const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
-      renderWithHost(<AppUpdateHeaderButton />, bridge);
+      renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
       fireEvent.click(await screen.findByTestId("app-update-header-button"));
 
@@ -585,7 +585,7 @@ describe("app update install vs a retained unsynced buffer", () => {
     expect(registry.retainedCountForTests("epic-syncable")).toBe(0);
 
     const bridge = new FakeAppUpdatesBridge(readySnapshot(1));
-    renderWithHost(<AppUpdateHeaderButton />, bridge);
+    renderWithHost(<AppUpdateHeaderButton layout="icon" />, bridge);
 
     fireEvent.click(await screen.findByTestId("app-update-header-button"));
 

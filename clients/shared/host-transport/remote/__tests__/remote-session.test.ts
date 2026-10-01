@@ -16,6 +16,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { z } from "zod";
+import { deflateSync } from "fflate";
 import {
   defineFallbackMethodDegrade,
   defineFloorAwareVersionedRpcRegistry,
@@ -38,6 +39,10 @@ import {
   SESSION_CLOSED_FATAL_CODE,
   SESSION_NOT_READY_FATAL_CODE,
 } from "@traycer/protocol/framework/stream-ws-protocol";
+import {
+  RemoteTrafficAccounting,
+  type RemoteTrafficSnapshot,
+} from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import {
   createResponderHandshake,
   generateStaticKeyPair,
@@ -106,9 +111,14 @@ import {
 } from "../active-remote-sessions";
 import {
   HOST_STATUS_LIVENESS_PROBE,
+  readRemoteTrafficDebugClosedSessions,
+  readRemoteTrafficDebugSnapshots,
+  REMOTE_TRAFFIC_DEBUG_STORAGE_KEY,
   RemoteSession,
   type RemoteSessionOptions,
 } from "../remote-session";
+import { RemoteSession as ProtocolRemoteSession } from "@traycer/protocol/host-transport/remote/session";
+import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
 import { RemoteStreamClient } from "../remote-stream-client";
 import {
   getNegotiatedStreamMethodVersion,
@@ -6065,6 +6075,98 @@ describe("RemoteSession reassembly progress watchdog", () => {
   );
 
   it(
+    "retires the old row incomplete on a retryable-FATAL re-key, counts no reconnect on either row, and leaves the session's own reconnect counter untouched",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      expect(session.enableTrafficAccounting()).toBe(true);
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let delivered = 0;
+      stream.onServerFrame(() => {
+        delivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const originalId = relay.subscribeStreamIds[0];
+        const [seedFirst, seedLast] = buildChunkFrames(originalId);
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
+
+        // A retryable per-stream FATAL re-keys the stream: the OLD id's row
+        // must retire incomplete, and the replacement must open its OWN row
+        // - not resume the old one.
+        await relay.sendStreamFatal(originalId, retryableDropDetails());
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const replacementId = relay.subscribeStreamIds[1];
+        if (replacementId === undefined) {
+          throw new Error("expected the re-keyed replacement subscribe");
+        }
+
+        const snapshot = session.readTrafficSnapshot();
+        if (snapshot === null) {
+          throw new Error("expected traffic accounting to be enabled");
+        }
+        const oldRow = snapshot.streams.find(
+          (row) => row.streamId === originalId,
+        );
+        const newRow = snapshot.streams.find(
+          (row) => row.streamId === replacementId,
+        );
+        if (oldRow === undefined || newRow === undefined) {
+          throw new Error("expected both the retired and replacement rows");
+        }
+        expect(oldRow.incomplete).toBe(true);
+        expect(oldRow.reconnects).toBe(0);
+        expect(newRow.incomplete).toBe(false);
+        // A per-stream re-key is not a CONNECTION drop: the socket never
+        // dropped, so the session-level reconnect counter - the one
+        // `connectionLost()` alone feeds - must stay at zero.
+        expect(snapshot.reconnects).toBe(0);
+
+        const streamBytes = snapshot.streams.reduce(
+          (total, row) => total + row.ciphertextBytes,
+          0,
+        );
+        const streamFrames = snapshot.streams.reduce(
+          (total, row) => total + row.frames,
+          0,
+        );
+        expect(
+          snapshot.relayTextBytes +
+            snapshot.noiseHandshakeBytes +
+            snapshot.unclassifiedBinaryBytes +
+            streamBytes,
+        ).toBe(snapshot.receivedBytes);
+        expect(
+          snapshot.relayTextFrames +
+            snapshot.noiseHandshakeFrames +
+            snapshot.unclassifiedBinaryFrames +
+            streamFrames,
+        ).toBe(snapshot.receivedFrames);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "moves the stall license through a retryable-FATAL re-key - the verdict answers one attempt, not the stream's proven stall",
     async () => {
       // stall -> licensed replacement B -> host answers B with a retryable
@@ -6502,6 +6604,109 @@ describe("RemoteSession per-stream inbound error routing", () => {
         expect(relay.openBearers).toHaveLength(1);
         expect(relay.errors).toEqual([]);
       } finally {
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "fails the SESSION, not the stream, on a compressed frame that inflates past its declaration",
+    async () => {
+      // The other half of the asymmetry the neighbour above closes. Both
+      // frames are flagged compressed and both fail to decode, but they are
+      // NOT the same fault: the neighbour's payload is bytes `inflateSync`
+      // cannot decode at all ("failed to inflate"), which stays per-stream.
+      // This one decodes CLEANLY but produces far more plaintext than its
+      // own declared length promised - the one inbound fault
+      // `failStreamOnInboundError` does NOT route per-stream
+      // (`MuxFrameOverExpansionError`, chunking.ts), because by the time it
+      // is caught the receiver has already paid for the whole real
+      // expansion once. The caller re-throws, and the inbound IIFE's
+      // `.catch` sends it through `handleConnectionLost(..., "inbound-decode
+      // -failed", "host-transport-plane")` - a full connection drop and
+      // redial, not a per-stream fatal.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let streamAClosedReason: StreamCloseReason | null = null;
+      streamA.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamAClosedReason = reason;
+        }
+      });
+      let streamBClosedReason: StreamCloseReason | null = null;
+      streamB.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamBClosedReason = reason;
+        }
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [streamIdA] = relay.subscribeStreamIds;
+
+        // A frame FLAGGED compressed whose declared plaintext length clears
+        // BOTH bound checks in `inflateFramePayload` - well under
+        // `BULK_CHUNK_SIZE_BYTES`, and strictly larger than the compressed
+        // payload's own byte length, so a genuine-looking header - but whose
+        // REAL inflated size is the whole megabyte of zeros this deflates:
+        // ~1000x the declaration. Highly compressible input keeps the
+        // compressed bytes tiny so the forged declared length can stay small
+        // too; only the genuine inflate exposes the mismatch.
+        const deflated = deflateSync(new Uint8Array(1024 * 1024), {
+          level: 6,
+        });
+        const declaredPlainLength = 4 + deflated.length + 1;
+        const overExpandingPayload = new Uint8Array(4 + deflated.length);
+        new DataView(overExpandingPayload.buffer).setUint32(
+          0,
+          declaredPlainLength,
+        );
+        overExpandingPayload.set(deflated, 4);
+        const overExpandingFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: streamIdA,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: overExpandingPayload,
+        };
+        relay.deliverToClient(await relay.encryptFrame(overExpandingFrame));
+
+        // The connection-lost path, observed the way this suite observes it
+        // elsewhere (the availability-recovered reconnect case above): a
+        // redial puts a SECOND bearer on `openBearers`. Nothing routes this
+        // per-stream - if this stayed at 1 the production change had
+        // regressed to the neighbour's per-stream route instead.
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
+        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+
+        // Neither logical stream was condemned - it is the SHARED CONNECTION
+        // that dropped and redialled, not stream A specifically (which is
+        // what the neighbour's per-stream routing would have done instead).
+        expect(streamAClosedReason).toBeNull();
+        expect(streamBClosedReason).toBeNull();
+        expect(session.isClosed()).toBe(false);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streamA.close();
         streamB.close();
         session.close();
       }
@@ -9240,6 +9445,443 @@ describe("RemoteSession host_attached always rebuilds (D1)", () => {
       }
     },
     SILENCE_PIN_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession opt-in traffic accounting", () => {
+  it.each([
+    [false, 0],
+    [true, 1],
+  ] as const)(
+    "counts only a dropped live relay leg (opened=%s), not failed redials",
+    async (opened, expectedDrops) => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+      const sockets: FakeSocket[] = [];
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        webSocketFactory: {
+          create: () => {
+            const socket = new FakeSocket(vi.fn(), vi.fn());
+            sockets.push(socket);
+            return socket;
+          },
+        },
+      });
+      expect(session.enableTrafficAccounting()).toBe(true);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+        const first = sockets[0];
+        if (first === undefined) throw new Error("expected the first dial");
+        expect(first.onopen).not.toBeNull();
+        expect(first.onerror).not.toBeNull();
+        if (opened) first.onopen?.({ type: "open" });
+        first.onerror?.({ message: "fixture transport failure" });
+        expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+        expect(session.readTrafficSnapshot()?.receivedFrames).toBe(0);
+
+        // A new socket must not inherit the prior leg's established state.
+        await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+        const retry = sockets[1];
+        if (retry === undefined) throw new Error("expected the retry dial");
+        expect(retry.onerror).not.toBeNull();
+        retry.onerror?.({ message: "fixture dial failure" });
+        expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+      } finally {
+        session.close();
+      }
+      expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+    },
+    TEST_BUDGET_MS,
+  );
+
+  function createMemoryStorage(): Storage {
+    const values = new Map<string, string>();
+    return {
+      get length() {
+        return values.size;
+      },
+      clear: () => values.clear(),
+      getItem: (key) => values.get(key) ?? null,
+      key: (index) => Array.from(values.keys()).at(index) ?? null,
+      removeItem: (key) => values.delete(key),
+      setItem: (key, value) => values.set(key, value),
+    };
+  }
+
+  it("enables the debug reader from localStorage and stays off with both flags absent", () => {
+    const sessionStore = createMemoryStorage();
+    const localStore = createMemoryStorage();
+    vi.stubGlobal("sessionStorage", sessionStore);
+    vi.stubGlobal("localStorage", localStore);
+
+    try {
+      const readerCountBefore = readRemoteTrafficDebugSnapshots().length;
+      const lastCaptureSessionBefore = Math.max(
+        -1,
+        ...readRemoteTrafficDebugSnapshots().map((row) => row.captureSession),
+      );
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+      const makeSession = (): RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      > =>
+        new RemoteSession({
+          ...buildSessionOptions(relay, lease, null),
+          streamRegistry: cursorStreamRegistry,
+        });
+
+      expect(sessionStore.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY)).toBeNull();
+      expect(localStore.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY)).toBeNull();
+      const noOptInSession = makeSession();
+      try {
+        expect(noOptInSession.readTrafficSnapshot()).toBeNull();
+        expect(readRemoteTrafficDebugSnapshots()).toHaveLength(
+          readerCountBefore,
+        );
+      } finally {
+        noOptInSession.close();
+      }
+
+      localStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+      const localOptInSession = makeSession();
+      try {
+        expect(localOptInSession.readTrafficSnapshot()).not.toBeNull();
+        const readers = readRemoteTrafficDebugSnapshots();
+        expect(readers).toHaveLength(readerCountBefore + 1);
+        expect(readers.at(-1)?.captureSession).toBeGreaterThan(
+          lastCaptureSessionBefore,
+        );
+      } finally {
+        localOptInSession.close();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("releases a closed session's debug reader and keeps live capture ids stable", () => {
+    const sessionStore = createMemoryStorage();
+    const localStore = createMemoryStorage();
+    vi.stubGlobal("sessionStorage", sessionStore);
+    vi.stubGlobal("localStorage", localStore);
+
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+    const makeSession = (): RemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    > =>
+      new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+    const captureSessions = (): number[] =>
+      readRemoteTrafficDebugSnapshots().map((row) => row.captureSession);
+
+    try {
+      const before = captureSessions();
+      sessionStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+      const first = makeSession();
+      const second = makeSession();
+      try {
+        const [firstId, secondId] = captureSessions().slice(before.length);
+        expect(captureSessions()).toHaveLength(before.length + 2);
+
+        const closedBefore = readRemoteTrafficDebugClosedSessions().sessions;
+        first.close();
+        // A closed session's accounting is final: its reader, and the rows it
+        // pins, leave the registry, and the live session keeps the id an
+        // earlier sample recorded it under.
+        expect(captureSessions()).not.toContain(firstId);
+        expect(captureSessions()).toEqual([...before, secondId]);
+        expect(readRemoteTrafficDebugClosedSessions().sessions).toBe(
+          closedBefore + 1,
+        );
+      } finally {
+        first.close();
+        second.close();
+      }
+      expect(captureSessions()).toEqual(before);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it(
+    "counts the bytes of a session opened and closed between two samples, which leaves no row or id gap",
+    async () => {
+      const sessionStore = createMemoryStorage();
+      vi.stubGlobal("sessionStorage", sessionStore);
+      vi.stubGlobal("localStorage", createMemoryStorage());
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+
+      try {
+        const idsBefore = readRemoteTrafficDebugSnapshots().map(
+          (row) => row.captureSession,
+        );
+        const closedBefore = readRemoteTrafficDebugClosedSessions();
+        sessionStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+        const session = new RemoteSession({
+          ...buildSessionOptions(relay, lease, null),
+          streamRegistry: cursorStreamRegistry,
+        });
+        const stream = session.subscribe("cursor.subscribe", {
+          cursor: null,
+        });
+        let received: RemoteTrafficSnapshot | null = null;
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeStreamIds).toHaveLength(1),
+            WAIT,
+          );
+          received = session.readTrafficSnapshot();
+        } finally {
+          stream.close();
+          session.close();
+        }
+        if (received === null) {
+          throw new Error("expected traffic accounting to be enabled");
+        }
+        expect(received.receivedBytes).toBeGreaterThan(0);
+
+        // The newest session is gone without a gap: the ids alone cannot
+        // tell a sample it ever existed.
+        expect(
+          readRemoteTrafficDebugSnapshots().map((row) => row.captureSession),
+        ).toEqual(idsBefore);
+        const closed = readRemoteTrafficDebugClosedSessions();
+        expect(closed.sessions).toBe(closedBefore.sessions + 1);
+        expect(closed.receivedBytes).toBeGreaterThanOrEqual(
+          closedBefore.receivedBytes + received.receivedBytes,
+        );
+        expect(closed.receivedFrames).toBeGreaterThanOrEqual(
+          closedBefore.receivedFrames + received.receivedFrames,
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps the accounting tracker absent while an ordinary session receives frames",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const realDateNow = Date.now.bind(Date);
+      const accountingClockReads: string[] = [];
+      const diagnosticClock = vi.spyOn(Date, "now").mockImplementation(() => {
+        const stack = new Error().stack ?? "";
+        if (stack.includes("traffic-accounting.ts")) {
+          accountingClockReads.push(stack);
+        }
+        return realDateNow();
+      });
+      const accountingMethodSpies = [
+        vi.spyOn(RemoteTrafficAccounting.prototype, "register"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "receiveBinary"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "receiveText"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "classifyHandshake"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "classifyMux"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "end"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "connectionLost"),
+      ];
+      // `RelaySocket`'s dialer wires `onTextBytes` from a single ternary
+      // (`session.ts` around `this.traffic === null ? undefined : (bytes) =>
+      // this.traffic?.receiveText(bytes)`), so an absent tracker means the
+      // handler itself is `undefined`, not merely a wired no-op - spying on
+      // `RelaySocket` or on the global `TextEncoder` constructor to observe
+      // that from the outside breaks real `new` construction in this
+      // environment (both attempts made the session's own dial fail), so
+      // this is pinned by the `receiveText` spy below instead: it is the
+      // only call `onTextBytes` would ever make, and it never fires.
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let receivedFrames = 0;
+      stream.onServerFrame(() => {
+        receivedFrames += 1;
+      });
+
+      try {
+        // The debug switch is the only implicit opt-in. With it off, even a
+        // real handshake and repeated in-channel frames must not instantiate
+        // the per-session counter or create snapshots/rows on the hot path.
+        // This suite runs in Node without either browser storage, so the
+        // diagnostic switch remains off. The accounting constructor's
+        // `startedAt` stamp and receiveBinary's elapsed-time stamp are the only
+        // accounting clock reads; asserting no accounting stack reaches Date.now
+        // plus no method calls pins the disabled path.
+        expect(session.readTrafficSnapshot()).toBeNull();
+        expect(accountingClockReads).toEqual([]);
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined) {
+          throw new Error("expected the cursor subscription to open");
+        }
+
+        for (let index = 0; index < 8; index += 1) {
+          await relay.sendStreamFrame(
+            streamId,
+            { kind: "snapshot", hasBinaryPayload: false },
+            null,
+            QosClass.INTERACTIVE,
+          );
+        }
+        await vi.waitFor(() => expect(receivedFrames).toBe(8), WAIT);
+
+        expect(session.readTrafficSnapshot()).toBeNull();
+        for (const spy of accountingMethodSpies) {
+          expect(spy).not.toHaveBeenCalled();
+        }
+        expect(accountingClockReads).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+        for (const spy of accountingMethodSpies) spy.mockRestore();
+        diagnosticClock.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * A host dialing another host constructs the protocol base class directly -
+ * never the clients/shared adapter, which is client-only (bearer auth, the
+ * debug-storage opt-in, negotiated-manifest recording). Traffic accounting is
+ * opt-in on the base class too (b, task list item b): a host dialer that never
+ * calls `enableTrafficAccounting()` must carry the same null tracker through a
+ * real handshake and real frames.
+ */
+describe("RemoteSession host-dialer traffic accounting (protocol base class, task b)", () => {
+  function hostAuth(): RemoteSessionAuth {
+    return {
+      missingOpenAuthCause: "missing-host-credential",
+      readOpenAuth: () => ({
+        bearer: "host-bearer",
+        authz: null,
+        fingerprint: "host-bearer",
+      }),
+      readCredentialUpdateBearer: () => "host-bearer",
+      currentFingerprint: () => "host-bearer",
+      revalidateForReconnect: null,
+    };
+  }
+
+  function buildHostSession(
+    relay: FakeRelayHost,
+  ): InstanceType<
+    typeof ProtocolRemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >
+  > {
+    let nextRequestId = 0;
+    return new ProtocolRemoteSession({
+      hostId: "host-2",
+      attachBaseUrl: "wss://relay.test/attach",
+      hostStaticPublicKey: relay.hostStaticPublicKey,
+      grantProvider: () =>
+        Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        }),
+      auth: hostAuth(),
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: cursorStreamRegistry,
+      webSocketFactory: relay.factory,
+      requestId: () => `host-req-${(nextRequestId += 1)}`,
+      // Host dialers pass null for both: no selection authority to feed, and
+      // no client-side capability publication hook.
+      evidence: null,
+      onNegotiatedMethods: null,
+      servedStreamMajors: {},
+      // Host dialers pass the 330s budget, not the 30s GUI default.
+      unaryResponseMs: 330_000,
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      livenessProbe: null,
+    });
+  }
+
+  it(
+    "never instantiates the accounting tracker through a real handshake and real frames, and enableTrafficAccounting() refuses once started",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const session = buildHostSession(relay);
+
+      try {
+        // Never opted in: no traffic to read before this session has even
+        // dialed.
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        const stream = session.subscribe("cursor.subscribe", {
+          cursor: null,
+        });
+        let receivedFrames = 0;
+        stream.onServerFrame(() => {
+          receivedFrames += 1;
+        });
+
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined) {
+          throw new Error("expected the cursor subscription to open");
+        }
+
+        for (let index = 0; index < 4; index += 1) {
+          await relay.sendStreamFrame(
+            streamId,
+            { kind: "snapshot", hasBinaryPayload: false },
+            null,
+            QosClass.INTERACTIVE,
+          );
+        }
+        await vi.waitFor(() => expect(receivedFrames).toBe(4), WAIT);
+
+        // Real frames arrived on a real, started session - still null.
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        // Opting in AFTER start() is refused: `enableTrafficAccounting()`
+        // only succeeds from the idle phase (session.ts, "Public surface").
+        expect(session.enableTrafficAccounting()).toBe(false);
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        stream.close();
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
   );
 });
 

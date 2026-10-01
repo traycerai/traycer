@@ -18,6 +18,8 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { buildQueuedMessageOrderKey } from "@/components/chat/queued-message-reorder-dnd";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
+import * as copy from "@/components/chat/fallback/fallback-copy";
+import { QUEUE_PAUSED_AFTER_ERROR_TOOLTIP } from "@/components/chat/fallback/fallback-copy";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
@@ -288,7 +290,7 @@ describe("<QueuedMessagePanel />", () => {
     const header = screen.getByTestId("queued-message-header");
     const toggle = screen.getByTestId("queued-message-header-toggle");
     const runningDot = screen.getByLabelText("Queue running");
-    const title = screen.getByText("Message Queue");
+    const title = screen.getByText("Message queue");
     const divider = screen.getByTestId("queued-message-header-divider");
     const statusIcon = screen.getByTestId("queued-message-header-status-icon");
     const count = screen.getByText("2 messages");
@@ -512,7 +514,7 @@ describe("<QueuedMessagePanel />", () => {
     const content = within(
       screen.getByTestId("queued-message-row"),
     ).getByTestId("queued-message-content-scroll");
-    expect(content.className).toContain("max-h-[3lh]");
+    expect(content.className).toContain("max-h-[calc(3lh+--spacing(1))]");
     expect(content.className).toContain("overflow-y-auto");
   });
 
@@ -1210,7 +1212,345 @@ describe("<QueuedMessagePanel />", () => {
   });
 });
 
-function renderPanel(input: {
+describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
+  afterEach(cleanup);
+
+  const TOOLTIP = "Held because the last turn failed. Resume to send it.";
+
+  function pausedQueue(pausedReason: string | null | undefined) {
+    const queue: ChatSessionState["queue"] = {
+      status: "paused",
+      items: [queuedItem("queue-held", "Held prompt", "paused")],
+    };
+    // `undefined` is the ABSENT key: a host that predates `pausedReason`.
+    return pausedReason === undefined ? queue : { ...queue, pausedReason };
+  }
+
+  function badge(): HTMLElement {
+    return within(screen.getByTestId("queued-message-row")).getByTestId(
+      "queued-message-status-badge",
+    );
+  }
+
+  function heldInput(
+    pausedReason: string | null | undefined,
+    viewer: boolean,
+  ): PanelInput {
+    return {
+      queue: pausedQueue(pausedReason),
+      readOnly: viewer,
+      canAct: !viewer,
+      onReorder: null,
+    };
+  }
+
+  function renderHeld(pausedReason: string | null | undefined) {
+    return renderPanel(heldInput(pausedReason, false));
+  }
+
+  const ERROR_LITERAL = "Held because the last turn failed. Resume to send it.";
+  const ROUTING_LITERAL = "Held by routing after the last turn failed.";
+  const LEGACY_HOLD =
+    "Queue paused while the host tries a fallback for the failed turn.";
+
+  it("exports the ruled tooltip sentences and no routing-liveness variants", () => {
+    expect(QUEUE_PAUSED_AFTER_ERROR_TOOLTIP).toBe(ERROR_LITERAL);
+    // A namespace read: a type error until production adds the export.
+    expect(copy.QUEUE_PAUSED_BY_ROUTING_TOOLTIP).toBe(ROUTING_LITERAL);
+    expect("QUEUE_PAUSED_FOR_ROUTING_TOOLTIP" in copy).toBe(false);
+    expect("QUEUE_PAUSED_AFTER_ROUTING_TOOLTIP" in copy).toBe(false);
+  });
+
+  it("turn_error says the failed-turn sentence", () => {
+    renderHeld("turn_error");
+
+    expect(badge().textContent).toBe("Paused after an error");
+    expect(tooltipTextNear(badge())).toBe(QUEUE_PAUSED_AFTER_ERROR_TOOLTIP);
+    expect(tooltipTextNear(badge())).toBe(ERROR_LITERAL);
+    expect(badge().tabIndex).toBe(0);
+  });
+
+  it("routing says it is held by routing, whatever state the traversal is in", () => {
+    renderHeld("routing");
+
+    expect(badge().textContent).toBe("Paused after an error");
+    expect(tooltipTextNear(badge())).toBe(copy.QUEUE_PAUSED_BY_ROUTING_TOOLTIP);
+    expect(tooltipTextNear(badge())).toBe(ROUTING_LITERAL);
+    expect(badge().tabIndex).toBe(0);
+  });
+
+  it("an older host (no pausedReason key) keeps a plain 'Paused' with no tooltip", () => {
+    renderHeld(undefined);
+
+    expect(badge().textContent).toBe("Paused");
+    expect(tooltipTextNear(badge())).toBeNull();
+    expect(badge().hasAttribute("tabindex")).toBe(false);
+  });
+
+  it.each([
+    ["routing", "routing", ROUTING_LITERAL],
+    ["turn_error", "turn_error", ERROR_LITERAL],
+  ])(
+    "a read-only viewer sees the owner's pill and tooltip for %s",
+    (_name, reason, tooltip) => {
+      renderPanel(heldInput(reason, true));
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(tooltipTextNear(badge())).toBe(tooltip);
+    },
+  );
+
+  it.each([
+    ["exact", LEGACY_HOLD],
+    ["padded with two spaces each side", `  ${LEGACY_HOLD}  `],
+  ])(
+    "the legacy routing-hold sentence (%s) is absent under a routing pill",
+    (_name, reason) => {
+      renderPanel({
+        ...heldInput("routing", false),
+        queue: {
+          ...pausedQueue("routing"),
+          items: [
+            {
+              ...queuedItem("queue-held", "Held prompt", "paused"),
+              fallbackReason: reason,
+            },
+          ],
+        },
+      });
+
+      const row = screen.getByTestId("queued-message-row");
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(within(row).queryByText(LEGACY_HOLD)).toBeNull();
+      expect(row.textContent).not.toContain("tries a fallback");
+    },
+  );
+
+  it("draws the legacy routing-hold sentence under a plain 'Paused' pill", () => {
+    renderPanel({
+      ...heldInput("user", false),
+      queue: {
+        ...pausedQueue("user"),
+        items: [
+          {
+            ...queuedItem("queue-held", "Held prompt", "paused"),
+            fallbackReason: LEGACY_HOLD,
+          },
+        ],
+      },
+    });
+
+    expect(badge().textContent).toBe("Paused");
+    expect(
+      within(screen.getByTestId("queued-message-row")).getByText(LEGACY_HOLD),
+    ).not.toBeNull();
+  });
+
+  it.each([
+    ["another reason", "user"],
+    ["a reason this build has not heard of", "some_future_reason"],
+    ["a null reason", null],
+    ["an absent reason (an older host)", undefined],
+  ])("keeps a plain 'Paused' with no tooltip for %s", (_name, reason) => {
+    renderHeld(reason);
+
+    expect(badge().textContent).toBe("Paused");
+    expect(tooltipTextNear(badge())).toBeNull();
+    expect(badge().hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("gives a paused managed-command row the same pill", () => {
+    renderPanel({
+      queue: {
+        status: "paused",
+        pausedReason: "turn_error",
+        items: [
+          {
+            ...managedCommandQueuedItem("queue-managed", "bun test"),
+            status: "paused",
+          },
+        ],
+      },
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    expect(badge().textContent).toBe("Paused after an error");
+  });
+
+  // Clutter cuts, 2026-09-27: under a "Paused after an error" pill the line is
+  // dropped for the host's two QUEUE-WIDE pause sentences, the errored-turn one
+  // and the routing-hold one, because the pill (and its tooltip) or the routing
+  // card already says them. Every row-specific reason is still drawn (a
+  // restamp-rejection reason stamped while the queue is paused for "routing", a
+  // leftover steer's reason kept by a "turn_error" pause), and under any other
+  // pill the line is the only place the reason is said.
+  describe("the row's fallbackReason line", () => {
+    const REASON =
+      "Queue paused because the previous turn ended with an error.";
+    // The host stamps this on every held row while routing recovers the turn.
+    const ROUTING_HOLD = "Queue paused while routing recovers the failed turn.";
+
+    function renderReasonRow(
+      queue: ChatSessionState["queue"],
+      item: ChatQueuedItem,
+    ): HTMLElement {
+      renderPanel({
+        queue: { ...queue, items: [item] },
+        readOnly: false,
+        canAct: true,
+        onReorder: null,
+      });
+      return screen.getByTestId("queued-message-row");
+    }
+
+    function promptWithReason(
+      status: ChatQueuedPromptItem["status"],
+      reason: string | null,
+    ): ChatQueuedPromptItem {
+      return {
+        ...queuedItem("queue-reason", "Held prompt", status),
+        fallbackReason: reason,
+      };
+    }
+
+    it("is absent under a 'Paused after an error' pill, which keeps its tooltip", () => {
+      const row = renderReasonRow(
+        pausedQueue("turn_error"),
+        promptWithReason("paused", REASON),
+      );
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(tooltipTextNear(badge())).toBe(TOOLTIP);
+      expect(within(row).queryByText(REASON)).toBeNull();
+      expect(row.textContent).not.toContain("Queue paused because");
+    });
+
+    it("is absent when the reason is the pill's sentence padded with spaces", () => {
+      const row = renderReasonRow(
+        pausedQueue("turn_error"),
+        promptWithReason("paused", `  ${REASON}  `),
+      );
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(within(row).queryByText(REASON)).toBeNull();
+      expect(row.textContent).not.toContain("Queue paused because");
+    });
+
+    it("is drawn under a 'Paused after an error' pill when a routing restamp was rejected", () => {
+      const restampReason =
+        "Queue paused: this message's settings are not supported on the provider the chat switched to, so it was left on the previous one. Resume it to run it anyway.";
+      const row = renderReasonRow(
+        pausedQueue("routing"),
+        promptWithReason("paused", restampReason),
+      );
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(within(row).getByText(restampReason)).not.toBeNull();
+    });
+
+    it("is drawn under a 'Paused after an error' pill for a leftover steer's reason", () => {
+      const steerReason =
+        "The turn ended before the provider confirmed this follow-up was delivered. Resume to retry.";
+      const row = renderReasonRow(
+        pausedQueue("turn_error"),
+        promptWithReason("paused", steerReason),
+      );
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(within(row).getByText(steerReason)).not.toBeNull();
+    });
+
+    it("is absent for the queue-wide routing-hold sentence under a 'Paused after an error' pill", () => {
+      const row = renderReasonRow(
+        pausedQueue("routing"),
+        promptWithReason("paused", ROUTING_HOLD),
+      );
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(within(row).queryByText(ROUTING_HOLD)).toBeNull();
+      expect(row.textContent).not.toContain("routing recovers");
+    });
+
+    it("is absent for the routing-hold sentence padded with spaces", () => {
+      const row = renderReasonRow(
+        pausedQueue("routing"),
+        promptWithReason("paused", `  ${ROUTING_HOLD}  `),
+      );
+
+      expect(badge().textContent).toBe("Paused after an error");
+      expect(within(row).queryByText(ROUTING_HOLD)).toBeNull();
+      expect(row.textContent).not.toContain("routing recovers");
+    });
+
+    it("draws the routing-hold sentence under a plain 'Paused' pill: the cut applies only under the error pill", () => {
+      const row = renderReasonRow(
+        pausedQueue("user"),
+        promptWithReason("paused", ROUTING_HOLD),
+      );
+
+      expect(badge().textContent).toBe("Paused");
+      expect(within(row).getByText(ROUTING_HOLD)).not.toBeNull();
+    });
+
+    it("is drawn under a plain 'Paused' pill", () => {
+      const row = renderReasonRow(
+        pausedQueue("user"),
+        promptWithReason("paused", REASON),
+      );
+
+      expect(badge().textContent).toBe("Paused");
+      expect(within(row).getByText(REASON)).not.toBeNull();
+    });
+
+    it("is drawn under a non-paused pill such as 'After turn'", () => {
+      const row = renderReasonRow(
+        queueState([]),
+        promptWithReason("fallback", REASON),
+      );
+
+      expect(badge().textContent).toBe("After turn");
+      expect(within(row).getByText(REASON)).not.toBeNull();
+    });
+
+    it("draws no line for a row with no fallbackReason", () => {
+      const row = renderReasonRow(
+        pausedQueue("user"),
+        promptWithReason("paused", null),
+      );
+      const withoutReason = row.textContent;
+      cleanup();
+      const rowWithReason = renderReasonRow(
+        pausedQueue("user"),
+        promptWithReason("paused", REASON),
+      );
+
+      // The reason line is the only thing the second row adds.
+      expect(withoutReason).not.toContain(REASON);
+      expect(rowWithReason.textContent).toContain(REASON);
+    });
+  });
+
+  it("leaves a row that is not paused alone, whatever the queue's reason", () => {
+    renderPanel({
+      queue: {
+        status: "paused",
+        pausedReason: "turn_error",
+        items: [queuedItem("queue-pending", "Pending prompt", "pending")],
+      },
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const row = screen.getByTestId("queued-message-row");
+    expect(within(row).queryByText("Paused after an error")).toBeNull();
+    expect(within(row).queryByText("Paused")).toBeNull();
+  });
+});
+
+interface PanelInput {
   readonly queue: ChatSessionState["queue"];
   readonly readOnly: boolean;
   readonly canAct: boolean;
@@ -1221,7 +1561,9 @@ function renderPanel(input: {
   readonly onReorder:
     | ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void)
     | null;
-}) {
+}
+
+function renderPanel(input: PanelInput) {
   return render(
     <TooltipProvider delayDuration={0}>
       <QueuedMessagePanel
@@ -1233,6 +1575,7 @@ function renderPanel(input: {
         readOnly={input.readOnly}
         editingQueueItemId={null}
         scrollRegionMaxHeightClass="max-h-96"
+        separated={false}
         onPause={input.onPause ?? (() => null)}
         onResume={input.onResume ?? (() => null)}
         onEdit={vi.fn()}

@@ -120,7 +120,7 @@ export const builtinPalettes: Partial<
       secondary: "#f2f2f2",
       "secondary-foreground": "#171717",
       muted: "#f2f2f2",
-      "muted-foreground": "#7d7d7d",
+      "muted-foreground": "#717171",
       accent: "#ebebeb",
       "accent-foreground": "#171717",
       border: "#e6e6e6",
@@ -240,7 +240,10 @@ export const builtinPalettes: Partial<
       "secondary-foreground": "#ffffff",
       muted: "#1a2421",
       "muted-foreground": "#a8a8a8",
-      accent: "#257174",
+      // A lift of the card (L+0.03, same hue), like every other dark preset's
+      // accent - never `--primary`, or `text-primary` on a hovered, open or
+      // selected `bg-accent` row paints at 1:1 and vanishes.
+      accent: "#202c28",
       "accent-foreground": "#ffffff",
       border: "#33433d",
       input: "#33433d",

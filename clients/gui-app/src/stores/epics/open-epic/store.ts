@@ -80,6 +80,7 @@ import type {
 import type { PendingChatCreation } from "./pending-chat-creations";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { appLogger } from "@/lib/logger";
+import { createMainProjectionAccount } from "@/stores/replica-memory/main-projection-account";
 // The read seam's own word for "this client has no body to give you", raised
 // HERE because this is the layer that sees the grant say so. The edge back is
 // type-only (`OpenEpicStoreHandle`), so there is no runtime cycle.
@@ -1224,6 +1225,7 @@ export function createOpenEpicStore(
   nextIngestFenceIdentity += 1;
 
   let storeApi: StoreApi<OpenEpicState> | null = null;
+  const mainProjectionAccount = createMainProjectionAccount();
   /**
    * The worker's own dirty verdict, before main-only body refusals are folded
    * into it.
@@ -1464,25 +1466,42 @@ export function createOpenEpicStore(
    * each time any room was seeded. Availability says which rooms exist right
    * now, which is the question actually being asked.
    *
-   * Entries are forgotten WITHOUT posting: there is nothing on the far side to
-   * settle into, and a demote would sit pending on a `not-held`.
+   * Entries are forgotten WITHOUT a demote: there is nothing on the far side to
+   * settle into, and a demote would sit pending on a `not-held`. What `forget`
+   * does with the worker's demand is its own business - a still-held body goes
+   * back to awaiting, so the sibling below re-materializes it into the mounted
+   * editor when its room is ready again.
    */
   /**
-   * Doc keys the projection currently calls `ready`.
+   * Doc keys the projection currently calls `ready`, each with the ready
+   * artifacts filed under it.
    *
    * ONE reader of the availability map for both body-plane reconcilers, so
    * "which rooms are ready" cannot be answered two ways in the same frame.
+   * The artifact lists are for the retry: on `@1` a doc key is a ROOM hosting
+   * several artifacts, and re-materializing it has to go through one that
+   * still names it (see `retryAwaitingBodies`). On the lane arm each list is
+   * the one artifact the key already is.
    */
-  function readyBodyDocKeys(): ReadonlySet<string> {
+  function readyBodyArtifactsByDocKey(): ReadonlyMap<
+    string,
+    readonly string[]
+  > {
     const state = storeApi?.getState();
-    if (state === undefined) return new Set<string>();
-    const ready = new Set<string>();
+    const ready = new Map<string, string[]>();
+    if (state === undefined) return ready;
     for (const [artifactId, availability] of Object.entries(
       state.artifactRooms.stateByArtifactId,
     )) {
       if (availability !== "ready") continue;
       const docKey = state.getArtifactBodyDocKey(artifactId);
-      if (docKey !== null) ready.add(docKey);
+      if (docKey === null) continue;
+      const naming = ready.get(docKey);
+      if (naming === undefined) {
+        ready.set(docKey, [artifactId]);
+      } else {
+        naming.push(artifactId);
+      }
     }
     return ready;
   }
@@ -1490,7 +1509,7 @@ export function createOpenEpicStore(
   function dropBodiesWhoseRoomIsGone(): void {
     const resident = bodyDocs.residentDocKeys();
     if (resident.length === 0) return;
-    const ready = readyBodyDocKeys();
+    const ready = readyBodyArtifactsByDocKey();
     for (const docKey of resident) {
       if (ready.has(docKey)) continue;
       bodyLeases.forget(docKey);
@@ -1510,8 +1529,16 @@ export function createOpenEpicStore(
    * bytes exist now" are the same event seen from the two sides.
    */
   function retryBodiesWhoseRoomBecameReady(): void {
-    const ready = readyBodyDocKeys();
-    bodyLeases.retryAwaitingBodies((docKey) => ready.has(docKey));
+    const ready = readyBodyArtifactsByDocKey();
+    bodyLeases.retryAwaitingBodies((docKey, preferredArtifactId) => {
+      const naming = ready.get(docKey);
+      if (naming === undefined || naming.length === 0) return null;
+      // The body's own artifact while it still names this room, so the retry
+      // asks exactly what it asked before; otherwise any artifact that does.
+      return naming.includes(preferredArtifactId)
+        ? preferredArtifactId
+        : naming[0];
+    });
   }
 
   /**
@@ -1642,7 +1669,10 @@ export function createOpenEpicStore(
     };
   }
 
+  const isDisposed = (): boolean => disposed;
+
   function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
+    if (disposed) return;
     const api = storeApi;
     if (api === null) {
       // UNREACHABLE, and thrown rather than assumed away.
@@ -1704,6 +1734,17 @@ export function createOpenEpicStore(
         ? projected
         : { ...projected, bindingVersion: bindingEpoch },
     );
+    // Zustand notifies synchronously. A clean-state publication can make a
+    // warm registry entry byte-eligible, and its subscriber may dispose this
+    // store before `setState` returns. Its port has then released every holder.
+    if (isDisposed()) return;
+    const projectionSize = mainProjectionAccount.recordPatch(projected);
+    if (projectionSize !== null) {
+      options.accounting.settleMainProjectionBytes(
+        projectionSize.rawBytes,
+        projectionSize.estimatedHeapBytes,
+      );
+    }
     dropBodiesWhoseRoomIsGone();
     retryBodiesWhoseRoomBecameReady();
   }

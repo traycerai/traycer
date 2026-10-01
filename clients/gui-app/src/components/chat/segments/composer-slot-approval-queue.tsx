@@ -1,6 +1,12 @@
 import { useRef } from "react";
-import { Check, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import { Check, ChevronRight, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ToolInputPanel } from "@/components/chat/segments/tool-input-panel";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
@@ -8,11 +14,17 @@ import {
 } from "@/components/chat/chat-navigation-highlight";
 import { deriveToolInputSummary } from "@/lib/segment-summary";
 import { approvalCardText } from "@/components/chat/segments/approval-text";
-import { humanActionableApprovals } from "@/components/epic-canvas/renderers/chat-approval-visibility";
+import {
+  approvalIdsLeftOutOfApproveAll,
+  bulkApprovableApprovals,
+  humanActionableApprovals,
+} from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import {
   APPROVAL_PAUSED_LINE,
+  INDIVIDUAL_APPROVAL_MARKER,
   JUDGE_FIX_IN_SETTINGS_LABEL,
   approvalWaitLine,
+  individualApprovalCountLine,
   isJudgeUnavailableReason,
   judgeUnavailableHumanLine,
   judgeWaitDisclosure,
@@ -32,7 +44,10 @@ import type {
   ChatApprovalReason,
   ChatApprovalState,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import {
+  deriveToolInputDetail,
+  type ToolInputDetail,
+} from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
 
 interface ComposerSlotApprovalQueueProps {
@@ -80,6 +95,10 @@ const JUDGE_REVIEWING_LABEL: Record<
  * The bulk actions therefore act on - and count - only the rows a human can
  * actually answer, so "Approve all" can never resolve a call the judge is still
  * thinking about.
+ *
+ * "Approve all" also leaves out a row the provider stamped `cautious`, and the
+ * header says how many it left: those are asks the provider or the user's own
+ * rule wants answered one by one. "Deny all" takes them with the rest.
  */
 export function ComposerSlotApprovalQueue(
   props: ComposerSlotApprovalQueueProps,
@@ -88,6 +107,9 @@ export function ComposerSlotApprovalQueue(
   const count = approvals.length;
   if (count === 0) return null;
   const actionable = humanActionableApprovals(approvals);
+  const bulkApprovable = bulkApprovableApprovals(approvals);
+  const leftOutIds = approvalIdsLeftOutOfApproveAll(approvals);
+  const individualCount = leftOutIds.size;
   const showBulk = actionable.length >= 2;
   // Nothing is needed from the user while every row is still with the judge, so
   // the heading does not claim otherwise. It flips to "Approval needed" the
@@ -145,6 +167,19 @@ export function ComposerSlotApprovalQueue(
               <span className="text-ui-xs text-muted-foreground">
                 {actionable.length} pending
               </span>
+              {individualCount > 0 ? (
+                <>
+                  <span aria-hidden className="text-muted-foreground/40">
+                    ·
+                  </span>
+                  <span
+                    className="text-ui-xs text-muted-foreground"
+                    data-testid="approval-individual-count"
+                  >
+                    {individualApprovalCountLine(individualCount)}
+                  </span>
+                </>
+              ) : null}
               <div className="ml-auto flex items-center gap-2">
                 <Button
                   type="button"
@@ -164,9 +199,9 @@ export function ComposerSlotApprovalQueue(
                   type="button"
                   size="sm"
                   variant="default"
-                  disabled={!canAct}
+                  disabled={!canAct || bulkApprovable.length === 0}
                   onClick={() => {
-                    for (const approval of actionable) {
+                    for (const approval of bulkApprovable) {
                       onDecision(approval.approvalId, true);
                     }
                   }}
@@ -191,6 +226,9 @@ export function ComposerSlotApprovalQueue(
             }
             highlightGeneration={props.highlightedGeneration ?? 0}
             stageInHeader={approval === headerApproval}
+            leftOutOfApproveAll={
+              showBulk ? leftOutIds.has(approval.approvalId) : false
+            }
             ruleDraftWorkspace={props.ruleDraftWorkspace}
             onOpenSettings={props.onOpenSettings}
           />
@@ -208,6 +246,8 @@ interface ApprovalRowProps {
   readonly highlightGeneration: number;
   /** The card's header already shows this row's judge stage. */
   readonly stageInHeader: boolean;
+  /** "Approve all" is showing and skips this row (`cautious`). */
+  readonly leftOutOfApproveAll: boolean;
   readonly ruleDraftWorkspace: AutoModeRuleDraftWorkspace;
   readonly onOpenSettings: (opts: TabHostSettingsOpts) => void;
 }
@@ -227,7 +267,7 @@ function ApprovalRow(props: ApprovalRowProps) {
     approval.toolName,
     approval.input,
   );
-  const { inputSummary, headline } = approvalCardText(
+  const { inputSummary, headline, inputDetail } = approvalCardText(
     approval.toolName,
     derivedSummary,
     approval.description,
@@ -259,7 +299,9 @@ function ApprovalRow(props: ApprovalRowProps) {
         <ApprovalWaitLine requestedAt={approval.requestedAt} />
       ) : null}
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-code-sm text-foreground/80">
-        <span className="shrink-0">{approval.toolName}</span>
+        {/* An ACP harness names the call by its title, which can carry the
+            whole command, so the name wraps like the summary beside it. */}
+        <span className="min-w-0 break-words">{approval.toolName}</span>
         {inputSummary !== null ? (
           <>
             <span aria-hidden className="shrink-0 text-muted-foreground/40">
@@ -278,6 +320,19 @@ function ApprovalRow(props: ApprovalRowProps) {
           {headline}
         </p>
       )}
+      {inputDetail === null ? null : <ApprovalInput detail={inputDetail} />}
+      {approval.displayFacts !== undefined &&
+      approval.displayFacts.length > 0 ? (
+        <ApprovalDisplayFacts facts={approval.displayFacts} />
+      ) : null}
+      {props.leftOutOfApproveAll ? (
+        <p
+          className="m-0 text-ui-xs text-muted-foreground"
+          data-testid="approval-individual-marker"
+        >
+          {INDIVIDUAL_APPROVAL_MARKER}
+        </p>
+      ) : null}
       {approval.reason !== null ? (
         <JudgeReason
           reason={approval.reason}
@@ -330,6 +385,68 @@ function ApprovalRow(props: ApprovalRowProps) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * What the provider said about the ask beside the request itself - its own
+ * reason for asking, the path it blocked on, where an MCP server came from,
+ * that a rule forced the prompt (`chat.subscribe@1.20`).
+ *
+ * Its own list rather than more `input` keys, and that is why it shows on a
+ * Bash or grep card at all: the input panel renders those tools as a single
+ * `$ …` command line and never lists their fields. Producer text, rendered as
+ * plain text; the producer bounds its length.
+ *
+ * The file-edit card renders the same list for its one rule line.
+ */
+export function ApprovalDisplayFacts(props: {
+  readonly facts: NonNullable<ChatApprovalState["displayFacts"]>;
+}) {
+  return (
+    <dl
+      className="m-0 flex min-w-0 flex-col gap-0.5 text-ui-xs"
+      data-testid="approval-display-facts"
+    >
+      {props.facts.map((fact) => (
+        <div
+          key={`${fact.label}|${fact.value}`}
+          className="flex min-w-0 gap-2"
+          data-testid="approval-display-fact"
+        >
+          <dt className="shrink-0 text-muted-foreground">{fact.label}</dt>
+          <dd className="m-0 min-w-0 break-words text-foreground/85">
+            {fact.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * The whole input behind a disclosure, in the same panel a tool row and a
+ * resolved approval open: collapsed, since the card sits above the composer
+ * and a long script would push it down.
+ */
+function ApprovalInput(props: { readonly detail: ToolInputDetail }) {
+  return (
+    <Collapsible className="min-w-0">
+      <CollapsibleTrigger
+        variant="quiet"
+        className="group/approval-input flex w-fit items-center text-ui-xs"
+        data-testid="approval-input-toggle"
+      >
+        <ChevronRight
+          className="size-3 shrink-0 transition-transform group-data-[state=open]/approval-input:rotate-90"
+          aria-hidden
+        />
+        {props.detail.kind === "command" ? "Full command" : "Full input"}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1">
+        <ToolInputPanel detail={props.detail} />
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

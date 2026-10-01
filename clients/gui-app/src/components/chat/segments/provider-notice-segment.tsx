@@ -11,19 +11,19 @@ import type {
   ProviderNoticeKind,
   ProviderNoticeTone,
 } from "@traycer/protocol/persistence/epic/content-blocks";
-import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-notice-attribution";
-import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
+import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
 interface ProviderNoticeSegmentProps {
   status: "streaming" | "completed" | "errored";
   /**
-   * Which notice this is. Only the provider-fallback arms read it, and only to
-   * add the settings link below their details - the rest of this component is
-   * kind-blind on purpose, because a harness notice and a fallback notice are
-   * the same shape of row.
+   * Which notice this is. Only `fallback_applied` reads it, and only to leave
+   * its message off the rule (see `inlineMessageFor`) - the rest of this
+   * component is kind-blind on purpose, because a harness notice and a
+   * fallback notice are the same shape of row.
    */
   noticeKind: ProviderNoticeKind;
   /** Compact Codex status, matching the native app's transient retry row. */
@@ -40,10 +40,30 @@ const TONE_ICON: Record<ProviderNoticeTone, typeof Info> = {
   warning: TriangleAlert,
 };
 
+// The status token, never a palette hue: `text-warning-foreground` is verified
+// against every preset's background, where a fixed amber pair was tuned for
+// the default light/dark themes only.
 const TONE_TEXT_CLASS: Record<ProviderNoticeTone, string> = {
   info: "text-muted-foreground",
-  warning: "text-amber-700 dark:text-amber-300",
+  warning: "text-warning-foreground",
 };
+
+/**
+ * The message the collapsed rule prints after the title, or `null`.
+ *
+ * `fallback_applied` prints its title alone (clutter cuts, 2026-09-27): the
+ * title already says what happened ("Switched to Sonnet 5 · Low on Surya
+ * after a rate limit"), and the message beside it was the raw route that
+ * belongs among the details under the chevron. Every other kind keeps its
+ * message inline, as harness notices always have.
+ */
+function inlineMessageFor(
+  noticeKind: ProviderNoticeKind,
+  message: string | null,
+): string | null {
+  if (noticeKind === "fallback_applied") return null;
+  return message === null || message.length === 0 ? null : message;
+}
 
 export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   return props.presentation === "retry" ? (
@@ -74,17 +94,17 @@ function CodexRetryNotice(
         sideOffset={undefined}
         align="start"
       >
-        <button
-          type="button"
+        <Button
+          size="inline-xs"
+          variant="muted"
           data-find-include="true"
           aria-expanded={expanded}
           aria-label={`${title}. Reported by Codex. ${expanded ? "Hide" : "Show"} details.`}
           onClick={() => setExpanded((current) => !current)}
-          className="flex items-center gap-2 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Wifi className="size-3.5 shrink-0" aria-hidden />
           <span>{title}</span>
-        </button>
+        </Button>
       </TooltipWrapper>
       {expanded ? (
         <dl
@@ -112,20 +132,22 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   const isStreaming = status === "streaming";
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = (): void => setExpanded((current) => !current);
+  const readingWidth = useReadingWidthStyle();
 
   const hasDetails = details.length > 0;
   const Icon = TONE_ICON[tone];
   const toneClass = TONE_TEXT_CLASS[tone];
   const ExpandIcon = expanded ? ChevronDown : ChevronRight;
+  const inlineMessage = inlineMessageFor(noticeKind, message);
 
   const labelInner = (
     <div className={cn("flex items-center gap-2 text-ui-xs", toneClass)}>
       <Icon className="size-3.5 shrink-0" aria-hidden />
       <span>
         {title}
-        {message !== null && message.length > 0 ? (
-          <span className="text-muted-foreground/80"> · {message}</span>
-        ) : null}
+        {inlineMessage === null ? null : (
+          <span className="text-muted-foreground/80"> · {inlineMessage}</span>
+        )}
       </span>
       {isStreaming ? (
         <LivePulse
@@ -150,17 +172,14 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
       <div className="flex items-center gap-3">
         <span aria-hidden className="h-px flex-1 bg-border/60" />
         {hasDetails ? (
-          <button
-            type="button"
+          <Button
+            size="inline-xs-wrap"
+            variant="muted"
             onClick={toggleExpanded}
             aria-expanded={expanded}
-            className={cn(
-              "rounded-sm outline-none transition-colors",
-              "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-            )}
           >
             {labelInner}
-          </button>
+          </Button>
         ) : (
           labelInner
         )}
@@ -169,9 +188,11 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
       {hasDetails && expanded ? (
         <div
           className={cn(
-            "mx-auto w-full max-w-[min(90vw,42rem)]",
+            "mx-auto w-full",
             "rounded-md border border-border/60 bg-muted/30 p-3",
+            readingWidth.className,
           )}
+          style={{ maxWidth: readingWidth.maxWidth }}
         >
           <dl className="m-0 flex flex-col gap-1 text-ui-xs">
             {details.map((detail) => (
@@ -189,16 +210,12 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
             ))}
           </dl>
           {/*
-           * Inside the expanded details, never on the collapsed rule: this is
-           * the one place a historical fallback row offers an action, and it
-           * is the only KIND of action it may offer - a link to the policy
-           * that produced it. Nothing here re-dispatches.
+           * No action in here, for a fallback notice either (clutter cuts,
+           * 2026-09-27): the "Model routing" settings button that sat below
+           * the details was a text-styled action on a historical row. The
+           * row describes something that already happened; the gear on the
+           * live routing cards is the way to settings.
            */}
-          {isFallbackNoticeKind(noticeKind) ? (
-            <div className="mt-2 flex">
-              <FallbackNoticeSettingsLink />
-            </div>
-          ) : null}
         </div>
       ) : null}
     </div>

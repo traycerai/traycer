@@ -30,6 +30,7 @@ import type {
   SegmentEndState,
 } from "@/stores/composer/chat-store";
 import { FILE_EDIT_REASON_COPY } from "@/lib/chat/file-edit-reason-copy";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { SegmentCard } from "./segment-card";
 import { SegmentRow } from "./segment-row";
 import { SegmentEndStateBadge } from "./segment-end-state-badge";
@@ -147,10 +148,10 @@ function fileChangeBody(
 /**
  * Inline diff for a tool-call file edit, rendered through the same
  * `@pierre/diffs` pipeline as the Git diff tiles (via `DiffContentPrimitive`)
- * so the chat stream and the diff ecosystem look identical. Uses a fixed
- * inline-unified preset suited to the chat column: unified, no file header,
- * no line numbers, full changed-line backgrounds, and a compact change gutter.
- * This intentionally does not follow the global canvas diff viewer preferences.
+ * so the chat stream and the diff ecosystem look identical. Line numbers,
+ * backgrounds and gutter marks follow the shared diff viewer preferences; the
+ * layout stays unified with no file header and no wrap, which suits the chat
+ * column.
  *
  * The before/after content is no longer inlined in the chat doc - it is
  * lazy-fetched from the host's snapshot blob store by hash on first expand
@@ -242,6 +243,9 @@ function FileChangeDiffView(props: {
   failure: PayloadReadFailure | null;
 }) {
   const { segment, data, isLoading } = props;
+  const diffPreferences = useSettingsStore(
+    (state) => state.diffViewerPreferences,
+  );
   const patch = useMemo(() => {
     if (data === undefined || data.reason !== "snapshot") {
       return null;
@@ -323,9 +327,9 @@ function FileChangeDiffView(props: {
         cacheScope={`inline:${segment.id}`}
         mode="unified"
         wordWrap={false}
-        backgrounds
-        lineNumbers={false}
-        indicatorStyle="bars"
+        backgrounds={diffPreferences.backgrounds}
+        lineNumbers={diffPreferences.lineNumbers}
+        indicatorStyle={diffPreferences.indicatorStyle}
         fileHeaders={false}
         isEmptyFile={false}
       />

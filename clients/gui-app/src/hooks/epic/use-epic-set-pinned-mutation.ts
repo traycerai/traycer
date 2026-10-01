@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
   useMutationState,
   useQueryClient,
+  type Query,
   type QueryClient,
 } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -16,7 +17,9 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   cloudEpicTasksQueryKeyMatchesScope,
   epicPinReadingQueryKeyMatchesScope,
+  epicTaskContextsQueryKeyMatchesScope,
   setEpicPinnedInCloudTaskCaches,
+  setEpicPinnedInTaskContextsCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { cloudQueryKeys, epicMutationKeys } from "@/lib/query-keys";
 import {
@@ -152,9 +155,9 @@ export function useEpicSetPinned() {
     mapVariables: ({ epicId, pinned }) => ({ epicId, pinned }),
     options: {
       mutationKey: epicMutationKeys.setPinned(),
-      onMutate: (
+      onMutate: async (
         variables: SetEpicPinnedVariables,
-      ): SetEpicPinnedMutationContext => {
+      ): Promise<SetEpicPinnedMutationContext> => {
         // The host the request is ACTUALLY going to, resolved through the same
         // function the dispatch resolves it with. That is the point of doing it
         // here rather than reading the window's active host: the admission gate,
@@ -178,6 +181,13 @@ export function useEpicSetPinned() {
           throw new Error(EPIC_PIN_UNAUTHORIZED_MESSAGE);
         }
         const userId = dispatchClient?.getRequestContextUserId() ?? null;
+        if (userId !== null) {
+          await cancelInFlightTaskContextsReads(
+            queryClient,
+            userId,
+            variables.epicId,
+          );
+        }
         if (hostId !== null && userId !== null) {
           applyPinnedPatch(
             queryClient,
@@ -190,11 +200,50 @@ export function useEpicSetPinned() {
       },
       onSuccess: async (
         _response,
-        _variables,
+        variables: SetEpicPinnedVariables,
         ctx: SetEpicPinnedMutationContext,
       ) => {
         if (ctx.hostId === null || ctx.userId === null) return;
         const scope = { hostId: ctx.hostId, userId: ctx.userId };
+        // `epic.getTaskContexts` is the one pin source this handler does not
+        // invalidate - a refetch there is a cloud batch of up to 50 ids - so a
+        // read that was issued before the write and lands after it would put
+        // the pre-write bit back, with `staleTime: Infinity` keeping it. The
+        // tab menu's retry makes that read likely rather than theoretical.
+        // Cancel whatever is still in flight, then re-apply the committed bit
+        // over anything that already landed during the write.
+        //
+        // On EVERY host's cache for this user, matching the cancel's reach: a
+        // pin is one bit per user and epic whichever host answered it, a
+        // task-contexts key carries its host, and with `staleTime: Infinity` a
+        // copy this missed would render the pre-write bit until its key
+        // changed. Here and not in the optimistic patch, deliberately: its
+        // `onError` rollback INVERTS the bit, which is only right where the
+        // pre-write bit was the opposite - true of the rendered source, not of
+        // another host's copy - whereas this is the committed bit. A host
+        // that never resolved the epic holds no `found` row, and the patch
+        // touches only `found` rows.
+        await cancelInFlightTaskContextsReads(
+          queryClient,
+          ctx.userId,
+          variables.epicId,
+        );
+        setEpicPinnedInTaskContextsCaches(
+          queryClient,
+          { hostId: null, userId: ctx.userId },
+          variables.epicId,
+          variables.pinned,
+        );
+        // The one read neither step above can reach: a FIRST fetch still in
+        // flight, holding no data to patch and deliberately not cancelled by
+        // the helper. It was requested before the write committed, so it is
+        // restarted rather than awaited - see the helper for why a plain
+        // refetch cannot do this.
+        await restartInFlightFirstTaskContextsReads(
+          queryClient,
+          ctx.userId,
+          variables.epicId,
+        );
         const pinTailScope = cloudQueryKeys.currentTasksPinTailScope(
           ctx.hostId,
           ctx.userId,
@@ -312,6 +361,105 @@ function isLocalHomePinExempt(
   if (!variables.isLocalHome || hostId === null) return false;
   return negotiatedSetPinnedServesLocalHome(
     readNegotiatedMethodVersion(hostId, "epic.setPinned"),
+  );
+}
+
+/**
+ * Cancels in-flight `epic.getTaskContexts` refetches that ask for this epic,
+ * so a response requested before a pin write cannot land after it. Every
+ * host: the tab strip's batch is keyed by the WINDOW's host, which need not be
+ * the host a local-homed pin is dispatched to.
+ *
+ * `revert: true`, not `false`. In query-core `revert: false` does not "keep
+ * the data quietly": it dispatches the cancellation as a query ERROR -
+ * `status: "error"`, a `CancelledError`, the entry invalidated. A later
+ * `setQueryData` clears that, which is why it hides on the success path, where
+ * the patches below land; but wherever no patch follows - a write that failed,
+ * or another host's copy the patch had nothing to change in - nothing
+ * refetches, the error sticks, and History's title lookup counts it as real
+ * and swaps its list for an error panel. Reverting restores the pre-fetch
+ * state with its data instead. (That state also tracks manual `setQueryData`
+ * writes, but nothing here depends on it: `onSuccess` re-patches the written
+ * bit straight after its cancel.)
+ */
+async function cancelInFlightTaskContextsReads(
+  queryClient: QueryClient,
+  userId: string,
+  epicId: string,
+): Promise<void> {
+  await queryClient.cancelQueries(
+    {
+      fetchStatus: "fetching",
+      // Only a REFETCH of a query that already holds data. Cancelling a
+      // first fetch would strand it pending and idle - a spinner nothing
+      // resolves - and it has no cached bit for a late response to overwrite.
+      predicate: (query) =>
+        query.state.data !== undefined &&
+        epicTaskContextsQueryKeyMatchesScope(query.queryKey, {
+          hostId: null,
+          userId,
+        }) &&
+        taskContextsQueryKeyAsksFor(query.queryKey, epicId),
+    },
+    { revert: true },
+  );
+}
+
+/**
+ * Restarts in-flight FIRST `epic.getTaskContexts` fetches that ask for this
+ * epic, so a response requested before a pin write committed cannot become the
+ * cached answer after it.
+ *
+ * {@link cancelInFlightTaskContextsReads} leaves these alone on purpose: they
+ * hold no data a late response could overwrite, and cancelling one on its own
+ * strands it pending and idle. But the response they will deliver is exactly
+ * such a late answer, and `staleTime: Infinity` keeps it. Cancelling is
+ * therefore only safe when followed by a fresh fetch, which is what this does.
+ *
+ * `refetchQueries({ cancelRefetch: true })` alone is NOT enough: TanStack only
+ * cancels a running fetch on refetch when the query already has data, and
+ * otherwise hands back the running promise - the very read being replaced.
+ * The entries themselves are kept, so their observers receive the replacement.
+ * A query with no observer is skipped by `refetchQueries` and left pending,
+ * which is harmless: the next observer to mount fetches it from scratch.
+ */
+async function restartInFlightFirstTaskContextsReads(
+  queryClient: QueryClient,
+  userId: string,
+  epicId: string,
+): Promise<void> {
+  const firstReads = new Set(
+    queryClient.getQueryCache().findAll({
+      fetchStatus: "fetching",
+      predicate: (query) =>
+        query.state.data === undefined &&
+        epicTaskContextsQueryKeyMatchesScope(query.queryKey, {
+          hostId: null,
+          userId,
+        }) &&
+        taskContextsQueryKeyAsksFor(query.queryKey, epicId),
+    }),
+  );
+  if (firstReads.size === 0) return;
+  const restarted = { predicate: (query: Query) => firstReads.has(query) };
+  // `revert: true`, as in the helper above: with no data to keep, reverting
+  // returns the entry to pending-idle quietly, where `revert: false` would
+  // dispatch the cancellation as a query ERROR (and log it).
+  await queryClient.cancelQueries(restarted, { revert: true });
+  void queryClient.refetchQueries(restarted);
+}
+
+function taskContextsQueryKeyAsksFor(
+  queryKey: readonly unknown[],
+  epicId: string,
+): boolean {
+  const params = queryKey[3];
+  return (
+    params !== null &&
+    typeof params === "object" &&
+    "taskIds" in params &&
+    Array.isArray(params.taskIds) &&
+    params.taskIds.includes(epicId)
   );
 }
 

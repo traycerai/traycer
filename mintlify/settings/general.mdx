@@ -1,0 +1,64 @@
+---
+title: "General"
+description: "Composer behavior, keeping the computer awake while agents run, the worktree branch prefix, experimental features, and resetting this device's app state."
+---
+
+**General** holds app behavior that doesn't belong to a provider, a host, or one part of the app. It sits in the **Application** group of [Settings](/settings), so its settings apply to the app on this device, whichever host you are looking at.
+
+## Chat & Composer
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Voice input** | On | Dictate prompts with the composer's mic button or <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>M</kbd> (the same keys on macOS). The microphone opens only while you are dictating, and turning this off closes it. Speech is transcribed on your device; audio never leaves your machine. |
+| **Quote reply on text selection** | On | Selecting text in an agent's reply shows a quote button that inserts the selection into the composer. |
+| **Steer with ⌘+Enter** (**Steer with Ctrl+Enter** on Windows and Linux) | On | While a turn is running, <kbd>Cmd</kbd> + <kbd>Enter</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd> sends the composer text into that turn as a steering message, ahead of the queue. Plain <kbd>Enter</kbd> still queues. Works with agents that support steering; see [Message queue](/panels/agents/message-queue). |
+
+To hide the mic button but keep the dictation shortcut, set **Microphone** to **Hidden** in [Layout](/settings/layout#composer) instead of turning voice input off.
+
+## Running Agents
+
+**Prevent sleep while running** keeps the computer awake while an agent is running, so work continues when you step away. It is off by default.
+
+## Worktrees
+
+**Default branch prefix** is the start of every branch name Traycer creates for a new worktree. The default is `traycer/`.
+
+- The row previews an example branch name, such as "New branches start like `traycer/<name>`", and updates as you type.
+- Changes save automatically. The reset button next to the field restores `traycer/`.
+- Leave the field empty to create branches with no prefix.
+- A prefix can be up to 40 characters. It can't contain spaces, `~ ^ : ? * [ \`, `..` or `@{`, can't start with `-` or `/`, and can't contain `//`. No part between slashes can start with `.` or end with `.lock`.
+
+A repository can set its own prefix in `<repo>/.traycer/environment.json`, which takes precedence over this one for that repository. See [Setup and teardown scripts](/concepts/worktrees/scripts).
+
+## Experimental
+
+**Agent roles** lets agents claim durable responsibilities, called roles, and coordinate through role-aware tools and prompts. It is off by default. Agents claim, list, and release roles with `traycer agent role claim`, `traycer agent role list`, and `traycer agent role relinquish`; see [CLI commands](/cli/commands).
+
+## Danger Zone
+
+**Clear local app state** resets this device's app state, then reloads the app:
+
+- open tabs and layout
+- drafts
+- settings and view preferences
+
+You stay signed in, and nothing on your hosts or in your Tasks is deleted. Traycer asks you to confirm first, and the reset can't be undone.
+
+File edit snapshots are cleared per host, from **Host › Overview › Data**; see [Overview](/settings/host).
+
+## Desktop Only
+
+The mobile app doesn't show **Voice input**, **Prevent sleep while running**, or the **Experimental** group.
+
+## Moved Settings
+
+Several rows that used to be on this page now live elsewhere:
+
+| Former setting | Where it is now |
+| --- | --- |
+| **Notify on agent turn completion** | The **Done** severity in Host › [Notifications](/settings/notifications), and the **Done** chime in [Sounds](/settings/sounds). |
+| **Local snapshots**, **Clear local snapshots** | **File edit snapshots** in Host › Overview › **Data**, per host. See [Overview](/settings/host). |
+| **Data migration** | **Import & migration** in Host › Overview › **Data**. See [Overview](/settings/host). |
+| Default permission mode | **Modes** in [Permissions](/settings/permissions). |
+| Product tour | **Initial tour** in [Getting started](/settings/getting-started). |
+| Resource monitor and resource-stat toggles, **Pin context usage breakdown**, **Home tab** | [Layout](/settings/layout). |

@@ -1,8 +1,10 @@
 import "../../../../../__tests__/test-browser-apis";
+import { useRef } from "react";
 
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -15,6 +17,7 @@ const testState: {
   signOut: () => Promise<void>;
   openSettings: () => void;
   isPending: boolean;
+  historyQueryMounts: number;
   cloudPagePending: boolean;
   hostRequiresCloudToList: boolean;
   /** Live agent activity per epic id; anything unlisted is idle. */
@@ -26,16 +29,26 @@ const testState: {
   indicators: SurfaceNotificationIndicators["epics"];
   /** The epic-id sets the drawer asked the notifications source about. */
   indicatorEpicIdCalls: ReadonlyArray<string>[];
+  /** Epics an agent is working on right now, per the agent-activity store. */
+  workingEpicIds: ReadonlySet<string>;
+  /** Rows `epic.getTaskContexts` can answer, keyed by epic id. */
+  backfillTasks: ReadonlyMap<string, ListTaskLight>;
+  /** The id lists the activity projection asked that batch about. */
+  backfillIdCalls: ReadonlyArray<string>[];
 } = {
   items: [],
   signOut: () => Promise.resolve(),
   openSettings: () => undefined,
   isPending: false,
+  historyQueryMounts: 0,
   cloudPagePending: false,
   hostRequiresCloudToList: false,
   activity: {},
   indicators: {},
   indicatorEpicIdCalls: [],
+  workingEpicIds: new Set<string>(),
+  backfillTasks: new Map<string, ListTaskLight>(),
+  backfillIdCalls: [],
 };
 
 const UNREAD_DONE: SurfaceNotificationIndicators["epics"][string] = {
@@ -72,21 +85,55 @@ vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => openLink }));
 const trackMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
-    data: {
-      items: testState.items,
-      totalCount: testState.items.length,
-      hostRequiresCloudToList: testState.hostRequiresCloudToList,
-    },
-    isPending: testState.isPending,
-    cloudPagePending: testState.cloudPagePending,
-    isFetching: false,
-    error: null,
-    refetch: () => Promise.resolve(),
-    fetchNextPage: () => undefined,
-    hasNextPage: false,
-    isFetchingNextPage: false,
-  }),
+  useHistoryQuery: () => {
+    const hasMountedQuery = useRef(false);
+    if (!hasMountedQuery.current) {
+      hasMountedQuery.current = true;
+      testState.historyQueryMounts += 1;
+    }
+    return {
+      data: {
+        items: testState.items,
+        totalCount: testState.items.length,
+        hostRequiresCloudToList: testState.hostRequiresCloudToList,
+      },
+      isPending: testState.isPending,
+      cloudPagePending: testState.cloudPagePending,
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+      refetchTasks: () => Promise.resolve(),
+      fetchNextPage: () => undefined,
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      currentUserId: "u1",
+    };
+  },
+}));
+
+// Mock the shared activity projection inputs at their boundaries: turn ids
+// determine optimistic activity, and the by-id batch answers missing rows.
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+}));
+
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: (taskIds: ReadonlyArray<string>) => {
+    testState.backfillIdCalls.push([...taskIds]);
+    return {
+      tasksById: new Map(
+        taskIds.flatMap((taskId) => {
+          const task = testState.backfillTasks.get(taskId);
+          return task === undefined ? [] : [[taskId, task] as const];
+        }),
+      ),
+      localHomedTaskIds: new Set<string>(),
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
+    };
+  },
 }));
 
 vi.mock("@/lib/analytics", () => ({
@@ -139,16 +186,29 @@ import { domMax, LazyMotion } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import {
+  MobileDrawerHistoryGateProvider,
+  MobileDrawerVisibleTilePaintReporter,
+} from "@/components/layout/shell/mobile-drawer-history-gate";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { setMobileApp } from "@/lib/mobile-app";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  patchHistorySearch,
+} from "@/lib/history-search";
 
 function historyItem(overrides: {
   readonly id: string;
   readonly title: string;
   readonly updatedAtMs: number;
+  readonly recentAtMs?: number;
 }): HistoryItem {
   return {
     id: overrides.id,
@@ -157,6 +217,7 @@ function historyItem(overrides: {
     title: overrides.title,
     initialUserPrompt: "",
     updatedAtMs: overrides.updatedAtMs,
+    recentAtMs: overrides.recentAtMs,
     updatedLabel: "about 1 month ago",
     updatedBucket: "earlier",
     linkedRepos: [],
@@ -172,6 +233,41 @@ function historyItem(overrides: {
 }
 
 /**
+ * A row as `epic.getTaskContexts` hands it back - the shape the in-progress
+ * lift backfills a running epic from when no history page listed it.
+ */
+function backfillTask(overrides: {
+  readonly id: string;
+  readonly title: string;
+  readonly updatedAtMs: number;
+}): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: overrides.id,
+        title: overrides.title,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: overrides.updatedAtMs,
+        createdBy: "u1",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned: false,
+  };
+}
+
+/**
  * Returns the Testing Library container, which is a direct child of the
  * document body and therefore stands in for "the rest of the app" when the
  * modal containment tests below check what got sealed off.
@@ -182,13 +278,45 @@ function historyItem(overrides: {
  */
 function renderDrawer(): HTMLElement {
   const { container } = render(
-    <LazyMotion features={domMax}>
-      <TestRouterProvider>
-        <MobileNavDrawer />
-      </TestRouterProvider>
-    </LazyMotion>,
+    <MobileDrawerHistoryGateProvider>
+      <LazyMotion features={domMax}>
+        <TestRouterProvider>
+          <MobileNavDrawer />
+        </TestRouterProvider>
+      </LazyMotion>
+    </MobileDrawerHistoryGateProvider>,
   );
   return container;
+}
+
+function drawerWithVisibleTileReporter(props: {
+  readonly metadataReady: boolean;
+  readonly selectedContentReporterMounted: boolean;
+  readonly selectedContentReady: boolean;
+  readonly selected: boolean;
+  readonly paneVisible: boolean;
+}) {
+  return (
+    <MobileDrawerHistoryGateProvider>
+      <LazyMotion features={domMax}>
+        <TestRouterProvider>
+          {props.metadataReady ? (
+            <span data-testid="epic-metadata-ready" />
+          ) : null}
+          <TabBodySelectedContext.Provider value={props.selected}>
+            <PaneVisibilityContext.Provider value={props.paneVisible}>
+              {props.selectedContentReporterMounted ? (
+                <MobileDrawerVisibleTilePaintReporter
+                  ready={props.selectedContentReady}
+                />
+              ) : null}
+              <MobileNavDrawer />
+            </PaneVisibilityContext.Provider>
+          </TabBodySelectedContext.Provider>
+        </TestRouterProvider>
+      </LazyMotion>
+    </MobileDrawerHistoryGateProvider>
+  );
 }
 
 describe("MobileNavDrawer", () => {
@@ -200,9 +328,14 @@ describe("MobileNavDrawer", () => {
     useFirstTaskGuideStore.getState().prepare();
     testState.indicators = {};
     testState.indicatorEpicIdCalls = [];
+    testState.workingEpicIds = new Set<string>();
+    testState.backfillTasks = new Map<string, ListTaskLight>();
+    testState.backfillIdCalls = [];
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
     testState.signOut = () => Promise.resolve();
     testState.openSettings = () => undefined;
     testState.isPending = false;
+    testState.historyQueryMounts = 0;
     testState.cloudPagePending = false;
     testState.hostRequiresCloudToList = false;
     openLink.mockClear();
@@ -222,10 +355,134 @@ describe("MobileNavDrawer", () => {
     cleanup();
     vi.useRealTimers();
     useMobileNavStore.setState({ open: false });
-    useAuthStore.setState({ profile: null });
+    useAuthStore.setState({ profile: null, shareableTeams: [] });
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     setMobileApp(false);
     useDesktopDialogStore.getState().close();
   });
+
+  it("loads the task list when the drawer opens before the first task paint", async () => {
+    testState.items = [
+      historyItem({
+        id: "cold-task",
+        title: "Task opened before paint",
+        updatedAtMs: NOW_MS,
+      }),
+    ];
+    setMobileApp(true);
+    useMobileNavStore.setState({ open: false });
+    renderDrawer();
+
+    await screen.findByTestId("mobile-nav-drawer");
+    expect(testState.historyQueryMounts).toBe(0);
+    expect(screen.queryByText("Task opened before paint")).toBeNull();
+
+    // The hamburger's one opening gesture commits the nav store before the
+    // landing route has reported its first task paint. That request alone must
+    // mount and load the list; opening it a second time must not be necessary.
+    act(() => {
+      useMobileNavStore.getState().setOpen(true);
+    });
+
+    expect(await screen.findByText("Task opened before paint")).not.toBeNull();
+    expect(testState.historyQueryMounts).toBe(1);
+
+    // The request stays latched while the selected content is still pending.
+    // Closing and reopening keeps the task list mounted and does not issue a
+    // second query.
+    act(() => {
+      useMobileNavStore.getState().setOpen(false);
+    });
+    expect(testState.historyQueryMounts).toBe(1);
+    expect(screen.queryByText("Task opened before paint")).not.toBeNull();
+
+    act(() => {
+      useMobileNavStore.getState().setOpen(true);
+    });
+    expect(await screen.findByText("Task opened before paint")).not.toBeNull();
+    expect(testState.historyQueryMounts).toBe(1);
+  });
+
+  it.each([
+    { label: "selected chat transcript", reporterMounted: false },
+    { label: "selected artifact editor", reporterMounted: true },
+  ] as const)(
+    "waits for the $label reporter after epic metadata is ready",
+    async ({ reporterMounted }) => {
+      testState.items = [
+        historyItem({
+          id: "metadata-ready-task",
+          title: "Task content ready",
+          updatedAtMs: NOW_MS,
+        }),
+      ];
+      setMobileApp(true);
+      useMobileNavStore.setState({ open: false });
+      const renderTree = (selectedContentReady: boolean) =>
+        drawerWithVisibleTileReporter({
+          metadataReady: true,
+          selectedContentReporterMounted:
+            reporterMounted || selectedContentReady,
+          selectedContentReady,
+          selected: true,
+          paneVisible: true,
+        });
+      const view = render(renderTree(false));
+
+      await screen.findByTestId("mobile-nav-drawer");
+      expect(screen.getByTestId("epic-metadata-ready")).not.toBeNull();
+      expect(testState.historyQueryMounts).toBe(0);
+
+      // Chat's reporter mounts only when its transcript does; the artifact's
+      // reporter stays mounted while its editor is still pending. Neither a
+      // ready Epic snapshot nor an unready selected-content reporter counts as
+      // the first paint. The gate opens when that surface's reporter commits.
+      view.rerender(renderTree(true));
+      expect(testState.historyQueryMounts).toBe(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(testState.historyQueryMounts).toBe(1);
+    },
+  );
+
+  it.each([
+    { label: "unselected tab", selected: false, paneVisible: true },
+    { label: "hidden pane", selected: true, paneVisible: false },
+  ] as const)(
+    "does not release the gate for a $label even when ready is true",
+    async ({ selected, paneVisible }) => {
+      testState.items = [
+        historyItem({
+          id: "unreleased-task",
+          title: "Task content ready",
+          updatedAtMs: NOW_MS,
+        }),
+      ];
+      setMobileApp(true);
+      useMobileNavStore.setState({ open: false });
+      render(
+        drawerWithVisibleTileReporter({
+          metadataReady: true,
+          selectedContentReporterMounted: true,
+          selectedContentReady: true,
+          selected,
+          paneVisible,
+        }),
+      );
+
+      await screen.findByTestId("mobile-nav-drawer");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+
+      // The reporter's own `ready` prop is true, but it is not the SELECTED,
+      // VISIBLE tile - an unselected tab or a hidden pane must not count as
+      // the first paint, so the gate stays closed and history stays unmounted.
+      expect(testState.historyQueryMounts).toBe(0);
+      expect(screen.queryByText("Task content ready")).toBeNull();
+    },
+  );
 
   describe("platform branch", () => {
     // Distinguished by markers neither branch sets by hand: the Sheet path
@@ -714,11 +971,12 @@ describe("MobileNavDrawer", () => {
         await screen.findByTestId("mobile-nav-manage-subscription"),
       );
 
-      // `resolvePlatformBaseUrl` takes the origin of the shell's own
-      // `signInUrl`, so this tracks whatever deployment is configured rather
-      // than rewriting a hostname label.
+      // The origin is that of the shell's own `signInUrl`, so this tracks
+      // whatever deployment is configured rather than rewriting a hostname
+      // label; the path is the Billing page, since the origin's root is the
+      // marketing homepage.
       expect(openLink).toHaveBeenCalledExactlyOnceWith(
-        "https://platform.test",
+        "https://platform.test/billing",
         "account",
         null,
       );
@@ -729,6 +987,25 @@ describe("MobileNavDrawer", () => {
         { source: "direct_ui" },
       );
       expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("opens the selected team's Billing page", async () => {
+      useAuthStore.setState({
+        shareableTeams: [{ teamId: "team-1", slug: "acme", avatarUrl: null }],
+      });
+      useAccountContextStore.setState({
+        accountContext: { type: "TEAM", teamId: "team-1" },
+      });
+      renderDrawer();
+      fireEvent.click(
+        await screen.findByTestId("mobile-nav-manage-subscription"),
+      );
+
+      expect(openLink).toHaveBeenCalledExactlyOnceWith(
+        "https://platform.test/team/acme/billing",
+        "account",
+        null,
+      );
     });
 
     it("confirms before signing out, then closes the drawer", async () => {
@@ -812,6 +1089,125 @@ describe("MobileNavDrawer", () => {
     });
   });
 
+  describe("Oldest timestamp", () => {
+    it("shows updated time for Oldest while the recent time is newer", async () => {
+      testState.items = [
+        historyItem({
+          id: "older",
+          title: "Older task",
+          updatedAtMs: NOW_MS - DAY_MS,
+          recentAtMs: NOW_MS - HOUR_MS,
+        }),
+      ];
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { sort: "oldest" }),
+      });
+
+      renderDrawer();
+      const row = await screen.findByTestId("mobile-nav-task-row");
+
+      expect(row.textContent).toContain("Yesterday");
+      expect(row.textContent).not.toContain("1h ago");
+    });
+  });
+
+  // The phone's replacement for Home's "In progress" group, which the mobile
+  // shell never mounts. The feed's order is pinned-first then `updatedAt`
+  // descending, and agent activity never touches `updatedAt` - so without this
+  // the one task the user is watching sits wherever it last happened to be.
+  describe("in-progress lift", () => {
+    it("puts a running task no history page listed at the top of the list", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "stale", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({
+          id: "b",
+          title: "older",
+          updatedAtMs: NOW_MS - 30 * DAY_MS,
+        }),
+      ];
+      // Deep in the feed, so far down that no loaded page carries it.
+      testState.workingEpicIds = new Set(["z"]);
+      testState.backfillTasks = new Map([
+        [
+          "z",
+          backfillTask({
+            id: "z",
+            title: "running",
+            updatedAtMs: NOW_MS - 90 * DAY_MS,
+          }),
+        ],
+      ]);
+      testState.activity = { z: "turn" };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(rows.length).toBe(3);
+      expect(rows[0]?.textContent).toContain("running");
+      // Asked about exactly the running epic the page did not carry, and
+      // nothing else - the lift never re-fetches a row it already has.
+      expect(testState.backfillIdCalls.at(-1)).toEqual(["z"]);
+    });
+
+    it("moves a listed turn-active task to the top without duplicating it", async () => {
+      testState.items = [
+        historyItem({
+          id: "a",
+          title: "recent",
+          updatedAtMs: NOW_MS - HOUR_MS,
+        }),
+        historyItem({ id: "b", title: "middle", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({
+          id: "c",
+          title: "running",
+          updatedAtMs: NOW_MS - 30 * DAY_MS,
+        }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      testState.activity = { c: "turn" };
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(rows.length).toBe(3);
+      expect(rows[0]?.textContent).toContain("running");
+      expect(
+        rows.filter((row) => row.textContent.includes("running")).length,
+      ).toBe(1);
+      // The projection may ask for an older pending active row, but never
+      // fetches the already-listed task a second time.
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
+    });
+
+    it("leaves the order alone while a search is active", async () => {
+      // A query's ranking IS the answer the user asked for; re-sorting it
+      // around what happens to be running would discard that answer.
+      testState.items = [
+        historyItem({
+          id: "a",
+          title: "best match",
+          updatedAtMs: NOW_MS - HOUR_MS,
+        }),
+        historyItem({
+          id: "c",
+          title: "running",
+          updatedAtMs: NOW_MS - 30 * DAY_MS,
+        }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      testState.activity = { c: "turn" };
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { query: "match" }),
+      });
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(rows.length).toBe(2);
+      expect(rows[0]?.textContent).toContain("best match");
+      expect(rows[1]?.textContent).toContain("running");
+      // Inert under a narrowing: no id list is built, so no batch is issued.
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+    });
+  });
+
   describe("task rows", () => {
     it("labels rows with the compact bucketed timestamp, not the verbose one", async () => {
       testState.items = [
@@ -888,12 +1284,14 @@ describe("MobileNavDrawer", () => {
       renderDrawer();
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
-      const status = rows[0]?.querySelector('[role="status"]');
+      const busyRow = rows.find((row) => row.textContent.includes("busy"));
+      const quietRow = rows.find((row) => row.textContent.includes("quiet"));
+      const status = busyRow?.querySelector('[role="status"]');
       expect(status?.getAttribute("aria-label")).toBe(
         "Task activity in progress",
       );
       expect(screen.getByTestId("mobile-nav-task-activity-a")).toBeTruthy();
-      expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
+      expect(quietRow?.querySelector('[role="status"]')).toBeNull();
     });
 
     it("shows the pin and then the running indicator on a pinned running task", async () => {
@@ -1019,13 +1417,17 @@ describe("MobileNavDrawer", () => {
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
       // Asked about exactly the ids on screen, epic ids only.
-      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(["a", "b"]);
-      const status = rows[0]?.querySelector('[role="status"]');
+      expect(testState.indicatorEpicIdCalls.at(-1)).toEqual(
+        expect.arrayContaining(["a", "b"]),
+      );
+      const doneRow = rows.find((row) => row.textContent.includes("done"));
+      const quietRow = rows.find((row) => row.textContent.includes("quiet"));
+      const status = doneRow?.querySelector('[role="status"]');
       expect(status).not.toBeNull();
       expect(
         status?.querySelector('[data-testid^="mobile-nav-task-"]'),
       ).not.toBeNull();
-      expect(rows[1]?.querySelector('[role="status"]')).toBeNull();
+      expect(quietRow?.querySelector('[role="status"]')).toBeNull();
     });
 
     it("never looks a phase up for live activity or notifications", async () => {

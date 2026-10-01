@@ -11,6 +11,7 @@
  * and a key derived from anything else would not survive the next reading.
  */
 import type {
+  AntigravityRateLimitWindow,
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
@@ -97,6 +98,7 @@ export function isWindowedRateLimitProvider(
     case "opencode":
     case "grok":
     case "cursor":
+    case "antigravity":
       return true;
     case "openrouter":
     case "kilocode":
@@ -209,6 +211,9 @@ export function fixedProviderWindowKeys(
       return Object.values(GROK_WINDOW_KEYS);
     case "cursor":
       return Object.values(CURSOR_WINDOW_KEYS);
+    // Every Antigravity window is discovered: Google owns the bucket ids and
+    // the set a plan reports, so none can be named before a reading.
+    case "antigravity":
     case "openrouter":
     case "kilocode":
     case "huggingface":
@@ -288,6 +293,81 @@ function codexExtraLabel(
 }
 
 /**
+ * Codex's base pair, then its extra limits. Split out of the arm switch, which
+ * otherwise outgrows the complexity cap with every provider added.
+ */
+function codexWindowCandidates(
+  rateLimits: Extract<
+    ProviderRateLimits,
+    { provider: "codex"; available: true }
+  >,
+): ReadonlyArray<RateLimitWindowEntry> {
+  return [
+    ...entry({
+      windowKey: CODEX_WINDOW_KEYS.primary,
+      label: formatCompactWindowDuration(
+        rateLimits.primary?.durationMinutes ?? null,
+      ),
+      labelIsDuration: true,
+      kind: "session",
+      window: rateLimits.primary,
+    }),
+    ...entry({
+      windowKey: CODEX_WINDOW_KEYS.secondary,
+      label: formatCompactWindowDuration(
+        rateLimits.secondary?.durationMinutes ?? null,
+      ),
+      labelIsDuration: true,
+      kind: "weekly",
+      window: rateLimits.secondary,
+    }),
+    // An extra window's label is duration-only exactly when the limit went
+    // unnamed - `codexExtraLabel` returns the bare duration there. A named
+    // one carries the only thing that tells it from the base window it
+    // shares a duration (and a reset) with.
+    ...rateLimits.extraWindows.flatMap((extra) => [
+      ...entry({
+        windowKey: `codex:extra:${extra.limitId}:primary`,
+        label: codexExtraLabel(
+          extra.limitName,
+          extra.primary?.durationMinutes ?? null,
+        ),
+        labelIsDuration: extra.limitName === null,
+        kind: "session",
+        window: extra.primary,
+      }),
+      ...entry({
+        windowKey: `codex:extra:${extra.limitId}:secondary`,
+        label: codexExtraLabel(
+          extra.limitName,
+          extra.secondary?.durationMinutes ?? null,
+        ),
+        labelIsDuration: extra.limitName === null,
+        kind: "weekly",
+        window: extra.secondary,
+      }),
+    ]),
+  ];
+}
+
+/**
+ * An Antigravity window is named for its model group, since two groups report
+ * the same pair of durations and reset on their own cycles. The duration comes
+ * from `durationMinutes`; a window kind Traycer has no duration for falls back
+ * to Google's raw token, then to the bucket id.
+ */
+function antigravityWindowLabel(
+  groupName: string,
+  window: AntigravityRateLimitWindow,
+): string {
+  const duration =
+    window.durationMinutes !== null
+      ? formatCompactWindowDuration(window.durationMinutes)
+      : (window.windowKind ?? window.bucketId);
+  return `${groupName} · ${duration}`;
+}
+
+/**
  * Every window a provider snapshot carries, as toggleable entries in the order
  * they are meant to render.
  *
@@ -363,52 +443,7 @@ function providerWindowCandidates(
         })),
       ];
     case "codex":
-      return [
-        ...entry({
-          windowKey: CODEX_WINDOW_KEYS.primary,
-          label: formatCompactWindowDuration(
-            rateLimits.primary?.durationMinutes ?? null,
-          ),
-          labelIsDuration: true,
-          kind: "session",
-          window: rateLimits.primary,
-        }),
-        ...entry({
-          windowKey: CODEX_WINDOW_KEYS.secondary,
-          label: formatCompactWindowDuration(
-            rateLimits.secondary?.durationMinutes ?? null,
-          ),
-          labelIsDuration: true,
-          kind: "weekly",
-          window: rateLimits.secondary,
-        }),
-        // An extra window's label is duration-only exactly when the limit went
-        // unnamed - `codexExtraLabel` returns the bare duration there. A named
-        // one carries the only thing that tells it from the base window it
-        // shares a duration (and a reset) with.
-        ...rateLimits.extraWindows.flatMap((extra) => [
-          ...entry({
-            windowKey: `codex:extra:${extra.limitId}:primary`,
-            label: codexExtraLabel(
-              extra.limitName,
-              extra.primary?.durationMinutes ?? null,
-            ),
-            labelIsDuration: extra.limitName === null,
-            kind: "session",
-            window: extra.primary,
-          }),
-          ...entry({
-            windowKey: `codex:extra:${extra.limitId}:secondary`,
-            label: codexExtraLabel(
-              extra.limitName,
-              extra.secondary?.durationMinutes ?? null,
-            ),
-            labelIsDuration: extra.limitName === null,
-            kind: "weekly",
-            window: extra.secondary,
-          }),
-        ]),
-      ];
+      return codexWindowCandidates(rateLimits);
     case "opencode":
       return [
         ...entry({
@@ -478,6 +513,18 @@ function providerWindowCandidates(
           window: rateLimits.otherModels,
         }),
       ];
+    case "antigravity":
+      // Keyed by Google's bucket id, the one identity in the payload that
+      // survives a group being renamed. Groups keep wire order, Gemini first.
+      return rateLimits.groups.flatMap((group) =>
+        group.windows.map((window) => ({
+          windowKey: `antigravity:${window.bucketId}`,
+          label: antigravityWindowLabel(group.displayName, window),
+          labelIsDuration: false,
+          kind: "model" as const,
+          window,
+        })),
+      );
     case "openrouter":
     case "kilocode":
     case "huggingface":

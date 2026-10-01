@@ -70,6 +70,7 @@ function renderMinimap(
         readonly scroll?: number;
         readonly viewportHeight?: number;
         readonly viewportWidth?: number;
+        readonly shown?: boolean;
         readonly side?: "left" | "right";
       }
     | undefined,
@@ -104,6 +105,7 @@ function renderMinimap(
       rows={transcriptListRows({ window: null, rendered: messages })}
       transcriptWindow={null}
       onSelect={onSelect}
+      shown={options.shown ?? true}
       side={options.side ?? "right"}
       topOffsetAdjustmentRef={{ current: 0 }}
       viewportRef={{ current: viewport }}
@@ -114,7 +116,7 @@ function renderMinimap(
 
 function renderRegisteredMinimap(input: {
   readonly messages: ReadonlyArray<ChatMessageModel>;
-  readonly side: "hide" | "left" | "right";
+  readonly side: "left" | "right";
 }) {
   const viewport = document.createElement("div");
   const measureRect = vi.fn(
@@ -132,6 +134,7 @@ function renderRegisteredMinimap(input: {
         rows={transcriptListRows({ window: null, rendered: messages })}
         transcriptWindow={null}
         onSelect={onSelect}
+        shown
         side={input.side}
         topOffsetAdjustmentRef={{ current: 0 }}
         viewportRef={{ current: viewport }}
@@ -346,7 +349,8 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
           })}
           transcriptWindow={null}
           onSelect={onSelect}
-          side="hide"
+          shown={false}
+          side="right"
           topOffsetAdjustmentRef={{ current: 0 }}
           viewportRef={{ current: viewport }}
         />
@@ -354,7 +358,7 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
     );
     await flushFrame();
 
-    // The rail itself obeys `hide`.
+    // The rail itself obeys `shown: false`.
     expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
 
     const adapter =
@@ -450,26 +454,26 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
   });
 
   it("only keeps that publication alive on a phone viewport", () => {
-    // Desktop under `hide` unmounts exactly as it did before the button
-    // existed: nothing there reads the outline.
+    // Desktop with `shown: false` unmounts exactly as it did before the
+    // button existed: nothing there reads the outline.
     expect(
       shouldMountChatTurnMinimap({
         hasContent: true,
-        side: "hide",
+        shown: false,
         mobileViewport: false,
       }),
     ).toBe(false);
     expect(
       shouldMountChatTurnMinimap({
         hasContent: true,
-        side: "hide",
+        shown: false,
         mobileViewport: true,
       }),
     ).toBe(true);
     expect(
       shouldMountChatTurnMinimap({
         hasContent: false,
-        side: "right",
+        shown: true,
         mobileViewport: true,
       }),
     ).toBe(false);

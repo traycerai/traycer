@@ -9,6 +9,10 @@ import {
   SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
   SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
 } from "@/lib/host/session-connectivity";
+import {
+  __resetDocumentVisibilitySubscribersForTests,
+  __setBrowserDocumentHiddenForTests,
+} from "@/lib/dom/document-visibility";
 
 /**
  * Only these tests exercise `createSessionConnectivityStore` and
@@ -727,6 +731,98 @@ describe("createSessionConnectivityStore across a system resume", () => {
     expect(resume.listenerCount()).toBe(1);
     unsubscribe();
     expect(resume.listenerCount()).toBe(0);
+  });
+});
+
+describe("createSessionConnectivityStore while the window is hidden", () => {
+  afterEach(() => {
+    __setBrowserDocumentHiddenForTests(false);
+    __resetDocumentVisibilitySubscribersForTests();
+  });
+
+  it("does not tick the readiness poll while the document is hidden", () => {
+    const ready = createReadyControl(true);
+    const clock = createControllableClock();
+    const store = createSessionConnectivityStore({
+      streamClient: createFakeHostStreamClient(ready.isReady),
+      isReady: ready.isReady,
+      now: clock.now,
+      subscribeResume: NEVER_RESUMES,
+      pollMs: POLL_MS,
+      announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
+      escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
+    });
+    const listener = vi.fn();
+    const dispose = store.subscribe(listener);
+    expect(store.getSnapshot()).toBe("ready");
+
+    __setBrowserDocumentHiddenForTests(true);
+    const callsWhileHidden = listener.mock.calls.length;
+    ready.setReady(false);
+    clock.advance(POLL_MS * 4);
+    expect(listener.mock.calls.length).toBe(callsWhileHidden);
+    expect(store.getSnapshot()).toBe("ready");
+
+    dispose();
+  });
+
+  it("notices a drop that happened while hidden on show, via fireOnShow", () => {
+    const ready = createReadyControl(true);
+    const clock = createControllableClock();
+    const store = createSessionConnectivityStore({
+      streamClient: createFakeHostStreamClient(ready.isReady),
+      isReady: ready.isReady,
+      now: clock.now,
+      subscribeResume: NEVER_RESUMES,
+      pollMs: POLL_MS,
+      announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
+      escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
+    });
+    const listener = vi.fn();
+    const dispose = store.subscribe(listener);
+    expect(store.getSnapshot()).toBe("ready");
+
+    __setBrowserDocumentHiddenForTests(true);
+    ready.setReady(false);
+    clock.advance(POLL_MS * 4);
+    expect(store.getSnapshot()).toBe("ready");
+    expect(listener).not.toHaveBeenCalled();
+
+    __setBrowserDocumentHiddenForTests(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot()).toBe("settling");
+
+    dispose();
+  });
+
+  it("notices a session that recovered while hidden on show, via fireOnShow", () => {
+    const ready = createReadyControl(true);
+    const clock = createControllableClock();
+    const store = createSessionConnectivityStore({
+      streamClient: createFakeHostStreamClient(ready.isReady),
+      isReady: ready.isReady,
+      now: clock.now,
+      subscribeResume: NEVER_RESUMES,
+      pollMs: POLL_MS,
+      announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
+      escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
+    });
+    const listener = vi.fn();
+    const dispose = store.subscribe(listener);
+    expect(store.getSnapshot()).toBe("ready");
+
+    __setBrowserDocumentHiddenForTests(true);
+    ready.setReady(false);
+    ready.setReady(true);
+    clock.advance(POLL_MS * 4);
+    expect(store.getSnapshot()).toBe("ready");
+    expect(listener).not.toHaveBeenCalled();
+
+    __setBrowserDocumentHiddenForTests(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot()).toBe("ready");
+
+    dispose();
   });
 });
 

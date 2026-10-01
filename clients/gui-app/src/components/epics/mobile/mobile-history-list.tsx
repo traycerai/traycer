@@ -1,6 +1,10 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, RefreshCwIcon } from "lucide-react";
-import type { HistoryItem } from "@/components/home/data/home-page.data";
+import {
+  historyRowTimeLabel,
+  type HistoryItem,
+  type HistorySortOption,
+} from "@/components/home/data/home-page.data";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   EpicsListChatHostFilterUnsupported,
@@ -21,6 +25,7 @@ import { cn } from "@/lib/utils";
 const SETTLE_CLASS = "transition-transform duration-220";
 
 export interface MobileHistoryListProps {
+  readonly sort: HistorySortOption;
   readonly error: Error | null;
   readonly isPending: boolean;
   /**
@@ -71,6 +76,7 @@ export interface MobileHistoryListProps {
  */
 export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
   const {
+    sort,
     error,
     isPending,
     hostRequiresCloudToList,
@@ -151,6 +157,7 @@ export function MobileHistoryList(props: MobileHistoryListProps): ReactNode {
         onScroll={handleScroll}
       >
         <MobileHistoryListBody
+          sort={sort}
           error={error}
           isPending={isPending}
           hostRequiresCloudToList={hostRequiresCloudToList}
@@ -226,6 +233,7 @@ function PullIndicator(props: {
 }
 
 interface MobileHistoryListBodyProps {
+  readonly sort: HistorySortOption;
   readonly error: Error | null;
   readonly isPending: boolean;
   readonly hostRequiresCloudToList: boolean;
@@ -288,6 +296,7 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
           <MobileHistoryRow
             key={item.id}
             item={item}
+            timeLabel={historyRowTimeLabel(item, props.sort)}
             selectionMode={props.selectionMode}
             isSelected={props.selectedIds.has(item.epicId)}
             isTrayOpen={props.openTrayEpicId === item.epicId}

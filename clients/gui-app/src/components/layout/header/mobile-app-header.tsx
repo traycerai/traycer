@@ -11,11 +11,11 @@ import { MobileNotificationsButton } from "@/components/notifications/mobile-not
 import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
+import { useRegionShown, useStatusBarVisible } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 
@@ -32,9 +32,19 @@ export function MobileAppHeader(): ReactNode {
   // `useMobileHeaderRightActions` for why display is a resolution rather than
   // something surfaces write here.
   const rightActions = useMobileHeaderRightActions();
-  const showGlobalResourceMonitor = useSettingsStore(
-    (state) => state.showGlobalResourceMonitor,
-  );
+  // Either the header or the footer draws the two readings, never both: with
+  // the footer switched on it carries them (usage and resources at its fixed
+  // ends), so the header gives up its glyphs. Keyed on the SETTING the footer
+  // mounts from, not on whether it is on screen this instant - the footer
+  // steps aside while the keyboard or the nav drawer is open, and glyphs that
+  // followed that would flicker into the header every time a field focused.
+  const footerShown = useStatusBarVisible();
+  const resourceMonitorShown = useRegionShown("resourceMonitor");
+  // The same switch the desktop header and the strip follow; the phone header
+  // drew the glyph whatever it said (G6).
+  const usageLimitsShown = useRegionShown("usageLimits");
+  const showGlobalResourceMonitor = !footerShown && resourceMonitorShown;
+  const showUsageLimits = !footerShown && usageLimitsShown;
   const surface = useMobileHeaderSurface();
   const epicTabId = surface.kind === "epic" ? surface.tabId : null;
   const epicId = useMobileHeaderEpicId(epicTabId);
@@ -80,18 +90,17 @@ export function MobileAppHeader(): ReactNode {
       {/* Right cluster: global status controls sit parallel to the hamburger,
           mirroring the desktop header's rate-limit + resource-monitor gating
           (navDisabled never applies here - MobileAppHeader only renders for the
-          "app" variant). They come before the surface-provided actions so a
+          "app" variant), and giving both up to the footer when it is on. They come before the surface-provided actions so a
           surface's own controls (e.g. the epic overflow) land outermost. */}
       <div className="flex shrink-0 items-center gap-1">
-        <RateLimitIconButton />
+        {showUsageLimits ? <RateLimitIconButton form="glyph" /> : null}
         {showGlobalResourceMonitor ? (
-          // The owner of `app.resources.open` on this viewport. The footer
-          // strip can be on screen at the same time (it is opt-in here rather
-          // than a placement), and it stands down for this mount - the header
-          // is the one that survives an open keyboard or nav drawer.
+          // The owner of `app.resources.open` on this viewport while the
+          // footer is off; with the footer on, this glyph is not drawn and the
+          // footer's own readout takes the chord.
           <ResourceMonitorPopover
             trigger="header-button"
-            className={undefined}
+            form="glyph"
             claimsOpenAction
           />
         ) : null}
@@ -205,7 +214,7 @@ const HOME_SURFACE: MobileHeaderSurface = { kind: "home" };
  * screen - for an epic, for History and for Settings alike.
  */
 function useMobileHeaderSurface(): MobileHeaderSurface {
-  const homeTabEnabled = useSettingsStore((state) => state.homeTabEnabled);
+  const homeTabEnabled = useRegionShown("homeTab");
   return useTabsStore(
     useShallow((state): MobileHeaderSurface => {
       const focused = selectHostFocusedRef(state);
@@ -231,6 +240,7 @@ function useMobileHeaderSurface(): MobileHeaderSurface {
             kind: "settings",
             path: state.systemTabs.settings?.lastPath ?? null,
           };
+        case "sample-workspace":
         case "draft":
           return COMPOSER_SURFACE;
       }

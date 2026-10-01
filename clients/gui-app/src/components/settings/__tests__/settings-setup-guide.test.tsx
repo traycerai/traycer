@@ -5,6 +5,8 @@ import { SettingsSetupGuide } from "@/components/settings/settings-setup-guide";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { setMobileApp } from "@/lib/mobile-app";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 
@@ -62,7 +64,11 @@ describe("SettingsSetupGuide", () => {
     });
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useLayoutEditorStore.setState({ session: null });
+    setMobileApp(false);
+  });
 
   it("keeps the guide running through StrictMode's mount probe", async () => {
     render(
@@ -93,7 +99,7 @@ describe("SettingsSetupGuide", () => {
     await screen.findByTestId("guide-coachmark");
     const progress = screen.getByTestId("guide-coachmark-progress");
     expect(progress.getAttribute("aria-valuenow")).toBe("3");
-    expect(progress.getAttribute("aria-valuemax")).toBe("5");
+    expect(progress.getAttribute("aria-valuemax")).toBe("6");
 
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
@@ -102,6 +108,19 @@ describe("SettingsSetupGuide", () => {
       step: 3,
     });
     expect(navigateMock).toHaveBeenCalledWith("layout");
+  });
+
+  it("does not navigate when Continue stays within the same section", () => {
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 0 } });
+    render(<Harness section="appearance" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 1,
+    });
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   // A skip is a decision, not a pause: the person has been shown the guide and
@@ -116,5 +135,105 @@ describe("SettingsSetupGuide", () => {
     expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
       setupGuideLength("appearance"),
     );
+  });
+
+  it("runs to the end on Layout and finishes at Getting started", async () => {
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 5 } });
+    render(<Harness section="layout" />);
+    await screen.findByTestId("guide-coachmark");
+    const progress = screen.getByTestId("guide-coachmark-progress");
+    expect(progress.getAttribute("aria-valuenow")).toBe("6");
+    expect(progress.getAttribute("aria-valuemax")).toBe("6");
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
+      setupGuideLength("appearance"),
+    );
+    expect(navigateMock).toHaveBeenCalledWith("getting-started");
+  });
+
+  // The installed app can never open the editor, so the guide ends on the
+  // page rather than on a step pointing at a door that is not drawn there.
+  it("ends on Layout's areas in the installed app and completes the guide", async () => {
+    setMobileApp(true);
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 4 } });
+    render(<Harness section="layout" />);
+    await screen.findByTestId("guide-coachmark");
+    const progress = screen.getByTestId("guide-coachmark-progress");
+    expect(progress.getAttribute("aria-valuenow")).toBe("5");
+    expect(progress.getAttribute("aria-valuemax")).toBe("5");
+    expect(document.documentElement.hasAttribute("data-layout-lit")).toBe(
+      false,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
+      setupGuideLength("appearance"),
+    );
+    expect(navigateMock).toHaveBeenCalledWith("getting-started");
+  });
+
+  // L-50: the last step SHOWS the canvas signal on the real chrome instead of
+  // entering the editor, and closing the step puts the chrome back.
+  it("lights the chrome around Settings on the final step only", async () => {
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 4 } });
+    const { unmount } = render(<Harness section="layout" />);
+    await screen.findByTestId("guide-coachmark");
+    expect(document.documentElement.hasAttribute("data-layout-lit")).toBe(
+      false,
+    );
+    unmount();
+
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 5 } });
+    render(<Harness section="layout" />);
+    await screen.findByTestId("guide-coachmark");
+
+    expect(document.documentElement.getAttribute("data-layout-lit")).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(document.documentElement.hasAttribute("data-layout-lit")).toBe(
+      false,
+    );
+  });
+
+  it("does not light the chrome while the final step's section is elsewhere", () => {
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 5 } });
+    render(<Harness section="appearance" />);
+
+    expect(screen.queryByTestId("guide-coachmark")).toBeNull();
+    expect(document.documentElement.hasAttribute("data-layout-lit")).toBe(
+      false,
+    );
+  });
+
+  it("draws nothing while a layout-editor session is running, and resumes after", async () => {
+    useOnboardingStore.setState({
+      activeSetup: { id: "appearance", step: 3 },
+    });
+    useLayoutEditorStore.setState({
+      session: {
+        entry: "pointer",
+        source: "direct_ui",
+        startedAt: Date.now(),
+        origin: { kind: "tab" },
+      },
+    });
+
+    const { unmount } = render(<Harness section="layout" />);
+    expect(screen.queryByTestId("guide-coachmark")).toBeNull();
+    unmount();
+
+    useLayoutEditorStore.setState({ session: null });
+    render(<Harness section="layout" />);
+    expect(await screen.findByTestId("guide-coachmark")).toBeTruthy();
+    expect(useOnboardingStore.getState().activeSetup).toEqual({
+      id: "appearance",
+      step: 3,
+    });
   });
 });

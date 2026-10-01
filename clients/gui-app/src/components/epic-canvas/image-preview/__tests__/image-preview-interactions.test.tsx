@@ -390,6 +390,7 @@ function readyAsset(url: string): UseFileAssetResult {
     url,
     meta: META,
     reason: null,
+    missing: false,
     totalBytes: 2048,
     servedFromCache: false,
     reportDecodeFailure: vi.fn(),

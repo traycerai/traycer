@@ -53,6 +53,16 @@ export interface ApprovalCardText {
   readonly inputSummary: string | null;
   /** The line under it: `null` when it would only repeat the first line. */
   readonly headline: string | null;
+  /**
+   * The input panel the card can open: `null` only when one of the two lines
+   * shows the whole input VERBATIM. The summary is cut at 80 characters, so
+   * without it a long command could only be approved on its first 79. And
+   * unlike a tool row's expand, whitespace counts here: the summary and a
+   * description can both put a command on one line, and in a shell a newline
+   * separates two commands where a space passes an argument, so a line that
+   * matches only once collapsed is not the command being approved.
+   */
+  readonly inputDetail: ToolInputDetail | null;
 }
 
 export function approvalCardText(
@@ -61,6 +71,32 @@ export function approvalCardText(
   description: string,
   inputDetail: ToolInputDetail | null,
 ): ApprovalCardText {
+  const lines = approvalCardLines(
+    toolName,
+    inputSummary,
+    description,
+    inputDetail,
+  );
+  const whole = singleDetailText(inputDetail);
+  const shownVerbatim =
+    whole !== null &&
+    (lines.inputSummary === whole || lines.headline === whole);
+  const hasInput =
+    inputDetail !== null &&
+    (inputDetail.kind === "command" || inputDetail.entries.length > 0);
+  return {
+    inputSummary: lines.inputSummary,
+    headline: lines.headline,
+    inputDetail: hasInput && !shownVerbatim ? inputDetail : null,
+  };
+}
+
+function approvalCardLines(
+  toolName: string,
+  inputSummary: string | null,
+  description: string,
+  inputDetail: ToolInputDetail | null,
+): Omit<ApprovalCardText, "inputDetail"> {
   const headline = collapse(description);
   if (headline.length === 0 || headline === collapse(toolName)) {
     return { inputSummary, headline: null };

@@ -3,9 +3,87 @@
 // Keeping a single source means what the projection indexes can't drift from
 // what the card actually renders (the previous duplication did exactly that).
 
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+  SubagentChildSegment,
+  SubagentSegment,
+} from "@/stores/composer/chat-store";
+
 export interface ProgressUpdateItem {
   readonly key: string;
   readonly text: string;
+}
+
+/**
+ * The Result panel's presence rule: hidden whenever the card has at least one
+ * child TEXT block, shown otherwise. Presence, never text comparison - the
+ * result is the last all-text MESSAGE while a child is one BLOCK, and the same
+ * text also comes back as the spawn tool's result under the CLI's hand-back
+ * header, so any equality test breaks on whitespace or a multi-block final and
+ * draws the answer twice. A browser-session row is a text block that carries no
+ * prose, so it does not count.
+ */
+export function subagentHasChildText(
+  children: ReadonlyArray<SubagentChildSegment>,
+): boolean {
+  return children.some(
+    (child) => child.kind === "text" && child.browserSession === undefined,
+  );
+}
+
+/**
+ * The progress timeline a card draws: its lines minus every line whose trimmed
+ * text is a child text block's trimmed text (an import records the subagent's
+ * prose as progress too, and that prose now renders in the child list), then
+ * adjacent-deduped. A line that matches no child - a model-authored summary -
+ * stays. Which lines are per-tool noise is decided at the host, where the
+ * provenance exists; this removes only what the child list already shows.
+ */
+export function subagentProgressItems(
+  progressUpdates: ReadonlyArray<string>,
+  children: ReadonlyArray<SubagentChildSegment>,
+): ReadonlyArray<ProgressUpdateItem> {
+  const childTexts = new Set(
+    children.flatMap((child) =>
+      child.kind === "text" ? [child.markdown.trim()] : [],
+    ),
+  );
+  if (childTexts.size === 0) {
+    return adjacentDedupedProgressItems(progressUpdates);
+  }
+  return adjacentDedupedProgressItems(
+    progressUpdates.filter((update) => !childTexts.has(update.trim())),
+  );
+}
+
+/**
+ * Every card from the transcript root down to the card `id` names - the
+ * open-as-chat breadcrumb trail - or `null` when no rendered row holds it
+ * (the row left the loaded window, or the chat moved on).
+ */
+export function subagentCardPath(
+  messages: ReadonlyArray<ChatMessageModel>,
+  id: string,
+): ReadonlyArray<SubagentSegment> | null {
+  for (const message of messages) {
+    const path = subagentCardPathIn(message.segments, id);
+    if (path !== null) return path;
+  }
+  return null;
+}
+
+function subagentCardPathIn(
+  segments: ReadonlyArray<MessageSegment | SubagentChildSegment>,
+  id: string,
+): ReadonlyArray<SubagentSegment> | null {
+  for (const segment of segments) {
+    if (segment.kind !== "subagent") continue;
+    if (segment.id === id) return [segment];
+    const below = subagentCardPathIn(segment.children, id);
+    if (below !== null) return [segment, ...below];
+  }
+  return null;
 }
 
 /**

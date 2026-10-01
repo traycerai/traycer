@@ -59,7 +59,7 @@ function mockMatchMedia(): void {
 
 function buildHost(): MockRunnerHost {
   return new MockRunnerHost({
-    signInUrl: "https://platform.traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
+    signInUrl: "https://traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
     authnBaseUrl: "http://localhost:5005",
     localHost: null,
     hosts: [],
@@ -82,7 +82,7 @@ const TRAYCER_APP_TEST_TIMEOUT_MS = 30_000;
 
 function buildHostWithLocalHost(): MockRunnerHost {
   return new MockRunnerHost({
-    signInUrl: "https://platform.traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
+    signInUrl: "https://traycer.ai?redirect_uri=traycer%3A%2F%2Fauth",
     authnBaseUrl: "http://localhost:5005",
     localHost: localSnapshot,
     hosts: [],
@@ -132,12 +132,6 @@ function hostStatusResponse() {
     storeFormats: null,
     install: null,
   };
-}
-
-function harnessIdFromCallParams(params: unknown): string | null {
-  if (typeof params !== "object" || params === null) return null;
-  if (!("harnessId" in params)) return null;
-  return typeof params.harnessId === "string" ? params.harnessId : null;
 }
 
 describe("<TraycerApp />", () => {
@@ -386,7 +380,7 @@ describe("<TraycerApp />", () => {
   );
 
   it(
-    "prefetches the GUI harness model catalog after host binding",
+    "prefetches GUI harness availability after host binding without fanning listModels",
     async () => {
       const host = buildHostWithLocalHost();
       host.tokenStoreEntries.set("traycer.token", {
@@ -437,12 +431,20 @@ describe("<TraycerApp />", () => {
 
       expect(await screen.findByTestId("epics-list-empty")).not.toBeNull();
       await waitFor(() => {
-        const modelHarnessIds = messenger.calls
-          .filter((call) => call.method === "agent.gui.listModels")
-          .map((call) => harnessIdFromCallParams(call.params));
-        expect(modelHarnessIds).toContain("codex");
-        expect(modelHarnessIds).toContain("claude");
+        expect(
+          messenger.calls.some(
+            (call) => call.method === "agent.gui.listHarnesses",
+          ),
+        ).toBe(true);
       });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "agent.gui.listModels",
+        ),
+      ).toEqual([]);
     },
     TRAYCER_APP_TEST_TIMEOUT_MS,
   );

@@ -12,10 +12,11 @@ import {
 import { RefreshIcon } from "@/components/refresh-icon";
 import { DiffSplitIcon, DiffUnifiedIcon } from "./diff-mode-icons";
 import type { GitDiffTileViewState } from "@/stores/epics/canvas/types";
-import type {
-  DiffViewerPreferences,
-  GitDiffIndicatorStyle,
-  GitDiffViewMode,
+import {
+  GIT_DIFF_INDICATOR_STYLE_LABELS,
+  type DiffViewerPreferences,
+  type GitDiffIndicatorStyle,
+  type GitDiffViewMode,
 } from "@/lib/diff/diff-viewer-preferences";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -37,9 +38,17 @@ const INDICATOR_OPTIONS: ReadonlyArray<{
   readonly label: string;
   readonly icon: LucideIcon;
 }> = [
-  { value: "bars", label: "Bars", icon: AlignJustify },
-  { value: "classic", label: "Plus / minus", icon: Diff },
-  { value: "none", label: "Hidden", icon: EyeOff },
+  {
+    value: "bars",
+    label: GIT_DIFF_INDICATOR_STYLE_LABELS.bars,
+    icon: AlignJustify,
+  },
+  {
+    value: "classic",
+    label: GIT_DIFF_INDICATOR_STYLE_LABELS.classic,
+    icon: Diff,
+  },
+  { value: "none", label: GIT_DIFF_INDICATOR_STYLE_LABELS.none, icon: EyeOff },
 ];
 
 export type DiffTabToolbarView = DiffViewerPreferences & GitDiffTileViewState;
@@ -238,7 +247,7 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
               />
             ))}
             <div className="flex items-center justify-between gap-3 px-2 py-1.5 text-ui-sm">
-              <span>Indicator style</span>
+              <span>Gutter marks</span>
               <IndicatorStyleControl
                 value={view.indicatorStyle}
                 onChange={(indicatorStyle) =>
@@ -306,7 +315,7 @@ function IndicatorStyleControl(props: {
   return (
     <div
       role="radiogroup"
-      aria-label="Indicator style"
+      aria-label="Gutter marks"
       // muted-fill-ok: segmented track on bg-canvas (tile-canvas canvas-token-scope); --canvas never equals --muted
       className="relative flex items-center rounded-md bg-muted p-0.5"
     >

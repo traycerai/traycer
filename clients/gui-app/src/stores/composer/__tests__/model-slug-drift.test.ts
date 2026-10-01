@@ -61,6 +61,8 @@ function createStore(
   onSettingsChange: ((model: string) => void) | null,
 ) {
   return createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: `model-slug-${modelSlug}`,
     values: {
       permission: "supervised",
@@ -149,9 +151,38 @@ describe("composer toolbar model slug drift", () => {
     expect(store.getState().selectionCatalogConfirmed).toBe(true);
   });
 
-  it("pins the known reverse-drift gap: old decorated slugs fall back to Default", () => {
+  it("holds a decorated slug the catalog has since undecorated instead of presenting Default", () => {
     const emitted: string[] = [];
-    const store = createStore("opus[1m]", (modelSlug) => {
+    const store = createStore("claude-fable-5-1[1m]", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+
+    const models = [
+      model("default", "claude-opus-5-5", "Default"),
+      model("opus", "claude-opus-5-5", "Opus"),
+      model("claude-fable-5-1", "claude-fable-5-1", "Fable 5.1"),
+    ];
+    store.getState().setCatalog(catalog(models));
+
+    // Claude CLI 2.1.282 dropped the `[1m]` decoration: a chat pinned to
+    // `claude-fable-5-1[1m]` under 2.1.280 must keep showing and launching
+    // Fable 5.1, not silently become Default (Opus). The stored slug is held
+    // verbatim - the CLI still accepts it - and nothing is written back.
+    expect(store.getState().selection.modelSlug).toBe("claude-fable-5-1[1m]");
+    expect(store.getState().selectionHealedForDisplay).toBe(false);
+    expect(store.getState().selectionCatalogConfirmed).toBe(true);
+    expect(store.getState().values.selection.modelSlug).toBe(
+      "claude-fable-5-1[1m]",
+    );
+    expect(emitted).toEqual([]);
+    expect(findSelectedModel(models, store.getState().selection)).toMatchObject(
+      { slug: "claude-fable-5-1", label: "Fable 5.1" },
+    );
+  });
+
+  it("still presents Default for a slug no row claims, even with a tier marker", () => {
+    const emitted: string[] = [];
+    const store = createStore("retired-model[1m]", (modelSlug) => {
       emitted.push(modelSlug);
     });
 
@@ -159,17 +190,18 @@ describe("composer toolbar model slug drift", () => {
       .getState()
       .setCatalog(
         catalog([
-          model("default", "claude-opus-5[1m]", "Default"),
-          model("opus", "claude-opus-5", "Opus"),
+          model("default", "claude-opus-5-5", "Default"),
+          model("opus", "claude-opus-5-5", "Opus"),
         ]),
       );
 
-    // KNOWN, DELIBERATELY UNFIXED GAP: the old decorated form is in neither
-    // the exact slug nor resolvedModel field, so the two-pass resolver misses
-    // and Default is presented in its place - display only, never persisted.
+    // The tier-tolerant match must not turn "a model the catalog dropped" into
+    // "any model": only an id that agrees once the marker is ignored is held.
     expect(store.getState().selection.modelSlug).toBe("default");
     expect(store.getState().selectionHealedForDisplay).toBe(true);
-    expect(store.getState().values.selection.modelSlug).toBe("opus[1m]");
+    expect(store.getState().values.selection.modelSlug).toBe(
+      "retired-model[1m]",
+    );
     expect(emitted).toEqual([]);
   });
 

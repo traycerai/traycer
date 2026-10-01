@@ -118,7 +118,8 @@ export interface ProviderRateLimitEnvelope {
 
 /**
  * Whether `response` carries a snapshot for a provider whose `providers.list`
- * profile rows report cached `rateLimitStatus`: claude-code, codex, or grok.
+ * profile rows report cached `rateLimitStatus` for managed profiles:
+ * claude-code, codex, grok, or antigravity.
  * Openrouter/kilocode/traycer-aperture reads gate out here so a convergence
  * invalidation isn't spent on a provider that could never affect the
  * switch-prompt banner. Failed probes (`available: false` - timeout,
@@ -134,7 +135,8 @@ function isManagedProfileCapableRateLimitsResponse(
     provider.available &&
     (provider.provider === "codex" ||
       provider.provider === "claude-code" ||
-      provider.provider === "grok")
+      provider.provider === "grok" ||
+      provider.provider === "antigravity")
   );
 }
 
@@ -228,7 +230,7 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
  * the cached `data`: the `ephemeralProcess` lane
  * (`provider-rate-limit-fetch.ts`, which fetches via its own
  * `queryClient.fetchQuery` call) and the `httpFetch` lane (`use-host-provider-rate-limits-query.ts` /
- * `use-header-rate-limit-bars.ts` / the popover's "Refresh all" button, all via
+ * `use-status-bar-rate-limit-segments.ts` / the popover's "Refresh all" button, all via
  * `useHostQueryWithResponseMap` / `useHostQueriesWithResponseMap`). Both write
  * into the same query-key family, so routing every write through this one
  * function is what keeps the envelope shape consistent no matter which lane's
@@ -266,8 +268,9 @@ export function mapResponseToProviderRateLimitEnvelope(args: {
  * available, otherwise exactly what the latest attempt reported (a good
  * reading, an authoritative unavailable reason, or `null` if no provider
  * snapshot has ever arrived). Shared by both resolvers in
- * `provider-rate-limit-content.ts` and by the header glyph bars
- * (`use-header-rate-limit-bars.ts`), so all three surfaces retain identically.
+ * `provider-rate-limit-content.ts` and by the usage readings
+ * (`use-status-bar-rate-limit-segments.ts`), so every surface retains
+ * identically.
  */
 export function resolveRetainedProviderRateLimits(
   envelope: ProviderRateLimitEnvelope | null,

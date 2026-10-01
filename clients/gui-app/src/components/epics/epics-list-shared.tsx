@@ -96,7 +96,6 @@ export function HistoryRowStatusIcon(props: {
           />
         )
       }
-      statusPresentation="message"
       agentSurface="gui"
     />
   );

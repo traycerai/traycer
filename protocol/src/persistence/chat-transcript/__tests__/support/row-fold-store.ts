@@ -7,6 +7,7 @@ import {
   isTranscriptPauseOpenEvent,
   transcriptMessageFoldFacts,
   transcriptPauseCorrelationKey,
+  type TranscriptFoldFullInput,
   type TranscriptRowDescriptor,
   type TranscriptRowProjectionInput,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -26,6 +27,7 @@ import {
   type TranscriptFoldChange,
   type TranscriptFoldLoad,
   type TranscriptFoldLoadResult,
+  type TranscriptFoldResult,
   type TranscriptFoldRow,
   type TranscriptFoldState,
   type TranscriptMessageRemoval,
@@ -48,6 +50,34 @@ import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/
  * the SAME position kept on a replace - mirroring `chat_events` upserting a
  * row rewritten by the host rather than appending a duplicate.
  */
+
+/**
+ * The two entry points a build of `row-projection.ts` exports, so a store can
+ * fold with either the live build or a pinned older one (a byte-for-byte copy
+ * of an earlier `row-projection.ts`, imported under its own name so it never
+ * collides with the live module).
+ */
+export interface RowFoldBuild {
+  readonly name: string;
+  readonly fold: (
+    prior: TranscriptFoldState,
+    change: TranscriptFoldChange,
+  ) => Generator<
+    TranscriptFoldLoad,
+    TranscriptFoldResult,
+    TranscriptFoldLoadResult
+  >;
+  readonly foldInMemory: (
+    input: TranscriptFoldFullInput,
+  ) => Extract<TranscriptFoldResult, { readonly continued: true }>;
+}
+
+/** The live build: what every existing caller of {@link RowFoldStore.apply} runs. */
+export const CURRENT_ROW_FOLD_BUILD: RowFoldBuild = {
+  name: "current",
+  fold: foldTranscriptRows,
+  foldInMemory: foldTranscriptRowsInMemory,
+};
 
 interface StoredMessageEntry {
   readonly position: number;
@@ -128,6 +158,11 @@ export class RowFoldStore {
   }
 
   apply(change: RowFoldChangeInput): ApplyResult {
+    return this.applyWith(CURRENT_ROW_FOLD_BUILD, change);
+  }
+
+  /** Applies one change with a given build's `fold`/`foldInMemory`, for mixed-build tests. */
+  applyWith(build: RowFoldBuild, change: RowFoldChangeInput): ApplyResult {
     this.opIndex += 1;
 
     const removedMessages: TranscriptMessageRemoval[] = [];
@@ -216,7 +251,7 @@ export class RowFoldStore {
     this.activeTurnId = change.activeTurnId;
 
     if (this.state === null) {
-      this.fullRebuild();
+      this.fullRebuild(build);
       return { continued: true, reason: null, loads: [], touchedUnitKeys: [] };
     }
 
@@ -421,14 +456,14 @@ export class RowFoldStore {
       appendedEvents,
     };
 
-    const steps = foldTranscriptRows(this.state, foldChange);
+    const steps = build.fold(this.state, foldChange);
     let step = steps.next();
     while (step.done !== true) step = steps.next(answer(step.value));
     const result = step.value;
 
     if (!result.continued) {
       this.declines.push({ op: this.opIndex, reason: result.reason });
-      this.fullRebuild();
+      this.fullRebuild(build);
       return {
         continued: false,
         reason: result.reason,
@@ -502,8 +537,8 @@ export class RowFoldStore {
       .map((entry) => ({ position: entry.position, message: entry.message }));
   }
 
-  private fullRebuild(): void {
-    const result = foldTranscriptRowsInMemory({
+  private fullRebuild(build: RowFoldBuild): void {
+    const result = build.foldInMemory({
       chatId: this.chatId,
       activeTurnId: this.activeTurnId,
       messages: this.liveMessagesSorted(),
@@ -567,6 +602,14 @@ export class RowFoldStore {
       for (const row of unit.rows) out.push(row.order);
     }
     return out;
+  }
+
+  /** The current persisted fold state, JSON-stringified. Throws before the first apply. */
+  stateJson(): string {
+    if (this.state === null) {
+      throw new Error("row-fold-store: no fold state yet");
+    }
+    return JSON.stringify(this.state);
   }
 
   /** The chat as it stands, for driving the oracle / `buildRowSkeleton` / `projectTranscriptRows`. */

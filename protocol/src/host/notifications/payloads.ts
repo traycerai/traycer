@@ -89,11 +89,14 @@ export function deriveHostNotificationStoppedReason(
     //
     // And it is not `null`. Declining to classify does stop the switching, but
     // a turn with no typed failure gets no failed-attempt envelope
-    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`),
-    // so the error card loses its manual `retry` / `switch` / `wait_once` rungs
-    // - and a fresh session is exactly what `retry` performs, i.e. the one
-    // affordance that fixes this failure. What actually stops the automatic
-    // traversal is `EXCLUDED_FALLBACK_REASONS`, which this reason is in.
+    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`).
+    // Its error card still offers `retry` and `switch` - and a fresh session is
+    // exactly what `retry` performs - but it loses `wait_once` (its wait
+    // disposition is `attempt_unavailable`) and names no `failedTuple`, the
+    // replay facts the envelope carries. Classifying it is what gives this
+    // failure its envelope, so the wait and those facts exist. What actually
+    // stops the automatic traversal is `EXCLUDED_FALLBACK_REASONS`, which this
+    // reason is in.
     case "session_budget_exceeded":
       return "session_budget";
     case "billing_error":
@@ -458,6 +461,39 @@ export type HostNotificationWorktreeAutoCleanupPayload = z.infer<
 >;
 
 /**
+ * The `operation` identifier of a shell-output delivery the host parked
+ * because the chat could not start a turn to receive it.
+ */
+export const HOST_OPERATION_MANAGED_COMMAND_DELIVERY =
+  "managed-command.delivery";
+
+/**
+ * `host.operation.finished` payload for a parked shell-output delivery.
+ *
+ * Chat-scoped: the chat's queue is paused and the remedy lives in that chat,
+ * so `epicId`/`chatId` are what the row routes to. Rows minted before these
+ * fields existed fail this arm and keep the common-field tier - host copy,
+ * no deep link.
+ */
+export const hostNotificationManagedCommandDeliveryParkedPayloadSchema =
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("managed_command_delivery_parked"),
+        operation: z.literal(HOST_OPERATION_MANAGED_COMMAND_DELIVERY),
+        title: z.string().min(1),
+        message: z.string().min(1),
+        commandId: idSchema,
+        epicId: idSchema,
+        chatId: idSchema,
+      })
+      .catchall(z.unknown()),
+  );
+export type HostNotificationManagedCommandDeliveryParkedPayload = z.infer<
+  typeof hostNotificationManagedCommandDeliveryParkedPayloadSchema
+>;
+
+/**
  * `browser.human.needed` payload: the parked session's tile plus the agent's
  * own reason for parking.
  *
@@ -493,6 +529,7 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationInterviewPayloadSchema,
     hostNotificationWorktreeDeletionPayloadSchema,
     hostNotificationWorktreeAutoCleanupPayloadSchema,
+    hostNotificationManagedCommandDeliveryParkedPayloadSchema,
     hostNotificationBrowserHumanNeededPayloadSchema,
   ]),
 );
@@ -550,14 +587,15 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "approval";
     case "interview.requested":
       return payloadKind === "interview";
-    // Two operation arms so far. A FUTURE operation adds its arm above and its
-    // kind to this list; until a client learns that kind, its rows degrade to
-    // the common-field tier rather than failing - which is the property the
-    // whole payload tier exists to provide.
+    // A FUTURE operation adds its arm above and its kind to this list; until a
+    // client learns that kind, its rows degrade to the common-field tier
+    // rather than failing - which is the property the whole payload tier
+    // exists to provide.
     case "host.operation.finished":
       return (
         payloadKind === "worktree_deletion" ||
-        payloadKind === "worktree_auto_cleanup"
+        payloadKind === "worktree_auto_cleanup" ||
+        payloadKind === "managed_command_delivery_parked"
       );
     case "browser.human.needed":
       return payloadKind === "browser_human_needed";

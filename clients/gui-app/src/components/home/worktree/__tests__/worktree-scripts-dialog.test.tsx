@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithLibrary,
   screen,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -188,6 +189,17 @@ const STAGING_KEY: WorktreeStagingKey = {
   draftId: null,
 };
 const KEY_STRING = worktreeStagingKeyString(STAGING_KEY);
+
+function render(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderWithLibrary(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
 
 function osScript(value: string): WorktreeEntryScripts["setup"] {
   return { default: value, macos: null, windows: null, linux: null };

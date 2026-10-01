@@ -9,11 +9,11 @@ import {
 } from "@traycer-clients/shared/replica-runtime";
 
 /**
- * Projection-row telemetry for one epic replica. These counts are the
- * exit-criteria row totals, not a second budget — charging the projected
- * JSON on top of the root Y.Doc would double-count the same rows. The six
- * whole-set *chat* snapshot slices (queue / approvals / interviews /
- * background / commands) live on the chat-windows plane.
+ * Projection-row telemetry for one epic replica. These counts describe the
+ * worker's retained rows; the main-thread structured-cloned projection is a
+ * separate retained graph with its own holder. The six whole-set *chat*
+ * snapshot slices (queue / approvals / interviews / background / commands)
+ * live on the chat-windows plane.
  */
 export interface EpicReplicaProjectionCounts {
   readonly artifacts: number;
@@ -45,6 +45,28 @@ export interface EpicReplicaBudgetBook {
     holderId: BudgetHolderId,
     bytes: number,
   ): void;
+  settleReplicaData(
+    accountant: MemoryAccountant,
+    size: {
+      readonly bookKey: string;
+      readonly holderId: BudgetHolderId;
+      readonly rawBytes: number;
+      readonly estimatedHeapBytes: number;
+    },
+  ): void;
+  settleMainProjection(
+    accountant: MemoryAccountant,
+    size: {
+      readonly bookKey: string;
+      readonly holderId: BudgetHolderId;
+      readonly rawBytes: number;
+      readonly estimatedHeapBytes: number;
+    },
+  ): void;
+  rawReplicaDataBytes(): number;
+  estimatedReplicaDataHeapBytes(): number;
+  rawMainProjectionBytes(): number;
+  estimatedMainProjectionHeapBytes(): number;
   settleColdRoom(
     accountant: MemoryAccountant,
     bookKey: string,
@@ -75,9 +97,13 @@ export function epicReplicaBookKey(
  * added on one side only.
  */
 const EPIC_REPLICA_ROOT_KIND = "root";
+const EPIC_REPLICA_DATA_KIND = "replica-data";
+const EPIC_MAIN_PROJECTION_KIND = "main-projection";
 const EPIC_REPLICA_COMMAND_OVERLAY_KIND = "command-overlay";
 const EPIC_REPLICA_FIXED_HOLDER_KINDS = [
   EPIC_REPLICA_ROOT_KIND,
+  EPIC_REPLICA_DATA_KIND,
+  EPIC_MAIN_PROJECTION_KIND,
   EPIC_REPLICA_COMMAND_OVERLAY_KIND,
 ] as const;
 
@@ -98,6 +124,28 @@ export function epicRootHolderId(
   return epicFixedHolderId(
     epicReplicaBookKey(hostId, epicId, runtimeToken),
     EPIC_REPLICA_ROOT_KIND,
+  );
+}
+
+export function epicReplicaDataHolderId(
+  hostId: string,
+  epicId: string,
+  runtimeToken: string,
+): BudgetHolderId {
+  return epicFixedHolderId(
+    epicReplicaBookKey(hostId, epicId, runtimeToken),
+    EPIC_REPLICA_DATA_KIND,
+  );
+}
+
+export function epicMainProjectionHolderId(
+  hostId: string,
+  epicId: string,
+  runtimeToken: string,
+): BudgetHolderId {
+  return epicFixedHolderId(
+    epicReplicaBookKey(hostId, epicId, runtimeToken),
+    EPIC_MAIN_PROJECTION_KIND,
   );
 }
 
@@ -124,6 +172,14 @@ export function epicColdRoomHolderId(
 export function createEpicReplicaBudgetBook(): EpicReplicaBudgetBook {
   const sessions = new Map<string, EpicReplicaBudgetSession>();
   const coldRoomsByKey = new Map<string, Set<BudgetHolderId>>();
+  const dataSizeByKey = new Map<
+    string,
+    { readonly rawBytes: number; readonly estimatedHeapBytes: number }
+  >();
+  const mainProjectionSizeByKey = new Map<
+    string,
+    { readonly rawBytes: number; readonly estimatedHeapBytes: number }
+  >();
 
   return {
     attach(session: EpicReplicaBudgetSession): void {
@@ -140,6 +196,65 @@ export function createEpicReplicaBudgetBook(): EpicReplicaBudgetBook {
       bytes: number,
     ): void {
       accountant.settle(BUDGET_PLANE_IDS.epicReplicas, holderId, bytes);
+    },
+
+    settleReplicaData(accountant, size): void {
+      const { bookKey, holderId, rawBytes, estimatedHeapBytes } = size;
+      if (estimatedHeapBytes === 0) {
+        dataSizeByKey.delete(bookKey);
+        accountant.release(BUDGET_PLANE_IDS.epicReplicas, holderId);
+        return;
+      }
+      dataSizeByKey.set(bookKey, { rawBytes, estimatedHeapBytes });
+      accountant.settle(
+        BUDGET_PLANE_IDS.epicReplicas,
+        holderId,
+        estimatedHeapBytes,
+      );
+    },
+
+    settleMainProjection(accountant, size): void {
+      const { bookKey, holderId, rawBytes, estimatedHeapBytes } = size;
+      if (estimatedHeapBytes === 0) {
+        mainProjectionSizeByKey.delete(bookKey);
+        accountant.release(BUDGET_PLANE_IDS.epicReplicas, holderId);
+        return;
+      }
+      mainProjectionSizeByKey.set(bookKey, { rawBytes, estimatedHeapBytes });
+      accountant.settle(
+        BUDGET_PLANE_IDS.epicReplicas,
+        holderId,
+        estimatedHeapBytes,
+      );
+    },
+
+    rawReplicaDataBytes(): number {
+      let total = 0;
+      for (const size of dataSizeByKey.values()) total += size.rawBytes;
+      return total;
+    },
+
+    estimatedReplicaDataHeapBytes(): number {
+      let total = 0;
+      for (const size of dataSizeByKey.values()) {
+        total += size.estimatedHeapBytes;
+      }
+      return total;
+    },
+
+    rawMainProjectionBytes(): number {
+      let total = 0;
+      for (const size of mainProjectionSizeByKey.values())
+        total += size.rawBytes;
+      return total;
+    },
+
+    estimatedMainProjectionHeapBytes(): number {
+      let total = 0;
+      for (const size of mainProjectionSizeByKey.values()) {
+        total += size.estimatedHeapBytes;
+      }
+      return total;
     },
 
     settleColdRoom(
@@ -171,6 +286,8 @@ export function createEpicReplicaBudgetBook(): EpicReplicaBudgetBook {
     },
 
     release(accountant: MemoryAccountant, bookKey: string): void {
+      dataSizeByKey.delete(bookKey);
+      mainProjectionSizeByKey.delete(bookKey);
       for (const kind of EPIC_REPLICA_FIXED_HOLDER_KINDS) {
         accountant.release(
           BUDGET_PLANE_IDS.epicReplicas,

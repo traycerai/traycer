@@ -41,6 +41,7 @@ export const MASTER_TOGGLE_DESCRIPTION =
  */
 export const FALLBACK = defineSettingsSection("fallback", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "Model routing",
     description:
       "What Traycer tries when a rate limit or another provider problem interrupts your chat.",
@@ -137,7 +138,8 @@ export const FALLBACK = defineSettingsSection("fallback", {
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: [],
+    // The section's own vocabulary: its rows are tiers of models and patterns.
+    keywords: ["tier", "tiers", "pattern", "frontier", "flagship", "standard"],
   },
   advanced: {
     kind: "group",

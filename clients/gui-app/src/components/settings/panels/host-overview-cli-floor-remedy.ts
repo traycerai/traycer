@@ -10,6 +10,7 @@ import {
   isValidHostVersion,
 } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { isPreReleaseVersion } from "@traycer-clients/shared/host-version/release-line";
+import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
 import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
 
 // There is deliberately no terminal action: a 1.2.0 host ignores shellCommand
@@ -452,7 +453,7 @@ function windowsCliInvocation(binaryPath: string | null): string {
   // at command position is a string expression, so invocation needs `&`.
   // Single quotes keep the path literal; cmd users need double quotes
   // without `&` instead.
-  return `& '${binaryPath.replaceAll("'", "''")}'`;
+  return `& ${powershellSingleQuoted(binaryPath)}`;
 }
 
 function posixCliUpgradeCommand(binaryPath: string | null): string {

@@ -51,7 +51,9 @@ make dev-desktop
 make dev-desktop VERSION=1.2.3
 ```
 
-Details: [`docs/DEVELOPMENT.md`](../../docs/DEVELOPMENT.md).
+`compile`, `build` and `test` above are whole-project runs. The commit hook
+compiles, and CI builds and tests; run one yourself only to diagnose its
+failure (see the root `AGENTS.md`).
 
 **Commits:** don't manually run `compile` / `build` / `lint` / `format` before
 committing — repo-root `pre-commit` already runs the affected checks (see root
@@ -118,7 +120,7 @@ failures.
   capabilities on the registered `webContents`. Placement is CSS
   `position-anchor` on a persistent DOM host. DOM overlays stack with ordinary
   z-index; there is no native-view occlusion coordinator, bounds IPC, or
-  snapshot stand-in. See `docs/adr/0001-browser-tile-rendering.md`.
+  snapshot stand-in.
 - **Login import** (`electron-main/browser-view/storage/login-import/`)
   reads other browsers' cookie jars on this machine into the durable
   `persist:traycer-browser` partition. Every reader is a pure function over

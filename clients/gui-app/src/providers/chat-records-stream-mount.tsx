@@ -15,6 +15,11 @@ import {
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
 import { publishRecordListDeltaStamp } from "@/lib/records/record-list-delta-stamps";
+import {
+  observeOwnHistoryRecordChange,
+  requestHistoryActivityRefresh,
+} from "@/hooks/home/use-optimistic-activity-history-items";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list-revision";
 
 /**
@@ -118,6 +123,24 @@ export function ChatRecordsStreamMount(): ReactNode {
       delta: ChatRecordsStreamDelta,
       listRevision: RecordListRevision | null,
     ): void => {
+      // The stream also carries own-row changes for closed tasks. History
+      // needs that edge even when there is no epic session to route into.
+      const userId = useAuthStore.getState().contextMetadata?.userId;
+      if (userId !== undefined) {
+        if (delta.kind === "upsert" || delta.kind === "tuiUpsert") {
+          if (delta.record.ownerUserId === userId) {
+            observeOwnHistoryRecordChange(
+              userId,
+              delta.epicId,
+              delta.record.updatedAt,
+            );
+          }
+        } else {
+          // The frozen removal frame has no owner. A bounded page refresh
+          // covers own deletes without projecting a collaborator's activity.
+          requestHistoryActivityRefresh(userId);
+        }
+      }
       // Peek, not acquire, for every delta kind - a record change must never
       // construct an epic session or reorder the MRU (see the doc above).
       const handle = getOpenEpicRegistry().peek(delta.epicId);

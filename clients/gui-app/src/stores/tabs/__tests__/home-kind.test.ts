@@ -13,9 +13,8 @@
  * either would let a hand-edited or corrupted payload put a second,
  * closable "Home" into the strip.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-  isRegisteredTabKind,
   tabDuplicate,
   tabEpicId,
   tabMatchesPath,
@@ -25,6 +24,7 @@ import {
   tabRouteOptions,
   tabSurfaceDescriptor,
 } from "@/stores/tabs/registry";
+import { isRegisteredTabKind } from "@/stores/tabs/tab-kind-policy";
 import { homeHeaderTab, HOME_TAB_REF } from "@/stores/tabs/kinds/home";
 import { homeTabIntent } from "@/lib/tab-navigation/intents";
 import {
@@ -51,8 +51,10 @@ describe("home tab kind - registry dispatch", () => {
     expect(tabDuplicate(homeHeaderTab())).toBeNull();
   });
 
-  it("tabRequestClose does not throw and leaves the tabs store untouched", () => {
-    expect(() => tabRequestClose(homeHeaderTab())).not.toThrow();
+  it("tabRequestClose refuses: the close operation is never called", () => {
+    const close = vi.fn<(ref: TabRef) => void>();
+    tabRequestClose(homeHeaderTab(), close);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("tabRequiresCloseConfirm is false", () => {

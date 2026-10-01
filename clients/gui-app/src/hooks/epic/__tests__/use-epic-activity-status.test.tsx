@@ -13,13 +13,21 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
-import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
+import {
+  chatSessionWaitingReason,
+  epicWaitingReasonFromSessions,
+  useEpicActivityStatus,
+  useEpicWaitingReason,
+} from "@/hooks/epic/use-epic-activity-status";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __getChatSessionRegistryForTests,
   disposeAllChatSessions,
 } from "@/lib/registries/chat-session-registry";
-import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import {
+  createChatSessionStore,
+  type ChatSessionState,
+} from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
@@ -245,5 +253,248 @@ describe("useEpicActivityStatus", () => {
       publishWorking([AGENT_ID], [AGENT_ID]);
     });
     expect(result.current).toBe("idle");
+  });
+});
+
+const COMMAND_APPROVAL: ChatSessionState["pendingApprovals"][number] = {
+  kind: "tool",
+  approvalId: "approval-1",
+  toolName: "bash",
+  description: "Run a command",
+  input: null,
+  planId: null,
+  actions: [],
+  requestedAt: 1,
+  reason: null,
+  reviewing: null,
+};
+
+const FILE_EDIT_APPROVAL: ChatSessionState["pendingFileEditApprovals"][number] =
+  {
+    approvalId: "file-edit-1",
+    toolName: "edit",
+    description: "Edit a file",
+    paths: ["/work/repo/a.ts"],
+    operation: "edit",
+    input: null,
+    requestedAt: 1,
+  };
+
+const INTERVIEW: ChatSessionState["pendingInterviews"][number] = {
+  blockId: "question-1",
+  requestedAt: 1,
+};
+
+function chatStore(chatId: string): ChatSessionState {
+  const handle = __getChatSessionRegistryForTests().peek(
+    EPIC_ID,
+    chatId,
+    ACTIVITY_HOST_ID,
+  );
+  if (handle === null) throw new Error(`expected chat session ${chatId}`);
+  return handle.store.getState();
+}
+
+function setChatGates(
+  chatId: string,
+  gates: Pick<
+    ChatSessionState,
+    "pendingApprovals" | "pendingFileEditApprovals" | "pendingInterviews"
+  >,
+): void {
+  const handle = __getChatSessionRegistryForTests().peek(
+    EPIC_ID,
+    chatId,
+    ACTIVITY_HOST_ID,
+  );
+  if (handle === null) throw new Error(`expected chat session ${chatId}`);
+  handle.store.setState(gates);
+}
+
+describe("chatSessionWaitingReason", () => {
+  it.each<{
+    readonly name: string;
+    readonly gates: Pick<
+      ChatSessionState,
+      "pendingApprovals" | "pendingFileEditApprovals" | "pendingInterviews"
+    >;
+    readonly expected: "approval" | "reply" | null;
+  }>([
+    {
+      name: "reads null for a chat with no gate",
+      gates: {
+        pendingApprovals: [],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [],
+      },
+      expected: null,
+    },
+    {
+      name: "reads reply for a pending interview",
+      gates: {
+        pendingApprovals: [],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [INTERVIEW],
+      },
+      expected: "reply",
+    },
+    {
+      name: "reads approval for a pending command approval",
+      gates: {
+        pendingApprovals: [COMMAND_APPROVAL],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [],
+      },
+      expected: "approval",
+    },
+    {
+      name: "reads null for a command approval still under the auto-judge",
+      gates: {
+        pendingApprovals: [{ ...COMMAND_APPROVAL, reviewing: "checking" }],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [],
+      },
+      expected: null,
+    },
+    {
+      name: "reads approval for a plan approval",
+      gates: {
+        pendingApprovals: [
+          { ...COMMAND_APPROVAL, kind: "plan", planId: "plan-1" },
+        ],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [],
+      },
+      expected: "approval",
+    },
+    {
+      name: "reads approval for a pending file-edit approval",
+      gates: {
+        pendingApprovals: [],
+        pendingFileEditApprovals: [FILE_EDIT_APPROVAL],
+        pendingInterviews: [],
+      },
+      expected: "approval",
+    },
+    {
+      name: "ranks an interview over an approval in the same chat",
+      gates: {
+        pendingApprovals: [COMMAND_APPROVAL],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [INTERVIEW],
+      },
+      expected: "reply",
+    },
+  ])("$name", ({ gates, expected }) => {
+    registerChatSession(AGENT_ID, []);
+    setChatGates(AGENT_ID, gates);
+    expect(chatSessionWaitingReason(chatStore(AGENT_ID))).toBe(expected);
+  });
+});
+
+describe("epicWaitingReasonFromSessions", () => {
+  it("ranks reply over approval across two chats, in either order", () => {
+    registerSessionHoldingAgents([AGENT_ID, OTHER_AGENT_ID]);
+    registerChatSession(AGENT_ID, []);
+    registerChatSession(OTHER_AGENT_ID, []);
+    const live = new Set([AGENT_ID, OTHER_AGENT_ID]);
+
+    setChatGates(AGENT_ID, {
+      pendingApprovals: [COMMAND_APPROVAL],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [],
+    });
+    setChatGates(OTHER_AGENT_ID, {
+      pendingApprovals: [],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [INTERVIEW],
+    });
+    expect(epicWaitingReasonFromSessions(EPIC_ID, live)).toBe("reply");
+
+    setChatGates(AGENT_ID, {
+      pendingApprovals: [],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [INTERVIEW],
+    });
+    setChatGates(OTHER_AGENT_ID, {
+      pendingApprovals: [],
+      pendingFileEditApprovals: [FILE_EDIT_APPROVAL],
+      pendingInterviews: [],
+    });
+    expect(epicWaitingReasonFromSessions(EPIC_ID, live)).toBe("reply");
+  });
+
+  it("ignores a warm chat the live projection no longer holds", () => {
+    registerChatSession(AGENT_ID, []);
+    setChatGates(AGENT_ID, {
+      pendingApprovals: [COMMAND_APPROVAL],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [],
+    });
+    expect(epicWaitingReasonFromSessions(EPIC_ID, new Set())).toBeNull();
+    expect(epicWaitingReasonFromSessions(EPIC_ID, null)).toBeNull();
+    expect(epicWaitingReasonFromSessions(EPIC_ID, new Set([AGENT_ID]))).toBe(
+      "approval",
+    );
+  });
+});
+
+describe("useEpicWaitingReason", () => {
+  it("re-renders when a live chat's pending interview resolves", () => {
+    registerSessionHoldingAgents([AGENT_ID, OTHER_AGENT_ID]);
+    registerChatSession(AGENT_ID, []);
+    registerChatSession(OTHER_AGENT_ID, []);
+    setChatGates(AGENT_ID, {
+      pendingApprovals: [],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [INTERVIEW],
+    });
+    setChatGates(OTHER_AGENT_ID, {
+      pendingApprovals: [COMMAND_APPROVAL],
+      pendingFileEditApprovals: [],
+      pendingInterviews: [],
+    });
+
+    const { result } = renderHook(() => useEpicWaitingReason(EPIC_ID));
+    expect(result.current).toBe("reply");
+
+    act(() => {
+      setChatGates(AGENT_ID, {
+        pendingApprovals: [],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [],
+      });
+    });
+    expect(result.current).toBe("approval");
+
+    act(() => {
+      setChatGates(OTHER_AGENT_ID, {
+        pendingApprovals: [],
+        pendingFileEditApprovals: [],
+        pendingInterviews: [],
+      });
+    });
+    expect(result.current).toBeNull();
+  });
+
+  it("picks up a chat session that registers after mount", () => {
+    registerSessionHoldingAgents([AGENT_ID]);
+    const { result } = renderHook(() => useEpicWaitingReason(EPIC_ID));
+    expect(result.current).toBeNull();
+
+    act(() => {
+      registerChatSession(AGENT_ID, []);
+      setChatGates(AGENT_ID, {
+        pendingApprovals: [],
+        pendingFileEditApprovals: [FILE_EDIT_APPROVAL],
+        pendingInterviews: [],
+      });
+    });
+    expect(result.current).toBe("approval");
+  });
+
+  it("reads null for a null epic id", () => {
+    const { result } = renderHook(() => useEpicWaitingReason(null));
+    expect(result.current).toBeNull();
   });
 });

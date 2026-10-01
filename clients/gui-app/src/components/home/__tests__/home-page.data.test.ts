@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ListTaskLightPre13,
   ListTaskLightPre15,
@@ -9,6 +9,7 @@ import {
   canDeleteHistoryItem,
   canEditHistoryItemTitle,
   EMPTY_LOCAL_HOMED_TASK_IDS,
+  formatUpdatedLabel,
   collectHistoryRepos,
   filterHistoryItems,
   groupHistoryItems,
@@ -48,6 +49,16 @@ function makeItem(
 }
 
 describe("home-page history helpers", () => {
+  it("labels under-a-minute activity as just now", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(100_000);
+      expect(formatUpdatedLabel(100_000)).toBe("just now");
+      expect(formatUpdatedLabel(40_000)).toBe("1 minute ago");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("collects unique repos across items", () => {
     const items: ReadonlyArray<HistoryItem> = [
       makeItem({ id: "a", title: "A", linkedRepos: ["gui-app", "mobile"] }),
@@ -423,6 +434,58 @@ describe("home-page history helpers", () => {
       isLocalHome: true,
       isPinned: false,
     });
+  });
+
+  it("labels a task updated under a minute ago as just now", () => {
+    const nowMs = Date.now();
+    const taskUpdatedAt = (
+      id: string,
+      updatedAt: number,
+    ): ListTaskLightPre15 => ({
+      epic: {
+        light: {
+          id,
+          title: id,
+          initialUserPrompt: "",
+          ticketCount: 0,
+          specCount: 0,
+          storyCount: 0,
+          reviewCount: 0,
+          status: "active",
+          createdAt: updatedAt,
+          updatedAt,
+          createdBy: "user-1",
+          version: "1",
+        },
+        permission: {
+          role: "owner" as const,
+          accessType: "direct" as const,
+          userId: "user-1",
+          grantedBy: "user-1",
+          grantedAt: 1,
+        },
+        repos: [],
+        workspaces: [],
+        roomInfo: null,
+      },
+      phase: null,
+      pinned: false,
+    });
+
+    const items = buildHistoryItemsFromTasks(
+      [
+        taskUpdatedAt("epic-fresh", nowMs - 5_000),
+        taskUpdatedAt("epic-older", nowMs - 5 * 60_000),
+      ],
+      nowMs,
+      "user-1",
+      EMPTY_LOCAL_HOMED_TASK_IDS,
+    );
+
+    expect(items.map((item) => item.updatedLabel)).toEqual([
+      "just now",
+      "5 minutes ago",
+    ]);
   });
 
   describe("chat-host filter", () => {

@@ -6,6 +6,7 @@
  */
 import type { ReactNode } from "react";
 import type {
+  AntigravityRateLimitWindow,
   ProviderRateLimits,
   ProviderRateLimitWindow,
   RateLimitUnavailableReason,
@@ -54,7 +55,7 @@ import {
 } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useRegionValue } from "@/lib/layout-overrides";
 import {
   selectEarliestExpiringCodexResetCredit,
   visibleCodexResetCredits,
@@ -127,6 +128,10 @@ type OpenRouterRateLimits = Extract<
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
 type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
 type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
+type AntigravityRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "antigravity" }
+>;
 type HuggingFaceRateLimits = Extract<
   ProviderRateLimits,
   { provider: "huggingface" }
@@ -303,9 +308,7 @@ function WindowMeterDetail({
   readonly resetsAt: number | null;
   readonly usedPercent: number;
 }): ReactNode {
-  const percentMode = useLayoutStore(
-    (state) => state.statusBar.rateLimits.percentMode,
-  );
+  const percentMode = useRegionValue("usageLimits", "amount");
   return (
     <span className="flex items-center gap-1">
       <span>{windowPercentText(usedPercent, percentMode)}</span>
@@ -1545,6 +1548,73 @@ function CursorIncludedUsageBar({
   );
 }
 
+/**
+ * Antigravity's usage detail: Google's model groups in wire order (Gemini
+ * first), each a heading, its description as a caption, then one row per
+ * window labelled by duration. The groups are separated the way Codex
+ * separates its limits. A group that reports no windows keeps its heading and
+ * caption, since upstream allows purely informational groups.
+ *
+ * Overview keeps only the first group, as Codex keeps only its base pair. The
+ * plan is not part of this body: the popover header renders it as a chip
+ * (`resolveProviderPlanLabel`), the same as Codex's and Claude's.
+ */
+export function AntigravityRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: AntigravityRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  const overview = isOverviewVariant(variant);
+  const groups = overview ? data.groups.slice(0, 1) : data.groups;
+  return (
+    <RateLimitGroupStack
+      groups={groups.map((group) => ({
+        key: `${group.displayName}:${group.windows.map((window) => window.bucketId).join(",")}`,
+        node: <AntigravityGroup group={group} />,
+      }))}
+    />
+  );
+}
+
+function AntigravityGroup({
+  group,
+}: {
+  readonly group: AntigravityRateLimits["groups"][number];
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-0.5">
+        <p className="text-ui-sm font-medium text-foreground">
+          {group.displayName}
+        </p>
+        {group.description !== null ? (
+          <p className="text-ui-xs text-muted-foreground">
+            {group.description}
+          </p>
+        ) : null}
+      </div>
+      {group.windows.map((window) => (
+        <RateLimitWindowRow
+          key={window.bucketId}
+          label={antigravityWindowLabel(window)}
+          window={window}
+        />
+      ))}
+    </div>
+  );
+}
+
+// A window kind Traycer has no duration for keeps Google's own token rather
+// than the generic "Usage", which would read the same for every such window.
+function antigravityWindowLabel(window: AntigravityRateLimitWindow): string {
+  if (window.durationMinutes !== null) {
+    return formatWindowDuration(window.durationMinutes);
+  }
+  return window.windowKind ?? window.bucketId;
+}
+
 export function ProviderRateLimitBody(
   props: ProviderRateLimitQueryState & {
     readonly codexResetAction: CodexResetCreditActionRenderer | null;
@@ -1709,5 +1779,9 @@ export function ProviderRateLimitDetail({
     // the spend-only layout OpenRouter/Kilo Code/Hugging Face use.
     case "cursor":
       return <CursorRateLimitView data={data} variant={variant} />;
+    // Antigravity is windowed and grouped: each Google model group carries its
+    // own 5h and weekly windows, so it renders Codex-style limit groups.
+    case "antigravity":
+      return <AntigravityRateLimitView data={data} variant={variant} />;
   }
 }
