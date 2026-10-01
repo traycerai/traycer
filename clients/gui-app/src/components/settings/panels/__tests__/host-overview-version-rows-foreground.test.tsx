@@ -283,7 +283,7 @@ describe("host-overview-version-picker — Install disabled during a local foreg
 
     const install = await findInstallButton("1.6.0");
     expect(install.disabled).toBe(true);
-    // Read through the button's own description: the version card's Update
+    // Read through the button's own description: the answer card's Update
     // now slot says the same sentence, so a page-wide text query finds two.
     const describedBy = install.getAttribute("aria-describedby");
     expect(describedBy).not.toBeNull();
