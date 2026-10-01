@@ -20,7 +20,12 @@ export function TabGroupChip(props: {
   useStripEntrance(chipRef, stripGroupMarkKey(groupId), "chip");
   const actions = useTabsStore.getState();
   return (
-    <GroupEditorAnchor groupId={groupId} group={group} onClose={props.onClose}>
+    <GroupEditorAnchor
+      groupId={groupId}
+      group={group}
+      onClose={props.onClose}
+      opensOnEnter={false}
+    >
       <TooltipWrapper
         label="Right-click to edit group"
         side="bottom"

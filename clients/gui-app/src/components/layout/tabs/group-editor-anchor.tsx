@@ -25,6 +25,11 @@ export function GroupEditorAnchor(props: {
   readonly groupId: string;
   readonly group: TabGroup;
   readonly onClose: (groupId: string) => void;
+  /**
+   * Enter and Space open it too, for an anchor with no action of its own (the
+   * Activity view's label); a pointer click still does nothing.
+   */
+  readonly opensOnEnter: boolean;
   readonly children: ReactElement;
 }): ReactNode {
   const { groupId, group } = props;
@@ -42,7 +47,10 @@ export function GroupEditorAnchor(props: {
           setOpen(true);
         }}
         onKeyDown={(event) => {
-          if (event.target !== event.currentTarget || !opensEditor(event)) {
+          if (
+            event.target !== event.currentTarget ||
+            !opensEditor(event, props.opensOnEnter)
+          ) {
             return;
           }
           event.preventDefault();
@@ -67,10 +75,14 @@ export function GroupEditorAnchor(props: {
   );
 }
 
-function opensEditor(event: KeyboardEvent<HTMLElement>): boolean {
+function opensEditor(
+  event: KeyboardEvent<HTMLElement>,
+  opensOnEnter: boolean,
+): boolean {
   return (
     event.key === "F2" ||
     event.key === "ContextMenu" ||
-    (event.shiftKey && event.key === "F10")
+    (event.shiftKey && event.key === "F10") ||
+    (opensOnEnter && (event.key === "Enter" || event.key === " "))
   );
 }

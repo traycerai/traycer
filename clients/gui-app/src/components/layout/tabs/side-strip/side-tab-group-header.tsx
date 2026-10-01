@@ -66,7 +66,12 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
       .updateGroup(groupId, { collapsed: !group.collapsed });
   };
   return (
-    <GroupEditorAnchor groupId={groupId} group={group} onClose={props.onClose}>
+    <GroupEditorAnchor
+      groupId={groupId}
+      group={group}
+      onClose={props.onClose}
+      opensOnEnter={false}
+    >
       <button
         type="button"
         aria-label={label}

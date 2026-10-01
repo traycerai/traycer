@@ -68,6 +68,8 @@ for (const [key, name] of [
   ["F2", "F2"],
   ["ContextMenu", "the context-menu key"],
   ["Shift+F10", "Shift+F10"],
+  ["Enter", "Enter"],
+  ["Space", "Space"],
 ] as const) {
   test(`opens the editor on ${name} on a focused label, at that label`, async ({
     page,
@@ -83,6 +85,22 @@ for (const [key, name] of [
     await expectAnchoredTo(page, label);
   });
 }
+
+test("opens nothing on a click of the label", async ({ page }) => {
+  await openStrip(page, ACTIVITY);
+  const label = blockIn(page, "idle").getByTestId(
+    `side-tab-group-label-${GROUP}`,
+  );
+
+  await label.click();
+
+  // The click landed: the label took focus. The editor would open by now.
+  await expect(label).toBeFocused();
+  await nextFrames(page, 10);
+  await expect(page.getByRole("textbox", { name: "Group name" })).toHaveCount(
+    0,
+  );
+});
 
 test("opens a task's Edit group… at the label of that task's own block", async ({
   page,

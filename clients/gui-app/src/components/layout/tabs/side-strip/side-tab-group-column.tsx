@@ -103,6 +103,7 @@ export function SideTabGroupColumn(props: {
           groupId={props.groupId}
           group={header.group}
           onClose={header.onClose}
+          opensOnEnter={false}
         >
           {column}
         </GroupEditorAnchor>

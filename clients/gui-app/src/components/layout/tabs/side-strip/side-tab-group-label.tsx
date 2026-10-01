@@ -10,8 +10,9 @@ import {
 /**
  * A group block's header in the Activity view: its name, and the group's
  * editor on a right-click, F2 or the context-menu keys, as on the Layered
- * view's header. The sections do the folding there, so a group has no fold of
- * its own and no count to show, and a click does nothing.
+ * view's header, and on Enter or Space, since the label has no action of its
+ * own. The sections do the folding there, so a group has no fold of its own
+ * and no count to show, and a pointer click does nothing.
  */
 export function SideTabGroupLabel(props: {
   readonly groupId: string;
@@ -20,17 +21,20 @@ export function SideTabGroupLabel(props: {
 }): ReactNode {
   const { groupId, group } = props;
   return (
-    <GroupEditorAnchor groupId={groupId} group={group} onClose={props.onClose}>
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={`${group.name || "Unnamed group"}: group`}
+    <GroupEditorAnchor
+      groupId={groupId}
+      group={group}
+      onClose={props.onClose}
+      opensOnEnter
+    >
+      <button
+        type="button"
+        aria-label={`${group.name || "Unnamed group"}: edit group`}
         aria-haspopup="dialog"
-        aria-keyshortcuts="F2"
         data-testid={`side-tab-group-label-${groupId}`}
         className={cn(
           SIDE_TAB_GROUP_LABEL_CLASS,
-          "rounded-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
+          "w-full rounded-lg text-start outline-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
         )}
       >
         {group.name ? (
@@ -41,7 +45,7 @@ export function SideTabGroupLabel(props: {
             {group.name}
           </span>
         ) : null}
-      </div>
+      </button>
     </GroupEditorAnchor>
   );
 }
