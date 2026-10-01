@@ -64,6 +64,11 @@ export interface UnifiedCloudChatEntry {
   readonly kind: "cloud";
   readonly key: string;
   readonly chat: CloudChatSummary;
+  /**
+   * The subagents nested under this row, in the same order the root list
+   * sorts by. Empty for a leaf. See `nestCloudChats` for which rows nest.
+   */
+  readonly children: readonly UnifiedCloudChatEntry[];
 }
 
 export type UnifiedChatEntry = UnifiedLocalChatEntry | UnifiedCloudChatEntry;
@@ -86,6 +91,118 @@ export function cloudChatRowKey(identity: {
 
 export function localChatRowKey(nodeId: string): string {
   return `${LOCAL_KEY_PREFIX}${nodeId}`;
+}
+
+/**
+ * The row key of the cloud row a cloud row names as its parent, or `null` for
+ * a root.
+ *
+ * A subagent is created by its orchestrator's host, which stamps the child's
+ * `parentChatId` with the orchestrator's host-minted chat id. That id is only
+ * meaningful together with the OWNER: two users can each hold a chat with the
+ * same host-minted id under one task, so the parent is looked up under the
+ * child's own owner, never by id alone.
+ */
+export function cloudChatParentRowKey(chat: CloudChatSummary): string | null {
+  if (chat.parentChatId === null) return null;
+  return cloudChatRowKey({
+    taskId: chat.identity.taskId,
+    ownerUserId: chat.identity.ownerUserId,
+    chatId: chat.parentChatId,
+  });
+}
+
+export interface CloudChatForest {
+  /** The rows with no parent among the input rows, in input order. */
+  readonly roots: readonly CloudChatSummary[];
+  /**
+   * Each row's children, keyed by the parent's `cloudChatRowKey`, in input
+   * order. A row absent from the map is a leaf.
+   */
+  readonly childrenByKey: ReadonlyMap<string, readonly CloudChatSummary[]>;
+}
+
+const NO_CHILDREN: readonly CloudChatSummary[] = [];
+
+/**
+ * The parent/child shape of a set of cloud rows: an orchestrator shared by a
+ * collaborator with the subagents it created nested beneath it, exactly as
+ * that collaborator's own sidebar draws them.
+ *
+ * A row nests only under a parent that is IN THE INPUT. The cloud list carries
+ * every row's `parentChatId`, but the parent it names may not be visible to
+ * this viewer at all - a private orchestrator is never listed, a terminal
+ * orchestrator is never published, and a forked orchestrator publishes under a
+ * derived clone id that no child's `parentChatId` matches. Such a row is a
+ * root: shown flat, never dropped, so a subagent whose parent this device
+ * cannot see is still on the list.
+ *
+ * The fold never separates a child from its parent: a subagent is created
+ * under the account of the agent that called create, so a parent and its
+ * child always share an owner, and the viewer's own rows - the only ones the
+ * fold removes - can only be parents of other rows of the viewer's own, which
+ * the record tree nests by itself.
+ *
+ * The result is a forest, whatever the input claims: a row reachable from a
+ * root appears once, under the first parent that reaches it, and a row inside
+ * a parent cycle - reachable from no root - is promoted to a root with the
+ * cycle's back-edge cut, so a renderer that recurses over `childrenByKey`
+ * always terminates and draws every row exactly once.
+ */
+export function nestCloudChats(
+  chats: readonly CloudChatSummary[],
+): CloudChatForest {
+  const present = new Set<string>();
+  for (const chat of chats) present.add(cloudChatRowKey(chat.identity));
+  const claimedChildren = new Map<string, CloudChatSummary[]>();
+  const claimedRoots: CloudChatSummary[] = [];
+  for (const chat of chats) {
+    const parentKey = cloudChatParentRowKey(chat);
+    if (parentKey === null || !present.has(parentKey)) {
+      claimedRoots.push(chat);
+      continue;
+    }
+    const siblings = claimedChildren.get(parentKey);
+    if (siblings === undefined) claimedChildren.set(parentKey, [chat]);
+    else siblings.push(chat);
+  }
+  const reached = new Set<string>();
+  const childrenByKey = new Map<string, CloudChatSummary[]>();
+  const roots: CloudChatSummary[] = [];
+  const reach = (chat: CloudChatSummary): void => {
+    const key = cloudChatRowKey(chat.identity);
+    const children: CloudChatSummary[] = [];
+    for (const child of claimedChildren.get(key) ?? NO_CHILDREN) {
+      const childKey = cloudChatRowKey(child.identity);
+      if (reached.has(childKey)) continue;
+      reached.add(childKey);
+      children.push(child);
+    }
+    if (children.length > 0) childrenByKey.set(key, children);
+    for (const child of children) reach(child);
+  };
+  const plant = (chat: CloudChatSummary): void => {
+    const key = cloudChatRowKey(chat.identity);
+    if (reached.has(key)) return;
+    reached.add(key);
+    roots.push(chat);
+    reach(chat);
+  };
+  for (const chat of claimedRoots) plant(chat);
+  // Whatever is left is inside a cycle; each cycle is entered at its first
+  // input row, whose parent edge is the one cut.
+  for (const chat of chats) plant(chat);
+  return { roots, childrenByKey };
+}
+
+/**
+ * The row keys of the cloud rows that have children - the branches whose
+ * expansion state the sidebar tracks. A leaf has no expansion state.
+ */
+export function cloudChatBranchKeys(
+  forest: CloudChatForest,
+): readonly string[] {
+  return [...forest.childrenByKey.keys()];
 }
 
 /**
@@ -359,12 +476,12 @@ export function chatListLastActiveAtByKey(input: {
  * (`cloudChatRowLastActiveAt`) - so the order and the chip cannot disagree
  * about which chat moved last. A row absent from it sorts by its own stamp.
  *
- * Local rows keep their tree identity: only ROOTS take part in the interleave,
- * and a nested child still renders under its parent. A cloud row is always a
- * leaf - the cloud list carries `parentChatId`, but the parent it names is a
- * chat on another machine that this device may not be able to see at all, and a
- * row that silently reparents itself as its sibling loads is worse than a flat
- * one.
+ * Rows keep their tree identity: only ROOTS take part in the interleave, and a
+ * nested child still renders under its parent. A local child renders through
+ * the projection's own tree; a cloud child - a collaborator's subagent - is
+ * nested here, under the cloud row its `parentChatId` names (`nestCloudChats`),
+ * and its siblings are sorted by the same comparator as the roots. A cloud
+ * row whose parent is not on the list is a root, not a dropped row.
  */
 export function mergeChatListEntries(input: {
   readonly localRootIds: readonly string[];
@@ -383,6 +500,20 @@ export function mergeChatListEntries(input: {
       ? sortable
       : { ...sortable, updatedAt: lastActiveAt };
   };
+  const forest = nestCloudChats(input.cloudChats);
+  const cloudEntry = (
+    chat: CloudChatSummary,
+  ): { entry: UnifiedCloudChatEntry; sortable: SortableNode } => {
+    const key = cloudChatRowKey(chat.identity);
+    const children = sortCloudEntries(
+      (forest.childrenByKey.get(key) ?? NO_CHILDREN).map(cloudEntry),
+      compare,
+    );
+    return {
+      entry: { kind: "cloud", key, chat, children },
+      sortable: withLastActiveAt(key, cloudChatSortable(chat)),
+    };
+  };
   const rows: { entry: UnifiedChatEntry; sortable: SortableNode }[] = [];
   for (const nodeId of input.localRootIds) {
     // Root ids are drawn from the same tree as `nodeById`, so every id
@@ -393,13 +524,16 @@ export function mergeChatListEntries(input: {
       sortable: withLastActiveAt(key, input.nodeById[nodeId]),
     });
   }
-  for (const chat of input.cloudChats) {
-    const key = cloudChatRowKey(chat.identity);
-    rows.push({
-      entry: { kind: "cloud", key, chat },
-      sortable: withLastActiveAt(key, cloudChatSortable(chat)),
-    });
-  }
+  for (const chat of forest.roots) rows.push(cloudEntry(chat));
   rows.sort((a, b) => compare(a.sortable, b.sortable));
   return rows.map((row) => row.entry);
+}
+
+function sortCloudEntries(
+  rows: readonly { entry: UnifiedCloudChatEntry; sortable: SortableNode }[],
+  compare: NodeComparator,
+): readonly UnifiedCloudChatEntry[] {
+  return [...rows]
+    .sort((a, b) => compare(a.sortable, b.sortable))
+    .map((row) => row.entry);
 }

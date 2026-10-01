@@ -54,6 +54,7 @@ function MountedDrainGate(props: {
       liveBusyBreakdown={props.liveBusyBreakdown ?? null}
       settledBusySessionCount={props.settledBusySessionCount}
       settledBusyBreakdown={props.settledBusyBreakdown ?? null}
+      foregroundUpdateLine={null}
     />
   );
 }

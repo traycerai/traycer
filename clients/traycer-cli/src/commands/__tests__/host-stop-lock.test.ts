@@ -112,7 +112,7 @@ const WORKER_SCRIPT = join(
 describe.skipIf(process.platform === "win32")(
   "host stop - genuine cli-lock contention",
   () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       workHome = mkdtempSync(join(tmpdir(), "traycer-host-stop-lock-test-"));
       osHome.current = workHome;
       process.env.HOME = workHome;
@@ -121,6 +121,9 @@ describe.skipIf(process.platform === "win32")(
       // module cache so the dynamic imports below see this test's own
       // tmp HOME (the mocked `node:os.homedir()` above, not the real one).
       vi.resetModules();
+      // Proves the redirect before any case can touch a host file.
+      const { hostHomeDir } = await import("../../store/paths");
+      expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
       mocks.controllerCalls = [];
     });
 
@@ -158,7 +161,11 @@ describe.skipIf(process.platform === "win32")(
         await waitForFile(join(holdBarrierDir, "held"));
 
         const { buildHostStopCommand } = await import("../host-stop");
-        const pending = buildHostStopCommand({ force: false })(fakeCtx());
+        const pending = buildHostStopCommand({
+          force: false,
+          ifIdle: false,
+          lifecycleOrigin: "terminal",
+        })(fakeCtx());
 
         // Give the command every chance to (wrongly) proceed while the
         // worker still genuinely holds the lock on disk.

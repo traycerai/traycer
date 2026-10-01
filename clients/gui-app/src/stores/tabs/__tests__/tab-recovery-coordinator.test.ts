@@ -1,11 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   __resetTabSyncCoordinatorForTesting,
@@ -17,14 +10,6 @@ import {
   type ClosedHeaderTab,
 } from "@/lib/tab-recovery/history";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { closeTab } from "@/stores/epics/canvas/actions";
-import type { EpicCanvasState } from "@/stores/epics/canvas/types";
-import {
-  CHAT_A,
-  SPEC_A,
-  pane,
-} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
-import { registerChatTabViewportCapture } from "@/stores/chats/chat-tab-viewport-handoff";
 import {
   landingDraftIsRetired,
   resetLandingDraftRetirementsForTests,
@@ -43,6 +28,13 @@ import {
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import { tabSourceRefs } from "@/stores/tabs/source-refs";
+import {
+  peekStripEntrance,
+  resetStripMotionForTesting,
+  stripGroupMarkKey,
+  subscribeClosingTabs,
+  takeReopenGlow,
+} from "@/stores/tabs/strip-motion";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
@@ -307,7 +299,7 @@ describe("tab recovery through the command coordinator", () => {
     const entries = useTabRecoveryHistory.getState().entries;
     expect(entries).toHaveLength(1);
     const entry = entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a header recovery entry");
     }
     expect(entry.bulk).toBe(false);
@@ -360,7 +352,7 @@ describe("tab recovery through the command coordinator", () => {
     useEpicCanvasStore.getState().closeTab(taskId);
 
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (recovery === undefined || recovery.kind !== "header") {
+    if (recovery === undefined) {
       throw new Error("expected the direct canvas close recovery entry");
     }
     expect(recovery.items).toHaveLength(1);
@@ -391,7 +383,7 @@ describe("tab recovery through the command coordinator", () => {
     expect(tabCommandCoordinator.closeRefAfterConfirmed(taskRef)).toBe(true);
 
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (recovery === undefined || recovery.kind !== "header") {
+    if (recovery === undefined) {
       throw new Error("expected the closed task recovery entry");
     }
     expect(recovery.items).toHaveLength(1);
@@ -439,7 +431,7 @@ describe("tab recovery through the command coordinator", () => {
     const entries = useTabRecoveryHistory.getState().entries;
     expect(entries).toHaveLength(1);
     const entry = entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a bulk header recovery entry");
     }
     expect(entry.bulk).toBe(true);
@@ -522,61 +514,6 @@ describe("tab recovery through the command coordinator", () => {
     expect(useTabRecoveryHistory.getState().entries).toEqual([]);
   });
 
-  it("captures a surviving chat viewport before restoring a closed split", () => {
-    const tabId = useEpicCanvasStore
-      .getState()
-      .openEpicTab("epic-viewport", "Viewport task");
-    const before: EpicCanvasState = {
-      root: {
-        kind: "group" as const,
-        id: "split-viewport",
-        direction: "horizontal" as const,
-        children: [
-          pane("pane-chat", [CHAT_A.instanceId]),
-          pane("pane-closed", [SPEC_A.instanceId]),
-        ],
-      },
-      activePaneId: "pane-chat",
-      tilesByInstanceId: {
-        [CHAT_A.instanceId]: CHAT_A,
-        [SPEC_A.instanceId]: SPEC_A,
-      },
-      sizesByGroupId: { "split-viewport": [0.5, 0.5] },
-    };
-    const after = closeTab(before, "pane-closed", SPEC_A.instanceId);
-    useEpicCanvasStore.setState((state) => ({
-      canvasByTabId: { ...state.canvasByTabId, [tabId]: after },
-    }));
-
-    const capturedCanvases: (typeof after)[] = [];
-    const unregister = registerChatTabViewportCapture(
-      CHAT_A.instanceId,
-      () => {
-        const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
-        if (canvas !== undefined) capturedCanvases.push(canvas);
-      },
-      {
-        viewKey: CHAT_A.instanceId,
-        contentKey: null,
-        deletionKey: null,
-        epicId: "epic-viewport",
-        hostId: CHAT_A.hostId,
-        durability: "renderer-live",
-      },
-    );
-    onTestFinished(unregister);
-
-    useEpicCanvasStore.getState().restoreCanvasForRecovery(tabId, {
-      before,
-      after,
-      instanceIds: [SPEC_A.instanceId],
-      focus: false,
-    });
-
-    expect(capturedCanvases).toEqual([after]);
-    expect(useEpicCanvasStore.getState().canvasByTabId[tabId]).not.toBe(after);
-  });
-
   it("replaces an empty start draft while restoring the last closed task", () => {
     const taskId = useEpicCanvasStore
       .getState()
@@ -586,7 +523,7 @@ describe("tab recovery through the command coordinator", () => {
 
     expect(tabCommandCoordinator.closeRefAfterConfirmed(taskRef)).toBe(true);
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (recovery === undefined || recovery.kind !== "header") {
+    if (recovery === undefined) {
       throw new Error("expected the closed task recovery entry");
     }
 
@@ -663,7 +600,7 @@ describe("tab recovery through the command coordinator", () => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(imageRef)).toBe(true);
     }, readTabStripLayout());
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (recovery === undefined || recovery.kind !== "header") {
+    if (recovery === undefined) {
       throw new Error("expected the closed draft recovery entry");
     }
     expect(recovery.items).toEqual([
@@ -706,7 +643,7 @@ describe("tab recovery through the command coordinator", () => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
     }, readTabStripLayout());
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
-    if (recovery === undefined || recovery.kind !== "header") {
+    if (recovery === undefined) {
       throw new Error("expected the bulk task recovery entry");
     }
     const focusedBeforeRestore = useTabsStore.getState().activeItemId;
@@ -754,7 +691,7 @@ describe("tab recovery through the command coordinator", () => {
       const closed = closedSide === "left" ? refA : refB;
       expect(tabCommandCoordinator.closeRefAfterConfirmed(closed)).toBe(true);
       const entry = useTabRecoveryHistory.getState().entries.at(0);
-      if (entry === undefined || entry.kind !== "header") {
+      if (entry === undefined) {
         throw new Error("expected a split recovery entry");
       }
       expect(entry.items[0]).toMatchObject({
@@ -825,7 +762,7 @@ describe("tab recovery through the command coordinator", () => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
     }, readTabStripLayout());
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a bulk group recovery entry");
     }
     expect(entry.items.map((item) => item.index)).toEqual([0, 1]);
@@ -891,7 +828,7 @@ describe("tab recovery through the command coordinator", () => {
       collapsed: false,
     });
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a renamed-group recovery entry");
     }
 
@@ -934,7 +871,7 @@ describe("tab recovery through the command coordinator", () => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refC)).toBe(true);
     }, readTabStripLayout());
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a mixed recovery entry");
     }
     expect(entry.items.map((item) => item.index)).toEqual([0, 1]);
@@ -974,7 +911,7 @@ describe("tab recovery through the command coordinator", () => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refC)).toBe(true);
     }, readTabStripLayout());
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a full split batch recovery entry");
     }
     expect(entry.items.map((item) => item.index)).toEqual([0, 0, 1]);
@@ -1018,7 +955,7 @@ describe("tab recovery through the command coordinator", () => {
       systemTabs: { history: null, settings: null },
     });
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a split recovery entry");
     }
 
@@ -1064,7 +1001,7 @@ describe("tab recovery through the command coordinator", () => {
     const newGroupId = useTabsStore.getState().createGroup(refB);
     if (newGroupId === null) throw new Error("expected a new group");
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected a changed-group recovery entry");
     }
 
@@ -1100,7 +1037,7 @@ describe("tab recovery through the command coordinator", () => {
 
     expect(tabCommandCoordinator.closeRefAfterConfirmed(ref)).toBe(true);
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected an empty-split recovery entry");
     }
 
@@ -1127,7 +1064,7 @@ describe("tab recovery through the command coordinator", () => {
 
     expect(tabCommandCoordinator.closeRefAfterConfirmed(taskRef)).toBe(true);
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected an empty-draft-peer recovery entry");
     }
 
@@ -1161,7 +1098,7 @@ describe("tab recovery through the command coordinator", () => {
     useEpicCanvasStore.getState().closeTab(taskA);
 
     const entry = useTabRecoveryHistory.getState().entries.at(0);
-    if (entry === undefined || entry.kind !== "header") {
+    if (entry === undefined) {
       throw new Error("expected direct-close recovery entry");
     }
     expect(entry.items[0]).toMatchObject({
@@ -1174,5 +1111,320 @@ describe("tab recovery through the command coordinator", () => {
     expect(useTabsStore.getState().items).toEqual([
       { ...split, focusedSide: "right", routeBackingSide: "right" },
     ]);
+  });
+});
+
+function stripMotionDelayFor(ref: TabRef): number | null {
+  return peekStripEntrance([tabRefKey(ref)])?.delayMs ?? null;
+}
+
+function openTaskRef(epicId: string): TabRef {
+  const tabId = useEpicCanvasStore.getState().openEpicTab(epicId, epicId);
+  return { kind: "epic", id: tabId };
+}
+
+/** The items the recovery history journalled for the close just made. */
+function latestRecoveryItems(): ReadonlyArray<ClosedHeaderTab> {
+  const entry = useTabRecoveryHistory.getState().entries.at(0);
+  if (entry === undefined) {
+    throw new Error("expected a recovery entry");
+  }
+  return entry.items;
+}
+
+/** Closes `refs` in one gesture, as Close Other Tabs does. */
+function closeTogether(
+  refs: ReadonlyArray<TabRef>,
+): ReadonlyArray<ClosedHeaderTab> {
+  batchHeaderTabRecovery(() => {
+    for (const ref of refs) {
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(ref)).toBe(true);
+    }
+  }, readTabStripLayout());
+  return latestRecoveryItems();
+}
+
+/**
+ * Whether each closing notice names `ref` while it is still in the strip: the
+ * strip measures the tab it is about to lose, so it has to be there when told.
+ */
+function watchStripAtClosingNotices(ref: TabRef): boolean[] {
+  const namedWhileInStrip: boolean[] = [];
+  subscribeClosingTabs((closingKeys) => {
+    namedWhileInStrip.push(
+      closingKeys.includes(tabRefKey(ref)) &&
+        stripRefs().some((stripRef) => tabRefKey(stripRef) === tabRefKey(ref)),
+    );
+  });
+  return namedWhileInStrip;
+}
+
+describe("strip motion marks from the command coordinator", () => {
+  beforeEach(() => {
+    resetStripMotionForTesting();
+  });
+
+  it("marks a tab that activation opens", () => {
+    const taskRef = openTaskRef("epic-motion-open");
+    seedStrip([taskRef], taskRef);
+
+    const activation = tabCommandCoordinator.activateTab({
+      kind: "draft",
+      draftId: null,
+      settings: null,
+      create: true,
+    });
+    if (activation === null) {
+      throw new Error("expected the draft activation");
+    }
+
+    expect(stripMotionDelayFor(activation.ref)).toBe(0);
+    expect(stripMotionDelayFor(taskRef)).toBeNull();
+  });
+
+  it("marks nothing when activation only selects a tab that is already open", () => {
+    const refA = openTaskRef("epic-motion-select-a");
+    const refB = openTaskRef("epic-motion-select-b");
+    seedStrip([refA, refB], refA);
+
+    expect(
+      tabCommandCoordinator.activateTab({ kind: "ref", ref: refB }),
+    ).not.toBeNull();
+
+    expect(stripMotionDelayFor(refB)).toBeNull();
+  });
+
+  it("tells the strip about a close while the closing task is still in it", () => {
+    const refA = openTaskRef("epic-motion-close-a");
+    const refB = openTaskRef("epic-motion-close-b");
+    seedStrip([refA, refB], refA);
+    const refAStillInStrip = watchStripAtClosingNotices(refA);
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+
+    expect(refAStillInStrip).toEqual([true]);
+    expect(stripRefs().map(tabRefKey)).toEqual([tabRefKey(refB)]);
+  });
+
+  it("does not tell the strip about a close that is refused", () => {
+    const taskRef = openTaskRef("epic-motion-refused");
+    seedStrip([taskRef], taskRef);
+    const notices = watchStripAtClosingNotices(taskRef);
+
+    expect(
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "epic",
+        id: "not-in-the-strip",
+      }),
+    ).toBe(false);
+
+    expect(notices).toEqual([]);
+  });
+
+  it("staggers reopened tasks in strip order, whatever order the journal lists them", () => {
+    const refA = openTaskRef("epic-motion-bulk-a");
+    const refB = openTaskRef("epic-motion-bulk-b");
+    const survivorRef = openTaskRef("epic-motion-bulk-survivor");
+    seedStrip([refA, refB, survivorRef], survivorRef);
+    const closed = closeTogether([refA, refB]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed.toReversed(), null);
+
+    expect(stripMotionDelayFor(refA)).toBe(0);
+    expect(stripMotionDelayFor(refB)).toBe(30);
+    expect(stripMotionDelayFor(survivorRef)).toBeNull();
+  });
+
+  it("gives a split side that rejoins a partner still open the join glow but no entrance", () => {
+    const refA = openTaskRef("epic-motion-rejoin-a");
+    const refB = openTaskRef("epic-motion-rejoin-b");
+    const refC = openTaskRef("epic-motion-rejoin-c");
+    const split = splitItem("split-motion-rejoin", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [tabItem(refC), split],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+    const closed = latestRecoveryItems();
+    expect(closed[0]).toMatchObject({ placement: { split } });
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(useTabsStore.getState().items.at(1)?.kind).toBe("split");
+    expect(stripMotionDelayFor(refA)).toBeNull();
+    expect(stripMotionDelayFor(refB)).toBeNull();
+    expect(takeReopenGlow([tabRefKey(refA)])).toBe(true);
+  });
+
+  it("does not count a rejoining split side in the stagger of the tabs reopened with it", () => {
+    const refA = openTaskRef("epic-motion-mixed-a");
+    const refB = openTaskRef("epic-motion-mixed-b");
+    const refD = openTaskRef("epic-motion-mixed-d");
+    const split = splitItem("split-motion-mixed", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refD)],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+    const closed = closeTogether([refA, refD]);
+    expect(closed.map((item) => item.index)).toEqual([0, 1]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(stripMotionDelayFor(refA)).toBeNull();
+    expect(stripMotionDelayFor(refD)).toBe(0);
+    expect(takeReopenGlow([tabRefKey(refA), tabRefKey(refD)])).toBe(false);
+  });
+
+  it("enters a split at once when both of its sides were closed", () => {
+    const refA = openTaskRef("epic-motion-whole-a");
+    const refB = openTaskRef("epic-motion-whole-b");
+    const refC = openTaskRef("epic-motion-whole-c");
+    const split = splitItem("split-motion-whole", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refC)],
+      activeItemId: tabItemId(refC),
+      systemTabs: { history: null, settings: null },
+    });
+    const closed = closeTogether([refA, refB]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(peekStripEntrance([tabRefKey(refA), tabRefKey(refB)])).toEqual({
+      delayMs: 0,
+    });
+    expect(stripMotionDelayFor(refC)).toBeNull();
+  });
+
+  it("staggers a split restored whole as one strip item, so a standalone tab restored after it waits 30ms", () => {
+    const refA = openTaskRef("epic-motion-item-a");
+    const refB = openTaskRef("epic-motion-item-b");
+    const refC = openTaskRef("epic-motion-item-c");
+    const split = splitItem("split-motion-item", refA, refB, 0.4);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refC)],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+    const closed = closeTogether([refA, refB, refC]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(useTabsStore.getState().items).toEqual([split, tabItem(refC)]);
+    expect(peekStripEntrance([tabRefKey(refA), tabRefKey(refB)])).toEqual({
+      delayMs: 0,
+    });
+    expect(stripMotionDelayFor(refC)).toBe(30);
+  });
+
+  it("glows a single reopened task, once", () => {
+    const refA = openTaskRef("epic-motion-glow-a");
+    const survivorRef = openTaskRef("epic-motion-glow-survivor");
+    seedStrip([refA, survivorRef], survivorRef);
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(latestRecoveryItems(), null);
+
+    expect(takeReopenGlow([tabRefKey(refA)])).toBe(true);
+    expect(takeReopenGlow([tabRefKey(refA)])).toBe(false);
+  });
+
+  it("glows none of several tasks reopened together", () => {
+    const refA = openTaskRef("epic-motion-pair-a");
+    const refB = openTaskRef("epic-motion-pair-b");
+    const survivorRef = openTaskRef("epic-motion-pair-survivor");
+    seedStrip([refA, refB, survivorRef], survivorRef);
+    const closed = closeTogether([refA, refB]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(takeReopenGlow([tabRefKey(refA), tabRefKey(refB)])).toBe(false);
+  });
+
+  it("opens a recreated group's chip first and holds its tabs back", () => {
+    const refA = openTaskRef("epic-motion-group-a");
+    const refB = openTaskRef("epic-motion-group-b");
+    const refC = openTaskRef("epic-motion-group-c");
+    seedLayout({
+      version: 2,
+      items: [tabItem(refA), tabItem(refB), tabItem(refC)],
+      activeItemId: tabItemId(refC),
+      systemTabs: { history: null, settings: null },
+      customizations: {
+        [tabRefKey(refA)]: { color: null, icon: "A", groupId: "group-motion" },
+        [tabRefKey(refB)]: { color: null, icon: "B", groupId: "group-motion" },
+      },
+      groups: {
+        "group-motion": { name: "Motion", color: "#8ab4f8", collapsed: false },
+      },
+      activationHistory: [refC],
+    });
+    const closed = closeTogether([refA, refB]);
+    expect(useTabsStore.getState().groups?.["group-motion"]).toBeUndefined();
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, null);
+
+    expect(peekStripEntrance([stripGroupMarkKey("group-motion")])).toEqual({
+      delayMs: 0,
+    });
+    expect(stripMotionDelayFor(refA)).toBe(60);
+    expect(stripMotionDelayFor(refB)).toBe(90);
+  });
+
+  it("leaves a surviving group's chip alone and does not hold its returning tab back", () => {
+    const refA = openTaskRef("epic-motion-kept-a");
+    const refB = openTaskRef("epic-motion-kept-b");
+    seedLayout({
+      version: 2,
+      items: [tabItem(refA), tabItem(refB)],
+      activeItemId: tabItemId(refB),
+      systemTabs: { history: null, settings: null },
+      customizations: {
+        [tabRefKey(refA)]: { color: null, icon: "A", groupId: "group-kept" },
+        [tabRefKey(refB)]: { color: null, icon: "B", groupId: "group-kept" },
+      },
+      groups: {
+        "group-kept": { name: "Kept", color: "#8ab4f8", collapsed: false },
+      },
+    });
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(latestRecoveryItems(), null);
+
+    expect(peekStripEntrance([stripGroupMarkKey("group-kept")])).toBeNull();
+    expect(stripMotionDelayFor(refA)).toBe(0);
+  });
+
+  it("tells the strip about a close when a reopen replaces the empty start page", () => {
+    const taskRef = openTaskRef("epic-motion-replace");
+    seedStrip([taskRef], taskRef);
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(taskRef)).toBe(true);
+    const closed = latestRecoveryItems();
+    const emptyStartId = useLandingDraftStore.getState().createDraft(null);
+    const emptyStartRef: TabRef = { kind: "draft", id: emptyStartId };
+    seedStrip([emptyStartRef], emptyStartRef);
+    const emptyStartStillInStrip = watchStripAtClosingNotices(emptyStartRef);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(closed, emptyStartId);
+
+    expect(emptyStartStillInStrip).toEqual([true]);
+    expect(stripRefs().map(tabRefKey)).toEqual([tabRefKey(taskRef)]);
+  });
+
+  it("does not tell the strip about a close when a reopen replaces nothing", () => {
+    const refA = openTaskRef("epic-motion-plain-a");
+    const refB = openTaskRef("epic-motion-plain-b");
+    seedStrip([refA, refB], refB);
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+    const notices = watchStripAtClosingNotices(refB);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(latestRecoveryItems(), null);
+
+    expect(notices).toEqual([]);
   });
 });

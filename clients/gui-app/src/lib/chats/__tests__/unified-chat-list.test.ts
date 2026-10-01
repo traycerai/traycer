@@ -3,7 +3,12 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { SortableNode } from "@/lib/epic-sort";
 import {
   chatListLastActiveAtByKey,
+  cloudChatBranchKeys,
+  cloudChatParentRowKey,
   localChatLastActiveAtById,
+  nestCloudChats,
+  type UnifiedChatEntry,
+  type UnifiedCloudChatEntry,
   chatRowLastActiveAt,
   cloudChatLastActiveAt,
   cloudChatRowKey,
@@ -537,5 +542,198 @@ describe("cross-owner folding", () => {
       publicationChatIdByChatId: NO_REDIRECTS,
     });
     expect(kept).toEqual([COLLABORATOR_ROW]);
+  });
+});
+
+describe("nesting shared subagents", () => {
+  const PARENT_ID = "parent-chat";
+
+  function member(input: {
+    readonly chatId: string;
+    readonly ownerUserId: string;
+    readonly parentChatId: string | null;
+    readonly publishedAt: number;
+  }): CloudChatSummary {
+    const base = cloudChat({
+      chatId: input.chatId,
+      ownerHostId: OTHER_HOST,
+      title: input.chatId,
+      publishedAt: input.publishedAt,
+      metadataUpdatedAt: input.publishedAt,
+      createdAt: 1,
+    });
+    return {
+      ...base,
+      identity: { ...base.identity, ownerUserId: input.ownerUserId },
+      isOwnedByViewer: input.ownerUserId === VIEWER,
+      parentChatId: input.parentChatId,
+    };
+  }
+
+  function merge(
+    cloudChats: readonly CloudChatSummary[],
+    lastActiveAtByKey: ReadonlyMap<string, number>,
+  ): readonly UnifiedChatEntry[] {
+    return mergeChatListEntries({
+      localRootIds: [],
+      nodeById: {},
+      cloudChats,
+      comparator: null,
+      lastActiveAtByKey,
+    });
+  }
+
+  function isCloud(entry: UnifiedChatEntry): entry is UnifiedCloudChatEntry {
+    return entry.kind === "cloud";
+  }
+
+  function cloudRoots(
+    cloudChats: readonly CloudChatSummary[],
+    lastActiveAtByKey: ReadonlyMap<string, number>,
+  ): readonly UnifiedCloudChatEntry[] {
+    return merge(cloudChats, lastActiveAtByKey).filter(isCloud);
+  }
+
+  function chatIds(entries: readonly UnifiedCloudChatEntry[]): string[] {
+    return entries.map((entry) => entry.chat.identity.chatId);
+  }
+
+  function flatten(
+    entries: readonly UnifiedCloudChatEntry[],
+  ): UnifiedCloudChatEntry[] {
+    return entries.flatMap((entry) => [entry, ...flatten(entry.children)]);
+  }
+
+  const parent = member({
+    chatId: PARENT_ID,
+    ownerUserId: VIEWER,
+    parentChatId: null,
+    publishedAt: 100,
+  });
+  const childOld = member({
+    chatId: "child-old",
+    ownerUserId: VIEWER,
+    parentChatId: PARENT_ID,
+    publishedAt: 200,
+  });
+  const childNew = member({
+    chatId: "child-new",
+    ownerUserId: VIEWER,
+    parentChatId: PARENT_ID,
+    publishedAt: 400,
+  });
+
+  it("nests a child under its parent and leaves it out of the roots", () => {
+    const roots = cloudRoots([parent, childOld], new Map());
+    expect(chatIds(roots)).toEqual([PARENT_ID]);
+    expect(chatIds(roots[0].children)).toEqual(["child-old"]);
+    expect(roots[0].children[0].children).toEqual([]);
+  });
+
+  it("builds the same forest from nestCloudChats", () => {
+    const forest = nestCloudChats([childOld, parent]);
+    expect(forest.roots).toEqual([parent]);
+    expect(forest.childrenByKey.get(cloudChatRowKey(parent.identity))).toEqual([
+      childOld,
+    ]);
+    expect(cloudChatParentRowKey(childOld)).toBe(
+      cloudChatRowKey(parent.identity),
+    );
+    expect(cloudChatParentRowKey(parent)).toBeNull();
+  });
+
+  it("sorts children by recency, newest first", () => {
+    const roots = cloudRoots([parent, childOld, childNew], new Map());
+    expect(chatIds(roots[0].children)).toEqual(["child-new", "child-old"]);
+  });
+
+  it("re-orders siblings by a lastActiveAtByKey override", () => {
+    const roots = cloudRoots(
+      [parent, childOld, childNew],
+      new Map([[cloudChatRowKey(childOld.identity), 900]]),
+    );
+    expect(chatIds(roots[0].children)).toEqual(["child-old", "child-new"]);
+  });
+
+  it("renders a child of a private (unlisted) parent as a root, not dropped", () => {
+    const orphan = member({
+      chatId: "orphan",
+      ownerUserId: VIEWER,
+      parentChatId: "private-orchestrator",
+      publishedAt: 300,
+    });
+    const roots = cloudRoots([orphan], new Map());
+    expect(chatIds(roots)).toEqual(["orphan"]);
+    expect(roots[0].children).toEqual([]);
+  });
+
+  it("keeps a child of a forked parent flat: the parent publishes under a clone id", () => {
+    const forkedParent = member({
+      chatId: CLONE_ROW,
+      ownerUserId: VIEWER,
+      parentChatId: null,
+      publishedAt: 100,
+    });
+    const child = member({
+      chatId: "fork-child",
+      ownerUserId: VIEWER,
+      parentChatId: WALKTHROUGH,
+      publishedAt: 200,
+    });
+    const roots = cloudRoots([forkedParent, child], new Map());
+    expect(chatIds(roots).sort()).toEqual(["fork-child", CLONE_ROW].sort());
+    expect(roots.every((root) => root.children.length === 0)).toBe(true);
+  });
+
+  it("does not nest a row under a parent with the same id but another owner", () => {
+    const foreignChild = member({
+      chatId: "their-child",
+      ownerUserId: "user-2",
+      parentChatId: PARENT_ID,
+      publishedAt: 300,
+    });
+    const roots = cloudRoots([parent, foreignChild], new Map());
+    expect(chatIds(roots).sort()).toEqual(["their-child", PARENT_ID].sort());
+    expect(roots.every((root) => root.children.length === 0)).toBe(true);
+  });
+
+  it("nests grandchildren two levels deep", () => {
+    const grandchild = member({
+      chatId: "grandchild",
+      ownerUserId: VIEWER,
+      parentChatId: "child-old",
+      publishedAt: 250,
+    });
+    const roots = cloudRoots([parent, childOld, grandchild], new Map());
+    expect(chatIds(roots)).toEqual([PARENT_ID]);
+    expect(chatIds(roots[0].children)).toEqual(["child-old"]);
+    expect(chatIds(roots[0].children[0].children)).toEqual(["grandchild"]);
+  });
+
+  it("terminates on a parent cycle and yields every row exactly once", () => {
+    const a = member({
+      chatId: "cycle-a",
+      ownerUserId: VIEWER,
+      parentChatId: "cycle-b",
+      publishedAt: 100,
+    });
+    const b = member({
+      chatId: "cycle-b",
+      ownerUserId: VIEWER,
+      parentChatId: "cycle-a",
+      publishedAt: 200,
+    });
+    const roots = cloudRoots([a, b], new Map());
+    expect(chatIds(flatten(roots)).sort()).toEqual(["cycle-a", "cycle-b"]);
+    const forest = nestCloudChats([a, b]);
+    expect(forest.roots).toHaveLength(1);
+  });
+
+  it("cloudChatBranchKeys lists only rows that have children", () => {
+    const forest = nestCloudChats([parent, childOld, childNew]);
+    expect(cloudChatBranchKeys(forest)).toEqual([
+      cloudChatRowKey(parent.identity),
+    ]);
+    expect(cloudChatBranchKeys(nestCloudChats([parent]))).toEqual([]);
   });
 });

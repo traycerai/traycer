@@ -767,9 +767,6 @@ vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
 // the fact under test ("terminal agents are excluded from this broad prune,
 // deferring to the hook's own owner-scoped one") lives in that predicate's
 // body, not in any store side effect this harness could otherwise observe.
-// `withoutTabRecovery` stays real: it is side-effect-free here (a suppress
-// counter around the callback) and several tests already close tabs through
-// it.
 vi.mock("@/lib/tab-recovery/history", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tab-recovery/history")>()),
   pruneRecoveryTiles: (

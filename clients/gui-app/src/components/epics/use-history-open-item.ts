@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { openEpicFromList as openEpicFromCommand } from "@/lib/commands/actions/open-epic-from-list";
 import {
   activateTabIntent,
@@ -31,6 +32,9 @@ export interface HistoryOpenItemArgs {
  * the prior tab if the navigation is rejected. An Epic goes through the command
  * action, which threads the row's title into tab creation so a cold-open canvas
  * skeleton renders the real title rather than "Untitled task".
+ *
+ * A task whose deletion is still in flight does not open from any list: the
+ * open raced the host's delete. Its row shows the delete in progress instead.
  */
 export function useHistoryOpenItem(
   args: HistoryOpenItemArgs,
@@ -38,8 +42,10 @@ export function useHistoryOpenItem(
   const { onSelectEpic, onOpenItem } = args;
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isEpicDeleteInFlight = useEpicDeleteInFlightReader();
   return useCallback(
     (item: HistoryItem) => {
+      if (isEpicDeleteInFlight(item.epicId)) return;
       if (onOpenItem !== null) {
         onOpenItem(item);
         return;
@@ -67,6 +73,6 @@ export function useHistoryOpenItem(
         source: "direct_ui",
       });
     },
-    [navigate, onOpenItem, onSelectEpic, pathname],
+    [isEpicDeleteInFlight, navigate, onOpenItem, onSelectEpic, pathname],
   );
 }

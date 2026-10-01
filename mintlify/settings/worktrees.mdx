@@ -1,6 +1,6 @@
 ---
 title: "Worktrees"
-description: "Manage Traycer worktrees, configure automatic cleanup, and inspect cleanup history for each host."
+description: "Manage Traycer worktrees, choose whether agents may create them, configure automatic cleanup, and inspect cleanup history for each host."
 ---
 
 import { FeatureVideo } from "/snippets/feature-video.jsx";
@@ -17,6 +17,7 @@ To clean up worktrees for particular Tasks, open [Sweep](/concepts/sweep) from t
 |---|---|
 | **Host** | The host whose worktrees are shown. Change it with the [host switcher](/settings#host-picker) in the Settings sidebar. |
 | **Cleanup** | Opens [automatic cleanup](#automatic-cleanup) for the host. Reads **Cleanup off** or the inactivity threshold. |
+| **Agent worktrees** | Chooses whether [agents may create worktrees](#agent-worktrees) on the host: **Allow**, **Ask first**, or **Never**. |
 | **Select all** | Selects every visible worktree you can delete, except **In use** ones. |
 | **Expand all** / **Collapse all** | Opens or closes every repository group. |
 | **Refresh** | Reloads the list. The "Updated" time next to it says how old the list is. |
@@ -79,6 +80,26 @@ Deleting keeps the worktree's branch. The exception is a submodule checked out o
 <Warning>
   Deleting a worktree closes every terminal open inside it, including terminals that are still running a command, even when the row isn't marked **In use**. Automatic cleanup skips such worktrees instead.
 </Warning>
+
+## Agent Worktrees
+
+An agent can create worktrees itself, for example when it splits work across [child agents](/guides/parallel-agents-on-worktrees) that each need their own checkout. **Agent worktrees** in the worktree toolbar decides what happens when an agent running on the selected host asks for one:
+
+| Setting | What happens |
+|---|---|
+| **Allow** (default) | The agent creates the worktree. |
+| **Ask first** | The agent's chat shows a question naming each repository and branch. **Allow** creates the worktree; **Don't allow**, or a typed answer, refuses it and passes your words to the agent. |
+| **Never** | Agents aren't offered worktree creation at all, and keep working in the workspace they were given. |
+
+With **Ask first**, an agent that another agent started, in a chat nobody has open, can't reach you, so its request is refused and it reports back to the agent that started it. Open the agent's chat before it asks if you want to approve worktrees for it, or ask the coordinating agent to create them.
+
+With **Ask first** or **Never**, Claude Code agents also lose Claude Code's own worktree tool, so the setting isn't bypassed by it.
+
+The setting also covers `traycer worktree create` when an agent runs it in its own shell. There it is refused under **Never**, and under **Ask first** too, because the command has no way to ask you. Running the command yourself is unaffected.
+
+The setting applies from an agent's next request, including agents already running: one that was started before you chose **Ask first** or **Never** is asked or refused the next time it tries. After you switch away from **Never**, an agent that started under it may not be offered worktrees again until it restarts.
+
+The setting doesn't affect worktrees you create yourself, or agents started on a worktree that already exists. An agent can still run `git worktree add` in a shell. Traycer tells agents when the setting is off or a request was refused, but it doesn't block the command.
 
 ## Automatic Cleanup
 

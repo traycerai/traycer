@@ -108,6 +108,7 @@ function runBootstrap() {
         sessionId: "term-1",
         instanceId: "inst-1",
         sessionKind: "terminal",
+        viewer: "presentation",
         preparePayload: () =>
           Promise.resolve({
             tuiHarnessId: null,

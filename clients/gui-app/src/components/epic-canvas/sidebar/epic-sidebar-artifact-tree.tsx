@@ -1,4 +1,3 @@
-import { withoutTabRecovery } from "@/lib/tab-recovery/history";
 import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 /**
  * Artifact tree body for the sidebar. Renders specs, tickets, stories, and
@@ -1159,12 +1158,10 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       const found = findOpenArtifactInTab(tabId, nodeId);
       if (found !== null) {
         navigateNested(epicId, tabId, () =>
-          withoutTabRecovery(() =>
-            prepareCloseCanvasTabFocusTarget(
-              tabId,
-              found.paneId,
-              found.instanceId,
-            ),
+          prepareCloseCanvasTabFocusTarget(
+            tabId,
+            found.paneId,
+            found.instanceId,
           ),
         );
       }

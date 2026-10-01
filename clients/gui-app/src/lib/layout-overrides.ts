@@ -3,7 +3,6 @@ import type {
   BarPlacement,
   BarRegionId,
   LayoutArrangement,
-  ReadingWidth,
 } from "@/lib/layout/layout-arrangement";
 import {
   type HideableRegionId,
@@ -15,6 +14,7 @@ import type { RailRegionId, RegionId } from "@/lib/layout/region-id";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
+import { cn } from "@/lib/utils";
 
 /**
  * The ONE seam every layout value is read through, so a picture of an element
@@ -190,18 +190,76 @@ export function useArrangementValue<Key extends keyof LayoutArrangement>(
 }
 
 /**
- * The content column the transcript, every lower surface of the composer and
- * an artifact's body share, as a class. One answer for all of them, because a
- * chat and the document read beside it must agree on their measure (audit R2).
- * Literal class names, so Tailwind sees both.
+ * Stands down `.md-prose`'s own 72ch block cap (`index.css`) inside a
+ * reading-width column, in both modes: the column is the measure the user
+ * picked, and a second, fixed one under it made Wide's paragraphs stop at 72ch
+ * while the column around them grew. Literal, so Tailwind sees it.
  */
-const READING_WIDTH_CLASS: Readonly<Record<ReadingWidth, string>> = {
-  comfortable: "max-w-3xl",
-  wide: "max-w-5xl",
-};
+const READING_WIDTH_OWNS_MEASURE_CLASS = "[--md-block-measure:none]";
 
-export function useReadingWidthClass(): string {
-  return READING_WIDTH_CLASS[useArrangementValue("readingWidth")];
+/** `comfortable`'s fixed column. Literal, so Tailwind sees it ahead of time. */
+const COMFORTABLE_READING_WIDTH_CLASS = "max-w-3xl";
+
+/**
+ * How far the wide column's own outer edge is kept from the viewport edge, so
+ * even at the slider's max there is a sliver of breathing room rather than the
+ * box touching the window edge exactly. This is NOT the visible margin around
+ * the transcript's text - `ChatTimelineRow` (and every other reading-width
+ * consumer) already carries its own `px-6`/`px-4` content padding INSIDE this
+ * box, which is what actually insets the text. Reserving extra here on top of
+ * that inner padding would double the margin the slider's max is supposed to
+ * remove; this gutter exists only for the outer box edge itself.
+ */
+const WIDE_READING_WIDTH_VIEWPORT_GUTTER_PX = 24;
+
+/**
+ * What {@link useReadingWidthStyle} hands every consumer. Two fields rather
+ * than a pre-built `style` object: `shadcn/no-inline-styles` requires a
+ * `style={{ ... }}` at the JSX call site to be a literal object it can check
+ * property-by-property, so every consumer writes
+ * `style={{ maxWidth: readingWidth.maxWidth }}` inline rather than passing
+ * a whole object through by reference.
+ */
+export interface ReadingWidthStyle {
+  /**
+   * The static Tailwind classes: the measure hand-off in both modes, plus
+   * `comfortable`'s fixed column.
+   */
+  readonly className: string;
+  /** The viewport-clamped `max-width` CSS value for `wide`; `undefined` otherwise. */
+  readonly maxWidth: string | undefined;
+}
+
+/**
+ * The content column the transcript, every lower surface of the composer and
+ * an artifact's body share. One answer for all of them, because a chat and
+ * the document read beside it must agree on their measure (audit R2).
+ *
+ * `comfortable` is a literal, build-time Tailwind class - the compiler has to
+ * see it ahead of time. `wide` is a user-chosen px value with no such static
+ * form, so it renders through `maxWidth` as an inline style instead,
+ * min()-clamped against the viewport so it can never overflow the window
+ * whatever the user picked. Every consumer applies BOTH `className` and
+ * `maxWidth` (see {@link ReadingWidthStyle}).
+ */
+export function useReadingWidthStyle(): ReadingWidthStyle {
+  const readingWidth = useArrangementValue("readingWidth");
+  const wideReadingWidthPx = useArrangementValue("wideReadingWidthPx");
+  return useMemo((): ReadingWidthStyle => {
+    if (readingWidth === "comfortable") {
+      return {
+        className: cn(
+          READING_WIDTH_OWNS_MEASURE_CLASS,
+          COMFORTABLE_READING_WIDTH_CLASS,
+        ),
+        maxWidth: undefined,
+      };
+    }
+    return {
+      className: READING_WIDTH_OWNS_MEASURE_CLASS,
+      maxWidth: `min(${wideReadingWidthPx}px, calc(100vw - ${WIDE_READING_WIDTH_VIEWPORT_GUTTER_PX}px))`,
+    };
+  }, [readingWidth, wideReadingWidthPx]);
 }
 
 /**

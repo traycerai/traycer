@@ -44,6 +44,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
     word: true,
     reset: true,
     amount: "used",
+    display: "full",
   },
   // CPU and process count, not memory: on a fresh install the host's memory
   // figure is the one a reader cannot act on, and it cost the scarcest row in
@@ -55,6 +56,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
     processes: true,
     ramShare: false,
     agentRows: true,
+    display: "full",
   },
   minimap: { shown: "shown" },
   contextUsage: {
@@ -73,7 +75,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   todo: { shown: "shown", size: "full" },
   attachImage: { shown: "shown" },
   access: { size: "full" },
-  model: { style: "text", reasoningControl: "slider" },
+  model: { style: "text", reasoningControl: "slider", toolbarStyle: "flat" },
   mic: { shown: "shown" },
   railAgents: { shown: "shown" },
   railTerminals: { shown: "shown" },
@@ -110,6 +112,7 @@ const COMPACT_VALUES: LayoutValues = {
     word: false,
     reset: false,
     amount: "used",
+    display: "full",
   },
   resourceMonitor: {
     shown: "shown",
@@ -120,6 +123,7 @@ const COMPACT_VALUES: LayoutValues = {
     // The sidebar's per-agent CPU/RSS/process readout crowds the agent titles
     // out of a narrow row; the status bar's total still reads.
     agentRows: false,
+    display: "full",
   },
   contextUsage: {
     shown: "shown",
@@ -141,7 +145,7 @@ const COMPACT_VALUES: LayoutValues = {
   background: { shown: "shown", size: "chip" },
   todo: { shown: "shown", size: "chip" },
   access: { size: "chip" },
-  model: { style: "bars", reasoningControl: "slider" },
+  model: { style: "bars", reasoningControl: "slider", toolbarStyle: "flat" },
   mic: { shown: "hidden" },
 };
 
@@ -158,6 +162,7 @@ const DETAILED_VALUES: LayoutValues = {
     word: true,
     reset: true,
     amount: "used",
+    display: "full",
   },
   resourceMonitor: {
     shown: "shown",
@@ -166,6 +171,7 @@ const DETAILED_VALUES: LayoutValues = {
     processes: true,
     ramShare: true,
     agentRows: true,
+    display: "full",
   },
   contextUsage: {
     shown: "shown",
@@ -175,7 +181,7 @@ const DETAILED_VALUES: LayoutValues = {
     compactButton: "shown",
   },
   // Every thinking level spelled out by name, which is what the list does.
-  model: { style: "bars-text", reasoningControl: "list" },
+  model: { style: "bars-text", reasoningControl: "list", toolbarStyle: "flat" },
   toolActivity: { size: "full" },
   thinking: { shown: "shown", size: "full" },
 };

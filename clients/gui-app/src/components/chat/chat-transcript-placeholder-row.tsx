@@ -1,4 +1,4 @@
-import { useReadingWidthClass } from "@/lib/layout-overrides";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { memo, type ReactNode } from "react";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -54,7 +54,7 @@ function ChatTranscriptPlaceholderRowImpl({
   ordinal,
   heightMemory,
 }: ChatTranscriptPlaceholderRowProps): React.JSX.Element {
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   const height =
     heightMemory === null
       ? placeholderRowHeight(entry)
@@ -117,8 +117,8 @@ function ChatTranscriptPlaceholderRowImpl({
       data-testid="chat-transcript-placeholder-row"
       data-ordinal={ordinal}
       aria-hidden="true"
-      className={cn("mx-auto w-full px-6", readingWidth)}
-      style={{ height: `${height}px` }}
+      className={cn("mx-auto w-full px-6", readingWidth.className)}
+      style={{ height: `${height}px`, maxWidth: readingWidth.maxWidth }}
     >
       <div
         className={cn(

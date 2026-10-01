@@ -31,6 +31,7 @@ function renderRows(
         onToggleShowAll={vi.fn()}
         installingVersion={null}
         disabled={false}
+        describedBy={null}
         onInstall={onInstall}
         onInstallAnyway={onInstallAnyway}
       />

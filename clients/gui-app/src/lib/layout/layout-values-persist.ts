@@ -136,6 +136,9 @@ function usageLimitsPatch(value: unknown): Partial<UsageLimitsValues> {
     ...(stored.amount === "used" || stored.amount === "remaining"
       ? { amount: stored.amount }
       : {}),
+    ...(stored.display === "full" || stored.display === "icon"
+      ? { display: stored.display }
+      : {}),
   };
 }
 
@@ -153,6 +156,9 @@ function resourceMonitorPatch(value: unknown): Partial<ResourceMonitorValues> {
       : {}),
     ...(typeof stored.agentRows === "boolean"
       ? { agentRows: stored.agentRows }
+      : {}),
+    ...(stored.display === "full" || stored.display === "icon"
+      ? { display: stored.display }
       : {}),
   };
 }
@@ -206,6 +212,9 @@ function modelPatch(value: unknown): Partial<ModelValues> {
     ...(stored.reasoningControl === "slider" ||
     stored.reasoningControl === "list"
       ? { reasoningControl: stored.reasoningControl }
+      : {}),
+    ...(stored.toolbarStyle === "flat" || stored.toolbarStyle === "bordered"
+      ? { toolbarStyle: stored.toolbarStyle }
       : {}),
   };
 }

@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   isProcessAliveMock: vi.fn(),
   provisionHostMock: vi.fn(),
   createServiceControllerMock: vi.fn(),
+  readHostLifecycleSnapshotMock: vi.fn(),
   readUpdateAttemptRecordMock: vi.fn(),
   hostInstallRecordPathValue: "/tmp/test-host-home/absent-install.json",
 }));
@@ -76,6 +77,18 @@ vi.mock("../../store/paths", async (importOriginal) => {
   };
 });
 
+// The lifecycle read probes pids and reads the real host home; only the read
+// is stubbed, the row rendering stays real.
+vi.mock("../../host/lifecycle-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../host/lifecycle-snapshot")
+  >("../../host/lifecycle-snapshot");
+  return {
+    ...actual,
+    readHostLifecycleSnapshot: mocks.readHostLifecycleSnapshotMock,
+  };
+});
+
 vi.mock("../../store/cli-lock", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/cli-lock")>();
   return { ...actual, isProcessAlive: mocks.isProcessAliveMock };
@@ -107,6 +120,7 @@ vi.mock("@traycer-clients/shared/host-update", async (importOriginal) => {
 });
 
 import { hostStatusCommand } from "../host-status";
+import type { HostLifecycleSnapshot } from "../../host/lifecycle-snapshot";
 
 function makeRuntime(overrides: Partial<RuntimeContext>): RuntimeContext {
   return {
@@ -148,6 +162,34 @@ const runningPidMetadata: HostPidMetadata = {
 };
 
 const bootstrapMarkers: readonly BootstrapLogEntry[] = [];
+
+const lifecycleSnapshot: HostLifecycleSnapshot = {
+  policy: {
+    state: "absent",
+    mode: "background",
+    rev: null,
+    updatedAt: null,
+    updatedBy: null,
+    path: "/tmp/lifecycle-policy.json",
+  },
+  presence: {
+    state: "absent",
+    pid: null,
+    onExit: null,
+    policyRev: null,
+    liveness: null,
+  },
+  supervisor: {
+    state: "absent",
+    pid: null,
+    cliVersion: null,
+    capabilities: [],
+    liveness: null,
+    enforcesLifecyclePolicy: false,
+  },
+  run: null,
+  owner: { kind: "unknown" },
+};
 
 // Mirrors `attempt-record-test-support.ts`'s `attemptRecord()` fixture -
 // only the fields these tests override differ per case, everything else is
@@ -245,6 +287,7 @@ beforeEach(() => {
   mocks.readBootstrapMarkersMock.mockResolvedValue(bootstrapMarkers);
   mocks.readBootstrapLogTailMock.mockResolvedValue("");
   mocks.isProcessAliveMock.mockReturnValue(false);
+  mocks.readHostLifecycleSnapshotMock.mockResolvedValue(lifecycleSnapshot);
   // No update attempt record by default - most of these tests are about the
   // pre-existing payload shape and must not gain a hidden dependency on it.
   mocks.readUpdateAttemptRecordMock.mockResolvedValue({ kind: "absent" });
@@ -281,8 +324,13 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       bootstrapLogPath: "/tmp/test-bootstrap.log",
       bootstrapLogTail: "log tail",
       bootstrap: null,
+      lifecycle: lifecycleSnapshot,
       updateAttempt: null,
     });
+    expect(mocks.readHostLifecycleSnapshotMock).toHaveBeenCalledWith(
+      "production",
+      true,
+    );
     expect(result.exitCode).toBe(0);
   });
 
@@ -315,6 +363,53 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     const result = await hostStatusCommand(makeCtx(makeRuntime({})));
 
     expect(result.human).not.toContain("traycer host ensure");
+  });
+
+  it("human output includes the 'Lifecycle' section", async () => {
+    const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+    expect(result.human).toContain("Lifecycle");
+    // The rows themselves, not just the heading.
+    expect(result.human).toContain("Lifecycle mode");
+    expect(result.human).toContain("Supervisor");
+  });
+
+  it("names a corrupt lifecycle policy file as corrupt in the Lifecycle section", async () => {
+    mocks.readHostLifecycleSnapshotMock.mockResolvedValue({
+      ...lifecycleSnapshot,
+      policy: {
+        ...lifecycleSnapshot.policy,
+        state: "invalid",
+        path: "/tmp/lifecycle-policy.json",
+      },
+    });
+
+    const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+    expect(result.human).toContain("Lifecycle");
+    expect(result.human).toContain("corrupt");
+  });
+
+  // A Windows requested-kill is recorded as `killed` with the
+  // handle-bound kill's exit CODE and no signal (`persistChildExit`). The
+  // human renderer must show that code, not silently drop it the way a bare
+  // `killed` (no code, no signal) would.
+  it("renders a killed marker's exit code in both the Recent activity list and the Last phase row", async () => {
+    mocks.readBootstrapMarkersMock.mockResolvedValue([
+      {
+        timestamp: "2026-08-01T00:00:00.000Z",
+        phase: "killed",
+        fields: { code: "4294967295" },
+        writer: "supervisor",
+      },
+    ] satisfies readonly BootstrapLogEntry[]);
+
+    const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+    expect(result.human).toContain("Recent activity");
+    expect(result.human).toContain("code=4294967295");
+    // The single-row "Last phase" summary uses the parenthesized form.
+    expect(result.human).toContain("killed (code=4294967295)");
   });
 
   // The 2026-09-27 staging outage: a parked record made `host ensure` and

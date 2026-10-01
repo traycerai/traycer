@@ -7,10 +7,8 @@ import {
   writeJsonFileAtomic,
 } from "./credentials-fs";
 import {
-  isHolderProvablyDead,
-  isProcessAlive,
-  ownPidStartFingerprint,
-  queryPidStartFingerprint,
+  holderProvablyDead,
+  ownPidStartFingerprintAsync,
   withCredentialsLock,
 } from "./credentials-lock";
 import {
@@ -463,9 +461,9 @@ function markerIsFresh(marker: SpentBaseMarker, nowMs: number): boolean {
 /** This process armed the marker. A live pid is unique, so a pid match while
  *  we are running means us; the fingerprint only tightens the recycled-pid
  *  case (where a mismatch is ALSO caught by the provably-dead probe). */
-function isOwnSpentBaseMarker(marker: SpentBaseMarker): boolean {
+async function isOwnSpentBaseMarker(marker: SpentBaseMarker): Promise<boolean> {
   if (marker.ownerPid !== process.pid) return false;
-  const own = ownPidStartFingerprint();
+  const own = await ownPidStartFingerprintAsync();
   return (
     marker.ownerFingerprint === null ||
     own === null ||
@@ -473,14 +471,12 @@ function isOwnSpentBaseMarker(marker: SpentBaseMarker): boolean {
   );
 }
 
-/** Same decision as the lock's dead-holder takeover, applied to the marker. */
-function markerOwnerProvablyDead(marker: SpentBaseMarker): boolean {
-  if (!isProcessAlive(marker.ownerPid)) return true;
-  return isHolderProvablyDead({
-    alive: true,
-    recordedFingerprint: marker.ownerFingerprint,
-    currentFingerprint: queryPidStartFingerprint(marker.ownerPid),
-  });
+/**
+ * The lock's dead-holder takeover decision itself, applied to the marker -
+ * asynchronous like it, since it runs inside long-lived processes.
+ */
+function markerOwnerProvablyDead(marker: SpentBaseMarker): Promise<boolean> {
+  return holderProvablyDead(marker.ownerPid, marker.ownerFingerprint);
 }
 
 /**
@@ -507,7 +503,7 @@ async function writeSpentBaseMarker(
     spentTokenDigest: digestToken(spentToken),
     at: new Date().toISOString(),
     ownerPid: process.pid,
-    ownerFingerprint: ownPidStartFingerprint(),
+    ownerFingerprint: await ownPidStartFingerprintAsync(),
   };
   try {
     await writeJsonFileAtomic(
@@ -878,8 +874,8 @@ export function createCredentialsMutationStore(
         if (marker !== null) {
           const blocked =
             marker.spentTokenDigest === digestToken(file.token) &&
-            !isOwnSpentBaseMarker(marker) &&
-            !markerOwnerProvablyDead(marker) &&
+            !(await isOwnSpentBaseMarker(marker)) &&
+            !(await markerOwnerProvablyDead(marker)) &&
             markerIsFresh(marker, Date.now());
           if (blocked) {
             return {
@@ -1265,8 +1261,8 @@ export function createCredentialsMutationStore(
               marker.spentTokenDigest === digestToken(file.token));
           const blocked =
             guardsLiveSpend &&
-            !isOwnSpentBaseMarker(marker) &&
-            !markerOwnerProvablyDead(marker) &&
+            !(await isOwnSpentBaseMarker(marker)) &&
+            !(await markerOwnerProvablyDead(marker)) &&
             markerIsFresh(marker, Date.now());
           if (blocked) {
             return {

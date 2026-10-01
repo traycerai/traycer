@@ -255,4 +255,25 @@ export const PAYLOAD_FINGERPRINT_BASELINE = {
       "interruptedCount",
     ],
   },
+  managed_command_delivery_parked: {
+    type: "object",
+    properties: {
+      kind: { type: "string", const: "managed_command_delivery_parked" },
+      operation: { type: "string", const: "managed-command.delivery" },
+      title: { type: "string", minLength: 1 },
+      message: { type: "string", minLength: 1 },
+      commandId: { type: "string", minLength: 1 },
+      epicId: { type: "string", minLength: 1 },
+      chatId: { type: "string", minLength: 1 },
+    },
+    required: [
+      "kind",
+      "operation",
+      "title",
+      "message",
+      "commandId",
+      "epicId",
+      "chatId",
+    ],
+  },
 } satisfies Record<HostNotificationKnownPayloadKind, JsonSchemaFingerprint>;

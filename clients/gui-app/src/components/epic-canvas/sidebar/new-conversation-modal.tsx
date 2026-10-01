@@ -135,6 +135,7 @@ import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 import { modalWorkspaceHostScope } from "./new-conversation-modal-host-scope";
 import { ComposerBody } from "@/components/home/composer/composer-body";
+import { VisibleDraftImagePrefetch } from "@/components/home/visible-draft-image-prefetch";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -256,19 +257,22 @@ function NewConversationModalAttachmentStrip(props: {
     props.hostId,
   );
   return (
-    <AttachmentStrip
-      content={content}
-      onRemoveImage={props.onRemoveImage}
-      fetcher={fetcher}
-      // This composer is hash-first now, so a just-pasted chip has no epic
-      // attachment to fetch - its bytes are in this window's composer store,
-      // and the session object-URL is what paints it without a placeholder
-      // frame. It also covers a restored draft, because pulling the blobs back
-      // off the host (`readDraftBlobsIntoLocalStore`) seeds the same session
-      // entry. The epic fetcher still answers for hashes that came from a quote
-      // seed, which address the epic store and were never local.
-      sessionObjectUrl={sessionObjectUrl}
-    />
+    <>
+      <VisibleDraftImagePrefetch content={content} active />
+      <AttachmentStrip
+        content={content}
+        onRemoveImage={props.onRemoveImage}
+        fetcher={fetcher}
+        // This composer is hash-first now, so a just-pasted chip has no epic
+        // attachment to fetch - its bytes are in this window's composer store,
+        // and the session object-URL is what paints it without a placeholder
+        // frame. It also covers a restored draft, because pulling the blobs back
+        // off the host (`readDraftBlobsIntoLocalStore`) seeds the same session
+        // entry. The epic fetcher still answers for hashes that came from a quote
+        // seed, which address the epic store and were never local.
+        sessionObjectUrl={sessionObjectUrl}
+      />
+    </>
   );
 }
 

@@ -80,6 +80,8 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 function controllerStatusWithLane(
@@ -114,7 +116,8 @@ function makeHostManagement(kind: MutationKind | null): IHostManagement {
     registerService: notImplemented("registerService"),
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
-    freePortAndRestart: (input) => Promise.resolve(input),
+    freePortAndRestart: (input) =>
+      Promise.resolve({ kind: "applied" as const, ...input }),
     runDoctorRepairQueued: () => Promise.resolve({ kind: "applied" as const }),
     freePortAndRestartIfIdle: () =>
       Promise.resolve({
@@ -127,6 +130,9 @@ function makeHostManagement(kind: MutationKind | null): IHostManagement {
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
     restartHostIfIdle: notImplemented("restartHostIfIdle"),
+    restartHostServiceIfHostIdle: notImplemented(
+      "restartHostServiceIfHostIdle",
+    ),
     runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
     getHostName: notImplemented("getHostName"),
     setHostName: notImplemented("setHostName"),
@@ -209,6 +215,15 @@ describe("useHostOptions provisioning lane", () => {
   it("does not read a deregister lane as setting up", async () => {
     const { result, queryClient, hostManagement } =
       renderWithLane("deregister");
+    await waitForControllerStatusSettled(queryClient, hostManagement);
+    expect(findLocalRow(result.current.hosts)?.settingUp).toBe(false);
+  });
+
+  // `refreshService` ("host service refresh") rewrites the service
+  // definition only - the host is neither brought up nor taken down.
+  it("does not read a refreshService lane as setting up", async () => {
+    const { result, queryClient, hostManagement } =
+      renderWithLane("refreshService");
     await waitForControllerStatusSettled(queryClient, hostManagement);
     expect(findLocalRow(result.current.hosts)?.settingUp).toBe(false);
   });

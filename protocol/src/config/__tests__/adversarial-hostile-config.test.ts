@@ -23,6 +23,8 @@ import { cliConfigPath } from "../paths";
 import {
   loadEffectiveShellConfig,
   readCliConfig,
+  readWorktreesConfig,
+  readWorktreesConfigSync,
   removeShell,
   resetShell,
   revertShellArgs,
@@ -141,6 +143,37 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
     expect(cfg.shell.path).toBe("/bin/zsh");
     expect(cfg.surpriseKey).toEqual({ nested: true });
     expect("bogus" in cfg.shell).toBe(false);
+  });
+
+  it("strips unknown keys inside the worktrees block but keeps the policy", async () => {
+    await writeRaw({
+      version: 1,
+      shell: { path: null, args: null },
+      envOverrides: {},
+      worktrees: { agentCreate: "never", bogus: 42 },
+    });
+    expect(await readWorktreesConfig()).toEqual({ agentCreate: "never" });
+    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "never" });
+  });
+
+  it("never crashes the sync worktrees reader on hostile block shapes", async () => {
+    for (const worktrees of [
+      null,
+      "never",
+      42,
+      [],
+      { agentCreate: { nested: "never" } },
+      { agentCreate: ["never"] },
+      { agentCreate: "NEVER" },
+    ]) {
+      await writeRaw({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        worktrees,
+      });
+      expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+    }
   });
 
   it("survives a 1000-entry array", async () => {

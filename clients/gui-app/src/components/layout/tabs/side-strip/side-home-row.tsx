@@ -57,7 +57,6 @@ function SideHomeRowBody(props: SideHomeRowProps): ReactNode {
       active={isActive}
       session={null}
       tint={null}
-      autoTint={null}
       groupLine={null}
       leading={icon}
       tile={{ kind: "icon", icon }}

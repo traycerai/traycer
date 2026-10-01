@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useIsMutating } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import { create, useStore } from "zustand";
+import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
 import type {
   ChatRunSettings,
   LastFailedAttempt,
@@ -565,11 +566,21 @@ function ManualRungAffordances({
  * `resetsAt` is PRESENT for a boundary past the user's cap and ABSENT for one
  * nobody verified. `now` only decides whether the reset time needs its
  * weekday.
+ *
+ * Said only for a failure whose REASON has a reset boundary to wait on -
+ * `REASON_ELIGIBLE_RUNGS`, the matrix the host engine reads too, so this is
+ * not a second opinion. The disposition is decided from the failed tuple's
+ * reset gauge alone, so a turn that failed for a reason with no limit behind
+ * it (a spent quota, a stream that ended with no terminal event) can arrive
+ * `beyond_cap` and would be told about a limit it never hit.
  */
 function waitExplanationFor(
   attempt: LastFailedAttempt,
   now: number,
 ): string | null {
+  if (!REASON_ELIGIBLE_RUNGS[attempt.failure.reason].includes("wait")) {
+    return null;
+  }
   const resetsAt = attempt.failure.resetsAt;
   return describeWaitDisposition(
     attempt.waitDisposition,

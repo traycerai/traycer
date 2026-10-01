@@ -1,7 +1,17 @@
+import { rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 // `readHostPidMetadataEvidence` keeps an absent record apart from one that
 // exists and cannot be read. The takeover's published-host gate refuses on
@@ -9,6 +19,39 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // `readHostPidMetadata` must keep folding both into `null` for every
 // discovery caller. The record path is redirected to a scratch directory so
 // the real `~/.traycer` is never read.
+//
+// HOME is ALSO redirected to a private temp dir BEFORE anything reads it: a
+// `store/paths` mock that only overrides `hostPidMetadataPath` is not
+// isolation on its own - a read/parse failure here calls `createCliLogger`,
+// which resolves `cliLogPath` (and therefore `homedir()`) for real unless
+// `node:os.homedir()` itself is redirected first.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-pid-metadata-evidence-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+beforeAll(async () => {
+  expect(osHome.current).not.toBe("");
+  const paths =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  expect(paths.hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+  expect(paths.cliLogPath("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
+
 const PATHS = vi.hoisted(() => ({ recordPath: "" }));
 vi.mock("../../store/paths", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../store/paths")>();

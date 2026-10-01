@@ -135,7 +135,9 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(20);
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    // @1.6 added the `viewer` intent on the open request; @1.7 added the
+    // `viewer` client frame that restates it on a live stream.
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
     // @1.1 carries the resume cursor that lets a reconnect skip the catch-up.
     expect(hostStreamRpcRegistry["worktree.changed"][1].latestMinor).toBe(1);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
@@ -658,7 +660,7 @@ describe("stream compatibility", () => {
     expect(openAckManifest["browser.screencast"]).toBeUndefined();
     expect(openAckManifest["terminal.subscribe"]).toEqual({
       major: 1,
-      minor: 6,
+      minor: 7,
       supportedMajors: [1],
     });
 

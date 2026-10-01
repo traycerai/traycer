@@ -77,22 +77,25 @@ If the background service is still registered afterwards, the row reads **Trayce
 
 ## Updates
 
-### Version
+### Update Status
 
-The first card shows the version the host is running, with one tag:
+The running version is in the host's header, and the version list marks it **installed** (and **latest** when nothing newer exists). When the host is up to date, the Updates tab shows no extra card.
 
-| Tag | Meaning |
+When there is something to act on, a card leads the tab:
+
+| Card | Meaning |
 |---|---|
-| **Latest** | The host is up to date. |
-| **Update available** | A newer version can be installed. |
-| **Checking…** | Traycer is checking for updates. |
-| **Restart to finish** | An update is installed and the host needs a restart to use it. |
+| **Update available** | A newer version can be installed. It shows the move, such as v1.4.0 → v1.5.1. Click **Update now** to install it. |
 | **Needs newer CLI tools** | The update needs a newer version of Traycer's command-line tools first. The card shows what to do. |
-| **Last reported** | The host is offline, so this is the last version it reported. |
+| **Restart to finish** | An update is installed and the host needs a restart to use it. |
+| **Newer version on another release line** | A newer version exists, but this host follows its own release line. Pick it from the versions below to move. |
+| **Update unavailable for this host** | A newer version exists, but this host can't install it. |
+| **Update check failed** | The host couldn't check for updates. The card says why. |
+| **Updates aren't managed here** | This host's updates are handled outside this page, for example by whatever deploys it. |
 
-Under the version, a sentence gives the answer, such as "v1.5.1 is available." Click **Update now** to install it, or **Check now** to check again. If the check fails, the card reads "Couldn't check for updates on &lt;host&gt;."
+To check again, click **Check now** next to **Pick a different version**.
 
-While an update is in progress, the card shows only the version, and the update card above the tabs reports progress.
+While an update is in progress, the update card above the tabs reports progress, and **Check now** is hidden until it finishes.
 
 **Needs newer CLI tools.** In place of **Update now**, the card gives the fix: a command to copy and run on that machine (**Copy command**), the steps to update Traycer Desktop, or **Show installation help**. While the page is open it checks again every 30 seconds, and **Update now** appears once the host accepts the update.
 

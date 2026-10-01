@@ -106,6 +106,7 @@ describe("recordObservationFromLocalAttempt", () => {
       targetVersion: "2.1.0",
       phase: "failed",
       errorMessage: null,
+      errorCode: null,
       liveness: "unknown",
       livenessObservedAtMs: null,
       updatedAt: "2026-08-27T00:00:00.000Z",
@@ -136,6 +137,7 @@ describe("recordObservationFromLocalAttempt", () => {
       observedAtMs: OBSERVED_AT_MS,
     });
     expect(result?.errorMessage).toBe("the service did not start");
+    expect(result?.errorCode).toBe("service-start-failed");
   });
 
   it("a non-failed record with error: null yields errorMessage: null", () => {
@@ -175,6 +177,7 @@ describe("recordObservationFromLocalAttempt", () => {
       targetVersion: "2.1.0",
       phase: "restarting",
       errorMessage: null,
+      errorCode: null,
       liveness: "live",
       // NOT `OBSERVED_AT_MS`: the two are deliberately different numbers here
       // so a re-stamp cannot pass by coincidence.
@@ -218,6 +221,7 @@ describe("recordObservationFromLocalAttempt", () => {
         targetVersion: "3.0.0",
         phase,
         errorMessage: null,
+        errorCode: null,
         liveness: "unknown",
         livenessObservedAtMs: null,
         updatedAt: "2026-08-27T00:00:00.000Z",

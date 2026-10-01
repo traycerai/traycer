@@ -13,6 +13,7 @@ import {
 } from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
+import type { HostStartOrigin } from "./lifecycle-origin";
 
 // `host ensure` - the desktop's post-auth provisioning call, and now the
 // CLI's ONLY convergent install/register/start path. A thin source-resolving
@@ -100,6 +101,8 @@ export interface EnsureHostOptions {
   readonly beforeMutate: (() => Promise<void>) | null;
   /** See `ProvisionHostOptions.adoption`. Forwarded verbatim. */
   readonly adoption: UpdateMutationCapabilityAdoption | undefined;
+  /** See `ProvisionHostOptions.lifecycleOrigin`. Forwarded verbatim. */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export async function ensureHost(
@@ -190,6 +193,7 @@ export async function ensureHost(
     opts.versionRequest !== null && opts.versionRequest !== "latest";
   const result = await provisionHost({
     adoption: opts.adoption,
+    lifecycleOrigin: opts.lifecycleOrigin,
     runtime: opts.runtime,
     resolveInstallSource: () => Promise.resolve(source),
     satisfaction,
@@ -201,6 +205,10 @@ export async function ensureHost(
     force: opts.force,
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     yankLookup: opts.yankLookup,
+    // The real clock and budget: `host ensure` (and the desktop's ensure
+    // through it) is the caller whose wait for a relaunching supervisor
+    // matters most, and it has no reason to shorten it.
+    supervisorRelaunchWait: null,
     holdExplicitDowngrade,
     onProgress: opts.onProgress,
     beforeMutate: opts.beforeMutate,

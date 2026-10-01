@@ -1407,7 +1407,11 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     });
     vi.mocked(management.runDoctorRepairIfIdle).mockResolvedValue({
       kind: "dispatched",
-      outcome: { kind: "failed", message: "converge failed" },
+      outcome: {
+        kind: "failed",
+        message: "converge failed",
+        errorCode: null,
+      },
     });
 
     await openHostOverviewMenu();

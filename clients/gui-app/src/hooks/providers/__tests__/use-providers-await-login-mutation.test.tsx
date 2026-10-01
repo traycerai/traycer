@@ -4,9 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ProviderMutationCliStateV21 } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-schemas";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRequestAbortedError,
+  HostRpcError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostQueryKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 
 const HOST_ID = "host-1";
 const OTHER_HOST_ID = "host-2";
@@ -25,7 +35,20 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => mocks.tabHostId(),
 }));
 
-import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
+// A spy, so a test can see whether a failed await raised the "Couldn't confirm
+// sign-in." toast. Everything else the module exports stays real.
+vi.mock("@/lib/host-error-toast", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host-error-toast")>();
+  return { ...actual, toastFromHostError: vi.fn() };
+});
+
+import {
+  useProvidersAwaitLogin,
+  useProvidersAwaitLoginForClient,
+  type AwaitLoginVariables,
+} from "@/hooks/providers/use-providers-await-login-mutation";
+import { toastFromHostError } from "@/lib/host-error-toast";
 
 type ProvidersListResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -203,7 +226,10 @@ describe("useProvidersAwaitLogin overlay merge", () => {
 
     const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
     act(() => {
-      result.current.mutate({ providerId: "copilot", profileId: null });
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+      });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -253,7 +279,10 @@ describe("useProvidersAwaitLogin overlay merge", () => {
 
     const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
     act(() => {
-      result.current.mutate({ providerId: "copilot", profileId: null });
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+      });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -295,7 +324,10 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
 
     const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
     act(() => {
-      result.current.mutate({ providerId: "copilot", profileId: null });
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+      });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -323,7 +355,10 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
 
     const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
     act(() => {
-      result.current.mutate({ providerId: "copilot", profileId: null });
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+      });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -348,7 +383,10 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
 
     const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
     act(() => {
-      result.current.mutate({ providerId: "copilot", profileId: null });
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+      });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -375,12 +413,307 @@ describe("useProvidersAwaitLogin providers.list invalidation", () => {
 
     const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
     act(() => {
-      result.current.mutate({ providerId: "copilot", profileId: null });
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+      });
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
     expect(invalidateSpy).not.toHaveBeenCalled();
     expect(setQueryDataSpy).not.toHaveBeenCalled();
+  });
+});
+
+// `providers.awaitLogin` runs in `join` mode on the request coordinator: a
+// second wait with the same host, user, method and params attaches to the
+// first one's in-flight request and receives ITS answer. That is right for two
+// waiters on one login and wrong for an attempt that was abandoned - a Retry's
+// wait for the same `{ providerId, profileId }` must not inherit the answer of
+// the Cancel it replaced. The hook therefore takes an `AbortSignal` with each
+// wait: aborting it detaches that waiter, and once the last cancelable waiter
+// is gone the coordinator aborts the in-flight job and frees the slot.
+//
+// These tests drive a REAL `HostClient` (and so the real
+// `HostRequestCoordinator`, under the gui-app's own scheduling policy) over a
+// `MockHostMessenger`; a stubbed client would bypass the coordinator and prove
+// nothing about the join.
+describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordinator's join slot", () => {
+  type AwaitLoginRequest = RequestOfMethod<
+    HostRpcRegistry,
+    "providers.awaitLogin"
+  >;
+  type AwaitLoginResponse = ResponseOfMethod<
+    HostRpcRegistry,
+    "providers.awaitLogin"
+  >;
+
+  interface Deferred<T> {
+    readonly resolve: (value: T) => void;
+    readonly promise: Promise<T>;
+  }
+  function deferred<T>(): Deferred<T> {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { resolve, promise };
+  }
+
+  const AWAIT_REQUEST: AwaitLoginRequest = {
+    providerId: "copilot",
+    profileId: null,
+  };
+
+  function awaitAnswer(existingProfileId: string): AwaitLoginResponse {
+    return {
+      state: null,
+      existingProfileId,
+      codeRejected: false,
+      refusal: null,
+    };
+  }
+
+  /**
+   * A real client over a messenger whose `providers.awaitLogin` handler stays
+   * pending until the test answers it, one `Deferred` per dispatch that
+   * actually reached the transport.
+   */
+  function realClientFixture(): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly messenger: MockHostMessenger<HostRpcRegistry>;
+    readonly answers: Deferred<AwaitLoginResponse>[];
+  } {
+    const answers: Deferred<AwaitLoginResponse>[] = [];
+    let nextRequestId = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => {
+        nextRequestId += 1;
+        return `req-${nextRequestId}`;
+      },
+      handlers: {
+        "providers.awaitLogin": () => {
+          const answer = deferred<AwaitLoginResponse>();
+          answers.push(answer);
+          return answer.promise;
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => {} },
+      messenger,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    return {
+      client: spine.createRequester(mockLocalHostEntry),
+      messenger,
+      answers,
+    };
+  }
+
+  function awaitDispatches(
+    messenger: MockHostMessenger<HostRpcRegistry>,
+  ): Array<{ readonly requestId: string; readonly params: unknown }> {
+    return messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+  }
+
+  /** What the transport reported for one dispatch, once it settled. */
+  function transportErrorOf(
+    messenger: MockHostMessenger<HostRpcRegistry>,
+    requestId: string,
+  ): HostRpcError | null {
+    for (const event of messenger.phases) {
+      if (event.kind === "response" && event.requestId === requestId) {
+        return event.error;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * `mutateAsync` inside `act`, returning the promise it started. The promise
+   * is marked handled here so a wait the test abandons without awaiting
+   * cannot surface as an unhandled rejection; the test still reads its
+   * outcome from the returned promise.
+   */
+  function startWait(
+    mutateAsync: (
+      variables: AwaitLoginVariables,
+    ) => Promise<AwaitLoginResponse>,
+    variables: AwaitLoginVariables,
+  ): Promise<AwaitLoginResponse> {
+    const started: Array<Promise<AwaitLoginResponse>> = [];
+    act(() => {
+      started.push(mutateAsync(variables));
+    });
+    const wait = started[0];
+    wait.catch(() => undefined);
+    return wait;
+  }
+
+  type WaitOutcome = "pending" | "resolved" | "rejected";
+
+  /**
+   * A reader for how a wait ended, so a test can bound its wait for the
+   * outcome (`waitFor`) instead of hanging on a promise that never settles
+   * when the behavior under test is missing.
+   */
+  function trackOutcome(wait: Promise<unknown>): () => WaitOutcome {
+    let outcome: WaitOutcome = "pending";
+    wait.then(
+      () => {
+        outcome = "resolved";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+    return () => outcome;
+  }
+
+  /** Lets every promise chain and TanStack's own macrotask scheduling finish. */
+  async function flushMacrotask(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(toastFromHostError).mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("dispatches a fresh request, and answers with it, for the same wait started after the first one's signal aborted", async () => {
+    const { client, messenger, answers } = realClientFixture();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    // Attempt one: the long-poll goes out and stays in flight.
+    const firstAttempt = new AbortController();
+    const first = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: firstAttempt.signal,
+    });
+    const firstOutcome = trackOutcome(first);
+    await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
+
+    // The user cancels attempt one: its wait is detached, and with no
+    // cancelable waiter left the coordinator aborts the in-flight request
+    // rather than leaving it in the join slot.
+    firstAttempt.abort();
+    await waitFor(() => expect(firstOutcome()).toBe("rejected"));
+    // The hook's own mutation has settled; the coordinator's job teardown
+    // (the transport's abort, then the slot being freed) is a few promise
+    // hops further, so let it finish - the flow likewise only admits a Retry
+    // once `awaitLogin.isPending` has cleared.
+    await flushMacrotask();
+    const [firstDispatch] = awaitDispatches(messenger);
+    expect(transportErrorOf(messenger, firstDispatch.requestId)).toBeInstanceOf(
+      HostRequestAbortedError,
+    );
+
+    // Attempt two asks the very same question with a fresh signal.
+    const secondAttempt = new AbortController();
+    const second = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: secondAttempt.signal,
+    });
+    // Before the fix this attached to attempt one's in-flight request and no
+    // second dispatch ever reached the host.
+    await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(2));
+    expect(awaitDispatches(messenger)[1].params).toEqual(AWAIT_REQUEST);
+
+    // The second wait resolves with the second dispatch's answer, never the
+    // first's.
+    answers[1].resolve(awaitAnswer("answer-two"));
+    await expect(second).resolves.toMatchObject({
+      existingProfileId: "answer-two",
+    });
+    // The abandoned dispatch answering late changes nothing.
+    answers[0].resolve(awaitAnswer("answer-one"));
+    await flushMacrotask();
+    expect(result.current.data?.existingProfileId).toBe("answer-two");
+  });
+
+  it("raises no toast when the wait ended because its own signal was aborted", async () => {
+    const { client, messenger } = realClientFixture();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    const attempt = new AbortController();
+    const wait = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: attempt.signal,
+    });
+    const outcome = trackOutcome(wait);
+    await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
+
+    attempt.abort();
+    // `mutateAsync` settles only after the mutation's own `onError` has run,
+    // so a toast the hook raised would already have been recorded.
+    await waitFor(() => expect(outcome()).toBe("rejected"));
+    await flushMacrotask();
+
+    expect(toastFromHostError).not.toHaveBeenCalled();
+  });
+
+  it("control: a wait that fails while its signal is still live does raise the toast", async () => {
+    const { client, messenger } = realClientFixture();
+    messenger.setHandlers({
+      "providers.awaitLogin": () => {
+        throw new Error("host failed");
+      },
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    const liveAttempt = new AbortController();
+    const wait = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: liveAttempt.signal,
+    });
+    await expect(wait).rejects.toBeInstanceOf(HostRpcError);
+
+    // Without this the previous test could pass because the mock never fires,
+    // not because an aborted wait is silent.
+    expect(liveAttempt.signal.aborted).toBe(false);
+    expect(toastFromHostError).toHaveBeenCalledTimes(1);
+    expect(toastFromHostError).toHaveBeenCalledWith(
+      expect.any(HostRpcError),
+      "Couldn't confirm sign-in.",
+    );
   });
 });

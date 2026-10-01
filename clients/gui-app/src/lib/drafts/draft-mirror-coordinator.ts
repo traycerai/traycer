@@ -16,7 +16,7 @@ import {
   registerExtraImageRootSource,
   registerExtraImageSizeSource,
 } from "@/lib/composer/landing-image-budget";
-import { getImageBytes } from "@/lib/composer/landing-image-store";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
   currentDraftBlobOwnerId,
@@ -34,6 +34,7 @@ import { draftKindIsHostBound } from "./draft-portability";
 import {
   forgetCloudDraftPayloadUnsupportedHost,
   rebindCloudDraftImageClientForHost,
+  recordCloudDraftImageSources,
   recoverCloudDraftImages,
   resetCloudDraftImageRecoveryForTests,
 } from "./cloud-draft-image-recovery";
@@ -248,9 +249,9 @@ export function draftsCloudScopeId(hostId: string): string | null {
  * is app-global and survives restarts - and the source row retired so it
  * stops being listed.
  *
- * The blobs are already in this window's landing store (`applyHostDocument`
- * read them through `readDraftBlobsIntoLocalStore` before calling here), so
- * `readBlob` resolves straight from that map.
+ * `applyHostDocument` read verified blobs through `readDraftBlobsIntoLocalStore`
+ * before calling here. A full partition may have kept them ephemeral; the
+ * conversion imports from this map under its own batch reservation.
  *
  * `applyOwner` is the account the apply belongs to, captured before its first
  * await. Re-asked here because the conversion installs a landing draft - this
@@ -1447,12 +1448,12 @@ export async function ingestCloudDraftSummary(input: {
   // served. `applyHostDocument` swallows its own abandonment, so the condition
   // is re-derived here rather than returned from it.
   if (currentDraftBlobOwnerId() !== ingestOwner) return;
-  await recoverIngestedCloudDraftImages(input);
+  recoverIngestedCloudDraftImages(input);
 }
 
 /**
- * Pull a cloud-ingested draft's images down from the published
- * `image-attachment` blobs, for the window that has no other source for them.
+ * Remember the published image addresses of a cloud-ingested draft without
+ * pulling image bytes into this window during bootstrap.
  *
  * This is the ONLY path where that can be true. A document that arrives on
  * `drafts.subscribe` came from a host this window holds a mirror on, so
@@ -1460,10 +1461,8 @@ export async function ingestCloudDraftSummary(input: {
  * arrives here is owned by a host this window is not mirroring, which is the
  * second-window and offline-owner case the replica exists for.
  *
- * Run AFTER the apply so the row already roots these hashes, and awaited rather
- * than detached so an ingest is one settled unit - nothing is gated on it, and
- * each read carries its own timeout, so awaiting costs a bounded wait on a
- * chain whose caller has already released its ingest guard.
+ * Run AFTER the apply so the row already roots these hashes. Visible-draft
+ * idle prefetch and render/submit resolution use these addresses later.
  *
  * Landing and new-chat only. Stash entries also reach this function, and their
  * bytes are deliberately NOT recovered here: a stash row is converted into a
@@ -1476,20 +1475,11 @@ export async function ingestCloudDraftSummary(input: {
 /**
  * Fetch a cloud-ingested STASH document's images, for handing to the apply.
  *
- * The stash twin of {@link recoverIngestedCloudDraftImages}, and it runs on the
- * other side of the apply for a reason the sibling's own comment gives: that
- * one writes into this window's image partition, where the APPLIED row is what
- * roots the hashes, so it must run after. A stash row is not applied as a row
- * at all - it is CONVERTED, and the conversion reads these bytes through the
- * map handed in - so for this kind "after the apply" is not late, it is never.
+ * The stash twin of {@link recoverIngestedCloudDraftImages} runs before apply:
+ * a stash row is CONVERTED, and conversion needs its bytes in the handed map.
  *
- * The bytes still pass through the partition on the way: the cloud transfer
- * verifies each digest with `putImageBytesAtHash`, which is what makes a
- * returned byte string trustworthy, and that write seeds a session entry which
- * roots them meanwhile. Once the conversion has re-written them under their
- * landing hashes that first copy is incidental, and the sweep reclaims it on
- * its own schedule - the same
- * disposition any unrooted transfer gets.
+ * The transfer verifies each digest. An unrooted stash hash stays ephemeral
+ * until conversion admits it through the landing image budget.
  *
  * Answers an EMPTY map for every failure, including a fetch that raises: the
  * caller applies the document either way, and a stash entry whose images are
@@ -1508,8 +1498,9 @@ async function recoverCloudStashImages(input: {
   // cloud read is a byte pipe through whatever host this device runs.
   const client = sessionClients.get(input.hostId);
   if (client === undefined) return null;
+  let recovered: ReadonlyMap<string, ImageBytes>;
   try {
-    await recoverCloudDraftImages({
+    recovered = await recoverCloudDraftImages({
       identity: input.summary.identity,
       hostId: input.hostId,
       client,
@@ -1523,7 +1514,7 @@ async function recoverCloudStashImages(input: {
   }
   const images = new Map<string, ImageBlob>();
   for (const hash of hashes) {
-    const bytes = await getImageBytes(hash);
+    const bytes = recovered.get(hash);
     if (bytes === undefined) continue;
     // Sniffed from the BYTES, never from the document's `mimeType` attr, and
     // with NO fallback. The transport's readers answer `"image/png"` for bytes
@@ -1540,11 +1531,11 @@ async function recoverCloudStashImages(input: {
   return images;
 }
 
-async function recoverIngestedCloudDraftImages(input: {
+function recoverIngestedCloudDraftImages(input: {
   readonly hostId: string;
   readonly summary: CloudChatSummary;
   readonly document: DraftDocument;
-}): Promise<void> {
+}): void {
   const { document } = input;
   if (document.kind !== "landing" && document.kind !== "new-chat") return;
   const hashes = blobHashesOfDocument(document);
@@ -1554,23 +1545,11 @@ async function recoverIngestedCloudDraftImages(input: {
   // every site that runs the cloud ingest acquires this mirror alongside it.
   const client = sessionClients.get(input.hostId);
   if (client === undefined) return;
-  // Contained at this boundary, not inside the recovery module, and the
-  // asymmetry is deliberate. `useCloudDraftsIngest` calls this from a `void
-  // attemptRead(0)` chain with no catch around the ingest, so ANY rejection
-  // that reaches it is an unhandled rejection. Every failure the recovery can
-  // actually produce is already answered as a miss, so this catches only a
-  // fault nobody predicted - and it belongs here, where the consequence is,
-  // rather than in the module, where swallowing would also hide it from that
-  // module's own tests.
-  await recoverCloudDraftImages({
+  recordCloudDraftImageSources({
     identity: input.summary.identity,
     hostId: input.hostId,
     client,
     hashes,
-  }).catch((error: unknown) => {
-    appLogger.warn("[draft-mirror] cloud draft image recovery failed", {
-      error: describeLogError(error),
-    });
   });
 }
 
@@ -1752,9 +1731,9 @@ registerExtraImageRootSource({
  * The step it does not cover is a root this partition has NEVER held: a draft
  * mirrored from the host, or restored on a second machine, naming digests whose
  * bytes the recovery legs have not fetched yet. Unmeasured, undeclared and
- * absent from the partition, such a root prices at ZERO - and recovery then
- * writes those bytes in through `cloud-draft-image-recovery` /
- * `readDraftBlobsIntoLocalStore`, neither of which asks the budget for room.
+ * absent from the partition, such a root prices at ZERO. Both the cloud and
+ * host recovery readers now reserve residency before writing those bytes;
+ * this declaration lets that reservation account for a restored root.
  * The landing surface never had this hole, because `declaredSizeByHash` walks
  * landing drafts directly; this is the same reading for the two composer
  * surfaces that reach the budget only through this registration.

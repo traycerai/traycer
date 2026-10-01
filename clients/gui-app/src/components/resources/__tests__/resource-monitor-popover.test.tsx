@@ -48,12 +48,12 @@ import {
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
 import type { BarReadingForm } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
-import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import {
   resourcesRegistry,
@@ -843,24 +843,48 @@ function desktopMetric(
   };
 }
 
+/** Holds one epic's stream lease, as a chip or the pane's fallback would. */
+function EpicLease(props: { readonly epicId: string }): null {
+  useEpicResourcesLease(props.epicId, true);
+  return null;
+}
+
+/**
+ * `emit()` speaks for the host: each call reaches the newest stream, and a
+ * global stream opened later - a header panel opening, which is when its
+ * stream opens - is first sent everything said so far, as a host sends a
+ * fresh subscriber its current state.
+ */
 function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
   let captured: ResourcesStreamCallbacks | null = null;
-  __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
+  const said: Array<(callbacks: ResourcesStreamCallbacks) => void> = [];
+  __setResourcesStreamClientFactoryForTests((scope, callbacks) => {
     captured = callbacks;
+    if (scope.kind === "global") {
+      for (const replay of said) replay(callbacks);
+    }
     return { close: () => undefined, setDemand: () => undefined };
   });
-  return {
-    emit: () => {
-      if (captured === null) throw new Error("stream callbacks not wired");
-      return captured;
-    },
+  const say = (message: (callbacks: ResourcesStreamCallbacks) => void) => {
+    if (captured === null) throw new Error("stream callbacks not wired");
+    said.push(message);
+    message(captured);
   };
+  const host: ResourcesStreamCallbacks = {
+    onSnapshot: (payload) => say((callbacks) => callbacks.onSnapshot(payload)),
+    onUpdate: (payload) => say((callbacks) => callbacks.onUpdate(payload)),
+    onConnectionStatus: (status, reason) =>
+      say((callbacks) => callbacks.onConnectionStatus(status, reason)),
+    onScopeSupport: (support) =>
+      say((callbacks) => callbacks.onScopeSupport(support)),
+  };
+  return { emit: () => host };
 }
 
 function renderPopover(): void {
   render(
     <TooltipProvider>
-      <ResourcesStreamMount epicId="epic-1" />
+      <EpicLease epicId="epic-1" />
       <ResourceMonitorPopover
         trigger="header-button"
         form="glyph"
@@ -961,7 +985,7 @@ describe("ResourceMonitorPopover", () => {
     installStubFactory();
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -2438,7 +2462,7 @@ describe("ResourceMonitorPopover", () => {
     const stub = installStubFactory();
     render(
       <TooltipProvider delayDuration={0}>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -3651,7 +3675,7 @@ describe("ResourceMonitorPopover", () => {
     const stub = installStubFactory();
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -3682,7 +3706,7 @@ describe("ResourceMonitorPopover", () => {
 
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -3742,7 +3766,7 @@ describe("ResourceMonitorPopover", () => {
 
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -3771,7 +3795,7 @@ describe("ResourceMonitorPopover", () => {
     const stub = installStubFactory();
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -3846,7 +3870,7 @@ describe("ResourceMonitorPopover", () => {
     const stub = installStubFactory();
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -3892,7 +3916,7 @@ describe("ResourceMonitorPopover", () => {
 
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -4844,7 +4868,7 @@ describe("ResourceMonitorPopover · host picker", () => {
     const stub = installStubFactory();
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form="glyph"
@@ -5312,7 +5336,7 @@ describe("ResourceMonitorPopover · custom trigger", () => {
   function renderWithCustomTrigger(): void {
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="custom"
           claimsOpenAction
@@ -5376,7 +5400,7 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
     const stub = installStubFactory();
     render(
       <TooltipProvider>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <ResourceMonitorPopover
           trigger="header-button"
           form={form}
@@ -5469,3 +5493,126 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
     expect(button.getAttribute("aria-label")).toBe("Resources");
   });
 });
+
+/**
+ * A closed trigger holds the global stream only while it draws live readings.
+ * The glyph and the tile are a bare icon, and so is any trigger with every
+ * metric switched off; the status bar's segment and the header's `readout` /
+ * `inline` forms print numbers while closed and keep their background lease.
+ * The rule is the same on every shell.
+ */
+describe.each([false, true])(
+  "ResourceMonitorPopover · global stream lease (installed app: %s)",
+  (mobileApp) => {
+    afterEach(() => {
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    });
+
+    function renderHeader(form: BarReadingForm): void {
+      render(
+        <TooltipProvider>
+          <ResourceMonitorPopover
+            trigger="header-button"
+            form={form}
+            claimsOpenAction
+          />
+        </TooltipProvider>,
+      );
+    }
+
+    function renderStatusBarTrigger(): void {
+      render(
+        <TooltipProvider>
+          <ResourceMonitorPopover
+            trigger="custom"
+            claimsOpenAction
+            contentSide="top"
+            triggerNode={
+              <button type="button" data-testid="status-bar-trigger">
+                cpu 12%
+              </button>
+            }
+          />
+        </TooltipProvider>,
+      );
+    }
+
+    function switchEveryMetricOff(): void {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: false,
+        memory: false,
+        processes: false,
+        ramShare: false,
+      });
+    }
+
+    it.each<BarReadingForm>(["glyph", "tile"])(
+      "holds a bare %s button's global stream only while its panel is open",
+      (form) => {
+        setMobileApp(mobileApp);
+        installStubFactory();
+        renderHeader(form);
+
+        expect(resourcesRegistry.getGlobal()).toBeNull();
+
+        fireEvent.click(screen.getByTestId("resource-monitor-header-button"));
+        expect(resourcesRegistry.getGlobal()).not.toBeNull();
+
+        fireEvent.keyDown(document.activeElement ?? document.body, {
+          key: "Escape",
+        });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(resourcesRegistry.getGlobal()).toBeNull();
+      },
+    );
+
+    it.each<BarReadingForm>(["readout", "inline"])(
+      "keeps the %s button's background stream while closed",
+      (form) => {
+        setMobileApp(mobileApp);
+        installStubFactory();
+        renderHeader(form);
+
+        expect(resourcesRegistry.getGlobal()).not.toBeNull();
+      },
+    );
+
+    it("keeps a readout trigger's background stream while closed", () => {
+      setMobileApp(mobileApp);
+      installStubFactory();
+      renderStatusBarTrigger();
+
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    });
+
+    it("lets a closed readout's stream go once every metric is switched off, and takes it back with the first one on", () => {
+      setMobileApp(mobileApp);
+      installStubFactory();
+      renderStatusBarTrigger();
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+
+      act(() => {
+        switchEveryMetricOff();
+      });
+      expect(resourcesRegistry.getGlobal()).toBeNull();
+
+      act(() => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("resourceMonitor", { memory: true });
+      });
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    });
+
+    it("still streams for the panel of a trigger with every metric off", () => {
+      setMobileApp(mobileApp);
+      installStubFactory();
+      switchEveryMetricOff();
+      renderHeader("inline");
+      expect(resourcesRegistry.getGlobal()).toBeNull();
+
+      fireEvent.click(screen.getByTestId("resource-monitor-header-button"));
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    });
+  },
+);

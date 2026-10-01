@@ -106,6 +106,7 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    warning: vi.fn(),
     message: vi.fn(),
   },
 }));
@@ -146,7 +147,7 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
-  HostStatusUpdateOperation,
+  HostStatusUpdateOperationV2,
   HostStatusUpdateProgress,
 } from "@traycer/protocol/host/status/index";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -155,6 +156,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { HOST_UPDATE_SERVICE_DISABLED_MESSAGE } from "@traycer-clients/shared/platform/host-service-notices";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
@@ -190,6 +192,8 @@ const UP_TO_DATE_STATUS: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 function makeManagement(): IHostManagement {
@@ -213,7 +217,9 @@ function makeManagement(): IHostManagement {
     registerService: vi.fn(notImplemented("registerService")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
-    freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    freePortAndRestart: vi.fn((input) =>
+      Promise.resolve({ kind: "applied" as const, ...input }),
+    ),
     runDoctorRepairQueued: vi.fn(() =>
       Promise.resolve({ kind: "applied" as const }),
     ),
@@ -233,6 +239,9 @@ function makeManagement(): IHostManagement {
       notImplemented("maintenanceInstallVersion"),
     ),
     restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    restartHostServiceIfHostIdle: vi.fn(
+      notImplemented("restartHostServiceIfHostIdle"),
+    ),
     runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
@@ -285,7 +294,7 @@ function bindLocalHost(
 }
 
 function attemptStatus(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -303,8 +312,8 @@ function attemptStatus(
 }
 
 function baseAttempt(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -408,7 +417,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   // 1. Every banner state names its phase.
   const STATE_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation;
+    readonly operation: HostStatusUpdateOperationV2;
     readonly expectedPhrase: RegExp;
   }> = [
     {
@@ -732,7 +741,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   // controls checked directly.
   const ISOLATION_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation | null;
+    readonly operation: HostStatusUpdateOperationV2 | null;
     readonly updateProgress: HostStatusUpdateProgress | null;
   }> = [
     {
@@ -925,6 +934,60 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       ).toBeNull();
     });
 
+    it("a failed attempt with the store-format floor code says so in safe copy, offers Settings › Host and NO Retry", async () => {
+      openSettingsMock.mockClear();
+      bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              phase: "failed",
+              execution: "terminal",
+              error: {
+                code: "E_HOST_STORE_FORMAT_FLOOR",
+                message: "raw refusal; pass --accept-store-format-loss",
+                phase: "applying",
+              },
+            }),
+          ),
+      });
+      renderBanner(undefined);
+      const phase = await findPhaseText();
+      expect(phase).toContain("Settings › Host");
+      expect(phase).not.toContain("--accept-store-format-loss");
+      expect(
+        screen.queryByTestId("host-update-banner-operation-retry"),
+      ).toBeNull();
+      fireEvent.click(
+        await screen.findByTestId("host-update-banner-open-host-settings"),
+      );
+      expect(openSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ section: "host" }),
+      );
+    });
+
+    it("a failed attempt with any OTHER error code keeps Retry and offers no Settings action", async () => {
+      bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              phase: "failed",
+              execution: "terminal",
+              error: {
+                code: "E_SOMETHING_ELSE",
+                message: "disk on fire",
+                phase: "applying",
+              },
+            }),
+          ),
+      });
+      renderBanner(undefined);
+      expect(await findPhaseText()).toContain("disk on fire");
+      await screen.findByTestId("host-update-banner-operation-retry");
+      expect(
+        screen.queryByTestId("host-update-banner-open-host-settings"),
+      ).toBeNull();
+    });
+
     it("Retry dispatches applyStaged", async () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
@@ -1019,6 +1082,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           onRestart={null}
           onForceUpdate={null}
           cliFloorBlocked={false}
+          foregroundHeldFinish={null}
           // Panel-level in production (`useHostUpdateCompletion`); this
           // failed attempt is not dismissed, which is the only half of the
           // completion the card itself reads (`completion.dismissed`).
@@ -1307,6 +1371,55 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
     // Never the attempt-driven copy - the unbound arm has no attempt to read.
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
+  });
+
+  // The launch apply waits over a service registration its owner switched off
+  // (`HostControllerStatus.updateDeferral`): the row says so and offers the ONE
+  // action that finishes it, fenced to this machine's host like any Doctor
+  // repair - Update now would swap the bytes and still leave the host stopped.
+  it("an update-ready row with an updateDeferral shows the message and Enable background service, not Update now; the click dispatches Doctor's register-service fenced to the local host", async () => {
+    bindLocalHost({ "host.status": () => attemptStatus({ kind: "none" }) });
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    );
+    const management: IHostManagement = {
+      ...makeManagement(),
+      getHostControllerStatus: vi.fn(() =>
+        Promise.resolve<HostControllerStatus>({
+          ...UP_TO_DATE_STATUS,
+          latestVersion: "1.4.2",
+          stagedVersion: "1.4.2",
+          updateReady: true,
+          updateDeferral: {
+            message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+            code: "E_SERVICE_REGISTRATION_DISABLED",
+          },
+        }),
+      ),
+      runDoctorRepairQueued,
+    };
+    renderBanner(createFakeRunnerHost({ hostManagement: management }));
+
+    const notice = await screen.findByTestId(
+      "host-update-banner-service-disabled",
+    );
+    expect(notice.textContent).toBe(HOST_UPDATE_SERVICE_DISABLED_MESSAGE);
+    expect(screen.queryByRole("button", { name: /Update now/i })).toBeNull();
+    // Not a failure: the info tint, never the destructive one.
+    const banner = screen.getByRole("status", {
+      name: /Traycer host update waiting/i,
+    });
+    expect(banner.className).not.toContain("destructive");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Enable background service/i }),
+    );
+    await waitFor(() => {
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "register-service",
+        expectedHostId: LOCAL_HOST_ID,
+      });
+    });
   });
 
   // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).

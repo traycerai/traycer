@@ -36,6 +36,7 @@ export type {
   HostRegistryUpdateState,
   HostRemovalState,
   HostRestartRequestResult,
+  HostServiceRestartResult,
   HostTrayCommand,
   HostUninstallResult,
   InstallVersionOk,
@@ -52,6 +53,7 @@ export type {
   ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
+  FreePortAndRestartResult,
 } from "@traycer-clients/shared/platform/runner-host";
 
 // The `maintenance:*` handlers resolve protocol response shapes verbatim (see

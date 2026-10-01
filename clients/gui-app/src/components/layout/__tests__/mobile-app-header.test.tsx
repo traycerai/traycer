@@ -186,8 +186,27 @@ function presentNoTab(): void {
   useEpicCanvasStore.setState({ tabsById: {} });
 }
 
+// The header only ever renders on a phone, and whether the footer is on
+// screen is a viewport-dependent answer (`useStatusBarVisible`), so every case
+// runs at a phone's width rather than at jsdom's desktop default.
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+const PHONE_VIEWPORT_WIDTH = 390;
+
+function setMobileFooter(on: boolean): void {
+  const layout = useLayoutStore.getState();
+  layout.setArrangement({ ...layout.arrangement, mobileFooter: on });
+}
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
+
 describe("MobileAppHeader", () => {
   beforeEach(() => {
+    setViewportWidth(PHONE_VIEWPORT_WIDTH);
     useMobileNavStore.setState({ open: false });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     presentNoTab();
@@ -204,6 +223,7 @@ describe("MobileAppHeader", () => {
   });
   afterEach(() => {
     cleanup();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     useAuthStore.setState({ status: "signed-out" });
     useMobileNavStore.setState({ open: false });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
@@ -354,6 +374,31 @@ describe("MobileAppHeader", () => {
       expect(screen.queryByRole("button", { name })).toBeNull();
     },
   );
+
+  // Either/or with the footer: with it switched on the footer carries both
+  // readings, so the header draws neither - whatever their own switches say.
+  it("gives both readings up to the footer while the footer is switched on", async () => {
+    const layout = useLayoutStore.getState();
+    layout.setRegionValues("resourceMonitor", { shown: "shown" });
+    layout.setRegionValues("usageLimits", { shown: "shown" });
+    setMobileFooter(true);
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(screen.queryByRole("button", { name: "Usage limits" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Resource monitor" }),
+    ).toBeNull();
+
+    cleanup();
+    setMobileFooter(false);
+    renderAt("/");
+    expect(
+      await screen.findByRole("button", { name: "Usage limits" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Resource monitor" }),
+    ).not.toBeNull();
+  });
 
   it("renders the presented epic tab's registered right actions", async () => {
     useMobileHeaderStore

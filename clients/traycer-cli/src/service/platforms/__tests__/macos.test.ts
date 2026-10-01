@@ -1121,7 +1121,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await controller.uninstall({ label });
+    await controller.uninstall({ label, leaveForegroundRun: null });
 
     expect(calls).toEqual([
       {
@@ -1173,7 +1173,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).resolves.toBeUndefined();
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).resolves.toBeUndefined();
   });
 
   it("surfaces a real bootout failure and preserves the service manifest", async () => {
@@ -1190,7 +1192,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining("Operation not permitted"),
     });
@@ -1212,7 +1216,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining("timed out"),
     });
@@ -1775,7 +1781,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).resolves.toBeUndefined();
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).resolves.toBeUndefined();
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
       "print",
@@ -1812,7 +1820,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining(`${label.id}.agent`),
     });

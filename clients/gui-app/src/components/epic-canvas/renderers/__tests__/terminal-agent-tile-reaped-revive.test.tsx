@@ -49,6 +49,7 @@ vi.mock("@/hooks/agent/use-terminal-tile-bootstrap", () => ({
     createError: null,
     retry: bootstrapRetry,
     hostHasSession: false,
+    hostSessionSettled: false,
   }),
 }));
 

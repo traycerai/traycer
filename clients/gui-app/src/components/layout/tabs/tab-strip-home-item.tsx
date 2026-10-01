@@ -97,6 +97,7 @@ export function TabStripHomeItemView(
         <TabChrome
           isActive={isActive}
           joined={joined}
+          concealed={false}
           color={null}
           session={false}
         />

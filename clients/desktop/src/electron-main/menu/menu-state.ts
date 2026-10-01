@@ -23,6 +23,16 @@ export interface MenuState {
   // here when an upgrade is queued (Flow 6). `null` means no update is
   // pending. The tray and macOS app menus use it to insert an update row.
   readonly hostUpdateAvailableVersion: string | null;
+  // Whether this instance runs the local-host lanes (off when booted in
+  // `none` or once `none` is committed this session). "Restart Host" is
+  // offered only then: otherwise the restart is refused - the controller
+  // refuses every host start once `none` is committed or the app booted in
+  // it (`HostController.enqueueHostStart`) - and a destructive confirm for an
+  // action the app has already ruled out is a dead control. Off, too, while
+  // the running host is one a person started in a terminal: this app never
+  // restarts it. The same fact the tray reads
+  // (`trayHostLifecyclePresentation`).
+  readonly offerRestartHost: boolean;
 }
 
 export function toMenuHostPresentation(

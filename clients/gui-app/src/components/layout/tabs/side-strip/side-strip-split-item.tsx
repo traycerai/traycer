@@ -283,7 +283,6 @@ function SideFillableMember(
       active={props.focused}
       session={null}
       tint={null}
-      autoTint={null}
       groupLine={props.groupLine}
       leading={icon}
       tile={{ kind: "icon", icon }}

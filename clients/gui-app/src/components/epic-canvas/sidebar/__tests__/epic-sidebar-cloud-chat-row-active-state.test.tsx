@@ -3,7 +3,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { v4 as uuidv4 } from "uuid";
 import { vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import {
+  EpicSidebarCloudChatRow,
+  type CloudChatRowExpansion,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
@@ -41,6 +45,13 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
       prepare(),
 }));
 
+/** A leaf row: no subagents beneath it, so no expansion state to consult. */
+const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
+const LEAF_EXPANSION: CloudChatRowExpansion = {
+  expandedIds: new Set<string>(),
+  toggleExpanded: () => undefined,
+};
+
 const CHAT: CloudChatSummary = {
   identity: {
     taskId: "d60781ca-e0d3-4318-bf2a-e03d8ce4e3a7",
@@ -76,6 +87,8 @@ function renderRow(tabId: string): HTMLElement {
   render(
     <EpicSidebarCloudChatRow
       chat={CHAT}
+      childEntries={NO_CHILDREN}
+      expansion={LEAF_EXPANSION}
       tabId={tabId}
       depth={0}
       selectionMode={false}

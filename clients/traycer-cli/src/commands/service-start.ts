@@ -1,17 +1,29 @@
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import type { CommandFn, CommandResult } from "../runner/runner";
+import type {
+  CommandContext,
+  CommandFn,
+  CommandResult,
+} from "../runner/runner";
 import {
   createServiceController,
   serviceLabelFor,
   type ServiceLabel,
   type ServiceStatus,
 } from "../service";
-import { withCliUpdateContender } from "../host/update-contender";
+import {
+  withCliAttemptMutation,
+  withCliSupervisorRelaunchSegment,
+} from "../host/update-contender";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
-import { startHostServiceWithAttempt } from "../host/update-mutation";
+import {
+  startHostServiceWithAttempt,
+  type ServiceStartOutcome,
+} from "../host/update-mutation";
 import type { Environment } from "../runner/environment";
 import type { ILogger } from "../logger";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
+import { refuseForegroundHostRun } from "../host/foreground-host-run";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 
 // `traycer host service start` - ask the OS service manager to start the
 // already-registered host in the BACKGROUND and return.
@@ -93,9 +105,23 @@ async function statusBestEffort(
   }
 }
 
-export const serviceStartCommand: CommandFn = async (
-  ctx,
-): Promise<CommandResult> => {
+export interface ServiceStartArgs {
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof this start publishes
+   * (`host/lifecycle-origin.ts`). It never decides whether the supervisor
+   * runs; it shapes only the wording of the foreground-run refusal.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
+}
+
+export function buildServiceStartCommand(args: ServiceStartArgs): CommandFn {
+  return (ctx) => runServiceStart(ctx, args);
+}
+
+async function runServiceStart(
+  ctx: CommandContext,
+  args: ServiceStartArgs,
+): Promise<CommandResult> {
   ctx.runtime.logger.info("Service start command started", {
     environment: ctx.runtime.environment,
   });
@@ -107,117 +133,186 @@ export const serviceStartCommand: CommandFn = async (
     reason: "service-start",
     waitMs: 30_000,
     pollIntervalMs: 100,
-    admission: "service-maintenance",
+    admission: "supervisor-relaunch-maintenance",
   };
-  return withCliUpdateContender(contenderOptions, async (capability) => {
-    // Read INSIDE the lock: a registration observed before acquiring it can
-    // be gone by the time the start runs.
-    //
-    // ADVISORY and BEST-EFFORT, not a gate. On Windows `statusService` maps
-    // every `schtasks /Query` failure - a timeout, a transient access denial
-    // - to `not-installed`, and a Linux manifest stat or a macOS
-    // `launchctl print` can simply fail. Neither may stop the authoritative
-    // start attempt: that would leave a registered, stopped host down
-    // because an INSPECTION failed. This read only decides what to SAY.
-    const before = await statusBestEffort(
-      controller,
-      label,
-      ctx.runtime.logger,
-      "pre-start",
-    );
-    // Already running: report it and touch NOTHING. The platform start is
-    // skipped deliberately rather than relied on to no-op, because on
-    // Windows it does not. The Scheduled Task is registered
-    // `MultipleInstancesPolicy=IgnoreNew`, so `schtasks /Run` against a
-    // live task is suppressed - and `runTaskAndVerifyStart` requires
-    // POST-BASELINE spawn evidence before it will call the start a success.
-    // Suppressed run plus no new evidence means it polls for the whole
-    // verify timeout and then throws `E_SERVICE_CONTROL_FAILED`, so
-    // "start an already-running host" would have been a slow hard failure
-    // on Windows instead of the idempotent no-op this command advertises.
-    // launchctl kickstart and `systemctl --user start` genuinely do no-op,
-    // so returning early costs those platforms nothing and gives all three
-    // one answer.
-    //
-    // `running` alone is not enough, twice over. It is derived from
-    // `isProcessAlive(pid)` over pid metadata, so stale metadata naming a
-    // RECYCLED pid reports a host that is not there - hence the positive
-    // liveness confirmation. And even confirmed, it cannot attribute the
-    // process to the service manager; the summary says so rather than
-    // claiming the service was already running.
-    const runningConfirmed =
-      before?.state === "running" &&
-      (await isHostPositivelyServing(environment));
-    if (runningConfirmed) {
-      ctx.runtime.logger.info("Service start command found a running host", {
-        environment: ctx.runtime.environment,
-        label: label.id,
-      });
-      return {
-        data: startData(label, "running", before, true),
-        human: humanSummary(label.id, true, before),
-        exitCode: 0,
-      };
-    }
+  // Admitted as the service's own supervisor relaunch is: this command's one
+  // mutation IS that start. A standing update attempt parked for work, parked
+  // on an activation of the installed generation, or interrupted in a phase
+  // whose own next act is starting the host admits it, and every other
+  // nonterminal record refuses it as `service-maintenance` did. Under that
+  // admission every such record refused, so after a Linked teardown or a
+  // reboot over a park the explicit start could not bring the host back for
+  // as long as the record stood.
+  return withCliSupervisorRelaunchSegment(
+    contenderOptions,
+    (capability, context) =>
+      withCliAttemptMutation(capability, contenderOptions, async () => {
+        // A host a person started in a terminal holds the slot: whatever the
+        // service manager launched would find it as the incumbent and decline,
+        // so nothing can start. Say that, first and for either origin, instead
+        // of the misleading answers the status read and the start give over it
+        // (on Windows, a start that waits out its verify timeout for spawn
+        // evidence and fails). Admission has already run: an update attempt
+        // this start's admission refuses never reaches this check, and one it
+        // admits does.
+        await refuseForegroundHostRun(
+          "host service start",
+          environment,
+          args.lifecycleOrigin,
+        );
+        // Read INSIDE the lock: a registration observed before acquiring it
+        // can be gone by the time the start runs.
+        //
+        // ADVISORY and BEST-EFFORT, not a gate. On Windows `statusService`
+        // throws on any `schtasks /Query` failure that does not name a missing
+        // task - a timeout, a transient access denial - and a Linux manifest
+        // stat or a macOS `launchctl print` can simply fail. Neither may stop
+        // the authoritative start attempt: that would leave a registered,
+        // stopped host down because an INSPECTION failed. This read only
+        // decides what to SAY.
+        const before = await statusBestEffort(
+          controller,
+          label,
+          ctx.runtime.logger,
+          "pre-start",
+        );
+        // Already running: report it and touch NOTHING. The platform start is
+        // skipped deliberately rather than relied on to no-op, because on
+        // Windows it does not. The Scheduled Task is registered
+        // `MultipleInstancesPolicy=IgnoreNew`, so `schtasks /Run` against a
+        // live task is suppressed - and `runTaskAndVerifyStart` requires
+        // POST-BASELINE spawn evidence before it will call the start a success.
+        // Suppressed run plus no new evidence means it polls for the whole
+        // verify timeout and then throws `E_SERVICE_CONTROL_FAILED`, so
+        // "start an already-running host" would have been a slow hard failure
+        // on Windows instead of the idempotent no-op this command advertises.
+        // launchctl kickstart and `systemctl --user start` genuinely do no-op,
+        // so returning early costs those platforms nothing and gives all three
+        // one answer.
+        //
+        // `running` alone is not enough, twice over. It is derived from
+        // `isProcessAlive(pid)` over pid metadata, so stale metadata naming a
+        // RECYCLED pid reports a host that is not there - hence the positive
+        // liveness confirmation. And even confirmed, it cannot attribute the
+        // process to the service manager; the summary says so rather than
+        // claiming the service was already running.
+        const runningConfirmed =
+          before?.state === "running" &&
+          (await isHostPositivelyServing(environment));
+        if (runningConfirmed) {
+          ctx.runtime.logger.info(
+            "Service start command found a running host",
+            {
+              environment: ctx.runtime.environment,
+              label: label.id,
+            },
+          );
+          return {
+            data: startData(label, "running", before, true),
+            human: humanSummary(label.id, true, before),
+            exitCode: 0,
+          };
+        }
 
-    ctx.progress({
-      stage: "start",
-      message: `starting service '${label.id}'`,
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-      workUnits: null,
-    });
-    // `externally-managed` (macOS, Desktop's SMAppService registration owns
-    // the label) is deliberately NOT refused: a registration exists, the
-    // user asked for the host to be running, and the macOS backend already
-    // redirects the start to the agent label that launchd can actually
-    // start. Refusing here would leave the one platform where Desktop is
-    // the common setup without a background start.
-    try {
-      await startHostServiceWithAttempt(
-        capability,
-        contenderOptions,
-        controller,
-        label,
-      );
-    } catch (cause) {
-      // The start failed AND the earlier read said nothing was registered:
-      // that combination is what "you have no service" actually looks like,
-      // so attach the actionable guidance here rather than refusing up
-      // front on a read that cannot be trusted to mean it.
-      if (before?.state === "not-installed") {
-        throw cliError({
-          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-          message: `host service start: could not start the service, and no OS service appears to be registered for environment=${ctx.runtime.environment}; run 'traycer host service install' to register and start it, or 'traycer host ensure' to install the host as well (start failed: ${cause instanceof Error ? cause.message : String(cause)})`,
-          details: { environment: ctx.runtime.environment, label: label.id },
-          exitCode: 1,
+        if (context.activeAttempt !== null) {
+          ctx.runtime.logger.info(
+            "Service start command is starting the service beside a standing update attempt",
+            {
+              environment: ctx.runtime.environment,
+              label: label.id,
+              attemptId: context.activeAttempt.attemptId,
+              phase: context.activeAttempt.phase,
+            },
+          );
+        }
+        ctx.progress({
+          stage: "start",
+          message: `starting service '${label.id}'`,
+          percent: null,
+          bytes: null,
+          totalBytes: null,
+          workUnits: null,
         });
-      }
-      throw cause;
-    }
-    // Also best-effort: the start was ACCEPTED, and a descriptive readback
-    // that fails afterwards must not turn that into a nonzero result. This
-    // command promises an accepted request, not readiness.
-    const after = await statusBestEffort(
-      controller,
-      label,
-      ctx.runtime.logger,
-      "post-start",
-    );
-    ctx.runtime.logger.info("Service start command completed", {
-      environment: ctx.runtime.environment,
-      label: label.id,
-      priorState: before?.state ?? null,
-      state: after?.state ?? null,
-    });
-    return {
-      data: startData(label, before?.state ?? null, after, false),
-      human: humanSummary(label.id, false, after),
-      exitCode: 0,
-    };
-  });
-};
+        // `externally-managed` (macOS, Desktop's SMAppService registration owns
+        // the label) is deliberately NOT refused: a registration exists, the
+        // user asked for the host to be running, and the macOS backend already
+        // redirects the start to the agent label that launchd can actually
+        // start. Refusing here would leave the one platform where Desktop is
+        // the common setup without a background start.
+        let outcome: ServiceStartOutcome;
+        try {
+          outcome = await startHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            args.lifecycleOrigin,
+            controller,
+            label,
+          );
+        } catch (cause) {
+          // The start failed AND the earlier read said nothing was registered:
+          // that combination is what "you have no service" actually looks like,
+          // so attach the actionable guidance here rather than refusing up
+          // front on a read that cannot be trusted to mean it.
+          if (before?.state === "not-installed") {
+            throw cliError({
+              code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+              message: `host service start: could not start the service, and no OS service appears to be registered for environment=${ctx.runtime.environment}; run 'traycer host service install' to register and start it, or 'traycer host ensure' to install the host as well (start failed: ${cause instanceof Error ? cause.message : String(cause)})`,
+              details: {
+                environment: ctx.runtime.environment,
+                label: label.id,
+              },
+              exitCode: 1,
+            });
+          }
+          throw cause;
+        }
+        // The service IS running - its supervisor is, between two relaunches
+        // of a host that died - so the service manager would start nothing,
+        // and a start published over it used to stall that relaunch. The
+        // request is already satisfied by the supervisor; this command
+        // promises an accepted request, not readiness, so it says what it
+        // found and returns.
+        if (outcome.kind === "supervisor-relaunching") {
+          ctx.runtime.logger.info(
+            "Service start command found the service's supervisor relaunching the host",
+            {
+              environment: ctx.runtime.environment,
+              label: label.id,
+              supervisorPid: outcome.supervisorPid,
+            },
+          );
+          return {
+            data: {
+              ...startData(label, before?.state ?? null, before, false),
+              supervisorRelaunchingPid: outcome.supervisorPid,
+            },
+            human: `service '${label.id}' is already running: its supervisor (pid ${String(outcome.supervisorPid)}) is relaunching the host, so no start was requested; run 'traycer host status' to confirm the host came back`,
+            exitCode: 0,
+          };
+        }
+        // Also best-effort: the start was ACCEPTED, and a descriptive readback
+        // that fails afterwards must not turn that into a nonzero result. This
+        // command promises an accepted request, not readiness.
+        const after = await statusBestEffort(
+          controller,
+          label,
+          ctx.runtime.logger,
+          "post-start",
+        );
+        ctx.runtime.logger.info("Service start command completed", {
+          environment: ctx.runtime.environment,
+          label: label.id,
+          priorState: before?.state ?? null,
+          state: after?.state ?? null,
+        });
+        return {
+          data: startData(label, before?.state ?? null, after, false),
+          human: humanSummary(label.id, false, after),
+          exitCode: 0,
+        };
+      }),
+  );
+}
 
 function startData(
   label: ServiceLabel,

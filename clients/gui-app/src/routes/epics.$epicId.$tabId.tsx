@@ -6,6 +6,7 @@ import {
   negotiatedListTasksServesLocalFirst,
   registerCloudEpicTasksClient,
 } from "@/lib/cloud-epic-tasks-query";
+import { isMobileApp } from "@/lib/mobile-app";
 import { requireSignedIn } from "@/lib/router-auth";
 import {
   admitsLocalPlane,
@@ -46,6 +47,10 @@ export const Route = createFileRoute("/epics/$epicId/$tabId")({
     const hostId = client?.getActiveHostId() ?? null;
     const auth = context.getAuthSnapshot();
     if (hostId === null || client === null) return;
+    // The phone restores this route at launch, where the prefetch put
+    // History's first page ahead of the task's first paint. Its drawer warms
+    // the same query after that paint or on the first open.
+    if (isMobileApp()) return;
     // SURFACE, on the same reading as `/epics`: this warms the History first
     // page so the overlay opens populated from inside an epic tab, and that
     // page is the local-first `initial` leg. `beforeLoad`'s `requireSignedIn`

@@ -1,6 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -441,7 +447,7 @@ describe("observeAttemptRecoveryEvidence - installed/staged artifacts: absent, v
     expect(evidence.installed).toEqual({ kind: "unreadable" });
   });
 
-  it("fails closed as unreadable when the installed executable is a FIFO (or any non-regular file), bounded and never opened for read", async () => {
+  it("fails closed as unreadable when the installed executable is a FIFO (or any non-regular file): opened non-blocking and never read, bounded", async () => {
     if (process.platform === "win32") return;
     const installDir = paths.hostInstallDir("production");
     mkdirSync(installDir, { recursive: true });
@@ -453,10 +459,11 @@ describe("observeAttemptRecoveryEvidence - installed/staged artifacts: absent, v
     );
     identityVerdictMock.mockResolvedValue("dead");
 
-    // Bounded: a FIFO with nothing on the other end would hang a naive open
-    // for read. `placedFileFingerprint` must reject on the pre-open `lstat`
-    // identity check (not `.isFile()`) before ever calling `open()`, so this
-    // resolves promptly rather than hanging until the test timeout.
+    // Bounded: a FIFO with nothing on the other end would hang a blocking
+    // open or read. `placedFileFingerprint` opens with O_NONBLOCK, so the
+    // open itself does not wait for a writer; the fstat'd `.isFile()` check
+    // then rejects it without ever reading - so this resolves promptly
+    // rather than hanging until the test timeout.
     const evidence = await Promise.race([
       readAttemptRecoveryEvidence(
         "production",
@@ -469,6 +476,87 @@ describe("observeAttemptRecoveryEvidence - installed/staged artifacts: absent, v
         ),
       ),
     ]);
+    expect(evidence.installed).toEqual({ kind: "unreadable" });
+  });
+
+  it("fails closed as unreadable when the installed executable is a symlink to a regular file", async () => {
+    if (process.platform === "win32") return;
+    const installDir = paths.hostInstallDir("production");
+    mkdirSync(installDir, { recursive: true });
+    const targetPath = join(installDir, "traycer-host-real");
+    writeFileSync(targetPath, "binary-bytes");
+    const executablePath = join(installDir, "traycer-host");
+    symlinkSync(targetPath, executablePath);
+    await writeHostInstallRecord(
+      "production",
+      installRecord(
+        "1.2.3",
+        executablePath,
+        "install-1",
+        GENUINE_EXECUTABLE_SHA256,
+      ),
+    );
+    identityVerdictMock.mockResolvedValue("dead");
+
+    // O_NOFOLLOW makes `open()` reject any trailing symlink outright (ELOOP),
+    // whether or not its target exists - so a live target is still refused.
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.installed).toEqual({ kind: "unreadable" });
+  });
+
+  it("fails closed as unreadable when the installed executable is a dangling symlink", async () => {
+    if (process.platform === "win32") return;
+    const installDir = paths.hostInstallDir("production");
+    mkdirSync(installDir, { recursive: true });
+    const executablePath = join(installDir, "traycer-host");
+    symlinkSync(join(installDir, "does-not-exist"), executablePath);
+    await writeHostInstallRecord(
+      "production",
+      installRecord(
+        "1.2.3",
+        executablePath,
+        "install-1",
+        GENUINE_EXECUTABLE_SHA256,
+      ),
+    );
+    identityVerdictMock.mockResolvedValue("dead");
+
+    // O_NOFOLLOW rejects the trailing symlink with ELOOP before the missing
+    // target is ever consulted, so this is refused rather than reported
+    // absent - unlike the no-entry-at-all case below.
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.installed).toEqual({ kind: "unreadable" });
+  });
+
+  it("fails closed as unreadable when a directory sits at the installed executable's path", async () => {
+    if (process.platform === "win32") return;
+    const installDir = paths.hostInstallDir("production");
+    mkdirSync(installDir, { recursive: true });
+    const executablePath = join(installDir, "traycer-host");
+    mkdirSync(executablePath);
+    await writeHostInstallRecord(
+      "production",
+      installRecord(
+        "1.2.3",
+        executablePath,
+        "install-1",
+        GENUINE_EXECUTABLE_SHA256,
+      ),
+    );
+    identityVerdictMock.mockResolvedValue("dead");
+
+    // A directory opens without error, so this is rejected by the fstat'd
+    // `.isFile()` check rather than by the open call itself.
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
     expect(evidence.installed).toEqual({ kind: "unreadable" });
   });
 
