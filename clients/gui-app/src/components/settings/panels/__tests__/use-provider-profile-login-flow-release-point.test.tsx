@@ -20,6 +20,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
   useProviderProfileLoginFlow,
   type AwaitLoginMutation,
@@ -161,6 +162,57 @@ const NOT_AUTHENTICATED_ANSWER: AwaitLoginResponse = {
   refusal: null,
 };
 
+/** `awaitLogin` resolving with the awaited profile signed in: the sign-in
+ *  completed, and the flow moves to `identity`. */
+function authenticatedAnswer(profileId: string): AwaitLoginResponse {
+  const profile: ProviderProfile = {
+    profileId,
+    enabled: true,
+    kind: "managed",
+    authType: "oauth",
+    label: "Test profile",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: { email: null, tier: null, accountUuid: null },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+  return {
+    state: {
+      providerId: PROVIDER_ID,
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" },
+      candidates: [],
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+      profiles: [profile],
+    },
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+  };
+}
+
 function queryClientWrapper(): (props: {
   readonly children: ReactNode;
 }) => ReactNode {
@@ -183,6 +235,7 @@ type FlowInput = Parameters<typeof useProviderProfileLoginFlow>[0];
 function LoginFlowHarness(props: {
   readonly mode: ProviderProfileLoginFlowMode;
   readonly existingProfileId: string | null;
+  readonly supportsLoginOwnership: boolean;
   readonly startLoginImpl: (
     request: StartLoginRequest,
   ) => Promise<StartLoginResponse>;
@@ -263,7 +316,7 @@ function LoginFlowHarness(props: {
       notFinished: "Sign-in did not finish.",
     },
     onFailed: () => undefined,
-    supportsLoginOwnership: true,
+    supportsLoginOwnership: props.supportsLoginOwnership,
   };
   const flow = useProviderProfileLoginFlow(input);
 
@@ -385,6 +438,7 @@ describe("useProviderProfileLoginFlow - a failed attempt releases its own holder
       <LoginFlowHarness
         mode="reauth"
         existingProfileId={EXISTING_PROFILE_ID}
+        supportsLoginOwnership
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
         awaitLoginImpl={awaitLoginImpl}
@@ -430,6 +484,7 @@ describe("useProviderProfileLoginFlow - a failed attempt releases its own holder
       <LoginFlowHarness
         mode="reauth"
         existingProfileId={EXISTING_PROFILE_ID}
+        supportsLoginOwnership
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
         awaitLoginImpl={awaitLoginImpl}
@@ -488,6 +543,7 @@ describe("useProviderProfileLoginFlow - a failed attempt releases its own holder
       <LoginFlowHarness
         mode="reauth"
         existingProfileId={null}
+        supportsLoginOwnership
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
         awaitLoginImpl={awaitLoginImpl}
@@ -531,6 +587,7 @@ describe("useProviderProfileLoginFlow - the release also detaches the attempt's 
       <LoginFlowHarness
         mode="reauth"
         existingProfileId={EXISTING_PROFILE_ID}
+        supportsLoginOwnership
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
         awaitLoginImpl={awaitLoginImpl}
@@ -564,6 +621,7 @@ describe("useProviderProfileLoginFlow - the release also detaches the attempt's 
       <LoginFlowHarness
         mode="reauth"
         existingProfileId={EXISTING_PROFILE_ID}
+        supportsLoginOwnership
         startLoginImpl={recorder.impl}
         cancelLoginImpl={cancelLoginImpl}
         awaitLoginImpl={awaitLoginImpl}
@@ -587,5 +645,87 @@ describe("useProviderProfileLoginFlow - the release also detaches the attempt's 
 
     // The attempt let go of its claim, so its await no longer has an owner.
     expect(signal?.aborted).toBe(true);
+  });
+});
+
+describe("useProviderProfileLoginFlow - what an ending attempt does not release", () => {
+  it("on a host without login ownership, a failed attempt drops its wait and sends no release", async () => {
+    // Such a host has no holder to name: a release there is a cancel of the
+    // whole scope, which would end a login another surface started for the
+    // same profile. The attempt still stops waiting for its own login.
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi.fn<CancelLoginImpl>();
+    const awaitCall = deferred<AwaitLoginResponse>();
+    const awaitLoginImpl = vi.fn<AwaitLoginImpl>(() => awaitCall.promise);
+    render(
+      <LoginFlowHarness
+        mode="reauth"
+        existingProfileId={EXISTING_PROFILE_ID}
+        supportsLoginOwnership={false}
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+        awaitLoginImpl={awaitLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await pressStart();
+    await answerStart(recorder.calls[0], startedAnswer(EXISTING_PROFILE_ID));
+    expect(flowState()).toBe("waiting");
+    expect(awaitLoginImpl).toHaveBeenCalledTimes(1);
+    const signal = awaitSignalOf(awaitLoginImpl, 0);
+    expect(signal).toBeDefined();
+    expect(signal?.aborted).toBe(false);
+
+    await act(async () => {
+      awaitCall.reject(new Error("await failed"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    await settle();
+
+    // Guard against a vacuous pass: the start really was sent without a holder.
+    expect(holderIdsSent(recorder.requests)).toEqual([]);
+    expect(cancelLoginImpl).not.toHaveBeenCalled();
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("a completed sign-in releases nothing and leaves its wait alone", async () => {
+    const recorder = startLoginRecorder();
+    const cancelLoginImpl = vi.fn<CancelLoginImpl>();
+    const awaitCall = deferred<AwaitLoginResponse>();
+    const awaitLoginImpl = vi.fn<AwaitLoginImpl>(() => awaitCall.promise);
+    render(
+      <LoginFlowHarness
+        mode="reauth"
+        existingProfileId={EXISTING_PROFILE_ID}
+        supportsLoginOwnership
+        startLoginImpl={recorder.impl}
+        cancelLoginImpl={cancelLoginImpl}
+        awaitLoginImpl={awaitLoginImpl}
+      />,
+      { wrapper: queryClientWrapper() },
+    );
+
+    await pressStart();
+    await answerStart(recorder.calls[0], startedAnswer(EXISTING_PROFILE_ID));
+    expect(flowState()).toBe("waiting");
+    expect(awaitLoginImpl).toHaveBeenCalledTimes(1);
+    const signal = awaitSignalOf(awaitLoginImpl, 0);
+    expect(signal).toBeDefined();
+
+    await act(async () => {
+      awaitCall.resolve(authenticatedAnswer(EXISTING_PROFILE_ID));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(flowState()).toBe("identity"));
+    await settle();
+
+    // Guard against a vacuous pass: the attempt did mint a holder to release.
+    expect(holderIdsSent(recorder.requests)).toHaveLength(1);
+    // The sign-in completed, so there is no claim to give up and no login to
+    // stop waiting for.
+    expect(cancelLoginImpl).not.toHaveBeenCalled();
+    expect(signal?.aborted).toBe(false);
   });
 });
