@@ -12,6 +12,7 @@ import {
 } from "@/lib/resources/format-resource-usage";
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
+import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
 import type { NavigatorResourceMetric } from "@/stores/settings/settings-store";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
@@ -134,8 +135,13 @@ export interface OwnerResourceChipProps {
 /**
  * Owner-scoped chip. Renders nothing when there is no live snapshot for the
  * owner - absent means "not currently tracked" (unknown), never zero use.
+ *
+ * Holds its epic's stream lease while mounted: a chip is what draws these
+ * numbers, so the stream is open exactly while one is on screen, on every
+ * shell, and closes with the last of them.
  */
 export function OwnerResourceChip(props: OwnerResourceChipProps) {
+  useEpicResourcesLease(props.epicId, props.metrics.length > 0);
   const usage = useOwnerResourceUsage(
     props.epicId,
     props.kind,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
 import type { ResourcesStreamCallbacks } from "@traycer-clients/shared/host-transport/resources-stream-client";
@@ -8,6 +8,12 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
+import { setMobileApp } from "@/lib/mobile-app";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  getRetentionProfile,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 
 // The two inputs the pre-check reads. Defaults are a REMOTE host as the
 // transport actually reports one — `"unknown"` support and no client-wide
@@ -103,6 +109,27 @@ describe("GlobalResourcesStreamMount", () => {
 
     view.rerender(<GlobalResourcesStreamMount interactive={false} />);
     expect(demands).toEqual(["background", "interactive", "background"]);
+  });
+
+  /**
+   * A monitor whose host the pre-check convicted acquires nothing, so it has
+   * no stream of its own to speed up - and must not speed up the one another
+   * holder (a footer readout) is keeping at background.
+   */
+  it("adds no interactive demand from a mount that holds no lease", () => {
+    const demands: string[] = [];
+    __setResourcesStreamClientFactoryForTests(() => ({
+      close: () => undefined,
+      setDemand: (demand) => demands.push(demand),
+    }));
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    expect(demands).toEqual(["background"]);
+
+    streamMock.support = "supported";
+    streamMock.version = { major: 1, minor: 0 };
+    render(<GlobalResourcesStreamMount interactive />);
+
+    expect(demands).toEqual(["background"]);
   });
 
   /**
@@ -233,5 +260,81 @@ describe("GlobalResourcesStreamMount", () => {
 
     expect(builds).toBe(1);
     expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe("supported");
+  });
+});
+
+/**
+ * Cadence is counted across every holder of the one global stream: it runs
+ * interactive while ANY holder's panel is open and background otherwise, and
+ * a rebuilt stream inherits that aggregate rather than the last writer's.
+ * Pinned on the desktop profile, where the header glyph and the status bar's
+ * readout are both holders of this stream.
+ */
+describe("GlobalResourcesStreamMount · demand across holders (desktop)", () => {
+  /** Demands in arrival order, one list per stream the factory built. */
+  let demandsByStream: string[][] = [];
+
+  beforeEach(() => {
+    setMobileApp(false);
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    demandsByStream = [];
+    __setResourcesStreamClientFactoryForTests(() => {
+      const demands: string[] = [];
+      demandsByStream.push(demands);
+      return {
+        close: () => undefined,
+        setDemand: (demand) => demands.push(demand),
+      };
+    });
+  });
+
+  afterEach(() => {
+    __setResourcesStreamClientFactoryForTests(null);
+    resourcesRegistry.disposeAll();
+    cleanup();
+  });
+
+  function liveDemand(): string | undefined {
+    return demandsByStream.at(-1)?.at(-1);
+  }
+
+  it("runs interactive while one of two holders is interactive", () => {
+    expect(getRetentionProfile()).toBe(DESKTOP_RETENTION_PROFILE);
+    const readout = render(<GlobalResourcesStreamMount interactive={false} />);
+    render(<GlobalResourcesStreamMount interactive />);
+    expect(liveDemand()).toBe("interactive");
+
+    // The background holder leaving changes nothing for the open panel.
+    readout.unmount();
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    expect(liveDemand()).toBe("interactive");
+  });
+
+  it("drops back to background when the interactive holder unmounts", () => {
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    const panel = render(<GlobalResourcesStreamMount interactive />);
+    expect(liveDemand()).toBe("interactive");
+
+    panel.unmount();
+
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    expect(liveDemand()).toBe("background");
+  });
+
+  /**
+   * A second holder's acquire rebuilds the shared stream (each mount carries
+   * its own transport token), and a re-probe rebuilds it on its own. Either
+   * way the fresh stream must open at the cadence the holders are asking for,
+   * not at whatever the holder that acquired last would say alone.
+   */
+  it("keeps interactive cadence across a re-acquire", () => {
+    render(<GlobalResourcesStreamMount interactive />);
+    expect(demandsByStream).toHaveLength(1);
+    expect(liveDemand()).toBe("interactive");
+
+    render(<GlobalResourcesStreamMount interactive={false} />);
+
+    expect(demandsByStream).toHaveLength(2);
+    expect(liveDemand()).toBe("interactive");
   });
 });

@@ -16,7 +16,7 @@ import {
   OwnerResourceChip,
   ResourceUsageChip,
 } from "@/components/resources/resource-usage-chip";
-import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
+import { useEpicResourcesLease } from "@/hooks/resources/use-epic-resources-lease";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
 import { resourcesRegistry } from "@/stores/resources/resources-registry";
 
@@ -92,6 +92,12 @@ function projection(
     restricted: undefined,
     ...over,
   };
+}
+
+/** Holds one epic's stream lease, as a chip or the pane's fallback would. */
+function EpicLease(props: { readonly epicId: string }): null {
+  useEpicResourcesLease(props.epicId, true);
+  return null;
 }
 
 function installStubFactory(): { emit: () => ResourcesStreamCallbacks } {
@@ -306,20 +312,77 @@ describe("ResourceUsageChip", () => {
 });
 
 describe("OwnerResourceChip", () => {
+  function renderChip(ownerId: string) {
+    return render(
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId={ownerId}
+        hostId="host-1"
+        metrics={["cpu"]}
+        className={undefined}
+      />,
+    );
+  }
+
+  /**
+   * The chip is what draws an epic's numbers, so it is what holds the epic's
+   * stream: open while one is mounted, shared by every chip on the epic, and
+   * closed with the last of them.
+   */
+  it("holds one shared stream for its epic while any chip is mounted", () => {
+    let opened = 0;
+    let closed = 0;
+    __setResourcesStreamClientFactoryForTests(() => {
+      opened += 1;
+      return {
+        close: () => {
+          closed += 1;
+        },
+        setDemand: () => undefined,
+      };
+    });
+
+    const first = renderChip("s1");
+    const second = renderChip("s2");
+    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
+    expect(opened).toBe(1);
+
+    first.unmount();
+    expect(resourcesRegistry.get("epic-1")).not.toBeNull();
+    expect(closed).toBe(0);
+
+    second.unmount();
+    expect(resourcesRegistry.get("epic-1")).toBeNull();
+    expect(closed).toBe(1);
+  });
+
+  it("opens nothing when it has no metric to draw", () => {
+    installStubFactory();
+    render(
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId="s1"
+        hostId="host-1"
+        metrics={[]}
+        className={undefined}
+      />,
+    );
+    expect(resourcesRegistry.get("epic-1")).toBeNull();
+  });
+
   it("renders nothing until a live owner snapshot arrives, then reflects it", () => {
     const stub = installStubFactory();
     render(
-      <>
-        <ResourcesStreamMount epicId="epic-1" />
-        <OwnerResourceChip
-          epicId="epic-1"
-          kind="terminal"
-          ownerId="s1"
-          hostId="host-1"
-          metrics={["cpu", "memory", "processes"]}
-          className={undefined}
-        />
-      </>,
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId="s1"
+        hostId="host-1"
+        metrics={["cpu", "memory", "processes"]}
+        className={undefined}
+      />,
     );
 
     // Absent snapshot -> nothing rendered (unknown, not zero).
@@ -339,17 +402,14 @@ describe("OwnerResourceChip", () => {
   it("stays absent for an owner with no snapshot even when others are tracked", () => {
     const stub = installStubFactory();
     render(
-      <>
-        <ResourcesStreamMount epicId="epic-1" />
-        <OwnerResourceChip
-          epicId="epic-1"
-          kind="terminal"
-          ownerId="missing"
-          hostId="host-1"
-          metrics={["cpu", "memory", "processes"]}
-          className={undefined}
-        />
-      </>,
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId="missing"
+        hostId="host-1"
+        metrics={["cpu", "memory", "processes"]}
+        className={undefined}
+      />,
     );
     act(() => {
       stub
@@ -362,17 +422,14 @@ describe("OwnerResourceChip", () => {
   it("selects the matching host when two terminals share an owner id", () => {
     const stub = installStubFactory();
     render(
-      <>
-        <ResourcesStreamMount epicId="epic-1" />
-        <OwnerResourceChip
-          epicId="epic-1"
-          kind="terminal"
-          ownerId="shared"
-          hostId="host-b"
-          metrics={["cpu", "memory", "processes"]}
-          className={undefined}
-        />
-      </>,
+      <OwnerResourceChip
+        epicId="epic-1"
+        kind="terminal"
+        ownerId="shared"
+        hostId="host-b"
+        metrics={["cpu", "memory", "processes"]}
+        className={undefined}
+      />,
     );
     act(() => {
       stub.emit().onSnapshot(
@@ -410,7 +467,7 @@ describe("EpicResourceChip", () => {
     const stub = installStubFactory();
     render(
       <>
-        <ResourcesStreamMount epicId="epic-1" />
+        <EpicLease epicId="epic-1" />
         <EpicResourceChip
           epicId="epic-1"
           metrics={["cpu", "memory", "processes"]}
@@ -452,19 +509,16 @@ describe("NavigatorResourceHotspotChip", () => {
   it("delegates to OwnerResourceChip once given an owner: nothing until a snapshot arrives, then the reading", () => {
     const stub = installStubFactory();
     render(
-      <>
-        <ResourcesStreamMount epicId="epic-1" />
-        <NavigatorResourceHotspotChip
-          owner={{
-            epicId: "epic-1",
-            kind: "terminal",
-            ownerId: "s1",
-            hostId: "host-1",
-          }}
-          metrics={["cpu"]}
-          className={undefined}
-        />
-      </>,
+      <NavigatorResourceHotspotChip
+        owner={{
+          epicId: "epic-1",
+          kind: "terminal",
+          ownerId: "s1",
+          hostId: "host-1",
+        }}
+        metrics={["cpu"]}
+        className={undefined}
+      />,
     );
     expect(screen.queryByLabelText(/Resource usage/)).toBeNull();
     act(() => {
