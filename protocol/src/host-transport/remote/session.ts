@@ -1082,6 +1082,10 @@ export class RemoteSession<
   private pendingForceGeneration: number | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
+  /** Re-reports the no-host refusal while parked before ready; see `reportParkedRefusal`. */
+  private parkTimer: TimerHandle | null = null;
+  /** Refusals reported for the current connection's park; numbers the attempt ids. */
+  private parkedRefusals = 0;
   /**
    * Pending per-stream re-opens after a RETRYABLE per-stream fatal, keyed by
    * stream id, with the escalating attempt count that paces them. Separate
@@ -1403,6 +1407,14 @@ export class RemoteSession<
       // authority being aborted while parked; returns once this session is
       // ready to carry the frame.
       try {
+        if (this.isParkedBeforeReady()) {
+          // The relay has already said there is no host, and nothing bounds
+          // a wait from here (the phase timer is cleared; see
+          // `onHostDetached`). This is the same retryable pre-send failure a
+          // waiter parked before the detach was settled with, delivered at
+          // once instead of at `host_attached`.
+          throw this.notReadyRejection(requestId, method);
+        }
         await this.awaitReadyBoundary(requestId, method, abortSignal);
       } catch (cause) {
         if (cause instanceof RetryableTransportError) {
@@ -1960,11 +1972,21 @@ export class RemoteSession<
       return;
     }
     const connection = this.connection;
-    if (this.phase === "ready" && connection !== null) {
+    if (
+      connection !== null &&
+      (this.phase === "ready" || this.isParkedBeforeReady())
+    ) {
       // A client-initiated teardown says nothing about the host - the durable
       // rule is that `confirmed-refusal` requires evidence from the HOST's
       // transport plane, and this loss is our own decision (see the provenance
       // note on `handleConnectionLost`).
+      //
+      // A connection parked before ready is handled here too, deliberately:
+      // it has no backoff timer to pull and no in-flight deadline to fail,
+      // so the "record the intent" branch below would hold a user's Retry
+      // until an unrelated `host_attached`. Dropping it and redialling now is
+      // what the caller asked for; the redial parks again if the host is
+      // still away.
       this.handleConnectionLost(
         connection.generation,
         `forced-reconnect:${reason}`,
@@ -2346,6 +2368,7 @@ export class RemoteSession<
       lastInChannelInboundAt: Date.now(),
       inChannelFrames: 0,
     };
+    this.parkedRefusals = 0;
     this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
   }
 
@@ -2399,6 +2422,13 @@ export class RemoteSession<
       void (async () => {
         await connection.noise.readResponderMessage(bytes);
         if (!this.isCurrent(generation) || this.phase !== "handshaking") {
+          return;
+        }
+        // The host leg can drop between its responder frame arriving and this
+        // read completing. Opening then would arm an open-ack timer against
+        // a host that is gone, and its expiry would restart the redial loop
+        // the park exists to end. Stay parked; `host_attached` rebuilds.
+        if (!connection.hostAttached) {
           return;
         }
         this.sendOpenFrame(generation, connection);
@@ -3911,20 +3941,42 @@ export class RemoteSession<
     // host leg is attached, and in reply to any data frame while that holds.
     // The phase timer that would otherwise fire (`handshake-timeout`,
     // `open-ack-timeout`) did two jobs — tell the authority the host refused,
-    // and redial. The first is done here, now, with the provenance the timeout
-    // carried: the relay's word about its host leg is host-transport-plane
-    // evidence. The second is not done at all. The socket parks exactly as it
-    // does after a mid-session detach, and `host_attached` — sent from the one
-    // site that knows the host is back — rebuilds it. Redialling instead
-    // (15 s timeout, 1–30 s backoff, repeat) cost one host's clients 16,891
-    // attaches on 2026-09-24, each minting a grant and waking the relay
-    // object, for a host that was simply off.
+    // and redial. The first is kept, the second is not: the socket PARKS
+    // exactly as it does after a mid-session detach, and `host_attached` —
+    // sent from the one site that knows the host is back — rebuilds it.
+    // Redialling instead (15 s timeout, 1–30 s backoff, repeat) cost one
+    // host's clients 16,891 attaches on 2026-09-24, each minting a grant and
+    // waking the relay object, for a host that was simply off.
+    //
+    // A parked pre-ready connection is a state the rest of this file did not
+    // have before, and four things that the phase timer used to bound have to
+    // be bounded here instead (see `isParkedBeforeReady`):
+    //
+    //  - **Evidence keeps its cadence.** The authority confirms a host dead
+    //    on a STREAK of refusals, not one, and this connection never reaches
+    //    ready, so no retraction arms the corpse ceiling either. The park
+    //    timer re-reports a refusal every handshake-timeout interval for as
+    //    long as the park lasts — the same signal, at the same rate, the
+    //    redial loop produced, minus the attaches. Provenance is the
+    //    timeout's: the relay's word about its own host leg is
+    //    host-transport-plane evidence.
+    //  - **RPC callers do not hang.** `sendUnary` parks in
+    //    `awaitReadyBoundary` with no timer of its own; the pre-send
+    //    retryable failure a refused attach promised them is settled here,
+    //    and a call made while parked is refused at once (`sendUnaryUntyped`).
+    //  - **The relay leg stays authenticated.** The re-auth loop is armed at
+    //    `handleOpenAck`, which this connection will not reach; without it
+    //    the relay's 60-minute client deadline would close the leg and force
+    //    the very redial the park removes.
+    //  - The handshake continuation, `forceReconnect` and `runClientReauth`
+    //    each consult the parked state at their own site.
     if (this.phase === "handshaking" || this.phase === "opening") {
       this.clearPhaseTimer();
-      this.reportEvidenceOutcome(
-        `${this.evidenceScope}#${generation}-no-host`,
-        "refusal",
-      );
+      this.reportParkedRefusal(generation);
+      this.settleReadyWaiters(false);
+      if (this.reauthTimer === null) {
+        this.startReauthLoop();
+      }
     }
     this.markStreamsReconnecting(null);
     this.retractSession();
@@ -4999,11 +5051,21 @@ export class RemoteSession<
 
   private async runClientReauth(): Promise<void> {
     const connection = this.connection;
-    if (this.phase !== "ready" || connection === null) {
+    // A connection parked before ready holds a relay leg too, and the relay
+    // enforces the same 60-minute client deadline on it; without this the leg
+    // would be swept and redialled at the hour, which is the loop the park
+    // removes, only slower.
+    if (
+      connection === null ||
+      !(this.phase === "ready" || this.isParkedBeforeReady())
+    ) {
       return;
     }
     const provision = await this.options.grantProvider();
-    if (this.phase !== "ready" || this.connection !== connection) {
+    if (
+      this.connection !== connection ||
+      !(this.phase === "ready" || this.isParkedBeforeReady())
+    ) {
       return;
     }
     if (provision.kind === "plan-restricted") {
@@ -5590,6 +5652,7 @@ export class RemoteSession<
     this.openFrameBearer = null;
     this.openFrameCloudAuthorized = undefined;
     this.clearPhaseTimer();
+    this.clearParkTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
     // A drop from ANY other cause - a relay close, a `host_attached` rebuild,
@@ -5636,6 +5699,56 @@ export class RemoteSession<
     if (this.reauthTimer !== null) {
       clearTimeout(this.reauthTimer);
       this.reauthTimer = null;
+    }
+  }
+
+  /**
+   * Whether the current connection is parked BEFORE its ready boundary: the
+   * relay answered its attach with `host_detached`, the phase timer is
+   * cleared, and nothing moves until `host_attached` (a rebuild), a caller's
+   * `forceReconnect`, or the socket itself dropping. The ready-state park (a
+   * mid-session `host_detached`) is the same shape one phase later and is
+   * recognised by `phase === "ready" && !hostAttached` where it matters.
+   */
+  private isParkedBeforeReady(): boolean {
+    const connection = this.connection;
+    return (
+      connection !== null &&
+      !connection.hostAttached &&
+      (this.phase === "handshaking" || this.phase === "opening")
+    );
+  }
+
+  /**
+   * One refusal now, and another every `NOISE_HANDSHAKE_TIMEOUT_MS` while the
+   * park lasts — the cadence the handshake timeout gave the authority before
+   * parking existed, so a host that is really gone still reaches the
+   * confirmed-death streak at the same pace, with no attach behind each
+   * report. Each report carries its own attempt id, because the authority
+   * de-duplicates by it. Ends with the park: the timer is cleared by
+   * `teardownConnection` (every rebuild, drop and close goes through it) and
+   * re-checked on fire.
+   */
+  private reportParkedRefusal(generation: number): void {
+    this.parkedRefusals += 1;
+    this.reportEvidenceOutcome(
+      `${this.evidenceScope}#${generation}-no-host-${this.parkedRefusals}`,
+      "refusal",
+    );
+    this.clearParkTimer();
+    this.parkTimer = setTimeout(() => {
+      this.parkTimer = null;
+      if (!this.isCurrent(generation) || !this.isParkedBeforeReady()) {
+        return;
+      }
+      this.reportParkedRefusal(generation);
+    }, NOISE_HANDSHAKE_TIMEOUT_MS);
+  }
+
+  private clearParkTimer(): void {
+    if (this.parkTimer !== null) {
+      clearTimeout(this.parkTimer);
+      this.parkTimer = null;
     }
   }
 
@@ -5737,6 +5850,7 @@ export class RemoteSession<
 
   private clearAllTimers(): void {
     this.clearPhaseTimer();
+    this.clearParkTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
     this.clearStableResetTimer();

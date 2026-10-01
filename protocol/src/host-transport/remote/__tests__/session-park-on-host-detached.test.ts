@@ -37,6 +37,8 @@ import {
   NOISE_HANDSHAKE_TIMEOUT_MS,
   SESSION_OPEN_ACK_TIMEOUT_MS,
 } from "../config";
+import { RetryableTransportError } from "../rpc-types";
+import type { AttachGrantProvider } from "../grant";
 import { RemoteSession, type RemoteSessionEvidence } from "../session";
 
 /**
@@ -47,14 +49,17 @@ import { RemoteSession, type RemoteSessionEvidence } from "../session";
  * The relay sends `host_detached` right after `attach_ack` when no host leg is
  * attached, and again in reply to every data frame while that holds. Before
  * the change, the 15 s phase timer fired, reported a refusal and redialled -
- * 15 s timeout, 1-30 s backoff, repeat - for a host that was simply off. Now:
- * the timer is cleared, ONE refusal is reported (`<scope>#<generation>-no-host`),
- * the socket stays open with the scheduler paused, and the relay's
- * `host_attached` is what rebuilds the connection.
+ * 15 s timeout, 1-30 s backoff, repeat - for a host that was simply off. Now
+ * the phase timer is cleared and the socket stays open with its scheduler
+ * paused. The authority still hears of the absence at the old pace: one
+ * refusal at once and another every `NOISE_HANDSHAKE_TIMEOUT_MS`
+ * (`<scope>#<generation>-no-host-<n>`), with no attach behind any of them. The
+ * park ends only through `host_attached` (a rebuild), a caller's
+ * `forceReconnect`, or the socket dropping.
  *
  * The fake relay below is deliberately minimal: it speaks the real relay
  * control frames (`attach_ack`, `host_detached`, `host_attached`, the
- * keepalive pong) and, for the `opening` case only, runs a real responder-side
+ * keepalive pong) and, for the hosted cases only, runs a real responder-side
  * Noise-NK handshake so the session genuinely reaches `opening`. It never
  * answers the session `open`, which is exactly the state in which the
  * `open-ack-timeout` used to fire.
@@ -62,7 +67,10 @@ import { RemoteSession, type RemoteSessionEvidence } from "../session";
 
 const HOST_ID = "host-park";
 const ATTACH_URL = "wss://relay.test/attach";
-const NO_HOST_ATTEMPT_ID = /^remote-\d+#1-no-host$/;
+const REFUSAL_ID = /^(remote-\d+)#(\d+)-no-host-(\d+)$/;
+const MINUTE_MS = 60_000;
+/** Past the open-ack deadline several times over. */
+const WELL_PAST_OPEN_ACK_TIMEOUT_MS = SESSION_OPEN_ACK_TIMEOUT_MS * 4;
 
 const emptyRpcRegistry: VersionedRpcRegistry = defineVersionedRpcRegistry({});
 const emptyStreamRegistry: VersionedStreamRpcRegistry =
@@ -75,6 +83,8 @@ class FakeSocket implements StreamWebSocketLike {
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
   /** Binary frames the session sent: the Noise initiator, then the `open`. */
   readonly binarySends: Uint8Array[] = [];
+  /** Text frames the session sent, keepalive pings excluded (`reauth`). */
+  readonly textSends: string[] = [];
   closeCalls = 0;
 
   private readonly onSend: (data: string | Uint8Array) => void;
@@ -84,7 +94,11 @@ class FakeSocket implements StreamWebSocketLike {
   }
 
   send(data: string | Uint8Array): void {
-    if (typeof data !== "string") {
+    if (typeof data === "string") {
+      if (data !== "relay-ping") {
+        this.textSends.push(data);
+      }
+    } else {
       this.binarySends.push(data);
     }
     this.onSend(data);
@@ -109,6 +123,12 @@ class FakeRelay {
   hostless = true;
   /** Run a real responder handshake and deliver msg1 (reaches `opening`). */
   answerHandshake = false;
+  /** Compute msg1 but hold it in `pendingMsg1` for the test to deliver. */
+  holdResponderFrame = false;
+  pendingMsg1: {
+    readonly socket: FakeSocket;
+    readonly bytes: Uint8Array;
+  } | null = null;
 
   get hostStaticPublicKey(): Uint8Array {
     return this.hostKeys.publicKey;
@@ -134,6 +154,17 @@ class FakeRelay {
       return socket;
     },
   };
+
+  /** Delivers the held responder frame and, in the SAME tick, a detach. */
+  releaseResponderFrameThenDetach(): void {
+    const held = this.pendingMsg1;
+    if (held === null) {
+      throw new Error("no responder frame is being held");
+    }
+    this.pendingMsg1 = null;
+    held.socket.onmessage?.({ type: "binary", data: held.bytes });
+    held.socket.deliverControl("host_detached");
+  }
 
   private onClientSend(socket: FakeSocket, data: string | Uint8Array): void {
     if (typeof data === "string") {
@@ -165,6 +196,10 @@ class FakeRelay {
     );
     await handshake.readMessage(msg0);
     const msg1 = await handshake.writeMessage(new Uint8Array(0));
+    if (this.holdResponderFrame) {
+      this.pendingMsg1 = { socket, bytes: msg1 };
+      return;
+    }
     socket.onmessage?.({ type: "binary", data: msg1 });
   }
 }
@@ -186,6 +221,8 @@ function hostAuth(): RemoteSessionAuth {
 interface EvidenceSpies {
   readonly evidence: RemoteSessionEvidence;
   readonly reportDialRefusal: Mock<RemoteSessionEvidence["reportDialRefusal"]>;
+  /** Fake-clock time of each refusal, index-aligned with its mock calls. */
+  readonly refusalTimes: number[];
   readonly reportDialIndeterminate: Mock<
     RemoteSessionEvidence["reportDialIndeterminate"]
   >;
@@ -194,7 +231,12 @@ interface EvidenceSpies {
 
 function buildEvidence(): EvidenceSpies {
   const reportDialSuccess = vi.fn<RemoteSessionEvidence["reportDialSuccess"]>();
-  const reportDialRefusal = vi.fn<RemoteSessionEvidence["reportDialRefusal"]>();
+  const refusalTimes: number[] = [];
+  const reportDialRefusal = vi.fn<RemoteSessionEvidence["reportDialRefusal"]>(
+    () => {
+      refusalTimes.push(Date.now());
+    },
+  );
   const reportDialIndeterminate =
     vi.fn<RemoteSessionEvidence["reportDialIndeterminate"]>();
   return {
@@ -208,25 +250,32 @@ function buildEvidence(): EvidenceSpies {
         vi.fn<RemoteSessionEvidence["reportRestartIntent"]>(),
     },
     reportDialRefusal,
+    refusalTimes,
     reportDialIndeterminate,
     reportDialSuccess,
   };
 }
 
+function okGrantProvider(): Mock<AttachGrantProvider> {
+  return vi.fn<AttachGrantProvider>(() =>
+    Promise.resolve({
+      kind: "ok" as const,
+      grant: { grant: "grant-jws", expiresInSeconds: 300 },
+    }),
+  );
+}
+
 function buildSession(
   relay: FakeRelay,
   evidence: RemoteSessionEvidence,
+  grantProvider: AttachGrantProvider,
 ): RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry> {
   let nextRequestId = 0;
   return new RemoteSession({
     hostId: HOST_ID,
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: relay.hostStaticPublicKey,
-    grantProvider: () =>
-      Promise.resolve({
-        kind: "ok" as const,
-        grant: { grant: "grant-jws", expiresInSeconds: 300 },
-      }),
+    grantProvider,
     auth: hostAuth(),
     clock: null,
     rpcRegistry: emptyRpcRegistry,
@@ -246,12 +295,71 @@ function buildSession(
   });
 }
 
-/** Past both phase deadlines and the first reconnect backoff rungs. */
-const WELL_PAST_PHASE_TIMEOUTS_MS =
-  Math.max(NOISE_HANDSHAKE_TIMEOUT_MS, SESSION_OPEN_ACK_TIMEOUT_MS) * 4;
+/** One parsed `<scope>#<generation>-no-host-<n>` refusal attempt id. */
+interface NoHostRefusal {
+  readonly scope: string;
+  readonly generation: number;
+  readonly n: number;
+}
 
-/** Everything the suite asserts "never happened" for a parked session. */
-function expectNoTimeoutDrivenRedial(
+/** Every refusal reported so far; fails on any id that is not a no-host id. */
+function noHostRefusals(spies: EvidenceSpies): NoHostRefusal[] {
+  return spies.reportDialRefusal.mock.calls.map(
+    ([hostId, attemptId, transportKind, detail]) => {
+      expect(hostId).toBe(HOST_ID);
+      expect(transportKind).toBe("remote-relay");
+      expect(detail).toBeNull();
+      const match = REFUSAL_ID.exec(attemptId);
+      if (match === null) {
+        throw new Error(`unexpected refusal attempt id ${attemptId}`);
+      }
+      return {
+        scope: match[1] ?? "",
+        generation: Number(match[2]),
+        n: Number(match[3]),
+      };
+    },
+  );
+}
+
+/** The numbers reported for one generation, in arrival order. */
+function refusalNumbers(
+  spies: EvidenceSpies,
+  generation: number,
+): readonly number[] {
+  return noHostRefusals(spies)
+    .filter((refusal) => refusal.generation === generation)
+    .map((refusal) => refusal.n);
+}
+
+/** Start a hostless session and wait until it is parked after its initiator. */
+async function startParked(
+  relay: FakeRelay,
+  session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
+): Promise<void> {
+  session.start();
+  // attach_ack, the relay's immediate host_detached, then the session's Noise
+  // initiator - which the hostless relay answers with a SECOND host_detached.
+  await vi.waitFor(() => {
+    expect(relay.sockets[0]?.binarySends).toHaveLength(1);
+  });
+  await vi.advanceTimersByTimeAsync(0);
+}
+
+/** Moves the fake clock to `ms` after the first refusal (the park's start). */
+async function advanceToSinceFirstRefusal(
+  spies: EvidenceSpies,
+  ms: number,
+): Promise<void> {
+  const parkedAt = spies.refusalTimes[0];
+  if (parkedAt === undefined) {
+    throw new Error("the session has not reported a refusal yet");
+  }
+  await vi.advanceTimersByTimeAsync(parkedAt + ms - Date.now());
+}
+
+/** A parked session never opened, closed or lost a socket. */
+function expectStillOneParkedSocket(
   relay: FakeRelay,
   spies: EvidenceSpies,
 ): void {
@@ -259,9 +367,41 @@ function expectNoTimeoutDrivenRedial(
   expect(relay.sockets[0]?.closeCalls).toBe(0);
   expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();
   expect(spies.reportDialSuccess).not.toHaveBeenCalled();
-  for (const call of spies.reportDialRefusal.mock.calls) {
-    expect(call[1]).not.toMatch(/-lost$/);
-  }
+}
+
+interface CallOutcome {
+  settled: boolean;
+  error: unknown;
+}
+
+/** Tracks a call's settlement as it happens; read it after the clock moved. */
+function trackOutcome(call: Promise<unknown>): CallOutcome {
+  const outcome: CallOutcome = { settled: false, error: null };
+  void call.then(
+    () => {
+      outcome.settled = true;
+    },
+    (error: unknown) => {
+      outcome.settled = true;
+      outcome.error = error;
+    },
+  );
+  return outcome;
+}
+
+function hostStatusCall(
+  session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
+): Promise<unknown> {
+  return session.sendUnary(
+    "host.status",
+    {},
+    null,
+    null,
+    null,
+    undefined,
+    false,
+    null,
+  );
 }
 
 describe("RemoteSession parks on host_detached before the ready boundary", () => {
@@ -276,36 +416,40 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
     vi.restoreAllMocks();
   });
 
-  it("clears the handshake timer, reports ONE no-host refusal, and never redials while the host stays away", async () => {
+  it("clears the handshake timer and re-reports a numbered refusal every 15 s while parked, with no socket opened or closed", async () => {
     const relay = new FakeRelay();
     const spies = buildEvidence();
-    const session = buildSession(relay, spies.evidence);
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
     try {
-      session.start();
-      // attach_ack, the relay's immediate host_detached, then the session's
-      // Noise initiator - which the hostless relay answers with a SECOND
-      // host_detached. Both must have been delivered before we assert.
-      await vi.waitFor(() => {
-        expect(relay.sockets).toHaveLength(1);
-        expect(relay.sockets[0]?.binarySends).toHaveLength(1);
-      });
-      await vi.advanceTimersByTimeAsync(0);
+      await startParked(relay, session);
 
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
+      // At once: refusal 1, and the relay's second host_detached (the reply
+      // to the Noise initiator) added nothing.
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
+      const [first] = noHostRefusals(spies);
       expect(spies.reportDialRefusal).toHaveBeenCalledWith(
         HOST_ID,
-        expect.stringMatching(NO_HOST_ATTEMPT_ID),
+        `${first?.scope}#1-no-host-1`,
         "remote-relay",
         null,
       );
 
-      // Far past the 15 s handshake deadline and several backoff rungs: the
-      // cleared timer must not fire, so nothing is redialled, nothing closes
-      // and no second outcome of any kind is reported.
-      await vi.advanceTimersByTimeAsync(WELL_PAST_PHASE_TIMEOUTS_MS);
+      // Every report after the first arrives exactly one handshake timeout
+      // after the one before it - the pace the phase timer gave the authority.
+      await vi.advanceTimersByTimeAsync(NOISE_HANDSHAKE_TIMEOUT_MS * 2);
+      expect(refusalNumbers(spies, 1)).toEqual([1, 2, 3]);
+      expect(spies.refusalTimes[1]).toBe(
+        (spies.refusalTimes[0] ?? 0) + NOISE_HANDSHAKE_TIMEOUT_MS,
+      );
+      expect(spies.refusalTimes[2]).toBe(
+        (spies.refusalTimes[1] ?? 0) + NOISE_HANDSHAKE_TIMEOUT_MS,
+      );
 
-      expectNoTimeoutDrivenRedial(relay, spies);
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
+      // Far past the old redial loop's reach: still the one parked socket,
+      // and only the cadence has spoken.
+      await vi.advanceTimersByTimeAsync(NOISE_HANDSHAKE_TIMEOUT_MS * 4);
+      expect(refusalNumbers(spies, 1)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expectStillOneParkedSocket(relay, spies);
       expect(session.isClosed()).toBe(false);
       expect(session.isReady()).toBe(false);
     } finally {
@@ -313,39 +457,38 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
     }
   });
 
-  it("treats a second host_detached while already parked as a no-op", async () => {
+  it("does not reset or double the cadence when host_detached repeats while parked", async () => {
     const relay = new FakeRelay();
     const spies = buildEvidence();
-    const session = buildSession(relay, spies.evidence);
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
     try {
-      session.start();
-      await vi.waitFor(() => {
-        expect(relay.sockets[0]?.binarySends).toHaveLength(1);
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
+      await startParked(relay, session);
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
 
-      // The relay repeats itself for every further client frame; deliver two
-      // more by hand, with time passing between them.
+      // Repeats straddling the first timer boundary, and one just before it.
       relay.sockets[0]?.deliverControl("host_detached");
-      await vi.advanceTimersByTimeAsync(1_000);
+      await advanceToSinceFirstRefusal(spies, 14_000);
       relay.sockets[0]?.deliverControl("host_detached");
-      await vi.advanceTimersByTimeAsync(WELL_PAST_PHASE_TIMEOUTS_MS);
+      await advanceToSinceFirstRefusal(spies, 15_500);
+      relay.sockets[0]?.deliverControl("host_detached");
+      await advanceToSinceFirstRefusal(spies, 29_000);
+      relay.sockets[0]?.deliverControl("host_detached");
+      await advanceToSinceFirstRefusal(spies, 31_000);
 
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
-      expectNoTimeoutDrivenRedial(relay, spies);
-      expect(session.isClosed()).toBe(false);
+      // t = 31 s: exactly the 0 / 15 / 30 s reports, whatever arrived.
+      expect(refusalNumbers(spies, 1)).toEqual([1, 2, 3]);
+      expectStillOneParkedSocket(relay, spies);
     } finally {
       session.close();
     }
   });
 
-  it("clears the open-ack timer on host_detached during opening, with the same single refusal and no redial", async () => {
+  it("keeps the same cadence, and never opens, when host_detached lands during opening", async () => {
     const relay = new FakeRelay();
     relay.hostless = false;
     relay.answerHandshake = true;
     const spies = buildEvidence();
-    const session = buildSession(relay, spies.evidence);
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
     try {
       session.start();
       // msg0, then (after the real responder replied) the session's `open`
@@ -357,54 +500,195 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
       expect(spies.reportDialRefusal).not.toHaveBeenCalled();
 
       relay.sockets[0]?.deliverControl("host_detached");
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
-      expect(spies.reportDialRefusal).toHaveBeenCalledWith(
-        HOST_ID,
-        expect.stringMatching(NO_HOST_ATTEMPT_ID),
-        "remote-relay",
-        null,
-      );
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
 
-      // A repeat while parked, then well past the 15 s open-ack deadline.
+      // A repeat while parked, then past the 15 s open-ack deadline: the
+      // cadence continues, nothing redials.
       relay.sockets[0]?.deliverControl("host_detached");
-      await vi.advanceTimersByTimeAsync(WELL_PAST_PHASE_TIMEOUTS_MS);
-
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
-      expectNoTimeoutDrivenRedial(relay, spies);
+      await advanceToSinceFirstRefusal(spies, 31_000);
+      expect(refusalNumbers(spies, 1)).toEqual([1, 2, 3]);
+      expect(relay.sockets).toHaveLength(1);
+      expect(relay.sockets[0]?.closeCalls).toBe(0);
+      expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();
       expect(session.isClosed()).toBe(false);
     } finally {
       session.close();
     }
   });
 
-  it("rebuilds through a fresh attach when host_attached follows the park", async () => {
+  it("ends the cadence at host_attached, rebuilds through a fresh attach, and restarts at -no-host-1 if the new generation parks", async () => {
     const relay = new FakeRelay();
     const spies = buildEvidence();
-    const session = buildSession(relay, spies.evidence);
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
     try {
-      session.start();
-      await vi.waitFor(() => {
-        expect(relay.sockets[0]?.binarySends).toHaveLength(1);
-      });
-      await vi.advanceTimersByTimeAsync(WELL_PAST_PHASE_TIMEOUTS_MS);
-      expectNoTimeoutDrivenRedial(relay, spies);
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
+      await startParked(relay, session);
+      await advanceToSinceFirstRefusal(spies, 31_000);
+      expect(refusalNumbers(spies, 1)).toEqual([1, 2, 3]);
+      expectStillOneParkedSocket(relay, spies);
 
-      // The host is back: the relay's one `host_attached` site fires, and the
-      // session abandons the parked socket for a fresh attach.
-      relay.hostless = false;
+      // The host announces itself (the relay's one `host_attached` site) but
+      // is still hostless for the NEXT attach, which therefore parks again.
       relay.sockets[0]?.deliverControl("host_attached");
-
-      // The redial waits out its first backoff rung (1 s, jittered).
+      // The redial waits out its first backoff rung (1 s, jittered), and its
+      // dial passes through real async work (key import).
       await vi.advanceTimersByTimeAsync(5_000);
       await vi.waitFor(() => {
         expect(relay.sockets).toHaveLength(2);
       });
       expect(relay.sockets[0]?.closeCalls).toBe(1);
-      // The rebuild is the client's own decision, not a host verdict: no
-      // second refusal was banked against the host for it.
-      expect(spies.reportDialRefusal).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(NOISE_HANDSHAKE_TIMEOUT_MS * 2 + 1_000);
+      // The old generation's cadence is over: still exactly 1, 2, 3.
+      expect(refusalNumbers(spies, 1)).toEqual([1, 2, 3]);
+      // The new generation numbers its own park from 1, on its own cadence.
+      const second = refusalNumbers(spies, 2);
+      expect(second.slice(0, 3)).toEqual([1, 2, 3]);
+      expect(relay.sockets).toHaveLength(2);
       expect(session.isClosed()).toBe(false);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("fails a call parked in awaitReadyBoundary retryably the moment the pre-ready host_detached lands", async () => {
+    const relay = new FakeRelay();
+    const spies = buildEvidence();
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
+    try {
+      // `sendUnary` starts the session and parks, before any attach landed.
+      const outcome = trackOutcome(hostStatusCall(session));
+      expect(outcome.settled).toBe(false);
+      await vi.waitFor(() => {
+        expect(relay.sockets[0]?.binarySends).toHaveLength(1);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Promptly - not at a 30 s unary timeout, and not never.
+      expect(outcome.settled).toBe(true);
+      expect(outcome.error).toBeInstanceOf(RetryableTransportError);
+
+      await vi.advanceTimersByTimeAsync(MINUTE_MS);
+      expectStillOneParkedSocket(relay, spies);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("rejects a NEW call issued while already parked, immediately, without waiting or redialling", async () => {
+    const relay = new FakeRelay();
+    const spies = buildEvidence();
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
+    try {
+      await startParked(relay, session);
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
+
+      const outcome = trackOutcome(hostStatusCall(session));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(outcome.settled).toBe(true);
+      expect(outcome.error).toBeInstanceOf(RetryableTransportError);
+
+      await vi.advanceTimersByTimeAsync(MINUTE_MS);
+      expectStillOneParkedSocket(relay, spies);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("keeps the relay leg alive while parked: the re-auth loop mints a grant and sends reauth on the SAME socket", async () => {
+    const relay = new FakeRelay();
+    const spies = buildEvidence();
+    const grantProvider = okGrantProvider();
+    const session = buildSession(relay, spies.evidence, grantProvider);
+    try {
+      await startParked(relay, session);
+      const mintsAtPark = grantProvider.mock.calls.length;
+      expect(relay.sockets[0]?.textSends).toEqual([]);
+
+      // The cadence is CLIENT_REAUTH_INTERVAL_MS plus up to 5 minutes of
+      // jitter, so 51 minutes always covers the first fire.
+      await vi.advanceTimersByTimeAsync(51 * MINUTE_MS);
+
+      expect(grantProvider.mock.calls.length).toBeGreaterThan(mintsAtPark);
+      const reauthFrames = (relay.sockets[0]?.textSends ?? []).map(
+        (text): unknown => JSON.parse(text),
+      );
+      expect(reauthFrames).toContainEqual({
+        type: "reauth",
+        grant: "grant-jws",
+      });
+      expect(relay.sockets).toHaveLength(1);
+      expect(relay.sockets[0]?.closeCalls).toBe(0);
+      expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();
+    } finally {
+      session.close();
+    }
+  });
+
+  it("redials at once on forceReconnect while parked, and the new attach parks again from -no-host-1", async () => {
+    const relay = new FakeRelay();
+    const spies = buildEvidence();
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
+    try {
+      await startParked(relay, session);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
+
+      session.forceReconnect("retry");
+      expect(relay.sockets[0]?.closeCalls).toBe(1);
+
+      // No backoff and no host_attached: the force pulls the redial to now.
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.waitFor(() => {
+        expect(relay.sockets).toHaveLength(2);
+      });
+      await vi.waitFor(() => {
+        expect(relay.sockets[1]?.binarySends).toHaveLength(1);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(refusalNumbers(spies, 2)).toEqual([1]);
+      expect(spies.reportDialRefusal).toHaveBeenLastCalledWith(
+        HOST_ID,
+        expect.stringMatching(/^remote-\d+#2-no-host-1$/),
+        "remote-relay",
+        null,
+      );
+      // The old generation's cadence stopped with its socket.
+      await vi.advanceTimersByTimeAsync(NOISE_HANDSHAKE_TIMEOUT_MS + 1_000);
+      expect(refusalNumbers(spies, 1)).toEqual([1]);
+      expect(relay.sockets).toHaveLength(2);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("does not send `open` when host_detached lands before the responder-frame read completes", async () => {
+    const relay = new FakeRelay();
+    relay.hostless = false;
+    relay.answerHandshake = true;
+    relay.holdResponderFrame = true;
+    const spies = buildEvidence();
+    const session = buildSession(relay, spies.evidence, okGrantProvider());
+    try {
+      session.start();
+      await vi.waitFor(() => {
+        expect(relay.pendingMsg1).not.toBeNull();
+      });
+
+      // The responder frame starts its async read; the detach arrives in the
+      // same tick, before that read can complete.
+      relay.releaseResponderFrameThenDetach();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(WELL_PAST_OPEN_ACK_TIMEOUT_MS);
+
+      // Only the Noise initiator was ever sent: no `open`, so no open-ack
+      // timer, no timeout-driven redial.
+      expect(relay.sockets[0]?.binarySends).toHaveLength(1);
+      expect(relay.sockets).toHaveLength(1);
+      expect(relay.sockets[0]?.closeCalls).toBe(0);
+      expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();
+      // Parked, so the cadence (and only it) has been speaking.
+      expect(refusalNumbers(spies, 1).slice(0, 2)).toEqual([1, 2]);
     } finally {
       session.close();
     }
