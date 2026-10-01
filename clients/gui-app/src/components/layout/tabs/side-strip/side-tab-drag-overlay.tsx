@@ -1,4 +1,6 @@
 import { use, type ReactNode } from "react";
+import * as m from "motion/react-m";
+import { useHeaderTabOverlayFadeTransition } from "../tab-chrome-tokens";
 import { ColumnEdgeContext } from "@/components/layout/column-edge-context";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
 import { Plus } from "lucide-react";
@@ -50,10 +52,12 @@ export function SideTabDragOverlay(props: {
   const { item, source } = props;
   const collapsed = useSideStripCollapsed();
   const tearOff = useEpicDndStore((state) => state.headerTearOffPreview);
-  // Ghosted while a merge target is highlighted, which this overlay covers.
+  // Faded out while a split preview shows: it covers the preview, which says
+  // where the row goes, and even ghosted its title drew over the target's.
   const mergeTargeted = useEpicDndStore(
     (state) => state.topLevelStripPairPreview !== null,
   );
+  const fade = useHeaderTabOverlayFadeTransition();
   const variant: SideTabRowVariant = collapsed ? "collapsed" : "expanded";
   const draggedMember =
     item.kind === "split"
@@ -71,10 +75,13 @@ export function SideTabDragOverlay(props: {
   // A torn-off split member is one row at its own size, not the pair's.
   const size = tornMember === null ? props.size : null;
   return (
-    <div
+    <m.div
       data-testid="header-tab-drag-overlay"
       data-merge-targeted={mergeTargeted}
-      className="pointer-events-none flex cursor-grabbing flex-col select-none data-[merge-targeted=true]:opacity-45"
+      initial={false}
+      animate={{ opacity: mergeTargeted ? 0 : 1 }}
+      transition={fade}
+      className="pointer-events-none flex cursor-grabbing flex-col select-none"
       style={
         size === null ? undefined : { width: size.width, height: size.height }
       }
@@ -97,7 +104,7 @@ export function SideTabDragOverlay(props: {
           variant={variant}
         />
       ) : null}
-    </div>
+    </m.div>
   );
 }
 

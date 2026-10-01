@@ -1,4 +1,3 @@
-import { type Transition } from "motion/react";
 import * as m from "motion/react-m";
 import {
   useEpicDndStore,
@@ -7,14 +6,10 @@ import {
 import { cn } from "@/lib/utils";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { HeaderTabPreview } from "./header-tab-visual";
-import { headerTabClassName } from "./tab-chrome-tokens";
-
-const HEADER_TAB_OVERLAY_TRANSITION = {
-  type: "spring",
-  stiffness: 420,
-  damping: 34,
-  mass: 0.7,
-} satisfies Transition;
+import {
+  headerTabClassName,
+  useHeaderTabOverlayFadeTransition,
+} from "./tab-chrome-tokens";
 
 interface HeaderTabDragOverlayProps {
   readonly tab: HeaderTab;
@@ -34,12 +29,14 @@ interface HeaderTabDragOverlayProps {
 /** Captured appearance and notifications with live activity status. */
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
   const tab = props.tab;
-  // While a merge target is highlighted the overlay ghosts: the highlight sits
-  // on the approach half of the target tab, which is exactly where this
-  // overlay is - opaque, it would cover the one signal the gesture shows.
+  // While a split preview shows the overlay fades out: the preview sits on the
+  // approach half of the target tab, which is exactly where this overlay is,
+  // and says where the tab goes. Even ghosted, its label drew over the
+  // target's own.
   const mergeTargeted = useEpicDndStore(
     (state) => state.topLevelStripPairPreview !== null,
   );
+  const fade = useHeaderTabOverlayFadeTransition();
   return (
     <m.div
       // Named so an instrument can find it by identity rather than by a
@@ -50,8 +47,8 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       // No entry scale/offset: the dragged tab must be the SAME object that was
       // under the pointer a frame ago, not a chip that animates into being.
       initial={false}
-      animate={{ opacity: mergeTargeted ? 0.45 : 1 }}
-      transition={HEADER_TAB_OVERLAY_TRANSITION}
+      animate={{ opacity: mergeTargeted ? 0 : 1 }}
+      transition={fade}
       style={props.width === null ? undefined : { width: props.width }}
       className={cn(
         headerTabClassName("own", props.isActive),
