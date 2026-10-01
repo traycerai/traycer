@@ -6,9 +6,9 @@ export const PROFILE_COPY_MAX_PAYLOAD_BYTES = 256 * 1024;
 export const PROFILE_COPY_MAX_DESTINATIONS = 16;
 export const PROFILE_COPY_MAX_INCOMING_PAGE = 50;
 export const profileCopyIdSchema = lazySchema(() => z.string().uuid());
-/** A copy's source: a managed profile's id, or the literal id `providers.list`
- * gives the Terminal account. Only the SOURCE may be ambient; every id a copy
- * mints stays a uuid. */
+/** A copy's source: a managed profile's id, or the literal `"ambient"`, the id
+ * `providers.list` gives the Terminal account. Only the SOURCE may be ambient;
+ * every id a copy mints stays a uuid. */
 export const profileCopySourceProfileIdSchema = lazySchema(() =>
   z.union([profileCopyIdSchema, z.literal("ambient")]),
 );

@@ -60,7 +60,9 @@ function ProfileCopyIncomingList(props: {
   const drafts = page.filter(
     (draft) => draft.outcome.attempt.providerId === provider,
   );
-  if (drafts.length === 0) return null;
+  // The page is read across every provider, so a later page can hold this
+  // provider's copies even when the first holds none of them.
+  if (drafts.length === 0 && nextCursor === null) return null;
   return (
     <section
       className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"
@@ -76,19 +78,21 @@ function ProfileCopyIncomingList(props: {
           until they finish.
         </p>
       </div>
-      <ul className="flex flex-col gap-1.5">
-        {drafts.map((draft) => (
-          <ProfileCopyIncomingRow
-            key={draft.outcome.attempt.attemptId}
-            draft={draft}
-            hosts={hosts}
-          />
-        ))}
-      </ul>
+      {drafts.length > 0 ? (
+        <ul className="flex flex-col gap-1.5">
+          {drafts.map((draft) => (
+            <ProfileCopyIncomingRow
+              key={draft.outcome.attempt.attemptId}
+              draft={draft}
+              hosts={hosts}
+            />
+          ))}
+        </ul>
+      ) : null}
       {nextCursor !== null ? (
         <p className="text-ui-xs text-muted-foreground">
-          Showing the first {page.length} copies on this device. Finish or
-          cancel some to see the rest.
+          This device has more copies waiting than can be listed, across all
+          providers. Finish or cancel some to see the rest.
         </p>
       ) : null}
     </section>

@@ -31,6 +31,7 @@ import {
   SOURCE_HOST_ID,
   SOURCE_PROFILE_ID,
 } from "@/lib/profile-copy/__tests__/profile-copy-test-fixtures";
+import type { ProfileCopyIncomingDraft } from "@/lib/profile-copy/profile-copy-model";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
 import {
@@ -117,43 +118,31 @@ describe("ProfileCopyIncomingSection", () => {
     expect(screen.queryByLabelText("Incoming copies")).toBeNull();
   });
 
-  it("filters by provider, shows the Q3 limit sentence, and retries from the source", async () => {
+  const codexDraft = (): ProfileCopyIncomingDraft =>
+    incomingDraft({
+      outcome: recordedOutcome({
+        state: "sign-in-required",
+        attempt: {
+          sourceHostId: SOURCE_HOST_ID,
+          sourceProfileId: SOURCE_PROFILE_ID,
+          providerId: "codex",
+          operationId: OPERATION_ID,
+          attemptId: "55555555-5555-4555-8555-555555555555",
+          destinationHostId: DEST_HOST_ID,
+        },
+      }),
+    });
+
+  function renderClaudeIncoming(
+    drafts: ProfileCopyIncomingDraft[],
+    nextCursor: string | null,
+  ): void {
     const queryClient = createAppQueryClient();
     const messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {
-        "providers.profileCopy.incoming": () => ({
-          drafts: [
-            incomingDraft({
-              metadata: {
-                name: "Work",
-                color: "#3b82f6",
-                desiredEnabled: true,
-                skillsPluginsShared: false,
-              },
-              outcome: recordedOutcome({
-                state: "quarantined",
-                reason: "writer-unconfirmed",
-                replacementAttemptId: null,
-              }),
-            }),
-            incomingDraft({
-              outcome: recordedOutcome({
-                state: "sign-in-required",
-                attempt: {
-                  sourceHostId: SOURCE_HOST_ID,
-                  sourceProfileId: SOURCE_PROFILE_ID,
-                  providerId: "codex",
-                  operationId: OPERATION_ID,
-                  attemptId: "55555555-5555-4555-8555-555555555555",
-                  destinationHostId: DEST_HOST_ID,
-                },
-              }),
-            }),
-          ],
-          nextCursor: "99999999-9999-4999-8999-999999999999",
-        }),
+        "providers.profileCopy.incoming": () => ({ drafts, nextCursor }),
       },
     });
     const spine = new HostClient<HostRpcRegistry>({
@@ -182,6 +171,28 @@ describe("ProfileCopyIncomingSection", () => {
         </TooltipProvider>
       </QueryClientProvider>,
     );
+  }
+
+  it("filters by provider, shows the Q3 limit sentence, and retries from the source", async () => {
+    renderClaudeIncoming(
+      [
+        incomingDraft({
+          metadata: {
+            name: "Work",
+            color: "#3b82f6",
+            desiredEnabled: true,
+            skillsPluginsShared: false,
+          },
+          outcome: recordedOutcome({
+            state: "quarantined",
+            reason: "writer-unconfirmed",
+            replacementAttemptId: null,
+          }),
+        }),
+        codexDraft(),
+      ],
+      "99999999-9999-4999-8999-999999999999",
+    );
     await waitFor(() =>
       expect(screen.getByLabelText("Incoming copies")).toBeTruthy(),
     );
@@ -190,7 +201,13 @@ describe("ProfileCopyIncomingSection", () => {
         /Copies waiting on this device. Copies that never reached it are listed only on the device that started them/,
       ),
     ).toBeTruthy();
-    expect(screen.getByText(/Showing the first/)).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    // The page counts every provider's drafts, so the notice names no count.
+    expect(
+      screen.getByText(
+        "This device has more copies waiting than can be listed, across all providers. Finish or cancel some to see the rest.",
+      ),
+    ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /Retry from Studio Mac/ }),
     ).toBeTruthy();
@@ -210,6 +227,20 @@ describe("ProfileCopyIncomingSection", () => {
       kind: "operation",
       operationId: OPERATION_ID,
     });
+  });
+
+  it("keeps the section and its notice when the first page holds only another provider's copies", async () => {
+    renderClaudeIncoming(
+      [codexDraft()],
+      "99999999-9999-4999-8999-999999999999",
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText(/more copies waiting than can be listed/),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByLabelText("Incoming copies")).toBeTruthy();
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
   });
 });
 
