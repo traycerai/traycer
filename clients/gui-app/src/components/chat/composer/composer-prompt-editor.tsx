@@ -543,6 +543,16 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     // Whatever async work was filling THIS draft (a cross-host tab screenshot
     // still in flight) must not write into the empty one that replaces it.
     bumpComposerDraftGeneration(editor);
+    // Every caller clears after an accepted submit. On the installed mobile
+    // app the keyboard should leave with the message, and the chat send path
+    // blurs the field right after this call to make it. Tiptap's focus
+    // command defers the real `view.focus()` to an animation frame, so a
+    // focus chained here would land AFTER that blur and raise the keyboard
+    // again. Off the mobile app the caret returns to the composer.
+    if (isMobileApp()) {
+      editor.chain().clearContent().run();
+      return;
+    }
     editor.chain().clearContent().focus().run();
   }, [editor]);
 
