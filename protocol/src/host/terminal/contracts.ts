@@ -36,6 +36,7 @@ import {
   terminalSubscribeV14,
   terminalSubscribeV15,
   terminalSubscribeV16,
+  terminalSubscribeV17,
 } from "@traycer/protocol/host/terminal/subscribe";
 
 // Terminal sessions live entirely in the host's memory; these contracts
@@ -430,4 +431,5 @@ export {
   terminalSubscribeV14,
   terminalSubscribeV15,
   terminalSubscribeV16,
+  terminalSubscribeV17,
 };

@@ -1,6 +1,7 @@
 /**
  * Schema + version-negotiation tests for the lifecycle protocol minors:
- * `terminal.subscribe@1.6` viewer intent, `WORKTREE_BUSY` holders,
+ * `terminal.subscribe@1.6` viewer intent, `terminal.subscribe@1.7` viewer
+ * frame, `WORKTREE_BUSY` holders,
  * `worktree.delete@1.1` stopOwners, `worktree.deleteByPath@1.1`, and the
  * submit-time workspace intent on `agent.tui.promptSubmitted@1.1`.
  *
@@ -23,8 +24,11 @@ import {
 } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  terminalSubscribeClientFrameSchemaV17,
   terminalSubscribeOpenRequestSchema,
   terminalSubscribeOpenRequestSchemaV16,
+  terminalSubscribeV16,
+  terminalSubscribeV17,
 } from "@traycer/protocol/host/terminal/subscribe";
 import {
   worktreeDeleteRequestSchema,
@@ -208,8 +212,8 @@ describe("WORKTREE_BUSY typed holders", () => {
 });
 
 describe("terminal.subscribe@1.6 viewer intent", () => {
-  it("is registered as latest minor 6", () => {
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+  it("is registered at minor 6, below the latest minor 7", () => {
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
     expect(
       hostStreamRpcRegistry["terminal.subscribe"][1].versions[6].contract
         .schemaVersion,
@@ -244,6 +248,88 @@ describe("terminal.subscribe@1.6 viewer intent", () => {
     });
     expect(parsed).toEqual({ sessionId: "s1", cols: 80, rows: 24 });
     expect(parsed).not.toHaveProperty("viewer");
+  });
+});
+
+describe("terminal.subscribe@1.7 viewer frame", () => {
+  const sessionId = "s1";
+  const viewerFrame = (viewer: "presentation" | "cache") => ({
+    kind: "viewer",
+    hasBinaryPayload: false,
+    sessionId,
+    viewer,
+  });
+
+  it("is registered as latest minor 7", () => {
+    const line = hostStreamRpcRegistry["terminal.subscribe"][1];
+    expect(line.latestMinor).toBe(7);
+    expect(line.versions[7].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 7,
+    });
+    expect(line.versions[7].contract).toBe(terminalSubscribeV17);
+    // The line below it is still the 1.6 contract, untouched.
+    expect(line.versions[6].contract).toBe(terminalSubscribeV16);
+  });
+
+  it("parses a viewer frame for both intents", () => {
+    expect(
+      terminalSubscribeClientFrameSchemaV17.parse(viewerFrame("presentation")),
+    ).toEqual(viewerFrame("presentation"));
+    expect(
+      terminalSubscribeClientFrameSchemaV17.parse(viewerFrame("cache")),
+    ).toEqual(viewerFrame("cache"));
+  });
+
+  it("rejects a viewer frame with an unknown intent", () => {
+    expect(
+      terminalSubscribeClientFrameSchemaV17.safeParse({
+        ...viewerFrame("cache"),
+        viewer: "background",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still parses a resize frame", () => {
+    const resize = {
+      kind: "resize",
+      hasBinaryPayload: false,
+      sessionId,
+      clientActionId: "a1",
+      cols: 100,
+      rows: 30,
+    };
+    expect(terminalSubscribeClientFrameSchemaV17.parse(resize)).toEqual(resize);
+  });
+
+  it("is rejected by the 1.6 contract's client frame schema (old-host degrade)", () => {
+    expect(
+      terminalSubscribeV16.clientFrameSchema.safeParse(viewerFrame("cache"))
+        .success,
+    ).toBe(false);
+    // The frames 1.6 already carried are unchanged.
+    expect(
+      terminalSubscribeV16.clientFrameSchema.safeParse({
+        kind: "resize",
+        hasBinaryPayload: false,
+        sessionId,
+        clientActionId: "a1",
+        cols: 100,
+        rows: 30,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps the 1.6 open request schema, which defaults an absent viewer to presentation", () => {
+    expect(terminalSubscribeV17.openRequestSchema).toBe(
+      terminalSubscribeV16.openRequestSchema,
+    );
+    const parsed = terminalSubscribeV17.openRequestSchema.parse({
+      sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    expect(parsed.viewer).toBe("presentation");
   });
 });
 
