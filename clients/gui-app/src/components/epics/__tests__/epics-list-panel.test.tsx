@@ -99,6 +99,7 @@ import {
   anyTooltipHasText,
   tooltipTextNear,
 } from "@/components/ui/__tests__/tooltip-probe";
+import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -223,7 +224,6 @@ const testState = vi.hoisted(() => ({
   renameMutate: vi.fn<(variables: RenameEpicTitleVariables) => void>(),
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   pendingSetPinnedEpicIds: new Set<string>(),
-  pendingDeleteEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
   hostId: "host-test" as string | null,
@@ -283,13 +283,23 @@ vi.mock("@/hooks/home/use-history-query", () => ({
   }),
 }));
 
-vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
-  useEpicBatchDelete: () => ({
-    isPending: false,
-    mutate: testState.mutate,
+// Only the dispatch is replaced (it needs a host runtime this suite does not
+// mount). The pending-delete readers stay REAL and read the mutation cache of
+// the `queryClient` below, so a case stages an in-flight delete the way a
+// confirmed one leaves it - a held `epic.batchDelete` - and every surface (row,
+// open gate, bulk selection) answers from the same source production does.
+vi.mock(
+  "@/hooks/epic/use-epic-batch-delete-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-batch-delete-mutation")
+    >()),
+    useEpicBatchDelete: () => ({
+      isPending: false,
+      mutate: testState.mutate,
+    }),
   }),
-  usePendingDeleteEpicIds: () => testState.pendingDeleteEpicIds,
-}));
+);
 
 vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   useTaskDeleteWorktreeCandidates: () => ({
@@ -592,7 +602,6 @@ describe("<EpicsListPanel />", () => {
     testState.renameMutate.mockReset();
     testState.setPinnedMutate.mockReset();
     testState.pendingSetPinnedEpicIds = new Set();
-    testState.pendingDeleteEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
     testState.hostId = "host-test";
@@ -656,22 +665,23 @@ describe("<EpicsListPanel />", () => {
         title: "Second history item",
       }),
     ];
-    testState.pendingDeleteEpicIds = new Set(["epic-from-history"]);
+    holdEpicBatchDelete(queryClient, ["epic-from-history"]);
     renderPanel("page", "/");
 
     await screen.findByRole("link", { name: "Open task Open from landing" });
 
-    // The in-flight row renders the inert control; the other row stays live.
+    // The in-flight row shows its delete in progress where its delete control
+    // sat (so there is no second delete to click); the other row stays live.
+    expect(screen.getByTestId("epics-list-row-deleting")).not.toBeNull();
     expect(
-      screen.getByRole("button", { name: "Cannot delete Open from landing" }),
-    ).not.toBeNull();
+      screen.queryByRole("button", { name: "Cannot delete Open from landing" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Delete Open from landing" }),
+    ).toBeNull();
     expect(
       screen.getByRole("button", { name: "Delete Second history item" }),
     ).not.toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Cannot delete Open from landing" }),
-    );
-    expect(screen.queryByTestId("delete-tasks-dialog")).toBeNull();
 
     // "Select all" skips it, so a bulk delete never re-submits it.
     fireEvent.click(
@@ -689,6 +699,197 @@ describe("<EpicsListPanel />", () => {
     expect(deleteCall[0]).toEqual({
       ids: ["epic-two"],
       worktreeCleanup: null,
+    });
+  });
+
+  describe("a Task whose deletion is in flight", () => {
+    function rowCardTitled(title: string): HTMLElement {
+      const card = screen
+        .getAllByTestId("epics-list-row-card")
+        .find((el) => el.textContent.includes(title));
+      if (card === undefined) throw new Error(`expected a row card: ${title}`);
+      return card;
+    }
+
+    function seedDeletingAndLiveRows(): void {
+      testState.items = [
+        historyItem({}),
+        historyItem({
+          id: "history-epic-2",
+          epicId: "epic-two",
+          title: "Second history item",
+        }),
+      ];
+    }
+
+    it("shows the delete in progress on its row and nothing else of the row's own actions", async () => {
+      seedDeletingAndLiveRows();
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      await screen.findByRole("link", { name: "Open task Open from landing" });
+
+      const deleting = rowCardTitled("Open from landing");
+      const live = rowCardTitled("Second history item");
+
+      expect(deleting.getAttribute("data-deleting")).toBe("true");
+      expect(deleting.getAttribute("aria-busy")).toBe("true");
+      expect(live.getAttribute("data-deleting")).toBeNull();
+      expect(live.getAttribute("aria-busy")).toBeNull();
+
+      const indicator = within(deleting).getByRole("status", {
+        name: "Deleting Open from landing",
+      });
+      expect(indicator.getAttribute("data-testid")).toBe(
+        "epics-list-row-deleting",
+      );
+      expect(within(live).queryByTestId("epics-list-row-deleting")).toBeNull();
+      expect(tooltipTextNear(indicator)).toBe("This task is being deleted.");
+
+      // The controls a settled row has - proven present on the live neighbour
+      // so their absence on the deleting row is not an artefact of the page.
+      for (const testId of [
+        "epics-list-row-delete",
+        "epics-list-row-pin",
+        "epics-list-row-edit-title",
+      ]) {
+        expect(within(live).queryByTestId(testId)).not.toBeNull();
+        expect(within(deleting).queryByTestId(testId)).toBeNull();
+      }
+      for (const testId of [
+        "epics-list-row-delete-disabled",
+        "epics-list-row-edit-title-disabled",
+        "epics-list-row-sweep",
+        "epics-list-row-sweep-disabled",
+        "epics-list-row-sweep-menu",
+      ]) {
+        expect(within(deleting).queryByTestId(testId)).toBeNull();
+      }
+    });
+
+    it("drops the sweep affordance with the rest of the row's controls", async () => {
+      testState.worktreesByEpicId = new Map([
+        ["epic-from-history", [historyWorktree()]],
+      ]);
+      renderPanel("page", "/");
+      await screen.findByRole("link", { name: "Open task Open from landing" });
+      // Control: a settled worktree-owning row offers the live sweep.
+      expect(screen.queryByTestId("epics-list-row-sweep")).not.toBeNull();
+      cleanup();
+
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+      await screen.findByRole("link", { name: "Open task Open from landing" });
+
+      expect(screen.queryByTestId("epics-list-row-sweep")).toBeNull();
+      expect(screen.queryByTestId("epics-list-row-sweep-disabled")).toBeNull();
+      expect(screen.getByTestId("epics-list-row-deleting")).not.toBeNull();
+    });
+
+    it("does not open on a click, from a destination picker or by navigation", async () => {
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      const onOpenItem = vi.fn();
+      const router = renderPanelWithOpenItem("page", "/", onOpenItem);
+
+      const link = await screen.findByRole("link", {
+        name: "Open task Open from landing",
+      });
+      expect(link.getAttribute("aria-disabled")).toBe("true");
+      fireEvent.click(link);
+
+      expect(onOpenItem).not.toHaveBeenCalled();
+      expect(router.state.location.pathname).toBe("/");
+    });
+
+    it("does not navigate to the canonical epic tab route on a click", async () => {
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      const router = renderPanel("page", "/");
+
+      fireEvent.click(
+        await screen.findByRole("link", {
+          name: "Open task Open from landing",
+        }),
+      );
+
+      expect(router.state.location.pathname).toBe("/");
+      expect(
+        useEpicCanvasStore.getState().resolveTabIdForEpic("epic-from-history"),
+      ).toBeNull();
+    });
+
+    it("does not open in the background on a middle-click, on the link or its status slot", async () => {
+      testState.items = [
+        historyItem({ title: "Local only epic", isLocalHome: true }),
+      ];
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      const router = renderPanel("page", "/");
+
+      const link = await screen.findByRole("link", {
+        name: "Open task Local only epic",
+      });
+      const slot = (
+        await screen.findByTestId(
+          "epics-list-row-provenance-local-only-epic-from-history",
+        )
+      ).closest('[data-testid="epics-list-row-status-slot"]');
+      if (slot === null) throw new Error("expected a status-slot ancestor");
+
+      // A background open lands as a canvas tab (the sibling middle-click
+      // cases above read it back the same way), so no tab is the proof.
+      for (const target of [link, slot]) {
+        fireEvent(
+          target,
+          new MouseEvent("auxclick", {
+            bubbles: true,
+            cancelable: true,
+            button: 1,
+          }),
+        );
+      }
+
+      expect(
+        useEpicCanvasStore.getState().resolveTabIdForEpic("epic-from-history"),
+      ).toBeNull();
+      expect(router.state.location.pathname).toBe("/");
+    });
+
+    it("mounts no context menu, so neither background nor new-window open is offered", async () => {
+      enableDesktopBridge();
+      holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      renderPanel("page", "/");
+
+      fireEvent.contextMenu(await screen.findByTestId("epics-list-row-card"));
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(screen.queryByTestId("epics-list-row-open-background")).toBeNull();
+      expect(screen.queryByTestId("epics-list-row-open-new-window")).toBeNull();
+    });
+
+    it("returns the row to normal once the delete settles", async () => {
+      seedDeletingAndLiveRows();
+      const held = holdEpicBatchDelete(queryClient, ["epic-from-history"]);
+      const onOpenItem = vi.fn();
+      renderPanelWithOpenItem("page", "/", onOpenItem);
+      await screen.findByTestId("epics-list-row-deleting");
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("epics-list-row-deleting")).toBeNull();
+      });
+      const card = rowCardTitled("Open from landing");
+      expect(card.getAttribute("data-deleting")).toBeNull();
+      expect(card.getAttribute("aria-busy")).toBeNull();
+      expect(
+        within(card).queryByTestId("epics-list-row-delete"),
+      ).not.toBeNull();
+      const link = screen.getByRole("link", {
+        name: "Open task Open from landing",
+      });
+      expect(link.getAttribute("aria-disabled")).toBeNull();
+      fireEvent.click(link);
+      expect(onOpenItem).toHaveBeenCalledTimes(1);
     });
   });
 

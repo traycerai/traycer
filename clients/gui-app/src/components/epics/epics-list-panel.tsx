@@ -37,8 +37,10 @@ import {
 } from "@/components/ui/tooltip";
 import {
   useEpicBatchDelete,
+  useIsEpicDeleteInFlight,
   usePendingDeleteEpicIds,
 } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { DELETE_IN_FLIGHT_TOOLTIP } from "@/components/epics/history-row-deleting-indicator";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import {
@@ -139,7 +141,6 @@ const PRESERVED_ORPHAN_DELETE_TOOLTIP =
 // credential, which no amount of waiting fixes - only signing in again does.
 // "Once it is" covers both the transient recovery and the re-sign-in without
 // promising either.
-const DELETE_IN_FLIGHT_TOOLTIP = "This task is being deleted.";
 const UNVERIFIED_SESSION_DELETE_TOOLTIP =
   "Your sign-in couldn't be confirmed. Deleting this task will work again once it is.";
 
@@ -1581,10 +1582,8 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     authorizesCloudCapability(state.status),
   );
   const canEditTitle = canEditHistoryItemTitle(item, cloudAuthorized);
-  const { canDeleteItem, deleteDisabledTooltip } = useHistoryRowDeleteGate(
-    item,
-    cloudAuthorized,
-  );
+  const { isDeleteInFlight, canDeleteItem, deleteDisabledTooltip } =
+    useHistoryRowDeleteGate(item, cloudAuthorized);
   const selectionDisabled = historySelectionDisabled(
     selectionMode,
     canDeleteItem,
@@ -1596,8 +1595,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     (s) => s.resolveTabIdForEpic(item.epicId) ?? item.epicId,
   );
   const openInNewWindow = useCallback(() => {
+    if (isDeleteInFlight) return;
     onOpenInNewWindow(item);
-  }, [onOpenInNewWindow, item]);
+  }, [isDeleteInFlight, onOpenInNewWindow, item]);
   const commitEpicTitle = useCallback(
     (nextTitle: string) => {
       if (isPhase) return;
@@ -1681,6 +1681,8 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       openEpic();
       return;
     }
+    // `openEpic` is gated in `useHistoryOpenItem`; the background open is not.
+    if (isDeleteInFlight) return;
     openHistoryItemInBackground(item, isOpen);
   };
   const blockUnavailableDeleteAction = useCallback(
@@ -1787,8 +1789,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
             onAuxClick={onMiddleClick(openEpicRowInBackground)}
             onKeyDown={onRowKeyDown}
             aria-label={`Open task ${displayTitle}`}
+            aria-disabled={isDeleteInFlight || undefined}
             data-history-row-target=""
-            className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className={cn(
+              "absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+              isDeleteInFlight && "cursor-not-allowed",
+            )}
           />
         )
       }
@@ -1832,6 +1838,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       showOpenBadge
       isOpen={isOpen}
       worktrees={worktrees}
+      isDeleting={isDeleteInFlight}
     />
   );
 });
@@ -1854,17 +1861,20 @@ function useHistoryRowDeleteGate(
   item: HistoryItem,
   cloudAuthorized: boolean,
 ): {
+  readonly isDeleteInFlight: boolean;
   readonly canDeleteItem: boolean;
   readonly deleteDisabledTooltip: string;
 } {
-  const isDeleteInFlight = usePendingDeleteEpicIds().has(item.epicId);
+  const isDeleteInFlight = useIsEpicDeleteInFlight(item.epicId);
   if (isDeleteInFlight) {
     return {
+      isDeleteInFlight,
       canDeleteItem: false,
       deleteDisabledTooltip: DELETE_IN_FLIGHT_TOOLTIP,
     };
   }
   return {
+    isDeleteInFlight,
     canDeleteItem: canDeleteHistoryItem(item, cloudAuthorized),
     deleteDisabledTooltip: historyDeleteDisabledTooltip(item, cloudAuthorized),
   };

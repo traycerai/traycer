@@ -168,9 +168,11 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -181,6 +183,8 @@ import {
 import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import type { TaskLabel } from "@traycer/protocol/host/organization/schemas";
 import { CurrentTasksSection } from "@/components/home/current-tasks-section";
+import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 import type { OrganizationDialog } from "@/components/organization/organization-dialogs";
 import {
   OrganizationContext,
@@ -230,8 +234,22 @@ function setGroups(groups: Partial<CurrentTaskGroups>): void {
   testState.groups = { inProgress: [], pinned: [], open: [], ...groups };
 }
 
+// A row asks the mutation cache whether its task is being deleted (from
+// History, which this page sits beside), so the section mounts inside a client.
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
+
+function Providers(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
 function renderSection() {
-  return render(<CurrentTasksSection />);
+  return render(<CurrentTasksSection />, { wrapper: Providers });
 }
 
 const openOrganizationDialog = vi.fn<(dialog: OrganizationDialog) => void>();
@@ -295,6 +313,7 @@ function renderSectionWithOrganization(view: OrganizationView) {
     <OrganizationContext.Provider value={organization}>
       <CurrentTasksSection />
     </OrganizationContext.Provider>,
+    { wrapper: Providers },
   );
 }
 
@@ -361,6 +380,7 @@ describe("<CurrentTasksSection />", () => {
     pinSupport.mockReturnValue(true);
     useAuthStore.setState({ status: "signed-in" });
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    queryClient.clear();
   });
 
   afterEach(() => {
@@ -844,6 +864,122 @@ describe("<CurrentTasksSection />", () => {
 
       expect(testState.openInBackground).not.toHaveBeenCalled();
       expect(testState.openItem).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a task whose deletion is in flight", () => {
+    it("shows the delete in progress on its row only, and offers no pin there", () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSection();
+
+      const deleting = within(rowItem("a"));
+      const live = within(rowItem("b"));
+
+      const indicator = deleting.getByRole("status", {
+        name: "Deleting Task a",
+      });
+      expect(indicator.getAttribute("data-testid")).toBe(
+        "epics-list-row-deleting",
+      );
+      expect(tooltipTextNear(indicator)).toBe("This task is being deleted.");
+      expect(
+        deleting
+          .getByTestId("epics-list-row-card")
+          .getAttribute("data-deleting"),
+      ).toBe("true");
+      expect(live.queryByTestId("epics-list-row-deleting")).toBeNull();
+      // The neighbour keeps its pin, so the deleting row's lack of one is the
+      // row's own state rather than a page that offers none.
+      expect(live.getByTestId("epics-list-row-pin")).not.toBeNull();
+      expect(deleting.queryByTestId("epics-list-row-pin")).toBeNull();
+    });
+
+    it("marks its row target disabled", () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSection();
+
+      expect(
+        screen
+          .getByRole("button", { name: "Open task Task a" })
+          .getAttribute("aria-disabled"),
+      ).toBe("true");
+      expect(
+        screen
+          .getByRole("button", { name: "Open task Task b" })
+          .getAttribute("aria-disabled"),
+      ).toBeNull();
+    });
+
+    it("does not open in a background tab on a middle-click", () => {
+      setGroups({ open: [task("a", {}), task("b", {})] });
+      holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSection();
+
+      fireEvent(
+        screen.getByRole("button", { name: "Open task Task a" }),
+        new MouseEvent("auxclick", {
+          bubbles: true,
+          cancelable: true,
+          button: 1,
+        }),
+      );
+      expect(testState.openInBackground).not.toHaveBeenCalled();
+
+      // Control: the same gesture on the other row still opens it.
+      fireEvent(
+        screen.getByRole("button", { name: "Open task Task b" }),
+        new MouseEvent("auxclick", {
+          bubbles: true,
+          cancelable: true,
+          button: 1,
+        }),
+      );
+      expect(testState.openInBackground).toHaveBeenCalledWith(
+        "epic-b",
+        "Task b",
+      );
+    });
+
+    it("mounts no context menu", () => {
+      testState.isNewWindowAvailable = true;
+      setGroups({ open: [task("a", {})] });
+      holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSection();
+
+      fireEvent.contextMenu(
+        within(rowItem("a")).getByTestId("epics-list-row-card"),
+      );
+
+      expect(screen.queryByRole("menu")).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Open in Background" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Open in New Window" }),
+      ).toBeNull();
+    });
+
+    it("returns the row to normal once the delete settles", async () => {
+      setGroups({ open: [task("a", {})] });
+      const held = holdEpicBatchDelete(queryClient, ["epic-a"]);
+      renderSection();
+      expect(screen.getByTestId("epics-list-row-deleting")).not.toBeNull();
+
+      await act(async () => {
+        await held.settle();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("epics-list-row-deleting")).toBeNull();
+      });
+      expect(screen.getByTestId("epics-list-row-pin")).not.toBeNull();
+      expect(
+        screen
+          .getByRole("button", { name: "Open task Task a" })
+          .getAttribute("aria-disabled"),
+      ).toBeNull();
     });
   });
 
