@@ -87,7 +87,9 @@ export function DeviceCodeProgress(props: {
 
         <div
           className={cn(
-            "flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-3 py-2 text-ui-xs",
+            // Wraps its two halves onto two lines where they do not fit (the
+            // strip), rather than drawing one over the other.
+            "flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border px-3 py-2 text-ui-xs",
             props.isHero
               ? "border-white/10 bg-black/[0.18] text-white/[0.65]"
               : "border-border/70 bg-foreground/3 text-muted-foreground",

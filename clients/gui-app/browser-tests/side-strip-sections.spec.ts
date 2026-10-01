@@ -172,6 +172,19 @@ test("cuts the title short before the time and the close at 192px", async ({
   );
 });
 
+test("signing in, keeps the device code's wait and its expiry apart in the strip's foot", async ({
+  page,
+}) => {
+  await openStrip(page);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const waiting = await boxOf(page.getByText("Waiting for approval"));
+  const expiry = await boxOf(page.getByText(/^Expires in/));
+
+  const beside = waiting.x + waiting.width <= expiry.x;
+  const below = waiting.y + waiting.height <= expiry.y;
+  expect(beside || below).toBe(true);
+});
+
 test("fades a second line at the edge at 192px, as the title does, instead of ending in an ellipsis", async ({
   page,
 }) => {
