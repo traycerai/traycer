@@ -55,7 +55,10 @@ function fakeWorkerPoolManager(): FakeWorkerPoolManager {
 }
 
 function asWorkerPoolManager(fake: FakeWorkerPoolManager): WorkerPoolManager {
-  return Object.assign(Object.create(null) as WorkerPoolManager, fake);
+  // The store watches the manager it builds; nothing here drives its stats.
+  return Object.assign(Object.create(null) as WorkerPoolManager, fake, {
+    subscribeToStatChanges: () => () => {},
+  });
 }
 
 describe("useDiffs highlight gates", () => {

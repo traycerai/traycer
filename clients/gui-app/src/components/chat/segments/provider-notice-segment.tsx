@@ -14,6 +14,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
 interface ProviderNoticeSegmentProps {
@@ -131,6 +132,7 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
   const isStreaming = status === "streaming";
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = (): void => setExpanded((current) => !current);
+  const readingWidth = useReadingWidthStyle();
 
   const hasDetails = details.length > 0;
   const Icon = TONE_ICON[tone];
@@ -186,9 +188,11 @@ function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
       {hasDetails && expanded ? (
         <div
           className={cn(
-            "mx-auto w-full max-w-[min(90vw,42rem)]",
+            "mx-auto w-full",
             "rounded-md border border-border/60 bg-muted/30 p-3",
+            readingWidth.className,
           )}
+          style={{ maxWidth: readingWidth.maxWidth }}
         >
           <dl className="m-0 flex flex-col gap-1 text-ui-xs">
             {details.map((detail) => (

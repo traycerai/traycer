@@ -2,11 +2,13 @@ import {
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
+import { upgradeHostBusyBreakdownV1ToV2 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartRequestSchema,
   hostRestartResponseSchema,
   hostRestartResponseV10Schema,
   hostRestartResponseV11Schema,
+  hostRestartResponseV13Schema,
 } from "./schemas";
 
 /**
@@ -51,6 +53,22 @@ export const hostRestartV12 = defineRpcContract({
   responseSchema: hostRestartResponseSchema,
 });
 
+/**
+ * v1.3 moves `verdict.busyBreakdown` to the V2 breakdown: v1.2's three counts
+ * plus the informational `shells` and `scheduledWakes`, each `null` when the
+ * host did not report it. The total and `blockers` are unchanged.
+ *
+ * A caller on 1.2 or older is served by the host re-parsing this response
+ * through that minor's schema, which strips the two extra keys, so it
+ * receives exactly the bytes it did before 1.3 existed.
+ */
+export const hostRestartV13 = defineRpcContract({
+  method: "host.restart",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: hostRestartRequestSchema,
+  responseSchema: hostRestartResponseV13Schema,
+});
+
 // A v1.0 host refuses without saying why. `blockers` upgrades to `null`, NOT
 // to all-false: the client's zero-count fallback copy turns on "the host
 // named nothing", and a fabricated all-false would claim the host
@@ -86,6 +104,35 @@ export const hostRestartUpgradeV11ToV12 = defineUpgradePath<
       ? {
           ...response,
           verdict: { ...response.verdict, busyBreakdown: null },
+        }
+      : response,
+});
+
+// A v1.2 host never counted shells or scheduled wakes. Its breakdown keeps
+// its three counts and gains `shells: null, scheduledWakes: null` - "did not
+// report", never `0`, which would claim nothing of that kind is running
+// under a verdict that already said the host is busy. A `null` breakdown
+// stays `null`.
+export const hostRestartUpgradeV12ToV13 = defineUpgradePath<
+  typeof hostRestartV12,
+  typeof hostRestartV13
+>({
+  from: hostRestartV12.schemaVersion,
+  to: hostRestartV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    response.outcome === "busy"
+      ? {
+          ...response,
+          verdict: {
+            ...response.verdict,
+            busyBreakdown:
+              response.verdict.busyBreakdown === null
+                ? null
+                : upgradeHostBusyBreakdownV1ToV2(
+                    response.verdict.busyBreakdown,
+                  ),
+          },
         }
       : response,
 });

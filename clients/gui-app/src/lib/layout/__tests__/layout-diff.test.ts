@@ -136,6 +136,7 @@ describe("what the page can see as changed", () => {
       { sideStripView: "activity" },
       { taskTabLayout: "shrink" },
       { readingWidth: "wide" },
+      { wideReadingWidthPx: 1600 },
     ];
     for (const patch of eachOne) {
       expect(
@@ -167,6 +168,7 @@ describe("Reset layout (L-20)", () => {
         sidebarSide: "right",
         // D8: and the vertical strip's view.
         sideStripView: "activity",
+        wideReadingWidthPx: 1600,
       },
     };
 
@@ -179,6 +181,9 @@ describe("Reset layout (L-20)", () => {
     expect(after.arrangement.tabStripPlacement).toBe("top");
     expect(after.arrangement.sidebarSide).toBe("left");
     expect(after.arrangement.sideStripView).toBe("layered");
+    expect(after.arrangement.wideReadingWidthPx).toBe(
+      DEFAULT_ARRANGEMENT.wideReadingWidthPx,
+    );
   });
 
   it("never hands a divider id back out, which is the one field it keeps", () => {

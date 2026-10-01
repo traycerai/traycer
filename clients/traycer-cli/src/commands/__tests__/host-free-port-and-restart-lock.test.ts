@@ -172,8 +172,11 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("blocks behind a foreign lock holder and proceeds (kill then restart) only after it releases", async () => {
-      const { cliLockPath, ensureCliInstallHomeDir } =
+      const { cliLockPath, ensureCliInstallHomeDir, hostHomeDir } =
         await import("../../store/paths");
+      // HOME-safety guard: prove the redirect actually took before this
+      // test spawns a real worker against a real lock file on disk.
+      expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
       await ensureCliInstallHomeDir("production");
       const lockPath = cliLockPath("production");
 
@@ -196,6 +199,7 @@ describe.skipIf(process.platform === "win32")(
           pid: 4242,
           port: 51820,
           deferIfParked: false,
+          lifecycleOrigin: "terminal",
         });
         const pending = command(fakeCtx());
 

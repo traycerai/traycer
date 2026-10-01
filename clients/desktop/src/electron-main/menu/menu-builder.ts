@@ -58,7 +58,7 @@ function buildAppMenu(
         authItem(state, actions),
         { type: "separator" },
         ...hostUpdateItems(state, actions),
-        restartHostItem(actions),
+        ...restartHostItems(state, actions),
         checkForUpdatesItem(state, actions),
         { type: "separator" },
         { role: "services" },
@@ -325,7 +325,7 @@ function buildHelpMenu(
         click: (_item, browserWindow) =>
           actions.command("app.openLogs", browserWindow ?? null),
       },
-      restartHostItem(actions),
+      ...restartHostItems(state, actions),
       checkForUpdatesItem(state, actions),
       { type: "separator" },
       {
@@ -391,14 +391,19 @@ function authItem(
   };
 }
 
-function restartHostItem(
+/** Empty when this instance runs no local host (`MenuState.offerRestartHost`). */
+function restartHostItems(
+  state: MenuState,
   actions: MenuBuildActions,
-): MenuItemConstructorOptions {
-  return {
-    label: "Restart Host",
-    click: (_item, browserWindow) =>
-      actions.command("host.restart", browserWindow ?? null),
-  };
+): readonly MenuItemConstructorOptions[] {
+  if (!state.offerRestartHost) return [];
+  return [
+    {
+      label: "Restart Host",
+      click: (_item, browserWindow) =>
+        actions.command("host.restart", browserWindow ?? null),
+    },
+  ];
 }
 
 function hostUpdateItems(

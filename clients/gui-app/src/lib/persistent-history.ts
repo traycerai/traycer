@@ -249,6 +249,10 @@ function persistState(
   // the user's real last-visited route and the next launch would restore
   // to `/` instead of where the user actually was.
   if (entries[index] === "/") return;
+  // Nor the signed-out quit surface. It is reached only by the desktop's
+  // "Settings…" while signed out; restoring it would open the next launch on
+  // that card, which nobody asked for.
+  if (entries[index] === "/when-you-quit") return;
   try {
     // The in-memory stack is already bounded to MAX_ENTRIES by `capStackInPlace`
     // (applied at every push and at seed), so persistence mirrors it verbatim.

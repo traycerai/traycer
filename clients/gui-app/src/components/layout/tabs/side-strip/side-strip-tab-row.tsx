@@ -23,7 +23,7 @@ import {
 } from "./side-tab-row";
 import { SideTabHoverCardBody } from "./side-tab-hover-card";
 import { joinedAttribute, type SheetJoin } from "./side-tab-join";
-import { sideTabTileOf, tabAutoTint } from "../tab-identity";
+import { sideTabTileOf } from "../tab-identity";
 
 /**
  * One task tab's row over its `useStripTabItem` result, inside the tab's own
@@ -74,7 +74,6 @@ export function SideStripTabRow(props: {
           active={isActive}
           session={sessionOf(tab, isActive)}
           tint={item.appearance?.color ?? null}
-          autoTint={epicId === null ? null : tabAutoTint(epicId)}
           groupLine={props.groupLine}
           leading={leading}
           tile={

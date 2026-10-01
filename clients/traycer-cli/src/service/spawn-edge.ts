@@ -1,3 +1,5 @@
+import { SpawnAcknowledgementTimeoutError } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
+export { SpawnAcknowledgementTimeoutError } from "@traycer-clients/shared/host-start-adoption/spawn-acknowledgement-error";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { cliError, type CliError, type CliErrorCode } from "../runner/errors";
 import { didServiceRegistrationCommit } from "./cli-invocation-record";
@@ -29,6 +31,13 @@ import {
 const spawnEdgeHook = new AsyncLocalStorage<() => Promise<void>>();
 
 /**
+ * Whether the call inside a lease scope withdrew its publication: see
+ * {@link withdrawServiceSpawnEdge}. One holder per scope, set by the call and
+ * read by the scope once the call returns.
+ */
+const spawnEdgeWithdrawal = new AsyncLocalStorage<{ withdrawn: boolean }>();
+
+/**
  * Publication failures that nothing has yet turned into an operator report.
  * Identity-keyed like the mutation-authority failures, so a caller further out
  * that KNOWS what state the refusal left (it stopped the host itself) can
@@ -57,6 +66,24 @@ export async function atServiceSpawnEdge(): Promise<void> {
  */
 export async function atServiceInstallEdge(): Promise<void> {
   await atServiceSpawnEdge();
+}
+
+/**
+ * The call published at an edge and then, finding it will launch nothing after
+ * all, returns without one: the enclosing lease scope cancels the lease
+ * instead of waiting its whole acknowledgement window for a supervisor that
+ * is not coming. Outside a scope it does nothing.
+ *
+ * One caller: a Windows install whose confirm-read found the task disabled by
+ * its owner DURING staging. The install edge had already published - it sits
+ * in front of the first write, and the disable landed after it - and a
+ * disabled task refuses `/Run`, so the install ends as a carried-over disable
+ * does: registered, not started, reported kept-disabled. A call that returns
+ * normally is otherwise read as "a child is coming" and waited for.
+ */
+export function withdrawServiceSpawnEdge(): void {
+  const scope = spawnEdgeWithdrawal.getStore();
+  if (scope !== undefined) scope.withdrawn = true;
 }
 
 /**
@@ -130,8 +157,41 @@ function describeRefusal(cause: unknown): string {
 
 /** What the lease-publishing facades hand back from their publisher. */
 export interface ServiceSpawnEdgeLease {
+  /**
+   * Resolves once the launched supervisor acknowledged the grant; rejects with
+   * {@link SpawnAcknowledgementTimeoutError} when none did in time.
+   */
   waitForSpawn(): Promise<void>;
   cancel(): Promise<void>;
+}
+
+/**
+ * No supervisor acknowledged a published grant in time. Its own class so the
+ * start paths that may try again (`isUnacknowledgedSpawn`, read by
+ * `startRetryingUnacknowledged` in `host/update-mutation.ts`) can tell it
+ * from every other start failure.
+ */
+
+/**
+ * Post-registration failures whose lease then waited the ack out in vain
+ * (see the catch in {@link runWithLeaseAtServiceSpawnEdge}). Identity-keyed,
+ * like the refusals above, so the error itself propagates unchanged.
+ */
+const unacknowledgedSpawns = new WeakSet<object>();
+
+/**
+ * Whether `error` ended a call whose published grant no supervisor
+ * acknowledged: the ack wait's own timeout, or a failure after the service
+ * manager accepted the call - the Windows `/Run` whose spawn evidence never
+ * came - whose lease then waited the ack out without one.
+ */
+export function isUnacknowledgedSpawn(error: unknown): boolean {
+  if (error instanceof SpawnAcknowledgementTimeoutError) return true;
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    unacknowledgedSpawns.has(error)
+  );
 }
 
 /**
@@ -154,7 +214,9 @@ export interface ServiceSpawnEdgeLease {
  * leaves an install half-done.
  *
  * A call that reaches no edge publishes nothing, waits for nothing and cancels
- * nothing; its error, if any, propagates unchanged.
+ * nothing; its error, if any, propagates unchanged. A call that published and
+ * then withdrew (`withdrawServiceSpawnEdge`) waits for nothing either: its
+ * lease is cancelled.
  */
 export async function runWithLeaseAtServiceSpawnEdge(
   publish: () => Promise<ServiceSpawnEdgeLease | null>,
@@ -189,17 +251,32 @@ export async function runWithLeaseAtServiceSpawnEdge(
     })();
     return publication;
   };
+  const withdrawal = { withdrawn: false };
   try {
-    await spawnEdgeHook.run(hook, start);
-    await held.lease?.waitForSpawn();
+    await spawnEdgeHook.run(hook, () =>
+      spawnEdgeWithdrawal.run(withdrawal, start),
+    );
+    // A withdrawn publication has no child coming: the `finally` below
+    // cancels the lease without this wait ever being entered.
+    if (!withdrawal.withdrawn) await held.lease?.waitForSpawn();
   } catch (error) {
     // A record-step failure after the service manager accepted the
     // registration means the supervisor is already launching and will present
     // this lease; cancelling first would refuse an admitted child. Honour the
     // lease, then surface the record error unchanged (a failed wait must not
-    // replace it - see the cleanup rule below).
-    if (didServiceRegistrationCommit(error)) {
-      await held.lease?.waitForSpawn().catch(() => undefined);
+    // replace it - see the cleanup rule below). Unless the call withdrew its
+    // publication first: what it registered launches nothing (a disabled
+    // task), so no child is coming whatever failed after the registration.
+    if (didServiceRegistrationCommit(error) && !withdrawal.withdrawn) {
+      await held.lease?.waitForSpawn().catch((waited: unknown) => {
+        if (
+          waited instanceof SpawnAcknowledgementTimeoutError &&
+          typeof error === "object" &&
+          error !== null
+        ) {
+          unacknowledgedSpawns.add(error);
+        }
+      });
     }
     throw error;
   } finally {

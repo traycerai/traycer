@@ -201,6 +201,7 @@ export type ArrangementField =
   | "sideStripView"
   | "taskTabLayout"
   | "readingWidth"
+  | "wideReadingWidthPx"
   | "sidebarSide"
   | "minimapSide"
   | "usageHost"
@@ -214,6 +215,7 @@ const ARRANGEMENT_FIELDS: ReadonlyArray<ArrangementField> = [
   "sideStripView",
   "taskTabLayout",
   "readingWidth",
+  "wideReadingWidthPx",
   "sidebarSide",
   "minimapSide",
   "usageHost",

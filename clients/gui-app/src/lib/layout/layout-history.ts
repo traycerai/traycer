@@ -242,6 +242,11 @@ function rebaseArrangement(
       previous.readingWidth,
       next.readingWidth,
     ),
+    wideReadingWidthPx: pick(
+      entry.wideReadingWidthPx,
+      previous.wideReadingWidthPx,
+      next.wideReadingWidthPx,
+    ),
   };
   return resolvePersistedArrangement(rebased);
 }

@@ -94,6 +94,7 @@ export function recordObservationFromLocalAttempt(input: {
     // exists when the host is down, which is the window this observation is
     // for; `null` on every other phase.
     errorMessage: facts.error?.message ?? null,
+    errorCode: facts.error?.code ?? null,
     // The three ordering facts `preferLiveOverRecord` needs. They travel with
     // the observation rather than being read at the comparison site so the
     // projector stays pure and the adapter stays the only thing that knows

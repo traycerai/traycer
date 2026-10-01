@@ -138,6 +138,14 @@ export function HostOverviewOperationCard(props: {
    * the panel so this card's own mount and unmount never restart its timer.
    */
   readonly completion: HostUpdateCompletion;
+  /**
+   * The panel withheld this card's Restart / Force controls because THIS
+   * machine's host was started in a terminal: each would reach the CLI and be
+   * refused. The card then says, in this sentence, what does finish the
+   * update (`hostForegroundUpdateLine`); `null` when nothing was withheld.
+   * Decided by the panel, like every other control here.
+   */
+  readonly foregroundHeldFinish: string | null;
 }): ReactNode {
   const { view, completion } = props;
   if (completion.dismissed) return null;
@@ -232,6 +240,11 @@ export function HostOverviewOperationCard(props: {
           </Button>
         )}
       </div>
+      {props.foregroundHeldFinish === null ? null : (
+        <p data-testid="host-overview-operation-foreground">
+          {props.foregroundHeldFinish}
+        </p>
+      )}
       {showProgress ? (
         <UpdateProgressBar
           percent={percent}

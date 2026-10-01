@@ -2,8 +2,19 @@ import { Cpu, Gauge } from "lucide-react";
 import {
   SHOW_HIDE_VERBS,
   type LayoutRegion,
+  type SegmentOption,
 } from "@/components/layout-editor/regions/region-grammar";
 import { barPlacementStateWord } from "@/components/layout-editor/regions/region-state-words";
+
+/**
+ * Full text, or the icon alone - only meaningful in the Tab strip
+ * (`surface-section.tsx` drops the row entirely while Location is the Status
+ * bar, which has the room for the full reading).
+ */
+const READING_DISPLAY_OPTIONS: ReadonlyArray<SegmentOption> = [
+  { value: "full", label: "Full" },
+  { value: "icon", label: "Icon only" },
+];
 
 /**
  * One of the two regions whose home is itself a setting - a bar and an end of
@@ -86,6 +97,20 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
             ],
           },
         },
+        {
+          id: "display",
+          label: "Display",
+          description:
+            "Icon only drops the provider icon, the account label and every text reading down to the glyph alone.",
+          pinsTransient: false,
+          liveWhileHidden: null,
+          requires: null,
+          control: {
+            kind: "segment",
+            key: "display",
+            options: READING_DISPLAY_OPTIONS,
+          },
+        },
       ],
     },
     { kind: "children", level: "usage-providers" },
@@ -148,6 +173,20 @@ export const RESOURCE_MONITOR_REGION: LayoutRegion<"resourceMonitor"> = {
               { key: "processes", label: "Processes", requires: null },
               { key: "ramShare", label: "RAM share", requires: null },
             ],
+          },
+        },
+        {
+          id: "display",
+          label: "Display",
+          description:
+            "Icon only drops every metric reading and the “Resources” label down to the glyph alone.",
+          pinsTransient: false,
+          liveWhileHidden: null,
+          requires: null,
+          control: {
+            kind: "segment",
+            key: "display",
+            options: READING_DISPLAY_OPTIONS,
           },
         },
       ],

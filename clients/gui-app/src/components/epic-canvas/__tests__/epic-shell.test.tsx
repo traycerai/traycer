@@ -13,6 +13,7 @@ import {
 } from "@/lib/layout/layout-arrangement";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { setMobileApp } from "@/lib/mobile-app";
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import {
   __getOpenEpicRegistryForTests,
@@ -101,6 +102,14 @@ vi.mock("@/components/epic-canvas/panels/epic-connection-toasts", () => ({
 
 vi.mock("@/components/epic-canvas/canvas/tile-canvas", () => ({
   TileCanvas: () => <div data-testid="tile-canvas-stub" />,
+}));
+
+// A marker for the pane's `resources.subscribe` lease: the suite asks only
+// whether the shell holds one, not what the stream does.
+vi.mock("@/providers/resources-stream-mount", () => ({
+  EpicResourcesFallbackMount: (props: { readonly epicId: string }) => (
+    <div data-testid="resources-fallback" data-epic-id={props.epicId} />
+  ),
 }));
 
 interface ControlledStream {
@@ -315,6 +324,28 @@ describe("<EpicShell />", () => {
     __setEpicRuntimeWorkerFactoryForTests(previousWorkerFactory);
     useLayoutStore.setState({ arrangement: DEFAULT_ARRANGEMENT });
   });
+
+  // No platform branch: the chips lease the epic's own stream wherever they
+  // draw, so every shell's pane holds only the old-host fallback.
+  it.each([false, true])(
+    "holds only the old-host fallback lease (installed app: %s)",
+    async (mobileApp) => {
+      setMobileApp(mobileApp);
+      try {
+        installControlledFactory();
+        const queryClient = new QueryClient();
+        renderShell(queryClient);
+        await waitForSessionReady();
+
+        expect(
+          screen.getByTestId("resources-fallback").getAttribute("data-epic-id"),
+        ).toBe(EPIC_ID);
+        queryClient.clear();
+      } finally {
+        setMobileApp(false);
+      }
+    },
+  );
 
   it("renders the stable shell frame while the session is not ready", () => {
     render(<EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />);

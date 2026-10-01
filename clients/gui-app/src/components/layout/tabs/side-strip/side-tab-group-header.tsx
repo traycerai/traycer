@@ -142,12 +142,14 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
             </>
           ) : (
             <>
-              <span
-                className={cn(SIDE_TAB_GROUP_PILL_CLASS, "min-w-0 truncate")}
-                style={swatch}
-              >
-                {group.name || " "}
-              </span>
+              {group.name ? (
+                <span
+                  className={cn(SIDE_TAB_GROUP_PILL_CLASS, "min-w-0 truncate")}
+                  style={swatch}
+                >
+                  {group.name}
+                </span>
+              ) : null}
               <span
                 data-testid="side-tab-group-count"
                 className={SIDE_TAB_GROUP_COUNT_CLASS}

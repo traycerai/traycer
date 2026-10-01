@@ -58,6 +58,7 @@ import {
   toggleStatusBarSurface,
   unstackRail,
   unstackRailPanel,
+  WIDE_READING_WIDTH_MAX_PX,
   withBarHost,
   withBarSide,
   type BarHost,
@@ -1556,6 +1557,23 @@ function arrangementFieldEntries(): ReadonlyArray<SweepEntry> {
         "arrangement:usageHost",
         "arrangement:resourceHost",
       ],
+      controls: [],
+    },
+    {
+      id: "arrangement-field:wideReadingWidthPx",
+      source: "arrangement-field",
+      mirrors: null,
+      // The wide-column-width row only draws once Reading width is Wide
+      // (`WideReadingWidthRow`).
+      given: [
+        arrangementFieldStep("Reading width: Wide", "readingWidth", "wide"),
+      ],
+      write: arrangementFieldStep(
+        "Wide column width: max",
+        "wideReadingWidthPx",
+        WIDE_READING_WIDTH_MAX_PX,
+      ),
+      covers: ["arrangement:wideReadingWidthPx"],
       controls: [],
     },
   ];

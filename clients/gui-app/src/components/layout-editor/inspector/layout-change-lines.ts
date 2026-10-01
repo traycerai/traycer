@@ -355,6 +355,7 @@ const FIELD_LABELS: Readonly<Record<ArrangementField, string>> = {
   sideStripView: "Side tab view",
   taskTabLayout: "Tab overflow",
   readingWidth: "Reading width",
+  wideReadingWidthPx: "Wide column width",
   sidebarSide: "Sidebar side",
   minimapSide: "Minimap side",
   usageHost: "Usage limits location",
@@ -371,6 +372,9 @@ const FIELD_OPTIONS: Readonly<
   sideStripView: SIDE_STRIP_VIEW_OPTIONS,
   taskTabLayout: TAB_OVERFLOW_OPTIONS,
   readingWidth: READING_WIDTH_OPTIONS,
+  // Continuous, not a discrete option set - `fieldWord` formats it directly
+  // rather than looking it up here.
+  wideReadingWidthPx: [],
   sidebarSide: EDGE_SIDE_OPTIONS,
   minimapSide: EDGE_SIDE_OPTIONS,
   usageHost: BAR_HOST_OPTIONS,
@@ -385,5 +389,9 @@ function fieldWord(
   value: string | boolean | number,
 ): string {
   if (typeof value === "boolean") return value ? "On" : "Off";
-  return optionLabel(FIELD_OPTIONS[field], String(value));
+  // `wideReadingWidthPx` is a user-chosen px number, not one of a small
+  // discrete set - no segment option names it, so it prints as itself rather
+  // than through `optionLabel`.
+  if (typeof value === "number") return `${value}px`;
+  return optionLabel(FIELD_OPTIONS[field], value);
 }

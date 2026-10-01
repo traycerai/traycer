@@ -161,6 +161,24 @@ async function waitForFile(path: string, maxWaitMs: number): Promise<void> {
   throw new Error(`timed out waiting for ${path}`);
 }
 
+// The fixtures now write every barrier file atomically (temp path + a
+// same-directory rename), so a stat-visible file is never a
+// truncated-but-not-yet-written one - but this content check is a second,
+// independent guard for `term-grace-started`, the one caller actually seen
+// failing on that race (`readFile` returning "" and `Number("")` being 0).
+async function waitForNonEmptyFile(
+  path: string,
+  maxWaitMs: number,
+): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const content = await readFile(path, "utf8").catch(() => "");
+    if (content.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for non-empty ${path}`);
+}
+
 function spawnAttemptCompetitor(
   hostHomeDir: string,
   barrierDir: string,
@@ -191,7 +209,12 @@ afterEach(async () => {
   __resetHeldInProcessForTest();
   for (const pid of supervisedPids.splice(0)) {
     try {
-      process.kill(pid, "SIGTERM");
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Not a group leader, or already gone.
+    }
+    try {
+      process.kill(pid, "SIGKILL");
     } catch {
       // The actuator normally exits through its release barrier; cleanup is
       // best effort when an assertion fails before that point.
@@ -607,7 +630,7 @@ describe("withUpdateContender - canonical first-run boundary", () => {
 
     process.kill(rebound.supervisorPid, "SIGTERM");
     await waitForFile(join(barrierDir, "descendant-term-received"), 10_000);
-    await waitForFile(join(barrierDir, "term-grace-started"), 10_000);
+    await waitForNonEmptyFile(join(barrierDir, "term-grace-started"), 10_000);
     const graceStartedAt = Number(
       await readFile(join(barrierDir, "term-grace-started"), "utf8"),
     );
@@ -622,6 +645,27 @@ describe("withUpdateContender - canonical first-run boundary", () => {
         () => false,
       ),
     ).toBe(false);
+
+    // Pins "TERM-resistant" through the grace window. The supervisor's reap
+    // has already sent the descendant two SIGTERMs, one to the group and one
+    // to its pid; a third, sent from here, must not kill it either. With a
+    // `once` listener the first TERM reset the disposition to SIG_DFL, so a
+    // later one killed the descendant this case calls TERM-resistant, and no
+    // barrier below could show it: the supervisor writes `descendant-exited
+    // {kind: "sigkill"}` however the descendant died. The probe runs after the
+    // window check above so it adds nothing to that window, and it stops short
+    // of the window's end, before the supervisor escalates at
+    // `graceStartedAt` + TERM_GRACE_MS (2_100 ms), so the SIGKILL is never
+    // what it sees.
+    process.kill(rebound.descendantPid, "SIGTERM");
+    const probeEnd = Math.min(Date.now() + 200, graceStartedAt + 2_000);
+    let probes = 0;
+    while (Date.now() < probeEnd) {
+      expect(() => process.kill(rebound.descendantPid, 0)).not.toThrow();
+      probes += 1;
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+    expect(probes).toBeGreaterThan(0);
     forgetChild(blocked);
     await waitForFile(join(barrierDir, "descendant-killed"), 10_000);
     await waitForFile(join(barrierDir, "group-absent"), 10_000);

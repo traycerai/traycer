@@ -34,6 +34,14 @@ export type RegionSize = "full" | "chip";
 /** How the model chip draws the thinking effort. */
 export type ModelStyle = "text" | "bars" | "bars-text";
 
+/**
+ * The composer toolbar's chrome: a bordered chip on the app's own background,
+ * or flat with just a hover highlight. One setting for the whole row (attach,
+ * access, model, mic) rather than a field on each of the four regions - see
+ * `TOOLBAR_CHIP_CLASS` in `toolbar-buttons.tsx`, the row's one reader.
+ */
+export type ToolbarStyle = "flat" | "bordered";
+
 /** How the model picker's footer sets the thinking effort. */
 export type ReasoningControl = "slider" | "list";
 
@@ -42,6 +50,15 @@ export type ContextStyle = "text" | "ring" | "ring-only";
 
 /** Whether a usage reading is consumed or headroom. */
 export type AmountMode = "used" | "remaining";
+
+/**
+ * Whether a bar reading draws its full text or just its icon. Distinct from
+ * `RegionSize` (`full` / `chip`) because that pair IS a region's own header
+ * control (`RegionDisplayControl`'s `"size" in ...` branch, L-128) - this one
+ * is a fine-tune row instead, and only means something in the Tab strip: the
+ * Status bar has the room for the full reading (`status-bar-regions.ts`).
+ */
+export type ReadingDisplay = "full" | "icon";
 
 /**
  * One row of the pinned context breakdown. The breakdown's own row keys, so
@@ -74,12 +91,14 @@ export const LAYOUT_VALUE_ENUM_MEMBERS: ReadonlyArray<string> = Object.keys({
     ModelStyle,
     true
   >),
+  ...({ flat: true, bordered: true } satisfies Record<ToolbarStyle, true>),
   ...({ slider: true, list: true } satisfies Record<ReasoningControl, true>),
   ...({ text: true, ring: true, "ring-only": true } satisfies Record<
     ContextStyle,
     true
   >),
   ...({ used: true, remaining: true } satisfies Record<AmountMode, true>),
+  ...({ full: true, icon: true } satisfies Record<ReadingDisplay, true>),
 });
 
 export interface ShownValues {
@@ -118,6 +137,7 @@ export interface UsageLimitsValues extends ShownValues {
   readonly word: boolean;
   readonly reset: boolean;
   readonly amount: AmountMode;
+  readonly display: ReadingDisplay;
 }
 
 /**
@@ -133,6 +153,7 @@ export interface ResourceMonitorValues extends ShownValues {
   readonly processes: boolean;
   readonly ramShare: boolean;
   readonly agentRows: boolean;
+  readonly display: ReadingDisplay;
 }
 
 /** The four readings the monitor can print, in the order it prints them. */
@@ -166,10 +187,16 @@ export interface ContextUsageValues extends ShownValues {
  * The model picker: a style and no Shown. It always draws - it also owns the
  * picker shortcut and the palette's Pick model - so a Shown switch here had no
  * reader (G6).
+ *
+ * `toolbarStyle` is the odd one out: it is not about the model chip, it is
+ * the whole toolbar row's chrome (attach, access, model, mic). It lives here
+ * because Model is the one toolbar region that never hides (G6), so its row
+ * is always reachable - not because the setting is about Model.
  */
 export interface ModelValues {
   readonly style: ModelStyle;
   readonly reasoningControl: ReasoningControl;
+  readonly toolbarStyle: ToolbarStyle;
 }
 
 export interface LayoutValues {

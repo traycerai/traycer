@@ -42,9 +42,12 @@ function envFlag(value: string | undefined): boolean {
 
 // Builds the runtime context from parsed flags + the process env.
 //
-// - CI=1 OR TRAYCER_NONINTERACTIVE=1 → nonInteractive=true AND implies
-//   noProgress=true (avoids progress spam in CI logs; future install
-//   commands will also skip stdin prompts).
+// - CI=1 OR TRAYCER_NONINTERACTIVE=1 → nonInteractive=true (no stdin
+//   prompts), and in HUMAN mode it implies noProgress=true (avoids progress
+//   spam in CI logs). Never in `--json` mode: an NDJSON progress event is the
+//   machine contract, not log noise - Desktop's idle timer is re-armed by
+//   nothing else, and it spawns the CLI with whatever environment it was
+//   itself started with. `--no-progress` suppresses progress in every mode.
 // - The environment (deployment slot) is `config.environment`, baked per build -
 //   there is no flag or env for it.
 export function resolveRuntimeContext(
@@ -56,7 +59,8 @@ export function resolveRuntimeContext(
   return {
     json: flags.json === true,
     quiet: flags.quiet === true,
-    noProgress: flags.noProgress === true || nonInteractive,
+    noProgress:
+      flags.noProgress === true || (nonInteractive && flags.json !== true),
     noBootstrap: flags.noBootstrap === true,
     nonInteractive,
     environment,

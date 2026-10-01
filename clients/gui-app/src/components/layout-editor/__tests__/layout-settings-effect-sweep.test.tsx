@@ -554,6 +554,7 @@ const ARRANGEMENT_SWEEP: Record<keyof LayoutArrangement, Sweep | NotSwept> = {
   sideStripView: SWEPT,
   taskTabLayout: SWEPT,
   readingWidth: SWEPT,
+  wideReadingWidthPx: SWEPT,
 };
 
 /**

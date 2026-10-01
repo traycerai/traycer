@@ -273,6 +273,56 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
     ).not.toBeNull();
   });
 
+  // The desktop menu's "Settings…" item stamps a SECOND marker alongside the
+  // startup one. The key is written as a literal here on purpose: this test
+  // pins the wire key itself, not the exported constant. This bridge reads only
+  // `isStartupNavigationIntent`, which the startup marker alone already
+  // satisfies, so the twin below must behave IDENTICALLY to the case above -
+  // the extra key must not change what this bridge does.
+  it("lets a desktop-menu escape-hatch navigation (both markers) outrank the desktop restored route", () => {
+    testState.hydrated = false;
+    seedRestoredRoute("/epics/epic-1/tab-1?focusPaneId=p1");
+    const { rerender } = render(<TabNavigationRouteBridge />);
+
+    act(() => {
+      testState.routerLocation = {
+        pathname: "/settings/host",
+        search: {},
+        searchStr: "",
+        state: {},
+      };
+      testState.subscriber?.({
+        location: {
+          pathname: "/settings/host",
+          state: {
+            [STARTUP_NAVIGATION_INTENT_KEY]: true,
+            __traycerStartupMenuSettingsIntent: true,
+          },
+          search: "",
+        },
+        action: { type: "PUSH" },
+      });
+    });
+
+    act(() => {
+      testState.hydrated = true;
+      rerender(<TabNavigationRouteBridge />);
+    });
+
+    expect(
+      testState.replaceCalls,
+      "the restored route must not overwrite an explicit user navigation",
+    ).toEqual([]);
+    expect(
+      useTabsStore.getState().systemTabs.settings,
+      "the queued settings commit must materialize once hydration releases",
+    ).not.toBeNull();
+    expect(
+      useTabsStore.getState().systemTabs.settings?.lastPath,
+      "the extra menu marker must not change which path the settings tab opens to",
+    ).toBe("/settings/host");
+  });
+
   it("still restores the desktop route when a cold launch redirects itself to / before hydration", () => {
     // THE COUNTER-CASE, and the reason intent is DECLARED rather than inferred.
     // A cold launch REPLACES to `/` with no user input at all: every protected
@@ -334,6 +384,30 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
         search: {},
         searchStr: "",
         state: { [STARTUP_NAVIGATION_INTENT_KEY]: true },
+      };
+      testState.hydrated = true;
+      rerender(<TabNavigationRouteBridge />);
+    });
+
+    expect(testState.replaceCalls).toEqual([]);
+  });
+
+  // The same "read off the current location, never observed" case, with both
+  // boot-escape markers on the location.
+  it("honours a desktop-menu escape-hatch marker (both markers) on the current location even if the commit was never observed", () => {
+    testState.hydrated = false;
+    seedRestoredRoute("/epics/epic-1/tab-1");
+    const { rerender } = render(<TabNavigationRouteBridge />);
+
+    act(() => {
+      testState.routerLocation = {
+        pathname: "/settings/host",
+        search: {},
+        searchStr: "",
+        state: {
+          [STARTUP_NAVIGATION_INTENT_KEY]: true,
+          __traycerStartupMenuSettingsIntent: true,
+        },
       };
       testState.hydrated = true;
       rerender(<TabNavigationRouteBridge />);

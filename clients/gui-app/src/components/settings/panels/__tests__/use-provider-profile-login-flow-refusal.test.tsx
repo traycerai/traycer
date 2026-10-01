@@ -201,6 +201,7 @@ function LoginFlowHarness(props: {
   });
 
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership: false,
     mode: props.mode,
     providerId: PROVIDER_ID,
     existingProfileId: props.existingProfileId,

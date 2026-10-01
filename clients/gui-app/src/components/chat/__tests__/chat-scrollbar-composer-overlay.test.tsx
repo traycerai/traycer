@@ -380,9 +380,13 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       const source = sourceOf("components/chat/composer/chat-composer.tsx");
 
       // Rate-limit banner: outer edge-lane only; centered owns paint + pt-4,
-      // width from the readingWidth token rather than a hardcoded max-w.
+      // width from the reading-width style token rather than a hardcoded
+      // max-w (both the static class AND the wide-mode inline style).
       expect(source).toMatch(
-        /topBannerKind === "rate-limit"[\s\S]*?className="pointer-events-none px-4"[\s\S]*?"pointer-events-auto mx-auto w-full bg-canvas pt-4",\s*\n\s*readingWidth,/,
+        /topBannerKind === "rate-limit"[\s\S]*?className="pointer-events-none px-4"[\s\S]*?"pointer-events-auto mx-auto w-full bg-canvas pt-4",\s*\n\s*readingWidth\.className,/,
+      );
+      expect(source).toMatch(
+        /topBannerKind === "rate-limit"[\s\S]*?style=\{\{ maxWidth: readingWidth\.maxWidth \}\}/,
       );
       // Main composer: outer edge-lane only (no vertical padding / bg-canvas).
       expect(source).toMatch(
@@ -471,7 +475,12 @@ describe("chat scrollbar + lower composer overlay pointer isolation", () => {
       expect(shellSource).toContain(
         '"pointer-events-auto relative mx-auto w-full bg-canvas"',
       );
-      expect(shellSource).toMatch(/\breadingWidth,/);
+      // Both the static class (comfortable) and the inline viewport-clamped
+      // style (wide) - `useReadingWidthStyle`'s two-part return.
+      expect(shellSource).toMatch(/\breadingWidth\.className,/);
+      expect(shellSource).toMatch(
+        /style=\{\{ maxWidth: readingWidth\.maxWidth \}\}/,
+      );
       expect(shellSource).toMatch(
         /props\.topSpacing === "normal" \? "pt-4" : "pt-0"/,
       );

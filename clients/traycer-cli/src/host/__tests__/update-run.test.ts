@@ -1,7 +1,51 @@
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { HOST_STORE_FORMAT_REFUSAL_MESSAGE } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
+
+// HOME is redirected to a private temp dir BEFORE anything reads it: the
+// `store/paths` mock below overrides `hostHomeDir`/`hostInstallDir`/
+// `ensureHostInstallDir`, but that spread-partial mock is NOT isolation on
+// its own - `cliLogPath` (through `createCliLogger`) and the protocol path
+// helpers still resolve `homedir()` for real unless `node:os.homedir()`
+// itself is redirected first.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-update-run-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+beforeAll(async () => {
+  expect(osHome.current).not.toBe("");
+  const paths =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  expect(paths.hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+  expect(paths.cliLogPath("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
 
 // `host update` on the attempt executor (`host/update-run.ts`).
 //
@@ -137,6 +181,16 @@ const mocks = vi.hoisted(() => ({
   // with a refusal is indistinguishable from one that only ever refused -
   // and those are very different answers to the host that is waiting on it.
   ackWrites: [] as string[],
+  // What `readOwnServiceRegistrationDisabled` answers: the automatic-path
+  // refusal (`refuseUpdateOverUnstartableService`) reads the service
+  // registration's switch through it. Not disabled by default, so every pin
+  // outside the disabled-service block runs the update it always did.
+  ownServiceDisabled: vi.fn(),
+  // R5 §46f: a not-owned task's admission evidence, read from `pid.json`
+  // through `readHostPidMetadataEvidence` (a cli-v1.3.0 supervisor writes
+  // this alone, no supervisor.json/supervisor-run.json pair). Absent by
+  // default, so every pin outside the §46f block is unaffected.
+  readHostPidMetadataEvidence: vi.fn(),
 }));
 
 // A PASS-THROUGH wrapper, not a stand-in: the real commit runs and the real
@@ -328,10 +382,40 @@ vi.mock("../update-dispatch-ack", async (importOriginal) => {
 
 vi.mock("../pid-metadata", () => ({
   readHostPidMetadata: mocks.readHostPidMetadata,
+  readHostPidMetadataEvidence: mocks.readHostPidMetadataEvidence,
 }));
 vi.mock("../../store/process-identity", () => ({
   getPublishedProcessIdentityVerdict: mocks.identityVerdict,
 }));
+// R3: `readOwnServiceRegistrationDisabled` is gone. The automatic-path
+// refusal (`refuseUpdateOverUnstartableService`) now reads the caller's task
+// through `readWindowsServiceTaskOwnership`, so `mocks.ownServiceDisabled`'s
+// answer is translated into that ownership shape instead - a caller task
+// whose `<Enabled>` matches it. Only the disabled/not-disabled axis is this
+// suite's concern; the not-owned axis has its own coverage in
+// `update-service-disabled.test.ts`.
+vi.mock("../../service/platforms/windows", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/windows")>();
+  return {
+    ...actual,
+    readWindowsServiceTaskOwnership: async () => {
+      const answer = await mocks.ownServiceDisabled();
+      if (answer?.kind === "not-owned") {
+        return {
+          kind: "not-owned" as const,
+          reason: "other-owner" as const,
+          detail: "the task's principal names another account",
+        };
+      }
+      const disabled = answer?.kind === "disabled";
+      return {
+        kind: "caller" as const,
+        xml: `<Task><Settings><Enabled>${disabled ? "false" : "true"}</Enabled></Settings></Task>`,
+      };
+    },
+  };
+});
 vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusy,
 }));
@@ -457,6 +541,7 @@ import {
   type HostUpdateRunArgs,
 } from "../update-run";
 import { LAUNCHD_THROTTLE_INTERVAL_SECONDS } from "../../service/spawn-edge-bounds";
+import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import { buildHostUpdateCommand } from "../../commands/host-update";
 import { buildProgram } from "../../index";
 import { verifyHostUpdateAttempt } from "../update-verify";
@@ -472,6 +557,8 @@ import {
 } from "../../manifest/host-staged";
 import { hostStagedDir } from "../../store/paths";
 import { CLI_ERROR_CODES, CliError, cliError } from "../../runner/errors";
+import { SERVICE_KEPT_DISABLED_WARNING } from "../../service/registration-owner";
+import { SERVICE_TASK_NOT_OWNED_MESSAGE } from "../../service/platforms/windows-task-gate";
 import type { ILogger } from "../../logger";
 import type { CommandContext } from "../../runner/runner";
 import type { ProgressInfo } from "../../runner/output";
@@ -944,6 +1031,21 @@ function appliedOutcomeWithStartError(
   return { ...appliedOutcome(previousVersion, version), postSwapError };
 }
 
+/**
+ * The same applied outcome, but the swap's service step started no host
+ * because the registration carries a warning instead of a hard error (R4
+ * §39/note 4): the task was disabled, or another account owns it. A sibling
+ * of `appliedOutcomeWithStartError` for the same reason - `postSwapWarning`
+ * is the one thing this fixture varies.
+ */
+function appliedOutcomeWithWarning(
+  previousVersion: string,
+  version: string,
+  postSwapWarning: { readonly code: string; readonly message: string },
+) {
+  return { ...appliedOutcome(previousVersion, version), postSwapWarning };
+}
+
 const progress = (stage: string, percent: number | null): ProgressInfo => ({
   stage,
   message: null,
@@ -1021,6 +1123,8 @@ function armWorld(): void {
     world.runningVersion === null ? null : pidMetadata(world.runningVersion),
   );
   mocks.identityVerdict.mockResolvedValue("current");
+  mocks.ownServiceDisabled.mockResolvedValue({ kind: "not-disabled" });
+  mocks.readHostPidMetadataEvidence.mockResolvedValue({ kind: "absent" });
   // A no-op by default: the seam exists, and nothing happens in it.
   mocks.beforeAttemptMutation.mockResolvedValue(undefined);
   mocks.assertHostNotBusy.mockResolvedValue(undefined);
@@ -1058,6 +1162,7 @@ function armWorld(): void {
     async (
       _capability: unknown,
       _contenderOptions: unknown,
+      _origin: unknown,
       options: ApplyMockOptions,
     ) => {
       const target = world.stagedVersion;
@@ -1306,7 +1411,7 @@ describe("runHostUpdate - the install intent's arms", () => {
     // the fixture installs 3.0.0, then fails verification for 2.0.0 - the
     // wrong error, over a host that was moved.
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledTimes(1);
-    expect(mocks.applyHostWithAttempt.mock.calls[0][2]).toMatchObject({
+    expect(mocks.applyHostWithAttempt.mock.calls[0][3]).toMatchObject({
       expectedStagedVersion: "2.0.0",
     });
     expect(world.stagedVersion).toBe("3.0.0");
@@ -2000,6 +2105,7 @@ describe("runHostUpdate - bound intents", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ acceptStoreFormatLoss: true }),
     );
   });
@@ -2198,6 +2304,7 @@ describe("runHostUpdate - bound intents", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ expectedStageFingerprint: claimed }),
     );
     expect(world.installedVersion).toBe(installedVersion);
@@ -2435,6 +2542,7 @@ describe("runHostUpdate - bound intents", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ expectedStageFingerprint: claimed }),
     );
     expect(world.installedVersion).toBe("1.0.0");
@@ -2459,7 +2567,7 @@ describe("runHostUpdate - bound intents", () => {
     // The transfer minted a NEW id, so pinning the apply to the claim's - the
     // fingerprint of bytes that no longer exist - would refuse the very stage
     // this run just placed.
-    const applied = mocks.applyHostWithAttempt.mock.calls[0]?.[2];
+    const applied = mocks.applyHostWithAttempt.mock.calls[0]?.[3];
     expect(applied?.expectedStageFingerprint).not.toBe(claimed);
     expect(applied?.expectedStageFingerprint).toBe(mocks.transferStageIds[0]);
   });
@@ -2581,6 +2689,7 @@ describe("runHostUpdate - the writer's own contract", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await rm(updateAttemptRecordPath(currentHome.value), { force: true });
@@ -2646,6 +2755,7 @@ describe("runHostUpdate - the writer's own contract", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -3186,6 +3296,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
     expect(mocks.applyHostWithAttempt).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
+      "maintenance",
       expect.objectContaining({ force: true }),
     );
   });
@@ -3197,6 +3308,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -3338,6 +3450,7 @@ describe("ported: buildHostUpdateCommand composite", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -3576,6 +3689,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -3628,6 +3742,41 @@ describe("ported: update-progress marker (T16)", () => {
     expect(mocks.disk.current).toMatchObject({
       state: "failed",
       targetVersion: "2.0.0",
+    });
+  });
+
+  it("a store-format floor refusal from the apply half is recorded with Settings copy, never the CLI flag, while the thrown error keeps the flag", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    // The refusal `installer/apply.ts` throws from `assertHostStoreFormatFloor`
+    // (before the busy gate), reaching this arm through `applyHostWithAttempt`.
+    const flagMessage =
+      "host apply: refusing to install host 2.0.0 over 1.0.0 - it reads chat store format 1, and 1 epic on this machine carries a newer one. Install a host that can read them instead, or rerun with --accept-store-format-loss to install it anyway and lose access to those chats.";
+    mocks.applyHostWithAttempt.mockRejectedValue(
+      cliError({
+        code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+        message: flagMessage,
+        details: {},
+        exitCode: 1,
+      }),
+    );
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      message: flagMessage,
+    });
+
+    const record = await requireRecord();
+    expect(record.phase).toBe("failed");
+    expect(record.error).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    });
+    expect(record.error?.message).toBe(HOST_STORE_FORMAT_REFUSAL_MESSAGE);
+    expect(record.error?.message).not.toContain("--accept-store-format-loss");
+    // The legacy progress marker carries the same safe copy, not the flag.
+    expect(mocks.disk.current).toMatchObject({
+      state: "failed",
+      error: HOST_STORE_FORMAT_REFUSAL_MESSAGE,
     });
   });
 
@@ -3954,6 +4103,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -3981,6 +4131,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -4079,6 +4230,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -4488,6 +4640,7 @@ describe("ported: update-progress marker (T16)", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -5288,6 +5441,7 @@ describe("ported: reassertMarkerUnderLock under the lock", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -5664,6 +5818,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? target;
@@ -5742,6 +5897,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         // Fires BEFORE the cooperative stop. Production passes no hook here,
@@ -6487,6 +6643,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -6584,6 +6741,7 @@ describe("acceptance: cells with no legacy ancestor", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         options.onProgress(progress("service-stop", null));
@@ -7077,6 +7235,14 @@ describe("ported: the explicit request's version binding (#1752 round 14)", () =
 
     expect(mocks.stopHostForRestartWithAttempt).toHaveBeenCalledTimes(1);
     expect(mocks.relaunchHostAfterRestartWithAttempt).toHaveBeenCalledTimes(1);
+    // The activation arm's relaunch is the maintenance leg of `host update`:
+    // it brings back a run that already existed, whoever invoked the update
+    // (`host/lifecycle-origin.ts`). Its 3rd positional argument is the
+    // origin, beside the same assertion already made on
+    // `applyHostWithAttempt`'s apply-arm relaunch above.
+    expect(mocks.relaunchHostAfterRestartWithAttempt.mock.calls[0]?.[2]).toBe(
+      "maintenance",
+    );
   });
 });
 
@@ -7168,6 +7334,7 @@ describe("fixup: cold review B", () => {
   function applyFixture(): (
     capability: unknown,
     contenderOptions: unknown,
+    origin: unknown,
     options: ApplyMockOptions,
   ) => Promise<unknown> {
     const armed = mocks.applyHostWithAttempt.getMockImplementation();
@@ -7192,6 +7359,7 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         // Another actor consumed this park's stage under the apply's own lock
@@ -7221,7 +7389,7 @@ describe("fixup: cold review B", () => {
             .catch(() => undefined);
           return observed;
         });
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
 
@@ -7256,12 +7424,13 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await seedInstalled("3.0.0");
         world.runningVersion = "3.0.0";
         await seedStaged(null);
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
 
@@ -7300,12 +7469,13 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await seedInstalled("2.0.0");
         world.runningVersion = "2.0.0";
         await seedStaged(null);
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
     let moved = false;
@@ -7374,6 +7544,7 @@ describe("fixup: cold review B", () => {
           async (
             _capability: unknown,
             _contenderOptions: unknown,
+            _origin: unknown,
             options: ApplyMockOptions,
           ) => refuse(options),
         );
@@ -7415,12 +7586,18 @@ describe("fixup: cold review B", () => {
         async (
           capability: unknown,
           contenderOptions: unknown,
+          origin: unknown,
           options: ApplyMockOptions,
         ) => {
           await seedInstalled(installedVersion);
           world.runningVersion = runningVersion;
           await seedStaged(null);
-          const outcome = await delegate(capability, contenderOptions, options);
+          const outcome = await delegate(
+            capability,
+            contenderOptions,
+            origin,
+            options,
+          );
           outcomes.push(outcome);
           return outcome;
         },
@@ -7711,12 +7888,13 @@ describe("fixup: cold review B", () => {
       async (
         capability: unknown,
         contenderOptions: unknown,
+        origin: unknown,
         options: ApplyMockOptions,
       ) => {
         await seedInstalled("2.0.0");
         world.runningVersion = "staging.1750000000.abc1234";
         await seedStaged(null);
-        return delegate(capability, contenderOptions, options);
+        return delegate(capability, contenderOptions, origin, options);
       },
     );
     return attemptId;
@@ -7825,6 +8003,7 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -7848,6 +8027,7 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
       async (
         _capability: unknown,
         _contenderOptions: unknown,
+        _origin: unknown,
         options: ApplyMockOptions,
       ) => {
         const previous = world.installedVersion ?? "1.0.0";
@@ -7858,6 +8038,30 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
         await options.hooks.afterSwap();
         after();
         return appliedOutcomeWithStartError(previous, "2.0.0", postSwapError);
+      },
+    );
+  }
+
+  /** As above, but the swap carries a post-swap WARNING (R4 §39), not an error. */
+  function applyWithWarningThenLeaveWorld(
+    after: () => void,
+    postSwapWarning: { readonly code: string; readonly message: string },
+  ): void {
+    mocks.applyHostWithAttempt.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        _origin: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        const previous = world.installedVersion ?? "1.0.0";
+        options.onProgress(progress("service-stop", null));
+        await options.hooks.beforeSwapCommit();
+        await seedInstalled("2.0.0");
+        await seedStaged(null);
+        await options.hooks.afterSwap();
+        after();
+        return appliedOutcomeWithWarning(previous, "2.0.0", postSwapWarning);
       },
     );
   }
@@ -8255,6 +8459,87 @@ describe("E13: the verify leg says WHY the host never became healthy", () => {
     });
   });
 
+  it("R4 §39 37a: a disabled-task postSwapWarning becomes service-start-failed, and the remedy names the service repair", async () => {
+    // A registration that finished the swap without starting a host - its
+    // owner disabled the task - carries a WARNING, not `postSwapError`, but
+    // `postSwapStartFailure` treats it the same way: no host is coming, so
+    // the verify leg fails on the shorter start-error budget, not the whole
+    // health-timeout budget. Falsification: drop the `warning` arm from
+    // `postSwapStartFailure` back to `outcome.postSwapError !== null` alone,
+    // and this reddens on `code` staying `verify-timeout`.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyWithWarningThenLeaveWorld(() => {
+      world.runningVersion = null;
+      world.runningDiagnosis = "pid-metadata-absent";
+    }, SERVICE_KEPT_DISABLED_WARNING);
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+    const message = (failure as { message: string }).message;
+    expect(message).toContain(SERVICE_KEPT_DISABLED_WARNING.message);
+    expect(message).toContain("committed");
+    // Note 4: ends with the service-repair remedy for a disabled task.
+    expect(message).toContain(
+      "run 'traycer host service install' and then 'traycer host service start'",
+    );
+    const record = await requireRecord();
+    expect(record.error).toMatchObject({
+      code: "service-start-failed",
+      phase: "verifying",
+    });
+  });
+
+  it("R4 §39 37b: a not-owned postSwapWarning becomes service-start-failed too, but the message has NO remedy - it ends at 'committed' then the probe", async () => {
+    // Note 4: unlike the disabled axis, another account's task names no
+    // service-repair remedy - the operator here cannot register a task that
+    // is not theirs. The sentence ends at "The bytes ARE committed at
+    // <target>." (no semicolon clause) and continues straight to the probe
+    // parenthetical. Falsification: drop the `warning.code ===
+    // SERVICE_TASK_NOT_OWNED` branch in `postSwapStartFailure` so it always
+    // returns `SERVICE_START_REMEDY`, and this reddens on the message
+    // containing "traycer host service install" when it must not.
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    applyWithWarningThenLeaveWorld(
+      () => {
+        world.runningVersion = null;
+        world.runningDiagnosis = "pid-metadata-absent";
+      },
+      {
+        code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+        message: SERVICE_TASK_NOT_OWNED_MESSAGE,
+      },
+    );
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+    const message = (failure as { message: string }).message;
+    expect(message).toContain(SERVICE_TASK_NOT_OWNED_MESSAGE);
+    expect(message).not.toContain("traycer host service install");
+    expect(message).not.toContain("traycer host service start");
+    // "committed at <target>." immediately followed by the probe
+    // parenthetical - no remedy clause spliced in between.
+    expect(message).toMatch(/committed at 2\.0\.0\. \(probe: /);
+    const record = await requireRecord();
+    expect(record.error).toMatchObject({
+      code: "service-start-failed",
+      phase: "verifying",
+    });
+  });
+
   it("Q6: a health timeout with NO start error is unchanged", async () => {
     // The control for the row above: the split must not rewrite the ordinary
     // verify-timeout, whose code `failed()` keys its unconditional marker
@@ -8389,5 +8674,167 @@ describe("verifyBudgetFor (Q6)", () => {
     expect(verifyBudgetFor("E_SERVICE_CONTROL_FAILED", 50)).toBe(50);
     // With no start error the override is simply authoritative.
     expect(verifyBudgetFor(null, 60_000)).toBe(60_000);
+  });
+});
+
+describe("runHostUpdate over a service registration its owner disabled", () => {
+  // `refuseUpdateOverUnstartableService` reads the Scheduled Task only on
+  // win32 - on any other platform it answers "startable" without a query, so
+  // this axis is unreachable without the stub. Scoped to this block: the rest
+  // of the suite runs unstubbed, as it always did.
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+  });
+  afterEach(() => {
+    if (originalPlatform !== undefined) {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  // `host update` is an AUTOMATIC path (the reconciler's detached run
+  // included). A disabled task refuses `/Run`, so an update that stopped the
+  // host to swap it could never bring it back: the run defers before it plans,
+  // claims, downloads, stops or swaps anything, keeps the stage, and exits
+  // with the one code only this refusal returns.
+  it("exits E_SERVICE_REGISTRATION_DISABLED / 79 with deferred: true; 0 stops, 0 swaps, 0 downloads, no attempt claimed, the stage kept", async () => {
+    await seedInstalled("1.0.0");
+    await seedStaged("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.ownServiceDisabled.mockResolvedValue({ kind: "disabled" });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+      exitCode: HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE,
+      details: { deferred: true },
+    });
+
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.relaunchHostAfterRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+    expect(mocks.installHostDowngradeInSegment).not.toHaveBeenCalled();
+    // No attempt was claimed: nothing of the run reached the record.
+    expect(await readRecord()).toBeNull();
+    expect(mocks.writes).toEqual([]);
+    // The stage a later enabled run applies is still there, byte for byte.
+    expect(
+      (await readFile(join(hostStagedDir("production"), "staged.json"), "utf8"))
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("refuses again on every run while it stays disabled, and applies once it is enabled (the release)", async () => {
+    await seedInstalled("1.0.0");
+    await seedStaged("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.ownServiceDisabled.mockResolvedValue({ kind: "disabled" });
+    for (let pass = 0; pass < 3; pass += 1) {
+      await expect(runUpdate({})).rejects.toMatchObject({
+        exitCode: HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE,
+      });
+    }
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(await readRecord()).toBeNull();
+
+    mocks.ownServiceDisabled.mockResolvedValue({ kind: "not-disabled" });
+    await runUpdate({});
+    expect(mocks.applyHostWithAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("control: a service that is not disabled runs the update as it always did", async () => {
+    await seedInstalled("1.0.0");
+    await seedStaged("2.0.0");
+    world.runningVersion = "1.0.0";
+    await runUpdate({});
+    expect(mocks.applyHostWithAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  // R5 §46f: a task this account does not own, with a cli-v1.3.0 supervisor's
+  // pid.json alone (no supervisor.json/supervisor-run.json pair) - the
+  // "unknown admission" case, which must be treated like a task-started host
+  // and refused, not read as "no host" and let through.
+  //
+  // RED today: `readRecordedSupervisorAdmission` only ever consults the
+  // supervisor pair, never pid.json, so an unpaired pid.json reads as
+  // `not-owned-no-host` - not refused - and the update proceeds to stop the
+  // host it cannot start again.
+  it("46a: a not-owned task with only a cli-v1.3.0 pid.json (no supervisor pair) is refused, not read as no host", async () => {
+    await seedInstalled("1.0.0");
+    await seedStaged("2.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.ownServiceDisabled.mockResolvedValue({ kind: "not-owned" });
+    mocks.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "read",
+      metadata: pidMetadata("1.0.0"),
+    });
+
+    await expect(runUpdate({})).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+      exitCode: HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE,
+    });
+
+    expect(mocks.applyHostWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.stopHostForRestartWithAttempt).not.toHaveBeenCalled();
+    expect(mocks.downloadAndStageHostInSegment).not.toHaveBeenCalled();
+    expect(await readRecord()).toBeNull();
+  });
+
+  // R5 §39 cleanup: the no-host swap - `refuseUpdateOverUnstartableService`
+  // finds a not-owned task with NO admitted host through it (case 46e), so it
+  // returns `serviceTaskNotOwnedWarning(reason)` instead of refusing, and the run
+  // proceeds to swap. The swap's own outcome carries no warning of its own
+  // (`outcome.postSwapWarning` absent) - the ONLY copy of what actually
+  // happened is the pre-swap warning `postSwapStartFailure` falls back to.
+  //
+  // Pinned rather than red-first: `?? preSwapWarning` already exists in
+  // `postSwapStartFailure` (R3). Proven red by a scoped ablation removing
+  // that fallback, restored within the same heavy.sh call - see the
+  // accompanying report for the sha before/after.
+  it("39 preSwapWarning fallback: a no-host not-owned pre-swap warning surfaces as service-start-failed with no remedy, when the swap itself reports none", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    mocks.ownServiceDisabled.mockResolvedValue({ kind: "not-owned" });
+    // Defaults already model "no host": readSupervisorRecord/RunState read
+    // real absent files under the sandboxed home, and
+    // readHostPidMetadataEvidence resolves `{kind: "absent"}` (armWorld).
+    mocks.applyHostWithAttempt.mockImplementation(
+      async (
+        _capability: unknown,
+        _contenderOptions: unknown,
+        _origin: unknown,
+        options: ApplyMockOptions,
+      ) => {
+        const previous = world.installedVersion ?? "1.0.0";
+        options.onProgress(progress("service-stop", null));
+        await options.hooks.beforeSwapCommit();
+        await seedInstalled("2.0.0");
+        await seedStaged(null);
+        await options.hooks.afterSwap();
+        world.runningVersion = null;
+        world.runningDiagnosis = "pid-metadata-absent";
+        return appliedOutcome(previous, "2.0.0");
+      },
+    );
+
+    const failure = await runUpdate({}).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({
+      code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
+    });
+    const message = (failure as { message: string }).message;
+    expect(message).toContain(SERVICE_TASK_NOT_OWNED_MESSAGE);
+    expect(message).not.toContain("traycer host service install");
+    expect(message).not.toContain("traycer host service start");
+    expect(message).toMatch(/committed at 2\.0\.0\. \(probe: /);
+    const record = await requireRecord();
+    expect(record.error).toMatchObject({
+      code: "service-start-failed",
+      phase: "verifying",
+    });
   });
 });

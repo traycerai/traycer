@@ -1,4 +1,4 @@
-import { useReadingWidthClass } from "@/lib/layout-overrides";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { Lock } from "lucide-react";
 import type {
@@ -914,18 +914,19 @@ export function ComposerSlotShell(props: {
   readonly topSpacing: ChatLowerSurfaceTopSpacing;
   readonly bottomSpacing: ComposerSlotBottomSpacing;
 }) {
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   return (
     <div className="pointer-events-none px-4">
       <div
         className={cn(
           "pointer-events-auto relative mx-auto w-full bg-canvas",
-          readingWidth,
+          readingWidth.className,
           props.topSpacing === "normal" ? "pt-4" : "pt-0",
           props.bottomSpacing === "normal" ? "pb-4" : "pb-0",
           props.bottomSpacing === "normal" &&
             "after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-canvas after:content-['']",
         )}
+        style={{ maxWidth: readingWidth.maxWidth }}
       >
         {props.children}
       </div>

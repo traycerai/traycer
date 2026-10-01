@@ -3366,6 +3366,16 @@ export type ProvidersStartLoginRequestV11 = z.infer<
   typeof providersStartLoginRequestSchemaV11
 >;
 
+/** A caller's claim on a shared login. Null preserves released-client behavior. */
+export const providersStartLoginRequestSchemaV14 = lazySchema(() =>
+  providersStartLoginRequestSchemaV11.extend({
+    holderId: z.string().min(1).max(128).nullable().default(null),
+  }),
+);
+export type ProvidersStartLoginRequestV14 = z.infer<
+  typeof providersStartLoginRequestSchemaV14
+>;
+
 /**
  * `providers.startLogin@1.1` response - echoes the profile this login
  * targeted, so a `createProfile` caller learns the host-minted id without a
@@ -3674,6 +3684,16 @@ export const providersCancelLoginRequestSchemaV11 = lazySchema(() =>
 );
 export type ProvidersCancelLoginRequestV11 = z.infer<
   typeof providersCancelLoginRequestSchemaV11
+>;
+
+/** Release one caller's claim; a null holder keeps the legacy scope cancel. */
+export const providersCancelLoginRequestSchemaV12 = lazySchema(() =>
+  providersCancelLoginRequestSchemaV11.extend({
+    holderId: z.string().min(1).max(128).nullable().default(null),
+  }),
+);
+export type ProvidersCancelLoginRequestV12 = z.infer<
+  typeof providersCancelLoginRequestSchemaV12
 >;
 
 /**

@@ -13,7 +13,7 @@ import { useManagedCommandPresence } from "@/stores/managed-commands/managed-com
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { formatSingleLine } from "@/lib/utils";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { SegmentCard, SegmentCardHeaderActionCell } from "./segment-card";
 import { SegmentRow } from "./segment-row";
@@ -72,9 +72,11 @@ function ResumeCompletionCard(props: {
   const { trigger } = props;
   const [open, setOpen] = useState(false);
   const compact = isShellDelivery(trigger);
-  const deliverySummary = formatSingleLine(
+  // Every line in this header is uncapped: each span below `truncate`s itself
+  // at the row's width (the full text stays in its tooltip), so a character
+  // cap in front could only end it early on a wide reading column.
+  const deliverySummary = collapseToSingleLine(
     trigger.summary.replace(/^still running\s*(?:[-–—·:]\s*)?/i, ""),
-    { maxLength: 180, ellipsis: "…" },
   );
 
   // An auto-backgrounded MCP call rides a "command" trigger (the kind enum is
@@ -84,10 +86,7 @@ function ResumeCompletionCard(props: {
     trigger.mcp === null
       ? trigger.title
       : `${trigger.mcp.serverName} · ${trigger.mcp.toolName}`;
-  const title = formatSingleLine(rawTitle, {
-    maxLength: 60,
-    ellipsis: "…",
-  });
+  const title = collapseToSingleLine(rawTitle);
   const header = (
     <>
       {resumeStatusIcon(trigger)}
@@ -127,7 +126,8 @@ function ResumeCompletionCard(props: {
   const preview =
     !compact && trigger.summary.trim().length > 0 ? (
       <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
-        {formatSingleLine(trigger.summary, { maxLength: 180, ellipsis: "…" })}
+        {/* Uncapped: `line-clamp-2` cuts it at two lines of the row's width. */}
+        {collapseToSingleLine(trigger.summary)}
       </p>
     ) : null;
 

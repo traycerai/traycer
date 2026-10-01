@@ -22,9 +22,8 @@ export interface ThemeSurfaces {
   readonly popover: string;
   /**
    * `--accent`. Carried because selection surfaces wash it over the row and
-   * then composite a state tint on top, and most presets keep it a near-grey
-   * while `traycer-green` sets it to its saturated `--primary` - the one case
-   * that decides whether a tinted glyph survives being selected.
+   * then composite a state tint on top, so it decides whether a tinted glyph
+   * survives being selected.
    */
   readonly accent: string;
 }
@@ -115,7 +114,7 @@ export const DARK_THEME_SURFACES: Readonly<Record<string, ThemeSurfaces>> = {
     background: "#121715",
     canvas: "#0f0f0f",
     popover: "#1a2421",
-    accent: "#257174",
+    accent: "#202c28",
   },
   dracula: {
     background: "#21222c",

@@ -21,7 +21,7 @@ import { TabLeadingIcon } from "../tab-leading-icon";
 import { sideTabWaitingLabel, tabWaitingReason } from "../tab-waiting";
 import { NO_LIVE_AGENTS, useSideTabLiveAgents } from "./side-tab-live-agents";
 import { railBadgeOf } from "./rail-badge-kind";
-import { sideTabTileOf, tabAutoTint } from "../tab-identity";
+import { sideTabTileOf } from "../tab-identity";
 import { SideSplitRowPair } from "./side-split-row-pair";
 import { SideTabRow, type SideTabRowVariant } from "./side-tab-row";
 
@@ -161,7 +161,6 @@ function OverlayMember(props: {
       active={props.focused}
       session={null}
       tint={null}
-      autoTint={null}
       groupLine={null}
       leading={icon}
       tile={{ kind: "icon", icon }}
@@ -217,7 +216,6 @@ function OverlayTabRow(props: {
       active={props.active}
       session={null}
       tint={appearance?.color ?? null}
-      autoTint={epicId === null ? null : tabAutoTint(epicId)}
       groupLine={null}
       leading={leading}
       tile={sideTabTileOf({

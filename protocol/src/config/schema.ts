@@ -83,6 +83,49 @@ export const browserOnlyConfigSchema = lazySchema(() =>
   }),
 );
 
+/**
+ * What an agent's `traycer_create_worktree` call does on this machine:
+ * `allow` creates the worktree, `ask` puts the request to the user in the
+ * calling agent's chat first, `never` refuses it. Worktrees the user creates
+ * themselves are not governed by it.
+ */
+export const AGENT_WORKTREE_CREATE_POLICIES = [
+  "allow",
+  "ask",
+  "never",
+] as const;
+export type AgentWorktreeCreatePolicy =
+  (typeof AGENT_WORKTREE_CREATE_POLICIES)[number];
+
+/**
+ * The `worktrees` block in `~/.traycer/cli/config.json`: the
+ * machine-user-global policy for worktrees agents create. Defaults to `allow` -
+ * agents could create worktrees before the policy existed, so an install that
+ * has never touched Settings keeps that behaviour. Additive and `.default()`-ed
+ * like every other block, so older config files keep validating without a
+ * `CLI_CONFIG_VERSION` bump.
+ */
+export const worktreesConfigSchema = lazySchema(() =>
+  z
+    .object({
+      agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES).default("allow"),
+    })
+    .default({ agentCreate: "allow" }),
+);
+export type WorktreesConfig = z.infer<typeof worktreesConfigSchema>;
+
+/**
+ * The `worktrees` block read on its own, ignoring every other key - for the
+ * same reason as `browserOnlyConfigSchema`: an unrelated defect elsewhere in
+ * the document must not send the gate to its permissive default while the file
+ * plainly says `agentCreate: "never"`.
+ */
+export const worktreesOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    worktrees: worktreesConfigSchema,
+  }),
+);
+
 export const featureSettingsSchema = lazySchema(() =>
   z
     .object({
@@ -161,6 +204,7 @@ export const cliConfigSchema = lazySchema(() =>
       logs: logsConfigSchema,
       features: featureSettingsSchema,
       browser: browserConfigSchema,
+      worktrees: worktreesConfigSchema,
     })
     // Top-level only: an unknown BLOCK survives a read-modify-write instead of
     // being stripped. Two binaries share this file - an older CLI or host that
@@ -230,4 +274,5 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
   features: { agentRoles: false, artifactVersioning: false },
   browser: { agentAccess: true },
+  worktrees: { agentCreate: "allow" },
 };

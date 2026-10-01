@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   useMutationState,
@@ -23,6 +23,7 @@ import {
   type WorktreeCleanupOutcome,
 } from "@/lib/epics/run-worktree-cleanup";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { progressToast } from "@/lib/toast/progress-toast";
 import { LANDING_ROUTE } from "@/lib/routes";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import {
@@ -47,6 +48,20 @@ interface BatchDeleteEpicMutationContext {
   readonly hostId: string | null;
   readonly userId: string | null;
   readonly epicTitlesById: Readonly<Record<string, string>>;
+  /**
+   * The progress toast this dispatch put up in `onMutate`. The confirm dialog
+   * closes at kickoff, so this toast is what stays in front of the person
+   * while the host deletes - on whatever surface they have moved to by then.
+   * Per dispatch, because two batches can be in flight at once.
+   */
+  readonly progressToastId: string;
+}
+
+let epicDeleteProgressToastSequence = 0;
+
+function nextEpicDeleteProgressToastId(): string {
+  epicDeleteProgressToastSequence += 1;
+  return `epic-delete-progress:${epicDeleteProgressToastSequence}`;
 }
 
 /**
@@ -101,16 +116,18 @@ export function useEpicBatchDelete(): UseMutationResult<
       onMutate: (variables) => {
         const hostId = client.getActiveHostId();
         const userId = client.getRequestContextUserId();
-        return {
-          hostId,
-          userId,
-          epicTitlesById: collectDeletedEpicTitles(
-            variables.ids,
-            getHeaderTabs(),
-            queryClient,
-            userId === null ? null : { hostId, userId },
-          ),
-        };
+        const epicTitlesById = collectDeletedEpicTitles(
+          variables.ids,
+          getHeaderTabs(),
+          queryClient,
+          userId === null ? null : { hostId, userId },
+        );
+        const progressToastId = nextEpicDeleteProgressToastId();
+        progressToast(
+          epicDeleteProgressToastMessage(variables.ids, epicTitlesById),
+          { id: progressToastId, duration: Infinity },
+        );
+        return { hostId, userId, epicTitlesById, progressToastId };
       },
       onSuccess: (data, variables, ctx) => {
         const failures = data.results.filter((r) => !r.success);
@@ -192,7 +209,12 @@ export function useEpicBatchDelete(): UseMutationResult<
           deletedIds,
           successes,
         );
+        // The outcome toast takes the progress toast's place. Dismiss-then-emit
+        // rather than an update by id: Sonner MERGES updates that reuse an id,
+        // so the outcome would inherit the progress toast's infinite lifetime
+        // and spinner unless every emitter below reset both.
         if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
+          toast.dismiss(ctx.progressToastId);
           emitEpicDeleteToast(
             epicToast.level,
             epicToast.message,
@@ -206,16 +228,42 @@ export function useEpicBatchDelete(): UseMutationResult<
           // is frozen from `onMutate` so a host swap mid-flight can't redirect
           // the cleanup or its cache invalidation to the wrong scope.
           const hostId = ctx.hostId;
+          const progressToastId = ctx.progressToastId;
+          // Same toast, next phase: the Task(s) are gone and the approved
+          // worktrees are what is still being removed. Only while it is still
+          // up: an update by id re-creates a toast the person has closed, and
+          // a dismissed progress toast stays dismissed (as the worktree
+          // delete bridge keeps it). The summary below is shown either way.
+          if (toast.getToasts().some((entry) => entry.id === progressToastId)) {
+            progressToast(
+              worktreeCleanupProgressToastMessage(eligibleWorktreePaths.length),
+              { id: progressToastId, duration: Infinity },
+            );
+          }
           void runWorktreeCleanup(openStreamTransport, {
             hostId,
             paths: eligibleWorktreePaths,
             source: "task_cleanup",
             epicId: undefined,
             stopOwnersPaths: new Set(),
-          }).then((outcome) => {
-            emitTaskDeleteSummaryToast(epicToast, outcome);
-            invalidateWorktreeCachesForHost(queryClient, hostId);
-          });
+          }).then(
+            (outcome) => {
+              toast.dismiss(progressToastId);
+              emitTaskDeleteSummaryToast(epicToast, outcome);
+              invalidateWorktreeCachesForHost(queryClient, hostId);
+            },
+            () => {
+              // The cleanup reports failures as an outcome and is not
+              // expected to reject; if it ever does, the Task deletion still
+              // happened, so say so rather than leave the spinner up.
+              toast.dismiss(progressToastId);
+              emitEpicDeleteToast(
+                epicToast.level,
+                epicToast.message,
+                epicToast.detail,
+              );
+            },
+          );
         }
         if (ctx.hostId !== null && ctx.userId !== null) {
           publishDeletedEpicNotification({
@@ -230,7 +278,13 @@ export function useEpicBatchDelete(): UseMutationResult<
           queryKey: hostQueryKeys.scope(ctx.hostId),
         });
       },
-      onError: (error) => toastFromHostError(error, "Couldn't delete epics."),
+      onError: (error, _variables, ctx) => {
+        // Explicit, never left to the error toast: `toastFromHostError` stays
+        // silent for an aborted or recoverable-unauthorized request, and a
+        // progress toast nothing dismisses would spin forever.
+        if (ctx !== undefined) toast.dismiss(ctx.progressToastId);
+        toastFromHostError(error, "Couldn't delete epics.");
+      },
     },
   });
 }
@@ -260,6 +314,43 @@ export function usePendingDeleteEpicIds(): ReadonlySet<string> {
         ),
       ),
     [pendingVariables],
+  );
+}
+
+/**
+ * Whether this task's `epic.batchDelete` is still in flight. The confirm
+ * dialog closes at kickoff, so a row is back on screen while the host deletes
+ * the task, and opening it then raced the delete. A row that lists a task
+ * reads this to show the delete in progress.
+ */
+export function useIsEpicDeleteInFlight(epicId: string): boolean {
+  return usePendingDeleteEpicIds().has(epicId);
+}
+
+/**
+ * The same question, asked at the moment of an open rather than rendered:
+ * every surface that opens a task from a list refuses one whose delete is in
+ * flight. Reads the mutation cache when CALLED, so it costs the list no
+ * subscription and cannot answer from a stale render.
+ */
+export function useEpicDeleteInFlightReader(): (epicId: string) => boolean {
+  const queryClient = useQueryClient();
+  return useCallback(
+    (epicId: string) =>
+      queryClient
+        .getMutationCache()
+        .findAll({
+          mutationKey: epicMutationKeys.batchDelete(),
+          status: "pending",
+        })
+        .some((mutation) => {
+          const variables: unknown = mutation.state.variables;
+          return (
+            isBatchDeleteEpicVariables(variables) &&
+            variables.ids.includes(epicId)
+          );
+        }),
+    [queryClient],
   );
 }
 
@@ -326,6 +417,28 @@ function collectDeletedEpicTitles(
     titles[tab.epicId] = title;
   }
   return titles;
+}
+
+/**
+ * What the progress toast says while the host deletes. The in-progress form of
+ * {@link deletedEpicSuccessToastMessage}, so the toast reads as one sentence
+ * changing tense when the outcome takes its place.
+ */
+export function epicDeleteProgressToastMessage(
+  epicIds: ReadonlyArray<string>,
+  epicTitlesById: Readonly<Record<string, string | undefined>>,
+): string {
+  if (epicIds.length === 1) {
+    const title = readEpicTitle(epicTitlesById, epicIds[0]);
+    return title === null ? "Deleting epic…" : `Deleting epic "${title}"…`;
+  }
+  return `Deleting ${epicIds.length} epics…`;
+}
+
+export function worktreeCleanupProgressToastMessage(
+  worktreeCount: number,
+): string {
+  return `Removing ${worktreeCount} worktree${worktreeCount === 1 ? "" : "s"}…`;
 }
 
 export function deletedEpicSuccessToastMessage(

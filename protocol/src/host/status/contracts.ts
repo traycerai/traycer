@@ -63,19 +63,82 @@ export type HostStatusUpdateProgress = z.infer<
 >;
 
 /**
- * Typed breakdown of {@link hostStatusV12}'s `busySessionCount` total, reused
- * by `host.restart` @1.2 and the unnegotiated `hostRuntimeStatus` awareness
- * field. Counts are non-negative; a missing breakdown is `null` (unknown),
- * never a fabricated zero object.
+ * Typed breakdown of {@link hostStatusV12}'s `busySessionCount` total. Counts
+ * are non-negative; a missing breakdown is `null` (unknown), never a
+ * fabricated zero object.
+ *
+ * FROZEN. This is the exact shape every released line put on the wire:
+ * `host.status` @1.2-@1.5 (top level and the nested `updateOperation` attempt
+ * arm), `host.restart` @1.2, and the unnegotiated `hostRuntimeStatus`
+ * awareness field. Awareness in particular can never take a wider shape: its
+ * entries from old and new hosts share one room with no negotiation, so it
+ * keeps this one for good. A count added here would widen all of those at
+ * once; it goes on {@link hostBusyBreakdownV2Schema} (or a V3) behind a new
+ * minor instead.
  */
-export const hostBusyBreakdownSchema = lazySchema(() =>
+export const hostBusyBreakdownV1Schema = lazySchema(() =>
   z.object({
     workingAgents: z.number().int().nonnegative(),
     activeTerminalAgents: z.number().int().nonnegative(),
     busyTerminals: z.number().int().nonnegative(),
   }),
 );
-export type HostBusyBreakdown = z.infer<typeof hostBusyBreakdownSchema>;
+export type HostBusyBreakdownV1 = z.infer<typeof hostBusyBreakdownV1Schema>;
+/**
+ * The name clients already import, kept bound to the frozen V1 shape so a
+ * consumer that has not opted into `host.status` @1.6 / `host.restart` @1.3
+ * keeps compiling against exactly what it reads. A V2 value is assignable to
+ * it (the two extra keys are simply not seen); reading the counts means
+ * naming {@link HostBusyBreakdownV2}.
+ */
+export type HostBusyBreakdown = HostBusyBreakdownV1;
+
+/**
+ * V1 plus two informational counts, first carried by `host.status` @1.6 and
+ * `host.restart` @1.3.
+ *
+ * - `shells` - managed commands with a live process or a pending spawn
+ *   (`interrupted` and `stopped` records excluded).
+ * - `scheduledWakes` - armed wake timers across the host's loaded chat
+ *   sessions.
+ *
+ * They are NOT part of `busySessionCount` and do not change its units: that
+ * total stays the sum of the three V1 fields (the work that blocks a
+ * cooperative stop). A shell or wake whose owning chat is active already
+ * makes the host busy through `workingAgents`, so adding them to the total
+ * would count one piece of work twice.
+ *
+ * `null` means the host did not report that count - an older host (the
+ * upgrade paths write it) or one that cannot read the source. It is never
+ * `0`: a real zero is an affirmative "nothing of this kind is running", and a
+ * quit prompt that lists what a stop would end depends on the difference.
+ */
+export const hostBusyBreakdownV2Schema = lazySchema(() =>
+  hostBusyBreakdownV1Schema.extend({
+    shells: z.number().int().nonnegative().nullable(),
+    scheduledWakes: z.number().int().nonnegative().nullable(),
+  }),
+);
+export type HostBusyBreakdownV2 = z.infer<typeof hostBusyBreakdownV2Schema>;
+
+/**
+ * Lifts a V1 breakdown to V2 for an upgrade path: the three counts are kept
+ * and the two new ones are `null`, because an older host said nothing about
+ * them. The shared helper keeps every upgrade that crosses this boundary
+ * (`host.status` 1.5→1.6 at two depths, `host.restart` 1.2→1.3) from
+ * fabricating a zero.
+ */
+export function upgradeHostBusyBreakdownV1ToV2(
+  breakdown: HostBusyBreakdownV1,
+): HostBusyBreakdownV2 {
+  return {
+    workingAgents: breakdown.workingAgents,
+    activeTerminalAgents: breakdown.activeTerminalAgents,
+    busyTerminals: breakdown.busyTerminals,
+    shells: null,
+    scheduledWakes: null,
+  };
+}
 
 /**
  * v1.1 folds in the T16 busy/drain signal (`host.drainStatus`, since removed
@@ -140,7 +203,7 @@ export const hostStatusV12 = defineRpcContract({
        */
       busySessionCount: z.number().int().nonnegative().nullable(),
       updateProgress: hostStatusUpdateProgressSchema.nullable(),
-      busyBreakdown: hostBusyBreakdownSchema.nullable(),
+      busyBreakdown: hostBusyBreakdownV1Schema.nullable(),
     }),
   ),
 });
@@ -238,59 +301,94 @@ export type HostUpdateOperationLiveness = z.infer<
  *
  * A fourth "nothing to show" lives one level up, as `updateOperation: null`,
  * and means the PEER did not say - see the field's own comment.
+ *
+ * FROZEN at the V1 busy breakdown: this is the union `host.status` @1.3-@1.5
+ * put on the wire. `host.status` @1.6 carries
+ * {@link hostStatusUpdateOperationV2Schema}, which differs only in the attempt
+ * arm's `busyBreakdown`. The arms are declared once below so the two unions
+ * cannot drift anywhere else.
  */
+const hostStatusUpdateOperationNoneSchema = lazySchema(() =>
+  z.object({ kind: z.literal("none") }),
+);
+const hostStatusUpdateOperationUnavailableSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("unavailable"),
+    reason: z.enum(["corrupt", "unsupported-version", "unreadable"]),
+    /** Diagnostic detail where the host has one; never a user-facing string. */
+    cause: z.string().nullable(),
+  }),
+);
+const hostStatusUpdateOperationAttemptV1Schema = lazySchema(() =>
+  z.object({
+    kind: z.literal("attempt"),
+    // `attemptId + generation + sequence` is the ordering key, in full. No
+    // timestamp is carried: two peers with skewed clocks must not be able to
+    // disagree about which observation is newer, and a client that could order
+    // by `updatedAt` is a client that will.
+    attemptId: z.string().min(1),
+    generation: z.number().int().positive(),
+    sequence: z.number().int().positive(),
+    targetVersion: z.string().min(1),
+    trigger: hostUpdateOperationTriggerSchema,
+    phase: hostUpdateOperationPhaseSchema,
+    execution: hostUpdateOperationExecutionSchema,
+    continuation: hostUpdateOperationContinuationSchema,
+    progress: z
+      .object({
+        percent: z.number().nullable(),
+        bytes: z.number().nullable(),
+        totalBytes: z.number().nullable(),
+      })
+      .nullable(),
+    liveness: hostUpdateOperationLivenessSchema,
+    /** Why liveness is `indeterminate`, when it is. `null` otherwise. */
+    livenessCause: z.string().nullable(),
+    // The live busy facts as of the SAME read that produced the phase above.
+    // Duplicated from the top level deliberately: a drain affordance that
+    // names a session count beside a phase must not be able to pair a count
+    // from one instant with a phase from another. Same `null` semantics as
+    // the top-level fields - "did not report", never "reported zero".
+    busySessionCount: z.number().int().nonnegative().nullable(),
+    busyBreakdown: hostBusyBreakdownV1Schema.nullable(),
+    error: z
+      .object({
+        code: z.string(),
+        message: z.string(),
+        phase: z.string(),
+      })
+      .nullable(),
+  }),
+);
 export const hostStatusUpdateOperationSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("none") }),
-    z.object({
-      kind: z.literal("unavailable"),
-      reason: z.enum(["corrupt", "unsupported-version", "unreadable"]),
-      /** Diagnostic detail where the host has one; never a user-facing string. */
-      cause: z.string().nullable(),
-    }),
-    z.object({
-      kind: z.literal("attempt"),
-      // `attemptId + generation + sequence` is the ordering key, in full. No
-      // timestamp is carried: two peers with skewed clocks must not be able to
-      // disagree about which observation is newer, and a client that could order
-      // by `updatedAt` is a client that will.
-      attemptId: z.string().min(1),
-      generation: z.number().int().positive(),
-      sequence: z.number().int().positive(),
-      targetVersion: z.string().min(1),
-      trigger: hostUpdateOperationTriggerSchema,
-      phase: hostUpdateOperationPhaseSchema,
-      execution: hostUpdateOperationExecutionSchema,
-      continuation: hostUpdateOperationContinuationSchema,
-      progress: z
-        .object({
-          percent: z.number().nullable(),
-          bytes: z.number().nullable(),
-          totalBytes: z.number().nullable(),
-        })
-        .nullable(),
-      liveness: hostUpdateOperationLivenessSchema,
-      /** Why liveness is `indeterminate`, when it is. `null` otherwise. */
-      livenessCause: z.string().nullable(),
-      // The live busy facts as of the SAME read that produced the phase above.
-      // Duplicated from the top level deliberately: a drain affordance that
-      // names a session count beside a phase must not be able to pair a count
-      // from one instant with a phase from another. Same `null` semantics as
-      // the top-level fields - "did not report", never "reported zero".
-      busySessionCount: z.number().int().nonnegative().nullable(),
-      busyBreakdown: hostBusyBreakdownSchema.nullable(),
-      error: z
-        .object({
-          code: z.string(),
-          message: z.string(),
-          phase: z.string(),
-        })
-        .nullable(),
-    }),
+    hostStatusUpdateOperationNoneSchema,
+    hostStatusUpdateOperationUnavailableSchema,
+    hostStatusUpdateOperationAttemptV1Schema,
   ]),
 );
 export type HostStatusUpdateOperation = z.infer<
   typeof hostStatusUpdateOperationSchema
+>;
+
+/**
+ * {@link hostStatusUpdateOperationSchema} with the attempt arm's
+ * `busyBreakdown` at V2, carried by `host.status` @1.6. The nested breakdown
+ * moves with the top-level one because the attempt arm duplicates the busy
+ * facts on purpose (see its comment): a phase paired with a breakdown must
+ * name the same kinds of work the top level does.
+ */
+export const hostStatusUpdateOperationV2Schema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    hostStatusUpdateOperationNoneSchema,
+    hostStatusUpdateOperationUnavailableSchema,
+    hostStatusUpdateOperationAttemptV1Schema.extend({
+      busyBreakdown: hostBusyBreakdownV2Schema.nullable(),
+    }),
+  ]),
+);
+export type HostStatusUpdateOperationV2 = z.infer<
+  typeof hostStatusUpdateOperationV2Schema
 >;
 
 /**
@@ -370,7 +468,7 @@ export const hostStatusV13 = defineRpcContract({
        * an update is in flight on this box, `null` otherwise.
        */
       updateProgress: hostStatusUpdateProgressSchema.nullable(),
-      busyBreakdown: hostBusyBreakdownSchema.nullable(),
+      busyBreakdown: hostBusyBreakdownV1Schema.nullable(),
       /**
        * `null` means the PEER did not report - it is pre-1.3 and the v1.2→v1.3
        * upgrade wrote this. It does NOT mean "no update is running": a peer that
@@ -573,4 +671,69 @@ export const hostStatusUpgradeV14ToV15 = defineUpgradePath<
   // `registry` here would be the same fabrication `storeFormats: null`
   // exists to avoid; `null` lands the client on the path it took before.
   upgradeResponse: (response) => ({ ...response, install: null }),
+});
+
+/**
+ * v1.6 moves the busy breakdown to {@link hostBusyBreakdownV2Schema} (V1 plus
+ * `shells` and `scheduledWakes`), both at the top level and inside the
+ * `updateOperation` attempt arm, which duplicates the busy facts of the same
+ * read. Every other field is v1.5's, unchanged.
+ *
+ * A caller on 1.5 or older is served by the host re-parsing this response
+ * through that minor's schema; zod strips the two extra keys at both depths,
+ * so an older caller receives exactly the bytes it did before 1.6 existed.
+ */
+export const hostStatusV16 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: hostStatusV15.requestSchema,
+  responseSchema: lazySchema(() =>
+    hostStatusV15.responseSchema.extend({
+      busyBreakdown: hostBusyBreakdownV2Schema.nullable(),
+      updateOperation: hostStatusUpdateOperationV2Schema.nullable(),
+    }),
+  ),
+});
+
+/**
+ * Lifts a v1.5 `updateOperation` to v1.6: only the attempt arm carries a
+ * breakdown, and a `null` breakdown (the host did not say) stays `null`.
+ */
+function upgradeUpdateOperationV1ToV2(
+  operation: HostStatusUpdateOperation,
+): HostStatusUpdateOperationV2 {
+  if (operation.kind !== "attempt") return operation;
+  return {
+    ...operation,
+    busyBreakdown:
+      operation.busyBreakdown === null
+        ? null
+        : upgradeHostBusyBreakdownV1ToV2(operation.busyBreakdown),
+  };
+}
+
+// A pre-1.6 peer never counted shells or scheduled wakes. Both upgrade to
+// `null` - "did not report" - at the top level and inside the attempt arm,
+// never to `0`: a quit prompt that says "no shells are running" about a host
+// that was never asked would put an affirmative idle claim in its mouth, the
+// same fabrication `busySessionCount: null` and `busyBreakdown: null` refuse
+// above. A breakdown that was already `null` stays `null`.
+export const hostStatusUpgradeV15ToV16 = defineUpgradePath<
+  typeof hostStatusV15,
+  typeof hostStatusV16
+>({
+  from: hostStatusV15.schemaVersion,
+  to: hostStatusV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    busyBreakdown:
+      response.busyBreakdown === null
+        ? null
+        : upgradeHostBusyBreakdownV1ToV2(response.busyBreakdown),
+    updateOperation:
+      response.updateOperation === null
+        ? null
+        : upgradeUpdateOperationV1ToV2(response.updateOperation),
+  }),
 });

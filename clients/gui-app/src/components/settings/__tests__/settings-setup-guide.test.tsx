@@ -6,6 +6,7 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { setupGuideLength } from "@/stores/onboarding/setup-guides";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
+import { setMobileApp } from "@/lib/mobile-app";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 
@@ -66,6 +67,7 @@ describe("SettingsSetupGuide", () => {
   afterEach(() => {
     cleanup();
     useLayoutEditorStore.setState({ session: null });
+    setMobileApp(false);
   });
 
   it("keeps the guide running through StrictMode's mount probe", async () => {
@@ -142,6 +144,29 @@ describe("SettingsSetupGuide", () => {
     const progress = screen.getByTestId("guide-coachmark-progress");
     expect(progress.getAttribute("aria-valuenow")).toBe("6");
     expect(progress.getAttribute("aria-valuemax")).toBe("6");
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(useOnboardingStore.getState().activeSetup).toBeNull();
+    expect(useOnboardingStore.getState().setupProgress.appearance).toBe(
+      setupGuideLength("appearance"),
+    );
+    expect(navigateMock).toHaveBeenCalledWith("getting-started");
+  });
+
+  // The installed app can never open the editor, so the guide ends on the
+  // page rather than on a step pointing at a door that is not drawn there.
+  it("ends on Layout's areas in the installed app and completes the guide", async () => {
+    setMobileApp(true);
+    useOnboardingStore.setState({ activeSetup: { id: "appearance", step: 4 } });
+    render(<Harness section="layout" />);
+    await screen.findByTestId("guide-coachmark");
+    const progress = screen.getByTestId("guide-coachmark-progress");
+    expect(progress.getAttribute("aria-valuenow")).toBe("5");
+    expect(progress.getAttribute("aria-valuemax")).toBe("5");
+    expect(document.documentElement.hasAttribute("data-layout-lit")).toBe(
+      false,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
 

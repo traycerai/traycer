@@ -20,7 +20,7 @@ function TogglePublisher(props: {
   readonly pane: SheetJoinPane;
 }): ReactNode {
   const [on, setOn] = useState(true);
-  usePublishSheetJoin(on ? props.pane : null);
+  usePublishSheetJoin(on ? props.pane : null, null);
   return (
     <button
       type="button"

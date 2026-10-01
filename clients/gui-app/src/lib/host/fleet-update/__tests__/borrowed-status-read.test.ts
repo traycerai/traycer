@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -33,8 +33,8 @@ import { isRecordObservation } from "@/lib/host/fleet-update/fleet-update-view";
 const NOW_MS = 42_000;
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -56,7 +56,7 @@ function attemptOperation(
 }
 
 function status(
-  operation: HostStatusUpdateOperation | null,
+  operation: HostStatusUpdateOperationV2 | null,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -79,7 +79,7 @@ function status(
 describe("observationFromStatus — the synthetic placeholder never escapes", () => {
   const CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation | null;
+    readonly operation: HostStatusUpdateOperationV2 | null;
   }> = [
     { name: "null operation (pre-1.3 peer)", operation: null },
     { name: "{ kind: 'none' }", operation: { kind: "none" } },

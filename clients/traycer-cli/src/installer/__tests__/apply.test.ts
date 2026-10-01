@@ -154,6 +154,7 @@ vi.mock("../../service/install-lifecycle", () => ({
       stoppedBeforeSwap: false,
       postSwapAction: "none" as "restart" | "start" | "install" | "none",
       postSwapError: null as string | null,
+      postSwapWarning: null,
     };
     return {
       state,
@@ -296,7 +297,8 @@ type ApplyDefaultedOptions =
   | "onWillCommitStaged"
   | "onWillDisruptHost"
   | "hooks"
-  | "acceptStoreFormatLoss";
+  | "acceptStoreFormatLoss"
+  | "lifecycleOrigin";
 const applyHost = (
   options: Omit<ApplyOptions, ApplyDefaultedOptions> &
     Partial<Pick<ApplyOptions, ApplyDefaultedOptions>>,
@@ -310,6 +312,7 @@ const applyHost = (
     onWillDisruptHost: options.onWillDisruptHost ?? null,
     hooks: options.hooks ?? NO_INSTALL_PHASE_HOOKS,
     acceptStoreFormatLoss: options.acceptStoreFormatLoss ?? false,
+    lifecycleOrigin: options.lifecycleOrigin ?? "terminal",
   });
 
 const ENV: Environment = "production";
@@ -1177,6 +1180,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
     const result = await applyHostWithAttempt(
       fakeCapability,
       fakeContenderOptions,
+      "terminal",
       {
         environment: ENV,
         force: false,
@@ -1243,7 +1247,7 @@ describe("applyHostWithAttempt (through the real host/update-mutation wrapper)",
     };
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,

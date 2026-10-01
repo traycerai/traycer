@@ -7,7 +7,11 @@ import { NotificationsBell } from "@/components/notifications/notifications-bell
 import { GhostRegionPicture } from "@/components/layout-editor/ghost-region";
 import { LayoutRegionContextMenu } from "@/components/layout-editor/region-quick-verbs";
 import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
-import { useBarPlacements, useRegionShown } from "@/lib/layout-overrides";
+import {
+  useBarPlacements,
+  useRegionShown,
+  useRegionValues,
+} from "@/lib/layout-overrides";
 import {
   barClusterRegionsAt,
   type EdgeSide,
@@ -35,8 +39,10 @@ export function HeaderBarCluster(props: {
   readonly side: EdgeSide;
 }): ReactNode {
   const placements = useBarPlacements();
-  // Both draw their readings, not a glyph: the header has the room, and a
-  // glyph could follow none of a reading's own settings (G6).
+  // The header has the room for the readings, so `inline` is the default;
+  // each region's own Display fine-tune row (only offered while Location is
+  // the Tab strip) can still ask for the icon-only glyph instead (G6
+  // overturned in part).
   return barClusterRegionsAt(placements, "header", props.side).map((region) =>
     region === "usageLimits" ? (
       <HeaderUsageRegion key={region} form="inline" />
@@ -67,10 +73,18 @@ export function HeaderUsageRegion(props: {
   readonly form: BarReadingForm;
 }): ReactNode {
   const shown = useRegionShown("usageLimits");
+  const display = useRegionValues("usageLimits").display;
   const { ref, editing } = useLayoutRegion({
     regionId: "usageLimits",
     instanceId: null,
   });
+  // Icon only downgrades the header's `inline` readings, and the expanded
+  // side strip's `readout` readings (F6), to the glyph; the collapsed rail's
+  // own `tile` form is untouched - it is already the compact one.
+  const form =
+    display === "icon" && (props.form === "inline" || props.form === "readout")
+      ? "glyph"
+      : props.form;
   return (
     // The cluster has no menu of its own, so this is the whole menu (L-19); it
     // names `usageLimits` because that is the region this element registers.
@@ -81,7 +95,7 @@ export function HeaderUsageRegion(props: {
           editing ? "inline-flex items-center gap-2 empty:hidden" : "contents",
         )}
       >
-        {shown ? <RateLimitIconButton form={props.form} /> : null}
+        {shown ? <RateLimitIconButton form={form} /> : null}
         {/* Hidden and pointed at: the passive depiction in place, never the
           live control - it fetches (L-14, L-62). */}
         {shown ? null : <GhostRegionPicture regionId="usageLimits" />}
@@ -108,10 +122,18 @@ export function HeaderResourceRegion(props: {
   readonly form: BarReadingForm;
 }): ReactNode {
   const shown = useRegionShown("resourceMonitor");
+  const display = useRegionValues("resourceMonitor").display;
   const { ref, editing } = useLayoutRegion({
     regionId: "resourceMonitor",
     instanceId: null,
   });
+  // Icon only downgrades the header's `inline` readings, and the expanded
+  // side strip's `readout` readings (F6), to the glyph; the collapsed rail's
+  // own `tile` form is untouched - it is already the compact one.
+  const form =
+    display === "icon" && (props.form === "inline" || props.form === "readout")
+      ? "glyph"
+      : props.form;
   return (
     <LayoutRegionContextMenu regionId="resourceMonitor">
       <span
@@ -123,7 +145,7 @@ export function HeaderResourceRegion(props: {
         {shown ? (
           <ResourceMonitorPopover
             trigger="header-button"
-            form={props.form}
+            form={form}
             claimsOpenAction
           />
         ) : null}

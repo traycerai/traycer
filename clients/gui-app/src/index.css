@@ -293,9 +293,12 @@
   }
 
   /* A header tab's box already carries its border; it only opens at the
-     bottom. */
+     bottom. Its outline is `--join-outline` (the tab's own colour, set by
+     `TabChromeBackground`), which the bridge below continues down its sides
+     and round its feet - one silhouette in one colour, the pre-#2021 tab cap.
+     Unset, it is the sheets' border. */
   [data-sheet-joined="top"] {
-    border-color: var(--canvas-border);
+    border-color: var(--join-outline, var(--canvas-border));
     border-bottom-width: 0;
     border-end-start-radius: 0;
     border-end-end-radius: 0;
@@ -342,7 +345,10 @@
     position-anchor: --sheet-joined;
     position-visibility: anchors-visible;
     /* Over the strip's resize handle (z-20), whose hover line would otherwise
-       cut the joined band in two; the handle still takes the pointer here. */
+       cut the joined band in two; the handle still takes the pointer here.
+       Under the collapsed tile's accent ring (z-22,
+       `SIDE_TAB_TILE_ACCENT_RING_CLASS`), whose right side lies inside this
+       box on the joined tile - move the two together. */
     z-index: 21;
     background-color: var(--join-fill);
     pointer-events: none;
@@ -362,7 +368,7 @@
       position: absolute;
       width: var(--join-radius);
       height: var(--join-radius);
-      border: 0 solid var(--canvas-border);
+      border: 0 solid var(--join-outline, var(--canvas-border));
       box-shadow: calc(var(--arc-x) * var(--join-radius) / 2)
         calc(var(--arc-y) * var(--join-radius) / 2) 0
         calc(var(--join-radius) / 2 - 1px) var(--join-fill);
@@ -377,7 +383,7 @@
     right: anchor(right);
     top: anchor(bottom);
     bottom: calc(anchor(--task-frame top) - 1px);
-    border-inline: 1px solid var(--canvas-border);
+    border-inline: 1px solid var(--join-outline, var(--canvas-border));
 
     &::before,
     &::after {
@@ -1022,9 +1028,14 @@
  * Wide panes and modals may intentionally give markdown room for tables,
  * diagrams, and code. Cap only prose-bearing blocks so plain paragraphs do not
  * stretch into uncomfortable 4K line lengths while wide media remains usable.
+ *
+ * Inside a reading-width column (`useReadingWidthStyle`) the column IS the
+ * measure - the user picked it - so that column sets `--md-block-measure`
+ * to `none` and this guard stands down. Left at 72ch there, it silently
+ * overrode Wide: the column grew and every paragraph stayed at 72ch.
  */
 .md-prose :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
-  max-width: 72ch;
+  max-width: var(--md-block-measure, 72ch);
 }
 
 /*
@@ -1645,7 +1656,7 @@
     opacity: 0;
   }
 
-  /* The close button is inert until keyboard focus, or hover on a wide tab.
+  /* The close button is inert until keyboard focus or hover.
      Keep BOTH the `none`
      default and the `auto` reveal in this same @layer so the reveal wins by
      specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
@@ -1689,19 +1700,21 @@
     pointer-events: auto;
   }
 
-  @container (min-width: 7rem) {
-    .group\/tab:hover .header-tab-title {
-      padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
-    }
+  /* Ungated by width: shrink's narrowest tab (`min-w-12`,
+     `tab-strip-item.tsx`) still fits the close control whole beside the
+     icon, the title giving up its room. A `min-width: 7rem` container gate
+     here predated shrink-to-fit and hid the close on every shrunk tab. */
+  .group\/tab:hover .header-tab-title {
+    padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
+  }
 
-    .group\/tab:hover .header-tab-trailing-slot {
-      width: 1.25rem;
-      opacity: 1;
-    }
+  .group\/tab:hover .header-tab-trailing-slot {
+    width: 1.25rem;
+    opacity: 1;
+  }
 
-    .group\/tab:hover .header-tab-close-button {
-      pointer-events: auto;
-    }
+  .group\/tab:hover .header-tab-close-button {
+    pointer-events: auto;
   }
 
   .header-tab-label[data-leader-visible="true"] .header-tab-title {

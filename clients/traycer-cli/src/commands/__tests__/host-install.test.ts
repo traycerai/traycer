@@ -1,7 +1,16 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 // `host install` (Host Update Layer Redesign Tech Plan, "Lock-scope
 // restructure" + "--no-service-register" + "--if-idle"): stage/verify/
@@ -13,6 +22,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // installer boundary and the service lifecycle, mirroring host-update.
 // test.ts's mock style. The genuine two-process lock-contention coverage
 // lives in host-install-lock.test.ts.
+
+// HOME is redirected to a private temp dir BEFORE anything reads it: the
+// command runs the REAL update-attempt segment, which takes its lock and
+// reads its attempt record under `hostHomeDir()`, and `store/paths` binds
+// `homedir()` at module load. Without this every row took (and read) this
+// machine's REAL `~/.traycer/host` lock. The dir is made inside the
+// `node:os` factory, so it exists before the first module that asks for
+// `homedir()` is evaluated.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-host-install-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
 
 const mocks = vi.hoisted(() => ({
   callOrder: [] as string[],
@@ -30,6 +59,7 @@ const mocks = vi.hoisted(() => ({
   provisionInstalledHostCredentialMock: vi.fn(),
   gateStoreFormatFloorMock: vi.fn(),
   readInstalledFloorOperandsMock: vi.fn(),
+  publishHostStartAdoptionMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
@@ -183,6 +213,24 @@ vi.mock("../../host/credential-provisioning", () => ({
   },
 }));
 
+// Not otherwise reached by this suite's fixtures (`sampleLifecycleHandle()`
+// has no `setHostStartAdoptionPublisher`, so `commitHostInstallSourceWithAttempt`
+// never registers a publisher) - mocked here only so a fixture that DOES
+// wire one up (the lifecycleOrigin desktop fixture below) never reaches the real handshake, which waits for
+// a service-manager child ack that never comes, against the operator's real
+// `~/.traycer` home.
+vi.mock("../../host/host-start-adoption", () => ({
+  publishHostStartAdoption: (
+    ...callArgs: Parameters<typeof mocks.publishHostStartAdoptionMock>
+  ) => {
+    mocks.publishHostStartAdoptionMock(...callArgs);
+    return Promise.resolve({
+      waitForSpawn: async () => undefined,
+      cancel: async () => undefined,
+    });
+  },
+}));
+
 vi.mock("../../store/cli-lock", () => ({
   withCliLock: async (
     _opts: unknown,
@@ -212,6 +260,16 @@ import {
   type StagedHostInstallSource,
 } from "../../installer";
 import type { ServiceInstallLifecycleHandle } from "../../service/install-lifecycle";
+import { hostHomeDir } from "../../store/paths";
+
+beforeAll(() => {
+  expect(osHome.current).not.toBe("");
+  expect(hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
 
 function sampleRecord(version: string): HostInstallRecord {
   return {
@@ -267,6 +325,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
       stoppedBeforeSwap: true,
       postSwapAction: "install",
       postSwapError: null,
+      postSwapWarning: null,
     },
     lifecycle: {
       beforeSwap: async () => {},
@@ -288,6 +347,7 @@ function baseArgs(overrides: Partial<HostInstallArgs>): HostInstallArgs {
     ifIdle: false,
     force: false,
     attemptAdoption: null,
+    lifecycleOrigin: "terminal",
     acceptStoreFormatLoss: false,
     ...overrides,
   };
@@ -457,6 +517,44 @@ describe("buildHostInstallCommand", () => {
       "auth-resolve",
       "credential-provision",
     ]);
+  });
+
+  // Every existing fixture in this file passes `lifecycleOrigin:
+  // "terminal"` (`baseArgs`'s default), so nothing here pins that an
+  // explicit `--lifecycle-origin desktop` actually reaches the publisher
+  // `commitHostInstallSourceWithAttempt` registers on the lifecycle handle.
+  it("threads lifecycleOrigin: desktop into the host-start adoption publisher registered on the lifecycle handle", async () => {
+    mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+    const setHostStartAdoptionPublisherMock = vi.fn();
+    mocks.createServiceInstallLifecycleMock.mockReturnValue({
+      ...sampleLifecycleHandle(),
+      lifecycle: {
+        ...sampleLifecycleHandle().lifecycle,
+        setHostStartAdoptionPublisher: setHostStartAdoptionPublisherMock,
+      },
+    });
+    mocks.commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("2.0.0"),
+      previous: sampleRecord("1.0.0"),
+      installGeneration: "id:install-2.0.0",
+    });
+
+    const command = buildHostInstallCommand(
+      baseArgs({ lifecycleOrigin: "desktop" }),
+    );
+    await command(fakeCtx());
+
+    expect(setHostStartAdoptionPublisherMock).toHaveBeenCalledTimes(1);
+    const registeredPublisher = setHostStartAdoptionPublisherMock.mock
+      .calls[0]?.[0] as (serviceLabel: string) => Promise<unknown>;
+    expect(typeof registeredPublisher).toBe("function");
+
+    await registeredPublisher("ai.traycer.host");
+
+    expect(mocks.publishHostStartAdoptionMock).toHaveBeenCalledTimes(1);
+    expect(mocks.publishHostStartAdoptionMock.mock.calls[0]?.[3]).toBe(
+      "desktop",
+    );
   });
 
   it("consults the store-format floor with the explicit --release target before staging, and refuses without staging anything when the floor refuses", async () => {
@@ -1384,6 +1482,7 @@ describe("buildHostInstallCommand", () => {
           stoppedBeforeSwap: true,
           postSwapAction: "start",
           postSwapError: "failed to start the host process",
+          postSwapWarning: null,
         },
         lifecycle: {
           beforeSwap: async () => {},
@@ -1402,6 +1501,146 @@ describe("buildHostInstallCommand", () => {
 
       expect(mocks.provisionInstalledHostCredentialMock).not.toHaveBeenCalled();
       expect(result.data).toMatchObject({ credentialProvision: null });
+    });
+
+    // A post-swap start failure is a failed
+    // install to a shell, even though the swap itself committed - the exit
+    // code must say so while the JSON payload stays exactly what it was
+    // (Desktop's runners trust the terminal `ok` line over a non-zero exit,
+    // see `traycer-cli.ts`'s `sawTerminalOk`/`extractTerminalEnvelope`).
+    it("a post-swap start failure exits 1, with serviceLifecycle.postSwapError unchanged in the payload", async () => {
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      mocks.createServiceInstallLifecycleMock.mockReturnValue({
+        state: {
+          priorState: "running",
+          stoppedBeforeSwap: true,
+          postSwapAction: "start",
+          postSwapError: "failed to start the host process",
+          postSwapWarning: null,
+        },
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: null,
+        },
+      });
+      mocks.commitHostInstallSourceMock.mockResolvedValue({
+        record: sampleRecord("2.0.0"),
+        previous: null,
+        installGeneration: "id:install-2.0.0",
+      });
+
+      const command = buildHostInstallCommand(baseArgs({}));
+      const result = await command(fakeCtx());
+
+      expect(result.exitCode).toBe(1);
+      expect(result.data).toMatchObject({
+        serviceLifecycle: {
+          postSwapAction: "start",
+          postSwapError: "failed to start the host process",
+          serviceWarning: null,
+        },
+      });
+    });
+
+    // The registration was refused (another user's task) or kept disabled (its
+    // owner's setting): the bytes are in and the install SUCCEEDED, so the exit
+    // is 0 - unlike a post-swap start failure - and the payload and the human
+    // line say why nothing started. Nothing started, so there is no host for the
+    // credential probe to dial.
+    it.each([
+      {
+        name: "another user's task",
+        warning: {
+          code: "E_SERVICE_TASK_NOT_OWNED",
+          message:
+            "The Traycer Host task on this PC is owned by another Windows user.",
+          details: { reason: "other-owner" },
+        },
+      },
+      {
+        name: "a task kept disabled",
+        warning: {
+          code: "E_SERVICE_REGISTRATION_DISABLED",
+          message:
+            "The host is stopped because the Traycer Host task is disabled in Task Scheduler.",
+          details: null,
+        },
+      },
+    ])(
+      "a registration left as it was ($name): exit 0, serviceWarning in the payload and the human line, no credential probe",
+      async ({ warning }) => {
+        mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+        mocks.createServiceInstallLifecycleMock.mockReturnValue({
+          state: {
+            priorState: "not-installed",
+            stoppedBeforeSwap: false,
+            postSwapAction: "install",
+            postSwapError: null,
+            postSwapWarning: warning,
+          },
+          lifecycle: {
+            beforeSwap: async () => {},
+            afterSwap: async () => {},
+            swapLockRecovery: null,
+          },
+        });
+        mocks.commitHostInstallSourceMock.mockResolvedValue({
+          record: sampleRecord("2.0.0"),
+          previous: null,
+          installGeneration: "id:install-2.0.0",
+        });
+
+        const result = await buildHostInstallCommand(baseArgs({}))(fakeCtx());
+
+        expect(result.exitCode).toBe(0);
+        expect(result.data).toMatchObject({
+          serviceLifecycle: { postSwapError: null, serviceWarning: warning },
+        });
+        expect(result.human ?? "").toContain(warning.message);
+        expect(
+          mocks.provisionInstalledHostCredentialMock,
+        ).not.toHaveBeenCalled();
+      },
+    );
+
+    // The positive twins - a clean post-swap start, and the bytes-only
+    // (`--no-service-register`) path where no service lifecycle ran at all -
+    // both exit 0.
+    it("no post-swap error exits 0, and a --no-service-register (bytes-only) install exits 0", async () => {
+      mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
+      mocks.createServiceInstallLifecycleMock.mockReturnValue(
+        sampleLifecycleHandle(),
+      );
+      mocks.commitHostInstallSourceMock.mockResolvedValue({
+        record: sampleRecord("2.0.0"),
+        previous: null,
+        installGeneration: "id:install-2.0.0",
+      });
+
+      const command = buildHostInstallCommand(baseArgs({}));
+      const result = await command(fakeCtx());
+      expect(result.exitCode).toBe(0);
+
+      const bytesOnlyLifecycle = {
+        beforeSwap: vi.fn(async () => {}),
+        afterSwap: vi.fn(async () => {}),
+        swapLockRecovery: null,
+      };
+      mocks.createBytesOnlyInstallLifecycleMock.mockReturnValue(
+        bytesOnlyLifecycle,
+      );
+      mocks.commitHostInstallSourceMock.mockResolvedValue({
+        record: sampleRecord("2.0.0"),
+        previous: null,
+        installGeneration: "id:install-2.0.0",
+      });
+
+      const bytesOnlyCommand = buildHostInstallCommand(
+        baseArgs({ noServiceRegister: true }),
+      );
+      const bytesOnlyResult = await bytesOnlyCommand(fakeCtx());
+      expect(bytesOnlyResult.exitCode).toBe(0);
     });
 
     it("resolveHostAuth going null between the preflight and the re-read: surfaces as unauthorized, not skipped", async () => {

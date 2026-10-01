@@ -29,6 +29,7 @@ import {
   type RateLimitPopoverRevealTarget,
 } from "@/stores/rate-limits/rate-limit-popover-store";
 import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
+import { cn } from "@/lib/utils";
 
 /**
  * The strip's left cluster: every visible provider's usage, the one control
@@ -172,11 +173,13 @@ export function StatusBarUsageTrigger(props: {
         // shrank would hide readings the scroller exists to reach. No
         // padding either - the readings inside carry it, so the hover
         // fill and focus ring end where the last reading does.
-        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        // On a phone it may shrink as far as the readings' own floor (see
+        // the scroller), which is where the account names truncate.
+        className="inline-flex h-6 shrink-0 items-center text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 max-md:shrink"
       >
         <span
           data-testid="status-bar-rate-limit-content"
-          className={STATUS_BAR_USAGE_CONTENT_CLASS}
+          className={cn(STATUS_BAR_USAGE_CONTENT_CLASS, "max-md:shrink")}
         >
           {props.sampleLabel ? (
             <span className="text-ui-xs">Sample</span>

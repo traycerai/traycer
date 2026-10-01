@@ -1,6 +1,5 @@
 import { readFile, rm } from "node:fs/promises";
 import {
-  compareProcessStartIdentity,
   isProcessStartIdentity,
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
@@ -9,7 +8,10 @@ import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { isProcessAlive } from "../store/cli-lock";
 import { hostPidMetadataPath } from "../store/paths";
-import { readProcessStartIdentity } from "../store/process-identity";
+import {
+  matchLiveProcessStartIdentity,
+  verifyProcessIdentityAsync,
+} from "../store/process-identity";
 import { isReadablePid } from "./pid-value";
 
 // Mirror of the writer contract owned by the host (the external
@@ -141,18 +143,43 @@ export async function readHostPidMetadata(
  * compared only for a live pid with a stamp on record, so an old record
  * costs exactly the liveness syscall it always did; a stamped one adds the
  * platform's creation-stamp read (a `ps` / PowerShell spawn on macOS and
- * Windows), synchronous like the liveness check it extends - every caller is
- * a one-shot CLI command or a start-path guard, not a polled status loop.
+ * Windows), synchronous like the liveness check it extends - fine for a
+ * one-shot CLI command. A caller that lives on - the host supervisor, whose
+ * lifecycle teardown and per-spawn log-rotation guard both ask this - takes
+ * {@link publishedHostProcessGoneAsync}.
  */
 export function publishedHostProcessGone(metadata: HostPidMetadata): boolean {
   if (!isProcessAlive(metadata.pid)) return true;
   if (!isProcessStartIdentity(metadata.processStartIdentity)) return false;
   return (
-    compareProcessStartIdentity(
+    matchLiveProcessStartIdentity(
+      metadata.pid,
       metadata.processStartIdentity,
-      readProcessStartIdentity(metadata.pid),
     ) === "different"
   );
+}
+
+/**
+ * {@link publishedHostProcessGone} without blocking the event loop: the same
+ * verdict - gone when the pid is dead, or runs another process than the
+ * recorded creation stamp names - from the async liveness and stamp reads.
+ * For a caller that lives on, where the synchronous form's `tasklist` and
+ * PowerShell spawns (seconds each on a loaded Windows machine) would freeze
+ * every timer and child-process event the process owns: the host
+ * supervisor asks this of its own host, from its lifecycle teardown and
+ * from the log-rotation guard on every spawn.
+ */
+export async function publishedHostProcessGoneAsync(
+  metadata: HostPidMetadata,
+): Promise<boolean> {
+  const verdict = await verifyProcessIdentityAsync({
+    pid: metadata.pid,
+    startedAtMs: null,
+    startIdentity: isProcessStartIdentity(metadata.processStartIdentity)
+      ? metadata.processStartIdentity
+      : null,
+  });
+  return verdict === "dead" || verdict === "alive-different";
 }
 
 export async function readHostPidMetadataEvidence(

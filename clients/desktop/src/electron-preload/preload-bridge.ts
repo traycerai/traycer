@@ -32,6 +32,10 @@ import {
   buildSelectionAuthorityBridge,
   buildSelectionFleetRefresh,
 } from "./selection-authority-bridge";
+import {
+  buildHostLifecycleBridge,
+  readLocalHostCapability,
+} from "./host-lifecycle-bridge";
 import { readSyncString } from "./sync-bootstrap";
 
 /**
@@ -88,6 +92,10 @@ contextBridge.exposeInMainWorld("runnerHost", {
   selectionAuthority: buildSelectionAuthorityBridge(),
   refreshSelectionFleet: buildSelectionFleetRefresh(),
   hostManagement: buildHostManagementBridge(),
+  // Independent of `hostManagement` (which the renderer nulls when this app
+  // runs no local host): the lifecycle mode must stay changeable there.
+  hostLifecycle: buildHostLifecycleBridge(),
+  localHostCapability: readLocalHostCapability(),
   hostTray: buildHostTrayCommandSubscriber(),
   hostControllerStatus: buildHostControllerStatusSubscriber(),
 });

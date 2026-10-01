@@ -5,6 +5,7 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
+import { HostLifecycleSettingsSection } from "@/components/settings/host-lifecycle-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
@@ -98,6 +99,10 @@ export function GeneralSettingsPanel() {
           hides itself on builds with no power bridge - so the heading has to
           go with it rather than be gated a second time here. */}
         <PreventSleepSettingsSection />
+
+        {/* Desktop only, and gated inside: it draws nothing on a shell with
+          no host lifecycle bridge. */}
+        <HostLifecycleSettingsSection />
 
         <SettingsGroup
           group={GENERAL.definitions.worktrees}

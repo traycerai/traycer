@@ -2,6 +2,7 @@ import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
+import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 
 /**
  * The category bar is a horizontal scroll container, so its `overflow-y`
@@ -54,7 +55,11 @@ function renderBaselineTabs(): { list: HTMLElement; trigger: HTMLElement } {
 function renderCategoryBar(): { list: HTMLElement; trigger: HTMLElement } {
   const { container } = render(
     <Tabs defaultValue="chats">
-      <SwitcherCategoryTabs />
+      <SwitcherCategoryTabs
+        categories={{ bar: LEFT_PANEL_DEFINITIONS, more: [] }}
+        activeCategory="chats"
+        onSelect={() => {}}
+      />
     </Tabs>,
   );
   const scope = within(container);

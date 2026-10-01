@@ -62,7 +62,7 @@ import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
 import { AppTelemetryBridge } from "@/providers/app-telemetry-bridge";
-import { STARTUP_NAVIGATION_INTENT_KEY } from "@/lib/host/startup-navigation-intent";
+import { withStartupNavigationIntent } from "@/lib/host/startup-navigation-intent";
 import { createAppRouter, type AppRouter } from "@/router";
 // Side-effect import: installs the WCO → `.wco` class bridge at module
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
@@ -168,10 +168,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
   const configureShell = useCallback(() => {
     void router.navigate({
       to: "/settings/shell",
-      state: (previous) => ({
-        ...previous,
-        [STARTUP_NAVIGATION_INTENT_KEY]: true,
-      }),
+      state: (previous) => withStartupNavigationIntent(previous, "boot-card"),
     });
   }, [router]);
   // The host-unavailable card's escape hatch. `/settings/host` rather than the
@@ -181,10 +178,19 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
   const openSettings = useCallback(() => {
     void router.navigate({
       to: "/settings/host",
-      state: (previous) => ({
-        ...previous,
-        [STARTUP_NAVIGATION_INTENT_KEY]: true,
-      }),
+      state: (previous) => withStartupNavigationIntent(previous, "boot-card"),
+    });
+  }, [router]);
+  // The desktop's "Settings…" (menu, tray, jump list) arriving while the first
+  // boot surface is up. Same target and marker as the escape hatch, so an
+  // admitted launch opens Settings ▸ Host exactly as before; the added menu
+  // marker is what lets a launch that settles signed out reach the quit card
+  // instead of the sign-in page (see `SettingsLayout`).
+  const openSettingsFromMenu = useCallback(() => {
+    void router.navigate({
+      to: "/settings/host",
+      state: (previous) =>
+        withStartupNavigationIntent(previous, "desktop-menu"),
     });
   }, [router]);
   // THE FIRST of a launch's three boot surfaces - see
@@ -195,9 +201,10 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
       <HostRuntimeBootFallback
         onConfigureShell={configureShell}
         onOpenSettings={openSettings}
+        onMenuOpenSettings={openSettingsFromMenu}
       />
     ),
-    [configureShell, openSettings],
+    [configureShell, openSettings, openSettingsFromMenu],
   );
 
   return (
