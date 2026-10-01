@@ -146,8 +146,19 @@ const TONE_CLASSES: Record<
  * Every other answer is a card: an icon tile, a title, the answer's own
  * sentence under it, and the answer's one control (Update now, or the
  * command-line-tools fix) on the right. An available update reads
- * `v1.4.0 → v1.5.1` in place of "v1.5.1 is available.", which stays the live
- * region's text for a screen reader.
+ * `v1.4.0 → v1.5.1` in place of "v1.5.1 is available.", which stays the
+ * text a screen reader gets.
+ *
+ * ONE STANDING LIVE REGION. The check runs on its own, so the answer changes
+ * with no user action to anchor it, and a live region is the only way a
+ * screen-reader user learns an update arrived or a check failed. A polite
+ * region is announced when its CONTENT changes, not when it is inserted
+ * already filled - and the card is inserted exactly at those two moments. So
+ * the region is this component's wrapper, mounted for as long as the host
+ * can be asked and empty while the answer is quiet; the card arrives INSIDE
+ * it, and a sentence or a failure changing later changes inside it too.
+ * Nothing in the card carries a live role of its own: a region nested in a
+ * region is announced twice.
  *
  * While an update runs, waits or restarts the card is withheld: the update
  * card in the notices strip above the tab bar is on screen for exactly that
@@ -177,6 +188,26 @@ export function HostOverviewAnswerCard(props: {
   readonly version: string | null;
   readonly answer: HostOverviewVersionAnswer;
   /** An update is running, waiting or restarting. */
+  readonly inFlight: boolean;
+}): ReactNode {
+  const card = resolveAnswerCard(props);
+  return (
+    <div
+      aria-live="polite"
+      // Empty, it is `sr-only`: out of the tab's column (no gap of its own)
+      // yet still in the accessibility tree, which is what keeps it standing.
+      className={card === null ? "sr-only" : undefined}
+      data-testid="host-overview-answer-live"
+    >
+      {card}
+    </div>
+  );
+}
+
+/** The card for this answer, or `null` when the answer is quiet. */
+function resolveAnswerCard(props: {
+  readonly version: string | null;
+  readonly answer: HostOverviewVersionAnswer;
   readonly inFlight: boolean;
 }): ReactNode {
   const { summary, degrade } = props.answer;
@@ -261,9 +292,9 @@ export function HostOverviewAnswerCard(props: {
 }
 
 /**
- * The answer's sentence, as a live region: the check runs on its own, so this
- * changes with no user action to anchor it - a live region is the only way a
- * screen-reader user learns a check failed or an update arrived.
+ * The answer's sentence. No live role of its own: the card sits inside the
+ * component's standing region, which announces this text arriving and
+ * changing.
  */
 function AnswerLine(props: {
   readonly summary: HostOverviewUpdatesSummary;
@@ -275,7 +306,6 @@ function AnswerLine(props: {
     const from = formatHostVersion(props.version);
     return (
       <p
-        role="status"
         className="font-mono text-muted-foreground text-code-xs"
         data-testid="host-overview-updates"
       >
@@ -296,7 +326,6 @@ function AnswerLine(props: {
   }
   return (
     <p
-      role="status"
       className="text-muted-foreground text-ui-sm"
       data-testid="host-overview-updates"
     >
@@ -364,10 +393,6 @@ function AnswerCardFrame(props: {
 }): ReactNode {
   const tone = TONE_CLASSES[props.look.tone];
   const Icon = props.look.icon;
-  // A failed-attempt card is its title alone, and that title is news the
-  // person did not ask for this moment: announce it the way the version
-  // list's own refusal is announced.
-  const titleRole = props.kind === "failed-attempt" ? "alert" : undefined;
   return (
     <section
       aria-label={props.kind === "failed-attempt" ? "Update" : props.look.title}
@@ -397,7 +422,6 @@ function AnswerCardFrame(props: {
             )}
           >
             <p
-              role={titleRole}
               className={cn(
                 "font-medium text-ui-sm",
                 props.kind === "failed-attempt"
@@ -421,19 +445,16 @@ function AnswerCardFrame(props: {
           )}
         </div>
       </div>
-      {/* A polite live region that exists whether or not a failure does, so
-          one arriving under an answer already on screen is announced. */}
-      <div aria-live="polite">
-        {props.footer === null ? null : (
-          <div
-            className="flex items-start gap-2 border-destructive/20 border-t bg-destructive/5 py-2.5 pr-4 pl-15 text-destructive text-ui-xs"
-            data-testid="host-overview-update-attempt-failed"
-          >
-            <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
-            <span className="max-w-[68ch]">{props.footer}</span>
-          </div>
-        )}
-      </div>
+      {/* Announced by the component's standing region, like the rest. */}
+      {props.footer === null ? null : (
+        <div
+          className="flex items-start gap-2 border-destructive/20 border-t bg-destructive/5 py-2.5 pr-4 pl-15 text-destructive text-ui-xs"
+          data-testid="host-overview-update-attempt-failed"
+        >
+          <CircleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
+          <span className="max-w-[68ch]">{props.footer}</span>
+        </div>
+      )}
     </section>
   );
 }

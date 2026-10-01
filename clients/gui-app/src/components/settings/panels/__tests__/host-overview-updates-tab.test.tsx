@@ -808,6 +808,38 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab — a re-check leaves t
     return screen.getByTestId("host-overview-update-check");
   }
 
+  it("the standing live region is mounted and empty while the first check is held, and the available card arrives inside the SAME node", async () => {
+    // Pins: the polite region exists, empty, before its content does - one
+    // inserted already filled is not announced.
+    const gate = makeGate();
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          gate.promise.then(() => okAnswer(["1.6.0"], false)),
+      },
+    });
+    await openUpdatesTab(fixture);
+
+    const live = await screen.findByTestId("host-overview-answer-live");
+    // Check now spinning is the sign the first check is in flight, held.
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.classList.contains("sr-only")).toBe(true);
+    expect(live.childNodes).toHaveLength(0);
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+
+    gate.release();
+    const card = await within(live).findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("available");
+    expect(screen.getByTestId("host-overview-answer-live")).toBe(live);
+    expect(live.classList.contains("sr-only")).toBe(false);
+  });
+
   it("Check now over an available answer keeps the card mounted (same node) with Update now disabled, and Update now returns when it settles", async () => {
     // Pins: the card must not unmount for the span of a re-check.
     const gate = makeGate();

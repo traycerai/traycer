@@ -448,6 +448,142 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
     expect(screen.getByText("v1.6.0 is available.")).not.toBeNull();
   });
 
+  it("mounts its polite live region before it has anything to say, and the card arrives inside the SAME node", () => {
+    // Pins: the live region exists, empty and sr-only, before its content
+    // does; a region inserted already filled is not announced.
+    const view = render(
+      <HostOverviewAnswerCard
+        version="1.5.0"
+        answer={answerWith({ answerKind: "latest", updatableVersion: null })}
+        inFlight={false}
+      />,
+    );
+    const live = screen.getByTestId("host-overview-answer-live");
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.classList.contains("sr-only")).toBe(true);
+    expect(live.childNodes).toHaveLength(0);
+    expect(live.textContent).toBe("");
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+
+    view.rerender(
+      <HostOverviewAnswerCard
+        version="1.5.0"
+        answer={answerWithUpdatable()}
+        inFlight={false}
+      />,
+    );
+    expect(screen.getByTestId("host-overview-answer-live")).toBe(live);
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.classList.contains("sr-only")).toBe(false);
+    const card = within(live).getByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("available");
+  });
+
+  const SHOWN_KIND_CASES: ReadonlyArray<{
+    readonly name: string;
+    readonly answer: HostOverviewVersionAnswer;
+    readonly inFlight: boolean;
+  }> = [
+    { name: "available", answer: answerWith({}), inFlight: false },
+    {
+      name: "available with a refused-install footer",
+      answer: answerWith({ failureDescription: "host-a refused the update." }),
+      inFlight: false,
+    },
+    {
+      name: "available while installing",
+      answer: answerWith({ installing: true }),
+      inFlight: false,
+    },
+    {
+      name: "needs-cli",
+      answer: answerWith({
+        answerKind: "needs-cli",
+        updatableVersion: null,
+        remedy: describeCliFloorRemedy({
+          isLocalMachine: false,
+          platform: "darwin-arm64",
+          cliSource: "manual",
+          cliBinaryPath: "/home/u/.local/bin/traycer",
+          cliVersion: "1.2.0",
+          requiredCliVersion: "1.3.0",
+          desktopUpdate: null,
+          hostName: "host-a",
+        }),
+      }),
+      inFlight: false,
+    },
+    {
+      name: "restart-to-finish",
+      answer: answerWith({
+        answerKind: "restart-to-finish",
+        updatableVersion: null,
+      }),
+      inFlight: false,
+    },
+    {
+      name: "stranded",
+      answer: answerWith({ answerKind: "stranded", updatableVersion: null }),
+      inFlight: false,
+    },
+    {
+      name: "not-installable",
+      answer: answerWith({
+        answerKind: "not-installable",
+        updatableVersion: null,
+      }),
+      inFlight: false,
+    },
+    {
+      name: "unreachable",
+      answer: answerWith({ answerKind: "unreachable", updatableVersion: null }),
+      inFlight: false,
+    },
+    {
+      name: "check-failed, its failure as the supporting line",
+      answer: answerWith({
+        answerKind: "check-failed",
+        updatableVersion: null,
+        failureDescription:
+          "host-a's Traycer CLI couldn't complete the request.",
+      }),
+      inFlight: false,
+    },
+    {
+      name: "degraded",
+      answer: { ...answerWith({}), degrade: "cli-unavailable" },
+      inFlight: false,
+    },
+    {
+      name: "failed-attempt",
+      answer: answerWith({ failureDescription: "host-a refused the update." }),
+      inFlight: true,
+    },
+  ];
+
+  it.each(SHOWN_KIND_CASES)(
+    "carries no live role of its own inside the standing region for $name",
+    ({ answer, inFlight }) => {
+      // Pins: nothing inside the region is itself live - a region nested in a
+      // region is announced twice.
+      render(
+        <HostOverviewAnswerCard
+          version="1.5.0"
+          answer={answer}
+          inFlight={inFlight}
+        />,
+      );
+      const live = screen.getByTestId("host-overview-answer-live");
+      // A card is in there, so the selector below is not looking at nothing.
+      expect(
+        within(live).getByTestId("host-overview-answer-card"),
+      ).not.toBeNull();
+      expect(
+        live.querySelector('[role="status"], [role="alert"], [aria-live]'),
+      ).toBeNull();
+    },
+  );
+
   it("shows Update now and Check now while nothing is in flight", () => {
     renderTab(false);
     expect(screen.getByTestId("host-overview-update-now")).not.toBeNull();
@@ -1328,7 +1464,7 @@ describe("the auto-update row — no longer a caption on the version card; the s
 });
 
 describe("a stranded answer's sentence points at the version list below it, with no 'Pick it in Updates' link", () => {
-  it("ends the role=status sentence with 'Pick it from the versions below to move.', and renders no host-overview-pick-in-updates element", async () => {
+  it("ends the answer sentence with 'Pick it from the versions below to move.', and renders no host-overview-pick-in-updates element", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1352,9 +1488,9 @@ describe("a stranded answer's sentence points at the version list below it, with
     renderPanel();
     await selectHostOverviewTab("updates");
 
-    const status = await screen.findByRole("status");
+    const sentence = await screen.findByTestId("host-overview-updates");
     expect(
-      status.textContent.endsWith("Pick it from the versions below to move."),
+      sentence.textContent.endsWith("Pick it from the versions below to move."),
     ).toBe(true);
     expect(screen.queryByTestId("host-overview-pick-in-updates")).toBeNull();
   });
@@ -1398,7 +1534,6 @@ describe("a refused/failed attempt line shows while an update is in flight, even
     expect(failure.textContent).toBe(
       "host-a refused the last Force update… request.",
     );
-    expect(failure.getAttribute("role")).toBe("alert");
     expect(screen.queryByTestId("host-overview-updates")).toBeNull();
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
   });

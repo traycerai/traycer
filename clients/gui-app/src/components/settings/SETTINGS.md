@@ -5495,6 +5495,18 @@ set-state-in-effect` forbids the effect form, and an effect would also
     | degrade             | neutral | Updates aren't managed here           | `describeOverviewDegrade`                       | none                                                                                 |
 
     The neutral tone is `bg-foreground/5`, never `bg-muted` (raised surface).
+    - **One standing live region.** The check runs on its own, so the answer
+      changes with no user action to anchor it. `HostOverviewAnswerCard`'s
+      wrapper is an `aria-live="polite"` region mounted for as long as the
+      host can be asked: empty and `sr-only` while the answer is quiet (out
+      of the tab's column, still in the accessibility tree), and holding the
+      card otherwise. A polite region is announced when its content changes,
+      not when it is inserted already filled, and the card is inserted at
+      exactly the moments worth announcing (an update arrived, a check
+      failed), so the region has to exist first. Nothing inside the card
+      carries a live role of its own - not the sentence, the failure footer
+      or the failed-attempt card - because a region nested in a region is
+      announced twice.
     - **In flight, quiet.** While an update runs, waits or restarts
       (`inFlightUpdateKind`, retained phase included) the card is withheld
       and Check now is HIDDEN, not disabled; both come back when the update
@@ -5516,7 +5528,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
     - **A refused or failed attempt** (`failureDescription`, clearing on the
       next try) is a red footer under whichever answer shows, or - under a
       quiet answer or in flight - a destructive card of its own
-      (`data-answer="failed-attempt"`, announced as an alert). It is not the
+      (`data-answer="failed-attempt"`). It is not the
       answer too: `describeCheckState` lost its failure-first arm, so the
       answer beside it is what the catalog still says. It is not held to the
       in-flight rule: a refused Force update… is answered during the very
