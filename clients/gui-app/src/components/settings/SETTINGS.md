@@ -5101,6 +5101,26 @@ aria-live="polite"` carrying the equivalent text for
       call sites in `host-workspace-selector.tsx` and the cached-default path
       in `use-landing-composer-actions.ts`; entirely client-local, no host
       RPC or protocol change.
+  - **Agent worktrees** (`worktree-agent-create-chip.tsx`) — the second chip in
+    the toolbar's leading slot (now `policies`, not `cleanup`), right of
+    Automatic cleanup: what an agent's `traycer_create_worktree` call does on
+    this host. `Allow` (default) / `Ask first` / `Never`, stored in the
+    `worktrees.agentCreate` block of `~/.traycer/cli/config.json` on that
+    machine and read over `config.worktrees.get` / `set`. The host enforces it
+    on every call (`traycer-host/src/domain/agent/agent-worktree-policy.ts`),
+    so a change governs the next request of an agent already running.
+    - **Same gate as the cleanup chip**, reusing `resolveAutoCleanupGate` with
+      `supported` = both methods advertised (they negotiate independently, and
+      a readable-but-unwritable policy would render a menu whose every choice
+      fails). Non-`ready` states render the same `aria-disabled` inert chip
+      with its sentence in a Tooltip.
+    - **A radio menu, not a popover**: `DropdownMenuRadioGroup` with one line
+      of meaning under each value and a footer naming the host the policy
+      governs ("agents running on {host}"). Items stay disabled until the read
+      lands, so no choice is made against an unknown current value. A failed
+      read (malformed config file) replaces the items with the repair
+      sentence the Browser row uses. Chip label: `Agent worktrees · <value>`,
+      bare `Agent worktrees` until the read lands.
   - **Automatic cleanup** (`worktree-auto-cleanup-chip.tsx`) — ONE chip in the
     inventory toolbar's leading slot, opening a popover that holds the opt-in
     letting this host delete proven-safe, long-idle worktrees unattended.
