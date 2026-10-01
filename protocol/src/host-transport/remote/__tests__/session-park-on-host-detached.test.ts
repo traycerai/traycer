@@ -517,7 +517,10 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
       // entered during `opening` must clear it: the relay has declared the
       // host absent and the cadence above is that absence's evidence, so a
       // lapse here would be a redial for a host already known to be away.
-      await advanceToSinceFirstRefusal(spies, HOST_STANDING_BOUND_MS + MINUTE_MS);
+      await advanceToSinceFirstRefusal(
+        spies,
+        HOST_STANDING_BOUND_MS + MINUTE_MS,
+      );
       expect(relay.sockets).toHaveLength(1);
       expect(relay.sockets[0]?.closeCalls).toBe(0);
       expect(spies.reportDialIndeterminate).not.toHaveBeenCalled();

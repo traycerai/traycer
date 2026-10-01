@@ -1413,7 +1413,7 @@ export class RemoteSession<
           // `onHostDetached`). This is the same retryable pre-send failure a
           // waiter parked before the detach was settled with, delivered at
           // once instead of at `host_attached`.
-          throw this.notReadyRejection(requestId, method);
+          throw this.hostDetachedRejection(requestId, method);
         }
         await this.awaitReadyBoundary(requestId, method, abortSignal);
       } catch (cause) {
@@ -1463,18 +1463,7 @@ export class RemoteSession<
       // 30s unary timeout kills it as a NON-retryable `HostRpcError`.
       // Pre-send and provably undeliverable ⇒ retryable, same as any other
       // not-ready-yet state.
-      return Promise.reject(
-        new RetryableTransportError({
-          code: "RPC_ERROR",
-          message: "Remote host is detached from the relay",
-          requestId,
-          method,
-          fatalDetails: null,
-          // Pre-send: the frame was never enqueued, so the next attempt is a
-          // first send however it is keyed.
-          replaySafetyFromKey: false,
-        }),
-      );
+      return Promise.reject(this.hostDetachedRejection(requestId, method));
     }
     const hostManifest = connection.hostManifest;
     if (hostManifest === null) {
@@ -1627,6 +1616,37 @@ export class RemoteSession<
    * non-retryable `HostTransportFailureError` carrying the verdict.
    */
   private settleReadyWaiters(ready: boolean): void {
+    this.drainReadyWaiters((waiter) => {
+      if (ready) {
+        waiter.resolve();
+        return;
+      }
+      waiter.reject(this.notReadyRejection(waiter.requestId, waiter.method));
+    });
+  }
+
+  /**
+   * The pre-ready park's ending for parked callers (`onHostDetached`): the
+   * same retryable, pre-send failure a call made against a detached host gets
+   * at dispatch, so the surface showing it can say the host is away rather
+   * than that the session is not ready yet.
+   */
+  private failReadyWaitersHostDetached(): void {
+    this.drainReadyWaiters((waiter) => {
+      waiter.reject(
+        this.hostDetachedRejection(waiter.requestId, waiter.method),
+      );
+    });
+  }
+
+  private drainReadyWaiters(
+    settle: (waiter: {
+      readonly requestId: string;
+      readonly method: string;
+      readonly resolve: () => void;
+      readonly reject: (error: HostRpcError) => void;
+    }) => void,
+  ): void {
     if (this.readyWaiters.size === 0) {
       return;
     }
@@ -1634,12 +1654,30 @@ export class RemoteSession<
     this.readyWaiters.clear();
     for (const waiter of waiters) {
       waiter.dispose();
-      if (ready) {
-        waiter.resolve();
-        continue;
-      }
-      waiter.reject(this.notReadyRejection(waiter.requestId, waiter.method));
+      settle(waiter);
     }
+  }
+
+  /**
+   * Relay said `host_detached`: the scheduler is paused and nothing will drain
+   * it (host re-attach forces a full re-dial — see `onHostAttached`). Pre-send
+   * and provably undeliverable ⇒ retryable, the same license as any other
+   * not-ready state, with the reason named.
+   */
+  private hostDetachedRejection(
+    requestId: string,
+    method: string,
+  ): RetryableTransportError {
+    return new RetryableTransportError({
+      code: "RPC_ERROR",
+      message: "Remote host is detached from the relay",
+      requestId,
+      method,
+      fatalDetails: null,
+      // Pre-send: the frame was never enqueued, so the next attempt is a
+      // first send however it is keyed.
+      replaySafetyFromKey: false,
+    });
   }
 
   /**
@@ -3006,6 +3044,16 @@ export class RemoteSession<
     if (this.phase !== "opening") {
       return;
     }
+    if (!connection.hostAttached) {
+      // The ack was on the wire, or mid-decrypt, when the relay reported the
+      // host leg gone (`onHostDetached`, pre-ready). Crossing the boundary on
+      // it would announce a session for a host that is not there, re-arm the
+      // standing watchdog, and end the parked-refusal cadence after one
+      // report, so the authority would hear nothing more until that watchdog
+      // redialled. The connection stays parked in `opening`; `host_attached`
+      // rebuilds it and the redial's own ack crosses.
+      return;
+    }
     const parsed = sessionOpenAckPayloadSchema.safeParse(json);
     if (!parsed.success) {
       this.handleConnectionLost(
@@ -3985,7 +4033,7 @@ export class RemoteSession<
       this.clearPhaseTimer();
       this.clearStandingTimer();
       this.reportParkedRefusal(generation);
-      this.settleReadyWaiters(false);
+      this.failReadyWaitersHostDetached();
       if (this.reauthTimer === null) {
         this.startReauthLoop();
       }
@@ -5125,6 +5173,14 @@ export class RemoteSession<
   private noteInChannelEvidence(connection: ActiveConnection): void {
     connection.lastInChannelInboundAt = Date.now();
     connection.inChannelFrames += 1;
+    // A host frame processed after the relay reported the host leg gone (one
+    // already received, or mid-decrypt, when `host_detached` landed) is not
+    // standing evidence: the park cleared the watchdog on purpose
+    // (`onHostDetached`), and re-arming it here would redial the parked leg
+    // at the 15-minute bound.
+    if (!connection.hostAttached) {
+      return;
+    }
     this.armStandingTimer();
   }
 
