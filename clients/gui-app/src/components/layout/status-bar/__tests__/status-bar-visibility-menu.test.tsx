@@ -1,18 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
+import type { BarRegionId } from "@/lib/layout/layout-arrangement";
 
 const viewport = vi.hoisted(() => ({ mobile: false }));
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => viewport.mobile,
 }));
 
-const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/settings-navigation", () => ({
-  navigateToSettingsSection: navigateToSettingsSectionMock,
+const openLayoutEditorMock = vi.hoisted(() => vi.fn());
+const navigateMock = vi.hoisted(() => vi.fn());
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => navigateMock }));
+vi.mock("@/lib/layout/editor-session", () => ({
+  openLayoutEditor: openLayoutEditorMock,
 }));
 
 import {
@@ -22,7 +25,7 @@ import {
 } from "@/components/layout/status-bar/status-bar-visibility-menu";
 
 function resetStore(): void {
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   window.localStorage.clear();
   viewport.mobile = false;
 }
@@ -32,9 +35,18 @@ const PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [
   { providerId: "claude-code", label: "Claude Code" },
 ];
 
-function renderMenu(providers: ReadonlyArray<StatusBarMenuProvider>) {
+/** What the shipped strip is holding, which is both readings (L-156). */
+const BOTH_READINGS: ReadonlyArray<BarRegionId> = [
+  "usageLimits",
+  "resourceMonitor",
+];
+
+function renderMenu(
+  providers: ReadonlyArray<StatusBarMenuProvider>,
+  regions: ReadonlyArray<BarRegionId>,
+) {
   return render(
-    <StatusBarVisibilityMenu providers={providers}>
+    <StatusBarVisibilityMenu providers={providers} regions={regions}>
       <div data-testid="status-bar-trigger">status bar</div>
     </StatusBarVisibilityMenu>,
   );
@@ -47,13 +59,13 @@ function openMenu(): void {
 beforeEach(resetStore);
 afterEach(() => {
   cleanup();
-  navigateToSettingsSectionMock.mockClear();
+  openLayoutEditorMock.mockClear();
   resetStore();
 });
 
 describe("<StatusBarVisibilityMenu />", () => {
   it("reflects store state: every passed provider checked, none hidden by default", () => {
-    renderMenu(PROVIDERS);
+    renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
     for (const provider of PROVIDERS) {
@@ -71,16 +83,11 @@ describe("<StatusBarVisibilityMenu />", () => {
   });
 
   it("unchecks a provider already in the hidden deny-list", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        rateLimits: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
-          hiddenProviders: ["codex"],
-        },
-      },
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      hiddenProviders: ["codex"],
     });
-    renderMenu(PROVIDERS);
+    renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
     expect(
@@ -96,13 +103,10 @@ describe("<StatusBarVisibilityMenu />", () => {
   });
 
   it("unchecks the resource-monitor item when resources are disabled", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        resources: { ...DEFAULT_STATUS_BAR_LAYOUT.resources, enabled: false },
-      },
-    });
-    renderMenu(PROVIDERS);
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { shown: "hidden" });
+    renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
     expect(
@@ -113,35 +117,72 @@ describe("<StatusBarVisibilityMenu />", () => {
   });
 
   it("toggles a provider's membership in the hidden deny-list on click", () => {
-    renderMenu(PROVIDERS);
+    renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Codex" }));
 
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
-    ).toEqual(["codex"]);
+    expect(useLayoutStore.getState().arrangement.hiddenProviders).toEqual([
+      "codex",
+    ]);
   });
 
-  it("navigates to the layout settings section from 'Status bar settings…'", () => {
-    renderMenu(PROVIDERS);
+  // The old "Status bar settings…" jump is gone: customizing goes through the
+  // one door, on the region this menu is anchored on (L-19).
+  it("opens the editor on the usage region from 'Customize layout...'", () => {
+    renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
     fireEvent.click(
-      screen.getByRole("menuitem", { name: "Status bar settings…" }),
+      screen.getByRole("menuitem", { name: "Customize layout..." }),
     );
 
-    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("layout");
+    expect(openLayoutEditorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: "pointer", target: "usageLimits" }),
+    );
   });
 
-  it("'Move to header' sets placement to header", () => {
-    useLayoutStore.getState().setStatusBarPlacement("status-bar");
-    renderMenu(PROVIDERS);
+  it("'Move to header' takes everything the strip is holding, and only that", () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      usageHost: "status-bar",
+      resourceHost: "status-bar",
+      resourceSide: "left",
+    });
+    renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to header" }));
 
-    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+    // The menu belongs to the STRIP, so it moves the strip's readings - both
+    // of them here - and each keeps the end it was on (L-156).
+    const { arrangement } = useLayoutStore.getState();
+    expect([arrangement.usageHost, arrangement.resourceHost]).toEqual([
+      "header",
+      "header",
+    ]);
+    expect([arrangement.usageSide, arrangement.resourceSide]).toEqual([
+      "left",
+      "left",
+    ]);
+  });
+
+  it("leaves a reading that is already in the header alone", () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      usageHost: "header",
+      usageSide: "right",
+      resourceHost: "status-bar",
+    });
+    renderMenu(PROVIDERS, BOTH_READINGS);
+    openMenu();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Move to header" }));
+
+    const { arrangement } = useLayoutStore.getState();
+    expect(arrangement.resourceHost).toBe("header");
+    expect(arrangement.usageHost).toBe("header");
+    expect(arrangement.usageSide).toBe("right");
   });
 
   it("drops 'Move to header' on a narrow viewport, where it would move nothing", () => {
@@ -151,7 +192,7 @@ describe("<StatusBarVisibilityMenu />", () => {
     // the effect of, and leave it waiting for the next desktop window - so it
     // takes the same gate the Layout page puts on the placement row.
     viewport.mobile = true;
-    renderMenu(PROVIDERS);
+    renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
     expect(
@@ -159,13 +200,13 @@ describe("<StatusBarVisibilityMenu />", () => {
     ).toBeNull();
     // The gate is on that one item, not on the menu.
     expect(
-      screen.getByRole("menuitem", { name: "Status bar settings…" }),
+      screen.getByRole("menuitem", { name: "Customize layout..." }),
     ).not.toBeNull();
   });
 
   it("does not open the menu for a right-click on an exempt subtree", () => {
     render(
-      <StatusBarVisibilityMenu providers={PROVIDERS}>
+      <StatusBarVisibilityMenu providers={PROVIDERS} regions={BOTH_READINGS}>
         <div data-testid="status-bar-trigger">
           <button
             type="button"
@@ -184,7 +225,7 @@ describe("<StatusBarVisibilityMenu />", () => {
 
   it("still opens the menu for a right-click elsewhere in the trigger", () => {
     render(
-      <StatusBarVisibilityMenu providers={PROVIDERS}>
+      <StatusBarVisibilityMenu providers={PROVIDERS} regions={BOTH_READINGS}>
         <div data-testid="status-bar-trigger">
           <button
             type="button"
@@ -200,5 +241,62 @@ describe("<StatusBarVisibilityMenu />", () => {
 
     fireEvent.contextMenu(screen.getByTestId("plain-region"));
     expect(screen.getByRole("menu")).toBeTruthy();
+  });
+});
+
+/**
+ * L-159: the menu names what the BAR is drawing. Since L-156 either reading
+ * can be in the top bar, where it carries its own menu, so a menu keyed on a
+ * literal offered verbs for a region nowhere near the pointer and a switch
+ * over a readout drawn in the other bar.
+ */
+describe("<StatusBarVisibilityMenu /> names what the bar holds (L-159)", () => {
+  it("offers the monitor's switch only while the monitor is in this bar", () => {
+    renderMenu(PROVIDERS, BOTH_READINGS);
+    openMenu();
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Resource monitor" }),
+    ).not.toBeNull();
+    cleanup();
+
+    renderMenu(PROVIDERS, ["usageLimits"]);
+    openMenu();
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Resource monitor" }),
+    ).toBeNull();
+  });
+
+  it("offers verbs for the readings the bar draws, and no others", () => {
+    renderMenu(PROVIDERS, ["resourceMonitor"]);
+    openMenu();
+
+    expect(
+      screen.getByRole("menuitem", { name: "Hide Resource monitor" }),
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Hide Usage limits" }),
+    ).toBeNull();
+    cleanup();
+
+    renderMenu(PROVIDERS, BOTH_READINGS);
+    openMenu();
+
+    expect(
+      screen.getByRole("menuitem", { name: "Hide Usage limits" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: "Hide Resource monitor" }),
+    ).not.toBeNull();
+  });
+
+  it("offers one way into the editor however many readings it names", () => {
+    renderMenu(PROVIDERS, BOTH_READINGS);
+    openMenu();
+
+    // Two regions, one door: "Customize layout..." names a screen, and a menu
+    // listing it twice would be the same door under two labels.
+    expect(
+      screen.getAllByRole("menuitem", { name: "Customize layout..." }),
+    ).toHaveLength(1);
   });
 });

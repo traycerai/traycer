@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
-import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
+import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
@@ -52,6 +52,7 @@ import type {
   BrowserSavedLoginSitesResponse,
 } from "@traycer/protocol/host/browser/contracts";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export function BrowserSettingsSection(): ReactNode {
@@ -59,7 +60,7 @@ export function BrowserSettingsSection(): ReactNode {
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
   );
-  // The ACTIVE host, like the sibling Website sessions group: General carries
+  // The ACTIVE host, like the sibling Website sessions group: Browser carries
   // no host scope of its own, so this page's host IS the app-wide one.
   const hostId = useAddressableHostId();
   // `null` (no handshake yet) hides the row exactly as `false` does - the row
@@ -82,7 +83,7 @@ export function BrowserSettingsSection(): ReactNode {
           be a heading over an empty box. */}
       {browserDevOrigins.length > 0 || agentAccessSupported ? (
         <SettingsGroup
-          group={GENERAL.definitions.browser}
+          group={BROWSER.definitions.browser}
           showTitle
           tone="default"
           dataTestId={undefined}
@@ -93,7 +94,7 @@ export function BrowserSettingsSection(): ReactNode {
           ) : null}
           {browserDevOrigins.length > 0 ? (
             <SettingsRow
-              row={GENERAL.definitions.detectedDevOrigins}
+              row={BROWSER.definitions.detectedDevOrigins}
               control={
                 <BrowserDevOriginsControl
                   origins={browserDevOrigins}
@@ -118,7 +119,7 @@ const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
  * Off means agent registrations on this host are minted with no browser MCP
  * server and no steering that names it; the user's own browser tiles, saved
  * logins and dev-origin detection are untouched. The value is machine-user
- * global, so the row names the host it is about - Settings > General has no
+ * global, so the row names the host it is about - Settings > Browser has no
  * host picker, and this is the one place on the page where "which machine"
  * is not obvious from the copy.
  *
@@ -148,11 +149,11 @@ function AgentBrowserAccessRow(props: {
 
   return (
     <SettingsRow
-      row={GENERAL.definitions.agentBrowserAccess}
+      row={BROWSER.definitions.agentBrowserAccess}
       status={
         query.isError
           ? "Couldn't read this host's browser setting. Repair ~/.traycer/cli/config.json on that machine, or back it up before resetting it, then reopen Settings."
-          : `On ${hostName ?? "this host"}. ${GENERAL.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
+          : `On ${hostName ?? "this host"}. ${BROWSER.definitions.agentBrowserAccess.description} Running agents pick this up on their next turn.`
       }
       control={
         <Switch
@@ -160,7 +161,7 @@ function AgentBrowserAccessRow(props: {
           disabled={query.isPending || query.isError || setAccess.isPending}
           aria-label="Let agents use the in-app browser"
           onCheckedChange={(next) => {
-            trackSettingChanged("general", "agentBrowserAccess");
+            trackSettingChanged("browser", "agentBrowserAccess");
             setAccess.mutate({ agentAccess: next });
           }}
         />
@@ -270,7 +271,7 @@ function BrowserSavedLoginsRows(props: {
   return (
     <>
       <SettingsGroup
-        group={GENERAL.definitions.websiteSessions}
+        group={BROWSER.definitions.websiteSessions}
         showTitle
         tone="default"
         dataTestId="settings-saved-logins"
@@ -327,7 +328,7 @@ function SavedLoginsToggleRow(props: {
   return (
     <>
       <SettingsRow
-        row={GENERAL.definitions.saveWebsiteSessions}
+        row={BROWSER.definitions.saveWebsiteSessions}
         status={
           props.enabled
             ? "Keep session data from Traycer browser tabs so sites can stay signed in."
@@ -340,7 +341,14 @@ function SavedLoginsToggleRow(props: {
             aria-label="Save website sessions on this computer"
             onCheckedChange={(next) => {
               if (next) {
-                props.saveLogins.setEnabled(true);
+                // The guide moves on only once the machine reports saving ON:
+                // a refused or downgraded write leaves the import step locked.
+                void props.saveLogins.setEnabled(true).then((settled) => {
+                  if (settled === true)
+                    useOnboardingStore
+                      .getState()
+                      .notifySetupEvent("browser-save-enabled");
+                });
                 return;
               }
               setConfirming(true);
@@ -358,7 +366,7 @@ function SavedLoginsToggleRow(props: {
         isPending={props.saveLogins.pending}
         blockedReason={null}
         onConfirm={() => {
-          props.saveLogins.setEnabled(false);
+          void props.saveLogins.setEnabled(false);
           setConfirming(false);
         }}
       />
@@ -374,7 +382,7 @@ function ImportLoginsRow(props: {
   const { enabled, triggerRef, onOpen } = props;
   return (
     <SettingsRow
-      row={GENERAL.definitions.bringInExistingSessions}
+      row={BROWSER.definitions.bringInExistingSessions}
       hint={enabled ? null : "Turn on Save website sessions first."}
       control={
         <Button
@@ -384,6 +392,7 @@ function ImportLoginsRow(props: {
           size="sm"
           disabled={!enabled}
           onClick={onOpen}
+          data-testid="settings-import-logins-trigger"
         >
           Choose source…
         </Button>
@@ -524,7 +533,7 @@ function SavedWebsiteSessionsState(props: {
   return (
     <div className="border-b border-border/40">
       <SettingsRow
-        row={GENERAL.definitions.savedWebsiteSessions}
+        row={BROWSER.definitions.savedWebsiteSessions}
         control={
           <span className="text-ui-sm text-muted-foreground" role="status">
             {props.status}
@@ -599,7 +608,7 @@ function SavedWebsiteSessionsManager(props: {
     <Sheet open={open} onOpenChange={changeOpen}>
       <div className="border-b border-border/40">
         <SettingsRow
-          row={GENERAL.definitions.savedWebsiteSessions}
+          row={BROWSER.definitions.savedWebsiteSessions}
           control={
             <span className="tabular-nums text-ui-sm text-muted-foreground">
               {siteCountLabel(props.sites.length)}
@@ -649,7 +658,7 @@ function SavedWebsiteSessionsManager(props: {
           <SheetTitle>Saved website sessions</SheetTitle>
           <SheetDescription>
             Search and remove website sessions without losing your place in
-            General settings.
+            Browser settings.
           </SheetDescription>
         </SheetHeader>
         <p className="mx-4 mb-4 rounded-md bg-foreground/8 px-3 py-2 text-ui-sm text-muted-foreground">

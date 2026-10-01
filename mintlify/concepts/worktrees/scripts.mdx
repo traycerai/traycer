@@ -1,0 +1,156 @@
+---
+title: "Setup and teardown scripts"
+description: "Run commands when Traycer creates or removes a worktree, and choose how new worktree branches are named."
+---
+
+Each repository can define a **setup script** that runs in a new [worktree](/concepts/worktrees) after Traycer creates it, and a **teardown script** that runs in a worktree before Traycer removes it. Use setup to install dependencies or build, and teardown to stop services or clean up anything outside the worktree.
+
+Both scripts, and an optional branch prefix, live in one file at the root of the repository: `.traycer/environment.json`. It's a normal file in your repository, so you can commit it and share it with everyone who works on the project.
+
+## The Environment File
+
+Traycer writes this file when you save in **Repository settings**. A saved file looks like this:
+
+```json .traycer/environment.json
+{
+  "setup": {
+    "default": "bun install",
+    "macos": null,
+    "linux": null,
+    "windows": "bun install --frozen-lockfile"
+  },
+  "teardown": {
+    "default": "docker compose down",
+    "macos": null,
+    "linux": null,
+    "windows": null
+  },
+  "branchPrefix": "feat/",
+  "updatedAt": 1790000000000
+}
+```
+
+| Field | What it holds |
+|---|---|
+| `setup` | Commands to run in a new worktree after Traycer creates it. |
+| `teardown` | Commands to run in a worktree before Traycer removes it. |
+| `default` | The script for every operating system without its own entry. Use `""` for no script. |
+| `macos`, `linux`, `windows` | A script for that operating system only. `null` or a blank value falls back to `default`. |
+| `branchPrefix` | Optional. This repository's [branch prefix](#branch-prefix). Leave it out to use the global default. `""` means no prefix. |
+| `updatedAt` | When the file was last saved, in milliseconds. Traycer updates it on every save. |
+
+The operating system that counts is the one of the host running the worktree. A script can span several lines, and it runs from the root of the worktree.
+
+<Warning>
+  If you edit the file by hand, keep all four keys under `setup` and `teardown` (`null` is fine) and keep `updatedAt`. When any of them is missing or has the wrong type, Traycer ignores the scripts in the file. The branch prefix is read separately and still applies.
+</Warning>
+
+### Which Copy Is Used
+
+Setup and teardown read the file **inside the worktree**, not the one in your main folder:
+
+- A new worktree starts with the file from its source branch. Changes you make in your main folder reach new worktrees once they are committed on the branch you create worktrees from, or when you create the worktree from the **Working tree** source, which carries uncommitted changes.
+- Scripts you save for a new worktree in **Repository settings** are written into that worktree when Traycer creates it, before setup runs.
+- Teardown runs whatever the worktree's own file says when the worktree is removed.
+
+## Edit Scripts in Repository Settings
+
+<Steps>
+  <Step title="Open Repository settings">
+    In the workspace picker, where you choose folders and run locations, click the gear button on the folder's row. Its tooltip reads **Repository settings**.
+  </Step>
+  <Step title="Edit the scripts">
+    Under **Setup & teardown scripts**, edit **Setup script** ("At the project root when a worktree is created.") and **Teardown script** ("At the project root before a worktree is removed."). Each has **Default**, **macOS**, **Linux**, and **Windows** tabs. Platform scripts override Default; leave a platform tab blank to use Default. A dot on a platform tab means it has its own script.
+  </Step>
+  <Step title="Save">
+    Click **Save**. The button shows **Saved** and the dialog closes.
+  </Step>
+</Steps>
+
+Where the save lands depends on the run location chosen for that folder:
+
+| Run location | Where the scripts are saved |
+|---|---|
+| **Local** | The folder's own `.traycer/environment.json`. The dialog notes "Commit the environment file to share these scripts." |
+| **New worktree** | With the pending worktree. Traycer writes them into the new worktree when it creates it. The dialog opens with the scripts committed on the source branch, so you see what the new worktree would otherwise inherit. |
+| **Existing worktree** | That worktree's own `.traycer/environment.json` only ("Changes apply to this worktree only."). |
+
+To change the teardown script of a worktree just before deleting it, use **Manage script** in [Settings › Worktrees](/settings/worktrees#worktree-rows) instead.
+
+## How Setup Runs
+
+Setup runs when Traycer creates a worktree and a setup script exists for the host's operating system.
+
+- Traycer opens a terminal in the Task named `Setup: <folder> <branch>`, starting in the new worktree, and runs the script there. The terminal stays open as a normal shell when setup finishes, so you can keep working in it.
+- The agent's first message waits for setup to finish. If setup fails or is cancelled, the message runs anyway.
+- There is no time limit. If the script prints nothing for 5 minutes, Traycer stops waiting, marks setup cancelled, and lets the agent continue.
+- Interrupting the script (for example with Ctrl+C) or closing the setup terminal marks setup cancelled. Any other non-zero exit code marks it failed.
+
+The agent's conversation shows a setup card with the progress. A failed card opens on its own so the retry is in reach.
+
+| State | Meaning |
+|---|---|
+| **Creating worktree** | Git is creating the worktree. |
+| **Setting up worktree** | The setup script is running. The card shows how long it has been running. |
+| **Worktree ready** | The worktree exists and setup, if there is one, finished. |
+| **Setup failed** | The setup script exited with an error. The card shows the exit code, for example "(exit 1)". |
+| **Setup cancelled** | Setup was interrupted, its terminal was closed, or it printed nothing for 5 minutes. |
+| **Worktree creation failed** | Git couldn't create the worktree. The card shows the error. |
+| **Worktree setup incomplete** | An earlier setup never reported a result, for example because the host stopped. It is no longer running. |
+
+With several folders, the card counts them instead, for example **Setting up 2 worktrees** and "1 of 2 done".
+
+| Action | What it does |
+|---|---|
+| **Open terminal** | Opens the setup terminal. It's unavailable once that terminal has been closed ("Setup terminal session ended"). |
+| **Retry setup** | Runs the setup script again in the existing worktree. Shown when setup failed or was cancelled. |
+| **Retry creation** | Tries to create the worktree again. When it succeeds, messages waiting in the queue continue. |
+
+For fixing a setup that keeps failing, see [Troubleshooting](/reference/troubleshooting).
+
+## How Teardown Runs
+
+Teardown runs before a worktree is removed, whether you remove it with [Sweep](/concepts/sweep), [Settings › Worktrees](/settings/worktrees), by deleting its Task in [History](/concepts/history#delete-tasks), through [automatic cleanup](/settings/worktrees#automatic-cleanup), or with `traycer worktree delete` in the [CLI](/cli/commands).
+
+- Traycer first closes any terminal open inside the worktree. Automatic cleanup never closes a terminal; it skips the worktree instead.
+- The teardown script for the host's operating system runs in the worktree folder, in the background, with no terminal.
+- It can run for up to 60 seconds. If it fails or runs longer, Traycer stops it and removes the worktree anyway.
+- You can follow its output in the Settings › Worktrees delete progress dialog (**Show output**) and in the CLI. Automatic cleanup history notes "Teardown timed out." or the exit code.
+
+Because a failing teardown doesn't stop the removal, don't rely on teardown to save work from the worktree. Copy anything you need out first.
+
+## Branch Prefix
+
+When you pick **New worktree**, Traycer proposes a branch name made of a prefix and two random words, for example `traycer/swift-otter`. When you set up worktrees for several repositories at once, the repository name is added, for example `traycer/web-swift-otter`. Proposed names are cut to 80 characters.
+
+The prefix applies only to proposed names. A name you type is used as you typed it, and a remote branch source proposes the remote branch's own name.
+
+### Set the Default Prefix
+
+Set the prefix in **Settings › General › Worktrees › Default branch prefix**. The default is `traycer/`.
+
+- The field saves as you type and shows a live example: "New branches start like `traycer/swift-otter` unless a repository sets its own prefix".
+- The prefix is used exactly as written. Traycer doesn't add a `/`, and an empty prefix means none.
+- The reset button next to the field restores `traycer/`.
+
+A prefix must follow Git's branch-name rules:
+
+- At most 40 characters.
+- No spaces or control characters, and none of `~` `^` `:` `?` `*` `[` `\`.
+- No `..`, `@{`, or `//`.
+- It can't start with `-` or `/`.
+- No part between slashes can start with `.` or end with `.lock`.
+
+### Override It for One Repository
+
+In **Repository settings**, the **Branch prefix** section chooses how new branches are named for that repository:
+
+1. Choose **This repository** (Custom prefix) instead of **Global default**.
+2. Enter the **Prefix**. An empty prefix means no prefix for this repository.
+3. Click **Save prefix**. The preview shows an example branch.
+
+The prefix is saved as `branchPrefix` in the folder's `.traycer/environment.json`; commit the file to share it. Use **Edit prefix** to change it, or **Remove prefix** to go back to the global default.
+
+If the folder already has a proposed name for a pending new worktree, Traycer asks "Update the staged branch name?". Choose **Use new prefix** to rename it, or **Keep current**.
+
+If the repository's prefix is invalid, or the file can't be read, Traycer uses the global default and shows a warning on the folder's row and in the dialog.

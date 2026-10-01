@@ -279,8 +279,22 @@ export function buildEpicRuntimeCorePorts(
     return heldLeases.has(docKey) || awaitingDemand.has(docKey);
   }
 
+  /**
+   * Bind this body's return leg to the room's CURRENT doc.
+   *
+   * A REBIND rather than attach-once, and the difference is a body that stops
+   * syncing after a reconnect. `observeBodyDoc` binds to the replica's `Y.Doc`
+   * object, and a room leaving `ready` destroys that replica while the lease -
+   * and so this map's entry - survives; the next snapshot builds a NEW doc.
+   * An early return on `bodyObservers.has(docKey)` then kept the handler on the
+   * destroyed doc, so the re-materialized body reached main and never received
+   * another update. Every caller is a materialize that is handing bytes over
+   * this same tick, so detaching first and binding to what the tier holds now
+   * cannot miss an update in between - Yjs emits synchronously - and costs a
+   * no-op swap when the doc did not change.
+   */
   function attachBodyObserver(docKey: string): void {
-    if (bodyObservers.has(docKey)) return;
+    detachBodyObserver(docKey);
     const detachDoc = source.observeBodyDoc(docKey, (update) => {
       // COPIED, because we do not own these bytes.
       //
@@ -319,11 +333,11 @@ export function buildEpicRuntimeCorePorts(
    *
    * NO OBSERVER IS ATTACHED HERE, and that is not an omission to tidy up later.
    * `observeArtifactBodyDoc` on an unmaterialized key is a documented no-op
-   * that watches nothing and hands back a no-op detach - but
-   * {@link attachBodyObserver} would still record an entry for the docKey, and
-   * its `bodyObservers.has(docKey)` early-out would then make the REAL attach
-   * on the retry a silent no-op. The body would materialise on main and never
-   * receive another update.
+   * that watches nothing and hands back a no-op detach, so attaching here would
+   * record a binding to nothing. {@link attachBodyObserver} now rebinds on the
+   * retry's materialize, so such an entry would no longer make the real attach
+   * a silent no-op - but it would still be an entry claiming a watch that does
+   * not exist, and the retry is where the doc exists to be watched.
    */
   function holdAwaitingDemand(docKey: string, release: () => void): void {
     // Demand from either map already covers this body; a second retained

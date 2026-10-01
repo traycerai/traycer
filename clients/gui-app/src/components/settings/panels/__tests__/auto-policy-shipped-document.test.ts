@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasShippedAutoPolicySections,
   parseShippedAutoPolicy,
+  parseShippedAutoPolicyRules,
 } from "@/components/settings/panels/auto-policy-shipped-document";
 
 // An inline fixture, not the host's real `defaults.md` - the OSS repo cannot
@@ -121,5 +122,52 @@ describe("hasShippedAutoPolicySections", () => {
     );
 
     expect(hasShippedAutoPolicySections(sections)).toBe(true);
+  });
+});
+
+describe("parseShippedAutoPolicyRules", () => {
+  it("opens a rule at each of the three bullet spellings", () => {
+    expect(
+      parseShippedAutoPolicyRules(
+        [
+          "- **Force Push** \u2014 git push --force",
+          "* **Exfiltrate**: send secrets out",
+          "- **Wipe Disk** rm -rf /",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { name: "Force Push", text: "git push --force" },
+      { name: "Exfiltrate", text: "send secrets out" },
+      { name: "Wipe Disk", text: "rm -rf /" },
+    ]);
+  });
+
+  it("joins continuation lines with a space", () => {
+    expect(
+      parseShippedAutoPolicyRules(
+        "- **Rule** first line\n  second line\n  third",
+      ),
+    ).toEqual([{ name: "Rule", text: "first line second line third" }]);
+  });
+
+  it("splits paragraphs at a blank line inside a rule with a blank line", () => {
+    expect(
+      parseShippedAutoPolicyRules(
+        "- **Rule** first paragraph\n  still first\n\n  second paragraph\n- **Next** n",
+      ),
+    ).toEqual([
+      { name: "Rule", text: "first paragraph still first\n\nsecond paragraph" },
+      { name: "Next", text: "n" },
+    ]);
+  });
+
+  it("drops intro text before the first rule", () => {
+    expect(
+      parseShippedAutoPolicyRules("Intro sentence.\n\n- **Only** rule"),
+    ).toEqual([{ name: "Only", text: "rule" }]);
+  });
+
+  it("returns no rules for an empty body", () => {
+    expect(parseShippedAutoPolicyRules("")).toEqual([]);
   });
 });

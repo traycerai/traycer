@@ -1,9 +1,8 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
+import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
 import { isMobileApp } from "@/lib/mobile-app";
-import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
  * The remedy for a host this account may not attach to remotely: a billing
@@ -21,9 +20,11 @@ import { useRunnerHost } from "@/providers/use-runner-host";
  * "the upgrade path is offered here" keeps matching whichever surface renders
  * it.
  *
- * Kept a component rather than inlined, as it was in the gate: `useRunnerHost`
- * then mounts only in the plan-restricted branch, so both callers stay
- * renderable without the runner provider. The open goes through `openLink`
+ * Kept a component rather than inlined, as it was in the gate: the runner host
+ * (read by `usePlatformBillingUrl`) then mounts only in the plan-restricted
+ * branch, so both callers stay renderable without the runner provider. It opens
+ * the Billing page of the account selected in the app, never the bare platform
+ * origin, which is the marketing homepage. The open goes through `openLink`
  * (kind `account`, always external per A2), which owns the runner-error
  * mapping, so a shell that cannot open links says so instead of failing
  * silently.
@@ -47,7 +48,7 @@ export function PlanRestrictedUpgradeAction(): ReactNode {
 }
 
 function UpgradeButton(): ReactNode {
-  const runnerHost = useRunnerHost();
+  const billingUrl = usePlatformBillingUrl();
   const openLink = useOpenLink();
   return (
     <Button
@@ -55,11 +56,7 @@ function UpgradeButton(): ReactNode {
       variant="outline"
       size="sm"
       onClick={() => {
-        void openLink(
-          resolvePlatformBaseUrl(runnerHost.signInUrl),
-          "account",
-          null,
-        );
+        void openLink(billingUrl, "account", null);
       }}
       data-testid="host-scope-plan-upgrade"
     >

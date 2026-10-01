@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
 import { useRouterState } from "@tanstack/react-router";
 import { v4 as uuidv4 } from "uuid";
 import { HomeHero } from "@/components/home/home-hero";
@@ -6,7 +7,7 @@ import { LandingComposer } from "@/components/home/composer/landing-composer";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
-import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import { CurrentTasksSection } from "@/components/home/current-tasks-section";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
 import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
@@ -19,12 +20,14 @@ import { isMobileApp } from "@/lib/mobile-app";
 import { restoreLandingSurfaceFocus } from "@/components/home/landing-surface-focus-restore";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 import { LandingAppearanceWallpaper } from "@/components/home/landing-appearance-wallpaper";
-import { Paintbrush } from "lucide-react";
+import { Palette } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
+import { LandingVisibleDraftImagePrefetch } from "./visible-draft-image-prefetch";
+import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 
 /**
  * Route-independent landing body. Its exact draft runtime remains the T6
@@ -49,7 +52,7 @@ export function LandingDraftSurface() {
       return overlay.settingsOverlay || overlay.historyOverlay;
     },
   });
-  // Phones drop the embedded list entirely: the hamburger drawer already
+  // Phones omit the Current tasks section: the hamburger drawer already
   // carries "Recent tasks" + "View all" off the same `useHistoryQuery`, so an
   // inline copy is pure duplication at this width.
   const isMobile = useIsMobileViewport();
@@ -123,15 +126,33 @@ export function LandingDraftSurface() {
     <div
       ref={surfaceRef}
       data-home-touch-scope
-      className="relative flex min-h-0 flex-1 overflow-hidden bg-background text-foreground"
+      // `contain-layout`: this surface is its own layout root, as a canvas
+      // tile is (the tile host transforms it), so a `fixed` descendant fills
+      // the surface below the app header rather than the viewport. The phone
+      // composer sheet (`composer-shell.tsx`) relies on that being true on
+      // both surfaces that mount it. Nothing else in here positions against
+      // the viewport; the overlays that do are portalled out.
+      //
+      // `overflow-clip`, never `overflow-hidden`: the collapsed terminal panel
+      // keeps its open width parked past this row's right edge
+      // (`landingTerminalPanelStyle`). `hidden` would still make the row a
+      // scroll container, so anything that scrolls an element inside that
+      // panel into view (its tab strip does on mount) would scroll the whole
+      // page sideways and leave a blank band where the panel sits.
+      className="relative flex min-h-0 flex-1 overflow-clip bg-background text-foreground contain-layout"
       data-primary-focus-scope="true"
       data-testid="landing-draft-surface"
     >
+      <MobileDrawerTaskPaintReporter ready={surfaceEffectivelyFocused} />
+      <LandingVisibleDraftImagePrefetch
+        draftId={draftId}
+        active={surfaceEffectivelyFocused}
+      />
       {/* The column track must be minmax(0,1fr), not the implicit `auto`: an
           auto track's minimum is its items' min-content, so the composer
           toolbar's intrinsic width would lock the whole column wider than a
           narrow viewport (or the space left beside the terminal panel) and
-          the outer overflow-hidden would clip the right edge instead of
+          the outer overflow-clip would clip the right edge instead of
           letting content reflow. */}
       {/* Row 2 bottom-aligns the hero and row 3 top-anchors the composer, so
           the boundary between them is where the pair sits. An even 1fr/1fr
@@ -151,7 +172,7 @@ export function LandingDraftSurface() {
           layout.rows,
         )}
       >
-        {activity.visible ? <LandingAppearanceWallpaper /> : null}
+        <LandingAppearanceWallpaper />
         <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
         </div>
@@ -188,10 +209,12 @@ export function LandingDraftSurface() {
             </SurfaceActivityProvider>
           </div>
 
-          {/* Drafts another host owns are not a section of their own: the
-              ingest mount puts them in the landing store and the History
-              drafts list below shows them beside this host's, with no owner
-              bucket. Opening one forks it underneath on the first edit. */}
+          <FirstTaskLandingGuide
+            enabled={surfaceEffectivelyFocused}
+            rootRef={surfaceRef}
+            workspaceFolders={workspaceFolders}
+          />
+
           {showRecentHistory && isMobile ? (
             /* Recent tasks live in the hamburger drawer at this width, which is
                not discoverable from a landing page that is otherwise empty
@@ -210,17 +233,9 @@ export function LandingDraftSurface() {
             </button>
           ) : null}
           {showRecentHistory && !isMobile ? (
-            <div className="mt-3 flex min-h-0 flex-1 flex-col pb-6">
+            <div className="flex min-h-0 flex-1 flex-col pb-6">
               {!systemModalOpen && activity.visible ? (
-                <EpicsListPanel
-                  variant="embedded"
-                  className={undefined}
-                  onSelectEpic={null}
-                  onOpenItem={null}
-                  routeSearch={null}
-                  historyNowMs={null}
-                  autoFocusSearch={false}
-                />
+                <CurrentTasksSection />
               ) : null}
             </div>
           ) : null}
@@ -355,10 +370,16 @@ function CustomizeStartPageButton() {
           size="icon"
           aria-label="Customize start page"
           onClick={() => {
-            openSettings({ section: "appearance", resetToGeneral: false });
+            openSettings({
+              section: "appearance",
+              resetToGeneral: false,
+              tab: null,
+              draft: null,
+              hostId: null,
+            });
           }}
         >
-          <Paintbrush className="size-3.5" />
+          <Palette className="size-3.5" />
         </Button>
       </TooltipWrapper>
     </div>

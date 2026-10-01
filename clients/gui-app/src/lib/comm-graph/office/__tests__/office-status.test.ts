@@ -27,6 +27,7 @@ function event(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }

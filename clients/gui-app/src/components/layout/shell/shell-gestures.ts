@@ -231,6 +231,25 @@ export function isWithinFocusedTextEntry(target: EventTarget | null): boolean {
 }
 
 /**
+ * Whether a touch landed inside a popup that belongs to a text entry - its
+ * suggestion or picker menu - which the entry declares with a
+ * `data-text-entry-popup` attribute on the popup's root.
+ *
+ * Such a popup is operated WITHOUT taking focus from its entry: its rows and
+ * buttons cancel their own `mousedown`, and choosing one writes into the entry
+ * and leaves the caret there. It is part of editing the entry, so a tap on it
+ * is no more a request to put the keyboard away than a tap into the entry
+ * itself. The popup cannot be found through `isWithinFocusedTextEntry`
+ * because it is rendered in a portal, outside the entry's DOM, which is why it
+ * has to be declared.
+ */
+export function isWithinTextEntryPopup(target: EventTarget | null): boolean {
+  const element = asElement(target);
+  if (element === null) return false;
+  return element.closest("[data-text-entry-popup]") !== null;
+}
+
+/**
  * Whether a touch landed inside a text entry, focused or not.
  *
  * Asked of the TARGET rather than of `document.activeElement`, and the

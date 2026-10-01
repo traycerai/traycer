@@ -15,7 +15,19 @@ import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { fallbackProviderLabelFor } from "@/components/chat/fallback/fallback-identity";
 import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
-import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
+import { useChatDockSectionAttached } from "@/components/chat/chat-dock-compact-context";
+import {
+  CHAT_DOCK_PANEL_LIST,
+  CHAT_DOCK_PANEL_ROW,
+  CHAT_DOCK_PANEL_ROW_BUTTON,
+  CHAT_DOCK_PANEL_ROW_CONTENT,
+  CHAT_DOCK_PANEL_ROW_TEXT,
+  chatDockPanelRowTreeInset,
+} from "@/components/chat/chat-dock-panel-row";
+import {
+  ChatDockAttachedPanelBody,
+  ChatDockPillActions,
+} from "@/components/chat/chat-dock-attached-panel";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
@@ -42,22 +54,20 @@ import {
   useHeldManagedCommandsForChat,
   useRunningManagedCommandsForChat,
 } from "@/stores/managed-commands/managed-commands-for-chat";
+import { usePortForwardsForChat } from "@/stores/port-forwards/port-forwards-for-chat";
+import { PortForwardRow } from "@/components/chat/port-forward-row";
 import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import { cn } from "@/lib/utils";
-import {
-  BASE_PAD_LEFT,
-  INDENT_PX,
-} from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { TreeGroupGuide } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-guide";
 import {
   backgroundHeaderSummary,
+  backgroundSectionCounts,
   buildBackgroundTree,
   buildRememberedBackgroundNodes,
   dedupeByTaskId,
-  treeHasRunningTask,
   type BackgroundTreeNode,
   type RememberedBackgroundNode,
 } from "@/lib/chat/background-item-tree";
@@ -84,9 +94,50 @@ function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
     // DOING, the same as every label above it.
     case "fallback-wait":
       return "Waiting";
+    case "cron":
+      return "Scheduled job";
   }
   const unreachableKind: never = kind;
   return unreachableKind;
+}
+
+function cronStopControlState(input: {
+  readonly items: ReadonlyArray<BackgroundItem>;
+  readonly managedCommandCount: number;
+  readonly stoppable: boolean;
+  readonly stopAllPending: boolean;
+  readonly hasSessionStopEscalation: boolean;
+}): {
+  scheduledJobCount: number;
+  harnessStopAllReady: boolean;
+  showStopAll: boolean;
+  stopAllLabel: string;
+} {
+  const {
+    items,
+    managedCommandCount,
+    stoppable,
+    stopAllPending,
+    hasSessionStopEscalation,
+  } = input;
+  const scheduledJobCount = items.filter((item) => item.kind === "cron").length;
+  const hasHarnessStopTarget = items.some((item) => item.kind !== "cron");
+  const onlyCronItems = scheduledJobCount > 0 && !hasHarnessStopTarget;
+  return {
+    scheduledJobCount,
+    harnessStopAllReady: !onlyCronItems && stoppable && !stopAllPending,
+    showStopAll: !onlyCronItems || managedCommandCount > 0,
+    // "Stop other items" promises the scheduled job survives the click. That
+    // is only true while the click stays a plain Stop all - once a gated
+    // command forces the session-stop escalation, confirming ends every
+    // harness item sharing the provider session, the cron job included, so
+    // the button has to carry the same "Stop all" label the plain, non-cron
+    // escalation path already uses.
+    stopAllLabel:
+      scheduledJobCount > 0 && !hasSessionStopEscalation
+        ? "Stop other items"
+        : "Stop all",
+  };
 }
 
 function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
@@ -263,11 +314,11 @@ function HeldManagedCommandRow(props: {
   return (
     <li className="m-0">
       <div
-        className="group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-foreground/8"
-        style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
+        className={cn("group", CHAT_DOCK_PANEL_ROW, "hover:bg-foreground/8")}
+        style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
       >
         <TooltipWrapper
-          label={`${held.description} — output that arrived as you stopped this chat is held back. It reaches the agent when the chat next wakes (a message or a resume), or right now with Deliver.`}
+          label={`${held.description} — output that arrived as this chat was stopped is held back. It reaches the agent when the chat next wakes (a message or a resume), or right now with Deliver.`}
           side="top"
           sideOffset={undefined}
           align={undefined}
@@ -279,7 +330,7 @@ function HeldManagedCommandRow(props: {
             onClick={() => {
               onOpen?.(held.commandId);
             }}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className={CHAT_DOCK_PANEL_ROW_BUTTON}
           >
             {command !== null && command.status.state === "running" ? (
               <ManagedCommandMonitorIcon
@@ -293,10 +344,20 @@ function HeldManagedCommandRow(props: {
                 className="size-3.5 shrink-0 text-foreground/40"
               />
             )}
-            <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+            <span
+              className={cn(
+                "block min-w-0 flex-1 truncate text-foreground/85",
+                CHAT_DOCK_PANEL_ROW_TEXT,
+              )}
+            >
               {held.description}
             </span>
-            <span className="shrink-0 text-ui-xs text-muted-foreground">
+            <span
+              className={cn(
+                "shrink-0 text-muted-foreground",
+                CHAT_DOCK_PANEL_ROW_TEXT,
+              )}
+            >
               Held
             </span>
           </button>
@@ -385,10 +446,12 @@ function ManagedCommandRow(props: {
     <li className="m-0">
       <div
         className={cn(
-          "group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-foreground/8",
+          "group",
+          CHAT_DOCK_PANEL_ROW,
+          "hover:bg-foreground/8",
           isDragging ? "opacity-50" : null,
         )}
-        style={{ paddingLeft: `${BASE_PAD_LEFT}px` }}
+        style={{ paddingLeft: chatDockPanelRowTreeInset(0) }}
       >
         <TooltipWrapper
           label={title}
@@ -406,7 +469,7 @@ function ManagedCommandRow(props: {
               onOpen?.(command.id);
             }}
             className={cn(
-              "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              CHAT_DOCK_PANEL_ROW_BUTTON,
               // No grab affordance where the gesture is gone.
               dragDisabled ? null : grabCursor,
             )}
@@ -416,7 +479,12 @@ function ManagedCommandRow(props: {
               decorative
               className="size-3.5 text-primary/80"
             />
-            <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+            <span
+              className={cn(
+                "block min-w-0 flex-1 truncate text-foreground/85",
+                CHAT_DOCK_PANEL_ROW_TEXT,
+              )}
+            >
               {title}
             </span>
             {command.status.state === "running" ? (
@@ -483,8 +551,8 @@ function BackgroundTreeRow(props: {
   // subscribing here repainted every command, monitor, subagent, workflow,
   // MCP and wake row each tick to change nothing. `BackgroundWaitTitle` below
   // is where a fallback-wait row gets the live clock instead, isolated the
-  // same way `FallbackGraceHeadline` isolates its own countdown from
-  // `FallbackGraceCard`.
+  // same way the routing card's `CountdownHeadline` isolates its own
+  // countdown from the rest of the card.
   const displayTitle =
     item === null ? node.title : backgroundItemDisplayTitle(item, 0);
   const titleNode: ReactNode =
@@ -498,31 +566,69 @@ function BackgroundTreeRow(props: {
     <li className="m-0">
       <div
         className={cn(
-          "group flex min-w-0 items-center gap-2 rounded-md pr-2 hover:bg-foreground/8",
+          "group",
+          CHAT_DOCK_PANEL_ROW,
+          "hover:bg-foreground/8",
           item === null ? "text-muted-foreground" : null,
         )}
-        style={{
-          paddingLeft: `${props.depth * INDENT_PX + BASE_PAD_LEFT}px`,
-        }}
+        style={{ paddingLeft: chatDockPanelRowTreeInset(props.depth) }}
       >
-        {item === null ? (
+        {item === null && (
           <TooltipWrapper
             label={displayTitle}
             side="top"
             sideOffset={undefined}
             align={undefined}
           >
-            <div className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left">
+            <div className={CHAT_DOCK_PANEL_ROW_CONTENT}>
               <BackgroundKindIcon kind={node.kind} />
-              <span className="block min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
+              <span
+                className={cn(
+                  "block min-w-0 flex-1 truncate text-muted-foreground",
+                  CHAT_DOCK_PANEL_ROW_TEXT,
+                )}
+              >
                 {displayTitle}
               </span>
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+              <span
+                className={cn(
+                  "shrink-0 rounded bg-muted px-1.5 py-0.5 uppercase text-muted-foreground",
+                  CHAT_DOCK_PANEL_ROW_TEXT,
+                )}
+              >
                 {backgroundKindLabel(node.kind)}
               </span>
             </div>
           </TooltipWrapper>
-        ) : (
+        )}
+        {item?.kind === "cron" && (
+          <div
+            data-testid={`cron-background-row-${item.taskId}`}
+            className="min-w-0 flex-1 py-1"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <BackgroundKindIcon kind="cron" />
+              <span className="min-w-0 flex-1 text-ui-xs font-medium text-foreground/85">
+                {item.humanSchedule}
+              </span>
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+                {backgroundKindLabel(item.kind)}
+              </span>
+            </div>
+            <p className="mt-1 break-words text-ui-xs text-muted-foreground">
+              Schedule · <code>{item.schedule}</code>
+            </p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-ui-xs text-foreground/85">
+              {item.prompt}
+            </p>
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              scheduled jobs run while the session is otherwise alive, and stop
+              ten minutes after the last real activity — a job already running
+              at that moment finishes first
+            </p>
+          </div>
+        )}
+        {item !== null && item.kind !== "cron" && (
           <>
             <TooltipWrapper
               label={titleNode}
@@ -532,17 +638,27 @@ function BackgroundTreeRow(props: {
             >
               <button
                 type="button"
-                className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className={cn(CHAT_DOCK_PANEL_ROW_BUTTON, "cursor-pointer")}
                 onClick={() => props.onItemClick(item)}
               >
                 <BackgroundKindIcon kind={item.kind} />
-                <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+                <span
+                  className={cn(
+                    "block min-w-0 flex-1 truncate text-foreground/85",
+                    CHAT_DOCK_PANEL_ROW_TEXT,
+                  )}
+                >
                   {titleNode}
                 </span>
                 {item.kind === "mcp" && item.startedAt !== null ? (
                   <LiveElapsed startedAt={item.startedAt} />
                 ) : null}
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+                <span
+                  className={cn(
+                    "shrink-0 rounded bg-muted px-1.5 py-0.5 uppercase text-muted-foreground",
+                    CHAT_DOCK_PANEL_ROW_TEXT,
+                  )}
+                >
                   {backgroundKindLabel(item.kind)}
                 </span>
               </button>
@@ -590,8 +706,8 @@ function BackgroundTreeRow(props: {
  * kind whose title reads `now` (whether the resume time is far enough out to
  * need its weekday, via `formatWaitTime`), so subscribing at this depth means
  * the tick repaints this leaf alone - not the icon, the badge, the stop
- * button, or any sibling row in the panel. Same shape `FallbackGraceHeadline`
- * uses to isolate its own countdown from `FallbackGraceCard`.
+ * button, or any sibling row in the panel. Same shape the routing card's
+ * `CountdownHeadline` uses to isolate its own countdown from the card.
  *
  * Returns a bare fragment rather than a `<span>`: the caller renders this
  * both as the row's visible title AND as the tooltip's `label` (which takes a
@@ -622,15 +738,17 @@ export function BackgroundItemsPanel(props: {
   /** Feeds the confirm dialog's "the active turn will also be stopped" line. */
   readonly turnActive: boolean;
   readonly scrollRegionMaxHeightClass: string;
+  /** A hairline above this panel, because a sibling drew before it in the
+   *  dock's shared frame (L-97). */
   readonly separated: boolean;
   readonly onItemClick: (item: BackgroundItem) => void;
   readonly onStopItem: (taskId: string) => string | null;
   readonly onStopAll: () => string | null;
   readonly onStopSession: () => string | null;
 }) {
-  // Open on arrival when a chip click is what put this row back in the dock.
-  const revealedByChip = useChatDockSectionRevealed("background");
-  const [open, setOpen] = useState(revealedByChip);
+  // Attached above the composer because its pill is the open one (L-142).
+  const attached = useChatDockSectionAttached("background");
+  const [open, setOpen] = useState(false);
   const [committedRememberedByTaskId, setCommittedRememberedByTaskId] =
     useState<ReadonlyMap<string, RememberedBackgroundNode>>(() => new Map());
   // A harness background item is stopped over the chat's own stream, so it
@@ -665,11 +783,21 @@ export function BackgroundItemsPanel(props: {
     () => buildBackgroundTree(items, rememberedByTaskId),
     [items, rememberedByTaskId],
   );
-  const runningGroupCount = tree.filter(treeHasRunningTask).length;
-  const waitingWakeCount = items.filter(
-    (item) => item.kind === "wakeup",
-  ).length;
   const hostId = useTabHostId();
+  // The version gate, read off the items themselves: any command the host
+  // flagged as not individually stoppable turns "Stop all" into the
+  // session-scoped escalation, which asks first - the click would otherwise
+  // do more than the label says (kill the provider session, and a live turn
+  // with it). Computed ahead of `cronStopControlState` because the button's
+  // label depends on it too - see the comment there.
+  const sessionStopEscalation = useMemo(() => {
+    for (const item of items) {
+      if (item.kind === "command" && item.individualStopUnavailable !== null) {
+        return item.individualStopUnavailable;
+      }
+    }
+    return null;
+  }, [items]);
   // Read from the same store the rows below read, so the header can never
   // claim a count the list does not show. Scoped to the TAB's bound host,
   // which is the host this panel's chat session was opened under.
@@ -678,6 +806,14 @@ export function BackgroundItemsPanel(props: {
     chatId: props.chatId,
     hostId,
   });
+  const { scheduledJobCount, harnessStopAllReady, showStopAll, stopAllLabel } =
+    cronStopControlState({
+      items,
+      managedCommandCount: managedCommands.length,
+      stoppable,
+      stopAllPending: props.stopAllPending,
+      hasSessionStopEscalation: sessionStopEscalation !== null,
+    });
   const heldManagedCommands = useHeldManagedCommandsForChat({
     epicId: props.epicId,
     chatId: props.chatId,
@@ -704,11 +840,23 @@ export function BackgroundItemsPanel(props: {
     () => managedCommands.filter((command) => !heldCommandIds.has(command.id)),
     [managedCommands, heldCommandIds],
   );
-  const headerSummary = backgroundHeaderSummary({
-    runningCount: runningGroupCount + runningOnlyManagedCommands.length,
-    heldCount: heldManagedCommands.length,
-    waitingWakeCount,
+  // Same store, same host scoping as the shells above. Forwards are NOT part
+  // of "Stop all": that button ends work the agent is doing, and a forward is
+  // plumbing a person may still be looking through - it has its own Stop.
+  const portForwards = usePortForwardsForChat({
+    epicId: props.epicId,
+    chatId: props.chatId,
+    hostId,
   });
+  // The chip's number comes from the same helper, so the two cannot disagree.
+  const headerSummary = backgroundHeaderSummary(
+    backgroundSectionCounts({
+      tree,
+      runningManagedCommandIds: managedCommands.map((command) => command.id),
+      heldManagedCommandIds: heldManagedCommands.map((held) => held.commandId),
+      portForwardCount: portForwards.length,
+    }),
+  );
   const deliverHeld = useManagedCommandDeliverHeld(props.chatId);
   const deliverHeldPending = useManagedCommandDeliverHeldIsPending(
     props.chatId,
@@ -733,22 +881,8 @@ export function BackgroundItemsPanel(props: {
   // leaving it out here would be a "Stop all" that knowingly left a process
   // alive. That is why the header's running total is a floor on this button's
   // reach rather than an equality - see `backgroundHeaderSummary`.
-  const harnessStopAllReady = stoppable && !props.stopAllPending;
   const managedStopAllReady =
     managedStoppable && managedCommands.length > 0 && !stopAllManagedPending;
-  // The version gate, read off the items themselves: any command the host
-  // flagged as not individually stoppable turns "Stop all" into the
-  // session-scoped escalation, which asks first - the click would otherwise
-  // do more than the label says (kill the provider session, and a live turn
-  // with it).
-  const sessionStopEscalation = useMemo(() => {
-    for (const item of items) {
-      if (item.kind === "command" && item.individualStopUnavailable !== null) {
-        return item.individualStopUnavailable;
-      }
-    }
-    return null;
-  }, [items]);
   const [confirmingSessionStop, setConfirmingSessionStop] = useState(false);
   // One button, one rule: live while there is something it can do, dead while
   // anything it started is still in flight. Re-enabling as soon as one half
@@ -788,12 +922,138 @@ export function BackgroundItemsPanel(props: {
   };
   // Count every affected row, not just root tree groups - a parent command
   // with running children would otherwise understate the dialog's blast
-  // radius. Wakeup rows are excluded: host-owned wakes survive a session
-  // stop (the handler never touches them), so counting them would be a
-  // false promise.
+  // radius. Scheduled jobs share the provider session and end with it.
+  // Wakeup rows are excluded: host-owned wakes survive a session stop (the
+  // handler never touches them), so counting them would be a false promise.
   const panelItemCount =
     items.filter((item) => item.kind !== "wakeup").length +
     managedCommands.length;
+
+  const actions = (
+    <>
+      {heldManagedCommands.length > 0 ? (
+        <TooltipWrapper
+          label="Wake the agent now with the output Stop held back. Otherwise it arrives when the chat next wakes (a message or a resume)."
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span className="inline-flex">
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="shrink-0"
+              disabled={!managedDeliverable || deliverHeldPending}
+              data-testid="background-deliver-held"
+              onClick={() => {
+                // Null, not the rendered ids: Deliver means "everything you
+                // are holding for me", and naming the ids this panel happens
+                // to show would silently skip a hold installed between
+                // render and click.
+                deliverHeld.mutate({
+                  hostId,
+                  epicId: props.epicId,
+                  chatId: props.chatId,
+                  commandIds: null,
+                });
+              }}
+            >
+              {deliverHeldPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="background-deliver-held-spinner"
+                  variant={undefined}
+                />
+              ) : null}
+              {heldManagedCommands.length === 1
+                ? "Deliver"
+                : `Deliver ${heldManagedCommands.length}`}
+            </Button>
+          </span>
+        </TooltipWrapper>
+      ) : null}
+      {showStopAll ? (
+        <BackgroundStopButton
+          label={stopAllLabel}
+          iconOnly={false}
+          disabled={stopAllDisabled}
+          testId="background-stop-all"
+          onClick={stopAll}
+        />
+      ) : null}
+    </>
+  );
+
+  const list = (
+    <ul className={cn("m-0 list-none", CHAT_DOCK_PANEL_LIST)}>
+      {heldManagedCommands.map((held) => (
+        <HeldManagedCommandRow
+          key={`held-${held.commandId}`}
+          held={held}
+          command={runningManagedCommandById.get(held.commandId) ?? null}
+          epicId={props.epicId}
+          hostId={hostId}
+          stoppable={managedStoppable}
+          onOpen={openManagedCommand}
+        />
+      ))}
+      {runningOnlyManagedCommands.map((command) => (
+        <ManagedCommandRow
+          key={command.id}
+          command={command}
+          epicId={props.epicId}
+          hostId={hostId}
+          viewTabId={props.viewTabId}
+          stoppable={managedStoppable}
+          onOpen={openManagedCommand}
+        />
+      ))}
+      {portForwards.map((forward) => (
+        <PortForwardRow
+          key={forward.forwardId}
+          forward={forward}
+          stoppable={managedStoppable}
+        />
+      ))}
+      <BackgroundTreeRows
+        nodes={tree}
+        depth={0}
+        stoppable={stoppable}
+        pendingStopTaskIds={props.pendingStopTaskIds}
+        onItemClick={props.onItemClick}
+        onStopItem={props.onStopItem}
+      />
+    </ul>
+  );
+
+  const sessionStopDialog = (
+    <SessionStopConfirmDialog
+      escalation={sessionStopEscalation}
+      open={confirmingSessionStop}
+      onOpenChange={setConfirmingSessionStop}
+      itemCount={panelItemCount}
+      scheduledJobCount={scheduledJobCount}
+      turnActive={props.turnActive}
+      isPending={props.sessionStopPending}
+      onConfirm={confirmSessionStop}
+    />
+  );
+
+  if (attached) {
+    return (
+      <>
+        <ChatDockPillActions>{actions}</ChatDockPillActions>
+        <ChatDockAttachedPanelBody
+          section="background"
+          testId="background-items-list"
+        >
+          {list}
+        </ChatDockAttachedPanelBody>
+        {sessionStopDialog}
+      </>
+    );
+  }
 
   return (
     <Collapsible
@@ -804,87 +1064,8 @@ export function BackgroundItemsPanel(props: {
       variant="panel"
     >
       <div className="flex items-stretch">
-        <CollapsibleTrigger
-          className="group/background flex min-w-0 flex-1 items-center text-left"
-          variant="panel"
-        >
-          <ChevronDown
-            aria-hidden
-            className={cn(
-              "size-3 shrink-0 text-muted-foreground/70 transition-transform",
-              open ? null : "-rotate-90",
-            )}
-          />
-          <LivePulse
-            size="xs"
-            tone="active"
-            ariaLabel="Background activity"
-            className={undefined}
-          />
-          <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
-            Background
-          </span>
-          <span aria-hidden className="shrink-0 text-muted-foreground/40">
-            ·
-          </span>
-          <span
-            data-testid="background-header-summary"
-            className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground"
-          >
-            {headerSummary}
-          </span>
-        </CollapsibleTrigger>
-        <div className="flex shrink-0 items-center gap-1 pr-1.5">
-          {heldManagedCommands.length > 0 ? (
-            <TooltipWrapper
-              label="Wake the agent now with the output Stop held back. Otherwise it arrives when the chat next wakes (a message or a resume)."
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <span className="inline-flex">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  className="shrink-0"
-                  disabled={!managedDeliverable || deliverHeldPending}
-                  data-testid="background-deliver-held"
-                  onClick={() => {
-                    // Null, not the rendered ids: Deliver means "everything you
-                    // are holding for me", and naming the ids this panel happens
-                    // to show would silently skip a hold installed between
-                    // render and click.
-                    deliverHeld.mutate({
-                      hostId,
-                      epicId: props.epicId,
-                      chatId: props.chatId,
-                      commandIds: null,
-                    });
-                  }}
-                >
-                  {deliverHeldPending ? (
-                    <AgentSpinningDots
-                      className={undefined}
-                      testId="background-deliver-held-spinner"
-                      variant={undefined}
-                    />
-                  ) : null}
-                  {heldManagedCommands.length === 1
-                    ? "Deliver"
-                    : `Deliver ${heldManagedCommands.length}`}
-                </Button>
-              </span>
-            </TooltipWrapper>
-          ) : null}
-          <BackgroundStopButton
-            label="Stop all"
-            iconOnly={false}
-            disabled={stopAllDisabled}
-            testId="background-stop-all"
-            onClick={stopAll}
-          />
-        </div>
+        <BackgroundItemsHeader open={open} headerSummary={headerSummary} />
+        <div className="flex shrink-0 items-center gap-1 pr-1.5">{actions}</div>
       </div>
       <CollapsibleContent>
         <div
@@ -895,49 +1076,10 @@ export function BackgroundItemsPanel(props: {
             props.scrollRegionMaxHeightClass,
           )}
         >
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
-            {heldManagedCommands.map((held) => (
-              <HeldManagedCommandRow
-                key={`held-${held.commandId}`}
-                held={held}
-                command={runningManagedCommandById.get(held.commandId) ?? null}
-                epicId={props.epicId}
-                hostId={hostId}
-                stoppable={managedStoppable}
-                onOpen={openManagedCommand}
-              />
-            ))}
-            {runningOnlyManagedCommands.map((command) => (
-              <ManagedCommandRow
-                key={command.id}
-                command={command}
-                epicId={props.epicId}
-                hostId={hostId}
-                viewTabId={props.viewTabId}
-                stoppable={managedStoppable}
-                onOpen={openManagedCommand}
-              />
-            ))}
-            <BackgroundTreeRows
-              nodes={tree}
-              depth={0}
-              stoppable={stoppable}
-              pendingStopTaskIds={props.pendingStopTaskIds}
-              onItemClick={props.onItemClick}
-              onStopItem={props.onStopItem}
-            />
-          </ul>
+          {list}
         </div>
       </CollapsibleContent>
-      <SessionStopConfirmDialog
-        escalation={sessionStopEscalation}
-        open={confirmingSessionStop}
-        onOpenChange={setConfirmingSessionStop}
-        itemCount={panelItemCount}
-        turnActive={props.turnActive}
-        isPending={props.sessionStopPending}
-        onConfirm={confirmSessionStop}
-      />
+      {sessionStopDialog}
     </Collapsible>
   );
 }
@@ -947,6 +1089,7 @@ function SessionStopConfirmDialog(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly itemCount: number;
+  readonly scheduledJobCount: number;
   readonly turnActive: boolean;
   readonly isPending: boolean;
   readonly onConfirm: () => void;
@@ -961,6 +1104,7 @@ function SessionStopConfirmDialog(props: {
       description={sessionStopDialogDescription({
         providerLabel: props.escalation.providerLabel,
         itemCount: props.itemCount,
+        scheduledJobCount: props.scheduledJobCount,
         turnActive: props.turnActive,
       })}
       cascadeSummary={null}
@@ -979,6 +1123,7 @@ function SessionStopConfirmDialog(props: {
 function sessionStopDialogDescription(input: {
   readonly providerLabel: string;
   readonly itemCount: number;
+  readonly scheduledJobCount: number;
   readonly turnActive: boolean;
 }): string {
   const blastRadius =
@@ -988,6 +1133,52 @@ function sessionStopDialogDescription(input: {
   return [
     `This ${input.providerLabel} version can't stop background commands individually.`,
     blastRadius,
+    ...(input.scheduledJobCount > 0
+      ? [
+          `This includes ${input.scheduledJobCount} scheduled ${input.scheduledJobCount === 1 ? "job" : "jobs"}.`,
+        ]
+      : []),
     ...(input.turnActive ? ["The active turn will also be stopped."] : []),
   ].join(" ");
+}
+
+export function BackgroundItemsHeader({
+  open,
+  headerSummary,
+}: {
+  open: boolean;
+  headerSummary: string;
+}) {
+  return (
+    <CollapsibleTrigger
+      className="group/background flex min-w-0 flex-1 items-center text-left"
+      variant="panel"
+    >
+      <ChevronDown
+        aria-hidden
+        className={cn(
+          "size-3 shrink-0 text-muted-foreground/70 transition-transform",
+          open ? null : "-rotate-90",
+        )}
+      />
+      <LivePulse
+        size="xs"
+        tone="active"
+        ariaLabel="Background activity"
+        className={undefined}
+      />
+      <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
+        Background
+      </span>
+      <span aria-hidden className="shrink-0 text-muted-foreground/40">
+        ·
+      </span>
+      <span
+        data-testid="background-header-summary"
+        className="min-w-0 flex-1 truncate text-ui-xs text-muted-foreground"
+      >
+        {headerSummary}
+      </span>
+    </CollapsibleTrigger>
+  );
 }

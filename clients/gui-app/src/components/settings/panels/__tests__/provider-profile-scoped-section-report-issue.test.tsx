@@ -23,7 +23,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 // the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
 // which that stub does not intercept - so the real hook throws its "must be
 // used inside a <HostRuntimeProvider>" error. The refresh button reaches that
-// chain via `useProviderRateLimitRefresh` -> `useRateLimitQueueScope`. Stub the
+// chain via `useProviderRateLimitRefresh` -> `useProviderRateLimitFetchScope`. Stub the
 // one resolution they share, the way the host-less panel suites already do.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -78,9 +78,10 @@ function ambientProfile(): ProviderCliState["profiles"][number] {
   };
 }
 
-// `opencode` is not in the rate-limit-capable provider set, so the embedded
-// usage card and refresh button take their no-query branch - no additional
-// host-query mocking needed for this section-level test.
+// `opencode` is rate-limit capable, so the embedded usage card and refresh
+// button do mount; the host-client stubs above resolve no client for them, so
+// their host queries never run and this section-level test needs no
+// host-query mocking.
 function opencodeState(): ProviderCliState {
   return {
     providerId: "opencode",
@@ -132,7 +133,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
-          signInUnavailableHint={null}
+          onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}

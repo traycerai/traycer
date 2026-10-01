@@ -496,11 +496,16 @@ function applyGroupSelectionSet(
   // shares one), and its checkbox governs all of them.
   const groups = groupsForViewKey(state, groupKey);
   if (groups.length === 0) return state;
+  // Only the rows the header is sitting above: the header's counts read the
+  // searched slice, so its checkbox has to move exactly that slice - the same
+  // contract the toolbar's master checkbox keeps.
+  const needle = state.query.trim().toLowerCase();
   const selected = new Set(state.selected);
   for (const group of groups) {
     for (const candidate of group.sessions) {
       if (!isImportable(candidate)) continue;
       if (state.disabledHarnesses.has(candidate.harness)) continue;
+      if (!matchesQuery(candidate, group.location.path, needle)) continue;
       const key = sessionImportSelectionKey(
         candidate.harness,
         candidate.nativeSessionId,
@@ -556,8 +561,8 @@ export interface SessionImportRowView {
   readonly title: string;
   /**
    * The folder this session ran in, as the scan spelled it. Every row carries
-   * it; the list shows it only inside the Deleted Folders group, where the
-   * header no longer names one folder.
+   * it; task view and Deleted Folders show it because no project header
+   * supplies that context.
    */
   readonly folderPath: string;
   readonly selected: boolean;
@@ -574,7 +579,17 @@ export type SessionImportGroupSelectionState = "none" | "partial" | "all";
 export interface SessionImportProviderView {
   readonly harness: GuiHarnessId;
   readonly name: string;
+  /** What the pill shows: the rows this harness has ON SCREEN. */
   readonly count: number;
+  /**
+   * Every row the scan produced for this harness, view filters included -
+   * which is what says whether the provider answered at all.
+   *
+   * Distinct from {@link count} because a statement of FACT cannot be read off
+   * a display count: with "Show imported" off, a harness whose every session
+   * is already in Traycer shows a pill of 0 while having produced rows.
+   */
+  readonly scannedCount: number;
   readonly enabled: boolean;
 }
 
@@ -587,6 +602,7 @@ export interface SessionImportGroupView {
   readonly rows: ReadonlyArray<SessionImportRowView>;
   /** Rows displayed in this folder, selectable or not. */
   readonly totalCount: number;
+  /** Of those displayed rows, how many can be ticked - what the header moves. */
   readonly selectableCount: number;
   readonly selectedCount: number;
   readonly selectionState: SessionImportGroupSelectionState;
@@ -632,9 +648,56 @@ export function candidateDisplayTitle(
 }
 
 /** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
+/**
+ * The sentence a provider failure leads with.
+ *
+ * A reader may fail AFTER it has already produced rows - a listing that walked
+ * two pages and then lost the provider is reported as a failure, and those two
+ * pages are on screen and importable. "Couldn't read Codex sessions" above a
+ * list of Codex sessions is the wrong sentence for that; the host's own detail
+ * (which carries the count) follows either way.
+ *
+ * It reads `scannedCount`, not the pill's `count`: whether the provider
+ * ANSWERED is a fact about the scan, and the pill is a fact about the screen.
+ * A harness whose pages all held already-imported sessions shows a pill of 0
+ * while "Show imported" is off, and "Couldn't read" would be false of it - and
+ * visibly so the moment the user turns the toggle on.
+ */
+export function sessionImportProviderFailureLead(
+  providers: ReadonlyArray<SessionImportProviderView>,
+  harness: GuiHarnessId,
+): string {
+  const view = providers.find((provider) => provider.harness === harness);
+  const name = harnessDisplayName(harness);
+  return view !== undefined && view.scannedCount > 0
+    ? `Some ${name} sessions are missing.`
+    : `Couldn’t read ${name} sessions.`;
+}
+
 export function harnessDisplayName(harness: GuiHarnessId): string {
   const providerId = guiHarnessIdToProviderId(harness);
   return providerId === null ? harness : providerDisplayName(providerId);
+}
+
+/**
+ * The noun for a COUNT of the things being imported. ONE table, deliberately:
+ * every site that renders such a count calls this, so the word moves in one
+ * edit.
+ *
+ * It is "session" and not "task" because after one task per repository the
+ * two are no longer the same number. Thirty-one sessions out of one checkout
+ * land as thirty-one chats inside ONE task, so "Imported 31 tasks" is not a
+ * wording preference, it is false - and the picker's counts are counts of the
+ * same things, before they land.
+ *
+ * The flow's bare nouns follow the same rule as literal strings: whatever names
+ * the things being imported says "session" ("Back to sessions", "Search
+ * sessions or folders"), and whatever names the task they land IN keeps "task"
+ * ("Ready in your task list.", "Open task", "into Traycer as tasks"). The host's
+ * `session-import-copy-drift.test.ts` pins both halves.
+ */
+export function importedCountNoun(count: number): string {
+  return count === 1 ? "session" : "sessions";
 }
 
 /** Last path segment, on either separator; the full path stays on the row. */
@@ -708,7 +771,7 @@ export function sessionImportNotImportedLine(
     (total, group) => total + group.entries.length,
     0,
   );
-  const noun = count === 1 ? "session" : "sessions";
+  const noun = importedCountNoun(count);
   const only = groups.length === 1 ? groups[0] : undefined;
   if (only === undefined) return `Not imported: ${count} ${noun}`;
   return `Not imported: ${count} ${noun} ${failureCause(only.reason)}`;
@@ -723,7 +786,7 @@ function failureCause(reason: SessionImportFailureReason): string {
     case "workspace_bind_failed":
       return "with no matching folder on this machine";
     case "creation_failed":
-      return "whose task could not be created";
+      return "that could not be created";
     case "internal_error":
       return "that hit an unexpected error";
   }
@@ -801,10 +864,18 @@ function providerViewsFor(
   state: SessionImportWizardState,
 ): ReadonlyArray<SessionImportProviderView> {
   const counts = new Map<GuiHarnessId, number>();
-  for (const harness of state.scannedProviders) counts.set(harness, 0);
-  for (const harness of state.disabledHarnesses) counts.set(harness, 0);
+  const scanned = new Map<GuiHarnessId, number>();
+  for (const harness of state.scannedProviders) {
+    counts.set(harness, 0);
+    scanned.set(harness, 0);
+  }
+  for (const harness of state.disabledHarnesses) {
+    counts.set(harness, 0);
+    scanned.set(harness, 0);
+  }
   for (const group of state.groups) {
     for (const candidate of group.sessions) {
+      scanned.set(candidate.harness, (scanned.get(candidate.harness) ?? 0) + 1);
       if (!isVisibleCandidate(state, candidate)) continue;
       counts.set(candidate.harness, (counts.get(candidate.harness) ?? 0) + 1);
     }
@@ -818,6 +889,7 @@ function providerViewsFor(
     harness: entry.id,
     name: harnessDisplayName(entry.id),
     count: entry.count,
+    scannedCount: scanned.get(entry.id) ?? entry.count,
     enabled: !state.disabledHarnesses.has(entry.id),
   }));
 }
@@ -833,12 +905,12 @@ export function selectionStateFor(
 /**
  * Projects state into what the list renders.
  *
- * The counts on a group header describe the whole IN-SCOPE group, not the
- * searched slice: the header's checkbox toggles exactly those rows (that is the
- * only way to clear a folder without expanding it), so a header claiming "2"
- * while ticking 40 would be lying about its own control. Scope is a different
- * matter - a provider the user switched off is not part of this import at all,
- * so it leaves the counts as well as the list.
+ * A group header's counts describe the rows UNDER it - the searched slice, not
+ * the whole in-scope group: the header's checkbox toggles exactly the rows it
+ * counts, so a header claiming "2" while ticking 40 would be lying about its
+ * own control. That is the same contract the toolbar's master checkbox keeps.
+ * Scope drops out the same way - a provider the user switched off is not part
+ * of this import at all, so it leaves the counts as well as the list.
  */
 export function buildSessionImportView(
   state: SessionImportWizardState,
@@ -857,8 +929,8 @@ export function buildSessionImportView(
   let matchedSessions = 0;
   let visibleSelectedCount = 0;
   let hiddenImportedCount = 0;
-  // Missing folders share a rendered group. Selection covers their full
-  // provider scope; the displayed count covers only the matching rows.
+  // Missing folders share a rendered group, so its counts accumulate across
+  // every one of them - over the matching rows, as any other header's do.
   const deletedRows: SessionImportRowView[] = [];
   const deleted = {
     folders: 0,
@@ -898,17 +970,18 @@ export function buildSessionImportView(
     const rows = matching.map((candidate) =>
       rowView(candidate, path, state.selected),
     );
+    let rowSelectableCount = 0;
+    let rowSelectedCount = 0;
     for (const row of rows) {
       if (!row.selectable) continue;
+      rowSelectableCount += 1;
       visibleSelectionKeys.push(row.selectionKey);
-      if (row.selected) visibleSelectedCount += 1;
+      if (row.selected) {
+        rowSelectedCount += 1;
+        visibleSelectedCount += 1;
+      }
     }
 
-    const selectedCount = selectable.filter((candidate) =>
-      state.selected.has(
-        sessionImportSelectionKey(candidate.harness, candidate.nativeSessionId),
-      ),
-    ).length;
     const latest = Math.max(
       0,
       ...providerScope.map((candidate) => candidate.updatedAt),
@@ -918,8 +991,8 @@ export function buildSessionImportView(
       if (inScope.length > 0) deleted.folders += 1;
       deletedRows.push(...rows);
       deleted.inScope += inScope.length;
-      deleted.selectable += selectable.length;
-      deleted.selected += selectedCount;
+      deleted.selectable += rowSelectableCount;
+      deleted.selected += rowSelectedCount;
       deleted.latest = Math.max(deleted.latest, latest);
       continue;
     }
@@ -935,9 +1008,9 @@ export function buildSessionImportView(
         expanded: state.expandedGroups.has(groupKey),
         rows,
         totalCount: rows.length,
-        selectableCount: selectable.length,
-        selectedCount,
-        selectionState: selectionStateFor(selectable.length, selectedCount),
+        selectableCount: rowSelectableCount,
+        selectedCount: rowSelectedCount,
+        selectionState: selectionStateFor(rowSelectableCount, rowSelectedCount),
       },
       tier: groupSortTier(false, group.gitBacked),
       count: providerScope.length,

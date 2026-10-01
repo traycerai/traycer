@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useWorktreeHostListingForClient } from "@/hooks/worktree/use-worktree-host-listing";
+import { useWorktreeEnrichmentForClient } from "@/hooks/worktree/use-worktree-enrichment-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
+const EMPTY_PATHS: readonly string[] = [];
 const EMPTY_BY_EPIC: ReadonlyMap<string, readonly WorktreeHostEntryV12[]> =
   new Map();
 
@@ -24,10 +25,10 @@ export interface WorktreeHostIndex {
 }
 
 /**
- * The cheap host-wide owner/path index: `worktree.listAllForHost` without
- * activity probes, so `branch`/`worktreePath`/`owners` are populated but the
- * expensive per-worktree probes never run. Shared (same query key) with the
- * base call of `useTaskWorktreeMetadata`.
+ * The host-wide owner/path index: the ONE shared host listing
+ * (`useWorktreeHostListingForClient`), which every worktree surface outside
+ * Settings reads - so the index, History's rows, the Epic sweep row and the
+ * composer's folder rows are all one read per host.
  */
 export function useWorktreeHostIndex(enabled: boolean): WorktreeHostIndex {
   return useWorktreeHostIndexForClient(useHostClient(), enabled);
@@ -42,25 +43,11 @@ export function useWorktreeHostIndexForClient(
   client: HostClient<HostRpcRegistry> | null,
   enabled: boolean,
 ): WorktreeHostIndex {
-  const baseQuery = useHostQuery<HostRpcRegistry, "worktree.listAllForHost">({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "worktree.listAllForHost",
-    params: {
-      includeActivity: false,
-      activityPaths: null,
-      cursor: null,
-      limit: null,
-      // A background read: serve the host's TTL-cached view. Only the
-      // Settings toolbar's explicit Refresh forces a disk recompute.
-      forceRefresh: false,
-    },
-    options: { enabled },
-  });
+  const listing = useWorktreeHostListingForClient(client, enabled);
   return {
-    worktrees: baseQuery.data?.worktrees ?? EMPTY_WORKTREES,
-    isFetching: baseQuery.isFetching,
-    error: baseQuery.error instanceof Error ? baseQuery.error : null,
+    worktrees: listing.worktrees,
+    isFetching: listing.isFetching,
+    error: listing.error,
   };
 }
 
@@ -70,46 +57,45 @@ export function useWorktreeHostIndexForClient(
  * the host probes each path (TTL-cached server-side) - so callers must gate
  * `enabled` on an actual need, e.g. a PR-number history search that has to
  * resolve "which epic owns PR #N" across all local worktrees.
+ *
+ * Cached per path (see `useWorktreeEnrichmentForClient`), so a
+ * `worktree.changed` frame re-probes only the row it names, never the fleet.
  */
 export function useWorktreeHostActivityIndex(
   enabled: boolean,
 ): WorktreeHostIndex {
   const client = useHostClient();
   const baseQuery = useWorktreeHostIndex(enabled);
+  // Gated on `enabled` itself, not only passed through: the base index is a
+  // key History already fetches, so a disabled observer still reads every
+  // host path out of it - and would otherwise mount one idle per-path observer
+  // per worktree, serving cached rows (and cached errors) while disabled.
   const activityPaths = useMemo(
-    () => baseQuery.worktrees.map((entry) => entry.worktreePath),
-    [baseQuery.worktrees],
+    () =>
+      enabled
+        ? baseQuery.worktrees.map((entry) => entry.worktreePath)
+        : EMPTY_PATHS,
+    [baseQuery.worktrees, enabled],
   );
-  const enrichedQuery = useHostQuery<
-    HostRpcRegistry,
-    "worktree.listAllForHost"
-  >({
-    cacheKeyIdentity: undefined,
+  const enrichment = useWorktreeEnrichmentForClient(
     client,
-    method: "worktree.listAllForHost",
-    params: {
-      includeActivity: true,
-      activityPaths,
-      cursor: null,
-      limit: null,
-      // Background read - see `useWorktreeHostIndex`.
-      forceRefresh: false,
-    },
-    options: { enabled: enabled && activityPaths.length > 0 },
-  });
+    activityPaths,
+    enabled,
+    "always",
+  );
   return {
-    worktrees: enrichedQuery.data?.worktrees ?? EMPTY_WORKTREES,
-    isFetching: baseQuery.isFetching || enrichedQuery.isFetching,
-    error:
-      baseQuery.error ??
-      (enrichedQuery.error instanceof Error ? enrichedQuery.error : null),
+    worktrees: enrichment.worktrees,
+    isFetching: baseQuery.isFetching || enrichment.isFetching,
+    error: baseQuery.error ?? enrichment.error,
   };
 }
 
 /**
- * Batches task-history worktree metadata into two host calls: one cheap
- * owner/path index, then one bounded enrichment request for only paths owned by
- * the visible tasks. The expensive branch/PR probes never walk unrelated rows.
+ * Task-history worktree metadata from one cheap owner/path index plus the
+ * activity enrichment of only the paths owned by the visible tasks. The
+ * expensive branch/PR probes never walk unrelated rows, and each owned path is
+ * cached on its own (see `useWorktreeEnrichmentForClient`): a
+ * `worktree.changed` frame for one row re-probes that row, not the page.
  */
 export function useTaskWorktreeMetadata(
   epicIds: readonly string[],
@@ -138,27 +124,16 @@ export function useTaskWorktreeMetadataForClient(
       ),
     [baseQuery.worktrees, visibleEpicIds],
   );
-  const enrichedQuery = useHostQuery<
-    HostRpcRegistry,
-    "worktree.listAllForHost"
-  >({
-    cacheKeyIdentity: undefined,
+  const enrichment = useWorktreeEnrichmentForClient(
     client,
-    method: "worktree.listAllForHost",
-    params: {
-      includeActivity: true,
-      activityPaths: ownedPaths,
-      cursor: null,
-      limit: null,
-      // Background read - see the base query above.
-      forceRefresh: false,
-    },
-    options: { enabled: ownedPaths.length > 0 },
-  });
+    ownedPaths,
+    true,
+    "ifMissing",
+  );
 
   const worktreesByEpicId = useMemo(() => {
-    const worktrees = enrichedQuery.data?.worktrees;
-    if (worktrees === undefined || worktrees.length === 0) return EMPTY_BY_EPIC;
+    const worktrees = enrichment.worktrees;
+    if (worktrees.length === 0) return EMPTY_BY_EPIC;
     const byEpic = new Map<string, WorktreeHostEntryV12[]>();
     for (const entry of worktrees) {
       for (const epicId of new Set(entry.owners.map((owner) => owner.epicId))) {
@@ -169,12 +144,10 @@ export function useTaskWorktreeMetadataForClient(
       }
     }
     return byEpic;
-  }, [enrichedQuery.data, visibleEpicIds]);
+  }, [enrichment.worktrees, visibleEpicIds]);
   return {
     worktreesByEpicId,
-    isFetching: baseQuery.isFetching || enrichedQuery.isFetching,
-    error:
-      baseQuery.error ??
-      (enrichedQuery.error instanceof Error ? enrichedQuery.error : null),
+    isFetching: baseQuery.isFetching || enrichment.isFetching,
+    error: baseQuery.error ?? enrichment.error,
   };
 }

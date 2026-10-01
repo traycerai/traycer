@@ -1191,10 +1191,66 @@ describe("range responses", () => {
     ).toBeNull();
   });
 
-  it("does not invalidate on a superseded epoch, which repairs itself", () => {
-    // The contrast that makes the case above a real distinction: a newer epoch
-    // is already on its way and will re-seat the coordinate space, so dropping
-    // the response is the whole of the correct response.
+  it("invalidates on an answer from AHEAD of the window so the planner cannot spin on it", () => {
+    // The host serves every range from its current index and stamps it with
+    // the current epoch, so an answer from ahead means the `reindexed` that
+    // would have moved this window on was lost. Dropping it and leaving the
+    // window valid made the planner ask for the same span again, and the host
+    // answer from ahead again - a loop at the round-trip rate that only a turn
+    // completion's snapshot ever ended. A newer epoch is a reindex learned
+    // late, and is voided exactly as `applyIndexChange` voids one.
+    const window = windowWithSkeleton(4);
+    const seated = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 1,
+        rowIds: ["row-1"],
+        messages: [userMessage("m-1", 1)],
+      }),
+      null,
+      null,
+    );
+
+    expect(seated.invalidated).toBe(true);
+    expect(seated.spans).toEqual([]);
+    expect(
+      planTranscriptHydration(seated, { fromOrdinal: 0, toOrdinal: 4 }, []),
+    ).toBeNull();
+    // A second answer from ahead, of the kind an in-flight request delivers
+    // after the first, is a no-op by identity: nothing to re-void.
+    const again = applyRangeResponse(
+      seated,
+      rangeResponse({
+        epoch: 2,
+        fromOrdinal: 1,
+        rowIds: ["row-1"],
+        messages: [userMessage("m-1", 1)],
+      }),
+      null,
+      null,
+    );
+    expect(again).toBe(seated);
+  });
+
+  it("invalidates on an EMPTY answer from ahead of the window", () => {
+    // The epoch is the evidence, not the body: an answer with nothing in it
+    // still says the space this window is framed against is gone.
+    const window = windowWithSkeleton(4);
+    const seated = applyRangeResponse(
+      window,
+      rangeResponse({ epoch: 2, fromOrdinal: 1, rowIds: [], messages: [] }),
+      null,
+      null,
+    );
+    expect(seated.invalidated).toBe(true);
+  });
+
+  it("does not invalidate on an OLDER epoch, which is a straggler", () => {
+    // The contrast that makes the case above a real distinction: an answer
+    // from a space this window has already left names ordinals that no longer
+    // exist, and the frame that moved the window on has already re-seated the
+    // coordinate space. Dropping it is the whole of the correct response.
     const window = windowWithSkeleton(4);
     const seated = applyRangeResponse(
       window,

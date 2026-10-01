@@ -48,7 +48,13 @@ interface DeferredResponse {
   resolve(response: Response): void;
 }
 
-const VALIDATION_URL = "http://localhost:5005/api/v3/user";
+// The identity route `validateAuthTokenIdentity*` calls FIRST (see
+// `auth-validation.ts`). Every fixture in this file answers this one - the
+// frozen route (`FROZEN_VALIDATION_URL`) is reached only by the one test
+// dedicated to it below.
+const NEGOTIATED_VALIDATION_URL =
+  "http://localhost:5005/api/v3/user/negotiated";
+const FROZEN_VALIDATION_URL = "http://localhost:5005/api/v3/user";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
 const SESSIONS_URL = "http://localhost:5005/api/v3/user/sessions";
 
@@ -213,7 +219,10 @@ function okWithProfile(): Promise<Response> {
       }),
       {
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-traycer-user-record-version": "2.0",
+        },
       },
     ),
   );
@@ -258,7 +267,10 @@ function okWithProfileForUser(userId: string): Promise<Response> {
       }),
       {
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-traycer-user-record-version": "2.0",
+        },
       },
     ),
   );
@@ -411,13 +423,13 @@ function repairedRaceFetch(
       return refreshResponse.promise;
     }
     if (
-      url === VALIDATION_URL &&
+      url === NEGOTIATED_VALIDATION_URL &&
       init?.headers?.Authorization === "Bearer account-b-token"
     ) {
       return okWithProfileForUser("user-2");
     }
     if (
-      url === VALIDATION_URL &&
+      url === NEGOTIATED_VALIDATION_URL &&
       (init?.headers?.Authorization === "Bearer account-a-token" ||
         init?.headers?.Authorization === "Bearer account-a-rotated-token")
     ) {
@@ -490,6 +502,11 @@ describe("AuthService", () => {
 
   beforeEach(() => {
     useAuthStore.getState().setSignedOut();
+    // `setSignedOut()` does not touch `cloudVerdictLoss` (E10) - it is a
+    // separate latch a real `signed-out` never clears in production either -
+    // so a test that latches it (a credential/account rejection) leaks it
+    // into the next one unless the suite resets it itself.
+    useAuthStore.getState().setCloudVerdictLoss("unreachable");
     restoreFetch = installFetch(() => okWithProfile());
   });
 
@@ -501,6 +518,7 @@ describe("AuthService", () => {
       }
     }
     useAuthStore.getState().setSignedOut();
+    useAuthStore.getState().setCloudVerdictLoss("unreachable");
     vi.useRealTimers();
     restoreFetch();
   });
@@ -571,7 +589,7 @@ describe("AuthService", () => {
         seenRefreshBodies.push(body);
         return okWithRefreshToken("tracked-token");
       }
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return okWithProfile();
       }
       return status(500);
@@ -618,7 +636,7 @@ describe("AuthService", () => {
         refreshCalls.push(String(init?.headers?.Authorization));
         return okWithRefreshToken(`repaired-${refreshCalls.length}`);
       }
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return okWithProfile();
       }
       return status(500);
@@ -672,7 +690,7 @@ describe("AuthService", () => {
         refreshCalls.push(String(init?.headers?.Authorization));
         return okWithRefreshToken("repaired-1");
       }
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return okWithProfile();
       }
       return status(500);
@@ -800,7 +818,7 @@ describe("AuthService", () => {
         // assertion below is what actually pins the gate.
         return okWithRefreshToken("must-not-be-minted");
       }
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return okWithProfile();
       }
       return status(500);
@@ -896,7 +914,7 @@ describe("AuthService", () => {
         return okWithRefreshToken("unexpected-account-a-rotation");
       }
       if (
-        url === VALIDATION_URL &&
+        url === NEGOTIATED_VALIDATION_URL &&
         init?.headers?.Authorization === "Bearer account-b-token"
       ) {
         return okWithProfileForUser("user-2");
@@ -1067,7 +1085,7 @@ describe("AuthService", () => {
     restoreFetch = installFetch((input, init) => {
       const url = typeof input === "string" ? input : String(input);
       if (
-        url === VALIDATION_URL &&
+        url === NEGOTIATED_VALIDATION_URL &&
         init?.headers?.Authorization === "Bearer old-token"
       ) {
         return status(401);
@@ -1079,7 +1097,7 @@ describe("AuthService", () => {
         return okWithRefreshToken("rotated-token");
       }
       if (
-        url === VALIDATION_URL &&
+        url === NEGOTIATED_VALIDATION_URL &&
         init?.headers?.Authorization === "Bearer rotated-token"
       ) {
         return okWithProfile();
@@ -1196,7 +1214,7 @@ describe("AuthService", () => {
       const url = typeof input === "string" ? input : String(input);
       calls.push(`${init?.method ?? "GET"} ${url}`);
       if (
-        url === VALIDATION_URL &&
+        url === NEGOTIATED_VALIDATION_URL &&
         init?.headers?.Authorization === "Bearer expired-token"
       ) {
         return status(401);
@@ -1208,7 +1226,7 @@ describe("AuthService", () => {
         return okWithRefreshToken("refreshed-token");
       }
       if (
-        url === VALIDATION_URL &&
+        url === NEGOTIATED_VALIDATION_URL &&
         init?.headers?.Authorization === "Bearer refreshed-token"
       ) {
         return okWithProfile();
@@ -1227,9 +1245,9 @@ describe("AuthService", () => {
     // collapseConsecutiveCalls: rotate's self-write may schedule a reconcile
     // validate (same URL as the post-rotate revalidate) that is a no-op adopt.
     expect(collapseConsecutiveCalls(calls)).toEqual([
-      `GET ${VALIDATION_URL}`,
+      `GET ${NEGOTIATED_VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
-      `GET ${VALIDATION_URL}`,
+      `GET ${NEGOTIATED_VALIDATION_URL}`,
     ]);
   });
 
@@ -1251,7 +1269,7 @@ describe("AuthService", () => {
     restoreFetch = installFetch((input, init) => {
       const url = typeof input === "string" ? input : String(input);
       calls.push(`${init?.method ?? "GET"} ${url}`);
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return validationAnswers ? status(401) : status(500);
       }
       if (url === REFRESH_URL) {
@@ -1270,9 +1288,11 @@ describe("AuthService", () => {
     // refresh spends.
     expect(useAuthStore.getState().status).toBe("unverified");
     expect(service.getLastError()).toBeNull();
-    expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${NEGOTIATED_VALIDATION_URL}`,
+    ]);
     expect(
-      calls.filter((call) => call === `GET ${VALIDATION_URL}`),
+      calls.filter((call) => call === `GET ${NEGOTIATED_VALIDATION_URL}`),
     ).toHaveLength(AUTH_FETCH_MAX_ATTEMPTS);
 
     // Validation comes back with a definitive 401: the recovery tick rotates,
@@ -1311,7 +1331,7 @@ describe("AuthService", () => {
     restoreFetch();
     restoreFetch = installFetch((input) => {
       const url = typeof input === "string" ? input : String(input);
-      if (url === VALIDATION_URL) return status(401);
+      if (url === NEGOTIATED_VALIDATION_URL) return status(401);
       if (url === REFRESH_URL) {
         return Promise.resolve(
           new Response(
@@ -1353,6 +1373,10 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("revoked-token", "revoked-token-refresh"),
     );
+    // E10: authn REJECTED this credential (a token rejection, not silence),
+    // so the share-refusal toast must say "sign in again" rather than "check
+    // your connection".
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("session-rejected");
   });
 
   it("HOLDS the local plane when validation rejects with 404 on start() - the account is gone, the epics on this disk are not", async () => {
@@ -1388,6 +1412,13 @@ describe("AuthService", () => {
     // to delete machine-shared state on the server's behalf.
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("missing-user-token", "missing-user-token-refresh"),
+    );
+    // E10: this is the ACCOUNT rejection, not a token rejection - the
+    // share-refusal toast reads `lastError` (via this latch) to say "this
+    // account is no longer available" rather than "sign in again", which
+    // would invite a retry that cannot ever succeed.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe(
+      "account-unavailable",
     );
   });
 
@@ -1463,10 +1494,16 @@ describe("AuthService", () => {
       expectedStored("offline-token", "offline-token-refresh"),
     );
     expect(service.getLastError()).toBeNull();
+    // E10: authn was never REACHED (as opposed to the 401/404 rejections
+    // above), so the share-refusal toast keeps the "check your connection"
+    // advice.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
     // Offline startup never reaches the refresh: a validation with NO verdict
     // does not authorize a spend (only a REJECTED one does), so the whole
     // offline window costs zero refresh generations.
-    expect(collapseConsecutiveCalls(calls)).toEqual([`GET ${VALIDATION_URL}`]);
+    expect(collapseConsecutiveCalls(calls)).toEqual([
+      `GET ${NEGOTIATED_VALIDATION_URL}`,
+    ]);
 
     // The anti-latch: a transient startup failure arms the recovery loop
     // rather than parking signed-out until an app restart. The next tick
@@ -1493,7 +1530,7 @@ describe("AuthService", () => {
     restoreFetch = installFetch((input, init) => {
       const url = typeof input === "string" ? input : String(input);
       const bearer = init?.headers?.Authorization ?? "";
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return bearer === "Bearer rotated-fresh-token"
           ? okWithProfile()
           : status(401);
@@ -1545,7 +1582,7 @@ describe("AuthService", () => {
       if (!reachable) {
         return Promise.reject(new Error("connection refused"));
       }
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return okWithProfile();
       }
       return status(500);
@@ -1565,6 +1602,53 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getCurrentSessionSnapshot().token).toBe("late-authn-token");
     expect(service.getLastError()).toBeNull();
+    // E10: `applySignedIn` clears the latch through the same setter that
+    // mirrors it into the store, and the setter's "not rejected" branch
+    // always writes `unreachable` - not because authn was necessarily
+    // unreachable a moment ago, but because a live verdict retires whatever
+    // caused the LAST loss, and `unreachable` is what the mirror falls back
+    // to once the latch is open. Its value stops mattering the moment the
+    // status leaves `unverified`; it is asserted here for exactly that
+    // reason - a future regression could leave a stale `session-rejected`
+    // sitting under a `signed-in` status with nothing else to catch it.
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
+  });
+
+  it("E10: a credential rejection's cloudVerdictLoss survives clearLastError and clears only on a later sign-in", async () => {
+    // The toast bridge clears the transient `lastError` right after showing
+    // it (`auth-session-expired-toast-bridge.tsx`) - if `cloudVerdictLoss`
+    // rode along with that clear, a share attempt minutes later would have
+    // lost the one fact the unverified-share toast needs.
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "revoked-token", refreshToken: "revoked-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    restoreFetch = installFetch(() => status(401));
+
+    await service.start();
+    expect(useAuthStore.getState().status).toBe("unverified");
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("session-rejected");
+
+    service.clearLastError();
+    expect(service.getLastError()).toBeNull();
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("session-rejected");
+
+    restoreFetch();
+    restoreFetch = installFetch(() => okWithProfile());
+    await service.signIn();
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "fresh-token",
+      refreshToken: "fresh-token-refresh",
+    });
+    await vi.waitFor(() => {
+      expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token");
+    });
+
+    expect(useAuthStore.getState().status).toBe("signed-in");
+    expect(useAuthStore.getState().cloudVerdictLoss).toBe("unreachable");
   });
 
   it("never resurrects a session deleted while the recovery tick's identity probe was in flight", async () => {
@@ -1588,7 +1672,7 @@ describe("AuthService", () => {
       if (!reachable) {
         return Promise.reject(new Error("connection refused"));
       }
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         // The delete lands while this very probe is in flight.
         void host.tokenStore.delete();
         return okWithProfile();
@@ -1640,7 +1724,7 @@ describe("AuthService", () => {
         refreshCalls += 1;
         return okWithRefreshToken(`minted-${refreshCalls}`);
       }
-      if (url === VALIDATION_URL && userReachable) {
+      if (url === NEGOTIATED_VALIDATION_URL && userReachable) {
         return okWithProfile();
       }
       return Promise.reject(new Error("user probe down"));
@@ -1689,7 +1773,7 @@ describe("AuthService", () => {
       if (url === REFRESH_URL) {
         return deferredRefresh.promise;
       }
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return bearer === "Bearer user-b-token"
           ? okWithProfileForUser("user-b")
           : status(401);
@@ -1744,7 +1828,7 @@ describe("AuthService", () => {
     let healthy = false;
     restoreFetch = installFetch((input) => {
       const url = typeof input === "string" ? input : String(input);
-      if (url === VALIDATION_URL && healthy) {
+      if (url === NEGOTIATED_VALIDATION_URL && healthy) {
         return okWithProfile();
       }
       return status(401);
@@ -1844,7 +1928,7 @@ describe("AuthService", () => {
     restoreFetch = installFetch((input, init) => {
       const url = typeof input === "string" ? input : String(input);
       calls.push(`${init?.method ?? "GET"} ${url}`);
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return status(401);
       }
       if (url === REFRESH_URL) {
@@ -1865,7 +1949,7 @@ describe("AuthService", () => {
     );
     expect(service.getLastError()).toBeNull();
     expect(collapseConsecutiveCalls(calls)).toEqual([
-      `GET ${VALIDATION_URL}`,
+      `GET ${NEGOTIATED_VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
     ]);
 
@@ -1887,7 +1971,7 @@ describe("AuthService", () => {
     restoreFetch = installFetch((input, init) => {
       const url = typeof input === "string" ? input : String(input);
       calls.push(`${init?.method ?? "GET"} ${url}`);
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         return status(401);
       }
       if (url === REFRESH_URL) {
@@ -1909,7 +1993,7 @@ describe("AuthService", () => {
     );
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
     expect(collapseConsecutiveCalls(calls)).toEqual([
-      `GET ${VALIDATION_URL}`,
+      `GET ${NEGOTIATED_VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
     ]);
   });
@@ -1976,7 +2060,7 @@ describe("AuthService", () => {
     expect(service.getDeviceProgress()).toBeNull();
   });
 
-  it("hits /api/v3/user (NOT the legacy /api/user) when validating a token", async () => {
+  it("hits /api/v3/user/negotiated (NOT the legacy /api/user, and not the frozen /api/v3/user) when validating a token", async () => {
     const { service, host } = makeService();
     await host.tokenStore.signIn(
       { token: "persisted-token", refreshToken: "persisted-token-refresh" },
@@ -1991,8 +2075,11 @@ describe("AuthService", () => {
 
     await service.start();
 
-    expect(seenUrls).toContain(VALIDATION_URL);
+    expect(seenUrls).toContain(NEGOTIATED_VALIDATION_URL);
     expect(seenUrls).not.toContain("http://localhost:5005/api/user");
+    // A 200 with a usable version header off the negotiated route settles the
+    // validation in one hop - the frozen recovery is never reached.
+    expect(seenUrls).not.toContain(FROZEN_VALIDATION_URL);
   });
 
   it("validates and persists a token delivered by the device poll", async () => {
@@ -2019,7 +2106,7 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("new-token", "new-token-refresh"),
     );
-    expect(validationCalls).toContain(VALIDATION_URL);
+    expect(validationCalls).toContain(NEGOTIATED_VALIDATION_URL);
   });
 
   it("surfaces sign-in-failed (NOT session-expired) when a device-poll token is rejected by AuthnV3", async () => {
@@ -2057,7 +2144,7 @@ describe("AuthService", () => {
     const validationCalls: string[] = [];
     restoreFetch = installFetch((input) => {
       const url = typeof input === "string" ? input : String(input);
-      if (url === VALIDATION_URL) {
+      if (url === NEGOTIATED_VALIDATION_URL) {
         validationCalls.push(url);
       }
       return Promise.reject(new Error("offline"));
@@ -2484,7 +2571,7 @@ describe("AuthService", () => {
       const validationCalls: string[] = [];
       restoreFetch = installFetch((input) => {
         const url = typeof input === "string" ? input : String(input);
-        if (url === VALIDATION_URL) {
+        if (url === NEGOTIATED_VALIDATION_URL) {
           validationCalls.push(url);
         }
         return status(503);
@@ -2514,7 +2601,7 @@ describe("AuthService", () => {
         const url = typeof input === "string" ? input : String(input);
         calls.push(`${init?.method ?? "GET"} ${url}`);
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer fail-closed-token"
         ) {
           return status(401);
@@ -2539,7 +2626,7 @@ describe("AuthService", () => {
       );
       expect(service.getLastError()).toBeNull();
       expect(collapseConsecutiveCalls(calls)).toEqual([
-        `GET ${VALIDATION_URL}`,
+        `GET ${NEGOTIATED_VALIDATION_URL}`,
         `POST ${REFRESH_URL}`,
       ]);
     });
@@ -2556,7 +2643,7 @@ describe("AuthService", () => {
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer old-token"
         ) {
           return status(401);
@@ -2572,7 +2659,7 @@ describe("AuthService", () => {
           return status(401);
         }
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer rotated-token"
         ) {
           return okWithProfile();
@@ -2631,7 +2718,7 @@ describe("AuthService", () => {
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer old-token"
         ) {
           oldValidationStarted = true;
@@ -2772,7 +2859,7 @@ describe("AuthService", () => {
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer old-token"
         ) {
           return status(401);
@@ -2784,7 +2871,7 @@ describe("AuthService", () => {
           return okWithRefreshToken("rotated-token");
         }
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer rotated-token"
         ) {
           return okWithProfile();
@@ -3229,7 +3316,7 @@ describe("AuthService", () => {
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer live-token"
         ) {
           return status(401);
@@ -3241,7 +3328,7 @@ describe("AuthService", () => {
           return okWithRefreshToken("post-401-token");
         }
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer post-401-token"
         ) {
           return okWithProfile();
@@ -3265,7 +3352,7 @@ describe("AuthService", () => {
       restoreFetch();
       restoreFetch = installFetch((input) => {
         const url = typeof input === "string" ? input : String(input);
-        if (url === VALIDATION_URL) {
+        if (url === NEGOTIATED_VALIDATION_URL) {
           return status(401);
         }
         if (url === REFRESH_URL) {
@@ -3300,7 +3387,7 @@ describe("AuthService", () => {
       restoreFetch();
       restoreFetch = installFetch((input) => {
         const url = typeof input === "string" ? input : String(input);
-        if (url === VALIDATION_URL) return status(401);
+        if (url === NEGOTIATED_VALIDATION_URL) return status(401);
         if (url === REFRESH_URL) {
           return Promise.resolve(
             new Response(
@@ -3363,7 +3450,7 @@ describe("AuthService", () => {
       restoreFetch();
       restoreFetch = installFetch((input) => {
         const url = typeof input === "string" ? input : String(input);
-        if (url === VALIDATION_URL) {
+        if (url === NEGOTIATED_VALIDATION_URL) {
           return status(401);
         }
         return status(500);
@@ -3388,7 +3475,7 @@ describe("AuthService", () => {
       restoreFetch();
       restoreFetch = installFetch((input) => {
         const url = typeof input === "string" ? input : String(input);
-        if (url === VALIDATION_URL) {
+        if (url === NEGOTIATED_VALIDATION_URL) {
           return status(401);
         }
         return status(500);
@@ -3459,7 +3546,7 @@ describe("AuthService", () => {
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === "Bearer external-rotated"
         ) {
           return okWithProfile();
@@ -3491,7 +3578,7 @@ describe("AuthService", () => {
       let validateCalls = 0;
       restoreFetch = installFetch((input) => {
         const url = typeof input === "string" ? input : String(input);
-        if (url === VALIDATION_URL) {
+        if (url === NEGOTIATED_VALIDATION_URL) {
           validateCalls += 1;
           if (validateCalls === 1) {
             return deferredValidate.promise;
@@ -3582,7 +3669,7 @@ describe("AuthService", () => {
       const deferredProjectionValidate = createDeferredResponse();
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
-        if (url === VALIDATION_URL) {
+        if (url === NEGOTIATED_VALIDATION_URL) {
           const auth = init?.headers?.Authorization ?? "";
           if (auth === "Bearer projected-token") {
             return deferredProjectionValidate.promise;
@@ -3835,7 +3922,7 @@ describe("AuthService", () => {
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
         if (
-          url === VALIDATION_URL &&
+          url === NEGOTIATED_VALIDATION_URL &&
           init?.headers?.Authorization === `Bearer ${staleButValid}`
         ) {
           return okWithProfile();

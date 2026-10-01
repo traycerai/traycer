@@ -1,0 +1,68 @@
+[
+  {
+    "name": "all four sections plus notes",
+    "sections": {
+      "environment": "Dev machine",
+      "allow": "- Run tests",
+      "softDeny": "- Delete branches",
+      "hardDeny": "- Force push",
+      "notes": "Team notes"
+    },
+    "markdown": "Team notes\n\n## Environment\n\nDev machine\n\n## Allow\n\n- Run tests\n\n## Soft deny\n\n- Delete branches\n\n## Hard deny\n\n- Force push\n"
+  },
+  {
+    "name": "a section body carrying a shallow sub-heading escalates every marker to #",
+    "sections": {
+      "environment": "",
+      "allow": "- Ship it\n\n## Deploy\n\n- staging only",
+      "softDeny": "",
+      "hardDeny": "",
+      "notes": ""
+    },
+    "markdown": "# Environment\n\n# Allow\n\n- Ship it\n\n## Deploy\n\n- staging only\n\n# Soft deny\n\n# Hard deny\n"
+  },
+  {
+    "name": "only notes",
+    "sections": {
+      "environment": "",
+      "allow": "",
+      "softDeny": "",
+      "hardDeny": "",
+      "notes": "Just a note"
+    },
+    "markdown": "Just a note\n\n## Environment\n\n## Allow\n\n## Soft deny\n\n## Hard deny\n"
+  },
+  {
+    "name": "all empty",
+    "sections": {
+      "environment": "",
+      "allow": "",
+      "softDeny": "",
+      "hardDeny": "",
+      "notes": ""
+    },
+    "markdown": ""
+  },
+  {
+    "name": "a heading line inside Notes stays in Notes",
+    "sections": {
+      "environment": "Dev machine",
+      "allow": "- Run tests",
+      "softDeny": "",
+      "hardDeny": "",
+      "notes": "## Team\n\nThe platform team owns these rules."
+    },
+    "markdown": "## Team\n\nThe platform team owns these rules.\n\n## Environment\n\nDev machine\n\n## Allow\n\n- Run tests\n\n## Soft deny\n\n## Hard deny\n"
+  },
+  {
+    "name": "Notes ahead of sections whose markers escalate to #",
+    "sections": {
+      "environment": "",
+      "allow": "- Ship it\n\n## Deploy\n\n- staging only",
+      "softDeny": "",
+      "hardDeny": "- Force push",
+      "notes": "Team notes"
+    },
+    "markdown": "Team notes\n\n# Environment\n\n# Allow\n\n- Ship it\n\n## Deploy\n\n- staging only\n\n# Soft deny\n\n# Hard deny\n\n- Force push\n"
+  }
+]

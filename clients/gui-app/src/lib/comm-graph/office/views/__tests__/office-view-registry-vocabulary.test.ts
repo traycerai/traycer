@@ -30,8 +30,15 @@ describe("OFFICE_VIEW_IDS vs the registry", () => {
     expect(OFFICE_VIEW_IDS).toEqual(Object.keys(OFFICE_VIEWS));
   });
 
-  it("lists Auto first, then every view in that same order", () => {
-    expect(OFFICE_VIEW_CHOICES).toEqual(["auto", ...OFFICE_VIEW_IDS]);
+  it("offers exactly the four supported choices, Auto and the retired views excluded", () => {
+    // The renderer registry retains legacy layouts; the picker offers only
+    // these four choices. Keep this expectation independent of the registry.
+    expect(OFFICE_VIEW_CHOICES).toEqual([
+      "floor",
+      "building",
+      "mission-control",
+      "campus",
+    ]);
   });
 });
 

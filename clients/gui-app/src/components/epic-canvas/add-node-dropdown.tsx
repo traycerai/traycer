@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   useCallback,
   useEffect,
@@ -121,6 +122,7 @@ export interface AddArtifactDropdownProps {
  * sidebar header "+", per-row inline "+", and other add-node entry points.
  */
 export function AddNodeDropdown(props: AddArtifactDropdownProps) {
+  const placement = useColumnOverlayPlacement("row");
   const {
     children,
     open,
@@ -185,8 +187,12 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
     <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
       <DropdownMenuContent
-        side={menuPlacement === "header" ? "right" : "bottom"}
-        align={menuPlacement === "header" ? "start" : "end"}
+        side={
+          placement?.side ?? (menuPlacement === "header" ? "right" : "bottom")
+        }
+        align={
+          placement?.align ?? (menuPlacement === "header" ? "start" : "end")
+        }
         sideOffset={menuPlacement === "header" ? 8 : 4}
         avoidCollisions={menuPlacement !== "header"}
         className="w-[min(90vw,11rem)]"
@@ -447,6 +453,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
             // button and names the chat picker instead.
             terminalLoginSurface={null}
             profileAdmission={null}
+            embedding={null}
           />
         </div>
       </section>

@@ -19,6 +19,9 @@ import {
  * accelerator -> the page; the app renderer's keybinding registry is never in
  * the chain. Every chord that must still mean something in that state is
  * listed here, and nowhere else. Anything absent belongs to the page.
+ * Text-history conventions are always page-owned: `isTextHistoryShortcut`
+ * guards both native and streamed matching before physical app chords, so
+ * undo/redo also survive a keyboard-layout collision or an app rebind.
  *
  * Two dispositions, and the `command` field is the whole distinction:
  *
@@ -34,9 +37,9 @@ import {
  *
  * Not listed, deliberately: the zoom chords (Cmd +/-/0), which the guest
  * handler claims for the page's own zoom factor
- * (`browser-view-entry-factory.ts`), and Electron's role-built items
- * (reload, cut/copy/paste, select-all), which already act on the focused
- * web contents and are therefore correct as they are.
+ * (`browser-view-entry-factory.ts`), the native Reload menu commands (which
+ * resolve the owning window's focused frame), and Electron's editing roles
+ * (cut/copy/paste, select-all).
  *
  * `@/lib/keybindings/conflicts.ts` reads the browser-scoped rows so the
  * rebinding UI can warn about a chord a focused browser tile would swallow -
@@ -53,6 +56,9 @@ import {
  * hosting surface's own handler and only where it has one. That gate is what
  * keeps a canvas viewer out of both: it opens no tabs and retires no row, so
  * it hands the controller nothing and those chords stay the page's.
+ * Address focus also runs in the renderer's keybinding provider through the
+ * visible tile registry, so chrome and start pages work before a guest exists
+ * or a stream is armed. That route reads the same browser-scoped table.
  *
  * The APP-FORWARDED rows have a streamed equivalent too, and it is the
  * simplest one there could be. Forwarding means main replays the key into the
@@ -236,11 +242,16 @@ export function reservedBrowserChordsFor(
  * argument even though the reserved set now depends on them.
  */
 export function browserScopedChordLabel(chord: ChordString): string | null {
-  const row = BROWSER_SCOPED_CHORDS.find(
-    (reserved) => reserved.token === chord,
+  const command = browserScopedCommandForChord(chord);
+  return command === null ? null : BROWSER_SCOPED_CHORD_LABELS[command];
+}
+
+export function browserScopedCommandForChord(
+  chord: ChordString,
+): BrowserViewReservedChord["command"] {
+  return (
+    BROWSER_SCOPED_CHORDS.find((row) => row.token === chord)?.command ?? null
   );
-  if (row === undefined || row.command === null) return null;
-  return BROWSER_SCOPED_CHORD_LABELS[row.command];
 }
 
 const BROWSER_SCOPED_CHORD_LABELS = {

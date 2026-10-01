@@ -18,6 +18,7 @@ const EVENT = {
   originKind: null,
   originChatId: null,
   originRefId: null,
+  peerEpicId: null,
 } satisfies CommGraphEvent;
 
 function entry(

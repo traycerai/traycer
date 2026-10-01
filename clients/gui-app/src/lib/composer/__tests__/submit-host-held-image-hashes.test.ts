@@ -19,7 +19,7 @@ import {
   type DraftBlobClient,
 } from "@/lib/drafts/draft-blob-transport";
 import { putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -28,12 +28,11 @@ const HOST = "host-gate";
 const OWNER = "owner-gate";
 const SURFACE = "surface-gate";
 
-const OK_CLIENT: DraftBlobClient = {
-  request: ((_method, _params) =>
-    Promise.resolve({
-      ok: true as const,
-    })) as HostRequester<HostRpcRegistry>["request"],
-};
+const request = ((_method, _params) =>
+  Promise.resolve({
+    ok: true as const,
+  })) as HostRequester<HostRpcRegistry>["request"];
+const OK_CLIENT: DraftBlobClient = { request, requestWithOptions: request };
 
 function pngBytes(): Uint8Array<ArrayBuffer> {
   return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);

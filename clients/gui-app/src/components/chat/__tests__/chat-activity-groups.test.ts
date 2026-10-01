@@ -1415,6 +1415,68 @@ describe("chat activity grouping", () => {
   });
 });
 
+// Layout > Chat > Thinking is Hidden (audit R1): reasoning is left out before
+// runs are grouped, so a run of nothing but reasoning draws no row and a mixed
+// run's summary drops its "thought for" clause.
+describe("chat activity grouping - hideReasoning", () => {
+  function buildHiddenTimeline(
+    segments: ReadonlyArray<MessageSegment>,
+  ): ReadonlyArray<ChatActivityTimelineItem> {
+    return buildChatActivityTimeline(segments, {
+      turnState: "complete",
+      promotedToolBlockIds: EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+      hideReasoning: true,
+    });
+  }
+
+  it("draws no activity group for a reasoning-only run", () => {
+    const timeline = buildHiddenTimeline([
+      reasoningSegment("reasoning-1", false, 4000),
+    ]);
+
+    expect(timeline).toEqual([]);
+  });
+
+  it("drops reasoning from a mixed run and its summary's 'thought for' clause", () => {
+    const timeline = buildHiddenTimeline([
+      reasoningSegment("reasoning-1", false, 4000),
+      commandSegment("command-1", "pwd", false, null),
+    ]);
+
+    const group = soleGroup(timeline, 0);
+    expect(group.segments.map((segment) => segment.kind)).toEqual(["command"]);
+    expect(group.summary).not.toMatch(/thought/i);
+    expect(group.summary).toBe("Ran 1 command");
+  });
+
+  it("keeps a run's group id when the setting toggles, so its open state survives", () => {
+    const segments = [
+      reasoningSegment("reasoning-1", false, 4000),
+      toolSegment("tool-1", "read_file", { path: "/repo/a.ts" }),
+      toolSegment("tool-2", "read_file", { path: "/repo/b.ts" }),
+    ];
+
+    const shown = buildCompleteTimeline(segments);
+    const hidden = buildHiddenTimeline(segments);
+
+    expect(hidden).toHaveLength(1);
+    expect(hidden[0].id).toBe(shown[0].id);
+    expect(soleGroup(hidden, 0).id).toBe(soleGroup(shown, 0).id);
+    expect(
+      soleGroup(hidden, 0).segments.map((segment) => segment.kind),
+    ).not.toContain("reasoning");
+  });
+
+  it("returns the same array instance for the same segments identity", () => {
+    const segments = [
+      reasoningSegment("reasoning-1", false, 4000),
+      commandSegment("command-1", "pwd", false, null),
+    ];
+
+    expect(buildHiddenTimeline(segments)).toBe(buildHiddenTimeline(segments));
+  });
+});
+
 function soleGroupLabel(
   timeline: ReadonlyArray<ChatActivityTimelineItem>,
 ): string {
@@ -1458,6 +1520,7 @@ function buildCompleteTimeline(
   return buildChatActivityTimeline(segments, {
     turnState: "complete",
     promotedToolBlockIds: EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+    hideReasoning: false,
   });
 }
 
@@ -1468,6 +1531,7 @@ function buildCompleteTimelineWithPromoted(
   return buildChatActivityTimeline(segments, {
     turnState: "complete",
     promotedToolBlockIds,
+    hideReasoning: false,
   });
 }
 
@@ -1477,6 +1541,7 @@ function buildActiveTimeline(
   return buildChatActivityTimeline(segments, {
     turnState: "active",
     promotedToolBlockIds: EMPTY_PROMOTED_TOOL_BLOCK_IDS,
+    hideReasoning: false,
   });
 }
 
@@ -1684,6 +1749,7 @@ function providerNoticeSegment(
   return {
     id,
     kind: "provider_notice",
+    receipt: null,
     status: "completed",
     noticeKind: "model_rerouted",
     tone: "info",

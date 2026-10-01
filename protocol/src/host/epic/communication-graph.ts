@@ -97,9 +97,10 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
 /**
@@ -122,11 +123,9 @@ const textFrameFields = {
  * representability exception in the module doc), and adding a kind is a NEW
  * MINOR, never a silent widening.
  */
-export const epicCommunicationGraphEventKindSchemaV10 = z.enum([
-  "a2a_message",
-  "a2a_notice",
-  "agent_created",
-]);
+export const epicCommunicationGraphEventKindSchemaV10 = lazySchema(() =>
+  z.enum(["a2a_message", "a2a_notice", "agent_created"]),
+);
 export type EpicCommunicationGraphEventKindV10 = z.infer<
   typeof epicCommunicationGraphEventKindSchemaV10
 >;
@@ -137,12 +136,9 @@ export type EpicCommunicationGraphEventKindV10 = z.infer<
  * receives the new kind (the serving host skips those rows under the
  * representability exception).
  */
-export const epicCommunicationGraphEventKindSchema = z.enum([
-  "a2a_message",
-  "a2a_notice",
-  "agent_created",
-  "host_agent_verb",
-]);
+export const epicCommunicationGraphEventKindSchema = lazySchema(() =>
+  z.enum(["a2a_message", "a2a_notice", "agent_created", "host_agent_verb"]),
+);
 export type EpicCommunicationGraphEventKind = z.infer<
   typeof epicCommunicationGraphEventKindSchema
 >;
@@ -156,11 +152,9 @@ export type EpicCommunicationGraphEventKind = z.infer<
  * - `tui_session`              - a terminal-agent session; opening the session
  *   is the whole behavior (there is no in-transcript anchor).
  */
-export const epicCommunicationGraphOriginKindSchemaV10 = z.enum([
-  "gui_block",
-  "gui_message",
-  "tui_session",
-]);
+export const epicCommunicationGraphOriginKindSchemaV10 = lazySchema(() =>
+  z.enum(["gui_block", "gui_message", "tui_session"]),
+);
 export type EpicCommunicationGraphOriginKindV10 = z.infer<
   typeof epicCommunicationGraphOriginKindSchemaV10
 >;
@@ -169,12 +163,9 @@ export type EpicCommunicationGraphOriginKindV10 = z.infer<
  * @1.1 adds `remote_host` so capture can name the verified origin host of a
  * host-agent verb. @1.0 stays frozen.
  */
-export const epicCommunicationGraphOriginKindSchema = z.enum([
-  "gui_block",
-  "gui_message",
-  "tui_session",
-  "remote_host",
-]);
+export const epicCommunicationGraphOriginKindSchema = lazySchema(() =>
+  z.enum(["gui_block", "gui_message", "tui_session", "remote_host"]),
+);
 export type EpicCommunicationGraphOriginKind = z.infer<
   typeof epicCommunicationGraphOriginKindSchema
 >;
@@ -206,80 +197,112 @@ export type EpicCommunicationGraphOriginKind = z.infer<
  * summary: for TUI-received and TUI↔TUI messages nothing else durable exists,
  * so truncating here would silently destroy the record.
  */
-export const epicCommunicationGraphEventSchema = z.object({
-  /**
-   * Autoincrement row id. Monotonic per host and doubles as the resume cursor
-   * (`sinceCursor`). Not comparable across hosts.
-   */
-  id: z.number().int().positive(),
-  kind: epicCommunicationGraphEventKindSchema,
-  /** Host wall clock at capture, epoch millis. Ordering key for the timeline. */
-  timestamp: z.number().int(),
-  /** The sending agent. */
-  senderAgentId: z.string().nullable(),
-  /** The receiving agent. */
-  receiverAgentId: z.string().nullable(),
-  /** The broker thread id (reused across a directed pair). */
-  responseId: z.string().nullable(),
-  /**
-   * The `responseId` this message answers, or null for a new request. Drives
-   * reply-vs-request edge styling and open-thread detection.
-   */
-  inReplyTo: z.string().nullable(),
-  /** Whether the sender asked for a reply. */
-  expectReply: z.boolean().nullable(),
-  /** The FULL message or notice text. */
-  messageText: z.string().nullable(),
-  /**
-   * `a2a_notice` ONLY: why the broker gave up on the thread (`turn-ended`,
-   * `errored`, `awaiting-input`, ...). Null on every other kind.
-   *
-   * Deliberately an open `string`, NOT the closed `reason` enum on
-   * `agentInboxNoticeSchema`: that enum belongs to the live broker and has
-   * grown before, and this log is HISTORICAL - a row captured today must still
-   * parse years later, and a reason added after this minor froze must not make
-   * old rows unreadable or force a new minor. Consumers should switch on the
-   * values they know and fall back to showing the raw string.
-   */
-  noticeReason: z.string().nullable(),
-  /** Origin ref: surface the event can be re-opened on, or null if unknown. */
-  originKind: epicCommunicationGraphOriginKindSchema.nullable(),
-  /** Origin ref: owning chat / terminal-agent id. */
-  originChatId: z.string().nullable(),
-  /** Origin ref: block or message id to anchor on within `originChatId`. */
-  originRefId: z.string().nullable(),
-});
+export const epicCommunicationGraphEventSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Autoincrement row id. Monotonic per host and doubles as the resume cursor
+     * (`sinceCursor`). Not comparable across hosts.
+     */
+    id: z.number().int().positive(),
+    kind: epicCommunicationGraphEventKindSchema,
+    /** Host wall clock at capture, epoch millis. Ordering key for the timeline. */
+    timestamp: z.number().int(),
+    /** The sending agent. */
+    senderAgentId: z.string().nullable(),
+    /** The receiving agent. */
+    receiverAgentId: z.string().nullable(),
+    /** The broker thread id (reused across a directed pair). */
+    responseId: z.string().nullable(),
+    /**
+     * The `responseId` this message answers, or null for a new request. Drives
+     * reply-vs-request edge styling and open-thread detection.
+     */
+    inReplyTo: z.string().nullable(),
+    /** Whether the sender asked for a reply. */
+    expectReply: z.boolean().nullable(),
+    /** The FULL message or notice text. */
+    messageText: z.string().nullable(),
+    /**
+     * `a2a_notice` ONLY: why the broker gave up on the thread (`turn-ended`,
+     * `errored`, `awaiting-input`, ...). Null on every other kind.
+     *
+     * Deliberately an open `string`, NOT the closed `reason` enum on
+     * `agentInboxNoticeSchema`: that enum belongs to the live broker and has
+     * grown before, and this log is HISTORICAL - a row captured today must still
+     * parse years later, and a reason added after this minor froze must not make
+     * old rows unreadable or force a new minor. Consumers should switch on the
+     * values they know and fall back to showing the raw string.
+     */
+    noticeReason: z.string().nullable(),
+    /** Origin ref: surface the event can be re-opened on, or null if unknown. */
+    originKind: epicCommunicationGraphOriginKindSchema.nullable(),
+    /** Origin ref: owning chat / terminal-agent id. */
+    originChatId: z.string().nullable(),
+    /** Origin ref: block or message id to anchor on within `originChatId`. */
+    originRefId: z.string().nullable(),
+    /**
+     * @1.1: the task at the far end of a cross-task `a2a_message`. A
+     * cross-task message is recorded in BOTH tasks' logs, each row naming the
+     * other task here, so the graph can draw that end as a task stub node
+     * rather than an agent it has no record of. Null for every same-task row
+     * and every other kind.
+     *
+     * Defaulted rather than required: a host serving @1.1 from before the field
+     * existed omits it, and its frames must still parse.
+     */
+    peerEpicId: z.string().nullable().default(null),
+  }),
+);
 export type EpicCommunicationGraphEvent = z.infer<
   typeof epicCommunicationGraphEventSchema
 >;
 
-/** Frozen @1.0 event row: the three original kinds only. */
-export const epicCommunicationGraphEventSchemaV10 =
-  epicCommunicationGraphEventSchema.extend({
+/**
+ * Frozen @1.0 event row: the three original kinds only, and no `peerEpicId`.
+ * A hand-written copy, never derived from the live schema above, so growth on
+ * @1.1 can never leak into the released @1.0 line; a @1.0 client's reparse
+ * strips the key.
+ */
+export const epicCommunicationGraphEventSchemaV10 = lazySchema(() =>
+  z.object({
+    id: z.number().int().positive(),
     kind: epicCommunicationGraphEventKindSchemaV10,
+    timestamp: z.number().int(),
+    senderAgentId: z.string().nullable(),
+    receiverAgentId: z.string().nullable(),
+    responseId: z.string().nullable(),
+    inReplyTo: z.string().nullable(),
+    expectReply: z.boolean().nullable(),
+    messageText: z.string().nullable(),
+    noticeReason: z.string().nullable(),
     originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
-  });
+    originChatId: z.string().nullable(),
+    originRefId: z.string().nullable(),
+  }),
+);
 export type EpicCommunicationGraphEventV10 = z.infer<
   typeof epicCommunicationGraphEventSchemaV10
 >;
 
-export const epicCommunicationGraphSubscribeOpenRequestSchema = z.object({
-  epicId: z.string(),
-  /**
-   * Highest event `id` the client has already applied FOR THIS HOST, or null
-   * for a first open. Only rows strictly above it are delivered - beginning
-   * with the `snapshot` batch and continuing as `event` frames until the gap
-   * is drained. Required-and-nullable rather than optional so the resume
-   * intent is always explicit on the wire - "start from the beginning" and
-   * "I forgot to send a cursor" are not the same request.
-   */
-  sinceCursor: z.number().int().nonnegative().nullable(),
-});
+export const epicCommunicationGraphSubscribeOpenRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    /**
+     * Highest event `id` the client has already applied FOR THIS HOST, or null
+     * for a first open. Only rows strictly above it are delivered - beginning
+     * with the `snapshot` batch and continuing as `event` frames until the gap
+     * is drained. Required-and-nullable rather than optional so the resume
+     * intent is always explicit on the wire - "start from the beginning" and
+     * "I forgot to send a cursor" are not the same request.
+     */
+    sinceCursor: z.number().int().nonnegative().nullable(),
+  }),
+);
 export type EpicCommunicationGraphSubscribeOpenRequest = z.infer<
   typeof epicCommunicationGraphSubscribeOpenRequestSchema
 >;
 
-export const epicCommunicationGraphSubscribeServerFrameSchema =
+export const epicCommunicationGraphSubscribeServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     /**
      * Exactly one per subscription, emitted first: the INITIAL BATCH of rows
@@ -350,42 +373,46 @@ export const epicCommunicationGraphSubscribeServerFrameSchema =
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 export type EpicCommunicationGraphSubscribeServerFrame = z.infer<
   typeof epicCommunicationGraphSubscribeServerFrameSchema
 >;
 
-export const epicCommunicationGraphSubscribeClientFrameSchema =
+export const epicCommunicationGraphSubscribeClientFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 export type EpicCommunicationGraphSubscribeClientFrame = z.infer<
   typeof epicCommunicationGraphSubscribeClientFrameSchema
 >;
 
-export const epicCommunicationGraphSubscribeServerFrameSchemaV10 =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("snapshot"),
-      epicId: z.string(),
-      events: z.array(epicCommunicationGraphEventSchemaV10),
-      headId: z.number().int().positive().nullable(),
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("event"),
-      epicId: z.string(),
-      event: epicCommunicationGraphEventSchemaV10,
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ]);
+export const epicCommunicationGraphSubscribeServerFrameSchemaV10 = lazySchema(
+  () =>
+    z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("snapshot"),
+        epicId: z.string(),
+        events: z.array(epicCommunicationGraphEventSchemaV10),
+        headId: z.number().int().positive().nullable(),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("event"),
+        epicId: z.string(),
+        event: epicCommunicationGraphEventSchemaV10,
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+    ]),
+);
 
 export const epicCommunicationGraphSubscribeV10 = defineStreamRpcContract({
   method: "epic.communicationGraph.subscribe",
@@ -446,10 +473,12 @@ export const epicCommunicationGraphSubscribeV11 = defineStreamRpcContract({
  * and this must never be added to the unary released floor
  * (`released-floor.ts`), which is fail-closed on the name set.
  */
-export const hostCommunicationGraphCloudFeedCursorSchema = z.object({
-  ingestVersion: z.number().int().nonnegative(),
-  eventId: z.string().min(1).max(191),
-});
+export const hostCommunicationGraphCloudFeedCursorSchema = lazySchema(() =>
+  z.object({
+    ingestVersion: z.number().int().nonnegative(),
+    eventId: z.string().min(1).max(191),
+  }),
+);
 export type HostCommunicationGraphCloudFeedCursor = z.infer<
   typeof hostCommunicationGraphCloudFeedCursorSchema
 >;
@@ -462,156 +491,190 @@ export type HostCommunicationGraphCloudFeedCursor = z.infer<
  * representability policy (see the local contract's module doc), never
  * held back or surfaced as a placeholder.
  */
-export const hostCommunicationGraphCloudFeedEventSchema = z.object({
-  /** The cloud's globally stable identity for this event; opaque to the client. */
-  eventId: z.string().min(1).max(191),
-  /** Which host originally captured this event - display/navigation metadata,
-   * not authorization. A source jump to an offline origin host is disabled,
-   * never redirected. */
-  originHostId: z.string().min(1),
-  /** The origin host's own per-host local sequence at capture time. */
-  originSequence: z.number().int().nonnegative(),
-  /** The cloud's ingestion-order position for this row; half of its cursor. */
-  ingestVersion: z.number().int().nonnegative(),
-  kind: epicCommunicationGraphEventKindSchema,
-  /** Origin host wall clock at capture, epoch millis. */
-  capturedAt: z.number().int(),
-  senderAgentId: z.string().nullable(),
-  receiverAgentId: z.string().nullable(),
-  responseId: z.string().nullable(),
-  inReplyTo: z.string().nullable(),
-  expectReply: z.boolean().nullable(),
-  messageText: z.string().nullable(),
-  noticeReason: z.string().nullable(),
-  originKind: epicCommunicationGraphOriginKindSchema.nullable(),
-  originChatId: z.string().nullable(),
-  originRefId: z.string().nullable(),
-  /** True for backlog uploaded by a lane that had not yet caught up when this
-   * row was captured; false for a row captured by an already-live lane. Only
-   * `false` is eligible for a live pulse - see the module doc above. */
-  historicalUpload: z.boolean(),
-});
+export const hostCommunicationGraphCloudFeedEventSchema = lazySchema(() =>
+  z.object({
+    /** The cloud's globally stable identity for this event; opaque to the client. */
+    eventId: z.string().min(1).max(191),
+    /** Which host originally captured this event - display/navigation metadata,
+     * not authorization. A source jump to an offline origin host is disabled,
+     * never redirected. */
+    originHostId: z.string().min(1),
+    /** The origin host's own per-host local sequence at capture time. */
+    originSequence: z.number().int().nonnegative(),
+    /** The cloud's ingestion-order position for this row; half of its cursor. */
+    ingestVersion: z.number().int().nonnegative(),
+    kind: epicCommunicationGraphEventKindSchema,
+    /** Origin host wall clock at capture, epoch millis. */
+    capturedAt: z.number().int(),
+    senderAgentId: z.string().nullable(),
+    receiverAgentId: z.string().nullable(),
+    responseId: z.string().nullable(),
+    inReplyTo: z.string().nullable(),
+    expectReply: z.boolean().nullable(),
+    messageText: z.string().nullable(),
+    noticeReason: z.string().nullable(),
+    originKind: epicCommunicationGraphOriginKindSchema.nullable(),
+    originChatId: z.string().nullable(),
+    originRefId: z.string().nullable(),
+    /** True for backlog uploaded by a lane that had not yet caught up when this
+     * row was captured; false for a row captured by an already-live lane. Only
+     * `false` is eligible for a live pulse - see the module doc above. */
+    historicalUpload: z.boolean(),
+    /**
+     * @1.1: the far end's task of a cross-task message, exactly as the cloud
+     * row carries it - see `epicCommunicationGraphEventSchema.peerEpicId`. Null
+     * for same-task rows and for rows ingested before the cloud stored it.
+     */
+    peerEpicId: z.string().nullable().default(null),
+  }),
+);
 export type HostCommunicationGraphCloudFeedEvent = z.infer<
   typeof hostCommunicationGraphCloudFeedEventSchema
 >;
 
-export const hostCommunicationGraphCloudFeedEventSchemaV10 =
-  hostCommunicationGraphCloudFeedEventSchema.extend({
+/**
+ * Frozen @1.0 cloud row: original kinds, no `peerEpicId`. Hand-written for
+ * the same reason as `epicCommunicationGraphEventSchemaV10`.
+ */
+export const hostCommunicationGraphCloudFeedEventSchemaV10 = lazySchema(() =>
+  z.object({
+    eventId: z.string().min(1).max(191),
+    originHostId: z.string().min(1),
+    originSequence: z.number().int().nonnegative(),
+    ingestVersion: z.number().int().nonnegative(),
     kind: epicCommunicationGraphEventKindSchemaV10,
+    capturedAt: z.number().int(),
+    senderAgentId: z.string().nullable(),
+    receiverAgentId: z.string().nullable(),
+    responseId: z.string().nullable(),
+    inReplyTo: z.string().nullable(),
+    expectReply: z.boolean().nullable(),
+    messageText: z.string().nullable(),
+    noticeReason: z.string().nullable(),
     originKind: epicCommunicationGraphOriginKindSchemaV10.nullable(),
-  });
+    originChatId: z.string().nullable(),
+    originRefId: z.string().nullable(),
+    historicalUpload: z.boolean(),
+  }),
+);
 export type HostCommunicationGraphCloudFeedEventV10 = z.infer<
   typeof hostCommunicationGraphCloudFeedEventSchemaV10
 >;
 
 export const hostCommunicationGraphCloudFeedSubscribeOpenRequestSchemaV10 =
-  z.object({
-    epicId: z.string(),
-    /**
-     * Highest cursor the client has already applied FOR THE CLOUD FEED, or
-     * null for a first open / no retained checkpoint. Required-and-nullable
-     * for the same reason as the local contract's `sinceCursor`: "start from
-     * the beginning" and "I forgot to send a cursor" must never be the same
-     * request on the wire.
-     */
-    sinceCursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
-  });
+  lazySchema(() =>
+    z.object({
+      epicId: z.string(),
+      /**
+       * Highest cursor the client has already applied FOR THE CLOUD FEED, or
+       * null for a first open / no retained checkpoint. Required-and-nullable
+       * for the same reason as the local contract's `sinceCursor`: "start from
+       * the beginning" and "I forgot to send a cursor" must never be the same
+       * request on the wire.
+       */
+      sinceCursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
+    }),
+  );
 export type HostCommunicationGraphCloudFeedSubscribeOpenRequestV10 = z.infer<
   typeof hostCommunicationGraphCloudFeedSubscribeOpenRequestSchemaV10
 >;
 
 export const hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10 =
-  z.discriminatedUnion("kind", [
-    /**
-     * Host-authoritative confirmation that this stream serves the cloud
-     * plane. The renderer never derives this verdict from subscription
-     * state itself. Relay failures use
-     * `connectionState`; terminal refusals close the stream with a typed code.
-     */
-    z.object({
-      kind: z.literal("availability"),
-      availability: z.literal("available"),
-      ...textFrameFields,
-    }),
-    /**
-     * The first frame of this kind in an available-authority epoch is the
-     * bounded initial batch above the retained cursor. A later cloud read may
-     * send another snapshot in the SAME epoch when its deletion frontier
-     * changes. Such a later snapshot is cursor-continuing: it neither starts
-     * a new authority/history epoch nor resets the retained cursor or arrival
-     * boundary. No availability frame in this contract revokes the plane or
-     * starts another epoch; a later subscription resumes from the cursor the
-     * client supplies.
-     */
-    z.object({
-      kind: z.literal("snapshot"),
-      epicId: z.string(),
-      events: z.array(hostCommunicationGraphCloudFeedEventSchemaV10),
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
       /**
-       * On the initial snapshot, the cloud's headVersion as of the first read:
-       * the arrival boundary, exactly like the local contract's `headId`. On a
-       * later frontier-bearing snapshot, the headVersion is THAT current
-       * read's boundary; it does not revise the epoch's established arrival
-       * boundary or reset the cursor. Never negative; a graph with nothing
-       * ingested yet reports 0, not null, because the cloud's version is a
-       * counter, not a "last row" pointer.
+       * Host-authoritative confirmation that this stream serves the cloud
+       * plane. The renderer never derives this verdict from subscription
+       * state itself. Relay failures use
+       * `connectionState`; terminal refusals close the stream with a typed code.
        */
-      headVersion: z.number().int().nonnegative(),
-      /** Optional retained-row deletion boundary. Rows below it are obsolete. */
-      frontier: z.number().int().nonnegative().optional(),
-      ...textFrameFields,
-    }),
-    /** One row, continuing the same cursor-ascending sequence after the
-     * initial snapshot and across any later frontier-bearing snapshots. Same
-     * "not a liveness signal" caveat as the local contract. */
-    z.object({
-      kind: z.literal("event"),
-      epicId: z.string(),
-      event: hostCommunicationGraphCloudFeedEventSchemaV10,
-      ...textFrameFields,
-    }),
-    /**
-     * Explicit proof that every cloud row through `headVersion` has been
-     * accounted for, including rows the serving host skipped because this
-     * wire version cannot represent them. `cursor` is the exact raw cloud
-     * resume position after that accounting; it may therefore advance beyond
-     * the last event frame visible to this client.
-     */
-    z.object({
-      kind: z.literal("caughtUp"),
-      epicId: z.string(),
-      headVersion: z.number().int().nonnegative(),
-      cursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
-      ...textFrameFields,
-    }),
-    /**
-     * The relay could not currently reach the cloud feed (transient HTTP
-     * failure, or the relay has not yet re-authenticated). The client keeps
-     * its retained graph and cursor untouched and waits for either a later
-     * `event`/`snapshot` frame or a reconnect - never a reason to discard
-     * state or fall back to a bootstrap read.
-     */
-    z.object({
-      kind: z.literal("connectionState"),
-      connectionState: z.literal("reconnecting"),
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ]);
+      z.object({
+        kind: z.literal("availability"),
+        availability: z.literal("available"),
+        ...textFrameFields,
+      }),
+      /**
+       * The first frame of this kind in an available-authority epoch is the
+       * bounded initial batch above the retained cursor. A later cloud read may
+       * send another snapshot in the SAME epoch when its deletion frontier
+       * changes. Such a later snapshot is cursor-continuing: it neither starts
+       * a new authority/history epoch nor resets the retained cursor or arrival
+       * boundary. No availability frame in this contract revokes the plane or
+       * starts another epoch; a later subscription resumes from the cursor the
+       * client supplies.
+       */
+      z.object({
+        kind: z.literal("snapshot"),
+        epicId: z.string(),
+        events: z.array(hostCommunicationGraphCloudFeedEventSchemaV10),
+        /**
+         * On the initial snapshot, the cloud's headVersion as of the first read:
+         * the arrival boundary, exactly like the local contract's `headId`. On a
+         * later frontier-bearing snapshot, the headVersion is THAT current
+         * read's boundary; it does not revise the epoch's established arrival
+         * boundary or reset the cursor. Never negative; a graph with nothing
+         * ingested yet reports 0, not null, because the cloud's version is a
+         * counter, not a "last row" pointer.
+         */
+        headVersion: z.number().int().nonnegative(),
+        /** Optional retained-row deletion boundary. Rows below it are obsolete. */
+        frontier: z.number().int().nonnegative().optional(),
+        ...textFrameFields,
+      }),
+      /** One row, continuing the same cursor-ascending sequence after the
+       * initial snapshot and across any later frontier-bearing snapshots. Same
+       * "not a liveness signal" caveat as the local contract. */
+      z.object({
+        kind: z.literal("event"),
+        epicId: z.string(),
+        event: hostCommunicationGraphCloudFeedEventSchemaV10,
+        ...textFrameFields,
+      }),
+      /**
+       * Explicit proof that every cloud row through `headVersion` has been
+       * accounted for, including rows the serving host skipped because this
+       * wire version cannot represent them. `cursor` is the exact raw cloud
+       * resume position after that accounting; it may therefore advance beyond
+       * the last event frame visible to this client.
+       */
+      z.object({
+        kind: z.literal("caughtUp"),
+        epicId: z.string(),
+        headVersion: z.number().int().nonnegative(),
+        cursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
+        ...textFrameFields,
+      }),
+      /**
+       * The relay could not currently reach the cloud feed (transient HTTP
+       * failure, or the relay has not yet re-authenticated). The client keeps
+       * its retained graph and cursor untouched and waits for either a later
+       * `event`/`snapshot` frame or a reconnect - never a reason to discard
+       * state or fall back to a bootstrap read.
+       */
+      z.object({
+        kind: z.literal("connectionState"),
+        connectionState: z.literal("reconnecting"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+    ]),
+  );
 export type HostCommunicationGraphCloudFeedSubscribeServerFrameV10 = z.infer<
   typeof hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV10
 >;
 
 export const hostCommunicationGraphCloudFeedSubscribeClientFrameSchemaV10 =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("ping"),
-      ...textFrameFields,
-    }),
-  ]);
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("ping"),
+        ...textFrameFields,
+      }),
+    ]),
+  );
 export type HostCommunicationGraphCloudFeedSubscribeClientFrameV10 = z.infer<
   typeof hostCommunicationGraphCloudFeedSubscribeClientFrameSchemaV10
 >;
@@ -629,43 +692,45 @@ export const hostCommunicationGraphCloudFeedSubscribeV10 =
   });
 
 export const hostCommunicationGraphCloudFeedSubscribeServerFrameSchemaV11 =
-  z.discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("availability"),
-      availability: z.literal("available"),
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("snapshot"),
-      epicId: z.string(),
-      events: z.array(hostCommunicationGraphCloudFeedEventSchema),
-      headVersion: z.number().int().nonnegative(),
-      frontier: z.number().int().nonnegative().optional(),
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("event"),
-      epicId: z.string(),
-      event: hostCommunicationGraphCloudFeedEventSchema,
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("caughtUp"),
-      epicId: z.string(),
-      headVersion: z.number().int().nonnegative(),
-      cursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("connectionState"),
-      connectionState: z.literal("reconnecting"),
-      ...textFrameFields,
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ]);
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("availability"),
+        availability: z.literal("available"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("snapshot"),
+        epicId: z.string(),
+        events: z.array(hostCommunicationGraphCloudFeedEventSchema),
+        headVersion: z.number().int().nonnegative(),
+        frontier: z.number().int().nonnegative().optional(),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("event"),
+        epicId: z.string(),
+        event: hostCommunicationGraphCloudFeedEventSchema,
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("caughtUp"),
+        epicId: z.string(),
+        headVersion: z.number().int().nonnegative(),
+        cursor: hostCommunicationGraphCloudFeedCursorSchema.nullable(),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("connectionState"),
+        connectionState: z.literal("reconnecting"),
+        ...textFrameFields,
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+    ]),
+  );
 
 export const hostCommunicationGraphCloudFeedSubscribeV11 =
   defineStreamRpcContract({

@@ -2,6 +2,7 @@ import { modLabel } from "@/lib/keybindings/platform";
 import {
   alwaysAvailable,
   isExperimentalGroupAvailable,
+  isHostLifecycleGroupAvailable,
   isPreventSleepRowAvailable,
   isVoiceInputRowAvailable,
 } from "@/lib/settings/settings-availability";
@@ -17,21 +18,10 @@ export const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 export const GENERAL = defineSettingsSection("general", {
   page: {
+    availableWhen: alwaysAvailable,
     label: "General",
     description: "App behavior, agent activity, and local data controls.",
-    keywords: [
-      "preferences",
-      "options",
-      "misc",
-      "website sessions",
-      "save website sessions",
-      "bring in existing sessions",
-      "saved website sessions",
-      "cookies",
-      "logins",
-      "stay signed in",
-      "browser profile",
-    ],
+    keywords: ["preferences", "options", "misc"],
   },
   chatComposer: {
     kind: "group",
@@ -42,38 +32,13 @@ export const GENERAL = defineSettingsSection("general", {
     availableWhen: alwaysAvailable,
     keywords: ["prompt", "input", "message box", "editor"],
   },
-  // Application scope, deliberately: this is one preference for this app, not
-  // per machine, so it belongs here rather than under the sidebar's host picker
-  // (SETTINGS.md, "Scope: the organising idea"). The Auto-mode judge it pairs
-  // with IS per machine and lives on the host-scoped Permissions page for the
-  // same reason.
-  defaultPermission: {
-    kind: "row",
-    group: "chatComposer",
-    search: { anchor: "general-default-permission-mode" },
-    label: "Default permission mode",
-    description:
-      "What a new conversation starts under. A machine you have already run agents on reuses the mode it last ran with; this is what a fresh one opens on, and any chat can still change its own.",
-    availableWhen: alwaysAvailable,
-    keywords: [
-      "permissions",
-      "approval",
-      "approve",
-      "auto mode",
-      "plan mode",
-      "accept edits",
-      "full access",
-      "supervised",
-      "new chat",
-    ],
-  },
   voiceInput: {
     kind: "row",
     group: "chatComposer",
     search: { anchor: "general-voice-input" },
     label: "Voice input",
     description:
-      "Dictate prompts with the mic button in the composer. Speech is transcribed on-device - audio never leaves your machine.",
+      "Dictate prompts with the mic button or its shortcut. The microphone opens only while you are dictating, and turning this off closes it. Speech is transcribed on-device - audio never leaves your machine.",
     availableWhen: isVoiceInputRowAvailable,
     keywords: ["dictation", "dictate", "speech", "microphone", "mic", "audio"],
   },
@@ -105,81 +70,6 @@ export const GENERAL = defineSettingsSection("general", {
       "shortcut",
     ],
   },
-  // Gated on DATA and on the HOST: the card renders once a terminal has printed
-  // a local URL, or once the active host advertises `config.browser.get` —
-  // neither of which a shell can promise, so it folds into the page.
-  browser: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Browser",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  // The row's description names the active host, so the rendered sentence is a
-  // `status` and this static copy is what search reads.
-  agentBrowserAccess: {
-    kind: "row",
-    group: "browser",
-    search: { contributesTo: "page" },
-    label: "Let agents use the in-app browser",
-    description:
-      "Agents get Traycer's browser as a tool and are told to use it for web pages. Turn off to let them use their own browser tooling.",
-    availableWhen: alwaysAvailable,
-    keywords: ["agent", "browser", "playwright", "mcp"],
-  },
-  detectedDevOrigins: {
-    kind: "row",
-    group: "browser",
-    search: { contributesTo: "page" },
-    label: "Detected dev origins",
-    description:
-      "Terminal URLs with local hosts or explicit ports are kept for browser-origin classification.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  // Gated on the HOST RUNTIME: the group also needs a bound host runtime and a
-  // first successful read of the browser bridge, so none of it is a target.
-  websiteSessions: {
-    kind: "group",
-    search: { contributesTo: "page" },
-    label: "Website sessions",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  saveWebsiteSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Save website sessions on this computer",
-    // Says whether saving is on or paused, so the sentence is the row's status.
-    description: null,
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  savedWebsiteSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Saved website sessions",
-    description:
-      "Shared with connected Traycer hosts. Removing a site may sign you out there.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
-  bringInExistingSessions: {
-    kind: "row",
-    group: "websiteSessions",
-    search: { contributesTo: "page" },
-    label: "Bring in existing sessions",
-    description:
-      "Choose a browser or cookie file, then review the sites before importing.",
-    availableWhen: alwaysAvailable,
-    keywords: [],
-  },
   // Drawn by `PreventSleepSettingsSection` around its one row - the two
   // resource-visibility toggles that used to sit beside it moved to Layout -
   // so the group is gated exactly as that row is, and one gate hides the
@@ -209,6 +99,33 @@ export const GENERAL = defineSettingsSection("general", {
       "power",
       "screensaver",
       "suspend",
+    ],
+  },
+  // Machine-local, so it lives here rather than under a host scope: it has to
+  // work before any host is installed and with no local host. Signed out this
+  // page is not reachable; the card renders on its own at `/when-you-quit`.
+  hostLifecycle: {
+    kind: "group",
+    search: { anchor: "general-host-lifecycle" },
+    label: "When you quit Traycer",
+    description:
+      "Choose what happens to the host on this machine when you quit: keep it running in the background, ask each time, stop it if idle, stop it with the app, or don't run a host here.",
+    breadcrumb: null,
+    availableWhen: isHostLifecycleGroupAvailable,
+    keywords: [
+      "quit",
+      "host",
+      "background",
+      "keep running",
+      "stop host",
+      "linked",
+      "lifecycle",
+      "login",
+      "ask",
+      "idle",
+      "remote",
+      "wsl",
+      "no local host",
     ],
   },
   worktrees: {
@@ -250,24 +167,6 @@ export const GENERAL = defineSettingsSection("general", {
       "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts.",
     availableWhen: alwaysAvailable,
     keywords: ["roles", "coordination", "delegation", "feature flag"],
-  },
-  onboarding: {
-    kind: "group",
-    search: { anchor: "general-onboarding" },
-    label: "Onboarding",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["tour", "welcome", "first run", "intro"],
-  },
-  productTour: {
-    kind: "row",
-    group: "onboarding",
-    search: { anchor: "general-product-tour" },
-    label: "Product tour",
-    description: "Replay the first-launch onboarding tour.",
-    availableWhen: alwaysAvailable,
-    keywords: ["tour", "walkthrough", "replay", "welcome", "guide"],
   },
   dangerZone: {
     kind: "group",

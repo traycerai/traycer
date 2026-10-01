@@ -19,7 +19,8 @@ const queryClientFixture = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
 }));
 
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQueryClient: () => queryClientFixture,
 }));
 

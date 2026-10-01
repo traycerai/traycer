@@ -15,31 +15,34 @@
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { sessionImportRunCountsSchema } from "@traycer/protocol/host/session-import/run";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const sessionImportStatusRequestSchema = z.object({});
+export const sessionImportStatusRequestSchema = lazySchema(() => z.object({}));
 export type SessionImportStatusRequest = z.infer<
   typeof sessionImportStatusRequestSchema
 >;
 
-export const sessionImportStatusResponseSchema = z.object({
-  active: z
-    .object({
-      runId: z.string().min(1),
-      done: z.number().int().nonnegative(),
-      total: z.number().int().nonnegative(),
-    })
-    .nullable(),
-  lastCompleted: z
-    .object({
-      // Which run the summary is of, so a client that watched a run can tell
-      // "this is the run I just saw finish" from "an older one, and mine is
-      // still going somewhere I am not attached to".
-      runId: z.string().min(1),
-      counts: sessionImportRunCountsSchema,
-      at: z.number(),
-    })
-    .nullable(),
-});
+export const sessionImportStatusResponseSchema = lazySchema(() =>
+  z.object({
+    active: z
+      .object({
+        runId: z.string().min(1),
+        done: z.number().int().nonnegative(),
+        total: z.number().int().nonnegative(),
+      })
+      .nullable(),
+    lastCompleted: z
+      .object({
+        // Which run the summary is of, so a client that watched a run can tell
+        // "this is the run I just saw finish" from "an older one, and mine is
+        // still going somewhere I am not attached to".
+        runId: z.string().min(1),
+        counts: sessionImportRunCountsSchema,
+        at: z.number(),
+      })
+      .nullable(),
+  }),
+);
 export type SessionImportStatusResponse = z.infer<
   typeof sessionImportStatusResponseSchema
 >;

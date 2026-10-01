@@ -50,6 +50,8 @@ type PopoverContentProps = React.ComponentProps<
     typeof PopoverPrimitive.Portal
   >["container"];
   readonly layout?: keyof typeof POPOVER_CONTENT_LAYOUTS;
+  /** Same theme tokens as label tooltips, for click-open path disclosures. */
+  readonly appearance?: "popover" | "tooltip";
 };
 
 function PopoverContent({
@@ -60,6 +62,7 @@ function PopoverContent({
   collisionPadding,
   container,
   layout = "padded",
+  appearance = "popover",
   onCloseAutoFocus,
   ...props
 }: PopoverContentProps) {
@@ -84,6 +87,7 @@ function PopoverContent({
       <PopoverPrimitive.Content
         ref={ref}
         data-slot="popover-content"
+        data-appearance={appearance}
         data-layout={layout}
         align={align}
         sideOffset={sideOffset}
@@ -91,6 +95,8 @@ function PopoverContent({
         className={cn(
           "z-50 flex w-72 max-w-safe-dvw origin-(--radix-popover-content-transform-origin) flex-col bg-popover text-ui-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           POPOVER_CONTENT_LAYOUTS[layout],
+          appearance === "tooltip" &&
+            "rounded-md bg-foreground text-background shadow-sm ring-0",
           className,
         )}
         onCloseAutoFocus={handleCloseAutoFocus}

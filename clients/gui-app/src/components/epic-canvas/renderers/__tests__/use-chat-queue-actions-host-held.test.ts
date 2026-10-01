@@ -78,6 +78,7 @@ function queuedPromptItem(
     sender: { type: "user", userId: "user-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" },
+    sentFromHostId: null,
     delivery,
     status: "pending",
     targetTurnId: null,
@@ -118,6 +119,7 @@ function fakeChatActions(overrides: Partial<ChatActions>): ChatActions {
     ackFailedSendRestoration: () => undefined,
     ackAcceptedAction: () => undefined,
     takeSetupFailedRestoration: () => null,
+    messageDeliveryRestored: () => null,
     ...overrides,
   };
 }

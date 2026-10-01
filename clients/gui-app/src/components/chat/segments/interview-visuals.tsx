@@ -18,12 +18,13 @@ import {
 } from "@/components/chat/segments/use-interview-option-details-disclosure";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { markdownToPlainText } from "@/lib/markdown/markdown-to-plain-text";
 import { cn } from "@/lib/utils";
+import { TraycerMarkdown } from "@/markdown";
 
-interface DetailItem {
-  readonly kind: "description" | "preview";
-  readonly label: string;
-  readonly value: string;
+interface OptionDetails {
+  readonly description: string | null;
+  readonly preview: string | null;
 }
 
 /** Shared history-only treatment for saved answers that were never delivered. */
@@ -35,6 +36,31 @@ export function InterviewDraftStatus() {
     <span className="text-ui-xs font-medium text-warning-foreground">
       Draft — not sent to agent
     </span>
+  );
+}
+
+/**
+ * Question text, option details and notes are model-authored markdown, just
+ * like assistant prose: a fenced snippet, a list, a mermaid diagram. They go
+ * through the chat renderer so they read the way the model meant them instead
+ * of as one paragraph of literal backticks.
+ */
+export function InterviewMarkdown(props: {
+  readonly markdown: string;
+  readonly className: string | null;
+}) {
+  return (
+    <TraycerMarkdown
+      className={props.className}
+      proseSize="compact"
+      components={null}
+      remarkPlugins={null}
+      rehypePlugins={null}
+      quotable={false}
+      isStreaming={false}
+    >
+      {props.markdown}
+    </TraycerMarkdown>
   );
 }
 
@@ -79,25 +105,11 @@ function meaningfulText(value: string | null): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function optionDetails(
-  option: InterviewQuestionOption,
-): ReadonlyArray<DetailItem> {
+function optionDetails(option: InterviewQuestionOption): OptionDetails | null {
   const description = meaningfulText(option.description);
   const preview = meaningfulText(option.preview);
-  return [
-    ...(description === null
-      ? []
-      : [
-          {
-            kind: "description" as const,
-            label: "Details",
-            value: description,
-          },
-        ]),
-    ...(preview === null
-      ? []
-      : [{ kind: "preview" as const, label: "Preview", value: preview }]),
-  ];
+  if (description === null && preview === null) return null;
+  return { description, preview };
 }
 
 export function InterviewQuestionHeader(props: {
@@ -118,12 +130,12 @@ export function InterviewQuestionHeader(props: {
           {header}
         </div>
       )}
-      <p
+      <div
         data-chat-find-unit={props.questionFindUnitId ?? undefined}
-        className="m-0 min-w-0 text-ui font-medium leading-6 text-foreground"
+        className="min-w-0 font-medium text-foreground"
       >
-        {props.questionText}
-      </p>
+        <InterviewMarkdown markdown={props.questionText} className={null} />
+      </div>
       {props.modeHint === null ? null : (
         <p
           data-testid="interview-choice-mode-hint"
@@ -189,7 +201,7 @@ export function InterviewOptionDetailsButton(props: {
   readonly disclosure: InterviewOptionDetailsDisclosure;
 }) {
   const details = optionDetails(props.option);
-  if (details.length === 0) return null;
+  if (details === null) return null;
   // Search pinned the detail open above us: it is already on screen and owns
   // the accessible description, so there is nothing here to disclose.
   if (props.pinnedDetailRegionId !== null) {
@@ -236,7 +248,7 @@ export function InterviewOptionDetailsRegion(props: {
   readonly disclosure: InterviewOptionDetailsDisclosure;
 }) {
   const details = optionDetails(props.option);
-  if (!props.disclosure.expanded || details.length === 0) return null;
+  if (!props.disclosure.expanded || details === null) return null;
   return (
     <InlineOptionDetails
       details={details}
@@ -247,23 +259,66 @@ export function InterviewOptionDetailsRegion(props: {
   );
 }
 
-function OptionDetailsTooltip(props: {
-  readonly details: ReadonlyArray<DetailItem>;
-}) {
+/**
+ * A tooltip is a glance, not a reading surface: it gets the description as
+ * plain prose and only says that a preview exists. The preview itself (a
+ * mockup, a snippet) needs width and monospace alignment, which is what the
+ * click-to-open inline region below is for.
+ */
+function OptionDetailsTooltip(props: { readonly details: OptionDetails }) {
+  const description =
+    props.details.description === null
+      ? null
+      : markdownToPlainText(props.details.description);
   return (
-    <div className="flex max-w-[80vw] flex-col gap-2 text-ui-xs">
-      {props.details.map((detail) => (
-        <div key={detail.label} className="flex flex-col gap-0.5">
-          <span className="font-medium text-background/70">{detail.label}</span>
-          <span className="text-background">{detail.value}</span>
-        </div>
-      ))}
+    <div className="flex max-w-[80vw] flex-col gap-1 text-ui-xs">
+      {description === null ? null : (
+        <span className="text-background">{description}</span>
+      )}
+      {props.details.preview === null ? null : (
+        <span className="text-background/70">Click to show the preview</span>
+      )}
     </div>
   );
 }
 
+// A CommonMark fence opener: at most three spaces of indentation, then three
+// or more backticks or tildes, at the start of a line; a backtick fence's info
+// string may not itself contain a backtick. A bare substring test misses a
+// `~~~wireframe` block and sends an ASCII mockup that merely mentions ```
+// mid-line through the paragraph parser, which folds its whitespace.
+const FENCE_OPENER = /^ {0,3}(?:`{3,}[^`\n]*$|~{3,})/m;
+
+/**
+ * Claude's own tool contract describes `preview` as markdown shown in a
+ * monospace box: ASCII mockups and code snippets. A preview carrying a fence
+ * is real markdown and renders as such. Anything else is verbatim text whose
+ * line breaks and column alignment ARE the content, so it goes into a pre
+ * block untouched rather than through a paragraph parser that would fold it.
+ */
+function OptionPreview(props: {
+  readonly preview: string;
+  readonly findUnitId: string | null;
+}) {
+  if (FENCE_OPENER.test(props.preview)) {
+    return (
+      <div data-chat-find-unit={props.findUnitId ?? undefined}>
+        <InterviewMarkdown markdown={props.preview} className={null} />
+      </div>
+    );
+  }
+  return (
+    <pre
+      data-chat-find-unit={props.findUnitId ?? undefined}
+      className="m-0 overflow-x-auto rounded-sm bg-foreground/5 px-2 py-1.5 font-mono text-code-xs leading-snug whitespace-pre text-foreground"
+    >
+      {props.preview}
+    </pre>
+  );
+}
+
 function InlineOptionDetails(props: {
-  readonly details: ReadonlyArray<DetailItem>;
+  readonly details: OptionDetails;
   readonly descriptionFindUnitId: string | null;
   readonly previewFindUnitId: string | null;
   readonly regionId: string;
@@ -273,23 +328,31 @@ function InlineOptionDetails(props: {
       id={props.regionId}
       role="note"
       aria-label="Option details"
-      className="flex min-w-0 flex-col gap-1 rounded-sm border border-border/45 bg-foreground/3 px-2 py-1.5 text-ui-xs text-muted-foreground"
+      className="flex min-w-0 flex-col gap-1.5 rounded-sm border border-border/45 bg-foreground/3 px-2 py-1.5 text-ui-xs text-muted-foreground"
     >
-      {props.details.map((detail) => (
-        <div key={detail.label} className="flex min-w-0 flex-col gap-0.5">
-          <span className="font-medium text-foreground/75">{detail.label}</span>
-          <span
-            data-chat-find-unit={
-              detail.kind === "description"
-                ? (props.descriptionFindUnitId ?? undefined)
-                : (props.previewFindUnitId ?? undefined)
-            }
-            className="min-w-0 break-words text-foreground"
+      {props.details.description === null ? null : (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-medium text-foreground/75">Details</span>
+          <div
+            data-chat-find-unit={props.descriptionFindUnitId ?? undefined}
+            className="min-w-0 text-foreground"
           >
-            {detail.value}
-          </span>
+            <InterviewMarkdown
+              markdown={props.details.description}
+              className={null}
+            />
+          </div>
         </div>
-      ))}
+      )}
+      {props.details.preview === null ? null : (
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-medium text-foreground/75">Preview</span>
+          <OptionPreview
+            preview={props.details.preview}
+            findUnitId={props.previewFindUnitId}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -424,7 +487,7 @@ export function StaticInterviewOptions(props: {
         const details = optionDetails(option);
         const detailPinned = props.pinnedDetailOptionIndex === index;
         const detailRegionId =
-          detailPinned && details.length > 0
+          detailPinned && details !== null
             ? optionDetailRegionId(detailRegionIdPrefix, findUnitIds)
             : null;
         return (
@@ -443,7 +506,7 @@ export function StaticInterviewOptions(props: {
                 <span className="sr-only">Selected answer</span>
               ) : null}
             </StaticOptionRow>
-            {detailRegionId === null ? null : (
+            {detailRegionId === null || details === null ? null : (
               <InlineOptionDetails
                 details={details}
                 descriptionFindUnitId={findUnitIds.description}

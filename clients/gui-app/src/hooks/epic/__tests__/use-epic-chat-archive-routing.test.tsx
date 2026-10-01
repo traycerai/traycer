@@ -405,15 +405,18 @@ function createRoutingFixture(): RoutingFixture {
           );
           if (index >= 0) remoteRecords.splice(index, 1);
           if (mutable.holdRemoteDelete !== null) {
-            return mutable.holdRemoteDelete.then(() => ({ deleted: true }));
+            return mutable.holdRemoteDelete.then(() => ({
+              deleted: true,
+              publicationChatId: null,
+            }));
           }
-          return { deleted: true };
+          return { deleted: true, publicationChatId: null };
         }
         const index = localRecords.findIndex(
           (entry) => entry.chatId === request.chatId,
         );
         if (index >= 0) localRecords.splice(index, 1);
-        return { deleted: true };
+        return { deleted: true, publicationChatId: null };
       },
     },
   });

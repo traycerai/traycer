@@ -31,7 +31,7 @@ describe("SessionImportProgress", () => {
     cleanup();
   });
 
-  it("says an import is already running on this machine while attached, with no 'you can close this' copy", () => {
+  it("says an import is already running on this device while attached, with no 'you can close this' copy", () => {
     useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
@@ -49,7 +49,7 @@ describe("SessionImportProgress", () => {
     const progress = screen.getByRole("status");
     expect(
       within(progress).getByText(
-        "An import is already running on this machine.",
+        "An import is already running on this device.",
       ),
     ).toBeTruthy();
     expect(within(progress).getByText("Importing 0 of 4…")).toBeTruthy();
@@ -72,7 +72,7 @@ describe("SessionImportProgress", () => {
     const progress = screen.getByRole("status");
     expect(screen.queryByTestId("session-import-progress-attached")).toBeNull();
     expect(progress.textContent).not.toContain(
-      "An import is already running on this machine.",
+      "An import is already running on this device.",
     );
     expect(progress.textContent).not.toContain("You can close this");
   });
@@ -92,12 +92,10 @@ describe("SessionImportProgress", () => {
     );
 
     expect(
-      screen.getByText(
-        "Traycer lost connection to the host importing the tasks.",
-      ),
+      screen.getByText("Lost connection to the importing device."),
     ).toBeTruthy();
     expect(
-      screen.getByText("The import keeps running on your machine."),
+      screen.getByText("The import continues on that device."),
     ).toBeTruthy();
   });
 
@@ -112,13 +110,13 @@ describe("SessionImportProgress", () => {
       />,
     );
 
-    expect(screen.getByText("The import did not start.")).toBeTruthy();
+    expect(screen.getByText("Import couldn’t start.")).toBeTruthy();
     expect(
-      screen.queryByText("The import keeps running on your machine."),
+      screen.queryByText("The import continues on that device."),
     ).toBeNull();
   });
 
-  it("points the tour at the end of onboarding and the dialog at the task list", () => {
+  it("points each surface at where the tasks actually are", () => {
     useSessionImportRunStore.getState().markStarting(HOST, new Map());
     useSessionImportRunStore
       .getState()
@@ -134,11 +132,8 @@ describe("SessionImportProgress", () => {
         hostId={HOST}
       />,
     );
-    expect(
-      screen.getByText(
-        "They'll be in your task list when you finish the tour.",
-      ),
-    ).toBeTruthy();
+    // The tour's task list is several acts away, so it cannot be named yet.
+    expect(screen.getByText("Ready when you land in the app.")).toBeTruthy();
 
     cleanup();
     render(
@@ -147,7 +142,7 @@ describe("SessionImportProgress", () => {
         hostId={HOST}
       />,
     );
-    expect(screen.getByText("They're in your task list.")).toBeTruthy();
+    expect(screen.getByText("Ready in your task list.")).toBeTruthy();
   });
 
   it("says nothing was imported and omits the destination line when nothing landed", () => {
@@ -168,7 +163,55 @@ describe("SessionImportProgress", () => {
     );
 
     expect(screen.getByText("Nothing was imported")).toBeTruthy();
-    expect(screen.queryByText("They're in your task list.")).toBeNull();
+    expect(screen.queryByText("Ready in your task list.")).toBeNull();
+  });
+
+  it("tells the tour nothing was imported because it was all already there", () => {
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
+    useSessionImportRunStore
+      .getState()
+      .applyStarted(HOST, { runId: "run-1", total: 2, attached: false });
+    useSessionImportRunStore.getState().applyComplete(HOST, {
+      runId: "run-1",
+      counts: { imported: 0, skippedAlreadyImported: 2, failed: 0 },
+    });
+
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("onboarding")}
+        hostId={HOST}
+      />,
+    );
+
+    expect(screen.getByText("Nothing was imported")).toBeTruthy();
+    expect(
+      screen.getByText("Everything you picked is already in Traycer."),
+    ).toBeTruthy();
+    expect(screen.getByText("2 already in Traycer")).toBeTruthy();
+  });
+
+  it("puts the tour's misses in a chip once something did land", () => {
+    useSessionImportRunStore.getState().markStarting(HOST, new Map());
+    useSessionImportRunStore
+      .getState()
+      .applyStarted(HOST, { runId: "run-1", total: 4, attached: false });
+    useSessionImportRunStore.getState().applyComplete(HOST, {
+      runId: "run-1",
+      counts: { imported: 1, skippedAlreadyImported: 1, failed: 2 },
+    });
+
+    render(
+      <SessionImportProgress
+        tone={sessionImportTone("onboarding")}
+        hostId={HOST}
+      />,
+    );
+
+    expect(screen.getByText("Imported 1 session")).toBeTruthy();
+    expect(screen.getByTestId("session-import-not-imported").textContent).toBe(
+      "2 not imported",
+    );
+    expect(screen.getByText("1 already in Traycer")).toBeTruthy();
   });
 
   it("reports how many were already in Traycer", () => {

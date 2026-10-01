@@ -726,6 +726,8 @@ function seedClaudeProviders(profiles: ReadonlyArray<ProviderProfile>): void {
         token: null,
         codePaste: null,
         terminalLogin: null,
+        remoteSafe: null,
+        selfOpensBrowser: null,
       },
       availabilityPending: false,
       nativeCapabilities: {

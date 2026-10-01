@@ -94,6 +94,12 @@ export interface PipCaptureStartInput extends BrowserViewNativeTabCapability {
 export type BrowserViewElectronTabControlAction =
   | { readonly kind: "navigate"; readonly url: string }
   | { readonly kind: "reload" }
+  /**
+   * Cancel the in-flight host-driven navigation, as a browser's Stop button
+   * does: the page beneath stays as it is and the tile settles to `ready`
+   * on it. A no-op on a tab that is not loading.
+   */
+  | { readonly kind: "stop" }
   | { readonly kind: "goBack" }
   | { readonly kind: "goForward" }
   | { readonly kind: "zoomIn" }

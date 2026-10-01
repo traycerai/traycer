@@ -61,6 +61,12 @@ export function HostVersionRows(props: {
   readonly installingVersion: string | null;
   /** Something else holds the surface (another mutation, a degraded host). */
   readonly disabled: boolean;
+  /**
+   * The id of the sentence saying why every install is withheld, or `null`.
+   * The rows are disabled by `disabled`; this only points each button at the
+   * reason.
+   */
+  readonly describedBy: string | null;
   readonly onInstall: (version: string) => void;
   readonly onInstallAnyway: (version: string) => void;
 }): ReactNode {
@@ -87,6 +93,7 @@ export function HostVersionRows(props: {
             // all drive one detached swap on one host, and a second request
             // mid-swap retargets an update already running.
             disabled={props.disabled || props.installingVersion !== null}
+            describedBy={props.describedBy}
             onInstall={props.onInstall}
             onInstallAnyway={props.onInstallAnyway}
           />
@@ -112,6 +119,7 @@ function VersionRow(props: {
   readonly row: HostVersionRow;
   readonly installing: boolean;
   readonly disabled: boolean;
+  readonly describedBy: string | null;
   readonly onInstall: (version: string) => void;
   readonly onInstallAnyway: (version: string) => void;
 }): ReactNode {
@@ -123,37 +131,7 @@ function VersionRow(props: {
     (row.unavailableReason !== null && !canInstallAnyway);
   return (
     <li className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-ui-sm">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="font-mono text-code-xs">v{row.version}</span>
-        {row.isLatest ? (
-          <VersionPill className="bg-success/40 text-success-foreground">
-            latest
-          </VersionPill>
-        ) : null}
-        {row.isInstalled ? (
-          <VersionPill className="bg-info/40 text-info-foreground">
-            installed
-          </VersionPill>
-        ) : null}
-        {row.yanked ? (
-          <VersionPill className="bg-destructive/40 text-destructive">
-            yanked
-          </VersionPill>
-        ) : null}
-        {row.newerData ? (
-          <VersionPill className="bg-destructive/40 text-destructive">
-            newer data
-          </VersionPill>
-        ) : null}
-        <span className="text-ui-xs text-muted-foreground">
-          {formatInstallDate(row.releasedAt)}
-        </span>
-        {row.unavailableReason === null ? null : (
-          <span className="text-ui-xs text-muted-foreground">
-            {row.unavailableReason}
-          </span>
-        )}
-      </div>
+      <VersionRowSummary row={row} />
       <TooltipWrapper
         label={row.unavailableDetail ?? row.unavailableReason ?? undefined}
         side="top"
@@ -168,6 +146,7 @@ function VersionRow(props: {
             // The version lives in a SIBLING element, so every row's button
             // otherwise reads as the same bare "Install" to a screen reader.
             aria-label={`Install ${row.version}${canInstallAnyway ? " anyway" : ""}`}
+            aria-describedby={props.describedBy ?? undefined}
             onClick={() =>
               canInstallAnyway
                 ? props.onInstallAnyway(row.version)
@@ -186,6 +165,44 @@ function VersionRow(props: {
         </span>
       </TooltipWrapper>
     </li>
+  );
+}
+
+/** The row's leading half: the version, its pills, the date, and why not. */
+function VersionRowSummary(props: { readonly row: HostVersionRow }): ReactNode {
+  const { row } = props;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <span className="font-mono text-code-xs">v{row.version}</span>
+      {row.isLatest ? (
+        <VersionPill className="bg-success/40 text-success-foreground">
+          latest
+        </VersionPill>
+      ) : null}
+      {row.isInstalled ? (
+        <VersionPill className="bg-info/40 text-info-foreground">
+          installed
+        </VersionPill>
+      ) : null}
+      {row.yanked ? (
+        <VersionPill className="bg-destructive/40 text-destructive">
+          yanked
+        </VersionPill>
+      ) : null}
+      {row.newerData ? (
+        <VersionPill className="bg-destructive/40 text-destructive">
+          newer data
+        </VersionPill>
+      ) : null}
+      <span className="text-ui-xs text-muted-foreground">
+        {formatInstallDate(row.releasedAt)}
+      </span>
+      {row.unavailableReason === null ? null : (
+        <span className="text-ui-xs text-muted-foreground">
+          {row.unavailableReason}
+        </span>
+      )}
+    </div>
   );
 }
 

@@ -363,6 +363,30 @@ export function useMergedNotificationOccurrenceEntries(): ReadonlyArray<MergedNo
   );
 }
 
+/**
+ * How many unread rows are BLOCKING on the user right now.
+ *
+ * Beside `useAttentionNotificationIds` and deliberately narrower than it: tier
+ * is not a field on a row, it is what `classifyNotificationLifecycle` says
+ * about one, and the unfiltered attention list also carries failures. The
+ * layout editor's relay row is the caller (4.8) and it says "an agent is
+ * waiting for you", which a failed task is not (C-05).
+ */
+export function useBlockingAttentionCount(): number {
+  const rows = useMergedNotificationRows();
+  return useMemo(
+    () =>
+      rows.filter((row) => {
+        const classification = classifyNotificationLifecycle(row);
+        return (
+          classification.section === "attention" &&
+          classification.tier === "blocking"
+        );
+      }).length,
+    [rows],
+  );
+}
+
 interface AttentionOrderEntry {
   readonly row: MergedNotificationRow;
   readonly tier: NotificationAttentionTier;
@@ -2008,6 +2032,9 @@ function navigationPayloadFromKnown(
         hostId: known.hostId,
         focus: { resourceId: known.runId },
       };
+    // The chat's queue is paused and its remedy lives in that chat.
+    case "managed_command_delivery_parked":
+      return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
   }
 }
 

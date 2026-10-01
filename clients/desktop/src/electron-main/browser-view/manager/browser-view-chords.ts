@@ -5,6 +5,7 @@ import {
   type ChordParts,
 } from "@traycer-clients/shared/keybindings/chord-core";
 import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
+import { isTextHistoryShortcut } from "@traycer-clients/shared/keybindings/text-history-shortcut";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { log } from "../../app/logger";
 import {
@@ -290,6 +291,22 @@ export class BrowserViewChords {
     windowId: string | null,
     input: BrowserViewKeyInput,
   ): MatchedReservedChord | null {
+    // Let Chromium/the site's editor own undo and redo, including when a
+    // layout puts Z on a reserved physical key or the app binding was changed.
+    if (
+      isTextHistoryShortcut(
+        {
+          key: input.key,
+          ctrlKey: input.control,
+          metaKey: input.meta,
+          shiftKey: input.shift,
+          altKey: input.alt,
+        },
+        this.hostPlatform === "darwin",
+      )
+    ) {
+      return null;
+    }
     // A guest with no window of its own claims nothing. Falling back to some
     // other window's table is exactly the defect this signature exists to
     // prevent, and letting the key reach the page is the safe direction: an

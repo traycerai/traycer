@@ -14,8 +14,15 @@ import type {
   ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
-import type { ChatDockSection } from "@/components/chat/chat-dock-compact-strip";
+import {
+  ChatLowerDock,
+  type DockRowHotspot,
+} from "@/components/chat/chat-lower-dock";
+import {
+  ChatDockCompactStripProvider,
+  type ChatDockCompactChipModel,
+} from "@/components/chat/chat-dock-compact-strip";
+import type { ChatDockSection } from "@/lib/chat/chat-dock-sections";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
@@ -106,7 +113,11 @@ describe("<ChatLowerDock />", () => {
     vi.clearAllMocks();
   });
 
-  it("renders queue, todo, and file changes in a stable top-down order", () => {
+  // Every remaining member is a dock REGION (L-139), so the frame's vertical
+  // order among them is the arrangement's. The queue is not a region at all
+  // (G1-G2): it is a fixed slot that always draws as the frame's LAST child,
+  // below every row, regardless of what `dockOrder` says.
+  it("renders the frame's rows in dock order, with the queue fixed last", () => {
     renderDock({
       folded: undefined,
       queue: queueState([queuedItem("queue-1", "Queued prompt")]),
@@ -129,10 +140,12 @@ describe("<ChatLowerDock />", () => {
     expect(dock.contains(queue)).toBe(true);
     expect(dock.contains(todo)).toBe(true);
     expect(dock.contains(changes)).toBe(true);
-    expect(queue.compareDocumentPosition(todo)).toBe(
+    // `DEFAULT_DOCK_ORDER`: todo, then the three reorderable rows.
+    expect(todo.compareDocumentPosition(changes)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(todo.compareDocumentPosition(changes)).toBe(
+    // The queue sits after every row, whatever `dockOrder` says.
+    expect(changes.compareDocumentPosition(queue)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
   });
@@ -158,6 +171,159 @@ describe("<ChatLowerDock />", () => {
 
     expect(frame).not.toBeNull();
     expect(changes.className).not.toContain("border-t");
+  });
+
+  // L-97: the full rows keep ONE frame tucked under the composer, and that
+  // frame's fill is not `bg-muted` at any alpha - every preset's dark variant
+  // defines `--muted` identical to `--card`, so a muted fill on this bordered
+  // box over `bg-canvas` is invisible in most of the eighteen themes.
+  it("draws one joined frame with no muted fill", () => {
+    renderDock({
+      ...emptyDock(),
+      changes: [fileChange()],
+      todo: todoSnapshot([todoItem("Current task")]),
+    });
+
+    const dock = screen.getByTestId("chat-lower-dock");
+    const frames = dock.querySelectorAll(".rounded-t-lg");
+    expect(frames).toHaveLength(1);
+    const frame = frames[0];
+    expect(frame.className).toContain("border-b-0");
+    expect(frame.className).toContain("-mb-px");
+    // The frame's OWN fill. (`Collapsible variant="panel"` paints its own
+    // `bg-muted/30` inside; that is the design system's call and lives in
+    // `components/ui/collapsible.tsx`, not here.)
+    expect(frame.className).not.toContain("bg-muted");
+    expect(frame.className).toContain("bg-foreground/3");
+    // Both panels live inside that one frame rather than in cards of their own.
+    expect(frame.contains(screen.getByTestId("pinned-todo-panel"))).toBe(true);
+    expect(
+      frame.contains(screen.getByTestId("accumulated-changes-panel")),
+    ).toBe(true);
+  });
+
+  // A12: the pills stand ABOVE the frame at the composer's left edge, not in
+  // the workspace row at its right. `ml-auto` was what pushed them right.
+  it("puts the pill row first in the stack and left-aligned", () => {
+    renderDock({
+      ...emptyDock(),
+      changes: [fileChange()],
+      chips: [compactChip("background")],
+    });
+
+    const dock = screen.getByTestId("chat-lower-dock");
+    const strip = screen.getByTestId("chat-dock-compact-strip");
+    const frame = dock.querySelector(".rounded-t-lg");
+
+    expect(strip.className).not.toContain("ml-auto");
+    expect(strip.className).toContain("flex-wrap");
+    expect(frame).not.toBeNull();
+    expect(strip.compareDocumentPosition(frame as Node)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // L-153: a clear STEP between the pill row and the frame tucked into the
+    // composer, not the 6px that made the owner read them as stuck together.
+    // Read as a class of the stack the two clusters are children of.
+    const stack = strip.parentElement;
+    const stackClasses = (stack?.getAttribute("class") ?? "")
+      .split(/\s+/)
+      .filter(Boolean);
+    expect(stackClasses).toContain("gap-3");
+    expect(stackClasses).not.toContain("gap-1.5");
+  });
+
+  // A.4.4 / risk 2: a fully compact chat has no todo, no queue and no row, so
+  // the dock's own null gate used to take the chips off screen with it the
+  // moment they moved into the dock. Mutation check: drop the `anyChipVisible`
+  // term in `ChatLowerDock` and this goes red.
+  it("stays on screen for a chip-only chat", () => {
+    renderDock({
+      ...emptyDock(),
+      changes: [fileChange()],
+      folded: new Set(["filesChanged", "activeAgents", "background"]),
+      chips: [compactChip("filesChanged")],
+    });
+
+    expect(screen.getByTestId("chat-lower-dock")).not.toBeNull();
+    expect(screen.getByTestId("chat-dock-compact-strip")).not.toBeNull();
+    expect(screen.queryByTestId("accumulated-changes-panel")).toBeNull();
+    // The queue is empty (`emptyDock()`), so it draws no node either.
+    expect(screen.queryByTestId("queued-message-rows")).toBeNull();
+    // And the frame collapses rather than drawing an empty bordered box.
+    const frame = screen
+      .getByTestId("chat-lower-dock")
+      .querySelector(".rounded-t-lg");
+    expect(frame?.childElementCount).toBe(0);
+  });
+
+  // G1-G2: the queue is a fixed slot, not a dock region, so it draws
+  // whenever it holds anything regardless of what the rest of the dock is
+  // doing. With every real member folded to a chip, the frame holds nothing
+  // BUT the queue.
+  it("holds only the queue in the frame when every other member is a chip", () => {
+    renderDock({
+      ...emptyDock(),
+      queue: queueState([queuedItem("queue-1", "Queued prompt")]),
+      folded: new Set(["filesChanged", "activeAgents", "background", "todo"]),
+      chips: [compactChip("filesChanged")],
+    });
+
+    const frame = screen
+      .getByTestId("chat-lower-dock")
+      .querySelector(".rounded-t-lg");
+    expect(frame).not.toBeNull();
+    expect(frame?.childElementCount).toBe(1);
+    const queue = screen.getByTestId("queued-message-rows");
+    expect(frame?.contains(queue)).toBe(true);
+  });
+
+  // The attached panel is the frame's topmost, replaceable slot (L-142); the
+  // queue is fixed below every row and every panel, including an open one.
+  it("draws an open pill's attached panel before the queue", () => {
+    renderDock({
+      ...emptyDock(),
+      queue: queueState([queuedItem("queue-1", "Queued prompt")]),
+      folded: new Set(["filesChanged"]),
+      chips: [compactChip("filesChanged")],
+      openSection: "filesChanged",
+      changes: [fileChange()],
+    });
+
+    const attached = screen.getByTestId("chat-dock-attached-panel");
+    const queue = screen.getByTestId("queued-message-rows");
+    expect(attached.compareDocumentPosition(queue)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  // A pill can exist while its panel draws nothing: `dockPanelContent`
+  // declines to draw the Active agents panel without a self record even when
+  // the chip itself is showing. Clicking that pill used to leave three wrong
+  // outputs behind - a pressed pill, an `aria-controls` naming an id no
+  // element carries, and the frame's first row drawing a separator under
+  // nothing. Everything now follows the NODE the dock built, so a panel that
+  // renders nothing is not open. Mutation check: derive `separatedBefore` and
+  // the strip's `openSection` from the pill again and all three go red.
+  it("claims nothing is open when the open pill's panel renders nothing", () => {
+    renderDock({
+      ...emptyDock(),
+      // No self record, so `dockPanelContent` draws no Active agents panel.
+      selfAgent: null,
+      activeAgents: [],
+      changes: [fileChange()],
+      folded: new Set(["activeAgents"]),
+      chips: [compactChip("activeAgents")],
+      openSection: "activeAgents",
+    });
+
+    expect(screen.queryByTestId("chat-dock-attached-panel")).toBeNull();
+    const pill = screen.getByTestId("chat-dock-chip-activeAgents");
+    expect(pill.getAttribute("aria-pressed")).toBe("false");
+    expect(pill.getAttribute("aria-controls")).toBeNull();
+    // The first full row is still flush to the frame's rounded top.
+    expect(
+      screen.getByTestId("accumulated-changes-panel").className,
+    ).not.toContain("border-t");
   });
 
   it("renders background items and dispatches item actions", () => {
@@ -373,13 +539,12 @@ describe("<ChatLowerDock />", () => {
     });
   });
 
-  // The Active agents chip stands in for received A2A responses too, so
-  // dropping them from the queue when that chip is folded is the CALLER's job
-  // (`useChatDockChrome`'s `foldedQueue`, upstream of this component) - this
-  // dock does no A2A filtering of its own. Handing it a queue that still
-  // carries a received response, even while "activeAgents" is folded, proves
-  // the dock renders exactly the array it is given rather than re-deriving
-  // the fold itself, which is the boundary the caller's filtering depends on.
+  // The queue is never filtered by any dock fold (G1-G2, staging round 4):
+  // there is no upstream `foldedQueue` any more, and this dock does no A2A
+  // filtering of its own either. Handing it a queue that still carries a
+  // received response, even while "activeAgents" is folded, proves the dock
+  // renders exactly the array it is given rather than deriving a fold of its
+  // own.
   it("renders every row in the queue it is handed, including a received A2A item, regardless of the activeAgents fold", () => {
     const receivedItem = receivedAgentQueueItem(
       "received-1",
@@ -413,6 +578,8 @@ describe("<ChatLowerDock />", () => {
 });
 
 interface DockInput {
+  /** The compact chips the surrounding strip context is holding, if any. */
+  readonly chips?: ReadonlyArray<ChatDockCompactChipModel>;
   readonly queue: ChatSessionState["queue"];
   readonly todo: PinnedTodoSnapshot | null;
   readonly changes: ReadonlyArray<AccumulatedChangeRow>;
@@ -421,9 +588,84 @@ interface DockInput {
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly folded: ReadonlySet<ChatDockSection> | undefined;
+  /** The pill whose panel is attached above the composer, if any (L-142). */
+  readonly openSection?: ChatDockSection;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;
+}
+
+/** `DEFAULT_DOCK_ORDER` as the registry holds it: today's top-to-bottom frame
+ *  (Todo, then the three reorderable rows), so a user who never opens the
+ *  editor sees exactly the dock they see now. The queue is not a dock region
+ *  (G1-G2) and is never part of this order - it always draws fixed, last. */
+const DEFAULT_DOCK_ORDER: ReadonlyArray<ChatDockSection> = [
+  "todo",
+  "filesChanged",
+  "activeAgents",
+  "background",
+];
+
+function dockHotspot(hasContent: boolean): DockRowHotspot {
+  return {
+    hotspotRef: () => undefined,
+    // Every dock region in this suite is shown and none is materialising; only
+    // `folded` and whether the row has content are what these tests are about.
+    shown: true,
+    hasContent,
+    ghost: false,
+    editing: false,
+  };
+}
+
+/** Mirrors the real "has content" gates `useChatDockChrome` computes, so a
+ *  fixture built from the same `DockInput` the test already passes in cannot
+ *  drift from what the row would actually decide in the app. */
+function dockHotspotsFor(
+  input: DockInput,
+): Readonly<Record<ChatDockSection, DockRowHotspot>> {
+  return {
+    filesChanged: dockHotspot(input.changes.length > 0),
+    activeAgents: dockHotspot(
+      input.activeAgents.length > 0 && input.selfAgent !== null,
+    ),
+    background: dockHotspot(
+      (input.backgroundItems?.length ?? 0) > 0 ||
+        input.heldManagedCommandCount > 0,
+    ),
+    todo: dockHotspot(input.todo !== null),
+  };
+}
+
+/** A dock with nothing in it, for the tests that add exactly one thing. */
+function emptyDock(): DockInput {
+  return {
+    folded: undefined,
+    queue: queueState([]),
+    todo: null,
+    changes: [],
+    backgroundItems: undefined,
+    heldManagedCommandCount: 0,
+    selfAgent: null,
+    activeAgents: [],
+    onBackgroundItemClick: () => undefined,
+    onBackgroundItemStop: () => null,
+    onBackgroundItemsStopAll: () => null,
+  };
+}
+
+function compactChip(section: ChatDockSection): ChatDockCompactChipModel {
+  return {
+    section,
+    glyph: section,
+    hotspotRef: null,
+    working: false,
+    text: "1",
+    lineDeltas: null,
+    label: `${section} chip`,
+    detail: `${section} detail`,
+    pulseToken: null,
+  };
 }
 
 function renderDock(input: DockInput) {
@@ -432,43 +674,55 @@ function renderDock(input: DockInput) {
     // managed command's output window, the same as it does inside a real tile.
     <TabHostProvider hostId="host-1">
       <TooltipProvider delayDuration={0}>
-        <ChatLowerDock
-          snapshotLoaded
-          epicId="epic-1"
-          chatId="chat-1"
-          viewTabId="tab-1"
-          selfAgent={input.selfAgent}
-          activeAgents={input.activeAgents}
-          todo={input.todo}
-          restore={baseRestore(input.changes)}
-          queue={input.queue}
-          folded={input.folded ?? new Set()}
-          queueResumeRequested={false}
-          queueKeepPausedRequested={false}
-          backgroundItems={input.backgroundItems}
-          runningManagedCommandCount={0}
-          heldManagedCommandCount={input.heldManagedCommandCount}
-          backgroundStopPendingTaskIds={new Set()}
-          backgroundStopAllPending={false}
-          backgroundSessionStopPending={false}
-          activeTurnStatus="running"
-          canAct
-          readOnly={false}
-          editingQueueItemId={null}
-          topSpacing="normal"
-          scrollRegionMaxHeightClass="max-h-96"
-          onQueuePause={() => null}
-          onQueueResume={() => null}
-          onQueueEdit={vi.fn()}
-          onQueueCancel={vi.fn()}
-          onQueueAbortSteer={vi.fn()}
-          onQueueReorder={vi.fn()}
-          onQueueSteerNow={vi.fn()}
-          onBackgroundItemClick={input.onBackgroundItemClick}
-          onBackgroundItemStop={input.onBackgroundItemStop}
-          onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
-          onBackgroundSessionStop={() => null}
-        />
+        <ChatDockCompactStripProvider
+          value={{
+            chips: input.chips ?? [],
+            openSection: input.openSection ?? null,
+            panelId: "dock-panel-1",
+            onToggle: () => undefined,
+          }}
+        >
+          <ChatLowerDock
+            snapshotLoaded
+            epicId="epic-1"
+            chatId="chat-1"
+            viewTabId="tab-1"
+            selfAgent={input.selfAgent}
+            activeAgents={input.activeAgents}
+            todo={input.todo}
+            restore={baseRestore(input.changes)}
+            queue={input.queue}
+            folded={input.folded ?? new Set()}
+            dockOrder={DEFAULT_DOCK_ORDER}
+            hotspots={dockHotspotsFor(input)}
+            queueResumeRequested={false}
+            queueKeepPausedRequested={false}
+            backgroundItems={input.backgroundItems}
+            runningManagedCommandCount={0}
+            heldManagedCommandCount={input.heldManagedCommandCount}
+            portForwardCount={0}
+            backgroundStopPendingTaskIds={new Set()}
+            backgroundStopAllPending={false}
+            backgroundSessionStopPending={false}
+            activeTurnStatus="running"
+            canAct
+            readOnly={false}
+            editingQueueItemId={null}
+            topSpacing="normal"
+            scrollRegionMaxHeightClass="max-h-96"
+            onQueuePause={() => null}
+            onQueueResume={() => null}
+            onQueueEdit={vi.fn()}
+            onQueueCancel={vi.fn()}
+            onQueueAbortSteer={vi.fn()}
+            onQueueReorder={vi.fn()}
+            onQueueSteerNow={vi.fn()}
+            onBackgroundItemClick={input.onBackgroundItemClick}
+            onBackgroundItemStop={input.onBackgroundItemStop}
+            onBackgroundItemsStopAll={input.onBackgroundItemsStopAll}
+            onBackgroundSessionStop={() => null}
+          />
+        </ChatDockCompactStripProvider>
       </TooltipProvider>
     </TabHostProvider>,
   );
@@ -522,6 +776,7 @@ function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

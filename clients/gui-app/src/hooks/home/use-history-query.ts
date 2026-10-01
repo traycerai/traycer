@@ -1,3 +1,7 @@
+import {
+  taskOrganization,
+  useOrganizationTasks,
+} from "@/hooks/organization/organization-context";
 import type {
   HistoryItem,
   HistoryOwnershipScope,
@@ -69,9 +73,22 @@ export interface UseHistoryQueryResult {
   data: HistoryFetchResult | undefined;
   isPending: boolean;
   isFetching: boolean;
+  /** The current search's count is provisional, unlike a same-query refresh. */
+  readonly isCountPending: boolean;
   error: Error | null;
   hostId: string | null;
+  /**
+   * The identity these rows were scoped to - `resolveCloudTasksUserId`'s
+   * WIDENED answer, which admits an `unverified` session's local plane. Cache
+   * identity for a follow-up read of the same rows (the phone's in-progress
+   * backfill), never an authorization to spend the cloud capability.
+   */
+  readonly currentUserId: string | null;
+  /** Canonical request identity for scoped activity reconciliation. */
+  readonly activityRefreshScope: string;
   refetch: () => Promise<unknown>;
+  /** Refresh only the task page when reconciling a chat activity edge. */
+  refetchTasks: () => Promise<unknown>;
   fetchNextPage: () => void;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
@@ -138,6 +155,10 @@ export function useHistoryQuery(
     });
     return listCloudTasksRequestForHistorySearch(search);
   }, [debouncedQuery, params.search]);
+  const activityRefreshScope = useMemo(
+    () => JSON.stringify(request),
+    [request],
+  );
   const {
     hostId,
     currentUserId,
@@ -184,6 +205,19 @@ export function useHistoryQuery(
       ),
     [currentUserId, nowMs, tasks],
   );
+  const organization = useOrganizationTasks([
+    ...baseItems
+      .filter(
+        (item) =>
+          item.taskType === "epic" &&
+          !item.isLocalHome &&
+          !item.isPreservedOrphan,
+      )
+      .map((item) => item.epicId),
+    ...[...taskContexts.tasksById.keys()].filter(
+      (id) => !taskContexts.localHomedTaskIds.has(id),
+    ),
+  ]);
   const contextItems = useMemo(
     () =>
       filterHistoryItemsLocally(
@@ -196,7 +230,14 @@ export function useHistoryQuery(
           // through this path - matched by worktree branch, path, or PR
           // number - has no other source for it.
           taskContexts.localHomedTaskIds,
-        ),
+        ).map((item) => ({
+          ...item,
+          organization: taskOrganization(
+            organization?.view,
+            item.epicId,
+            item.organization,
+          ),
+        })),
         params.search,
       ),
     [
@@ -205,6 +246,7 @@ export function useHistoryQuery(
       params.search,
       taskContexts.tasksById,
       taskContexts.localHomedTaskIds,
+      organization,
     ],
   );
   // Locally matched tasks are unioned under the cloud page: the cloud rows
@@ -229,8 +271,19 @@ export function useHistoryQuery(
   const worktreeMetadata = useTaskWorktreeMetadata(historyEpicIds);
   const worktreesByEpicId = worktreeMetadata.worktreesByEpicId;
   const allItems = useMemo(
-    () => withHistoryItemWorktreeMetadata(allBaseItems, worktreesByEpicId),
-    [allBaseItems, worktreesByEpicId],
+    () =>
+      withHistoryItemWorktreeMetadata(
+        allBaseItems.map((item) => ({
+          ...item,
+          organization: taskOrganization(
+            organization?.view,
+            item.epicId,
+            item.organization,
+          ),
+        })),
+        worktreesByEpicId,
+      ),
+    [allBaseItems, worktreesByEpicId, organization],
   );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {
@@ -374,7 +427,16 @@ export function useHistoryQuery(
     worktreesByEpicId,
   ]);
 
-  const refetch = useCallback(() => refetchCloudTasks(), [refetchCloudTasks]);
+  const refetch = useCallback(async () => {
+    const [tasks] = await Promise.all([
+      refetchCloudTasks(),
+      organization?.refresh(),
+    ]);
+    return tasks;
+  }, [refetchCloudTasks, organization]);
+  const isHydratingSearchMatches =
+    (isPullRequestNumberQuery && activityIndex.isFetching) ||
+    taskContexts.isFetching;
 
   return {
     data,
@@ -382,17 +444,29 @@ export function useHistoryQuery(
     // `pending` forever - it has no data and never will - and passing that
     // through is what put a permanent skeleton on History.
     isPending: !initialLegRefused && tasksQuery.isPending,
+    // Placeholder rows answer the previous request; local projection during
+    // debounce/hydration is only a preview. A background first-page refresh
+    // with current-query data, however, retains a usable loaded count.
+    isCountPending:
+      !initialLegRefused &&
+      [
+        tasksQuery.isPending,
+        isQueryDebouncing,
+        tasksQuery.isPlaceholderData,
+        isCloudPagePending,
+        isHydratingSearchMatches,
+      ].some(Boolean),
     isFetching:
-      tasksQuery.isFetching ||
-      isQueryDebouncing ||
-      (isPullRequestNumberQuery && activityIndex.isFetching) ||
-      taskContexts.isFetching,
+      tasksQuery.isFetching || isQueryDebouncing || isHydratingSearchMatches,
     error:
       (tasksQuery.error instanceof Error ? tasksQuery.error : null) ??
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
+    currentUserId,
+    activityRefreshScope,
     refetch,
+    refetchTasks: refetchCloudTasks,
     fetchNextPage,
     // Pagination follows the plain cloud query; id-fetched local matches are
     // complete per query (not paginated). Keep the guard so "Show more"
@@ -512,6 +586,10 @@ function settledHistoryItems(
   sort: HistorySortOption,
   query: string,
 ): ReadonlyArray<HistoryItem> {
+  // Host-synthesized local homes belong on page one, while later cloud pages
+  // remain cloud-owned. Sort the loaded union by the durable key even when a
+  // filter or picker disables the optimistic active-row overlay.
+  if (sort === "recent") return sortProjectedHistoryItems(items, sort, query);
   if (contextExtrasCount > 0) {
     return sortProjectedHistoryItems(items, sort, query);
   }
@@ -524,12 +602,23 @@ function projectHistoryItems(
 ): ReadonlyArray<HistoryItem> {
   const filtered = filterHistoryItemsLocally(items, search);
   const query = search.query.trim();
-  const searched =
-    query.length === 0
-      ? filtered
-      : new Fuse(filtered, LOCAL_FUSE_OPTIONS)
-          .search(query)
-          .map((result) => result.item);
+  let searched: ReadonlyArray<HistoryItem> = filtered;
+  if (query.length > 0) {
+    const matches = new Fuse(filtered, LOCAL_FUSE_OPTIONS)
+      .search(query)
+      .map((result) => result.item);
+    if (
+      search.sort === "recent" &&
+      filtered.some((item) => item.recentAtMs === undefined)
+    ) {
+      // Fuse supplies fuzzy membership while a previous page is displayed,
+      // but its relevance order must not replace the old peer's Recent order.
+      const matchIds = new Set(matches.map((item) => item.id));
+      searched = filtered.filter((item) => matchIds.has(item.id));
+    } else {
+      searched = matches;
+    }
+  }
   return sortProjectedHistoryItems(searched, search.sort, query);
 }
 
@@ -549,6 +638,24 @@ function filterHistoryItemsLocally(
     chatHosts: search.chatHosts,
     chatHostMatchMode: search.chatHostMode,
     ownershipScopes: search.ownershipScopes,
+  }).filter((item) => {
+    const labels = search.labelNames ?? [];
+    const names = new Set(
+      item.organization?.labels.map((label) => label.name.toLowerCase()) ?? [],
+    );
+    const labelMatches =
+      labels.length === 0 ||
+      (search.labelMode === "all"
+        ? labels.every((name) => names.has(name.toLowerCase()))
+        : labels.some((name) => names.has(name.toLowerCase())));
+    const groups = search.groupIds ?? [];
+    const groupId = item.organization?.group?.groupId;
+    return (
+      labelMatches &&
+      ((groups.length === 0 && !search.includeUngrouped) ||
+        (groupId !== undefined && groups.includes(groupId)) ||
+        (groupId === undefined && !!search.includeUngrouped))
+    );
   });
 }
 
@@ -625,6 +732,15 @@ function sortProjectedHistoryItems(
   query: string,
 ): ReadonlyArray<HistoryItem> {
   if ((sort === "relevance" && query.length > 0) || sort === "last-viewed") {
+    return prioritizePinnedHistoryItems(items);
+  }
+  // A pre-1.7 peer strips the activity key after ordering its page. Falling
+  // back to task edits here would reverse that authoritative server order.
+  // With no common key, preserve the loaded sequence within pin partitions.
+  if (
+    (sort === "recent" || sort === "relevance") &&
+    items.some((item) => item.recentAtMs === undefined)
+  ) {
     return prioritizePinnedHistoryItems(items);
   }
   return sortHistoryItems(items, sort);

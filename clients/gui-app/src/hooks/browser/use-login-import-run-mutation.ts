@@ -11,6 +11,7 @@ import type {
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { browserMutationKeys, queryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { BROWSER_SAVED_LOGIN_SITES_METHOD } from "./use-browser-saved-login-sites-query";
 
 /** What `onMutate` captures for the completion callbacks. */
@@ -66,6 +67,11 @@ export function useLoginImportRun(
     },
     retry: false,
     onSuccess: (result, _request, context) => {
+      if (result.status === "imported" && result.importedCookies > 0) {
+        useOnboardingStore
+          .getState()
+          .notifySetupEvent("browser-logins-imported");
+      }
       if (!changedTheJar(result)) return;
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethodScope(

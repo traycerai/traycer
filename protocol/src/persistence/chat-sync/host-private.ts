@@ -1,9 +1,10 @@
 import { jsonObjectSchema } from "@traycer/protocol/persistence/chat-sync/json";
 import {
+  declareResidualCapture,
   storageProjection,
-  withResidualCapture,
 } from "@traycer/protocol/persistence/chat-sync/residual";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Opaque host-private section of a published chat.
@@ -42,7 +43,7 @@ import { z } from "zod";
  */
 export const chatSyncHostPrivateShape = {
   /** Host-owned schema revision of `data`. Never interpreted by the protocol. */
-  revision: z.number().int().nonnegative(),
+  revision: lazySchema(() => z.number().int().nonnegative()),
   /** Opaque, validated-JSON host state. Preserved verbatim by every reader. */
   data: jsonObjectSchema,
 } as const;
@@ -50,15 +51,14 @@ export const chatSyncHostPrivateShape = {
 // The envelope itself captures residuals too: `data` is already opaque, but a
 // future minor could add a sibling of `revision`, and an older reader must not
 // drop it on re-publication (see `residual.ts`).
-export const chatSyncHostPrivateSchema = withResidualCapture(
-  "hostPrivate",
-  chatSyncHostPrivateShape,
+export const chatSyncHostPrivateSchema = lazySchema(
+  declareResidualCapture("hostPrivate", () => chatSyncHostPrivateShape),
 );
 export type ChatSyncHostPrivate = z.infer<typeof chatSyncHostPrivateSchema>;
 
 /** The persisted shape - declared fields, no `residual`. */
-export const chatSyncHostPrivateStorageSchema = storageProjection(
-  chatSyncHostPrivateShape,
+export const chatSyncHostPrivateStorageSchema = lazySchema(() =>
+  storageProjection(chatSyncHostPrivateShape),
 );
 
 /** Empty host-private section, for readers/tests constructing a bare head. */

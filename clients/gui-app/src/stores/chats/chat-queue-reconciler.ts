@@ -159,6 +159,14 @@ export type ReconcileSnapshotInput = {
    * second pass in {@link reconcileSnapshotChange}.
    */
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
+  /**
+   * The message the host's delivery view names, in any phase, or `null` when
+   * there is no view. That view is the message's one restorer
+   * (`ChatSessionState.messageDelivery`), so neither pass restores or states
+   * it on ABSENCE - absence is exactly what a withdrawal looks like. Presence
+   * is still read as usual: it only ever confirms.
+   */
+  readonly deliveryViewMessageId: string | null;
   readonly nowMs: number;
 };
 
@@ -1147,6 +1155,12 @@ export function reconcileSnapshotChange(
       if (pending.restore === null) {
         return next;
       }
+      // The host's delivery view speaks for this message. The record stays
+      // until the view settles it - `messageAccepted` once it starts, or the
+      // withdrawal's own drop.
+      if (pending.messageId === input.deliveryViewMessageId) {
+        return next;
+      }
       // Everything below settles on ABSENCE, and absence is only evidence for
       // a dispatch from a dead connection. A send issued after this connection
       // reached `open` - the composer gate reopens there, before the initial
@@ -1229,6 +1243,7 @@ export function reconcileSnapshotChange(
         ),
         failedSendRestoration: {
           clientActionId: pending.clientActionId,
+          messageId: pending.messageId,
           content: pending.restore.content,
           browserAnnotations: pending.restore.browserAnnotations,
           reason: `Message was not confirmed after reconnect.${deadSendAccountClauses(
@@ -1336,6 +1351,8 @@ function reconcileAcceptedSends(
       }
       // Absence is only evidence for a send nothing has ever confirmed.
       if (accepted.confirmedByHost) return next;
+      // ...and never for one the host's delivery view speaks for.
+      if (accepted.messageId === input.deliveryViewMessageId) return next;
       // ...and absence is evidence only against a dead connection.
       if (accepted.connectionEpoch >= input.connectionEpoch) return next;
       const settledAcceptedActionIds = new Set(next.settledAcceptedActionIds);
@@ -1381,6 +1398,7 @@ function reconcileAcceptedSends(
         settledAcceptedActionIds,
         failedSendRestoration: {
           clientActionId: accepted.clientActionId,
+          messageId: accepted.messageId,
           content: accepted.restore.content,
           browserAnnotations: accepted.restore.browserAnnotations,
           reason: `A queued message was not confirmed after reconnect.${deadSendAccountClauses(
@@ -1433,6 +1451,8 @@ export type ReconcileTurnSettledInput = {
    * same breath - see {@link ReconcileTurnSettledPatch.settledAcceptedActionIds}.
    */
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
+  /** See {@link ReconcileSnapshotInput.deliveryViewMessageId}. */
+  readonly deliveryViewMessageId: string | null;
 };
 
 export type ReconcileTurnSettledPatch = {
@@ -1537,7 +1557,12 @@ export function reconcileTurnSettled(
       // design; the recovery record owns it until the retry dispatches or the
       // prompt is handed back, and exactly one of those will happen.
       !input.recoveringActionIds.has(message.clientActionId) &&
-      !queueContainsPendingSend(input.queue, message.messageId, message),
+      !queueContainsPendingSend(input.queue, message.messageId, message) &&
+      // Not recorded is not stranded when the host's delivery view names the
+      // message: the view restores it, and a row it already confirmed is still
+      // dropped below like any other.
+      (message.messageId !== input.deliveryViewMessageId ||
+        confirmedMessageIds.has(message.messageId)),
   );
   if (stranded.length === 0) {
     return {
@@ -1620,6 +1645,7 @@ export function reconcileTurnSettled(
         ? input.failedSendRestoration
         : {
             clientActionId: restorable.clientActionId,
+            messageId: restorable.messageId,
             content: restorable.restore.content,
             browserAnnotations: restorable.restore.browserAnnotations,
             reason: `The message was not recorded before the turn stopped.${deadSendAccountClauses(

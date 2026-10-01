@@ -1,9 +1,18 @@
 import { useEffect, useRef, useState } from "react";
+import { MoreHorizontal } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   switcherCategoryTitle,
-  visibleSwitcherCategoryDefs,
+  type SwitcherCategories,
 } from "@/components/epic-canvas/mobile/switcher-categories";
+import { type LeftPanelId } from "@/lib/left-panel-ids";
 import { cn } from "@/lib/utils";
 
 interface ScrollEdges {
@@ -65,88 +74,162 @@ function fadeClassForEdges(edges: ScrollEdges): string | null {
 /**
  * The category tab bar for the mobile "Switch tab" sheet: a `line`-variant
  * `TabsList` whose triggers take natural width and scroll horizontally when the
- * curated categories overflow phone width. Rendered inside the sheet's `Tabs`
- * root so selection flows through Radix. Identity comes from
- * {@link visibleSwitcherCategoryDefs} (the desktop left-panel registry).
+ * categories overflow phone width, then - pinned outside the scroller, so it
+ * never scrolls away - a "More" menu holding the panels the user turned off in
+ * Settings > Layout. Rendered inside the sheet's `Tabs` root so chip selection
+ * flows through Radix; a More pick goes through `onSelect`, the same handler.
  */
-export function SwitcherCategoryTabs() {
+export function SwitcherCategoryTabs(props: {
+  readonly categories: SwitcherCategories;
+  readonly activeCategory: LeftPanelId;
+  readonly onSelect: (id: LeftPanelId) => void;
+}) {
+  const { categories, activeCategory, onSelect } = props;
   const listRef = useRef<HTMLDivElement>(null);
   const edges = useHorizontalScrollEdges(listRef);
   return (
-    <TabsList
-      ref={listRef}
-      variant="line"
-      // This list is a scroll container (`overflow-x-auto`), which makes
-      // overflow-y compute to `auto` too - any vertical spill inside it
-      // becomes a user-visible vertical scroller rather than clipping. So
-      // nothing may exceed the list's height: it sizes to its triggers
-      // (`h-auto` on the base height's exact modifier so `cn`
-      // replaces the fixed `h-8`), and the triggers themselves carry the full
-      // 44px touch height (min-h-[44px] below), which also collapses the
-      // coarse-pointer hit-slop `::after` (`height: max(100%, 44px)` in
-      // mobile-shell-touch-targets.css) to an exact fit.
-      //
-      // Every override here has to spell its modifier the way `ui/tabs` spells
-      // its own, and the reason is not style. `cn` only drops the
-      // base utility when both sides carry the IDENTICAL modifier chain; spell
-      // them differently and both ship, at which point the cascade decides -
-      // and the bare shadcn variants (`data-horizontal:`, `data-active:`,
-      // registered in `shadcn/tailwind.css`) compile `:where()`-wrapped, so
-      // they carry ZERO specificity while the `data-[…]` form carries a real
-      // attribute. A bare-variant override is therefore safe only while it is
-      // the sole rule for that property, and loses outright the moment the
-      // primitive states the same property with real specificity. Matching the
-      // spelling is what keeps the base out of the class list entirely, which
-      // is the only version of this that does not depend on winning a fight.
-      // `switcher-category-tabs.test.tsx` derives that coupling from the
-      // primitive rather than restating it.
-      className={cn(
-        "no-scrollbar w-full justify-start gap-1 overflow-x-auto px-2 group-data-[orientation=horizontal]/tabs:h-auto",
-        fadeClassForEdges(edges),
+    <div className="flex items-center">
+      <TabsList
+        ref={listRef}
+        variant="line"
+        // This list is a scroll container (`overflow-x-auto`), which makes
+        // overflow-y compute to `auto` too - any vertical spill inside it
+        // becomes a user-visible vertical scroller rather than clipping. So
+        // nothing may exceed the list's height: it sizes to its triggers
+        // (`h-auto` on the base height's exact modifier so `cn`
+        // replaces the fixed `h-8`), and the triggers themselves carry the full
+        // 44px touch height (min-h-[44px] below), which also collapses the
+        // coarse-pointer hit-slop `::after` (`height: max(100%, 44px)` in
+        // mobile-shell-touch-targets.css) to an exact fit.
+        //
+        // Every override here has to spell its modifier the way `ui/tabs` spells
+        // its own, and the reason is not style. `cn` only drops the
+        // base utility when both sides carry the IDENTICAL modifier chain; spell
+        // them differently and both ship, at which point the cascade decides -
+        // and the bare shadcn variants (`data-horizontal:`, `data-active:`,
+        // registered in `shadcn/tailwind.css`) compile `:where()`-wrapped, so
+        // they carry ZERO specificity while the `data-[…]` form carries a real
+        // attribute. A bare-variant override is therefore safe only while it is
+        // the sole rule for that property, and loses outright the moment the
+        // primitive states the same property with real specificity. Matching the
+        // spelling is what keeps the base out of the class list entirely, which
+        // is the only version of this that does not depend on winning a fight.
+        // `switcher-category-tabs.test.tsx` derives that coupling from the
+        // primitive rather than restating it.
+        className={cn(
+          "no-scrollbar min-w-0 flex-1 justify-start gap-1 overflow-x-auto px-2 group-data-[orientation=horizontal]/tabs:h-auto",
+          fadeClassForEdges(edges),
+        )}
+        aria-label="Tab categories"
+      >
+        {categories.bar.map((definition) => {
+          const Icon = definition.icon;
+          return (
+            <TabsTrigger
+              key={definition.id}
+              value={definition.id}
+              // `min-h-[44px]`, not `min-h-11`: this surface's root font is 15px,
+              // so a rem-based `11` is 41.25px and would leave the 44px hit-slop
+              // `::after` spilling out of the list's exact fit.
+              //
+              // `data-[state=active]:bg-transparent`: force the active state
+              // fill-less, so it paints no box where the active `--background`
+              // differs from the sheet surface - e.g. a white box in a light
+              // portal. `ui/tabs`' line variant already answers this for a
+              // `variant="line"` list, but it answers it by out-specifying the
+              // default fill rather than removing it, so the guarantee lasts only
+              // as long as this list stays on that variant. Stated here in the
+              // primitive's own spelling, `cn` drops the default fill
+              // outright and the outcome stops depending on which rule wins.
+              //
+              // The active indicator is a `::before` underline, NOT ui/tabs'
+              // `::after` one: the mobile-shell hit-slop
+              // (`mobile-shell-touch-targets.css`) claims every trigger's single
+              // `::after` under `@media (pointer: coarse)`, so on touch devices
+              // that `::after` is the (now transparent) slop, not the indicator.
+              // `::before` is untouched by both ui/tabs and the slop rule, so it
+              // renders the underline cleanly with no shared-pseudo collision.
+              // ui/tabs' own `::after` still carries a `bottom-[-5px]` offset for
+              // the indicator it thinks it owns, which on a fine pointer - a
+              // narrow desktop window, where this shell also renders and no slop
+              // rule overrides the geometry - hangs 5px below the trigger and
+              // reopens the spill; pinning it flush is the same "nothing exceeds
+              // the list" rule as the height above.
+              className="min-h-[44px] flex-none data-[state=active]:bg-transparent dark:data-[state=active]:bg-transparent group-data-[orientation=horizontal]/tabs:after:bottom-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-[state=active]:before:opacity-100"
+              data-testid={`mobile-switcher-tab-${definition.id}`}
+            >
+              <Icon className="size-4" />
+              {switcherCategoryTitle(definition)}
+            </TabsTrigger>
+          );
+        })}
+      </TabsList>
+      {categories.more.length === 0 ? null : (
+        <SwitcherMoreMenu
+          panels={categories.more}
+          active={categories.more.some(
+            (definition) => definition.id === activeCategory,
+          )}
+          onSelect={onSelect}
+        />
       )}
-      aria-label="Tab categories"
-    >
-      {visibleSwitcherCategoryDefs().map((definition) => {
-        const Icon = definition.icon;
-        return (
-          <TabsTrigger
-            key={definition.id}
-            value={definition.id}
-            // `min-h-[44px]`, not `min-h-11`: this surface's root font is 15px,
-            // so a rem-based `11` is 41.25px and would leave the 44px hit-slop
-            // `::after` spilling out of the list's exact fit.
-            //
-            // `data-[state=active]:bg-transparent`: force the active state
-            // fill-less, so it paints no box where the active `--background`
-            // differs from the sheet surface - e.g. a white box in a light
-            // portal. `ui/tabs`' line variant already answers this for a
-            // `variant="line"` list, but it answers it by out-specifying the
-            // default fill rather than removing it, so the guarantee lasts only
-            // as long as this list stays on that variant. Stated here in the
-            // primitive's own spelling, `cn` drops the default fill
-            // outright and the outcome stops depending on which rule wins.
-            //
-            // The active indicator is a `::before` underline, NOT ui/tabs'
-            // `::after` one: the mobile-shell hit-slop
-            // (`mobile-shell-touch-targets.css`) claims every trigger's single
-            // `::after` under `@media (pointer: coarse)`, so on touch devices
-            // that `::after` is the (now transparent) slop, not the indicator.
-            // `::before` is untouched by both ui/tabs and the slop rule, so it
-            // renders the underline cleanly with no shared-pseudo collision.
-            // ui/tabs' own `::after` still carries a `bottom-[-5px]` offset for
-            // the indicator it thinks it owns, which on a fine pointer - a
-            // narrow desktop window, where this shell also renders and no slop
-            // rule overrides the geometry - hangs 5px below the trigger and
-            // reopens the spill; pinning it flush is the same "nothing exceeds
-            // the list" rule as the height above.
-            className="min-h-[44px] flex-none data-[state=active]:bg-transparent dark:data-[state=active]:bg-transparent group-data-[orientation=horizontal]/tabs:after:bottom-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-[state=active]:before:opacity-100"
-            data-testid={`mobile-switcher-tab-${definition.id}`}
+    </div>
+  );
+}
+
+/**
+ * The trailing "More" entry: the panels turned off in Settings > Layout, which
+ * stay reachable here because the phone has no other route to their contents.
+ * Picking one selects it exactly as its chip would; while one of them is the
+ * shown category, More carries the bar's active underline so the bar never
+ * reads as having nothing selected.
+ */
+function SwitcherMoreMenu(props: {
+  readonly panels: SwitcherCategories["more"];
+  readonly active: boolean;
+  readonly onSelect: (id: LeftPanelId) => void;
+}) {
+  const { panels, active, onSelect } = props;
+  return (
+    <DropdownMenu>
+      {/* Full bar height, so the active underline sits on the same line as
+          the triggers' own `::before` underline beside it. */}
+      <span className="relative mr-2 flex shrink-0 items-center self-stretch">
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="More categories"
+            data-testid="mobile-switcher-more"
           >
-            <Icon className="size-4" />
-            {switcherCategoryTitle(definition)}
-          </TabsTrigger>
-        );
-      })}
-    </TabsList>
+            <MoreHorizontal className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        {active ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-foreground"
+          />
+        ) : null}
+      </span>
+      <DropdownMenuContent align="end" className="w-max min-w-40">
+        {panels.map((definition) => {
+          const Icon = definition.icon;
+          return (
+            <DropdownMenuItem
+              key={definition.id}
+              data-testid={`mobile-switcher-more-${definition.id}`}
+              onSelect={() => {
+                onSelect(definition.id);
+              }}
+            >
+              <Icon />
+              {switcherCategoryTitle(definition)}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

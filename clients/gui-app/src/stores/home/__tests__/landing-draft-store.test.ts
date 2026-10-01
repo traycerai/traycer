@@ -1478,11 +1478,21 @@ describe("useLandingDraftStore", () => {
           useLandingDraftStore.getState().drafts.find((d) => d.id === id)
             ?.content,
         ).toEqual(onlyPending);
-        // ...but the projected form drops the now-empty attachmentGroup (strip
-        // returns the doc node, not null, once its children are gone).
+        // ...but the projected form drops the now-empty attachmentGroup, and
+        // lands on the EMPTY DOCUMENT rather than on a doc with no children.
+        //
+        // This pin used to read `content: []`, describing what the walker
+        // happened to produce ("strip returns the doc node, not null, once its
+        // children are gone"). That shape is not a valid document:
+        // `@tiptap/extension-document` declares `content: "block+"`, so a doc
+        // with zero children throws while ProseMirror builds it - and this
+        // fixture is exactly the draft that produced one, which is how the
+        // reachability stopped being hypothetical. A draft that restores this
+        // projection would have taken the composer down with it instead of
+        // coming up empty.
         expect(patches.at(-1)?.landingDrafts?.[0].content).toEqual({
           type: "doc",
-          content: [],
+          content: [{ type: "paragraph" }],
         });
       } finally {
         setLandingDraftDesktopProjectionBridge(null);

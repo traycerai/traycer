@@ -1,12 +1,17 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const migratePhaseToEpicRequestSchema = z.object({
-  phaseId: z.string(),
-});
+export const migratePhaseToEpicRequestSchema = lazySchema(() =>
+  z.object({
+    phaseId: z.string(),
+  }),
+);
 
-export const migratePhaseToEpicResponseSchema = z.object({
-  epicId: z.string(),
-});
+export const migratePhaseToEpicResponseSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+  }),
+);
 
 export type MigratePhaseToEpicRequest = z.infer<
   typeof migratePhaseToEpicRequestSchema

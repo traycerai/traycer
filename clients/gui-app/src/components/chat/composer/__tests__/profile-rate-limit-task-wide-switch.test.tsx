@@ -395,6 +395,8 @@ describe("rate-limit banner task-wide switch", () => {
 
   it("preserves the composer's model and reasoning when committing a profile", () => {
     const store = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "rate-limit-banner",
       values: {
         permission: "supervised",

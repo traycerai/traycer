@@ -24,11 +24,14 @@ import {
   assetStreamServerFrameSchemaV11,
   assetStreamServerFrameSchemaV12,
 } from "@traycer/protocol/host/asset-stream-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const workspaceStreamAssetOpenRequestSchema = z.object({
-  workspacePath: z.string(),
-  filePath: z.string(),
-});
+export const workspaceStreamAssetOpenRequestSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    filePath: z.string(),
+  }),
+);
 export type WorkspaceStreamAssetOpenRequest = z.infer<
   typeof workspaceStreamAssetOpenRequestSchema
 >;

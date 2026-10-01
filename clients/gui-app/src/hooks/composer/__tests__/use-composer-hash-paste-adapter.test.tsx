@@ -29,7 +29,7 @@ import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/la
 import { reconcile } from "@/lib/composer/landing-image-gc";
 import { pendingIngestImageHashRoots } from "@/lib/composer/pending-ingest-image-roots";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 // F1 needs to gate ONE file's `putImage` mid-batch while its sibling's has
 // already resolved, so the GC sweep can be driven while the batch is still

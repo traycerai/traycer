@@ -27,6 +27,7 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
 import {
+  autoJudgeNoticeRowSource,
   autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
@@ -48,6 +49,7 @@ import {
   assistantRowTurnKey,
   assistantSliceRowId,
   assistantTurnNeedsTrailingRow,
+  autoJudgeNoticeRowId,
   autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
@@ -64,7 +66,9 @@ import {
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
+  checkpointEventTurnKey,
   isNoOpCheckpointEntry,
+  latestCheckpointPerTurn,
   overlappingCheckpointIds,
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
@@ -94,9 +98,11 @@ import type {
   SegmentTodoItem,
   SubagentChildSegment,
   SubagentSegment,
+  ToolSegment,
 } from "@/stores/composer/chat-store";
 import type { AgentSenderDisplay } from "@/lib/chat/sender-display";
 import { manualRungAnchorSegmentId } from "@/stores/chats/manual-rung-anchor";
+import { routingSettledNoticeSegmentId } from "@/stores/chats/routing-settled-notice";
 import type {
   LiveAssistantMessage,
   PendingUserMessage,
@@ -172,6 +178,19 @@ export interface RenderedMessagesInput {
    */
   readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
+  /**
+   * Prompt ids the host still has in the queue. An optimistic row with one of
+   * these ids is bookkeeping for a send that already has a queue row, so the
+   * transcript does not draw it. Absent means this caller has no queue.
+   */
+  readonly queuedPromptMessageIds?: ReadonlySet<string>;
+  /**
+   * The opening the host's delivery view says is withdrawn, or `null`
+   * (`withdrawnMessageDeliveryId`). Its user row, persisted or optimistic, is
+   * not drawn: the prompt is back in the composer, and the host's own removal
+   * can trail the view by a round trip.
+   */
+  readonly withdrawnMessageId: string | null;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingApprovals?: ReadonlyArray<ChatApprovalState>;
@@ -276,6 +295,10 @@ function turnSignature(blocks: ReadonlyArray<ContentBlock>): string {
     hash = hashStringField(hash, block.status);
     hash = hashNumberField(hash, block.timestamp);
     hash = hashNumberField(hash, blockContentVersion(block));
+    // Parentage is a rendered field: it decides whether a block draws flat in
+    // the transcript or inside its subagent's card, so a block whose parent
+    // resolves after its first render must not serve the cached flat segment.
+    hash = hashStringField(hash, block.parentBlockId ?? "");
   }
   return `${blocks.length}:${hash}`;
 }
@@ -328,23 +351,36 @@ function errorBlockContentVersion(
  * usually move with it and hide the miss, which is exactly why the kind cannot
  * be left to them: two upserts inside one millisecond at an unchanged status
  * leave every hashed field equal and the turn serves its cached segment. The
- * projected kind is what `isFallbackNoticeKind` reads to offer the fallback
- * settings link, so a stale one drops that affordance silently — e.g. a block
- * re-upserted as `fallback_wait_resumed` still rendering the previous kind.
+ * projected kind decides how the row paints — `fallback_applied` prints its
+ * title without its message — so a stale one paints the wrong row silently:
+ * e.g. a block re-upserted from `fallback_applied` to another kind still
+ * hiding the message it now has to show.
  */
 function textBlockContentVersion(
   block: Extract<ContentBlock, { type: "text" }>,
 ): number {
+  if (block.browserSession !== undefined) {
+    return hashStringField(
+      TURN_SIGNATURE_HASH_OFFSET,
+      JSON.stringify(block.browserSession),
+    );
+  }
   const notice = block.providerNotice;
   if (notice === null) return block.text.length;
   let hash = hashStringField(TURN_SIGNATURE_HASH_OFFSET, notice.noticeKind);
   hash = hashStringField(hash, notice.tone);
   hash = hashStringField(hash, notice.title);
   hash = hashStringField(hash, notice.message ?? "");
-  return notice.details.reduce((next, detail) => {
+  hash = notice.details.reduce((next, detail) => {
     const withLabel = hashStringField(next, detail.label);
     return hashStringField(withLabel, detail.value);
   }, hash);
+  // The receipt is a rendered field too, and the one that turns a divider into
+  // the settled card: a re-upsert that only ADDS it (or clears it, when a
+  // later settlement supersedes this one) must not serve the cached segment.
+  // JSON rather than a field walk: every value in it is a rendered string or
+  // a timestamp, and its shape is the protocol's to grow.
+  return hashStringField(hash, JSON.stringify(notice.receipt ?? null));
 }
 
 function planBlockContentVersion(
@@ -538,6 +574,7 @@ const NO_DEDUPLICATED_IMAGE_TARGETS: ReadonlyMap<
   AssistantMarkdownImageTarget
 > = new Map();
 const NO_STEERED_IDS: ReadonlySet<string> = new Set();
+const NO_QUEUED_PROMPT_IDS: ReadonlySet<string> = new Set();
 const NO_PENDING_APPROVALS: ReadonlyArray<ChatApprovalState> = [];
 const NO_PENDING_FILE_EDIT_APPROVALS: ReadonlyArray<ChatFileEditApprovalState> =
   [];
@@ -1135,6 +1172,9 @@ export function useRenderedMessages(
   const pendingFileEditApprovals =
     input.pendingFileEditApprovals ?? NO_PENDING_FILE_EDIT_APPROVALS;
   const pendingInterviews = input.pendingInterviews ?? NO_PENDING_INTERVIEWS;
+  const queuedPromptMessageIds =
+    input.queuedPromptMessageIds ?? NO_QUEUED_PROMPT_IDS;
+  const withdrawnMessageId = input.withdrawnMessageId;
   const turnPauseAccounting = useMemo(
     () =>
       buildTurnPauseAccounting({
@@ -1199,7 +1239,7 @@ export function useRenderedMessages(
         // card compute a row id the skeleton never published.
         message: buildSetupCardMessage(row, ownerId, viewTabId),
         anchorId: row.triggeringMessageId,
-        hasCreatingEvent: row.hasCreatingEvent,
+        isGenesisPin: row.isGenesisPin,
       })),
     [setupCardRows, ownerId, viewTabId],
   );
@@ -1214,6 +1254,11 @@ export function useRenderedMessages(
 
   const autoJudgeUnattendedDenialMessages = useMemo(
     () => buildAutoJudgeUnattendedDenialMessages(input.events),
+    [input.events],
+  );
+
+  const autoJudgeNoticeMessages = useMemo(
+    () => buildAutoJudgeNoticeMessages(input.events),
     [input.events],
   );
 
@@ -1264,14 +1309,18 @@ export function useRenderedMessages(
     () => userMessagesByIdFromMessages(input.messages),
     [input.messages],
   );
-  const retainedUserMessageIds = useMemo(
-    (): ReadonlySet<string> =>
-      new Set([
-        ...userMessagesById.keys(),
-        ...input.pendingUserMessages.map((message) => message.messageId),
-      ]),
-    [userMessagesById, input.pendingUserMessages],
-  );
+  // A withdrawn opening anchors nothing: its row is hidden below, and a
+  // record-less `turn.stopped` naming it (a legacy chat's stop during the old
+  // setup window, migrated on upgrade) would otherwise draw an orphan stopped
+  // boundary until the host's own removal of the row lands.
+  const retainedUserMessageIds = useMemo((): ReadonlySet<string> => {
+    const ids = new Set([
+      ...userMessagesById.keys(),
+      ...input.pendingUserMessages.map((message) => message.messageId),
+    ]);
+    if (withdrawnMessageId !== null) ids.delete(withdrawnMessageId);
+    return ids;
+  }, [userMessagesById, input.pendingUserMessages, withdrawnMessageId]);
 
   const activeTurnSteeredIdsKey = liveMergesIntoPersisted
     ? activeTurnSteeredIdsContentKey(partition.activeTurn, liveAssistant)
@@ -1440,6 +1489,20 @@ export function useRenderedMessages(
   );
 
   return useMemo(() => {
+    // A withdrawn opening has left the conversation - its prompt is back in the
+    // composer - so neither its row nor an optimistic copy of it is drawn, from
+    // the moment the host's delivery view says so. The host's own removal
+    // follows (on the windowed line, a reindex and a resnapshot later); this is
+    // the one place that gap is closed, and every row below reads these.
+    const shownPersisted = withoutWithdrawnUserRow(
+      persisted,
+      withdrawnMessageId,
+    );
+    const shownActiveTurn = withoutWithdrawnUserRow(
+      activeTurn,
+      withdrawnMessageId,
+    );
+    const shownPending = withoutWithdrawnUserRow(pending, withdrawnMessageId);
     // Pre-turn window: the host reports `running`/`stopping` (a send was
     // accepted) but no assistant row exists yet - provider-session/worktree
     // setup runs before the turn materializes. Synthesize a pending-assistant
@@ -1477,21 +1540,29 @@ export function useRenderedMessages(
           activeTurnStartedAt,
           activeTurnMeta: pendingTurnMeta(activeTurnMetaInput, displayContext),
           turnPauseAccounting,
-          rendered: [...persisted, ...activeTurn, ...pending, ...live],
+          rendered: [
+            ...shownPersisted,
+            ...shownActiveTurn,
+            ...shownPending,
+            ...live,
+          ],
         });
 
-    // Drop a pending optimistic echo whose `messageId` is already persisted.
-    // The optimistic "pending" user row and its persisted counterpart share an
-    // `id` (the messageId). Setup-gating's long accepted-but-not-running window
-    // lets the persisted message arrive (via snapshot) while the pending slot is
-    // already orphaned, so without this guard BOTH render (the "double message"
-    // bug). The invariant is "pending = not yet persisted" - once a message is
-    // persisted, its pending echo is stale and must drop.
+    // A prompt is drawn in one place.
+    //
+    // The optimistic row covers the instant after send, before the host has
+    // queued or persisted it. Once the host has that prompt in the queue, the
+    // queue row is the copy that survives a reload and a paused setup, so the
+    // optimistic row stays in the store (a queued send is not a lost send) and
+    // is not drawn. Once the host has persisted the message, that transcript
+    // row is the copy; the optimistic row shares its id and drops.
     const persistedIds = new Set(
-      [...persisted, ...activeTurn].map((message) => message.id),
+      [...shownPersisted, ...shownActiveTurn].map((message) => message.id),
     );
-    const dedupedPending = pending.filter(
-      (message) => !persistedIds.has(message.id),
+    const dedupedPending = shownPending.filter(
+      (message) =>
+        !persistedIds.has(message.id) &&
+        !queuedPromptMessageIds.has(message.id),
     );
 
     // `baseRows` = everything that sorts by `createdAt`. Assembled before the
@@ -1499,8 +1570,8 @@ export function useRenderedMessages(
     // imported-chat markers are deliberately NOT here - they are pinned (see
     // `pinImportedChatMarkers`), so sorting them would only file them wrongly.
     const baseRows = [
-      ...persisted,
-      ...activeTurn,
+      ...shownPersisted,
+      ...shownActiveTurn,
       ...dedupedPending,
       ...live,
       ...stoppedWithoutAssistantRecords,
@@ -1508,8 +1579,9 @@ export function useRenderedMessages(
       ...notificationAnchorMessages,
       // After the anchors, because `projectTranscriptRows` appends its passes
       // in this same order and a tie between two events sharing a timestamp is
-      // resolved by that order alone. Moving either list moves ordinals.
+      // resolved by that order alone. Moving any of these lists moves ordinals.
       ...autoJudgeUnattendedDenialMessages,
+      ...autoJudgeNoticeMessages,
       ...trailing,
     ];
 
@@ -1523,14 +1595,10 @@ export function useRenderedMessages(
       );
     }
 
-    // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is
-    // genuinely the initial worktree, not a creation that happened mid-chat. The
-    // discriminator is `hasCreatingEvent`: a window with a `setup.creating` event
-    // was announced LIVE during a conversation send. A window with NO creating
-    // event is the back-filled genesis worktree (epic-create / catch-up at
-    // chat-attach), whose `createdAt` can be stamped late, so it pins to the top
-    // where the genesis belongs.
-    const pinGenesisCard = !setupCardEntries[0].hasCreatingEvent;
+    // Only the initial worktree of an unforked chat pins above its history.
+    // A fork's own setup belongs after the inherited conversation; the shared
+    // whole-log partition supplies that decision even for a cold range.
+    const pinGenesisCard = setupCardEntries[0].isGenesisPin;
 
     // Every OTHER (mid-chat) setup card anchors DIRECTLY above the user message
     // whose send created it - by message id (`anchorId`), NOT `createdAt`. The
@@ -1593,8 +1661,11 @@ export function useRenderedMessages(
     importedChatMarkerMessages,
     notificationAnchorMessages,
     autoJudgeUnattendedDenialMessages,
+    autoJudgeNoticeMessages,
     setupCardRows,
     setupCardEntries,
+    queuedPromptMessageIds,
+    withdrawnMessageId,
     activeRunState,
     activeTurnId,
     activeTurnStartedAt,
@@ -1602,6 +1673,35 @@ export function useRenderedMessages(
     turnPauseAccounting,
     displayContext,
   ]);
+}
+
+/**
+ * The rows without the user row of a withdrawn opening - the same array when
+ * there is none. Keyed by row id, which a user row and its optimistic echo
+ * share (both are the message id).
+ */
+function withoutWithdrawnUserRow(
+  rows: ReadonlyArray<ChatMessageModel>,
+  withdrawnMessageId: string | null,
+): ReadonlyArray<ChatMessageModel> {
+  if (withdrawnMessageId === null) return rows;
+  return rows.filter(
+    (row) => row.role !== "user" || row.id !== withdrawnMessageId,
+  );
+}
+
+/**
+ * Whether the rendered transcript carries a worktree setup card, in any state.
+ * While it does, an unstarted opening prompt drops its own "Setting up" status:
+ * the card, or the pre-turn "Working…" row once the card is no longer in flight
+ * (`setupGating` above), already shows that wait.
+ */
+export function transcriptShowsSetupCard(
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  return rows.some((row) =>
+    row.segments.some((segment) => segment.kind === "setup-card"),
+  );
 }
 
 function projectActiveTurn(
@@ -1654,11 +1754,8 @@ function buildSetupCardMessage(
         kind: "setup-card",
         model: row.model,
         viewTabId,
-        // Ticket 13 (decision #28): same predicate the merge below uses for
-        // `pinGenesisCard` (`!setupCardEntries[0].hasCreatingEvent`) - only
-        // window 0 can ever be genesis-pinned, so this is exact, not a guess.
         anchorMessageId: row.triggeringMessageId,
-        isGenesisPin: row.windowIndex === 0 && !row.hasCreatingEvent,
+        isGenesisPin: row.isGenesisPin,
       },
     ],
     structuredContent: null,
@@ -1904,6 +2001,63 @@ function buildAutoJudgeUnattendedDenialMessages(
 }
 
 /**
+ * Project a LEGACY auto-mode judge notice row.
+ *
+ * Hosts used to journal a `permission.blocked` event carrying a notice (the
+ * judge could not run, a policy file was not wholly applied, Automatic moved
+ * the judge's billing to the conversation's provider). They no longer write
+ * one, but rows already on disk keep their ordinal: the host still numbers
+ * them from `autoJudgeNoticeRowSource`, so this list enumerates them too -
+ * the row-projection equivalence suite holds it to the host's list, row for
+ * row. Filtered and identified THROUGH the projection's own helper, like the
+ * refusal row above.
+ *
+ * Nothing draws the row. The chat tile withholds it before the list is built
+ * (`withholdUnpaintedRows` in `chat-special-segment.ts`), and
+ * `transcriptListRows` then omits its ordinal the way it omits a row the
+ * pinned-todo pass withholds.
+ */
+function buildAutoJudgeNoticeMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    const notice = autoJudgeNoticeRowSource(event);
+    if (notice === null) return [];
+    const id = autoJudgeNoticeRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "system",
+        content: "",
+        segments: [
+          {
+            id: `${id}:notice`,
+            kind: "auto-judge-notice",
+            marker: notice.marker,
+            message: notice.message,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
  * Build the run-metadata for the pre-turn pending indicator from the active
  * turn's primitive fields, mirroring what `renderAssistantTurnSlice` derives
  * for the live/persisted row so the provider icon + hover tooltip are present
@@ -1949,6 +2103,12 @@ function pendingTurnMeta(
 
 interface AssistantTurnAccumulator {
   messageId: string;
+  /**
+   * Every contributing record's id once a second record folds in, `null`
+   * while the turn has one: the common turn allocates nothing for it. See
+   * `ChatMessage.turnMessageIds`.
+   */
+  turnMessageIds: string[] | null;
   /**
    * The record's OWN `turnId`, not this turn's accumulator key.
    *
@@ -2609,11 +2769,16 @@ function addAssistantMessageToAccumulator(
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
     existing.costUsd = message.usage?.costUsd ?? existing.costUsd;
+    existing.turnMessageIds = [
+      ...(existing.turnMessageIds ?? [existing.messageId]),
+      message.messageId,
+    ];
     existing.messageId = message.messageId;
     return;
   }
   const created: AssistantTurnAccumulator = {
     messageId: message.messageId,
+    turnMessageIds: null,
     turnId: message.turnId,
     sender: message.sender,
     startedAt: message.startedAt,
@@ -2934,7 +3099,13 @@ function renderAssistantTurnRows(
 ): ReadonlyArray<ChatMessageModel> {
   const blocks = resolveResumeDeliveryPlacements(input.acc.blocks);
   const plan = planAssistantTurnRows(blocks);
-  const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
+  const homedSlices = sliceBlockIndicesHomedToCards(plan, blocks);
+  const rowIdByBlockId = assistantRowIdsByBlockId(
+    plan,
+    homedSlices,
+    blocks,
+    input.turnKey,
+  );
 
   const hiddenSliceIds = new Set<string>();
   const rows = plan.entries.map((entry): ChatMessageModel => {
@@ -2964,18 +3135,26 @@ function renderAssistantTurnRows(
         createdAt: input.rowAnchorAt,
       };
     }
-    const sliceBlocks = entry.blockIndices.map((index) => blocks[index]);
+    const sliceBlocks = (
+      homedSlices.get(entry.chunkIndex) ?? entry.blockIndices
+    ).map((index) => blocks[index]);
+    // A slice whose every block was a child homed into an earlier card's
+    // slice hides exactly like a slice of hidden retries: no bare row between
+    // two steers.
+    const emptiedByHoming =
+      sliceBlocks.length === 0 && entry.blockIndices.length > 0;
     if (
-      sliceBlocks.length > 0 &&
-      sliceBlocks.every(
-        (block) =>
-          block.type === "error" &&
-          codexRetryVisibility(
-            input.acc.sender.harnessId,
-            block.code,
-            input.retryTurnEnded,
-          ) === "hidden",
-      )
+      emptiedByHoming ||
+      (sliceBlocks.length > 0 &&
+        sliceBlocks.every(
+          (block) =>
+            block.type === "error" &&
+            codexRetryVisibility(
+              input.acc.sender.harnessId,
+              block.code,
+              input.retryTurnEnded,
+            ) === "hidden",
+        ))
     ) {
       hiddenSliceIds.add(
         assistantSliceRowId(input.turnKey, entry.chunkIndex, plan.split),
@@ -3052,6 +3231,11 @@ function renderAssistantTurnRows(
  * `chat-stable-rows.ts` compares `manualRungAnchorId` like every other field,
  * and handing back a fresh object for a row whose answer is "not you" would
  * churn a row per projection to say nothing.
+ *
+ * The anchor's row also learns whether it holds the settled routing notice
+ * (`routingSettledNoticeSegmentId`, asked of that ROW only): the settled card
+ * is the anchor's card with the notice folded in, so the two stamps are made
+ * together and cannot name different rows.
  */
 function withManualRungAnchor(
   rows: ReadonlyArray<ChatMessageModel>,
@@ -3059,12 +3243,22 @@ function withManualRungAnchor(
   const anchorId = manualRungAnchorSegmentId(assistantTurnSegments(rows));
   // The common case by a wide margin: a turn with no error segment at all.
   if (anchorId === null) return rows;
-  return rows.map((row) =>
-    row.role === "assistant" &&
-    row.segments.some((segment) => segment.id === anchorId)
+  return rows.map((row) => {
+    if (
+      row.role !== "assistant" ||
+      !row.segments.some((segment) => segment.id === anchorId)
+    ) {
+      return row;
+    }
+    const settledId = routingSettledNoticeSegmentId(row.segments);
+    return settledId === null
       ? { ...row, manualRungAnchorId: anchorId }
-      : row,
-  );
+      : {
+          ...row,
+          manualRungAnchorId: anchorId,
+          routingSettledNoticeId: settledId,
+        };
+  });
 }
 
 /**
@@ -3158,13 +3352,121 @@ function withTurnCompletion(
   );
 }
 
+const NO_HOMED_SLICES: ReadonlyMap<number, ReadonlyArray<number>> = new Map();
+
+/**
+ * Each assistant slice's block indices with every subagent child moved into
+ * the slice that holds its card (keyed by `chunkIndex`), or an empty map when
+ * no child sits outside its card's slice.
+ *
+ * A steer splits a turn into slices, and each slice builds its segments on its
+ * own - so a card's children that stream in after a steer land in a LATER
+ * slice than the card, find no card there, and render flat in the parent
+ * agent's voice. This homes each child block to its ROOT card's slice (a
+ * nested agent follows its own parent), in block order. Membership only: the
+ * plan, its row count and every row id are untouched, so the host's ordinals
+ * still agree. Every slice gets a bucket, so a slice whose blocks all moved
+ * out reads as EMPTY rather than falling back to its planned blocks; the
+ * renderer hides that slice exactly like a slice of hidden retries.
+ */
+function sliceBlockIndicesHomedToCards(
+  plan: AssistantTurnRowPlan,
+  blocks: ReadonlyArray<ContentBlock>,
+): ReadonlyMap<number, ReadonlyArray<number>> {
+  if (!plan.split) return NO_HOMED_SLICES;
+  const sliceByIndex = new Map<number, number>();
+  const homed = new Map<number, number[]>();
+  for (const entry of plan.entries) {
+    if (entry.kind === "steer") continue;
+    homed.set(entry.chunkIndex, []);
+    for (const index of entry.blockIndices) {
+      sliceByIndex.set(index, entry.chunkIndex);
+    }
+  }
+  const cardIndexById = cardBlockIndexById(blocks);
+  let moved = false;
+  for (let index = 0; index < blocks.length; index += 1) {
+    const own = sliceByIndex.get(index);
+    if (own === undefined) continue;
+    const home =
+      sliceByIndex.get(rootCardBlockIndex(blocks, cardIndexById, index)) ?? own;
+    if (home !== own) moved = true;
+    homed.get(home)?.push(index);
+  }
+  return moved ? homed : NO_HOMED_SLICES;
+}
+
+/**
+ * Blocks a child can name as its card: a rendered subagent block, or a tool
+ * call (a tool row that owns children draws as a card - see
+ * `withToolCardParents`). A subagent wins an id it shares with a tool call.
+ */
+function cardBlockIndexById(
+  blocks: ReadonlyArray<ContentBlock>,
+): ReadonlyMap<string, number> {
+  const byId = new Map<string, number>();
+  blocks.forEach((block, index) => {
+    if (block.type === "subagent" && isRenderableSubAgentBlock(block)) {
+      byId.set(block.blockId, index);
+    }
+  });
+  blocks.forEach((block, index) => {
+    if (block.type === "tool_call" && !byId.has(block.blockId)) {
+      byId.set(block.blockId, index);
+    }
+  });
+  return byId;
+}
+
+/**
+ * The index of the outermost card a block nests under (itself when it nests
+ * under none), following `parentBlockId` through blocks that nest - the block
+ * counterpart of `isSubagentChildSegment`. A cycle stops where it closes.
+ */
+function rootCardBlockIndex(
+  blocks: ReadonlyArray<ContentBlock>,
+  cardIndexById: ReadonlyMap<string, number>,
+  start: number,
+): number {
+  const seen = new Set<number>([start]);
+  let current = start;
+  for (;;) {
+    const block = blocks[current];
+    const parentId = nestsUnderCard(block)
+      ? (block.parentBlockId ?? null)
+      : null;
+    const parentIndex =
+      parentId === null ? undefined : cardIndexById.get(parentId);
+    if (parentIndex === undefined || seen.has(parentIndex)) return current;
+    seen.add(parentIndex);
+    current = parentIndex;
+  }
+}
+
+function nestsUnderCard(block: ContentBlock): boolean {
+  switch (block.type) {
+    case "text":
+    case "reasoning":
+    case "error":
+    case "file_change":
+    case "command":
+    case "subagent":
+      return true;
+    case "tool_call":
+      return block.toolName !== "image_generation";
+    default:
+      return false;
+  }
+}
+
 /**
  * Which row each block ended up on, for in-turn block targeting (jump-to-block,
- * image resolution). Read straight off the plan so it cannot disagree with the
- * rows actually rendered from it.
+ * image resolution). Read off the plan and the same homed membership the rows
+ * render from, so it cannot disagree with the rows actually rendered.
  */
 function assistantRowIdsByBlockId(
   plan: AssistantTurnRowPlan,
+  homedSlices: ReadonlyMap<number, ReadonlyArray<number>>,
   blocks: ReadonlyArray<ContentBlock>,
   turnKey: string,
 ): ReadonlyMap<string, string> {
@@ -3172,7 +3474,8 @@ function assistantRowIdsByBlockId(
   for (const entry of plan.entries) {
     if (entry.kind === "steer") continue;
     const rowId = assistantSliceRowId(turnKey, entry.chunkIndex, plan.split);
-    for (const index of entry.blockIndices) {
+    const indices = homedSlices.get(entry.chunkIndex) ?? entry.blockIndices;
+    for (const index of indices) {
       rowIdByBlockId.set(blocks[index].blockId, rowId);
     }
   }
@@ -3263,6 +3566,9 @@ function renderAssistantTurnSlice(
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    ...(input.acc.turnMessageIds === null
+      ? {}
+      : { turnMessageIds: input.acc.turnMessageIds }),
     // Spread rather than set: `turnId` is absent when the record carries none,
     // and an explicit `undefined` would be a present key whose value is the
     // one thing a reader must not treat as an identity.
@@ -3574,6 +3880,7 @@ function renderLiveAssistant(
   }
   const acc: AssistantTurnAccumulator = {
     messageId: transientLiveAssistantMessageId(liveAssistant.turnId),
+    turnMessageIds: null,
     // The live row always has a real turn id - it is what the host is
     // streaming against - so no `ts:` synthetic can reach here.
     turnId: liveAssistant.turnId,
@@ -3838,6 +4145,7 @@ function buildAssistantSegments(
         title: codexRetryTitle(block.message),
         message: null,
         details: [{ label: "Reported by Codex", value: block.message }],
+        receipt: null,
         parentId: block.parentBlockId ?? null,
       });
       continue;
@@ -3910,15 +4218,105 @@ function isSubagentChildSegment(
   // provider_notice IS eligible too - a notice on a subagent's own thread
   // nests under that card instead of interrupting the top-level transcript;
   // one with no matching parent (or none) falls through to topLevel below.
-  // Image-generation cards stay top-level so SubagentChildrenSection cannot
-  // swallow a nested generation while rendering only child agents.
+  // text / reasoning / error are the subagent's own conversation: left
+  // top-level they would render flat, in the parent agent's voice (the
+  // Codex/OpenCode import leak). Image-generation cards stay top-level: they
+  // are the turn's prominent outcome, not a step of the subagent's work.
   return (
     (segment.kind === "tool" && segment.toolName !== "image_generation") ||
     segment.kind === "file_change" ||
     segment.kind === "command" ||
     segment.kind === "subagent" ||
-    segment.kind === "provider_notice"
+    segment.kind === "provider_notice" ||
+    segment.kind === "text" ||
+    segment.kind === "reasoning" ||
+    segment.kind === "error"
   );
+}
+
+/** A child-eligible segment's owner, normalizing the absent key to null. */
+function subagentChildParentId(segment: SubagentChildSegment): string | null {
+  return segment.parentId ?? null;
+}
+
+/**
+ * The card-parent predicate: a segment draws a card when some block NAMES it
+ * as its parent - never by tool name. A `subagent` block is one by
+ * construction; a `tool` row becomes one when it owns parented children, which
+ * is how a model-invoked `Skill` fork arrives on import (its sidechain is
+ * parented to the `Skill` tool-use id, not to a subagent block). Without this
+ * those children would name a plain tool row that never draws them, and fall
+ * back to the top level - flat, in the parent agent's voice.
+ */
+function withToolCardParents(
+  flat: ReadonlyArray<MessageSegment>,
+): ReadonlyArray<MessageSegment> {
+  const ownerIds = new Set<string>();
+  for (const segment of flat) {
+    if (!isSubagentChildSegment(segment)) continue;
+    const parentId = subagentChildParentId(segment);
+    if (parentId !== null) ownerIds.add(parentId);
+  }
+  if (ownerIds.size === 0) return flat;
+  let promoted = false;
+  // The tool's own failure has no place in a card header, so it rides as the
+  // LAST entry of the card's conversation instead of being dropped - appended
+  // after every block, since children bucket in flat order.
+  const failures: MessageSegment[] = [];
+  const out: MessageSegment[] = [];
+  for (const segment of flat) {
+    if (segment.kind !== "tool" || !ownerIds.has(segment.id)) {
+      out.push(segment);
+      continue;
+    }
+    promoted = true;
+    const failure = toolCardFailure(segment);
+    if (failure !== null) failures.push(failure);
+    out.push(toolCardParent(segment));
+  }
+  return promoted ? [...out, ...failures] : flat;
+}
+
+/**
+ * A tool row re-cast as the card its children draw in. The row's identity is
+ * kept (same id, so jump-to-block and find still address it), the tool name is
+ * the card's name and its input summary the task. It has no spawn tool call of
+ * its own to suppress - it IS the row.
+ */
+function toolCardParent(tool: ToolSegment): SubagentSegment {
+  return {
+    id: tool.id,
+    kind: "subagent",
+    name: tool.toolName,
+    agentType: null,
+    task: tool.inputSummary,
+    progressUpdates: [],
+    result: null,
+    isStreaming: tool.isStreaming,
+    endState: tool.endState,
+    stopped: tool.stopped,
+    startedAt: tool.startedAt,
+    durationMs: tool.durationMs,
+    spawnToolCallId: null,
+    parentId: tool.parentId,
+    workflowMeta: null,
+    children: [],
+  };
+}
+
+function toolCardFailure(tool: ToolSegment): MessageSegment | null {
+  if (tool.stopped || tool.error === null || tool.error.length === 0) {
+    return null;
+  }
+  return {
+    id: `${tool.id}:error`,
+    kind: "error",
+    message: tool.error,
+    recoverable: false,
+    code: null,
+    failure: null,
+    parentId: tool.id,
+  };
 }
 
 /**
@@ -3932,8 +4330,9 @@ function isSubagentChildSegment(
  * being silently lost. Order is preserved at every level.
  */
 function nestSubagentChildren(
-  flat: ReadonlyArray<MessageSegment>,
+  input: ReadonlyArray<MessageSegment>,
 ): ReadonlyArray<MessageSegment> {
+  const flat = withToolCardParents(input);
   const subagentSegmentsById = new Map(
     flat.flatMap((segment) =>
       segment.kind === "subagent" ? [[segment.id, segment] as const] : [],
@@ -3944,14 +4343,17 @@ function nestSubagentChildren(
   const childrenByParent = new Map<string, SubagentChildSegment[]>();
   const topLevel: MessageSegment[] = [];
   for (const segment of flat) {
+    const parentId = isSubagentChildSegment(segment)
+      ? subagentChildParentId(segment)
+      : null;
     if (
       isSubagentChildSegment(segment) &&
-      segment.parentId !== null &&
-      subagentSegmentsById.has(segment.parentId)
+      parentId !== null &&
+      subagentSegmentsById.has(parentId)
     ) {
-      const bucket = childrenByParent.get(segment.parentId);
+      const bucket = childrenByParent.get(parentId);
       if (bucket === undefined) {
-        childrenByParent.set(segment.parentId, [segment]);
+        childrenByParent.set(parentId, [segment]);
       } else {
         bucket.push(segment);
       }
@@ -4020,23 +4422,54 @@ function resolveSubagentChildren(
  * superseded by their file_change card, then collapse repeated edits to the
  * same file into one row (first edit's pre-state -> last edit's post-state, the
  * net diff) using the same `mergeFileChangesByPath` that powers the top-level
- * "Changes" block. Tool calls and denied/failed edits keep their order and
- * position; the merged file rows land where the first real edit appeared.
+ * "Changes" block.
+ *
+ * The card draws its children as ONE ordered list, so the collapse runs within
+ * each contiguous run of activity (tool, file change, command) and never across
+ * anything else - the subagent's prose, a notice, a nested card. Merging across
+ * those would pull a later edit above the text that preceded it. A card with no
+ * such entries is one run, so it coalesces exactly as before. The turn-level
+ * "Changes" group still merges every edit of the turn.
  */
 function coalesceSubagentChildren(
   children: ReadonlyArray<SubagentChildSegment>,
 ): ReadonlyArray<SubagentChildSegment> {
-  const suppressed = suppressEditToolCalls(children);
-  const realChanges = suppressed.filter(
+  const out: SubagentChildSegment[] = [];
+  let run: SubagentChildSegment[] = [];
+  for (const segment of suppressEditToolCalls(children)) {
+    if (
+      segment.kind === "tool" ||
+      segment.kind === "file_change" ||
+      segment.kind === "command"
+    ) {
+      run.push(segment);
+      continue;
+    }
+    out.push(...coalesceSubagentActivityRun(run), segment);
+    run = [];
+  }
+  out.push(...coalesceSubagentActivityRun(run));
+  return out;
+}
+
+/**
+ * One contiguous activity run of a card: tool calls and denied/failed edits
+ * keep their order and position; the merged file rows land where the run's
+ * first real edit appeared.
+ */
+function coalesceSubagentActivityRun(
+  run: ReadonlyArray<SubagentChildSegment>,
+): ReadonlyArray<SubagentChildSegment> {
+  const realChanges = run.filter(
     (segment): segment is FileChangeSegment =>
       segment.kind === "file_change" && isRealFileChange(segment),
   );
-  if (realChanges.length <= 1) return suppressed;
+  if (realChanges.length <= 1) return run;
 
   const merged = mergeFileChangesByPath(realChanges);
   let inserted = false;
   const out: SubagentChildSegment[] = [];
-  for (const segment of suppressed) {
+  for (const segment of run) {
     if (segment.kind === "file_change" && isRealFileChange(segment)) {
       if (!inserted) {
         out.push(...merged);
@@ -4197,12 +4630,24 @@ interface CheckpointManifestView {
  * Reading `=== true` rather than a truthy check is the row-context contract:
  * an ABSENT field is the projection declining to speak, not an assertion of
  * `false`, so absence falls through to the derivation below.
+ *
+ * Each turn's view is its LAST checkpoint, and only those are weighed against
+ * each other - through the same `latestCheckpointPerTurn` the projection uses,
+ * so a turn whose checkpoint was rewritten is not flagged by its own rewrite on
+ * either line.
  */
 function checkpointManifestViewsFromEvents(
   events: ReadonlyArray<ChatEvent>,
   contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
 ): ReadonlyMap<string, CheckpointManifestView> {
-  const checkpoints = events.flatMap((event) => {
+  // Select from the RAW events, then parse what survived - see
+  // `latestCheckpointPerTurn`. Parsing first drops an unreadable rewrite
+  // before it can supersede anything, which would render this turn from the
+  // manifest that rewrite replaced.
+  const checkpoints = latestCheckpointPerTurn(
+    events.filter((event) => event.type === "checkpoint.captured"),
+    checkpointEventTurnKey,
+  ).flatMap((event) => {
     const checkpoint = checkpointManifestFromEvent(event);
     return isParsedCheckpointManifest(checkpoint) ? [checkpoint] : [];
   });
@@ -4419,6 +4864,19 @@ function hasSnapshotHash(hash: string | null | undefined): hash is string {
   return hash !== null && hash !== undefined;
 }
 
+/**
+ * The `parentId` key for a text / reasoning / error segment: present only on a
+ * parented block, so a main-agent segment keeps exactly the shape it always
+ * had (the `browserSession` convention on the same handler).
+ */
+function parentIdField(parentBlockId: string | null | undefined): {
+  readonly parentId?: string;
+} {
+  return parentBlockId === null || parentBlockId === undefined
+    ? {}
+    : { parentId: parentBlockId };
+}
+
 const BLOCK_HANDLERS: {
   [K in ContentBlock["type"]]: (
     block: Extract<ContentBlock, { type: K }>,
@@ -4439,6 +4897,9 @@ const BLOCK_HANDLERS: {
         title: notice.title,
         message: notice.message,
         details: notice.details,
+        // Absent (an older host, or a notice persisted before the key) and
+        // `null` (a superseded settlement) are one answer here: a divider.
+        receipt: notice.receipt ?? null,
         parentId: block.parentBlockId ?? null,
       };
     }
@@ -4447,7 +4908,11 @@ const BLOCK_HANDLERS: {
       : {
           kind: "text",
           markdown: block.text,
+          ...(block.browserSession === undefined
+            ? {}
+            : { browserSession: block.browserSession }),
           isStreaming: block.status === "streaming",
+          ...parentIdField(block.parentBlockId),
         };
   },
   reasoning: (block) =>
@@ -4464,6 +4929,7 @@ const BLOCK_HANDLERS: {
             block.startedAt,
             block.timestamp,
           ),
+          ...parentIdField(block.parentBlockId),
         },
   tool_call: (block) => ({
     kind: "tool",
@@ -4588,6 +5054,7 @@ const BLOCK_HANDLERS: {
     // affordances turn on it - so reading it here and inferring it from
     // `message`/`code` anywhere else would be two answers to one question.
     failure: block.failure,
+    ...parentIdField(block.parentBlockId),
   }),
   compaction: (block) => ({
     kind: "compaction",

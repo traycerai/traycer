@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The single literal version of the chat-sync publication contract.
@@ -84,7 +85,8 @@ import { z } from "zod";
 // 1.5 head CAN carry `minReaderVersion`, for a reason unrelated to this leaf.
 // `chatSyncReaderFloorForTranscriptEvents` in `head.ts` returns
 // `CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR` for any publication whose events
-// hold an unattended auto-judge denial row, so a publisher must still ask it
+// hold an unattended auto-judge denial row (or 1.6's higher notice floor when a
+// judge notice is there too), so a publisher must still ask it
 // rather than reading "1.5 stamps null" here and hard-coding the null; skipping
 // the call ships a head an older reader projects with the refusal row missing.
 //
@@ -109,7 +111,32 @@ import { z } from "zod";
 // claiming the exposure does not exist.
 // (Renumbered from 1.4 on the merge to main, which had taken that minor for
 // the delivery-placement field above.)
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 5 } as const;
+// 1.6 carries the negative provider-history marker (`providerHistory:
+// "excluded"`) on an accepted opening message that has not been sent yet.
+// Additive, and deliberately WITHOUT a reader floor (see the note above
+// `chatSyncReaderFloorForTranscriptEvents` in `head.ts`): an older reader
+// renders the row as the ordinary user message it is, and the marker's only
+// consumer is a host keeping the row out of provider history. Nor can an older
+// host clone the row into a new chat's history: every fork slices at an
+// assistant record, and nothing follows an unresolved opening.
+//
+// 1.6 also carries the auto-mode judge notice row (`autoJudgeNoticeRowSource`
+// in `row-order.ts`) and, unlike the marker above, it DOES stamp a floor:
+// `CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR`, for the reason the 1.5 denial row
+// does - an older reader parses the `permission.blocked` event and projects no
+// row for it. It rides this still-unreleased minor on the same rule as the
+// fields above (`host-v1.3.0` shipped chat-sync 1.3).
+//
+// 1.6 also carries `text.providerNotice.receipt` (the settled fallback card's
+// structured account - a `chat.subscribe@1.18` field that lands in a
+// publication), on the same still-unreleased-minor rule: the newest release,
+// `host-v1.3.1`, still ships chat-sync 1.3. Optional, so an older record
+// parses unchanged, and a content block's `raw` re-emission (§2 of
+// `COMPATIBILITY.md`) carries the key through an older reader's
+// re-publication. No reader floor: an older reader renders the notice from
+// `title` / `message` / `details` exactly as before, which is the divider that
+// notice was until this key existed.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 6 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 
@@ -118,10 +145,12 @@ export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
  * two cannot drift. A payload claiming any other version is not a v1.1 record
  * and does not parse as one.
  */
-export const chatSyncSchemaVersionSchema = z.object({
-  major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
-  minor: z.literal(CHAT_SYNC_SCHEMA_VERSION.minor),
-});
+export const chatSyncSchemaVersionSchema = lazySchema(() =>
+  z.object({
+    major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
+    minor: z.literal(CHAT_SYNC_SCHEMA_VERSION.minor),
+  }),
+);
 
 /**
  * The version a READER may accept, as opposed to the one a writer stamps.
@@ -141,10 +170,12 @@ export const chatSyncSchemaVersionSchema = z.object({
  * Older minors are accepted too: a 1.4 reader meeting a 1.0 head is the
  * ordinary case, not the interesting one.
  */
-export const chatSyncReaderVersionSchema = z.object({
-  major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
-  minor: z.number().int().nonnegative(),
-});
+export const chatSyncReaderVersionSchema = lazySchema(() =>
+  z.object({
+    major: z.literal(CHAT_SYNC_SCHEMA_VERSION.major),
+    minor: z.number().int().nonnegative(),
+  }),
+);
 
 /**
  * A payload version as a reader may see it: this contract's major, any minor.
@@ -157,4 +188,6 @@ export type ChatSyncPayloadVersion = {
 };
 
 /** Lowercase hex SHA-256, the only form a content address is written in. */
-export const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+export const sha256HexSchema = lazySchema(() =>
+  z.string().regex(/^[0-9a-f]{64}$/),
+);

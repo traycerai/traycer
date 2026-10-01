@@ -132,6 +132,9 @@ function buildRouter(initialPath: string): MockRouter {
       } else if (intent.kind === "home") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
         pathname = "/home";
+      } else if (intent.kind === "sample-workspace") {
+        calls.push({ kind: "home", epicId: null, sectionId: null });
+        pathname = "/sample-workspace";
       } else {
         calls.push({
           kind: "section",
@@ -680,9 +683,10 @@ describe("leader digit dispatch (global scope)", () => {
       lastPath: "/settings/general",
     });
     const { router, calls } = buildRouter("/settings/general");
+    // Getting started leads the list and owns digit 1, so 2 is General.
     expect(fireDigit(router, 2, "alt")).toBe(true);
     expect(calls[0].kind).toBe("section");
-    expect(calls[0].sectionId).toBe("appearance");
+    expect(calls[0].sectionId).toBe("general");
   });
 
   it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {
@@ -912,5 +916,150 @@ describe("<KeybindingProvider /> inside a Diffs editor boundary", () => {
     });
 
     expect(useEpicCanvasStore.getState().activeTabId).toBe(tabIds[11]);
+  });
+});
+
+// AltGr types a character on Windows/Linux by presenting itself to the event
+// as Ctrl+Alt (AltGr+N is a Polish ń, AltGr+2 a German @) - `handleKeyDown`'s
+// `event.getModifierState("AltGraph")` guard must return before digit
+// matching, chord matching, and any preventDefault/dispatch, so typing is
+// never swallowed by an app action or a user's own ctrl+alt rebind.
+describe("<KeybindingProvider /> and AltGr (Ctrl+Alt presented as AltGraph)", () => {
+  function fireWindowKeyDown(init: KeyboardEventInit): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { cancelable: true, ...init });
+    window.dispatchEvent(event);
+    return event;
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    __resetTabNavigationControllerForTesting();
+    seedEpicTabs();
+  });
+
+  afterEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+  });
+
+  it("skips tab.split.add's own ctrl+alt+n default under AltGraph", () => {
+    const calls: Array<void> = [];
+    const unregister = registerDynamicActionHandler("tab.split.add", () => {
+      calls.push(undefined);
+    });
+    render(
+      createElement(KeybindingProvider, {
+        router: buildProviderRouterSource("/epics/e1"),
+        children: null,
+      }),
+    );
+    try {
+      let event: KeyboardEvent | undefined;
+      act(() => {
+        event = fireWindowKeyDown({
+          code: "KeyN",
+          ctrlKey: true,
+          altKey: true,
+          modifierAltGraph: true,
+        });
+      });
+
+      expect(calls.length).toBe(0);
+      expect(event?.defaultPrevented).toBe(false);
+
+      // Sanity: the identical chord with no AltGraph dispatches.
+      act(() => {
+        event = fireWindowKeyDown({
+          code: "KeyN",
+          ctrlKey: true,
+          altKey: true,
+        });
+      });
+      expect(calls.length).toBe(1);
+      expect(event?.defaultPrevented).toBe(true);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("skips a user's own rebind to another ctrl+alt chord under AltGraph too", () => {
+    useKeybindingStore.getState().setBinding("tab.split.add", "ctrl+alt+j");
+    const calls: Array<void> = [];
+    const unregister = registerDynamicActionHandler("tab.split.add", () => {
+      calls.push(undefined);
+    });
+    render(
+      createElement(KeybindingProvider, {
+        router: buildProviderRouterSource("/epics/e1"),
+        children: null,
+      }),
+    );
+    try {
+      let event: KeyboardEvent | undefined;
+      act(() => {
+        event = fireWindowKeyDown({
+          code: "KeyJ",
+          ctrlKey: true,
+          altKey: true,
+          modifierAltGraph: true,
+        });
+      });
+
+      expect(calls.length).toBe(0);
+      expect(event?.defaultPrevented).toBe(false);
+
+      // Sanity: the rebind is live and would fire without AltGraph.
+      act(() => {
+        event = fireWindowKeyDown({
+          code: "KeyJ",
+          ctrlKey: true,
+          altKey: true,
+        });
+      });
+      expect(calls.length).toBe(1);
+      expect(event?.defaultPrevented).toBe(true);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("does not let an AltGr digit (ctrl+alt+2) match a digit action", () => {
+    // Rebind to the mask ctrl+alt actually reads as off macOS (`ctrl` is
+    // `mod` there), so this digit would match if the guard didn't run first.
+    useKeybindingStore.getState().setBinding("epic.switch.byDigit", "mod+alt");
+    const secondTabId = useEpicCanvasStore.getState().openTabOrder[1];
+    render(
+      createElement(KeybindingProvider, {
+        router: buildProviderRouterSource("/epics/e1"),
+        children: null,
+      }),
+    );
+
+    let event: KeyboardEvent | undefined;
+    act(() => {
+      event = fireWindowKeyDown({
+        code: "Digit2",
+        ctrlKey: true,
+        altKey: true,
+        modifierAltGraph: true,
+      });
+    });
+
+    expect(event?.defaultPrevented).toBe(false);
+    expect(useEpicCanvasStore.getState().activeTabId).not.toBe(secondTabId);
+
+    // Sanity: the rebound mask does match without AltGraph.
+    act(() => {
+      fireWindowKeyDown({ code: "Digit2", ctrlKey: true, altKey: true });
+    });
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(secondTabId);
   });
 });

@@ -13,7 +13,24 @@
  * and one that finds none is DROPPED rather than drawn over a neighbour. A
  * dropped tag costs a name that hovering still reveals; a drawn one costs both
  * names.
+ *
+ * AGAINST THE WHOLE FRAME'S LETTERING, not only against other tags. The space
+ * this places into arrives already holding the signage and the storey names
+ * that were laid down first ({@link OfficeLabelSpace}), because a name tag
+ * landing on a room's plate is the same defect as a name tag landing on
+ * another name, and for three rounds of feedback it was the one this module's
+ * own collision pass could not see.
  */
+import {
+  officeScreenLabelBaseline,
+  officeScreenLabelBox,
+  officeScreenLabelLineHeight,
+  OFFICE_LABEL_FONT_PX,
+  placeOfficeLabel,
+  type OfficeLabelBox,
+  type OfficeLabelSpace,
+} from "@/components/epic-canvas/comm-graph/office/office-label-space";
+
 export interface OfficeNameTagCandidate {
   readonly text: string;
   /** Carried through placement so the caller keeps its own colour choice. */
@@ -42,40 +59,30 @@ export interface OfficePlacedNameTag {
   readonly ownerAgentId: string | null;
 }
 
-interface TagBox {
-  readonly left: number;
-  readonly right: number;
-  readonly top: number;
-  readonly bottom: number;
-}
-
-/** How far a displaced tag drops per attempt, and how many attempts it gets. */
-export const NAME_TAG_LINE_HEIGHT = 11;
+/**
+ * How far a displaced tag drops per attempt.
+ *
+ * DERIVED, not chosen: it is the height of the box a tag reserves, so one
+ * attempt is exactly enough to clear the neighbour that displaced it. It was
+ * a literal `11` for a 10px face - the halo's top pixel and nothing else -
+ * which left a lifted tag's outline painting into the outline above it.
+ */
+export const NAME_TAG_LINE_HEIGHT =
+  officeScreenLabelLineHeight(OFFICE_LABEL_FONT_PX);
 const MAX_SHIFTS = 2;
 
-function boxFor(
-  candidate: OfficeNameTagCandidate,
-  baselineY: number,
-  lineHeight: number,
-): TagBox {
-  const half = candidate.width / 2;
-  return {
-    left: candidate.centerX - half,
-    right: candidate.centerX + half,
-    top: baselineY - lineHeight,
-    bottom: baselineY,
-  };
-}
-
-function overlaps(a: TagBox, b: TagBox): boolean {
-  return (
-    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
-  );
+function boxFor(candidate: OfficeNameTagCandidate): OfficeLabelBox {
+  return officeScreenLabelBox({
+    centerX: candidate.centerX,
+    baselineY: candidate.baselineY,
+    width: candidate.width,
+    fontPx: OFFICE_LABEL_FONT_PX,
+  });
 }
 
 export function layoutNameTags(
   candidates: ReadonlyArray<OfficeNameTagCandidate>,
-  lineHeight: number,
+  space: OfficeLabelSpace,
 ): ReadonlyArray<OfficePlacedNameTag> {
   // Sorted before placing, so the same floor always drops the same tags: a
   // tie broken by iteration order would make a name flicker as the scene
@@ -83,23 +90,23 @@ export function layoutNameTags(
   const ordered = [...candidates].sort(
     (a, b) => a.baselineY - b.baselineY || a.centerX - b.centerX,
   );
-  const placedBoxes: TagBox[] = [];
   const placed: OfficePlacedNameTag[] = [];
   for (const candidate of ordered) {
-    for (let shift = 0; shift <= MAX_SHIFTS; shift += 1) {
-      const baselineY = candidate.baselineY + shift * lineHeight;
-      const box = boxFor(candidate, baselineY, lineHeight);
-      if (placedBoxes.some((other) => overlaps(box, other))) continue;
-      placedBoxes.push(box);
-      placed.push({
-        text: candidate.text,
-        tone: candidate.tone,
-        centerX: candidate.centerX,
-        baselineY,
-        ownerAgentId: candidate.ownerAgentId,
-      });
-      break;
-    }
+    const box = placeOfficeLabel(space, boxFor(candidate), {
+      dy: NAME_TAG_LINE_HEIGHT,
+      max: MAX_SHIFTS,
+    });
+    if (box === null) continue;
+    placed.push({
+      text: candidate.text,
+      tone: candidate.tone,
+      centerX: candidate.centerX,
+      // Read back out of the box the space actually reserved, so a displaced
+      // tag is drawn where it landed rather than where this asked - the two
+      // differ by however many lines the shift took.
+      baselineY: officeScreenLabelBaseline(box),
+      ownerAgentId: candidate.ownerAgentId,
+    });
   }
   return placed;
 }

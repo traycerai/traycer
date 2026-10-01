@@ -27,6 +27,7 @@ import {
   BrowsersPanelNoResultsState,
   BrowsersPanelUnavailableState,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
+import { useEpicBrowsersElsewhere } from "@/components/epic-canvas/sidebar/use-epic-browsers-elsewhere";
 import { useCoalescedBrowserTabDrivers } from "@/components/epic-canvas/sidebar/use-coalesced-browser-tab-drivers";
 import { useAddBrowserAction } from "@/components/epic-canvas/sidebar/use-browser-add-action";
 import {
@@ -179,6 +180,11 @@ function SwitcherBrowsersBody(props: {
   readonly isAddingBrowser: boolean;
 }) {
   const sessions = useBrowserSessionsContext();
+  const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
+  const elsewhere = useEpicBrowsersElsewhere({
+    epicId: props.epicId,
+    resolvedHostId: hostPin.resolvedHostId,
+  });
   const { tabs, filteredTabs } = props;
   const isUnavailable =
     sessions.lifecycle === "failed" ||
@@ -208,6 +214,8 @@ function SwitcherBrowsersBody(props: {
         <BrowsersPanelEmptyState
           onAddBrowser={props.onAddBrowser}
           isAdding={props.isAddingBrowser}
+          elsewhere={elsewhere}
+          onShowHost={hostPin.setSelection}
         />
       ) : null}
       {hasNoResults ? <BrowsersPanelNoResultsState /> : null}

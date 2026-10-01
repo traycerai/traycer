@@ -24,17 +24,19 @@ export interface ProfileDropdownUsagePresentation {
 }
 
 /**
- * The comparison hook observes a process-wide queue, so its `queued` state is
- * only evidence that some ephemeral refresh is waiting. The picker adds the
- * local interaction fact that this specific profile initiated a refresh before
- * exposing that state to the sidecar.
+ * Folds the picker's local interaction fact - this profile's own Refresh click
+ * is still pending - into the observed fetch state. The click's promise covers
+ * the one moment the key itself is not fetching: a forced refresh that waited
+ * out an automatic read in flight, between that read settling and its own
+ * request starting.
  */
 export function scopeProfileUsageRefreshStatus(
   observedStatus: ProfileUsageRefreshStatus,
   refreshPending: boolean,
 ): ProfileUsageRefreshStatus {
-  if (observedStatus === "refreshing") return "refreshing";
-  return refreshPending ? "queued" : "idle";
+  return observedStatus === "refreshing" || refreshPending
+    ? "refreshing"
+    : "idle";
 }
 
 function envelopeFromDetail(

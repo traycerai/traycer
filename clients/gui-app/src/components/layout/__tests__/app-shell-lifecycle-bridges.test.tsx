@@ -3,13 +3,13 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import type { BarHost } from "@/lib/layout/layout-arrangement";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-  type UsageControlsPlacement,
-} from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+} from "@/stores/layout/layout-store";
 
 const windowHost = window as { runnerHost?: unknown };
 const DESKTOP_VIEWPORT_WIDTH = 1280;
@@ -22,8 +22,41 @@ function setViewportWidth(width: number): void {
   });
 }
 
+// The platform the shell reads from its runner host. `null` defers to the
+// real reading (the mock runner host carries no menu bridge, so no platform).
+const desktopPlatform = vi.hoisted(
+  (): { override: "darwin" | "win32" | "linux" | null } => ({
+    override: null,
+  }),
+);
+
+vi.mock("@/lib/windows/desktop-capabilities", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/windows/desktop-capabilities")>();
+  return {
+    ...actual,
+    resolveDesktopPlatform: (runnerHost: IRunnerHost) =>
+      desktopPlatform.override ?? actual.resolveDesktopPlatform(runnerHost),
+  };
+});
+
 vi.mock("@/components/layout/tabs/tab-strip", () => ({
   TabStrip: () => <div data-testid="tab-strip" />,
+}));
+
+// Router-dependent like TabStrip. Its own suite owns its contents; these cases
+// ask only where the shell mounts it and with which props.
+vi.mock("@/components/layout/tabs/side-strip/side-tab-strip", () => ({
+  SideTabStrip: (props: {
+    readonly edge: string;
+    readonly ownsTitleBar: boolean;
+  }) => (
+    <nav
+      data-testid="side-tab-strip"
+      data-edge={props.edge}
+      data-owns-title-bar={String(props.ownsTitleBar)}
+    />
+  ),
 }));
 
 // Router-dependent like TabStrip: the app-variant header mounts these arrows
@@ -153,6 +186,7 @@ import {
 import { setMobileApp } from "@/lib/mobile-app";
 import { setNativeKeyboardState } from "@/lib/native-keyboard";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useTabsStore } from "@/stores/tabs/store";
 
@@ -229,7 +263,13 @@ describe("<AppShell />", () => {
   beforeEach(() => {
     windowHost.runnerHost = {};
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+    // Home hidden and the resource monitor shown are SHIPPED_DEFAULT_VALUES,
+    // and usageHost "status-bar" (the footer) is DEFAULT_ARRANGEMENT - so a
+    // full reset of the layout store is the same starting point the old
+    // settings-store + layout-store pair used to set explicitly.
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
+    });
     useAuthStore
       .getState()
       .setSignedIn(
@@ -237,10 +277,6 @@ describe("<AppShell />", () => {
         { userId: "user-1", username: "test-user" },
         [],
       );
-    useSettingsStore.setState({
-      showGlobalResourceMonitor: true,
-      homeTabEnabled: false,
-    });
     useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
@@ -249,24 +285,28 @@ describe("<AppShell />", () => {
     queryClient?.clear();
     queryClient = undefined;
     delete windowHost.runnerHost;
+    desktopPlatform.override = null;
     setMobileApp(false);
     useAuthStore.getState().setSignedOut();
-    useSettingsStore.setState({
-      showGlobalResourceMonitor: true,
-      homeTabEnabled: false,
+    useLayoutStore.setState({
+      ...DEFAULT_LAYOUT_SNAPSHOT,
     });
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
     setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
     setNativeKeyboardState({ open: false, transitioning: false });
     useMobileNavStore.getState().setOpen(false);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
-  // The footer is the default, so the strip-drawing cases need no setup at
-  // all; the HEADER is the placement a test has to ask for now.
+  // The strip is the default for both readings, so the strip-drawing cases
+  // need no setup at all; the HEADER is what a test has to ask for. Both
+  // readings, because the strip stays on screen for either one of them
+  // (L-156) and this helper is for the cases about the header.
   function selectHeaderPlacement(): void {
-    useLayoutStore.setState({
-      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "header" },
+    const { arrangement } = useLayoutStore.getState();
+    useLayoutStore.getState().setArrangement({
+      ...arrangement,
+      usageHost: "header",
+      resourceHost: "header",
     });
   }
 
@@ -274,8 +314,11 @@ describe("<AppShell />", () => {
   // than inherit it: a test whose whole point is that some other gate decides
   // the strip must not go quiet the day the default moves again.
   function selectFooterPlacement(): void {
-    useLayoutStore.setState({
-      statusBar: { ...DEFAULT_STATUS_BAR_LAYOUT, placement: "status-bar" },
+    const { arrangement } = useLayoutStore.getState();
+    useLayoutStore.getState().setArrangement({
+      ...arrangement,
+      usageHost: "status-bar",
+      resourceHost: "status-bar",
     });
   }
 
@@ -350,7 +393,7 @@ describe("<AppShell />", () => {
     });
     expect(fired).toBe(true);
     // Off the default footer, which is where an untouched store starts.
-    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+    expect(useLayoutStore.getState().arrangement.usageHost).toBe("header");
   });
 
   it("does not register the status-bar placement toggle in the installed mobile app", async () => {
@@ -369,14 +412,16 @@ describe("<AppShell />", () => {
       fired = dispatchAction("app.status-bar.toggle", NOOP_ROUTER);
     });
     expect(fired).toBe(false);
-    expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
+    expect(useLayoutStore.getState().arrangement.usageHost).toBe("status-bar");
   });
 
   // Under the HEADER placement, since that is the only placement where this
   // preference has a button to hide - the strip has its own switch.
   it("hides the global resource monitor button when the preference is off", async () => {
     selectHeaderPlacement();
-    useSettingsStore.setState({ showGlobalResourceMonitor: false });
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { shown: "hidden" });
 
     queryClient = renderAppShell();
 
@@ -434,6 +479,164 @@ describe("<AppShell />", () => {
     ).toBeTruthy();
   });
 
+  // Both readings hosted in the footer, and both individually switched off:
+  // the strip used to stay mounted here forever as an empty, still-bordered
+  // shell, because `usageHost`/`resourceHost` naming the footer is a
+  // PLACEMENT fact and says nothing about whether either reading is actually
+  // on. `useStatusBarVisible` is the fix - these cases exercise it through
+  // the real shell rather than in isolation.
+  describe("status-bar auto-hide when both hosted readings are off", () => {
+    afterEach(() => {
+      useLayoutEditorStore.getState().endSession();
+    });
+
+    it("keeps the strip mounted while only one of the two hosted readings is hidden", async () => {
+      selectFooterPlacement();
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { shown: "hidden" });
+
+      queryClient = renderAppShell();
+
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+
+    it("unmounts the strip once both hosted readings are hidden, and remounts it the moment one is switched back on", async () => {
+      selectFooterPlacement();
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { shown: "hidden" });
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { shown: "hidden" });
+
+      queryClient = renderAppShell();
+
+      await screen.findByTestId("app-shell-child");
+      expect(screen.queryByTestId("app-status-bar")).toBeNull();
+
+      act(() => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("usageLimits", { shown: "shown" });
+      });
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+
+    it("keeps the strip mounted while both are hidden but a layout-editor session is open", async () => {
+      selectFooterPlacement();
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { shown: "hidden" });
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { shown: "hidden" });
+      useLayoutEditorStore.getState().beginSession({
+        entry: "pointer",
+        source: "direct_ui",
+        startedAt: 0,
+        origin: { kind: "tab" },
+      });
+
+      queryClient = renderAppShell();
+
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+  });
+
+  function selectTabStripPlacement(placement: "top" | "left" | "right"): void {
+    const { arrangement } = useLayoutStore.getState();
+    useLayoutStore
+      .getState()
+      .setArrangement({ ...arrangement, tabStripPlacement: placement });
+  }
+
+  it("mounts the side strip at the left edge in place of the header", async () => {
+    selectTabStripPlacement("left");
+
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    const strip = screen.getByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-edge")).toBe("left");
+    // A frameless window whose platform is not macOS keeps the slim band, so
+    // the strip's top block is not the title bar.
+    expect(strip.getAttribute("data-owns-title-bar")).toBe("false");
+    expect(screen.queryByTestId("app-header")).toBeNull();
+    const main = screen.getByTestId("route-adapter-layer").closest("main");
+    if (main === null) throw new Error("the shell rendered no <main>");
+    expect(
+      strip.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("hands the title bar to a left strip on a frameless macOS window", async () => {
+    desktopPlatform.override = "darwin";
+    selectTabStripPlacement("left");
+
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    expect(
+      screen.getByTestId("side-tab-strip").getAttribute("data-owns-title-bar"),
+    ).toBe("true");
+  });
+
+  it("mounts the side strip after the content at the right edge", async () => {
+    selectTabStripPlacement("right");
+
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    const strip = screen.getByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-edge")).toBe("right");
+    const main = screen.getByTestId("route-adapter-layer").closest("main");
+    if (main === null) throw new Error("the shell rendered no <main>");
+    expect(
+      main.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("mounts no side strip at the top placement", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    expect(screen.queryByTestId("side-tab-strip")).toBeNull();
+    expect(screen.getByTestId("tab-strip")).not.toBeNull();
+  });
+
+  it("registers the vertical-tabs toggle in either placement", async () => {
+    queryClient = renderAppShell();
+
+    await screen.findByTestId("app-shell-child");
+
+    act(() => {
+      expect(dispatchAction("app.tabs.vertical.toggle", NOOP_ROUTER)).toBe(
+        true,
+      );
+    });
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
+      "left",
+    );
+    expect(screen.getByTestId("side-tab-strip")).not.toBeNull();
+
+    act(() => {
+      expect(dispatchAction("app.tabs.vertical.toggle", NOOP_ROUTER)).toBe(
+        true,
+      );
+    });
+    expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe("top");
+  });
+
   it("ignores the status-bar placement on a mobile viewport", async () => {
     // Not an `isMobileApp` gate: a narrow DESKTOP window behaves the same, and
     // the mobile header keeps its own controls — so `placement` is not the
@@ -462,13 +665,15 @@ describe("<AppShell />", () => {
      * fixture resting on whichever placement happens to be the default cannot
      * show that - it also silently changes meaning the day the default moves.
      */
-    function selectMobileFooter(placement: UsageControlsPlacement): void {
-      useLayoutStore.setState({
-        statusBar: {
-          ...DEFAULT_STATUS_BAR_LAYOUT,
-          mobileFooter: true,
-          placement,
-        },
+    function selectMobileFooter(placement: BarHost): void {
+      const { arrangement } = useLayoutStore.getState();
+      // Both readings, because either one still in the strip is enough to
+      // draw it on a desktop viewport (L-156).
+      useLayoutStore.getState().setArrangement({
+        ...arrangement,
+        mobileFooter: true,
+        usageHost: placement,
+        resourceHost: placement,
       });
     }
 
@@ -483,26 +688,26 @@ describe("<AppShell />", () => {
       expect(screen.getByTestId("app-status-bar")).not.toBeNull();
     });
 
-    it("draws it under the header placement, which withholds the strip everywhere else", async () => {
-      // `placement` names which of two surfaces hosts the gauge, and this
-      // viewport has only one of them: the mobile header keeps its controls
-      // either way, so a strip gated on `placement` here would be off for
-      // every phone whose device-local store happens to say `header`.
+    it("draws the strip on `header` placement too, and the header still gives up its own glyphs to it", async () => {
+      // `placement` names which of two surfaces hosts the gauge on a DESKTOP
+      // window; a phone has no separate status-bar surface for it to name, so
+      // the footer's own switch is what decides the strip here, and the
+      // header hides its usage/resource glyphs whenever that switch is on -
+      // neither reads `placement` (L-162). A strip gated on `placement`
+      // instead would be off for every phone whose device-local store
+      // happens to say `header`, and a header un-gated on the footer would
+      // draw the same reading twice.
       selectMobileFooter("header");
       setViewportWidth(MOBILE_VIEWPORT_WIDTH);
-      expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+      expect(useLayoutStore.getState().arrangement.usageHost).toBe("header");
 
       queryClient = renderAppShell();
 
       await screen.findByTestId("app-shell-child");
 
       expect(screen.getByTestId("app-status-bar")).not.toBeNull();
-      // And the header keeps both of its own controls beside it - the strip
-      // does not displace them the way it does under desktop `placement`.
-      expect(screen.getByTestId("rate-limit-header-button")).not.toBeNull();
-      expect(
-        screen.getByTestId("resource-monitor-header-button"),
-      ).not.toBeNull();
+      expect(screen.queryByTestId("rate-limit-header-button")).toBeNull();
+      expect(screen.queryByTestId("resource-monitor-header-button")).toBeNull();
     });
 
     it("unmounts the strip while the software keyboard is up", async () => {
@@ -561,12 +766,12 @@ describe("<AppShell />", () => {
       expect(screen.queryByTestId("app-status-bar")).toBeNull();
 
       act(() => {
-        useLayoutStore.setState({
-          statusBar: {
-            ...DEFAULT_STATUS_BAR_LAYOUT,
-            mobileFooter: true,
-            placement: "status-bar",
-          },
+        const { arrangement } = useLayoutStore.getState();
+        useLayoutStore.getState().setArrangement({
+          ...arrangement,
+          mobileFooter: true,
+          usageHost: "status-bar",
+          resourceHost: "status-bar",
         });
       });
 
@@ -584,7 +789,7 @@ describe("<AppShell />", () => {
     }
 
     it("mounts the Home surface when the flag is on and Home holds the selection", async () => {
-      useSettingsStore.setState({ homeTabEnabled: true });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
 
       queryClient = renderAppShell();
       await screen.findByTestId("app-shell-child");
@@ -593,7 +798,7 @@ describe("<AppShell />", () => {
     });
 
     it("shows the Home surface as visible when Home is the active tab", async () => {
-      useSettingsStore.setState({ homeTabEnabled: true });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
       // `activeItemId: null` is the tabs store's own default (no tabs open
       // yet), which is exactly what "Home is active" means while the flag is
       // on - see `layoutHomeIsActive` in `stores/tabs/store.ts`. Set it
@@ -611,7 +816,7 @@ describe("<AppShell />", () => {
     });
 
     it("keeps the Home surface mounted but hidden once it has been opened and a real other tab takes over", async () => {
-      useSettingsStore.setState({ homeTabEnabled: true });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
       // A real, non-Home strip tab - seeded the way `top-level-tab-host.test.tsx`
       // seeds a History tab (its own surface stubbed above, since this
       // provider-light shell has no router for the real one to run under).
@@ -664,7 +869,7 @@ describe("<AppShell />", () => {
     });
 
     it("does not mount the Home surface when the flag is off", async () => {
-      useSettingsStore.setState({ homeTabEnabled: false });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
 
       queryClient = renderAppShell();
       await screen.findByTestId("app-shell-child");

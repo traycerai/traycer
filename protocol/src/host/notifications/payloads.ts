@@ -27,10 +27,11 @@ import {
   hostNotificationOutcomeSchema,
   type HostNotificationKind,
 } from "@traycer/protocol/host/notifications/host-notifications";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /** Identifier fields must be non-empty: an empty id is a malformed row, and
  * letting it through would mint an unusable deep-link instead of degrading. */
-const idSchema = z.string().min(1);
+const idSchema = lazySchema(() => z.string().min(1));
 
 export const HOST_NOTIFICATION_STOPPED_REASONS = [
   "auth",
@@ -88,11 +89,14 @@ export function deriveHostNotificationStoppedReason(
     //
     // And it is not `null`. Declining to classify does stop the switching, but
     // a turn with no typed failure gets no failed-attempt envelope
-    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`),
-    // so the error card loses its manual `retry` / `switch` / `wait_once` rungs
-    // - and a fresh session is exactly what `retry` performs, i.e. the one
-    // affordance that fixes this failure. What actually stops the automatic
-    // traversal is `EXCLUDED_FALLBACK_REASONS`, which this reason is in.
+    // (`preserveFallbackFailedAttemptEnvelope` returns at an absent `failure`).
+    // Its error card still offers `retry` and `switch` - and a fresh session is
+    // exactly what `retry` performs - but it loses `wait_once` (its wait
+    // disposition is `attempt_unavailable`) and names no `failedTuple`, the
+    // replay facts the envelope carries. Classifying it is what gives this
+    // failure its envelope, so the wait and those facts exist. What actually
+    // stops the automatic traversal is `EXCLUDED_FALLBACK_REASONS`, which this
+    // reason is in.
     case "session_budget_exceeded":
       return "session_budget";
     case "billing_error":
@@ -125,26 +129,28 @@ export function deriveHostNotificationStoppedReason(
  * GUI `agent.stopped` payload: the "chat" shape. `agentName` carries the
  * chat title (the GUI agent IS the chat).
  */
-export const hostNotificationChatStoppedPayloadSchema = z
-  .object({
-    kind: z.literal("chat"),
-    epicId: idSchema,
-    chatId: idSchema.nullable(),
-    hostId: idSchema.optional(),
-    agentName: z.string(),
-    taskTitle: z.string(),
-    outcome: hostNotificationOutcomeSchema,
-    code: z.string().optional(),
-    message: z.string().optional(),
-    reason: z.string().optional(),
-    providerId: z.string().optional(),
-    occurrenceId: idSchema.optional(),
-    messageId: idSchema.optional(),
-    eventId: idSchema.optional(),
-    backgroundWorkRunning: z.boolean().optional(),
-    automaticRecovery: z.literal(true).optional(),
-  })
-  .catchall(z.unknown());
+export const hostNotificationChatStoppedPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("chat"),
+      epicId: idSchema,
+      chatId: idSchema.nullable(),
+      hostId: idSchema.optional(),
+      agentName: z.string(),
+      taskTitle: z.string(),
+      outcome: hostNotificationOutcomeSchema,
+      code: z.string().optional(),
+      message: z.string().optional(),
+      reason: z.string().optional(),
+      providerId: z.string().optional(),
+      occurrenceId: idSchema.optional(),
+      messageId: idSchema.optional(),
+      eventId: idSchema.optional(),
+      backgroundWorkRunning: z.boolean().optional(),
+      automaticRecovery: z.literal(true).optional(),
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationChatStoppedPayload = z.infer<
   typeof hostNotificationChatStoppedPayloadSchema
 >;
@@ -155,23 +161,25 @@ export type HostNotificationChatStoppedPayload = z.infer<
  * `tuiAgentId` (hosts minted these rows without a chat binding before that
  * change, so entries from older rows may still carry a null `chatId`).
  */
-export const hostNotificationEpicStoppedPayloadSchema = z
-  .object({
-    kind: z.literal("epic"),
-    epicId: idSchema,
-    tuiAgentId: idSchema,
-    agentName: z.string(),
-    taskTitle: z.string(),
-    outcome: hostNotificationOutcomeSchema,
-    code: z.string().optional(),
-    message: z.string().optional(),
-    reason: z.string().optional(),
-    providerId: z.string().optional(),
-    occurrenceId: idSchema.optional(),
-    backgroundWorkRunning: z.boolean().optional(),
-    automaticRecovery: z.literal(true).optional(),
-  })
-  .catchall(z.unknown());
+export const hostNotificationEpicStoppedPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("epic"),
+      epicId: idSchema,
+      tuiAgentId: idSchema,
+      agentName: z.string(),
+      taskTitle: z.string(),
+      outcome: hostNotificationOutcomeSchema,
+      code: z.string().optional(),
+      message: z.string().optional(),
+      reason: z.string().optional(),
+      providerId: z.string().optional(),
+      occurrenceId: idSchema.optional(),
+      backgroundWorkRunning: z.boolean().optional(),
+      automaticRecovery: z.literal(true).optional(),
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationEpicStoppedPayload = z.infer<
   typeof hostNotificationEpicStoppedPayloadSchema
 >;
@@ -181,20 +189,22 @@ export type HostNotificationEpicStoppedPayload = z.infer<
  * deliberately an open string (not a closed enum) so a future stall reason
  * degrades to generic copy instead of failing the parse.
  */
-export const hostNotificationAgentStalledPayloadSchema = z
-  .object({
-    kind: z.literal("agent_stalled"),
-    epicId: idSchema,
-    chatId: idSchema,
-    agentId: idSchema,
-    agentName: z.string(),
-    taskTitle: z.string(),
-    reason: z.string(),
-    title: z.string(),
-    message: z.string().optional(),
-    outcome: hostNotificationOutcomeSchema,
-  })
-  .catchall(z.unknown());
+export const hostNotificationAgentStalledPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("agent_stalled"),
+      epicId: idSchema,
+      chatId: idSchema,
+      agentId: idSchema,
+      agentName: z.string(),
+      taskTitle: z.string(),
+      reason: z.string(),
+      title: z.string(),
+      message: z.string().optional(),
+      outcome: hostNotificationOutcomeSchema,
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationAgentStalledPayload = z.infer<
   typeof hostNotificationAgentStalledPayloadSchema
 >;
@@ -204,54 +214,61 @@ export type HostNotificationAgentStalledPayload = z.infer<
  * can add workspace lifecycle operations without making an older renderer drop
  * the row's typed chat navigation and generic failure presentation.
  */
-export const hostNotificationWorkspaceOperationFailedPayloadSchema = z
-  .object({
-    kind: z.literal("workspace_operation_failed"),
-    epicId: idSchema,
-    chatId: idSchema,
-    chatTitle: z.string(),
-    taskTitle: z.string(),
-    operation: idSchema,
-    title: z.string(),
-    message: z.string(),
-    workspacePath: z.string().optional(),
-    worktreePath: z.string().optional(),
-    branch: z.string().optional(),
-    setupExitCode: z.number().int().nullable().optional(),
-    terminalSessionId: z.string().optional(),
-    outcome: z.literal("errored"),
-  })
-  .catchall(z.unknown());
+export const hostNotificationWorkspaceOperationFailedPayloadSchema = lazySchema(
+  () =>
+    z
+      .object({
+        kind: z.literal("workspace_operation_failed"),
+        epicId: idSchema,
+        chatId: idSchema,
+        chatTitle: z.string(),
+        taskTitle: z.string(),
+        operation: idSchema,
+        title: z.string(),
+        message: z.string(),
+        workspacePath: z.string().optional(),
+        worktreePath: z.string().optional(),
+        branch: z.string().optional(),
+        setupExitCode: z.number().int().nullable().optional(),
+        terminalSessionId: z.string().optional(),
+        outcome: z.literal("errored"),
+      })
+      .catchall(z.unknown()),
+);
 export type HostNotificationWorkspaceOperationFailedPayload = z.infer<
   typeof hostNotificationWorkspaceOperationFailedPayloadSchema
 >;
 
 /** `approval.requested` payload. `chatTitle` carries the chat title. */
-export const hostNotificationApprovalPayloadSchema = z
-  .object({
-    kind: z.literal("approval"),
-    epicId: idSchema,
-    chatId: idSchema,
-    chatTitle: z.string(),
-    taskTitle: z.string(),
-    approvalId: idSchema,
-  })
-  .catchall(z.unknown());
+export const hostNotificationApprovalPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("approval"),
+      epicId: idSchema,
+      chatId: idSchema,
+      chatTitle: z.string(),
+      taskTitle: z.string(),
+      approvalId: idSchema,
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationApprovalPayload = z.infer<
   typeof hostNotificationApprovalPayloadSchema
 >;
 
 /** `interview.requested` payload. `chatTitle` carries the chat title. */
-export const hostNotificationInterviewPayloadSchema = z
-  .object({
-    kind: z.literal("interview"),
-    epicId: idSchema,
-    chatId: idSchema,
-    chatTitle: z.string(),
-    taskTitle: z.string(),
-    interviewBlockId: idSchema,
-  })
-  .catchall(z.unknown());
+export const hostNotificationInterviewPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("interview"),
+      epicId: idSchema,
+      chatId: idSchema,
+      chatTitle: z.string(),
+      taskTitle: z.string(),
+      interviewBlockId: idSchema,
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationInterviewPayload = z.infer<
   typeof hostNotificationInterviewPayloadSchema
 >;
@@ -272,13 +289,15 @@ export type HostNotificationInterviewPayload = z.infer<
  * shape every arm conforms to, not an arm of its own, so it must never win a
  * discriminated-union match against a real operation payload.
  */
-export const hostOperationCommonPayloadSchema = z
-  .object({
-    operation: idSchema,
-    title: z.string().min(1),
-    message: z.string().min(1),
-  })
-  .catchall(z.unknown());
+export const hostOperationCommonPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      operation: idSchema,
+      title: z.string().min(1),
+      message: z.string().min(1),
+    })
+    .catchall(z.unknown()),
+);
 export type HostOperationCommonPayload = z.infer<
   typeof hostOperationCommonPayloadSchema
 >;
@@ -312,17 +331,16 @@ export const HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS = [
   "teardown_failed",
   "removal_failed",
 ] as const;
-export const hostNotificationWorktreeDeletionFailureKindSchema = z.enum(
-  HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS,
+export const hostNotificationWorktreeDeletionFailureKindSchema = lazySchema(
+  () => z.enum(HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS),
 );
 export type HostNotificationWorktreeDeletionFailureKind = z.infer<
   typeof hostNotificationWorktreeDeletionFailureKindSchema
 >;
 
-const hostNotificationWorktreeDeletionFailureCountSchema = z
-  .number()
-  .int()
-  .positive();
+const hostNotificationWorktreeDeletionFailureCountSchema = lazySchema(() =>
+  z.number().int().positive(),
+);
 
 /**
  * Known failure counts, represented as an object with optional known keys
@@ -330,13 +348,18 @@ const hostNotificationWorktreeDeletionFailureCountSchema = z
  * natural, `z.object` strips unknown keys by default: a future host can add a
  * category without making an older client reject the entire durable payload.
  */
-export const hostNotificationWorktreeDeletionFailureKindsSchema = z.object({
-  busy: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
-  not_managed: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
-  teardown_failed:
-    hostNotificationWorktreeDeletionFailureCountSchema.optional(),
-  removal_failed: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
-});
+export const hostNotificationWorktreeDeletionFailureKindsSchema = lazySchema(
+  () =>
+    z.object({
+      busy: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+      not_managed:
+        hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+      teardown_failed:
+        hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+      removal_failed:
+        hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+    }),
+);
 export type HostNotificationWorktreeDeletionFailureKinds = z.infer<
   typeof hostNotificationWorktreeDeletionFailureKindsSchema
 >;
@@ -358,27 +381,30 @@ export type HostNotificationWorktreeDeletionFailureKinds = z.infer<
  * is both a leak and a lie. It is also why no retry action exists: a safe
  * retry would need exactly the paths this must not persist.
  */
-export const hostNotificationWorktreeDeletionPayloadSchema = z
-  .object({
-    kind: z.literal("worktree_deletion"),
-    operation: z.literal(HOST_OPERATION_WORKTREE_DELETION),
-    title: z.string().min(1),
-    message: z.string().min(1),
-    commandId: idSchema,
-    /** Open string, not the wire enum: a row minted by a newer host with a
-     * source this build has never heard of must still render and route. */
-    source: idSchema,
-    /** Task that initiated a single-Task sweep. */
-    epicId: idSchema.optional(),
-    /** Read-time title for a single-Task sweep. */
-    taskTitle: z.string().optional(),
-    requestedCount: z.number().int().nonnegative(),
-    deletedCount: z.number().int().nonnegative(),
-    failedCount: z.number().int().nonnegative(),
-    /** Optional for rows minted before failure categorization existed. */
-    failureKinds: hostNotificationWorktreeDeletionFailureKindsSchema.optional(),
-  })
-  .catchall(z.unknown());
+export const hostNotificationWorktreeDeletionPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("worktree_deletion"),
+      operation: z.literal(HOST_OPERATION_WORKTREE_DELETION),
+      title: z.string().min(1),
+      message: z.string().min(1),
+      commandId: idSchema,
+      /** Open string, not the wire enum: a row minted by a newer host with a
+       * source this build has never heard of must still render and route. */
+      source: idSchema,
+      /** Task that initiated a single-Task sweep. */
+      epicId: idSchema.optional(),
+      /** Read-time title for a single-Task sweep. */
+      taskTitle: z.string().optional(),
+      requestedCount: z.number().int().nonnegative(),
+      deletedCount: z.number().int().nonnegative(),
+      failedCount: z.number().int().nonnegative(),
+      /** Optional for rows minted before failure categorization existed. */
+      failureKinds:
+        hostNotificationWorktreeDeletionFailureKindsSchema.optional(),
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationWorktreeDeletionPayload = z.infer<
   typeof hostNotificationWorktreeDeletionPayloadSchema
 >;
@@ -414,22 +440,57 @@ export const HOST_OPERATION_WORKTREE_AUTO_CLEANUP = "worktree.autoCleanup";
  * host that stopped mid-cleanup must say so rather than silently round the run
  * down to what it could confirm.
  */
-export const hostNotificationWorktreeAutoCleanupPayloadSchema = z
-  .object({
-    kind: z.literal("worktree_auto_cleanup"),
-    operation: z.literal(HOST_OPERATION_WORKTREE_AUTO_CLEANUP),
-    title: z.string().min(1),
-    message: z.string().min(1),
-    runId: idSchema,
-    hostId: idSchema,
-    deletedCount: z.number().int().nonnegative(),
-    skippedCount: z.number().int().nonnegative(),
-    failedCount: z.number().int().nonnegative(),
-    interruptedCount: z.number().int().nonnegative(),
-  })
-  .catchall(z.unknown());
+export const hostNotificationWorktreeAutoCleanupPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("worktree_auto_cleanup"),
+      operation: z.literal(HOST_OPERATION_WORKTREE_AUTO_CLEANUP),
+      title: z.string().min(1),
+      message: z.string().min(1),
+      runId: idSchema,
+      hostId: idSchema,
+      deletedCount: z.number().int().nonnegative(),
+      skippedCount: z.number().int().nonnegative(),
+      failedCount: z.number().int().nonnegative(),
+      interruptedCount: z.number().int().nonnegative(),
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationWorktreeAutoCleanupPayload = z.infer<
   typeof hostNotificationWorktreeAutoCleanupPayloadSchema
+>;
+
+/**
+ * The `operation` identifier of a shell-output delivery the host parked
+ * because the chat could not start a turn to receive it.
+ */
+export const HOST_OPERATION_MANAGED_COMMAND_DELIVERY =
+  "managed-command.delivery";
+
+/**
+ * `host.operation.finished` payload for a parked shell-output delivery.
+ *
+ * Chat-scoped: the chat's queue is paused and the remedy lives in that chat,
+ * so `epicId`/`chatId` are what the row routes to. Rows minted before these
+ * fields existed fail this arm and keep the common-field tier - host copy,
+ * no deep link.
+ */
+export const hostNotificationManagedCommandDeliveryParkedPayloadSchema =
+  lazySchema(() =>
+    z
+      .object({
+        kind: z.literal("managed_command_delivery_parked"),
+        operation: z.literal(HOST_OPERATION_MANAGED_COMMAND_DELIVERY),
+        title: z.string().min(1),
+        message: z.string().min(1),
+        commandId: idSchema,
+        epicId: idSchema,
+        chatId: idSchema,
+      })
+      .catchall(z.unknown()),
+  );
+export type HostNotificationManagedCommandDeliveryParkedPayload = z.infer<
+  typeof hostNotificationManagedCommandDeliveryParkedPayloadSchema
 >;
 
 /**
@@ -442,31 +503,36 @@ export type HostNotificationWorktreeAutoCleanupPayload = z.infer<
  * construction (browser sessions never move hosts), so the row's originHostId
  * is what says where to open it.
  */
-export const hostNotificationBrowserHumanNeededPayloadSchema = z
-  .object({
-    kind: z.literal("browser_human_needed"),
-    epicId: idSchema,
-    chatId: idSchema,
-    sessionId: idSchema,
-    tabId: idSchema,
-    reason: z.string().min(1),
-  })
-  .catchall(z.unknown());
+export const hostNotificationBrowserHumanNeededPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("browser_human_needed"),
+      epicId: idSchema,
+      chatId: idSchema,
+      sessionId: idSchema,
+      tabId: idSchema,
+      reason: z.string().min(1),
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationBrowserHumanNeededPayload = z.infer<
   typeof hostNotificationBrowserHumanNeededPayloadSchema
 >;
 
-export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
-  hostNotificationChatStoppedPayloadSchema,
-  hostNotificationEpicStoppedPayloadSchema,
-  hostNotificationAgentStalledPayloadSchema,
-  hostNotificationWorkspaceOperationFailedPayloadSchema,
-  hostNotificationApprovalPayloadSchema,
-  hostNotificationInterviewPayloadSchema,
-  hostNotificationWorktreeDeletionPayloadSchema,
-  hostNotificationWorktreeAutoCleanupPayloadSchema,
-  hostNotificationBrowserHumanNeededPayloadSchema,
-]);
+export const hostNotificationKnownPayloadSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    hostNotificationChatStoppedPayloadSchema,
+    hostNotificationEpicStoppedPayloadSchema,
+    hostNotificationAgentStalledPayloadSchema,
+    hostNotificationWorkspaceOperationFailedPayloadSchema,
+    hostNotificationApprovalPayloadSchema,
+    hostNotificationInterviewPayloadSchema,
+    hostNotificationWorktreeDeletionPayloadSchema,
+    hostNotificationWorktreeAutoCleanupPayloadSchema,
+    hostNotificationManagedCommandDeliveryParkedPayloadSchema,
+    hostNotificationBrowserHumanNeededPayloadSchema,
+  ]),
+);
 export type HostNotificationKnownPayload = z.infer<
   typeof hostNotificationKnownPayloadSchema
 >;
@@ -521,14 +587,15 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "approval";
     case "interview.requested":
       return payloadKind === "interview";
-    // Two operation arms so far. A FUTURE operation adds its arm above and its
-    // kind to this list; until a client learns that kind, its rows degrade to
-    // the common-field tier rather than failing - which is the property the
-    // whole payload tier exists to provide.
+    // A FUTURE operation adds its arm above and its kind to this list; until a
+    // client learns that kind, its rows degrade to the common-field tier
+    // rather than failing - which is the property the whole payload tier
+    // exists to provide.
     case "host.operation.finished":
       return (
         payloadKind === "worktree_deletion" ||
-        payloadKind === "worktree_auto_cleanup"
+        payloadKind === "worktree_auto_cleanup" ||
+        payloadKind === "managed_command_delivery_parked"
       );
     case "browser.human.needed":
       return payloadKind === "browser_human_needed";

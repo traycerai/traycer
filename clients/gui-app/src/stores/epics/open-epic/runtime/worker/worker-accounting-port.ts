@@ -61,6 +61,8 @@ export function createWorkerAccountingPort(
       return {
         materializedRoomIds: [],
         rootBytes: 0,
+        replicaDataRawBytes: 0,
+        replicaDataEstimatedHeapBytes: 0,
         protectedBytesByKind: [],
         projectionCounts: null,
       };
@@ -68,6 +70,9 @@ export function createWorkerAccountingPort(
     return {
       materializedRoomIds: live.materializedRoomIds(),
       rootBytes: live.measureRootBytes(),
+      replicaDataRawBytes: live.measureReplicaDataBytes().rawBytes,
+      replicaDataEstimatedHeapBytes:
+        live.measureReplicaDataBytes().estimatedHeapBytes,
       protectedBytesByKind: lastProtectedBytesByKind,
       projectionCounts: live.projectionCounts(),
     };
@@ -114,6 +119,15 @@ export function createWorkerAccountingPort(
 
       settleRootBytes(bytes): void {
         settle({ kind: "root", bytes });
+      },
+      chargeRootProvisional(bytes): void {
+        settle({ kind: "root-provisional", bytes });
+      },
+      settleReplicaDataBytes(rawBytes, estimatedHeapBytes): void {
+        settle({ kind: "replica-data", rawBytes, estimatedHeapBytes });
+      },
+      settleMainProjectionBytes(): void {
+        throw new Error("main projection settlement belongs on the renderer");
       },
       settleColdRoomBytes(artifactRoomId, bytes): void {
         settle({ kind: "cold-room", artifactRoomId, bytes });

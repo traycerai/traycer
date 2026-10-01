@@ -1,10 +1,11 @@
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type {
-  GetTaskContextsResponse,
-  ListTaskLight,
+import {
+  GET_TASK_CONTEXTS_MAX_IDS,
+  type GetTaskContextsResponse,
+  type ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -129,6 +130,40 @@ describe("useEpicGetTaskContexts", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("explicitly refetches each capped batch inside the stale window", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const taskIds = Array.from({ length: 64 }, (_, index) => `epic-${index}`);
+    const { result } = renderHook(
+      () => useEpicGetTaskContexts(taskIds, USER_ID, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+
+    await waitFor(() => {
+      expect(result.current.tasksById.size).toBe(taskIds.length);
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await result.current.refetch();
+    });
+
+    expect(request).toHaveBeenCalledTimes(4);
+    const requestedIds = request.mock.calls.map((call) => {
+      expect(call[0]).toBe("epic.getTaskContexts");
+      const params = call[1] as { readonly taskIds: readonly string[] };
+      expect(params.taskIds.length).toBeLessThanOrEqual(
+        GET_TASK_CONTEXTS_MAX_IDS,
+      );
+      return params.taskIds;
+    });
+    expect(requestedIds.slice(0, 2).flat().toSorted()).toEqual(
+      taskIds.toSorted(),
+    );
+    expect(requestedIds.slice(2).flat().toSorted()).toEqual(taskIds.toSorted());
+  });
+
   it("refetches for a different user - a permission-scoped answer is never shared", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -152,5 +187,112 @@ describe("useEpicGetTaskContexts", () => {
     await waitFor(() => {
       expect(request).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("is pending until a batch first answers, and not while an answered batch refetches", async () => {
+    // `isFetching` cannot tell these two apart, which is what a reader needs to
+    // know to keep trusting a settled answer through its own refresh.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    let answerFirst: (response: GetTaskContextsResponse) => void = () =>
+      undefined;
+    request.mockImplementationOnce(
+      () =>
+        new Promise<GetTaskContextsResponse>((resolve) => {
+          answerFirst = resolve;
+        }),
+    );
+    const { result } = renderHook(
+      () => useEpicGetTaskContexts(["epic-a"], USER_ID, { enabled: true }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+    expect(result.current.isPending).toBe(true);
+    expect(result.current.isFetching).toBe(true);
+
+    await act(async () => {
+      answerFirst({
+        tasks: {
+          "epic-a": {
+            status: "found",
+            task: listTaskLight("epic-a", "Title epic-a"),
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+    });
+
+    request.mockImplementationOnce(
+      () => new Promise<GetTaskContextsResponse>(() => undefined),
+    );
+    act(() => {
+      void result.current.refetch();
+    });
+    await waitFor(() => {
+      expect(result.current.isFetching).toBe(true);
+    });
+    expect(result.current.isPending).toBe(false);
+  });
+
+  it("merges @1.4 recent activity into found rows and leaves it absent for older responses", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const activityTask = listTaskLight("epic-with-activity", "Activity task");
+    const legacyTask = listTaskLight("epic-without-activity", "Legacy task");
+    request
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          tasks: {
+            "epic-with-activity": { status: "found", task: activityTask },
+          },
+          recentAtByTaskId: { "epic-with-activity": 1_234 },
+        }),
+      )
+      .mockImplementationOnce(() =>
+        Promise.resolve({
+          tasks: {
+            "epic-without-activity": { status: "found", task: legacyTask },
+          },
+        }),
+      );
+
+    const withActivity = renderHook(
+      () =>
+        useEpicGetTaskContexts(["epic-with-activity"], USER_ID, {
+          enabled: true,
+        }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(
+        withActivity.result.current.tasksById.get("epic-with-activity")
+          ?.recentAt,
+      ).toBe(1_234);
+    });
+
+    const withoutActivity = renderHook(
+      () =>
+        useEpicGetTaskContexts(["epic-without-activity"], USER_ID, {
+          enabled: true,
+        }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(
+        withoutActivity.result.current.tasksById.has("epic-without-activity"),
+      ).toBe(true);
+    });
+
+    expect(
+      withoutActivity.result.current.tasksById.get("epic-without-activity")
+        ?.recentAt,
+    ).toBeUndefined();
   });
 });

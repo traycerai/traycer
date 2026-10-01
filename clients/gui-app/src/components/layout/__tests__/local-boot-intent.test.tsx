@@ -72,6 +72,8 @@ const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 interface ManagementSpy {
@@ -120,7 +122,8 @@ function buildManagementSpy(): ManagementSpy {
     registerService: notImplemented("registerService"),
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
-    freePortAndRestart: (input) => Promise.resolve(input),
+    freePortAndRestart: (input) =>
+      Promise.resolve({ kind: "applied" as const, ...input }),
     runDoctorRepairQueued: () => Promise.resolve({ kind: "applied" as const }),
     freePortAndRestartIfIdle: () =>
       Promise.resolve({
@@ -133,6 +136,9 @@ function buildManagementSpy(): ManagementSpy {
     maintenanceInstallationInfo: notImplemented("maintenanceInstallationInfo"),
     maintenanceInstallVersion: notImplemented("maintenanceInstallVersion"),
     restartHostIfIdle: notImplemented("restartHostIfIdle"),
+    restartHostServiceIfHostIdle: notImplemented(
+      "restartHostServiceIfHostIdle",
+    ),
     runDoctorRepairIfIdle: notImplemented("runDoctorRepairIfIdle"),
     getHostName: () =>
       Promise.resolve({
@@ -244,7 +250,7 @@ function installAuthFetch(): () => void {
     writable: true,
     value: (input: unknown): Promise<Response> => {
       const url = typeof input === "string" ? input : String(input);
-      if (url.endsWith("/api/v3/user")) {
+      if (url.endsWith("/api/v3/user/negotiated")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({
@@ -281,7 +287,10 @@ function installAuthFetch(): () => void {
               teamSubscriptions: [],
               payAsYouGoUsage: { allowPayAsYouGo: false },
             }),
-            { status: 200 },
+            {
+              status: 200,
+              headers: { "x-traycer-user-record-version": "2.0" },
+            },
           ),
         );
       }

@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   useCallback,
   useEffect,
@@ -66,19 +67,13 @@ import {
   useVisibleRateLimitProviders,
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
+import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
-import {
-  useAnyRateLimitQueueTargetFetching,
-  useIsRateLimitReadFollowUpExhausted,
-  useRateLimitQueueTargetPhase,
-} from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
 import {
   resolveStatusBarProfileIds,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { enqueueRateLimitFetchBatchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
-import { isRateLimitQueryFailure } from "@/lib/rate-limits/rate-limit-read-status";
-import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
@@ -101,11 +96,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
-import {
-  Analytics,
-  AnalyticsEvent,
-  trackSettingChanged,
-} from "@/lib/analytics";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   isRateLimitProfileFetchEligible,
@@ -136,7 +127,12 @@ import {
   type RateLimitPopoverRevealTarget,
   type RateLimitPopoverTab,
 } from "@/stores/rate-limits/rate-limit-popover-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import {
+  statusBarShownProfileIds,
+  type StatusBarShownProfiles,
+} from "@/lib/layout/layout-arrangement";
+import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -161,6 +157,8 @@ const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
   ambient: false,
   managedProfiles: false,
 };
+/** What the strip draws for a provider while the strip itself is not on screen. */
+const NO_PROFILE_IDS: ReadonlyArray<string | null> = [];
 
 const POPOVER_SURFACE_CLASS_NAME =
   "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
@@ -461,10 +459,11 @@ export function RateLimitPopover({
   readonly side: "top" | "bottom";
   readonly align: "start" | "end";
 }): ReactNode {
+  const placement = useColumnOverlayPlacement("foot");
   return (
     <PopoverContent
-      side={side}
-      align={align}
+      side={placement?.side ?? side}
+      align={placement?.align ?? align}
       sideOffset={8}
       collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
@@ -823,7 +822,13 @@ function RateLimitPopoverScopedBody({
     focus.setFocusHarnessId("opencode");
     focus.setFocusTab("modelProviders");
     carryViewedHostIntoSettingsScope(displayedHostId);
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   }, [displayedHostId, onClose, openSettings]);
   // "Manage provider", beside each provider's name. Same deep link the model
   // picker and the reauth banner use, so the viewed host travels with it and
@@ -839,7 +844,13 @@ function RateLimitPopoverScopedBody({
       // and this link, which names no tab, would then land on it.
       focus.clearFocusTab();
       carryViewedHostIntoSettingsScope(displayedHostId);
-      openSettings({ section: "providers", resetToGeneral: false });
+      openSettings({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
     },
     [displayedHostId, onClose, openSettings],
   );
@@ -999,7 +1010,15 @@ function RateLimitHostPickerRow({
             // The displayed host travels with the jump - one rule, one
             // implementation, shared with the provider CTAs.
             carryViewedHostIntoSettingsScope(scope.hostId);
-            openSettings({ section: "host", resetToGeneral: false });
+            // Named rather than left null: an Overview already open on
+            // another tab comes back to Updates, as every host link does.
+            openSettings({
+              section: "host",
+              resetToGeneral: false,
+              tab: "updates",
+              draft: null,
+              hostId: null,
+            });
           },
         }}
         surface="panel-header"
@@ -1141,7 +1160,13 @@ function RateLimitRail({
     useSettingsSearchStore
       .getState()
       .requestReveal("layout", LAYOUT.definitions.statusBar.anchor);
-    openSettings({ section: "layout", resetToGeneral: false });
+    openSettings({
+      section: "layout",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   };
   return (
     <div className="flex min-h-0 flex-col items-center border-r bg-foreground/3 p-1.5">
@@ -1387,22 +1412,20 @@ function useTraycerRateLimitUsageState(
 
 /**
  * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
- * refresh as one queued batch whose profile pulls run concurrently
- * (`force: true`), while httpFetch providers refresh concurrently alongside via
- * a direct query invalidation - a plain GET has no subprocess cost to serialize.
+ * refresh with one forced fetch per profile, all sent at once - how many of
+ * those probes run together is the host's call - while httpFetch providers
+ * refresh alongside via a direct query invalidation.
  * The synthetic Traycer entry refreshes here too: it refetches the AuthService
  * subscription query, and rate-limit based plans additionally invalidate the
  * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
  * bar.
- * `refreshing` combines all lanes' real query state - this button's OWN
- * ephemeral targets (which stay pending until every profile in the batch has
- * settled, even after one provider's own `isFetching` clears), each configured
- * httpFetch provider's own
- * `isFetching` (read via `useHostQueries` against the exact same query keys the
- * invalidation below targets), plus Traycer's auth/aperture fetch state - so
- * the icon spins for the whole round regardless of which lane(s) are actually
- * configured, not just when an ephemeralProcess provider happens to be in the
- * mix.
+ * `refreshing` combines all lanes' real query state - each of this button's
+ * OWN ephemeral targets' `isFetching` (observed passively on the same keys the
+ * fetches write), each configured httpFetch provider's own `isFetching` (read
+ * via `useHostQueries` against the exact same query keys the invalidation
+ * below targets), plus Traycer's auth/aperture fetch state - so the icon spins
+ * until the slowest target settles, regardless of which lane(s) are actually
+ * configured.
  */
 function RateLimitRefreshAllButton({
   providers,
@@ -1414,11 +1437,10 @@ function RateLimitRefreshAllButton({
   const queryClient = useQueryClient();
   const hostId = useAddressableHostId();
   const client = useHostClient();
-  // The ephemeral lane's app-shell default is configured to the app-wide host,
-  // so the unscoped `enqueueRateLimitFetchBatch` would refresh a machine this
-  // popover may not be showing. This scope is derived from the same context
-  // binding as `hostId` and `client` above, so all three name one host.
-  const queueScope = useRateLimitQueueScope();
+  // This popover may be showing a host other than the app-wide one. The fetch
+  // scope is derived from the same context binding as `hostId` and `client`
+  // above, so all three name one host.
+  const fetchScope = useProviderRateLimitFetchScope();
   const traycerRateLimitUsageState = useTraycerRateLimitUsageState(
     traycerRefreshTarget.rateLimitAccountContexts,
   );
@@ -1443,9 +1465,7 @@ function RateLimitRefreshAllButton({
   // Every httpFetch provider resolves to the exact same lane options (the
   // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
   // provider id) - reusing the first one's is safe without the "verify every
-  // request shares one lane" check `useHeaderRateLimitBars` needs (that hook's
-  // provider list isn't pre-filtered to a single lane the way `httpFetchProviders`
-  // is here). Passing this through (rather than `null`) matters:
+  // request shares one lane" check a mixed-lane batch would need. Passing this through (rather than `null`) matters:
   // `RateLimitProviderBlock`'s own query for these same providers sets
   // `retry: false`, and TanStack keys retry/staleTime/refetchOnMount per query
   // key - an unset `options` here would silently inherit the global
@@ -1476,11 +1496,39 @@ function RateLimitRefreshAllButton({
     options: httpFetchOptions,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
-  // The ephemeral half of "Refresh all" is scoped to the targets this button
-  // actually enqueues, not the whole lane, so a background sweep of a provider
-  // this popover isn't showing can no longer disable it.
-  const ephemeralProcessFetching = useAnyRateLimitQueueTargetFetching(
-    ephemeralProcessRequests,
+  // The ephemeral half of "Refresh all" watches the targets this button
+  // actually fetches, not the whole lane, so a background read of a provider
+  // this popover isn't showing cannot disable it. Passive observers: the lane's
+  // options never let an observer fetch (`providerRateLimitQueryOptions`), and
+  // they still see a fetch the fetch function runs on their key.
+  const ephemeralProcessOptions =
+    ephemeralProcessRequests.length === 0
+      ? null
+      : providerRateLimitQueryOptions(
+          ephemeralProcessRequests[0].providerId,
+          null,
+          true,
+        ).options;
+  const ephemeralProcessQueries = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
+  >({
+    client,
+    cacheKeyIdentity: undefined,
+    requests: ephemeralProcessRequests.map((target) => {
+      const { method, params } = providerRateLimitQueryOptions(
+        target.providerId,
+        target.profileId,
+        true,
+      );
+      return { method, params };
+    }),
+    options: ephemeralProcessOptions,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const ephemeralProcessFetching = ephemeralProcessQueries.some(
+    (query) => query.isFetching,
   );
   const traycerRefreshing =
     traycerRefreshTarget.enabled &&
@@ -1494,9 +1542,9 @@ function RateLimitRefreshAllButton({
     ephemeralProcessRequests.length > 0 ||
     traycerRefreshTarget.enabled;
 
-  // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation, ephemeralProcess profiles fan out inside one queued
-  // batch, and Traycer refetches its subscription/usage queries. Returns
+  // Fire-and-forget, not awaited: httpFetch providers refresh via a direct
+  // invalidation, each ephemeralProcess profile gets its own forced fetch, and
+  // Traycer refetches its subscription/usage queries. Returns
   // an already-resolved promise so `RefreshIconButton` gets its
   // `() => Promise<void>` contract without gating the spinner on the fetches
   // themselves - `refreshing` (above) owns that.
@@ -1513,13 +1561,9 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    void enqueueRateLimitFetchBatchForScope(
-      queueScope,
-      ephemeralProcessRequests,
-      {
-        force: true,
-      },
-    );
+    ephemeralProcessRequests.forEach((target) => {
+      void fetchProviderRateLimits(fetchScope, target, { force: true });
+    });
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
       traycerRefreshTarget.rateLimitAccountContexts.forEach(
@@ -1638,23 +1682,9 @@ function SingleProfileRateLimitProviderBlock({
 }): ReactNode {
   const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
   const cardRef = useRevealedProfileCard(providerId, null);
-  const targetPhase = useRateLimitQueueTargetPhase(providerId, null);
-  // Only this lane's reads are owned by the serial queue, so only they have a
-  // follow-up standing behind a read we stopped waiting for.
-  const queueOwned = rateLimitFetchLane(providerId) === "ephemeralProcess";
-  // ...and that follow-up is a single delayed attempt, so once it is spent this
-  // read has nothing left coming for it and must report rather than keep
-  // vouching for the cached reading.
-  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
-    providerId,
-    null,
-  );
-  const targetFetching = queueOwned
-    ? targetPhase === "fetching"
-    : query.isFetching;
   // Single source of truth for this provider's refresh action + spinner state
-  // (fresh-on-open, queue routing, and this target's own queue-phase fold-in),
-  // shared verbatim with the Settings card so they can't drift apart.
+  // (fresh-on-open, and a forced fetch for the ephemeral lane), shared verbatim
+  // with the Settings card so they can't drift apart.
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId: null,
@@ -1666,13 +1696,8 @@ function SingleProfileRateLimitProviderBlock({
   });
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
-    isFetching: targetFetching,
-    isError: isRateLimitQueryFailure({
-      isError: query.isError,
-      error: query.error,
-      queueOwned,
-      followUpExhausted,
-    }),
+    isFetching: query.isFetching,
+    isError: query.isError,
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
@@ -1686,9 +1711,9 @@ function SingleProfileRateLimitProviderBlock({
       : query.dataUpdatedAt;
   useEffect(() => {
     // A disabled query with no cache stays pending forever by design: it is a
-    // passive observer for a signed-out provider, not a queue-owned cold
-    // read. Reveal that provider in Overview so its unavailable state cannot
-    // remain hidden behind the global loading indicator.
+    // passive observer for a signed-out provider, not a cold read a mount
+    // fetch will fill. Reveal that provider in Overview so its unavailable
+    // state cannot remain hidden behind the global loading indicator.
     if ((!fetchEligible || state.kind !== "cold") && onReady !== null) {
       onReady();
     }
@@ -1735,8 +1760,7 @@ function SingleProfileRateLimitProviderBlock({
           <UsageLimitUpdatedLabel
             ready={state.kind === "ready"}
             updatedAt={updatedAt}
-            refreshing={targetFetching}
-            queued={targetPhase === "queued"}
+            refreshing={query.isFetching}
             degraded={state.kind === "ready" && state.degraded}
             degradedReason={
               state.kind === "ready" ? state.degradedReason : null
@@ -1749,10 +1773,9 @@ function SingleProfileRateLimitProviderBlock({
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
-              // `isRefreshing` (from useProviderRateLimitRefresh) already folds
-              // in THIS target's own queue phase, so the button reflects its own
-              // pull from the moment it is enqueued - and stays live while an
-              // unrelated provider's sweep runs.
+              // `isRefreshing` (from useProviderRateLimitRefresh) is THIS
+              // target's own `isFetching`, so the button stays live while an
+              // unrelated provider's read runs.
               refreshing={isRefreshing}
             />
           ) : null}
@@ -1797,7 +1820,7 @@ function ProfileRateLimitProviderBlock({
   const queryClient = useQueryClient();
   // Same reason as `RateLimitRefreshAllButton`'s: this provider's own refresh
   // must reach the host whose numbers it is redrawing, not the app-wide one.
-  const queueScope = useRateLimitQueueScope();
+  const fetchScope = useProviderRateLimitFetchScope();
   const hostId = useAddressableHostId();
   const client = useHostClient();
   const setProfileEnabled = useProvidersSetProfileEnabledForClient(
@@ -1814,22 +1837,27 @@ function ProfileRateLimitProviderBlock({
   // The accounts the strip is drawing for this provider right now - what was
   // checked, or the one account it falls back to - and the checks themselves.
   // The two differ exactly when nothing is checked: the fallback card is
-  // highlighted as "on the strip" while its switch stays off, since nothing
-  // was asked for and flipping the switch is how to ask.
-  const shownProfileIds = resolveStatusBarProfileIds(
-    profileSelection,
-    providerId,
-    profiles,
-  );
+  // highlighted as "on the strip" while its eye stays off, since nothing
+  // was asked for and flipping the eye is how to ask.
+  //
+  // Neither means anything while the reading is hidden: there is no segment
+  // for the highlight to point at and none for the eye to govern, so both go
+  // until it returns. Wherever it lives - the status bar, the tab strip or the
+  // phone header - it draws through the same selector, so the checks apply to
+  // every placement (G6). The checks stay in the store meanwhile.
+  const readingShown = useRegionShown("usageLimits");
+  const shownProfileIds = readingShown
+    ? resolveStatusBarProfileIds(profileSelection, providerId, profiles)
+    : NO_PROFILE_IDS;
   const checkedProfileIds = profileSelection.shownProfiles[providerId] ?? [];
-  // A provider hidden from the strip has no segment for a switch to govern;
-  // the switch goes with it rather than toggling a preference nothing shows.
-  const providerHiddenFromStrip = useLayoutStore((state) =>
-    state.statusBar.rateLimits.hiddenProviders.includes(providerId),
-  );
-  const setProfileShown = useLayoutStore(
-    (state) => state.setStatusBarProfileShown,
-  );
+  // A provider hidden from the strip has no segment for the eye to govern;
+  // the eye goes with it rather than toggling a preference nothing shows.
+  const hiddenProviders = useArrangementValue("hiddenProviders");
+  const providerHiddenFromStrip = hiddenProviders.includes(providerId);
+  // The host the eye writes for, or `null` when there is no eye to draw.
+  const eyeHostId =
+    readingShown && !providerHiddenFromStrip ? displayedHostId : null;
+  const setArrangement = useLayoutStore((state) => state.setArrangement);
   const targets = profiles.map((profile) => ({
     profile,
     profileId: rateLimitProfileId(profile),
@@ -1884,32 +1912,23 @@ function ProfileRateLimitProviderBlock({
       : passiveQueries[index];
   });
   const lane = rateLimitFetchLane(providerId);
-  // This provider's OWN queue entries, never the lane-wide draining flag: the
-  // button both disables and no-ops on this value, so a lane-wide gate made an
-  // unrelated provider's background sweep turn this control off.
-  const anyOwnTargetFetching = useAnyRateLimitQueueTargetFetching(
-    refreshEligibleTargets.map((target) => ({
-      providerId,
-      profileId: target.profileId,
-    })),
-  );
-  const isRefreshing =
-    lane === "ephemeralProcess"
-      ? anyOwnTargetFetching ||
-        fetchEligibleQueries.some((query) => query.isFetching)
-      : fetchEligibleQueries.some((query) => query.isFetching);
+  // This provider's OWN keys: the button both disables and no-ops on this
+  // value, so it must never read another provider's work.
+  const isRefreshing = fetchEligibleQueries.some((query) => query.isFetching);
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      void enqueueRateLimitFetchBatchForScope(
-        queueScope,
-        refreshEligibleTargets.map((target) => ({
-          providerId,
-          accountContext: DEFAULT_ACCOUNT_CONTEXT,
-          profileId: target.profileId,
-        })),
-        { force: true },
-      );
+      refreshEligibleTargets.forEach((target) => {
+        void fetchProviderRateLimits(
+          fetchScope,
+          {
+            providerId,
+            accountContext: DEFAULT_ACCOUNT_CONTEXT,
+            profileId: target.profileId,
+          },
+          { force: true },
+        );
+      });
       return Promise.resolve();
     }
     refreshEligibleTargets.forEach((target) => {
@@ -1954,19 +1973,24 @@ function ProfileRateLimitProviderBlock({
               shownOnStrip={shownProfileIds.includes(target.profileId)}
               checkedForStrip={checkedProfileIds.includes(target.profileId)}
               onSetShownOnStrip={
-                providerHiddenFromStrip || displayedHostId === null
+                eyeHostId === null
                   ? null
                   : (shown) => {
-                      trackSettingChanged(
-                        "layout",
-                        "layout.statusBar.shownProfiles",
-                      );
-                      setProfileShown(
-                        displayedHostId,
-                        providerId,
-                        target.profileId,
-                        shown,
-                      );
+                      // Read at write time rather than subscribed: this row
+                      // needs the whole arrangement only to spread it, and a
+                      // subscription to it re-renders the popover on every
+                      // dock reorder and divider drag (G1-14).
+                      const current = useLayoutStore.getState().arrangement;
+                      setArrangement({
+                        ...current,
+                        shownProfiles: withProfileShown({
+                          shownProfiles: current.shownProfiles,
+                          hostId: eyeHostId,
+                          providerId,
+                          profileId: target.profileId,
+                          shown,
+                        }),
+                      });
                     }
               }
               variant={variant}
@@ -1978,6 +2002,7 @@ function ProfileRateLimitProviderBlock({
               )}
               profileEnablementDisabledReason={profileEligibilityToggleDisabledReason(
                 true,
+                providerDisplayName(providerId),
                 target.profile,
                 profiles,
               )}
@@ -2151,8 +2176,8 @@ function showInStatusBarTooltip(
  * so the eye and the colour it governs sit together: `Eye` when the account
  * is checked for the strip, `EyeOff` when not. An icon rather than a second
  * switch beside the enable one - two identical toggles on a card said
- * nothing about which was which. Rendered only when the provider itself is
- * on the strip (`onSetShownOnStrip` non-null).
+ * nothing about which was which. Rendered only while the strip is on screen
+ * and the provider itself is on it (`onSetShownOnStrip` non-null).
  */
 function StatusBarEyeToggle({
   profile,
@@ -2286,7 +2311,10 @@ function RateLimitProviderProfileRow({
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
   readonly fetchEligible: boolean;
-  /** Whether the strip is drawing this account - checked, or the fallback. */
+  /**
+   * Whether the strip is drawing this account - checked, or the fallback.
+   * Always false while the strip is not on screen.
+   */
   readonly shownOnStrip: boolean;
   readonly checkedForStrip: boolean;
   readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
@@ -2300,9 +2328,6 @@ function RateLimitProviderProfileRow({
     readonly isPending: boolean;
     readonly isFetching: boolean;
     readonly isError: boolean;
-    // Carried so this row can tell a real failure from a read we merely
-    // stopped waiting for (`isRateLimitQueryFailure`).
-    readonly error: unknown;
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
@@ -2310,11 +2335,6 @@ function RateLimitProviderProfileRow({
   const refreshProfileStatus =
     useProvidersRefreshProfileStatusForClient(client);
   const cardRef = useRevealedProfileCard(providerId, profileId);
-  const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
-  const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
-    providerId,
-    profileId,
-  );
   useRefreshProviderRateLimitsOnMount({
     providerId,
     profileId,
@@ -2326,12 +2346,7 @@ function RateLimitProviderProfileRow({
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,
     isFetching: query.isFetching,
-    isError: isRateLimitQueryFailure({
-      isError: query.isError,
-      error: query.error,
-      queueOwned: rateLimitFetchLane(providerId) === "ephemeralProcess",
-      followUpExhausted,
-    }),
+    isError: query.isError,
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
@@ -2368,12 +2383,7 @@ function RateLimitProviderProfileRow({
           />
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
-            refreshing={
-              query.isFetching ||
-              targetPhase === "fetching" ||
-              refreshProfileStatus.isPending
-            }
-            queued={targetPhase === "queued"}
+            refreshing={query.isFetching || refreshProfileStatus.isPending}
             signedOut={signedOutWithoutUsage}
             notChecked={disabledWithoutUsage}
           />
@@ -2466,7 +2476,7 @@ function RateLimitProviderProfileStatusBadges({
   readonly planLabel: string | null;
   readonly shownOnStrip: boolean;
   readonly checkedForStrip: boolean;
-  /** `null` hides the eye: the provider itself is off the strip. */
+  /** `null` hides the eye: the strip is off screen, or the provider is off it. */
   readonly onSetShownOnStrip: ((shown: boolean) => void) | null;
 }): ReactNode {
   return (
@@ -2501,21 +2511,16 @@ function RateLimitProviderProfileStatusBadges({
 function ProfileUsageUpdatedLabel({
   updatedAt,
   refreshing,
-  queued,
   signedOut,
   notChecked,
 }: {
   readonly updatedAt: number | null;
   readonly refreshing: boolean;
-  readonly queued: boolean;
   readonly signedOut: boolean;
   readonly notChecked: boolean;
 }): ReactNode {
   const now = useSampledNow();
   const ago = useRelativeTimestamp(updatedAt ?? 0);
-  if (queued) {
-    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
-  }
   if (refreshing) return <RefreshingText />;
   if (signedOut) {
     return <span className="text-ui-xs text-muted-foreground">signed out</span>;
@@ -2547,20 +2552,15 @@ function UsageLimitUpdatedLabel({
   ready,
   updatedAt,
   refreshing,
-  queued,
   degraded,
   degradedReason,
 }: {
   readonly ready: boolean;
   readonly updatedAt: number;
   readonly refreshing: boolean;
-  readonly queued: boolean;
   readonly degraded: boolean;
   readonly degradedReason: RateLimitUnavailableReason | null;
 }): ReactNode {
-  if (queued) {
-    return <span className="text-ui-xs text-muted-foreground">Queued…</span>;
-  }
   if (!ready) return null;
   if (refreshing) return <RefreshingText />;
   if (updatedAt === 0) return null;
@@ -2923,7 +2923,6 @@ function TraycerAccountCards({
                   rateLimitUpdatedAtByAccount.get(account.key) ?? updatedAt
                 }
                 refreshing={refreshing}
-                queued={false}
                 signedOut={false}
                 notChecked={false}
               />
@@ -3049,7 +3048,13 @@ function RateLimitZeroState({
   const openProviderSettings = (): void => {
     onClose();
     carryViewedHostIntoSettingsScope(displayedHostId);
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   };
   return (
     <div className="flex h-full flex-col items-start gap-3">
@@ -3065,4 +3070,37 @@ function RateLimitZeroState({
       </button>
     </div>
   );
+}
+
+/**
+ * One account checked or unchecked for the strip, on one host.
+ *
+ * An emptied entry is REMOVED rather than left as `[]`, matching what the
+ * arrangement's resolver does on rehydration: one shape for "nothing checked",
+ * so the same selection can never read as two different arrangements.
+ */
+function withProfileShown(input: {
+  readonly shownProfiles: StatusBarShownProfiles;
+  readonly hostId: string;
+  readonly providerId: RateLimitProviderId;
+  readonly profileId: string | null;
+  readonly shown: boolean;
+}): StatusBarShownProfiles {
+  const { shownProfiles, hostId, providerId, profileId, shown } = input;
+  const current = statusBarShownProfileIds(shownProfiles, hostId, providerId);
+  if (current.includes(profileId) === shown) return shownProfiles;
+  const next = shown
+    ? [...current, profileId]
+    : current.filter((candidate) => candidate !== profileId);
+  const hostShown: Record<string, ReadonlyArray<string | null>> = {
+    ...shownProfiles[hostId],
+  };
+  if (next.length === 0) delete hostShown[providerId];
+  else hostShown[providerId] = next;
+  const nextShownProfiles: Record<string, StatusBarShownProfiles[string]> = {
+    ...shownProfiles,
+  };
+  if (Object.keys(hostShown).length === 0) delete nextShownProfiles[hostId];
+  else nextShownProfiles[hostId] = hostShown;
+  return nextShownProfiles;
 }

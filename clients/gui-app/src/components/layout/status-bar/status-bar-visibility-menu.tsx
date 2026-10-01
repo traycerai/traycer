@@ -7,11 +7,19 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { CustomizeLayoutMenuItem } from "@/components/layout-editor/customize-layout-menu-item";
+import { LayoutRegionVerbItems } from "@/components/layout-editor/region-quick-verbs";
+import { setRegionShown } from "@/components/layout-editor/layout-gestures";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { trackSettingChanged } from "@/lib/analytics";
+import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
+import {
+  BAR_REGION_IDS,
+  barPlacement,
+  withBarHost,
+  type BarRegionId,
+} from "@/lib/layout/layout-arrangement";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
-import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 
 /**
  * Marks a subtree the status bar's own right-click menu must not claim. The bar
@@ -34,6 +42,17 @@ interface StatusBarVisibilityMenuProps {
    * a different set than the segments beside it.
    */
   readonly providers: ReadonlyArray<StatusBarMenuProvider>;
+  /**
+   * The readings the bar is DRAWING, in the order it draws them (L-159).
+   *
+   * Since L-156 each reading picks its own bar, so the menu cannot name one
+   * by literal: it would offer verbs for a region drawn in the top bar, which
+   * has its own menu up there, and a switch over a readout nowhere near the
+   * pointer. Passed in for the same reason `providers` is - the bar has
+   * already worked out what it is holding, and a second answer here could
+   * disagree with the clusters beside it.
+   */
+  readonly regions: ReadonlyArray<BarRegionId>;
   /** The bar itself - the region a right-click opens this menu over. */
   readonly children: ReactNode;
 }
@@ -42,31 +61,26 @@ interface StatusBarVisibilityMenuProps {
  * The status bar's quick-visibility menu: what each segment shows, without a
  * trip to Settings, plus the way to that page for everything else.
  *
- * Every item writes the same `layout-store` fields the Layout page writes, so
- * the two can never disagree - this is a second view onto those preferences,
- * never a second place they live.
+ * Every item writes the same layout store the editor writes, so the two can
+ * never disagree - this is a second view onto those values, never a second
+ * place they live.
  */
 export function StatusBarVisibilityMenu(
   props: StatusBarVisibilityMenuProps,
 ): ReactNode {
-  const hiddenProviders = useLayoutStore(
-    (state) => state.statusBar.rateLimits.hiddenProviders,
-  );
-  const resourcesEnabled = useLayoutStore(
-    (state) => state.statusBar.resources.enabled,
-  );
-  const toggleProvider = useLayoutStore(
-    (state) => state.toggleStatusBarProvider,
-  );
-  const setResourcesEnabled = useLayoutStore(
-    (state) => state.setStatusBarResourcesEnabled,
-  );
-  const setPlacement = useLayoutStore((state) => state.setStatusBarPlacement);
-  // The same gate `StatusBarLayoutGroupContent` puts on the placement row, and
-  // for the same reason: below `md` the shell answers with `mobileFooter` and
-  // ignores `placement` entirely, while `MobileAppHeader` draws its usage
-  // controls whatever `placement` says. So the item would write a preference
-  // that moves nothing, and leave it waiting for the next desktop window.
+  const hiddenProviders = useArrangementValue("hiddenProviders");
+  const resourcesShown = useRegionShown("resourceMonitor");
+  const regions = props.regions;
+  const showsMonitor = regions.includes("resourceMonitor");
+  // The door names ONE region, and it is the first the bar draws: the editor
+  // opens on it, and every other reading here is one click away in the index.
+  // A bar drawing nothing opens the index instead of asserting a region.
+  const doorTarget: BarRegionId | null = regions.length > 0 ? regions[0] : null;
+  const setArrangement = useLayoutStore((state) => state.setArrangement);
+  // Below `md` this footer draws both readings whatever bar they name (L-162)
+  // and `MobileAppHeader` keeps its own copies either way, so the item would
+  // write a value with no visible effect on the viewport it was pressed on,
+  // and leave it waiting for the next desktop window.
   const narrowViewport = useIsMobileViewport();
 
   return (
@@ -94,43 +108,71 @@ export function StatusBarVisibilityMenu(
             key={provider.providerId}
             checked={!hiddenProviders.includes(provider.providerId)}
             onCheckedChange={() => {
-              trackSettingChanged(
-                "layout",
-                "layout.statusBar.rateLimits.provider",
-              );
-              toggleProvider(provider.providerId);
+              // The whole arrangement is read at write time rather than
+              // subscribed: this menu needs it only to spread it (G1-14).
+              setArrangement({
+                ...useLayoutStore.getState().arrangement,
+                hiddenProviders: hiddenProviders.includes(provider.providerId)
+                  ? hiddenProviders.filter((id) => id !== provider.providerId)
+                  : [...hiddenProviders, provider.providerId],
+              });
             }}
           >
             {provider.label}
           </ContextMenuCheckboxItem>
         ))}
-        <ContextMenuCheckboxItem
-          checked={resourcesEnabled}
-          onCheckedChange={(checked) => {
-            trackSettingChanged("layout", "layout.statusBar.resources.enabled");
-            setResourcesEnabled(checked);
-          }}
-        >
-          Resource monitor
-        </ContextMenuCheckboxItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem
-          onSelect={() => {
-            navigateToSettingsSection("layout");
-          }}
-        >
-          Status bar settings…
-        </ContextMenuItem>
+        {/* Only while the readout is in THIS bar: a switch here over a
+            monitor drawn in the top bar would make something disappear up
+            there because of a right-click down here (L-159). */}
+        {showsMonitor ? (
+          <ContextMenuCheckboxItem
+            checked={resourcesShown}
+            onCheckedChange={(checked) => {
+              setRegionShown("resourceMonitor", checked);
+            }}
+          >
+            Resource monitor
+          </ContextMenuCheckboxItem>
+        ) : null}
         {narrowViewport ? null : (
           <ContextMenuItem
             onSelect={() => {
-              trackSettingChanged("layout", "layout.statusBar.placement");
-              setPlacement("header");
+              // Everything this strip is still holding, each keeping its own
+              // side (L-156). The menu belongs to the STRIP, so it moves what
+              // the strip has; a reading already in the header is left alone.
+              const arrangement = useLayoutStore.getState().arrangement;
+              setArrangement(
+                BAR_REGION_IDS.reduce(
+                  (current, region) =>
+                    barPlacement(current, region).host === "status-bar"
+                      ? withBarHost(current, region, "header")
+                      : current,
+                  arrangement,
+                ),
+              );
             }}
           >
             Move to header
           </ContextMenuItem>
         )}
+        <ContextMenuSeparator />
+        {/* The bar's own quick verbs and the way in (L-19, L-159). The items
+            above are one per segment; what these add is a set of verbs for
+            each reading the bar is DRAWING - the readout's own segment menu
+            wins over the segment itself, so these are what the bar's padding
+            answers - and one "Customize layout...", which replaces the old
+            jump to the Layout settings page: customizing is the editor's job
+            now, and the door lands on that page by itself when the window is
+            too narrow. */}
+        {regions.map((regionId) => (
+          <LayoutRegionVerbItems
+            key={regionId}
+            regionId={regionId}
+            separator={false}
+          />
+        ))}
+        {regions.length > 0 ? <ContextMenuSeparator /> : null}
+        <CustomizeLayoutMenuItem target={doorTarget} />
       </ContextMenuContent>
     </ContextMenu>
   );

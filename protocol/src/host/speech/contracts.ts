@@ -9,13 +9,16 @@
 import { z } from "zod";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { speechModelStatusSchema } from "@traycer/protocol/host/speech/schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // `speech.getModelStatus@1.0` - reports whether the dictation model is present
 // on disk and, while downloading, how far along. `modelId: null` selects the
 // host's default model.
-export const speechGetModelStatusRequestSchema = z.object({
-  modelId: z.string().nullable(),
-});
+export const speechGetModelStatusRequestSchema = lazySchema(() =>
+  z.object({
+    modelId: z.string().nullable(),
+  }),
+);
 export type SpeechGetModelStatusRequest = z.infer<
   typeof speechGetModelStatusRequestSchema
 >;
@@ -28,9 +31,11 @@ export type SpeechGetModelStatusResponse = z.infer<
 // `speech.ensureModel@1.0` - idempotently kicks off the model download and
 // returns the status snapshot immediately; the renderer polls
 // `speech.getModelStatus` for progress and completion.
-export const speechEnsureModelRequestSchema = z.object({
-  modelId: z.string().nullable(),
-});
+export const speechEnsureModelRequestSchema = lazySchema(() =>
+  z.object({
+    modelId: z.string().nullable(),
+  }),
+);
 export type SpeechEnsureModelRequest = z.infer<
   typeof speechEnsureModelRequestSchema
 >;

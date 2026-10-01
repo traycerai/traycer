@@ -125,6 +125,55 @@ describe("withHostNodeOptions", () => {
     assertOnlyFlagTokens(result);
   });
 
+  it("strips an inherited old-space cap while preserving unrelated and canonical flags", () => {
+    const result = withHostNodeOptions(
+      "--max-old-space-size=4096 --trace-warnings",
+    );
+
+    expect(result).toBe(`--trace-warnings ${CANONICAL}`);
+    expect(result).not.toContain("--max-old-space-size=4096");
+    assertOnlyFlagTokens(result);
+  });
+
+  // Node.js v24.18.0 CLI docs: https://nodejs.org/download/release/v24.18.0/docs/api/cli.html
+  // Lines 380-385 allow dash/underscore aliases; 1358-1362 describe the
+  // percentage override; 2400 and 2494-2504 list flags accepted in
+  // NODE_OPTIONS. Rejected `initial-*` and `stack-size` flags are out of
+  // scope: Node 24.20 exits 9 before host boot.
+  describe("inherited heap caps (=value and space-separated aliases)", () => {
+    const cases = [
+      ["--max-old-space-size", "4096"],
+      ["--max-old-space-size-percentage", "50"],
+      ["--max-heap-size", "4096"],
+      ["--max-semi-space-size", "16"],
+    ] as const;
+    const inputs = cases.flatMap(([flag, value]) => {
+      const underscoreAlias = `--${flag.slice(2).replaceAll("-", "_")}`;
+      return [flag, underscoreAlias].flatMap((spelling) => [
+        `${spelling}=${value} --trace-warnings`,
+        `${spelling} ${value} --trace-warnings`,
+      ]);
+    });
+
+    it.each(inputs)("strips %s", (input) => {
+      const result = withHostNodeOptions(input);
+
+      expect(result).toBe(`--trace-warnings ${CANONICAL}`);
+      expect(result).toContain("--max-semi-space-size=64");
+      expect(result.match(/--max-semi-space-size/g)).toHaveLength(1);
+      assertOnlyFlagTokens(result);
+    });
+  });
+
+  it("strips whole-quoted numeric values for inherited heap caps", () => {
+    const result = withHostNodeOptions(
+      '--max-old-space-size="4096" --max-old-space-size-percentage "50" --max-heap-size="8192" --trace-warnings',
+    );
+
+    expect(result).toBe(`--trace-warnings ${CANONICAL}`);
+    assertOnlyFlagTokens(result);
+  });
+
   it("does not corrupt neighbors when a value CONTAINS another flag name", () => {
     // A path that embeds `--max-semi-space-size` must not re-trigger the
     // semi-space strip or leave an orphan token.
@@ -154,6 +203,45 @@ describe("withHostNodeOptions", () => {
     assertOnlyFlagTokens(result);
     expect(result).toBe(`--inspect=0 ${CANONICAL}`);
     expect(result).not.toContain("with spaces");
+  });
+
+  // The four tests below follow Node's own NODE_OPTIONS tokenizer: only a space
+  // outside double quotes separates tokens, double quotes group and are dropped,
+  // a backslash escapes inside them, and single quotes are ordinary characters.
+  // `assertOnlyFlagTokens` splits on whitespace and cannot read quotes, so they
+  // do not call it.
+  it("leaves a heap flag inside another option's quoted value alone", () => {
+    const result = withHostNodeOptions(
+      '--require="./my --max-old-space-size=4096 module.js" --max-old-space-size=4096',
+    );
+    expect(result).toBe(
+      `--require="./my --max-old-space-size=4096 module.js" ${CANONICAL}`,
+    );
+  });
+
+  it("leaves an owned flag inside a space-separated quoted value alone", () => {
+    const result = withHostNodeOptions(
+      '--require "./dir --report-directory=x mod.js" --trace-warnings',
+    );
+    expect(result).toBe(
+      `--require "./dir --report-directory=x mod.js" --trace-warnings ${CANONICAL}`,
+    );
+  });
+
+  it("passes an escaped quote inside a quoted value through byte for byte", () => {
+    // Node reads the title as: a " --max-heap-size=1 - the escaped quote does
+    // not close the run, so the space after it separates nothing.
+    const input = '--title="a \\" --max-heap-size=1" --trace-warnings';
+    expect(withHostNodeOptions(input)).toBe(`${input} ${CANONICAL}`);
+  });
+
+  it("does not treat single quotes as grouping, as Node does not", () => {
+    // Node's tokens here are `--title='a`, `--max-heap-size=1'` and
+    // `--trace-warnings`, so the owned `--max-heap-size` token is stripped.
+    const result = withHostNodeOptions(
+      "--title='a --max-heap-size=1' --trace-warnings",
+    );
+    expect(result).toBe(`--title='a --trace-warnings ${CANONICAL}`);
   });
 
   it("does not swallow a following --flag when report-directory has no value", () => {

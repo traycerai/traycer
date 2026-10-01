@@ -1,3 +1,10 @@
+import {
+  NotificationDeliveryReceipts,
+  projectNotificationFeedDisplay,
+  type NotificationFeedDisplay,
+  type NotificationFeedOccurrence,
+} from "@traycer-clients/shared/notifications/feed-delivery";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 import type {
   NotificationFeedSource,
@@ -55,28 +62,40 @@ interface NativeNotificationDisplayOptions {
   readonly foregroundAppLocal: NotificationForegroundAppLocal | null;
 }
 
+// A renderer keeps its receipts across stream reconnects and serving-host
+// changes. Account + origin identity prevents unrelated feeds colliding.
+const feedDisplayReceipts = new NotificationDeliveryReceipts(5_000);
+const pendingFeedOccurrences = new Map<string, Promise<void>>();
+
+export function resetNotificationFeedDisplayReceiptsForTests(): void {
+  feedDisplayReceipts.clear();
+  pendingFeedOccurrences.clear();
+}
+
+function feedOccurrenceKey(
+  originHostId: string | null,
+  coalesceKey: string,
+  entry: HostNotificationEntryV22,
+): string {
+  return JSON.stringify([
+    "feed-occurrence-v1",
+    useAuthStore.getState().contextMetadata?.userId ?? null,
+    originHostId,
+    coalesceKey,
+    entry.updatedAt,
+    entry.sourceRef,
+  ]);
+}
+
+function claimFeedOccurrence(key: string): boolean {
+  if (feedDisplayReceipts.has(key)) return false;
+  feedDisplayReceipts.record(key);
+  return true;
+}
+
 /**
- * Renders a notification another window's native pass relayed here because
- * this window holds app focus.
- *
- * A relay carries the SENDER's pre-composed display: one title and body built
- * from the rows that survived the sender's own focus filter, with only the
- * first row's payload attached. The receiver therefore cannot re-derive what
- * it should have shown - which is why a batched relay could otherwise land
- * here describing a sibling chat while silently re-counting the very row this
- * window suppressed.
- *
- * So a FEED relay is not rendered at all. Every window holds its own feed
- * subscription, so those rows are already arriving here directly, filtered by
- * THIS window's focus, with per-row content the sender's summary cannot
- * reproduce. The relay is pure duplication - unless our own feed is not
- * delivering, in which case it is the only copy we will get and the entity
- * gate decides it.
- *
- * App-local rows are the opposite: they live in the originating renderer's
- * store and reach no other window, so their relay is the delivery. Legacy and
- * unparseable payloads render too - a redundant toast is a nuisance, a
- * swallowed failure is data loss.
+ * Structured feed relays are authorized by the shell's occurrence ledger.
+ * Legacy relays remain a fallback while the receiving feed is unavailable.
  */
 export function displayForwardedForegroundNotification(
   display: NotificationForegroundDisplay,
@@ -85,29 +104,27 @@ export function displayForwardedForegroundNotification(
     readonly onToastClick: (payload: unknown) => void;
   },
 ): void {
+  const eligible = eligibleForegroundDisplay(display);
+  if (eligible === null) return;
   const parsed =
-    display.payload === null
+    eligible.payload === null
       ? null
-      : parseNotificationActivationPayload(display.payload);
-  if (isFeedRelay(display, parsed)) {
-    if (ownFeedIsDelivering(relayedFeedSource(display, parsed))) return;
-    if (suppressedByFocusedEntity(parsed)) return;
-  }
-  const actionable = display.payload !== null;
+      : parseNotificationActivationPayload(eligible.payload);
+  const actionable = eligible.payload !== null;
   const title = actionable
     ? createElement(
         "button",
         {
           type: "button",
-          "aria-label": `${display.title} ${display.body}`,
+          "aria-label": `${eligible.title} ${eligible.body}`,
           "data-notification-toast-action": "",
           className: "min-w-0 text-left",
-          onClick: () => target.onToastClick(display.payload),
+          onClick: () => target.onToastClick(eligible.payload),
         },
         createElement(
           "span",
           { className: "block font-medium leading-normal" },
-          display.title,
+          eligible.title,
         ),
         createElement(
           "span",
@@ -115,16 +132,72 @@ export function displayForwardedForegroundNotification(
             className:
               "mt-0.5 block text-sm leading-snug text-muted-foreground",
           },
-          display.body,
+          eligible.body,
         ),
       )
-    : display.title;
+    : eligible.title;
   toast(title, {
-    description: actionable ? undefined : display.body,
-    id: display.replaceKey ?? undefined,
+    description: actionable ? undefined : eligible.body,
+    id: eligible.replaceKey ?? undefined,
   });
   target.playChime(
-    parsed?.kind === "v1" ? parsed.envelope.chimeEventType : "done",
+    notificationChimeEventTypeForSeverities(
+      eligible.feedOccurrences?.map(
+        (occurrence) => occurrence.chimeEventType,
+      ) ?? [],
+    ) ?? (parsed?.kind === "v1" ? parsed.envelope.chimeEventType : "done"),
+  );
+}
+
+function eligibleForegroundDisplay(
+  display: NotificationForegroundDisplay,
+): NotificationForegroundDisplay | null {
+  const parsed =
+    display.payload === null
+      ? null
+      : parseNotificationActivationPayload(display.payload);
+  if (!isFeedRelay(display, parsed)) return display;
+  if (display.feedOccurrences === undefined) {
+    if (ownFeedIsDelivering(relayedFeedSource(display, parsed))) return null;
+    return suppressedByFocusedEntity(parsed) ? null : display;
+  }
+  const fresh = display.feedOccurrences.filter((occurrence) => {
+    if (!feedOccurrenceMatchesAccount(occurrence)) return false;
+    if (feedDisplayReceipts.has(occurrence.key)) return false;
+    if (feedOccurrenceIsFocused(occurrence)) return false;
+    return claimFeedOccurrence(occurrence.key);
+  });
+  const projection = projectNotificationFeedDisplay(fresh);
+  return projection === null ? null : { ...display, ...projection };
+}
+
+function feedOccurrenceMatchesAccount(
+  occurrence: NotificationFeedOccurrence,
+): boolean {
+  return (
+    occurrence.userId ===
+    (useAuthStore.getState().contextMetadata?.userId ?? null)
+  );
+}
+
+function feedOccurrenceIsFocused(
+  occurrence: NotificationFeedOccurrence,
+): boolean {
+  if (occurrence.epicId === null) return false;
+  const focused = readFocusedHostNotificationPresence();
+  return (
+    focused !== null &&
+    notificationOriginMatchesFocus(
+      occurrence.originHostId,
+      focused.originHostId,
+    ) &&
+    notificationEntityMatchesPresence(
+      {
+        epicId: occurrence.epicId,
+        ...(occurrence.chatId === null ? {} : { chatId: occurrence.chatId }),
+      },
+      focused.entity,
+    )
   );
 }
 
@@ -209,11 +282,6 @@ export function displayNotificationRows(
   displayFeedRows(rows, target, originHostId, feedRowsDeliveryKey(rows));
 }
 
-/**
- * Displays feed rows under an explicit delivery identity. Separate from
- * `displayNotificationRows` because a caller that shows a FOCUS-FILTERED
- * subset must still name the whole arrival: see `displayHostChannelEmission`.
- */
 function displayFeedRows(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
@@ -229,21 +297,8 @@ function displayFeedRows(
   });
 }
 
-/**
- * Every window subscribed to a feed reports the same arrival to the native
- * pass, so without a delivery key the main process treats N windows as N
- * notifications and shows an OS banner per window. The key collapses that to
- * one banner per occurrence, whichever window reports it first. (Duplicate
- * in-app toasts are handled upstream instead, by ignoring feed relays - see
- * `displayForwardedForegroundNotification`.)
- *
- * Identity is the feed's own `occurrenceKeyForNotification` - never a
- * hand-rolled one. A host row reuses its semantic id across occurrences, so
- * `(feedId, createdAt)` alone would let a prompt reopened inside one
- * `Date.now()` tick collide with the prompt it superseded and be suppressed;
- * `sourceRef` is what separates them. The JSON encoding is delimiter-safe,
- * which is also why a batch nests the keys instead of joining them.
- */
+/** Generic display callers retain their source-specific delivery identity.
+ * Host/cloud entry points instead supply source-independent occurrence keys. */
 function feedRowsDeliveryKey(
   rows: ReadonlyArray<MergedNotificationRow>,
 ): string | null {
@@ -283,10 +338,10 @@ async function displayNotificationRowsAwaitNative(
       foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
-    renderNotificationToast(content, target);
+    renderNotificationToast(content, target, "focused");
     throw error;
   }
-  const renderChimed = renderNotificationToast(content, target);
+  const renderChimed = renderNotificationToast(content, target, "focused");
   const outcome = await nativeDisplay;
   // `undeliverable`: the platform cannot present notifications and no window
   // was focused, so nothing was shown or relayed and the burnt delivery key
@@ -305,6 +360,7 @@ async function displayNotificationRowsAwaitNative(
 function renderNotificationToast(
   content: NotificationToastContent,
   target: NotificationDisplayTarget,
+  chime: "focused" | "always" | "never",
 ): boolean {
   const isActionable = content.row.payload !== null;
   const toastTitle = isActionable
@@ -345,7 +401,9 @@ function renderNotificationToast(
   // process picks banner or relay) and leaves the renderer only this one,
   // which is never the sole delivery: an unseen toast is harmless, while a
   // chime from a window nobody is looking at is not.
-  if (!isDocumentFocused()) return false;
+  if (chime === "never" || (chime === "focused" && !isDocumentFocused())) {
+    return false;
+  }
   target.playChime(content.chimeEventType);
   return true;
 }
@@ -407,66 +465,60 @@ function activationRoute(
   }
 }
 
-/**
- * Host-side presence suppression is authoritative (fresh presence marks the
- * row read at birth and skips the renderer channel entirely), but it runs on
- * TTL'd presence snapshots — an emission can already be in flight when focus
- * lands on the entity, or presence can go stale mid-hold. This gate re-checks
- * live focus at display time so the tab you are looking at never toasts about
- * its own activity; rows for other entities still display.
- *
- * The delivery key names the WHOLE emission, never this window's visible
- * subset. An emission is one batched display, and each window filters it by
- * its own focus - so a subset-derived key would differ between a window that
- * dropped the focused row and one that kept it, the two would fail to
- * deduplicate, and the focused window would show its own filtered toast plus
- * the relayed full batch, chiming twice. Delivery identity has to survive
- * focus filtering to collapse the fan-out it exists to collapse.
- */
-export function displayHostChannelEmission(
+/** Keep host batching while sharing occurrence receipts with cloud arrivals. */
+export async function displayHostChannelEmission(
   entries: ReadonlyArray<HostNotificationEntryV22>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
-): void {
-  const rows = entries.map(rowFromHostEntry);
-  const emissionDeliveryKey = feedRowsDeliveryKey(rows);
+): Promise<void> {
   const focused = readFocusedHostNotificationPresence();
-  const visibleRows =
-    focused === null ||
-    !notificationOriginMatchesFocus(originHostId, focused.originHostId)
-      ? rows
-      : rows.filter((_row, index) => {
-          const entity = notificationEntityFromHostEntry(entries[index]);
-          return (
-            entity === null ||
-            !notificationEntityMatchesPresence(entity, focused.entity)
-          );
-        });
-  displayFeedRows(visibleRows, target, originHostId, emissionDeliveryKey);
+  const rows: MergedNotificationRow[] = [];
+  const occurrences: NotificationFeedOccurrence[] = [];
+  for (const entry of entries) {
+    const key = feedOccurrenceKey(originHostId, entry.id, entry);
+    if (feedDisplayReceipts.has(key) || entry.readAt !== null) {
+      continue;
+    }
+    const entity = notificationEntityFromHostEntry(entry);
+    if (
+      focused !== null &&
+      notificationOriginMatchesFocus(originHostId, focused.originHostId) &&
+      entity !== null &&
+      notificationEntityMatchesPresence(entity, focused.entity)
+    ) {
+      continue;
+    }
+    const row = rowFromHostEntry(entry);
+    rows.push(row);
+    occurrences.push(
+      feedOccurrenceDisplay({
+        row,
+        key,
+        originHostId,
+        feedSource: "host",
+        entry,
+      }),
+    );
+  }
+  await displayFeedOccurrences(rows, occurrences, target);
 }
 
-/** Whole cloud snapshots carry no emission frame, so accepted post-baseline
- * entryId diffs are the arrival edge. Display each row with its own origin:
- * unlike a v1 channel batch, one snapshot can contain entries from several
- * hosts and every native activation envelope must retain the correct one. */
-export function displayCloudSnapshotArrivals(
+/** Cloud copies use the origin's semantic key, never their replica row id. */
+export async function displayCloudSnapshotArrivals(
   entries: ReadonlyArray<HostNotificationsCloudFeedRowV11>,
   target: NotificationDisplayTarget,
-): void {
+): Promise<void> {
   const focused = readFocusedHostNotificationPresence();
+  const deliveries: Promise<void>[] = [];
   for (const entry of entries) {
-    // Read at birth on the origin host - the writer already decided this row
-    // needs no interruption (presence was fresh there, or it is a recovery
-    // row reconstructed after the fact). The local plane never sees one: the
-    // host emission service drops read rows before the channel. The cloud
-    // plane has no such filter, so without this gate every born-read row
-    // toasts on every OTHER device the moment it lands in a snapshot diff.
-    // The check precedes the focus gate because it is a property of the row
-    // itself, independent of what this window is looking at. Display only -
-    // the row still reaches the merged projection and Recent Activity. Not
-    // the badge: attention is read-based, so a born-read row was never going
-    // to light it.
-    if (entry.entry.readAt !== null) continue;
+    const key = feedOccurrenceKey(
+      entry.originHostId,
+      entry.coalesceKey,
+      entry.entry,
+    );
+    if (feedDisplayReceipts.has(key) || entry.entry.readAt !== null) {
+      continue;
+    }
     const entity = notificationEntityFromHostEntry(entry.entry);
     if (
       focused !== null &&
@@ -479,11 +531,171 @@ export function displayCloudSnapshotArrivals(
     ) {
       continue;
     }
-    displayNotificationRows(
-      [rowFromCloudFeedRow(entry)],
-      target,
-      entry.originHostId,
+    const row = rowFromCloudFeedRow(entry);
+    deliveries.push(
+      displayFeedOccurrences(
+        [row],
+        [
+          feedOccurrenceDisplay({
+            row,
+            key,
+            originHostId: entry.originHostId,
+            feedSource: "cloud",
+            entry: entry.entry,
+          }),
+        ],
+        target,
+      ),
     );
+  }
+  await Promise.all(deliveries);
+}
+
+function feedOccurrenceDisplay({
+  row,
+  key,
+  originHostId,
+  feedSource,
+  entry,
+}: {
+  readonly row: MergedNotificationRow;
+  readonly key: string;
+  readonly originHostId: string | null;
+  readonly feedSource: "host" | "cloud";
+  readonly entry: HostNotificationEntryV22;
+}): NotificationFeedOccurrence {
+  const content = buildNotificationToastContent([row]);
+  return {
+    key,
+    userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+    chimeEventType: content.chimeEventType,
+    title: content.title,
+    body: content.body,
+    replaceKey: content.replaceKey,
+    payload:
+      content.payload === null
+        ? null
+        : buildNotificationActivationEnvelope({
+            route: content.payload,
+            feed: { source: row.source, id: row.sourceId },
+            chimeEventType: content.chimeEventType,
+            originHostId,
+          }),
+    feedSource,
+    originHostId,
+    epicId: entry.epicId,
+    chatId: entry.chatId,
+  };
+}
+
+async function displayFeedOccurrences(
+  rows: ReadonlyArray<MergedNotificationRow>,
+  occurrences: ReadonlyArray<NotificationFeedOccurrence>,
+  target: NotificationDisplayTarget,
+): Promise<void> {
+  // Keep a concurrent copy available to retry if the first submission fails.
+  // Waiting also prevents host/cloud races from claiming the same local toast.
+  for (;;) {
+    const pending = occurrences.flatMap((occurrence) => {
+      const delivery = pendingFeedOccurrences.get(occurrence.key);
+      return delivery === undefined ? [] : [delivery];
+    });
+    if (pending.length === 0) break;
+    await Promise.all(pending);
+  }
+  const seen = new Set<string>();
+  const ready = occurrences.filter((occurrence) => {
+    if (
+      feedDisplayReceipts.has(occurrence.key) ||
+      !feedOccurrenceMatchesAccount(occurrence) ||
+      seen.has(occurrence.key) ||
+      feedOccurrenceIsFocused(occurrence)
+    ) {
+      return false;
+    }
+    seen.add(occurrence.key);
+    return true;
+  });
+  const display = projectNotificationFeedDisplay(ready);
+  if (display === null) return;
+  let release = (): void => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  for (const occurrence of ready) {
+    pendingFeedOccurrences.set(occurrence.key, pending);
+  }
+  try {
+    const result = await submitFeedDisplay(display, target);
+    if (result === "duplicate") return;
+    const accepted =
+      typeof result === "string"
+        ? ready
+        : (result.display?.feedOccurrences ?? []);
+    const freshKeys = new Set(
+      accepted
+        .filter(
+          (occurrence) =>
+            feedOccurrenceMatchesAccount(occurrence) &&
+            !feedOccurrenceIsFocused(occurrence) &&
+            claimFeedOccurrence(occurrence.key),
+        )
+        .map((occurrence) => occurrence.key),
+    );
+    const freshRows = rows.filter((_row, index) =>
+      freshKeys.delete(occurrences[index].key),
+    );
+    if (freshRows.length === 0) return;
+    const outcome = typeof result === "string" ? result : result.outcome;
+    // A native banner owns its sound. Only an unsupported platform grants
+    // this caller the fallback chime; foreground delivery uses the relay.
+    let chime: "always" | "focused" | "never" =
+      typeof result === "string" ? "focused" : "never";
+    if (outcome === "undeliverable") chime = "always";
+    renderNotificationToast(
+      buildNotificationToastContent(freshRows),
+      target,
+      chime,
+    );
+  } finally {
+    for (const occurrence of ready) {
+      pendingFeedOccurrences.delete(occurrence.key);
+    }
+    release();
+  }
+}
+
+async function submitFeedDisplay(
+  display: NotificationFeedDisplay,
+  target: NotificationDisplayTarget,
+): Promise<NotificationShowOutcome | "local-fallback"> {
+  try {
+    return await target.showNotification({
+      ...display,
+      foregroundAppLocal: null,
+    });
+  } catch {
+    // A host-only or remote-only arrival may never have another feed copy.
+    // Retry once, fencing account/focus changes during the failed request.
+    const retry = projectNotificationFeedDisplay(
+      display.feedOccurrences.filter(
+        (occurrence) =>
+          feedOccurrenceMatchesAccount(occurrence) &&
+          !feedDisplayReceipts.has(occurrence.key) &&
+          !feedOccurrenceIsFocused(occurrence),
+      ),
+    );
+    if (retry === null) return "duplicate";
+    try {
+      return await target.showNotification({
+        ...retry,
+        foregroundAppLocal: null,
+      });
+    } catch {
+      // No shell-elected winner: only a focused renderer may sound its local
+      // fallback, otherwise several failing windows would all chime.
+      return "local-fallback";
+    }
   }
 }
 

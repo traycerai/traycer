@@ -89,6 +89,14 @@ vi.mock("@/components/layout/app-shell", () => ({
   ),
 }));
 
+// Route recency is the subject here. The root route now mounts the real
+// organization projection beside route content, and that projection needs a
+// host runtime which this route-only harness intentionally does not build.
+vi.mock("@/hooks/organization/organization-provider", () => ({
+  OrganizationProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
+
 vi.mock("@/components/layout/header/desktop-menu-bar", () => ({
   DesktopMenuBar: () => null,
 }));
@@ -122,6 +130,13 @@ vi.mock("@/components/layout/dialogs/system-tab-modal-host", () => ({
 
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
+}));
+
+// Always mounted by RootComponent, and it reads the QueryClient to report a
+// lifecycle mode change. This harness supplies only a router queryClient (no
+// QueryClientProvider), so stub it like the other shell bridges above.
+vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
+  HostLifecycleAnalyticsBridge: () => null,
 }));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({

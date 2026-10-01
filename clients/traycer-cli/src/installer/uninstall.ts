@@ -214,8 +214,9 @@ export async function uninstallHost(
     // `host uninstall --all` on every Ctrl-C teardown, so deleting here meant
     // the session you most wanted to investigate was routinely gone before you
     // could read it. Rotating still clears the live log (a purge that leaves an
-    // orphan behind is its own surprise) while keeping one generation, and it
-    // cannot accumulate.
+    // orphan behind is its own surprise) while shifting the host's own two
+    // generations (`host.log.1`, `host.log.2`) the way its logger does, so
+    // they cannot accumulate.
     await removeHostPidMetadataForPurgeWithVerifier(
       opts.environment,
       logger,

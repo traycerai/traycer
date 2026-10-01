@@ -289,6 +289,22 @@ export interface ComposerMentionProviderContext {
   readonly epicAttachedRoots: ReadonlySet<string>;
   /** PR/issue rows for the CURRENT step, already merged, filtered and ranked. */
   readonly github: GithubMentionProviderContext;
+  /**
+   * Row id → when the user last picked it from the menu, for the rows picked
+   * recently enough to earn the root search's recency nudge. Read off the
+   * composer's target host's bucket (`mention-pick-memory-store`).
+   */
+  readonly recentPicks: ReadonlyMap<string, number>;
+}
+
+/**
+ * One provider's root-search row: the menu entry plus the full path when the
+ * row names one. The registry turns these into ranking candidates; see
+ * `RootSearchCandidate.path` for why the path travels separately.
+ */
+export interface RootSearchRow {
+  readonly entry: MentionMenuEntry;
+  readonly path: string | null;
 }
 
 /**
@@ -371,6 +387,21 @@ export abstract class ComposerMentionProvider {
     return EMPTY_MENU_ENTRIES;
   }
 
+  /**
+   * The root-search rows with the ranking fact a rendered row does not carry:
+   * the full path, for providers whose rows name one. The default is
+   * `rootSearchEntries` with no path; the file and folder providers override
+   * it, since their rows rank on the path the host ranked them on.
+   */
+  rootSearchRows(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<RootSearchRow> {
+    return this.rootSearchEntries(context).map((entry) => ({
+      entry,
+      path: null,
+    }));
+  }
+
   rootWorkspaceRequests(
     _context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionWorkspaceRequest> {
@@ -450,9 +481,13 @@ class FileMentionProvider extends ComposerMentionProvider {
   rootSearchEntries(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
-    return context.workspaceEntries.flatMap((entry) =>
-      entry.kind === "file" ? suggestionEntry(entry) : [],
-    );
+    return this.rootSearchRows(context).map((row) => row.entry);
+  }
+
+  rootSearchRows(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<RootSearchRow> {
+    return pathSearchRows(context, "file");
   }
 
   rootWorkspaceRequests(
@@ -505,9 +540,13 @@ class FolderMentionProvider extends ComposerMentionProvider {
   rootSearchEntries(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
-    return context.workspaceEntries.flatMap((entry) =>
-      entry.kind === "folder" ? suggestionEntry(entry) : [],
-    );
+    return this.rootSearchRows(context).map((row) => row.entry);
+  }
+
+  rootSearchRows(
+    context: ComposerMentionProviderContext,
+  ): ReadonlyArray<RootSearchRow> {
+    return pathSearchRows(context, "folder");
   }
 
   rootWorkspaceRequests(
@@ -1249,9 +1288,12 @@ class MentionProviderRegistry {
     if (context.query.trim().length > 0) {
       return rankRootSearchEntries(
         this.orderedProviders.flatMap((provider) =>
-          provider
-            .rootSearchEntries(context)
-            .map((entry) => ({ entry, providerId: provider.id })),
+          provider.rootSearchRows(context).map((row) => ({
+            entry: row.entry,
+            providerId: provider.id,
+            path: row.path,
+            pickedAt: context.recentPicks.get(row.entry.id) ?? null,
+          })),
         ),
         // Sources match on the raw query - only the ranking string rewrites.
         rootRankingQuery(context.query),
@@ -1401,6 +1443,24 @@ function backEntry(description: string): MentionMenuEntry {
     dormant: false,
     preview: null,
   };
+}
+
+/**
+ * The file or folder rows of the workspace lane, each with the path the host
+ * ranked it on so the root search can rank it on the same text.
+ */
+function pathSearchRows(
+  context: ComposerMentionProviderContext,
+  kind: "file" | "folder",
+): ReadonlyArray<RootSearchRow> {
+  return context.workspaceEntries.flatMap((entry) =>
+    entry.kind === kind
+      ? suggestionEntry(entry).map((menuEntry) => ({
+          entry: menuEntry,
+          path: entry.relPath,
+        }))
+      : [],
+  );
 }
 
 function suggestionEntry(entry: MentionSuggestionEntry): MentionMenuEntry[] {

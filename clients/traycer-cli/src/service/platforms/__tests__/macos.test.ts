@@ -9,9 +9,9 @@ import {
 } from "vitest";
 import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
-import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import {
   SHUTDOWN_FORCE_EXIT_MS,
@@ -27,26 +27,35 @@ import {
   type ProcessRunner,
 } from "../macos";
 import {
+  LAUNCHCTL_RECYCLE_TIMEOUT_MS,
+  LAUNCHD_THROTTLE_INTERVAL_SECONDS,
+} from "../../spawn-edge-bounds";
+import {
   buildCompatibleHostStartScript,
   buildHostStartLauncherScript,
 } from "../host-start-script";
 import {
   ProcessRunError,
   ProcessSpawnError,
+  ProcessTimeoutError,
+  type RunOptions,
   type RunResult,
 } from "../../process-runner";
 import type { ServiceController } from "../../index";
 import {
   serviceLabelFor,
   serviceLauncherScriptPath,
+  serviceManifestPath,
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 import {
   isServiceMutationAuthorityError,
   ServiceMutationAuthorityError,
+  withServiceMutationAuthority,
 } from "../../mutation-authority";
 import { didServiceRegistrationCommit } from "../../cli-invocation-record";
+import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
 
 const execFileAsync = promisify(execFile);
 
@@ -161,8 +170,18 @@ vi.mock("../../health-probe", () => ({
 // Redirect the manifest path to a private, uniquely-created temp dir so the
 // suite never touches real macOS service registration or follows a predictable
 // path another local user could pre-create.
+//
+// `serviceLauncherScriptPath` resolves through the same real `homedir()` to
+// `~/.traycer/service/<label>/traycer-host-start`, and `installService`
+// writes that file for real on every install this suite exercises - so it
+// gets the same redirection, into its own temp root, preserving the
+// `<root>/<label-id>/traycer-host-start` shape the production path checks
+// (label-id-as-directory) depend on.
 const TEST_LAUNCH_AGENTS_DIR = mkdtempSync(
   join(tmpdir(), "traycer-macos-service-test-"),
+);
+const TEST_LAUNCHER_ROOT = mkdtempSync(
+  join(tmpdir(), "traycer-macos-launcher-test-"),
 );
 vi.mock("../../label", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../label")>();
@@ -170,6 +189,8 @@ vi.mock("../../label", async (importOriginal) => {
     ...actual,
     serviceManifestPath: (label: { readonly id: string }) =>
       join(TEST_LAUNCH_AGENTS_DIR, `${label.id}.plist`),
+    serviceLauncherScriptPath: (label: { readonly id: string }) =>
+      join(TEST_LAUNCHER_ROOT, label.id, "traycer-host-start"),
   };
 });
 
@@ -521,6 +542,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
   afterAll(async () => {
     await rm(tempPlistDir, { recursive: true, force: true });
+    await rm(TEST_LAUNCHER_ROOT, { recursive: true, force: true });
   });
 
   it("on an existing registration runs print → bootout → bootstrap → kickstart and returns cleanly", async () => {
@@ -1099,7 +1121,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await controller.uninstall({ label });
+    await controller.uninstall({ label, leaveForegroundRun: null });
 
     expect(calls).toEqual([
       {
@@ -1151,7 +1173,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).resolves.toBeUndefined();
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).resolves.toBeUndefined();
   });
 
   it("surfaces a real bootout failure and preserves the service manifest", async () => {
@@ -1168,7 +1192,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining("Operation not permitted"),
     });
@@ -1190,7 +1216,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining("timed out"),
     });
@@ -1415,6 +1443,38 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message: expect.stringContaining("no host endpoint is published"),
       });
+    });
+
+    // The message names the working next moves - not just the missing
+    // endpoint - since the 2026-09-27 staging outage left an operator here
+    // with nothing but "no host endpoint is published" and no path out.
+    it("the no-metadata stop message also names 'traycer host update' as a next move", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+
+      await expect(
+        controller.stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("traycer host update"),
+      });
+    });
+
+    // `stopForRestart`'s CLI-owned path (no Desktop agent): unlike a plain
+    // `stop --force`, a restart's stop half has a caller that RECYCLES the
+    // job afterwards (`kickstart -k`, `stopServiceForRestart`), which acts on
+    // the process launchd tracks rather than a pid.json pid - so nothing is
+    // published to kill is not a failure here, it is the expected shape of
+    // "already gone, already mid-boot, or never there". Throwing on it (the
+    // `operation === "stop"` behaviour above) is what turned `host restart
+    // --force` into a refusal that named no working command.
+    it("stopForRestart resolves forcedRecycle:true (never throws) when forceStopHostProcess reports no-metadata", async () => {
+      const { controller } = stageForceStop();
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+
+      await expect(
+        controller.stopForRestart(label, { force: true }),
+      ).resolves.toEqual({ forcedRecycle: true });
     });
 
     it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
@@ -1721,7 +1781,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).resolves.toBeUndefined();
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).resolves.toBeUndefined();
     expect(calls.map((c) => c.args[0])).toEqual([
       "print",
       "print",
@@ -1758,7 +1820,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     };
     const controller = createMacosController(runner);
 
-    await expect(controller.uninstall({ label })).rejects.toMatchObject({
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
       message: expect.stringContaining(`${label.id}.agent`),
     });
@@ -2284,6 +2348,321 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         controller.relaunchAfterRestart(label, { forcedRecycle: false }),
       ).resolves.toBeUndefined();
       expect(calls[1]?.args).toEqual(["kickstart", agentTarget]);
+    });
+  });
+
+  // The recycle timeout fix: `kickstart -k` does the whole stop-then-start
+  // before it returns, so its runner timeout must outlive launchd's own
+  // kill bound (`ExitTimeOut`) plus the throttle the restarted job may then
+  // sit behind - not the old CLI-owned 10s. `LAUNCHCTL_RECYCLE_TIMEOUT_MS`
+  // is the pinned budget; a runner TIMEOUT past it is reported unconfirmed
+  // (`recycleFailure`), never as a failed restart, because killing
+  // `launchctl` withdraws nothing launchd already accepted.
+  describe("recycle timeout (launchctl kickstart -k)", () => {
+    const cliOwnedTarget = `gui/${process.getuid?.() ?? 0}/${label.id}`;
+    const agentTarget = `gui/${process.getuid?.() ?? 0}/${label.id}.agent`;
+
+    interface RecordedRunCall {
+      readonly command: string;
+      readonly args: readonly string[];
+      readonly options: RunOptions;
+    }
+
+    function isRecycleCall(command: string, args: readonly string[]): boolean {
+      return (
+        command === "launchctl" && args[0] === "kickstart" && args[1] === "-k"
+      );
+    }
+
+    // CLI-owned: no `.agent` label is loaded, so `probeDesktopAgentOwnership`
+    // reads "not Desktop's" from every `print` and every arm goes straight
+    // to `launchctl kickstart -k gui/<uid>/<label.id>`.
+    function stageCliOwnedRecycleRunner(
+      recycleBehavior: (
+        args: readonly string[],
+        options: RunOptions,
+      ) => Promise<RunResult>,
+    ): { calls: RecordedRunCall[]; controller: ServiceController } {
+      const calls: RecordedRunCall[] = [];
+      const runner: ProcessRunner = async (command, args, options) => {
+        calls.push({ command, args, options });
+        if (isRecycleCall(command, args)) return recycleBehavior(args, options);
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    // Desktop-managed: the `.agent` label reads as Desktop's SMAppService
+    // registration, so restart/relaunch route through `kickstartDesktopAgent`
+    // against `gui/<uid>/<label.id>.agent` instead.
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    function stageDesktopManagedRecycleRunner(
+      recycleBehavior: (
+        args: readonly string[],
+        options: RunOptions,
+      ) => Promise<RunResult>,
+    ): { calls: RecordedRunCall[]; controller: ServiceController } {
+      const calls: RecordedRunCall[] = [];
+      const runner: ProcessRunner = async (command, args, options) => {
+        calls.push({ command, args, options });
+        if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+          return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+        }
+        if (isRecycleCall(command, args)) return recycleBehavior(args, options);
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    async function resolveSuccess(): Promise<RunResult> {
+      return buildSuccessResult();
+    }
+
+    // (b) SLOW BUT INSIDE THE BOUND: models what execFile itself would do -
+    // reject with the runner's own timeout wording only if the simulated
+    // duration exceeds the timeout it was actually given.
+    async function slowButWithinBound(
+      args: readonly string[],
+      options: RunOptions,
+    ): Promise<RunResult> {
+      const simulatedDurationMs = 13_000;
+      if (simulatedDurationMs > options.timeoutMs) {
+        throw new ProcessRunError(
+          `launchctl ${args.join(" ")} timed out after ${options.timeoutMs}ms (killed via SIGTERM): `,
+          "launchctl",
+          args,
+          -1,
+          "",
+          "",
+        );
+      }
+      return buildSuccessResult();
+    }
+
+    // (c) CONTROL: a genuine launchctl failure, not a timeout.
+    async function genuineFailure(args: readonly string[]): Promise<RunResult> {
+      throw buildLaunchctlError({
+        stderr: "Could not kickstart service: 5\n",
+        stdout: "",
+        exitCode: 5,
+        command: "launchctl",
+        cmdArgs: args,
+      });
+    }
+
+    // (e) PAST THE BOUND: the runner's own timer killed the child.
+    async function pastTheBound(args: readonly string[]): Promise<RunResult> {
+      throw new ProcessTimeoutError(
+        `launchctl ${args.join(" ")} timed out after 40000ms (killed via SIGTERM): `,
+        "launchctl",
+        args,
+        -1,
+        "",
+        "",
+        40_000,
+      );
+    }
+
+    describe("CLI-owned path", () => {
+      it("controller.restart gives kickstart -k a timeout past launchd's own bound", async () => {
+        const { calls, controller } =
+          stageCliOwnedRecycleRunner(resolveSuccess);
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", cliOwnedTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        // Independent floor, built only from symbols that exist on the
+        // unmodified code: 20s launchd ExitTimeOut ceiling + ThrottleInterval.
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      it("relaunchAfterRestart(forcedRecycle: true) gives kickstart -k the same timeout", async () => {
+        const { calls, controller } =
+          stageCliOwnedRecycleRunner(resolveSuccess);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", cliOwnedTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - restart()", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(slowButWithinBound);
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - relaunchAfterRestart()", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(slowButWithinBound);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+      });
+
+      it("a genuine launchctl failure still reports the restart as failed", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(genuineFailure);
+
+        await expect(controller.restart(label)).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("launchctl kickstart -k failed for"),
+        });
+      });
+
+      it("a runner timeout past the new bound reports the restart as unconfirmed, not failed", async () => {
+        const { controller } = stageCliOwnedRecycleRunner(pastTheBound);
+
+        const rejection: unknown = await controller
+          .restart(label)
+          .then(() => null)
+          .catch((error: unknown) => error);
+        expect(rejection).toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("did not return within 40000ms"),
+        });
+        expect(rejection).toMatchObject({
+          message: expect.stringContaining("unconfirmed"),
+        });
+        expect(rejection).not.toMatchObject({
+          message: expect.stringContaining("failed for"),
+        });
+        expect(rejection).toMatchObject({
+          details: expect.objectContaining({
+            timedOut: true,
+            timeoutMs: 40_000,
+          }),
+        });
+      });
+    });
+
+    describe("Desktop-managed path", () => {
+      it("restart of an unreachable host gives kickstart -k a timeout past launchd's own bound", async () => {
+        const { calls, controller } =
+          stageDesktopManagedRecycleRunner(resolveSuccess);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", agentTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      it("relaunchAfterRestart(forcedRecycle: true) gives kickstart -k the same timeout", async () => {
+        const { calls, controller } =
+          stageDesktopManagedRecycleRunner(resolveSuccess);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        const recycleCall = calls.find((c) => isRecycleCall(c.command, c.args));
+        expect(recycleCall?.args).toEqual(["kickstart", "-k", agentTarget]);
+        const timeoutMs = recycleCall?.options.timeoutMs;
+        expect(timeoutMs).toBeGreaterThanOrEqual(
+          (20 + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000,
+        );
+        expect(timeoutMs).toBe(LAUNCHCTL_RECYCLE_TIMEOUT_MS);
+      });
+
+      // Control: a plain kickstart (the cooperative "already stopped"
+      // restart) has no old instance to wait for, so it keeps the 10s bound
+      // - only a recycle's timeout moved.
+      it("a plain kickstart (cooperative restart) keeps the 10s timeout", async () => {
+        const { calls, controller } =
+          stageDesktopManagedRecycleRunner(resolveSuccess);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+
+        const plainKickstartCall = calls.find(
+          (c) => c.command === "launchctl" && c.args[0] === "kickstart",
+        );
+        expect(plainKickstartCall?.args).toEqual(["kickstart", agentTarget]);
+        expect(plainKickstartCall?.options.timeoutMs).toBe(10_000);
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - restart()", async () => {
+        const { controller } =
+          stageDesktopManagedRecycleRunner(slowButWithinBound);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+      });
+
+      it("a kickstart -k slower than the old 10s bound but inside the new one still resolves - relaunchAfterRestart()", async () => {
+        const { controller } =
+          stageDesktopManagedRecycleRunner(slowButWithinBound);
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+      });
+
+      it("a genuine launchctl failure still reports the restart as failed", async () => {
+        const { controller } = stageDesktopManagedRecycleRunner(genuineFailure);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        await expect(controller.restart(label)).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("launchctl kickstart -k failed for"),
+        });
+      });
+
+      it("a runner timeout past the new bound reports the restart as unconfirmed, not failed", async () => {
+        const { controller } = stageDesktopManagedRecycleRunner(pastTheBound);
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({
+          kind: "unreachable",
+          cause: "dial timeout",
+        });
+
+        const rejection: unknown = await controller
+          .restart(label)
+          .then(() => null)
+          .catch((error: unknown) => error);
+        expect(rejection).toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining("did not return within 40000ms"),
+        });
+        expect(rejection).toMatchObject({
+          message: expect.stringContaining("unconfirmed"),
+        });
+        expect(rejection).not.toMatchObject({
+          message: expect.stringContaining("failed for"),
+        });
+        expect(rejection).toMatchObject({
+          details: expect.objectContaining({
+            timedOut: true,
+            timeoutMs: 40_000,
+          }),
+        });
+      });
     });
   });
 
@@ -4274,14 +4653,30 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // normal launchctl path. Exercises all three operations (not just
     // start): a regression where the guard incorrectly blocks a legitimate
     // stop/restart on a CLI-managed machine must be caught here too.
+    //
+    // A CLI-managed machine is one where the CLI label HAS a job, so that
+    // label's print answers loaded. It used to answer not-found here too,
+    // which is the state `start` and `restart` now refuse (neither label
+    // loaded - pinned in "neither host label loaded" below), so the fixture
+    // would no longer describe a machine those operations can proceed on.
+    // `start` and `restart` therefore print twice - the Desktop-agent probe,
+    // then the CLI label the refusal guard confirms is loaded - and `stop`
+    // never asks about the CLI label.
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
       if (args[0] === "print") {
+        if (args[1]?.endsWith(".agent") === true) {
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
         return {
-          stdout: "",
-          stderr: "Could not find specified service\n",
-          exitCode: 113,
+          stdout: `path = /Users/me/Library/LaunchAgents/${label.id}.plist\ntype = LaunchAgent\n`,
+          stderr: "",
+          exitCode: 0,
         };
       }
       return buildSuccessResult();
@@ -4292,18 +4687,351 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // that `before === null` lets stop return right after the kill call.
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
 
-    for (const [op, expectedSecondCall] of [
-      [() => controller.stop(label, { force: false }), "kill"],
-      [() => controller.start(label), "kickstart"],
-      [() => controller.restart(label), "kickstart"],
+    for (const [op, expectedCalls] of [
+      [() => controller.stop(label, { force: false }), ["print", "kill"]],
+      [() => controller.start(label), ["print", "print", "kickstart"]],
+      [() => controller.restart(label), ["print", "print", "kickstart"]],
     ] as const) {
       calls.length = 0;
       await expect(op()).resolves.toBeUndefined();
-      expect(calls.map((c) => c.args[0])).toEqual([
-        "print",
-        expectedSecondCall,
-      ]);
+      expect(calls.map((c) => c.args[0])).toEqual(expectedCalls);
     }
+  });
+
+  // The CLI label is where a start or relaunch goes whenever no Desktop agent
+  // is loaded, which is right only while that label HAS a job. Field report:
+  // the app's Restart, after the agent job was booted out of launchd, ran
+  // `traycer host restart --force --defer-if-parked`, which kickstarted
+  // `ai.traycer.host` and failed with launchctl exit 113, `Could not find
+  // service "ai.traycer.host" in domain for user gui: 501` - a label that
+  // machine never had. With neither label loaded the CLI refuses instead,
+  // naming both; anything short of a definite absence of BOTH goes on as it
+  // always did, because the probe is advisory and must never block a start.
+  describe("neither host label loaded", () => {
+    const uid = process.getuid?.() ?? 0;
+    const cliTarget = `gui/${uid}/${label.id}`;
+    const agentLabelId = smAppServiceAgentLabelId(label);
+    const agentTarget = `gui/${uid}/${agentLabelId}`;
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+
+    // What one label's `launchctl print` answers. Every kind but `throws` and
+    // `times-out` is a RETURNED result: the probes pass `tolerateNonZeroExit`,
+    // so a not-found print is exit 113 on the result, not a rejection.
+    type PrintAnswer =
+      | { readonly kind: "not-found" }
+      | { readonly kind: "loaded"; readonly stdout: string }
+      | {
+          readonly kind: "exit";
+          readonly exitCode: number;
+          readonly stderr: string;
+        }
+      | { readonly kind: "throws" }
+      | { readonly kind: "times-out" };
+
+    // Answers `print` per label - the agent label by its `.agent` suffix,
+    // everything else as the CLI label - and records every call. Any
+    // non-print call succeeds, so a `kickstart` in `calls` is the proof the
+    // command went ahead.
+    function stageLaunchd(answers: {
+      readonly cli: PrintAnswer;
+      readonly agent: PrintAnswer;
+    }): { calls: RecordedCall[]; controller: ServiceController } {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] !== "print") return buildSuccessResult();
+        const target = args[1] ?? "";
+        const answer = target.endsWith(".agent") ? answers.agent : answers.cli;
+        switch (answer.kind) {
+          case "not-found":
+            // launchctl's own words, naming the label it was asked about -
+            // the field replay's exact stderr.
+            return {
+              stdout: "",
+              stderr: `Could not find service "${target.slice(target.lastIndexOf("/") + 1)}" in domain for user gui: ${uid}\n`,
+              exitCode: 113,
+            };
+          case "loaded":
+            return { stdout: answer.stdout, stderr: "", exitCode: 0 };
+          case "exit":
+            return {
+              stdout: "",
+              stderr: answer.stderr,
+              exitCode: answer.exitCode,
+            };
+          case "throws":
+            throw new ProcessSpawnError(
+              `${command} ${args.join(" ")} could not be spawned (ENOENT): `,
+              command,
+              args,
+              -1,
+              "",
+              "",
+            );
+          case "times-out":
+            throw new ProcessTimeoutError(
+              `${command} ${args.join(" ")} timed out after 10000ms (killed via SIGTERM): `,
+              command,
+              args,
+              -1,
+              "",
+              "",
+              10_000,
+            );
+        }
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    function printTargets(calls: readonly RecordedCall[]): readonly string[] {
+      return calls
+        .filter((call) => call.args[0] === "print")
+        .map((call) => call.args[1] ?? "");
+    }
+
+    function kickstartArgs(
+      calls: readonly RecordedCall[],
+    ): readonly (readonly string[])[] {
+      return calls
+        .filter((call) => call.args[0] === "kickstart")
+        .map((call) => call.args);
+    }
+
+    const cliLoaded: PrintAnswer = {
+      kind: "loaded",
+      stdout: `path = /Users/me/Library/LaunchAgents/${label.id}.plist\ntype = LaunchAgent\n`,
+    };
+    const notFound: PrintAnswer = { kind: "not-found" };
+
+    // Every way a `print` can fail to be an ANSWER. None may be read as
+    // "definitely absent": each proceeds to the kickstart.
+    const INDETERMINATE_ANSWERS = [
+      ["a spawn failure", { kind: "throws" }],
+      ["a timeout", { kind: "times-out" }],
+      [
+        "a permission refusal",
+        { kind: "exit", exitCode: 1, stderr: "Operation not permitted\n" },
+      ],
+      [
+        "a non-zero exit with unrecognized output",
+        { kind: "exit", exitCode: 5, stderr: "Could not kickstart service: 5" },
+      ],
+    ] as const;
+
+    it("refuses to relaunch, naming both labels and issuing no kickstart, when launchd answers not-found for both (the field replay)", async () => {
+      const { calls, controller } = stageLaunchd({
+        cli: notFound,
+        agent: notFound,
+      });
+
+      const rejection: unknown = await controller
+        .relaunchAfterRestart(label, { forcedRecycle: true })
+        .then(() => null)
+        .catch((error: unknown) => error);
+
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        // Quoted, because the CLI label is a prefix of the agent label: an
+        // unquoted match on either would be satisfied by the other's name.
+        message: expect.stringContaining(`'${agentLabelId}'`),
+        details: { label: label.id, agentLabel: agentLabelId },
+      });
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining(`'${label.id}'`),
+      });
+      // The in-app Restart reaches this relaunch, so the refusal says restart.
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("Cannot restart the host:"),
+      });
+      // Both labels were asked about, and nothing was kickstarted - the old
+      // behaviour was `kickstart -k` of the CLI label, which is the failure
+      // the field report shows.
+      expect(printTargets(calls)).toContain(cliTarget);
+      expect(printTargets(calls)).toContain(agentTarget);
+      expect(kickstartArgs(calls)).toEqual([]);
+    });
+
+    it.each([
+      [
+        "relaunchAfterRestart (plain kickstart)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+        "restart",
+      ],
+      [
+        "restart",
+        (controller: ServiceController) => controller.restart(label),
+        "restart",
+      ],
+      [
+        "start",
+        (controller: ServiceController) => controller.start(label),
+        "start",
+      ],
+    ] as const)(
+      "refuses %s the same way, issuing no kickstart",
+      async (_entryPoint, run, operation) => {
+        const { calls, controller } = stageLaunchd({
+          cli: notFound,
+          agent: notFound,
+        });
+
+        const rejection: unknown = await run(controller)
+          .then(() => null)
+          .catch((error: unknown) => error);
+
+        expect(rejection).toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+          message: expect.stringContaining(`'${agentLabelId}'`),
+          details: { label: label.id, agentLabel: agentLabelId },
+        });
+        // Worded for the operation the person asked for.
+        expect(rejection).toMatchObject({
+          message: expect.stringContaining(`Cannot ${operation} the host:`),
+        });
+        expect(kickstartArgs(calls)).toEqual([]);
+      },
+    );
+
+    it.each([
+      [
+        "relaunchAfterRestart (forced recycle)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ["kickstart", "-k", cliTarget],
+      ],
+      [
+        "relaunchAfterRestart (plain kickstart)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+        ["kickstart", cliTarget],
+      ],
+      [
+        "restart",
+        (controller: ServiceController) => controller.restart(label),
+        ["kickstart", "-k", cliTarget],
+      ],
+      [
+        "start",
+        (controller: ServiceController) => controller.start(label),
+        ["kickstart", cliTarget],
+      ],
+    ] as const)(
+      "%s kickstarts the CLI label as before when it is loaded, and never re-probes the agent label",
+      async (_entryPoint, run, expectedKickstart) => {
+        const { calls, controller } = stageLaunchd({
+          cli: cliLoaded,
+          agent: notFound,
+        });
+
+        await expect(run(controller)).resolves.toBeUndefined();
+
+        expect(kickstartArgs(calls)).toEqual([expectedKickstart]);
+        // The agent label is printed once, by the Desktop-agent ownership
+        // probe. The guard asks about the CLI label first and stops there
+        // when it is loaded, so this machine pays one extra print, not two.
+        expect(printTargets(calls)).toEqual([agentTarget, cliTarget]);
+      },
+    );
+
+    it.each(INDETERMINATE_ANSWERS)(
+      "still kickstarts the CLI label when the CLI label is not-found and the agent label's print is %s",
+      async (_name, agentAnswer) => {
+        const { calls, controller } = stageLaunchd({
+          cli: notFound,
+          agent: agentAnswer,
+        });
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        // The probe is advisory: an agent label that could not be asked about
+        // is not proof it is absent, so it must never block the kickstart.
+        expect(kickstartArgs(calls)).toEqual([["kickstart", "-k", cliTarget]]);
+      },
+    );
+
+    it.each(INDETERMINATE_ANSWERS)(
+      "still kickstarts the CLI label when its own print is %s and the agent label is not-found",
+      async (_name, cliAnswer) => {
+        const { calls, controller } = stageLaunchd({
+          cli: cliAnswer,
+          agent: notFound,
+        });
+
+        await expect(
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ).resolves.toBeUndefined();
+
+        expect(kickstartArgs(calls)).toEqual([["kickstart", "-k", cliTarget]]);
+        // An unreadable CLI label ends the guard: the agent label is asked
+        // about only after the CLI label is DEFINITELY absent.
+        expect(printTargets(calls)).toEqual([agentTarget, cliTarget]);
+      },
+    );
+
+    it("still kickstarts the CLI label when the agent label is loaded but not SMAppService-managed and the CLI label is not-found", async () => {
+      // Loaded, but as a plain LaunchAgent rather than Desktop's registration,
+      // so the ownership probe reads it as not-Desktop's and the CLI path runs.
+      // The refusal is for BOTH labels absent; a loaded agent label is a job
+      // launchd has, whoever registered it.
+      const { calls, controller } = stageLaunchd({
+        cli: notFound,
+        agent: {
+          kind: "loaded",
+          stdout: `path = /Users/me/Library/LaunchAgents/${agentLabelId}.plist\ntype = LaunchAgent\n`,
+        },
+      });
+
+      await expect(
+        controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+      ).resolves.toBeUndefined();
+
+      expect(kickstartArgs(calls)).toEqual([["kickstart", "-k", cliTarget]]);
+    });
+
+    it.each([
+      [
+        "relaunchAfterRestart (forced recycle)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+        ["kickstart", "-k", agentTarget],
+      ],
+      [
+        "relaunchAfterRestart (plain kickstart)",
+        (controller: ServiceController) =>
+          controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+        ["kickstart", agentTarget],
+      ],
+      [
+        "restart",
+        (controller: ServiceController) => controller.restart(label),
+        ["kickstart", agentTarget],
+      ],
+      [
+        "start",
+        (controller: ServiceController) => controller.start(label),
+        ["kickstart", agentTarget],
+      ],
+    ] as const)(
+      "%s on a Desktop-managed machine never asks about the CLI label, whose absence is that machine's normal state",
+      async (_entryPoint, run, expectedKickstart) => {
+        // The CLI label has no job on a Desktop-managed machine, so it reads
+        // not-found there by design. Only the CLI path's guard asks about it.
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+        const { calls, controller } = stageLaunchd({
+          cli: notFound,
+          agent: { kind: "loaded", stdout: `path = ${smAgentPath}\n` },
+        });
+
+        await expect(run(controller)).resolves.toBeUndefined();
+
+        expect(printTargets(calls)).not.toContain(cliTarget);
+        expect(kickstartArgs(calls)).toEqual([expectedKickstart]);
+      },
+    );
   });
 
   it("still reports stopped for a CLI-owned LaunchAgents registration", async () => {
@@ -5038,5 +5766,546 @@ describe("Q13 convergence: the post-swap relaunch against a waiting supervisor",
     const kickstarts = calls.filter((c) => c.args[0] === "kickstart");
     expect(kickstarts).toHaveLength(1);
     expect(kickstarts[0]?.args).toContain("-k");
+  });
+});
+
+describe("macOS controller — spawn-edge placement", () => {
+  const label = serviceLabelFor("production");
+
+  // Every runner call and the publish spy push into ONE shared log, in the
+  // order they actually happen - so "publish sits at the edge" is a
+  // statement about a single timeline, not a comparison between two
+  // independently-kept ones.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function loggingRunner(log: string[]): ProcessRunner {
+    return async (_command, args) => {
+      log.push(args.join(" "));
+      return buildSuccessResult();
+    };
+  }
+
+  /** Asserts publish ran exactly once, with `spawnPredicate` matching the
+   * entry immediately after it and nothing before it. */
+  function expectEdgeImmediatelyPrecedesSpawn(
+    log: readonly string[],
+    spawnPredicate: (entry: string) => boolean,
+  ): void {
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(log.slice(0, publishIndex).some(spawnPredicate)).toBe(false);
+    const next = log[publishIndex + 1];
+    expect(next).toBeDefined();
+    expect(next !== undefined && spawnPredicate(next)).toBe(true);
+  }
+
+  // The install edge moved in front of the first write (`atServiceInstallEdge`,
+  // `macos.ts`): publish now sits right after the two ownership prints and
+  // right BEFORE the launcher/plist writes, the conditional bootout and the
+  // bootstrap - not immediately before the bootstrap itself, as it did when
+  // the edge sat after the writes. Only launchctl calls land in `log` (the
+  // writes are local files), so the entry right after "publish" here is the
+  // bootout, and bootstrap follows it.
+  it("install (normal): both ownership prints precede publish; bootout then bootstrap follow it, in order", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    );
+
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const kinds = log.map((entry) =>
+      entry === "publish" ? "publish" : (entry.split(" ")[0] ?? ""),
+    );
+    expect(kinds).toEqual([
+      "print",
+      "print",
+      "publish",
+      "bootout",
+      "bootstrap",
+      "kickstart",
+    ]);
+    // CLI label first, then the agent label - both before publish.
+    expect(log[0]).toContain(`/${label.id}`);
+    expect(log[0]).not.toContain(`/${label.id}.agent`);
+    expect(log[1]).toContain(`/${label.id}.agent`);
+    expect(log.indexOf("publish")).toBe(2);
+  });
+
+  it("install through the bootstrap-reload race: publish sits before the writes/bootout, still runs exactly once, and two bootstraps plus the kickstart follow", async () => {
+    const { log, publish } = makeSharedLog();
+    let bootstrapAttempts = 0;
+    const runner: ProcessRunner = async (_command, args) => {
+      log.push(args.join(" "));
+      if (args[0] === "bootstrap") {
+        bootstrapAttempts += 1;
+        if (bootstrapAttempts === 1) {
+          throw buildLaunchctlError({
+            command: "launchctl",
+            cmdArgs: args,
+            stderr: "Bootstrap failed: 37: Service is already loaded\n",
+            stdout: "",
+            exitCode: 37,
+          });
+        }
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    );
+
+    // Exactly one publication for the whole call, however many edges it
+    // reaches (bootstrap x2, kickstart) - every one after the first reuses
+    // the same held publication.
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBe(2);
+    // Nothing before publish is a write/mutation call other than the two
+    // read-only ownership prints.
+    expect(
+      log
+        .slice(0, publishIndex)
+        .every((entry) => entry.startsWith("print") || entry === "publish"),
+    ).toBe(true);
+    expect(log.filter((entry) => entry.startsWith("bootstrap"))).toHaveLength(
+      2,
+    );
+    expect(log.filter((entry) => entry.startsWith("kickstart"))).toHaveLength(
+      1,
+    );
+    // The kickstart, the last edge on this path, runs after both bootstraps
+    // with no second publication in between.
+    expect(log[log.length - 1]?.startsWith("kickstart")).toBe(true);
+  });
+
+  it("install refusing an SMAppService-owned label reaches no edge: publish never runs and the error is unchanged", async () => {
+    const smPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist";
+    const runner: ProcessRunner = async (_command, args, options) => {
+      if (args[0] === "print" && options.tolerateNonZeroExit) {
+        return { stdout: `path = ${smPath}\n`, stderr: "", exitCode: 0 };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const publish = vi.fn(async (): Promise<null> => null);
+    let error: unknown = null;
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).catch((cause: unknown) => {
+      error = cause;
+    });
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(error).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+  });
+
+  // The install edge used to sit AFTER the writes, so a refused publication
+  // there had to roll a half-written launcher/plist back and report that
+  // state (`atServiceSpawnEdgeReporting`, `rollBackFailure`). The edge now
+  // sits in front of the first write (`atServiceInstallEdge`, `macos.ts`), so
+  // a refusal there touches nothing - there is no rollback to perform or
+  // report, and the refusal propagates by identity, exactly like every other
+  // pre-write refusal in this file (the SMAppService-ownership refusal
+  // above, the authority-loss test below).
+  it("install: a refused publication (plain error) propagates by identity, before any write - no bootout, no bootstrap, nothing to roll back", async () => {
+    const calls: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const manifestPath = serviceManifestPath(label);
+    const launcherPath = serviceLauncherScriptPath(label);
+    // A prior test in this describe block may have left a successful
+    // install's plist/launcher on disk (this file's tests share one label
+    // and never clean up on success) - start from a known-clean slate so
+    // this test's "nothing was written" claim is about THIS call, not an
+    // accident of run order.
+    await rm(manifestPath, { force: true });
+    await rm(launcherPath, { force: true });
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        controller.install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+    expect(calls).toEqual(["print", "print"]);
+    expect(calls).not.toContain("bootout");
+    expect(calls).not.toContain("bootstrap");
+    expect(existsSync(manifestPath)).toBe(false);
+    expect(existsSync(launcherPath)).toBe(false);
+  });
+
+  // P2-1: the timeline pin for a refusal over an EXISTING, live registration
+  // rather than a fresh machine - the case the install edge's pre-write
+  // placement matters most for. The CLI label already owns a loaded,
+  // non-SMAppService job (so both ownership probes pass), and an old
+  // plist/launcher are already on disk from a prior install. A refused
+  // publication here must not touch either the loaded registration (no
+  // bootout, no bootstrap, no kickstart) or the on-disk files (byte-for-byte
+  // unchanged) - the two probes are the only launchctl calls that ran.
+  it("P2-1: a refused publication over a live registration leaves the loaded job and the old plist/launcher completely untouched", async () => {
+    const calls: string[] = [];
+    const manifestPath = serviceManifestPath(label);
+    const launcherPath = serviceLauncherScriptPath(label);
+    const oldPlistContent = "OLD PLIST CONTENT - pre-existing registration";
+    const oldLauncherContent =
+      "OLD LAUNCHER CONTENT - pre-existing registration";
+    await mkdir(dirname(manifestPath), { recursive: true });
+    await mkdir(dirname(launcherPath), { recursive: true });
+    await writeFile(manifestPath, oldPlistContent, "utf8");
+    await writeFile(launcherPath, oldLauncherContent, "utf8");
+
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      if (args[0] === "print") {
+        const target = args[1] ?? "";
+        if (target.endsWith(".agent")) {
+          // Agent label: not loaded (this is a CLI-owned, pre-split
+          // machine).
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        // CLI label: loaded, non-SMAppService ("cli-or-other") - a live
+        // registration the install would otherwise reload.
+        return buildSuccessResult();
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        controller.install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    // Propagated by identity - the install edge has no try/catch around it,
+    // unlike the later spawn edges' `-Reporting` wrapper.
+    expect(rejection).toBe(publishError);
+    // Only the two read-only ownership probes ran; no bootout, no
+    // bootstrap, no kickstart against the live job.
+    expect(calls).toEqual(["print", "print"]);
+    expect(calls).not.toContain("bootout");
+    expect(calls).not.toContain("bootstrap");
+    expect(calls).not.toContain("kickstart");
+    // The old files are byte-for-byte exactly what they were.
+    await expect(readFile(manifestPath, "utf8")).resolves.toBe(oldPlistContent);
+    await expect(readFile(launcherPath, "utf8")).resolves.toBe(
+      oldLauncherContent,
+    );
+
+    await rm(manifestPath, { force: true });
+    await rm(launcherPath, { force: true });
+  });
+
+  // The pre-write install edge means an authority loss caught at the edge's
+  // OWN pre-publish check (`runWithLeaseAtServiceSpawnEdge`'s hook, which
+  // revalidates authority before calling `publish`) never reaches a write:
+  // publish itself is never called, and neither is the launcher/plist write
+  // that would follow it in `installService`.
+  it("install: an authority refusal at the pre-publish check propagates as itself, before any write", async () => {
+    // Every probe (`print`/`bootout`, through the wrapped runner) and every
+    // explicit `verifyServiceMutationAuthority()` around the launcher and
+    // manifest writes consults the SAME verifier the edge's own pre-publish
+    // check does, so "which call number is the edge" is a fact about this
+    // runner shape, not a constant - derive it with a dry run instead of
+    // hardcoding a count that would silently point at the wrong call if an
+    // unrelated write elsewhere in `installService` gained or lost one.
+    const successRunner: ProcessRunner = async () => buildSuccessResult();
+    const dryRunOrder: string[] = [];
+    const dryRunPublish = vi.fn(async (): Promise<null> => {
+      dryRunOrder.push("publish");
+      return null;
+    });
+    await withServiceMutationAuthority(
+      async () => {
+        dryRunOrder.push("verify");
+      },
+      () =>
+        runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
+          createMacosController(successRunner).install({
+            label,
+            cli: { command: "/usr/local/bin/traycer", args: [] },
+            enableLinger: false,
+          }),
+        ),
+    );
+    const preEdgeVerifyCalls = dryRunOrder
+      .slice(0, dryRunOrder.indexOf("publish"))
+      .filter((entry) => entry === "verify").length;
+
+    const calls: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      calls.push(args[0] ?? "");
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    const manifestPath = serviceManifestPath(label);
+    const launcherPath = serviceLauncherScriptPath(label);
+    // Same reason as the plain-error test above: start from a clean slate
+    // regardless of what an earlier successful install in this describe
+    // block left behind.
+    await rm(manifestPath, { force: true });
+    await rm(launcherPath, { force: true });
+    const authorityError = new Error("mutation authority was lost");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === preEdgeVerifyCalls) throw authorityError;
+    };
+    const publish = vi.fn(async (): Promise<null> => null);
+
+    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
+      runWithLeaseAtServiceSpawnEdge(publish, () =>
+        controller.install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+      ),
+    ).catch((cause: unknown) => cause);
+
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(calls).not.toContain("bootstrap");
+    // The edge sits in front of the first write, so an authority loss caught
+    // there - before publish is even called - leaves nothing on disk.
+    expect(existsSync(manifestPath)).toBe(false);
+    expect(existsSync(launcherPath)).toBe(false);
+  });
+
+  it("start: the ownership print precedes publish, and the plain kickstart is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.start(label),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && !entry.includes("-k"),
+    );
+    expect(log.slice(0, log.indexOf("publish"))).toContain(
+      `print gui/${process.getuid?.() ?? 0}/${label.id}.agent`,
+    );
+  });
+
+  it("restart (CLI-owned): the ownership print precedes publish, and kickstart -k is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && entry.includes("-k"),
+    );
+    const publishIndex = log.indexOf("publish");
+    expect(
+      log.slice(0, publishIndex).some((entry) => entry.startsWith("print")),
+    ).toBe(true);
+  });
+
+  it("restart (Desktop-managed): print-agent then the cooperative stand-down precede publish, and the plain kickstart of the agent label is the entry right after it", async () => {
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const log: string[] = [];
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+        log.push("print-agent");
+        return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+      }
+      log.push(args.join(" "));
+      return buildSuccessResult();
+    };
+    MOCKS.requestCooperativeShutdown.mockImplementation(async () => {
+      log.push("stand-down");
+      return { kind: "stopped" };
+    });
+    const controller = createMacosController(runner);
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    );
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    const printAgentIndex = log.indexOf("print-agent");
+    const standDownIndex = log.indexOf("stand-down");
+    const publishIndex = log.indexOf("publish");
+    expect(printAgentIndex).toBeGreaterThanOrEqual(0);
+    expect(standDownIndex).toBeGreaterThan(printAgentIndex);
+    expect(publishIndex).toBeGreaterThan(standDownIndex);
+    expect(log[publishIndex + 1]?.startsWith("kickstart")).toBe(true);
+    expect(log[publishIndex + 1]?.includes("-k")).toBe(false);
+  });
+
+  it("relaunchAfterRestart forced (recycle): the ownership print precedes publish, and kickstart -k is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && entry.includes("-k"),
+    );
+  });
+
+  it("relaunchAfterRestart not forced (plain kickstart): the ownership print precedes publish, and the plain kickstart is the entry right after it", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createMacosController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+    );
+
+    expectEdgeImmediatelyPrecedesSpawn(
+      log,
+      (entry) => entry.startsWith("kickstart") && !entry.includes("-k"),
+    );
+  });
+
+  it("relaunchAfterRestart: a refused publication propagates raw, by identity - a restart intent means the manager owes the comeback", async () => {
+    const runner: ProcessRunner = async () => buildSuccessResult();
+    const controller = createMacosController(runner);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+  });
+
+  it("a busy Desktop stand-down (restart) reaches no edge: publish never runs and the error is unchanged", async () => {
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const runner: ProcessRunner = async (_command, args) => {
+      if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+        return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+      }
+      return buildSuccessResult();
+    };
+    MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+    const controller = createMacosController(runner);
+    const publish = vi.fn(async (): Promise<null> => null);
+    let error: unknown = null;
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    ).catch((cause: unknown) => {
+      error = cause;
+    });
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(error).toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+  });
+
+  // The Desktop-agent ownership probe runs ONCE - `restartService` and
+  // `startService` used to repeat it with nothing in between that could change
+  // the answer. The CLI-label guard adds one print of a different target, and
+  // only that one when the CLI label is loaded (the plain-success runner's
+  // exit-0 print reads as loaded), so the agent label is still asked about a
+  // single time. Both prints precede the spawn.
+  it("relaunchAfterRestart(forcedRecycle: true) on a CLI-owned machine probes the agent label once and confirms the CLI label is loaded before kickstart -k", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await controller.relaunchAfterRestart(label, { forcedRecycle: true });
+
+    const uid = process.getuid?.() ?? 0;
+    const verbs = calls.map((c) => c.args[0]);
+    expect(
+      calls.filter((c) => c.args[0] === "print").map((c) => c.args[1]),
+    ).toEqual([`gui/${uid}/${label.id}.agent`, `gui/${uid}/${label.id}`]);
+    expect(verbs.lastIndexOf("print")).toBeLessThan(verbs.indexOf("kickstart"));
+  });
+
+  it("relaunchAfterRestart(forcedRecycle: false) on a CLI-owned machine probes the agent label once and confirms the CLI label is loaded before the plain kickstart", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+
+    await controller.relaunchAfterRestart(label, { forcedRecycle: false });
+
+    const uid = process.getuid?.() ?? 0;
+    const verbs = calls.map((c) => c.args[0]);
+    expect(
+      calls.filter((c) => c.args[0] === "print").map((c) => c.args[1]),
+    ).toEqual([`gui/${uid}/${label.id}.agent`, `gui/${uid}/${label.id}`]);
+    expect(verbs.lastIndexOf("print")).toBeLessThan(verbs.indexOf("kickstart"));
   });
 });

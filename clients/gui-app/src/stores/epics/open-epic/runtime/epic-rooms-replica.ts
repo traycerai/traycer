@@ -18,7 +18,10 @@ import type {
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
 import { createMonotonicSequence } from "@traycer-clients/shared/replica-runtime";
-import type { EpicArtifactRoomAvailability } from "../types";
+import type {
+  ArtifactRoomsSlice,
+  EpicArtifactRoomAvailability,
+} from "../types";
 import { EMPTY_ARTIFACT_ROOMS_SLICE } from "../types";
 import type { EpicRoomEvent } from "./epic-runtime-events";
 import type { EpicRoomsProjection } from "./epic-runtime-projection";
@@ -174,6 +177,15 @@ export function createEpicRoomsReplica(
    * is the pre-snapshot ordering this map was introduced to preserve.
    */
   const availabilityByRoom = new Map<string, EpicArtifactRoomAvailability>();
+  /**
+   * Rooms whose `ready` body the host is still reconciling with the cloud.
+   * Room-keyed and fanned out at publish for the same reason availability is.
+   *
+   * Bounded by `availabilityByRoom`: an entry is only ever added for a room
+   * that is `ready`, and dropped by every snapshot (the host re-states the
+   * state after each seed), every non-ready transition, and every reset.
+   */
+  const bodySyncingByRoom = new Set<string>();
   let bindingBumpScheduled = false;
   let observedAtMs: number | null = null;
 
@@ -185,38 +197,50 @@ export function createEpicRoomsReplica(
    * artifacts' availability. A room with no artifacts yet contributes nothing
    * and costs nothing.
    */
-  function deriveAvailability(): Record<string, EpicArtifactRoomAvailability> {
+  function deriveArtifactRooms(): ArtifactRoomsSlice {
     const stateByArtifactId: Record<string, EpicArtifactRoomAvailability> = {};
     for (const [artifactRoomId, availability] of availabilityByRoom) {
       for (const artifactId of artifactIdsForRoom(artifactRoomId)) {
         stateByArtifactId[artifactId] = availability;
       }
     }
-    return stateByArtifactId;
+    const bodySyncingByArtifactId: Record<string, true> = {};
+    for (const artifactRoomId of bodySyncingByRoom) {
+      for (const artifactId of artifactIdsForRoom(artifactRoomId)) {
+        bodySyncingByArtifactId[artifactId] = true;
+      }
+    }
+    return { stateByArtifactId, bodySyncingByArtifactId };
   }
 
-  function availabilityUnchanged(
-    next: Record<string, EpicArtifactRoomAvailability>,
+  function sameRecord<V>(
+    held: Readonly<Record<string, V>>,
+    next: Readonly<Record<string, V>>,
   ): boolean {
-    const held = sink.read().artifactRooms.stateByArtifactId;
     const nextKeys = Object.keys(next);
     if (nextKeys.length !== Object.keys(held).length) return false;
-    return nextKeys.every(
-      (artifactId) => held[artifactId] === next[artifactId],
+    return nextKeys.every((key) => held[key] === next[key]);
+  }
+
+  function artifactRoomsUnchanged(next: ArtifactRoomsSlice): boolean {
+    const held = sink.read().artifactRooms;
+    return (
+      sameRecord(held.stateByArtifactId, next.stateByArtifactId) &&
+      sameRecord(held.bodySyncingByArtifactId, next.bodySyncingByArtifactId)
     );
   }
 
   function publishAvailability(): void {
-    const stateByArtifactId = deriveAvailability();
+    const artifactRooms = deriveArtifactRooms();
     // GATED, unlike the room-keyed publish it replaces, and it has to be: the
     // records plane calls `republishAvailability` whenever its artifacts slice
     // may have moved, which is every root frame. Publishing an identical map
     // there would wake every subscriber in the epic on every update. The
     // room-keyed version could not have this gate - it published a value it had
     // just changed by construction.
-    if (availabilityUnchanged(stateByArtifactId)) return;
+    if (artifactRoomsUnchanged(artifactRooms)) return;
     sink.publish({
-      artifactRooms: { stateByArtifactId },
+      artifactRooms,
       bindingEpoch: bindingEpoch.current(),
     });
   }
@@ -230,7 +254,7 @@ export function createEpicRoomsReplica(
    */
   function publishAvailabilityUngated(): void {
     sink.publish({
-      artifactRooms: { stateByArtifactId: deriveAvailability() },
+      artifactRooms: deriveArtifactRooms(),
       bindingEpoch: bindingEpoch.current(),
     });
   }
@@ -242,6 +266,7 @@ export function createEpicRoomsReplica(
   function resetInternal(): void {
     tier.destroyAll();
     availabilityByRoom.clear();
+    bodySyncingByRoom.clear();
     observedAtMs = null;
     invalidateBindings();
     sink.publish({
@@ -257,6 +282,10 @@ export function createEpicRoomsReplica(
     readonly seed: DocSeedMode;
     readonly docGuid: string | null;
   }): void {
+    // A seed replaces the body the sync state described. The host re-states
+    // it right after this frame, so forgetting it here cannot leave a stale
+    // "syncing" over a body that has since synced.
+    bodySyncingByRoom.delete(event.artifactRoomId);
     // Forwarded, not decided. Which arm delivered this body is not something
     // this replica knows or should: the arm states what its wire states, and
     // the tier applies the rule. That is what lets one rooms replica serve
@@ -301,6 +330,8 @@ export function createEpicRoomsReplica(
       // is invalid the moment the host says the room is not ready, and the next
       // snapshot rebuilds it.
       tier.invalidate(artifactRoomId);
+      // The sync state describes a served body; there is none now.
+      bodySyncingByRoom.delete(artifactRoomId);
     }
     // No publish at all when nothing moved. The closure returned the previous
     // state object from its updater here, which zustand reads as "no change"
@@ -314,6 +345,25 @@ export function createEpicRoomsReplica(
     // epoch bump still has to reach the consumer.
     publishAvailabilityUngated();
     publishDivergence();
+  }
+
+  function applyBodySync(
+    artifactRoomId: string,
+    state: "syncing" | "synced",
+  ): void {
+    // Only a SERVED body has a sync state. A frame for a room this replica
+    // does not hold as `ready` describes a body it is not showing - the host
+    // sends it after the `doc` it describes, so this is a reordering or a
+    // late frame, and the next seed re-states it.
+    if (availabilityByRoom.get(artifactRoomId) !== "ready") return;
+    if (state === "syncing") {
+      bodySyncingByRoom.add(artifactRoomId);
+    } else {
+      bodySyncingByRoom.delete(artifactRoomId);
+    }
+    // GATED: a repeat of the state already shown changes nothing, and the
+    // binding epoch is untouched - the doc behind the editor is the same one.
+    publishAvailability();
   }
 
   return {
@@ -348,6 +398,9 @@ export function createEpicRoomsReplica(
           break;
         case "room-availability":
           applyAvailability(event.artifactRoomId, event.availability);
+          break;
+        case "room-body-sync":
+          applyBodySync(event.artifactRoomId, event.state);
           break;
       }
       // Doc-class frames on the `@1` line carry no lane cursor - see
@@ -425,6 +478,7 @@ export function createEpicRoomsReplica(
       // back `ready` - artifacts reading as mounted while lease acquisition has
       // no body to hand them.
       availabilityByRoom.clear();
+      bodySyncingByRoom.clear();
       if (!hadRoomState) return false;
       invalidateBindings();
       sink.publish({

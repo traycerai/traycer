@@ -9,6 +9,7 @@ import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/schemas
 import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
   ChatSessionStoreHandle,
+  ChatSessionState,
   EditUserMessageInput,
   InterviewDeliveryRetryIdentity,
   SendChatSessionMessageInput,
@@ -115,6 +116,7 @@ export interface ChatActions {
   readonly takeSetupFailedRestoration: (
     messageId: string,
   ) => JsonContent | null;
+  readonly messageDeliveryRestored: ChatSessionState["messageDeliveryRestored"];
 }
 
 /**
@@ -297,6 +299,8 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
         handle.store.getState().ackAcceptedAction(clientActionId),
       takeSetupFailedRestoration: (messageId) =>
         handle.store.getState().takeSetupFailedRestoration(messageId),
+      messageDeliveryRestored: (input) =>
+        handle.store.getState().messageDeliveryRestored(input),
     }),
     [handle.store],
   );

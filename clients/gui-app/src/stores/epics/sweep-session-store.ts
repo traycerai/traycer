@@ -30,7 +30,17 @@ export interface ParkedSweepReview {
  * In-memory only, on purpose: consent is never inferred, so a review that was
  * never confirmed simply disappears with the app.
  */
+export interface SweepReviewTarget {
+  readonly sessionKey: string;
+  readonly hostId: string;
+  readonly epicIds: ReadonlyArray<string>;
+  readonly taskTitle: string | null;
+}
+
 interface SweepSessionState {
+  readonly reviewTarget: SweepReviewTarget | null;
+  readonly openReview: (target: SweepReviewTarget) => void;
+  readonly closeReview: () => void;
   readonly proving: ReadonlySet<string>;
   readonly parked: ReadonlyMap<string, ParkedSweepReview>;
   readonly open: ReadonlySet<string>;
@@ -61,6 +71,9 @@ function withoutKey(
 }
 
 export const useSweepSessionStore = create<SweepSessionState>((set, get) => ({
+  reviewTarget: null,
+  openReview: (target) => set({ reviewTarget: target }),
+  closeReview: () => set({ reviewTarget: null }),
   proving: new Set(),
   parked: new Map(),
   open: new Set(),
@@ -90,5 +103,11 @@ export const useSweepSessionStore = create<SweepSessionState>((set, get) => ({
         ? withKey(state.open, sessionKey)
         : withoutKey(state.open, sessionKey),
     })),
-  reset: () => set({ proving: new Set(), parked: new Map(), open: new Set() }),
+  reset: () =>
+    set({
+      reviewTarget: null,
+      proving: new Set(),
+      parked: new Map(),
+      open: new Set(),
+    }),
 }));

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildFocusPrompts,
-  countPendingPromptRows,
   focusPromptEpicIds,
   pendingPromptEpicIds,
 } from "@/lib/home-focus/focus-prompts";
@@ -307,46 +306,6 @@ describe("buildFocusPrompts", () => {
       expect(second[0]?.title).toBe("Approve the REVISED plan");
       expect(second[0]?.activation).toBe(retitled);
     });
-  });
-
-  it("countPendingPromptRows(rows) equals buildFocusPrompts(rows, new Map(), new Map(), []).length across a mixed fixture", () => {
-    const eligible = makeMergedNotificationRow({
-      feedId: "host:approval-1",
-      hostKind: "approval.requested",
-      severity: "needs_action",
-      payload: makeApprovalPayload("epic-1", "chat-1"),
-    });
-    const wrongKind = makeMergedNotificationRow({
-      feedId: "host:stopped-1",
-      hostKind: "agent.stopped",
-      severity: "failure",
-    });
-    const resolved = makeMergedNotificationRow({
-      feedId: "host:approval-resolved",
-      hostKind: "approval.requested",
-      severity: "needs_action",
-      resolvedAt: 999,
-      payload: makeApprovalPayload("epic-2", "chat-2"),
-    });
-    const alreadyRead = makeMergedNotificationRow({
-      feedId: "host:approval-read",
-      hostKind: "approval.requested",
-      severity: "needs_action",
-      readAt: 10,
-      payload: makeApprovalPayload("epic-3", "chat-3"),
-    });
-    const anotherEligible = makeMergedNotificationRow({
-      feedId: "host:browser-1",
-      hostKind: "browser.human.needed",
-      severity: "needs_action",
-      payload: makeBrowserSessionPayload("epic-4", "session-1", "tab-1"),
-    });
-    const rows = [eligible, wrongKind, resolved, alreadyRead, anotherEligible];
-
-    expect(countPendingPromptRows(rows)).toBe(
-      buildFocusPrompts(rows, new Map(), new Map(), []).length,
-    );
-    expect(countPendingPromptRows(rows)).toBe(2);
   });
 
   it("pendingPromptEpicIds agrees with focusPromptEpicIds(buildFocusPrompts(...))", () => {

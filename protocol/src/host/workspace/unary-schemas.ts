@@ -14,68 +14,70 @@ import {
   SEARCH_TEXT_PREVIEW_MAX_BYTES,
   searchTextPreviewRangeSchema,
 } from "@traycer/protocol/host/search-text-preview-schema";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const workspaceMentionGitTypeSchema = z.enum([
-  "against_uncommitted_changes",
-  "against_branch",
-  "against_commit",
-]);
+export const workspaceMentionGitTypeSchema = lazySchema(() =>
+  z.enum(["against_uncommitted_changes", "against_branch", "against_commit"]),
+);
 export type WorkspaceMentionGitType = z.infer<
   typeof workspaceMentionGitTypeSchema
 >;
 
-export const workspaceFileTreeGitStatusSchema = z.enum([
-  "added",
-  "deleted",
-  "ignored",
-  "modified",
-  "renamed",
-  "untracked",
-]);
+export const workspaceFileTreeGitStatusSchema = lazySchema(() =>
+  z.enum(["added", "deleted", "ignored", "modified", "renamed", "untracked"]),
+);
 export type WorkspaceFileTreeGitStatus = z.infer<
   typeof workspaceFileTreeGitStatusSchema
 >;
 
-export const workspacePathMentionSuggestionsRequestSchema = z.object({
-  roots: z.array(z.string()),
-  query: z.string(),
-  limit: z.number().int().min(1).max(100),
-});
+export const workspacePathMentionSuggestionsRequestSchema = lazySchema(() =>
+  z.object({
+    roots: z.array(z.string()),
+    query: z.string(),
+    limit: z.number().int().min(1).max(100),
+  }),
+);
 export type WorkspacePathMentionSuggestionsRequest = z.infer<
   typeof workspacePathMentionSuggestionsRequestSchema
 >;
 
-export const workspaceGitMentionSuggestionsRequestSchema = z.object({
-  workspacePath: z.string(),
-  query: z.string(),
-  limit: z.number().int().min(1).max(100),
-});
+export const workspaceGitMentionSuggestionsRequestSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    query: z.string(),
+    limit: z.number().int().min(1).max(100),
+  }),
+);
 export type WorkspaceGitMentionSuggestionsRequest = z.infer<
   typeof workspaceGitMentionSuggestionsRequestSchema
 >;
 
-export const workspaceFileMentionSuggestionSchema = z.object({
-  kind: z.literal("file"),
-  id: z.string(),
-  label: z.string(),
-  relPath: z.string(),
-  absolutePath: z.string(),
-  workspacePath: z.string(),
-  description: z.string(),
-});
+export const workspaceFileMentionSuggestionSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("file"),
+    id: z.string(),
+    label: z.string(),
+    relPath: z.string(),
+    absolutePath: z.string(),
+    workspacePath: z.string(),
+    description: z.string(),
+  }),
+);
 export type WorkspaceFileMentionSuggestion = z.infer<
   typeof workspaceFileMentionSuggestionSchema
 >;
 
-export const workspaceFolderMentionSuggestionSchema = z.object({
-  kind: z.literal("folder"),
-  id: z.string(),
-  label: z.string(),
-  relPath: z.string(),
-  absolutePath: z.string(),
-  workspacePath: z.string(),
-  description: z.string(),
-});
+export const workspaceFolderMentionSuggestionSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("folder"),
+    id: z.string(),
+    label: z.string(),
+    relPath: z.string(),
+    absolutePath: z.string(),
+    workspacePath: z.string(),
+    description: z.string(),
+  }),
+);
 export type WorkspaceFolderMentionSuggestion = z.infer<
   typeof workspaceFolderMentionSuggestionSchema
 >;
@@ -89,133 +91,156 @@ export type WorkspaceFolderMentionSuggestion = z.infer<
  * branch checked out in the worktree (null when detached). `isMain` marks the
  * primary checkout (the workspace itself).
  */
-export const workspaceWorktreeMentionSuggestionSchema = z.object({
-  kind: z.literal("worktree"),
-  id: z.string(),
-  label: z.string(),
-  worktreePath: z.string(),
-  workspacePath: z.string(),
-  branch: z.string().nullable(),
-  isMain: z.boolean(),
-  description: z.string(),
-});
+export const workspaceWorktreeMentionSuggestionSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("worktree"),
+    id: z.string(),
+    label: z.string(),
+    worktreePath: z.string(),
+    workspacePath: z.string(),
+    branch: z.string().nullable(),
+    isMain: z.boolean(),
+    description: z.string(),
+  }),
+);
 export type WorkspaceWorktreeMentionSuggestion = z.infer<
   typeof workspaceWorktreeMentionSuggestionSchema
 >;
 
-export const workspaceGitUncommittedMentionSuggestionSchema = z.object({
-  kind: z.literal("git"),
-  id: z.string(),
-  label: z.string(),
-  description: z.string(),
-  workspacePath: z.string(),
-  gitType: z.literal("against_uncommitted_changes"),
-  branchName: z.null(),
-  commitHash: z.null(),
-});
+export const workspaceGitUncommittedMentionSuggestionSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("git"),
+    id: z.string(),
+    label: z.string(),
+    description: z.string(),
+    workspacePath: z.string(),
+    gitType: z.literal("against_uncommitted_changes"),
+    branchName: z.null(),
+    commitHash: z.null(),
+  }),
+);
 export type WorkspaceGitUncommittedMentionSuggestion = z.infer<
   typeof workspaceGitUncommittedMentionSuggestionSchema
 >;
 
-export const workspaceGitBranchMentionSuggestionSchema = z.object({
-  kind: z.literal("git"),
-  id: z.string(),
-  label: z.string(),
-  description: z.string(),
-  workspacePath: z.string(),
-  gitType: z.literal("against_branch"),
-  branchName: z.string(),
-  commitHash: z.null(),
-});
+export const workspaceGitBranchMentionSuggestionSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("git"),
+    id: z.string(),
+    label: z.string(),
+    description: z.string(),
+    workspacePath: z.string(),
+    gitType: z.literal("against_branch"),
+    branchName: z.string(),
+    commitHash: z.null(),
+  }),
+);
 export type WorkspaceGitBranchMentionSuggestion = z.infer<
   typeof workspaceGitBranchMentionSuggestionSchema
 >;
 
-export const workspaceGitCommitMentionSuggestionSchema = z.object({
-  kind: z.literal("git"),
-  id: z.string(),
-  label: z.string(),
-  description: z.string(),
-  workspacePath: z.string(),
-  gitType: z.literal("against_commit"),
-  branchName: z.null(),
-  commitHash: z.string(),
-});
+export const workspaceGitCommitMentionSuggestionSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("git"),
+    id: z.string(),
+    label: z.string(),
+    description: z.string(),
+    workspacePath: z.string(),
+    gitType: z.literal("against_commit"),
+    branchName: z.null(),
+    commitHash: z.string(),
+  }),
+);
 export type WorkspaceGitCommitMentionSuggestion = z.infer<
   typeof workspaceGitCommitMentionSuggestionSchema
 >;
 
-export const workspaceGitMentionSuggestionSchema = z.discriminatedUnion(
-  "gitType",
-  [
+export const workspaceGitMentionSuggestionSchema = lazySchema(() =>
+  z.discriminatedUnion("gitType", [
     workspaceGitUncommittedMentionSuggestionSchema,
     workspaceGitBranchMentionSuggestionSchema,
     workspaceGitCommitMentionSuggestionSchema,
-  ],
+  ]),
 );
 export type WorkspaceGitMentionSuggestion = z.infer<
   typeof workspaceGitMentionSuggestionSchema
 >;
 
-export const workspaceGitRootMentionSuggestionSchema = z.discriminatedUnion(
-  "gitType",
-  [
+export const workspaceGitRootMentionSuggestionSchema = lazySchema(() =>
+  z.discriminatedUnion("gitType", [
     workspaceGitUncommittedMentionSuggestionSchema,
     workspaceGitBranchMentionSuggestionSchema,
-  ],
+  ]),
 );
 export type WorkspaceGitRootMentionSuggestion = z.infer<
   typeof workspaceGitRootMentionSuggestionSchema
 >;
 
-export const workspaceMentionSuggestionSchema = z.union([
-  workspaceFileMentionSuggestionSchema,
-  workspaceFolderMentionSuggestionSchema,
-  workspaceWorktreeMentionSuggestionSchema,
-  workspaceGitMentionSuggestionSchema,
-]);
+export const workspaceMentionSuggestionSchema = lazySchema(() =>
+  z.union([
+    workspaceFileMentionSuggestionSchema,
+    workspaceFolderMentionSuggestionSchema,
+    workspaceWorktreeMentionSuggestionSchema,
+    workspaceGitMentionSuggestionSchema,
+  ]),
+);
 export type WorkspaceMentionSuggestion = z.infer<
   typeof workspaceMentionSuggestionSchema
 >;
 
-export const workspaceFileMentionSuggestionsResponseSchema = z.object({
-  entries: z.array(workspaceFileMentionSuggestionSchema),
-});
+export const workspaceFileMentionSuggestionsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(workspaceFileMentionSuggestionSchema),
+  }),
+);
 export type WorkspaceFileMentionSuggestionsResponse = z.infer<
   typeof workspaceFileMentionSuggestionsResponseSchema
 >;
 
-export const workspaceFolderMentionSuggestionsResponseSchema = z.object({
-  entries: z.array(workspaceFolderMentionSuggestionSchema),
-});
+export const workspaceFolderMentionSuggestionsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(workspaceFolderMentionSuggestionSchema),
+  }),
+);
 export type WorkspaceFolderMentionSuggestionsResponse = z.infer<
   typeof workspaceFolderMentionSuggestionsResponseSchema
 >;
 
-export const workspaceWorktreeMentionSuggestionsResponseSchema = z.object({
-  entries: z.array(workspaceWorktreeMentionSuggestionSchema),
-});
+export const workspaceWorktreeMentionSuggestionsResponseSchema = lazySchema(
+  () =>
+    z.object({
+      entries: z.array(workspaceWorktreeMentionSuggestionSchema),
+    }),
+);
 export type WorkspaceWorktreeMentionSuggestionsResponse = z.infer<
   typeof workspaceWorktreeMentionSuggestionsResponseSchema
 >;
 
-export const workspaceGitRootMentionSuggestionsResponseSchema = z.object({
-  entries: z.array(workspaceGitRootMentionSuggestionSchema),
-});
+export const workspaceGitRootMentionSuggestionsResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(workspaceGitRootMentionSuggestionSchema),
+  }),
+);
 export type WorkspaceGitRootMentionSuggestionsResponse = z.infer<
   typeof workspaceGitRootMentionSuggestionsResponseSchema
 >;
 
-export const workspaceGitBranchMentionSuggestionsResponseSchema = z.object({
-  entries: z.array(workspaceGitBranchMentionSuggestionSchema),
-});
+export const workspaceGitBranchMentionSuggestionsResponseSchema = lazySchema(
+  () =>
+    z.object({
+      entries: z.array(workspaceGitBranchMentionSuggestionSchema),
+    }),
+);
 export type WorkspaceGitBranchMentionSuggestionsResponse = z.infer<
   typeof workspaceGitBranchMentionSuggestionsResponseSchema
 >;
 
-export const workspaceGitCommitMentionSuggestionsResponseSchema = z.object({
-  entries: z.array(workspaceGitCommitMentionSuggestionSchema),
-});
+export const workspaceGitCommitMentionSuggestionsResponseSchema = lazySchema(
+  () =>
+    z.object({
+      entries: z.array(workspaceGitCommitMentionSuggestionSchema),
+    }),
+);
 export type WorkspaceGitCommitMentionSuggestionsResponse = z.infer<
   typeof workspaceGitCommitMentionSuggestionsResponseSchema
 >;
@@ -232,24 +257,32 @@ export type WorkspaceGitCommitMentionSuggestionsResponse = z.infer<
  * stays per-host by design (paths only mean something on the host
  * that owns them).
  */
-export const workspaceResolvePathsByRepoIdentifiersRequestSchema = z.object({
-  repoIdentifiers: z.array(taskRepoIdentifierSchema),
-});
+export const workspaceResolvePathsByRepoIdentifiersRequestSchema = lazySchema(
+  () =>
+    z.object({
+      repoIdentifiers: z.array(taskRepoIdentifierSchema),
+    }),
+);
 export type WorkspaceResolvePathsByRepoIdentifiersRequest = z.infer<
   typeof workspaceResolvePathsByRepoIdentifiersRequestSchema
 >;
 
-export const workspaceRepoPathMappingSchema = z.object({
-  repoIdentifier: taskRepoIdentifierSchema,
-  workspacePath: z.string(),
-});
+export const workspaceRepoPathMappingSchema = lazySchema(() =>
+  z.object({
+    repoIdentifier: taskRepoIdentifierSchema,
+    workspacePath: z.string(),
+  }),
+);
 export type WorkspaceRepoPathMapping = z.infer<
   typeof workspaceRepoPathMappingSchema
 >;
 
-export const workspaceResolvePathsByRepoIdentifiersResponseSchema = z.object({
-  mappings: z.array(workspaceRepoPathMappingSchema),
-});
+export const workspaceResolvePathsByRepoIdentifiersResponseSchema = lazySchema(
+  () =>
+    z.object({
+      mappings: z.array(workspaceRepoPathMappingSchema),
+    }),
+);
 export type WorkspaceResolvePathsByRepoIdentifiersResponse = z.infer<
   typeof workspaceResolvePathsByRepoIdentifiersResponseSchema
 >;
@@ -260,21 +293,25 @@ export type WorkspaceResolvePathsByRepoIdentifiersResponse = z.infer<
  * only for the released floor and the old-host fallback; new work uses
  * `workspace.subscribeFileList` / `workspace.searchPaths`.
  */
-export const workspaceListFileTreeRequestSchema = z.object({
-  workspacePath: z.string(),
-  maxFiles: z.number().int().min(1).max(50_000),
-  includeIgnored: z.boolean(),
-});
+export const workspaceListFileTreeRequestSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    maxFiles: z.number().int().min(1).max(50_000),
+    includeIgnored: z.boolean(),
+  }),
+);
 export type WorkspaceListFileTreeRequest = z.infer<
   typeof workspaceListFileTreeRequestSchema
 >;
 
-export const workspaceFileTreeGitStatusEntrySchema = z.object({
-  // Same host-canonical path contract as `workspaceFileTreeNodeSchema`:
-  // POSIX-relative to the workspace root, `/`-separated, no leading slash.
-  path: z.string(),
-  status: workspaceFileTreeGitStatusSchema,
-});
+export const workspaceFileTreeGitStatusEntrySchema = lazySchema(() =>
+  z.object({
+    // Same host-canonical path contract as `workspaceFileTreeNodeSchema`:
+    // POSIX-relative to the workspace root, `/`-separated, no leading slash.
+    path: z.string(),
+    status: workspaceFileTreeGitStatusSchema,
+  }),
+);
 export type WorkspaceFileTreeGitStatusEntry = z.infer<
   typeof workspaceFileTreeGitStatusEntrySchema
 >;
@@ -288,54 +325,61 @@ export type WorkspaceFileTreeGitStatusEntry = z.infer<
  * and never parses it. `name` is the display basename, computed by the
  * host, so the renderer never has to derive it from the path string.
  */
-export const workspaceFileTreeNodeSchema = z.object({
-  path: z.string().min(1),
-  name: z.string().min(1),
-});
+export const workspaceFileTreeNodeSchema = lazySchema(() =>
+  z.object({
+    path: z.string().min(1),
+    name: z.string().min(1),
+  }),
+);
 export type WorkspaceFileTreeNode = z.infer<typeof workspaceFileTreeNodeSchema>;
 
-export const workspaceListFileTreeResponseSchema = z.object({
-  workspacePath: z.string(),
-  files: z.array(workspaceFileTreeNodeSchema),
-  gitStatus: z.array(workspaceFileTreeGitStatusEntrySchema),
-  truncated: z.boolean(),
-});
+export const workspaceListFileTreeResponseSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    files: z.array(workspaceFileTreeNodeSchema),
+    gitStatus: z.array(workspaceFileTreeGitStatusEntrySchema),
+    truncated: z.boolean(),
+  }),
+);
 export type WorkspaceListFileTreeResponse = z.infer<
   typeof workspaceListFileTreeResponseSchema
 >;
 
-export const workspaceDirectoryEntryKindSchema = z.enum([
-  "file",
-  "directory",
-  "symlink",
-  "other",
-]);
+export const workspaceDirectoryEntryKindSchema = lazySchema(() =>
+  z.enum(["file", "directory", "symlink", "other"]),
+);
 export type WorkspaceDirectoryEntryKind = z.infer<
   typeof workspaceDirectoryEntryKindSchema
 >;
 
-export const workspaceListDirectoryRequestSchema = z.object({
-  workspacePath: z.string(),
-  directoryPath: z.string(),
-});
+export const workspaceListDirectoryRequestSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    directoryPath: z.string(),
+  }),
+);
 export type WorkspaceListDirectoryRequest = z.infer<
   typeof workspaceListDirectoryRequestSchema
 >;
 
-export const workspaceDirectoryEntrySchema = z.object({
-  path: z.string(),
-  name: z.string(),
-  kind: workspaceDirectoryEntryKindSchema,
-});
+export const workspaceDirectoryEntrySchema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    name: z.string(),
+    kind: workspaceDirectoryEntryKindSchema,
+  }),
+);
 export type WorkspaceDirectoryEntry = z.infer<
   typeof workspaceDirectoryEntrySchema
 >;
 
-export const workspaceListDirectoryResponseSchema = z.object({
-  workspacePath: z.string(),
-  directoryPath: z.string(),
-  entries: z.array(workspaceDirectoryEntrySchema),
-});
+export const workspaceListDirectoryResponseSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    directoryPath: z.string(),
+    entries: z.array(workspaceDirectoryEntrySchema),
+  }),
+);
 export type WorkspaceListDirectoryResponse = z.infer<
   typeof workspaceListDirectoryResponseSchema
 >;
@@ -353,26 +397,28 @@ export type WorkspaceListDirectoryResponse = z.infer<
  */
 const ABSOLUTE_HOST_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/;
 
-const absoluteHostPathSchema = z
-  .string()
-  .min(1)
-  .regex(ABSOLUTE_HOST_PATH, "must be an absolute host path");
+const absoluteHostPathSchema = lazySchema(() =>
+  z.string().min(1).regex(ABSOLUTE_HOST_PATH, "must be an absolute host path"),
+);
 
-export const workspaceBrowseFolderEntrySchema = z.object({
-  /** Absolute host-native path of the folder. */
-  path: absoluteHostPathSchema,
-  /** Display basename, computed by the host. */
-  name: z.string().min(1),
-});
+export const workspaceBrowseFolderEntrySchema = lazySchema(() =>
+  z.object({
+    /** Absolute host-native path of the folder. */
+    path: absoluteHostPathSchema,
+    /** Display basename, computed by the host. */
+    name: z.string().min(1),
+  }),
+);
 export type WorkspaceBrowseFolderEntry = z.infer<
   typeof workspaceBrowseFolderEntrySchema
 >;
 
-export const workspaceBrowseFolderEntrySchemaV11 =
+export const workspaceBrowseFolderEntrySchemaV11 = lazySchema(() =>
   workspaceBrowseFolderEntrySchema.extend({
     /** Dot-hidden on POSIX/macOS, or carrying Windows' native Hidden attribute. */
     hidden: z.boolean(),
-  });
+  }),
+);
 export type WorkspaceBrowseFolderEntryV11 = z.infer<
   typeof workspaceBrowseFolderEntrySchemaV11
 >;
@@ -393,58 +439,67 @@ export type WorkspaceBrowseFolderEntryV11 = z.infer<
  * GUI-session host on first touch) - approving it there and retrying here
  * is the remote consent flow.
  */
-export const workspaceBrowseFoldersRequestSchema = z.object({
-  directoryPath: absoluteHostPathSchema.nullable(),
-});
+export const workspaceBrowseFoldersRequestSchema = lazySchema(() =>
+  z.object({
+    directoryPath: absoluteHostPathSchema.nullable(),
+  }),
+);
 export type WorkspaceBrowseFoldersRequest = z.infer<
   typeof workspaceBrowseFoldersRequestSchema
 >;
 
-export const workspaceBrowseFoldersResponseSchema = z.object({
-  /** Absolute path that was listed (resolved from a null request). */
-  directoryPath: absoluteHostPathSchema,
-  /** Null only at the filesystem root; even the home directory walks up. */
-  parentPath: absoluteHostPathSchema.nullable(),
-  /** Direct child DIRECTORIES only; files never cross the wire. */
-  entries: z.array(workspaceBrowseFolderEntrySchema),
-});
+export const workspaceBrowseFoldersResponseSchema = lazySchema(() =>
+  z.object({
+    /** Absolute path that was listed (resolved from a null request). */
+    directoryPath: absoluteHostPathSchema,
+    /** Null only at the filesystem root; even the home directory walks up. */
+    parentPath: absoluteHostPathSchema.nullable(),
+    /** Direct child DIRECTORIES only; files never cross the wire. */
+    entries: z.array(workspaceBrowseFolderEntrySchema),
+  }),
+);
 export type WorkspaceBrowseFoldersResponse = z.infer<
   typeof workspaceBrowseFoldersResponseSchema
 >;
 
-export const workspaceBrowseFoldersResponseSchemaV11 =
+export const workspaceBrowseFoldersResponseSchemaV11 = lazySchema(() =>
   workspaceBrowseFoldersResponseSchema.extend({
     entries: z.array(workspaceBrowseFolderEntrySchemaV11),
-  });
+  }),
+);
 export type WorkspaceBrowseFoldersResponseV11 = z.infer<
   typeof workspaceBrowseFoldersResponseSchemaV11
 >;
 
-export const workspaceReadFileRequestSchema = z.object({
-  workspacePath: z.string(),
-  filePath: z.string(),
-  maxBytes: z.number().int().min(1).max(1_000_000),
-});
+export const workspaceReadFileRequestSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    filePath: z.string(),
+    maxBytes: z.number().int().min(1).max(1_000_000),
+  }),
+);
 export type WorkspaceReadFileRequest = z.infer<
   typeof workspaceReadFileRequestSchema
 >;
 
-export const workspaceReadFileResponseSchema = z.object({
-  workspacePath: z.string(),
-  filePath: z.string(),
-  content: z.string().nullable(),
-  truncated: z.boolean(),
-  error: z.string().nullable(),
-});
+export const workspaceReadFileResponseSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    filePath: z.string(),
+    content: z.string().nullable(),
+    truncated: z.boolean(),
+    error: z.string().nullable(),
+  }),
+);
 export type WorkspaceReadFileResponse = z.infer<
   typeof workspaceReadFileResponseSchema
 >;
 
 export const WORKSPACE_WRITE_FILE_MAX_CHARS = 1_000_000;
 
-const workspaceFileRevisionSchema = z
-  .string()
-  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 revision");
+const workspaceFileRevisionSchema = lazySchema(() =>
+  z.string().regex(/^[0-9a-f]{64}$/, "Expected a lowercase SHA-256 revision"),
+);
 
 /**
  * Conflict-safe text-file write. `expectedRevision` is the SHA-256 of the
@@ -452,36 +507,42 @@ const workspaceFileRevisionSchema = z
  * host only saves when the live file still matches it (or already equals the
  * submitted content, making a lost-ack retry idempotent).
  */
-export const workspaceWriteFileRequestSchema = z.object({
-  workspacePath: z.string(),
-  filePath: z.string(),
-  expectedRevision: workspaceFileRevisionSchema,
-  content: z.string().max(WORKSPACE_WRITE_FILE_MAX_CHARS),
-});
+export const workspaceWriteFileRequestSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    filePath: z.string(),
+    expectedRevision: workspaceFileRevisionSchema,
+    content: z.string().max(WORKSPACE_WRITE_FILE_MAX_CHARS),
+  }),
+);
 export type WorkspaceWriteFileRequest = z.infer<
   typeof workspaceWriteFileRequestSchema
 >;
 
-const workspaceWriteFileResponseBaseSchema = z.object({
-  workspacePath: z.string(),
-  filePath: z.string(),
-});
+const workspaceWriteFileResponseBaseSchema = lazySchema(() =>
+  z.object({
+    workspacePath: z.string(),
+    filePath: z.string(),
+  }),
+);
 
-export const workspaceWriteFileResponseSchema = z.discriminatedUnion("status", [
-  workspaceWriteFileResponseBaseSchema.extend({
-    status: z.literal("saved"),
-    revision: workspaceFileRevisionSchema,
-  }),
-  workspaceWriteFileResponseBaseSchema.extend({
-    status: z.literal("conflict"),
-    currentRevision: workspaceFileRevisionSchema,
-    error: z.string(),
-  }),
-  workspaceWriteFileResponseBaseSchema.extend({
-    status: z.literal("error"),
-    error: z.string(),
-  }),
-]);
+export const workspaceWriteFileResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    workspaceWriteFileResponseBaseSchema.extend({
+      status: z.literal("saved"),
+      revision: workspaceFileRevisionSchema,
+    }),
+    workspaceWriteFileResponseBaseSchema.extend({
+      status: z.literal("conflict"),
+      currentRevision: workspaceFileRevisionSchema,
+      error: z.string(),
+    }),
+    workspaceWriteFileResponseBaseSchema.extend({
+      status: z.literal("error"),
+      error: z.string(),
+    }),
+  ]),
+);
 export type WorkspaceWriteFileResponse = z.infer<
   typeof workspaceWriteFileResponseSchema
 >;
@@ -495,12 +556,9 @@ export type WorkspaceWriteFileResponse = z.infer<
 // which all assume a workspace root is already chosen.
 // -----------------------------------------------------------------------------
 
-export const workspacePathRejectionReasonSchema = z.enum([
-  "NOT_ABSOLUTE",
-  "NOT_FOUND",
-  "NOT_A_DIRECTORY",
-  "NO_PERMISSION",
-]);
+export const workspacePathRejectionReasonSchema = lazySchema(() =>
+  z.enum(["NOT_ABSOLUTE", "NOT_FOUND", "NOT_A_DIRECTORY", "NO_PERMISSION"]),
+);
 export type WorkspacePathRejectionReason = z.infer<
   typeof workspacePathRejectionReasonSchema
 >;
@@ -514,21 +572,25 @@ export type WorkspacePathRejectionReason = z.infer<
  * `resolvedPath` is the realpath-canonicalized absolute directory the client
  * should bind the workspace to.
  */
-export const workspaceValidatePathResponseSchema = z.discriminatedUnion("ok", [
-  z.object({ ok: z.literal(true), resolvedPath: z.string() }),
-  z.object({
-    ok: z.literal(false),
-    reason: workspacePathRejectionReasonSchema,
-  }),
-]);
+export const workspaceValidatePathResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    z.object({ ok: z.literal(true), resolvedPath: z.string() }),
+    z.object({
+      ok: z.literal(false),
+      reason: workspacePathRejectionReasonSchema,
+    }),
+  ]),
+);
 export type WorkspaceValidatePathResponse = z.infer<
   typeof workspaceValidatePathResponseSchema
 >;
 
-export const workspaceRecentEntrySchema = z.object({
-  path: z.string(),
-  lastOpenedAt: z.string(),
-});
+export const workspaceRecentEntrySchema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    lastOpenedAt: z.string(),
+  }),
+);
 export type WorkspaceRecentEntry = z.infer<typeof workspaceRecentEntrySchema>;
 
 // -----------------------------------------------------------------------------
@@ -553,41 +615,47 @@ export type WorkspaceRecentEntry = z.infer<typeof workspaceRecentEntrySchema>;
 // name.
 // -----------------------------------------------------------------------------
 
-export const workspacePrepareFoldersOperationSchema = z.enum([
-  "prepare",
-  "getHomeDir",
-  "validatePath",
-  "recordRecentWorkspace",
-  "listRecentWorkspaces",
-]);
+export const workspacePrepareFoldersOperationSchema = lazySchema(() =>
+  z.enum([
+    "prepare",
+    "getHomeDir",
+    "validatePath",
+    "recordRecentWorkspace",
+    "listRecentWorkspaces",
+  ]),
+);
 export type WorkspacePrepareFoldersOperation = z.infer<
   typeof workspacePrepareFoldersOperationSchema
 >;
 
-export const workspacePrepareFoldersRequestSchemaV11 = z.object({
-  operation: workspacePrepareFoldersOperationSchema,
-  /** Set only for `operation: "prepare"`. */
-  folderPaths: z.array(z.string()).nullable(),
-  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
-  path: z.string().nullable(),
-});
+export const workspacePrepareFoldersRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    operation: workspacePrepareFoldersOperationSchema,
+    /** Set only for `operation: "prepare"`. */
+    folderPaths: z.array(z.string()).nullable(),
+    /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+    path: z.string().nullable(),
+  }),
+);
 export type WorkspacePrepareFoldersRequestV11 = z.infer<
   typeof workspacePrepareFoldersRequestSchemaV11
 >;
 
-export const workspacePrepareFoldersResponseSchemaV11 = z.object({
-  operation: workspacePrepareFoldersOperationSchema,
-  /** Set for `operation: "prepare"`; `[]` otherwise. */
-  folders: z.array(preparedWorkspaceFolderSchema),
-  /** Set for `operation: "prepare"`; `[]` otherwise. */
-  repoIdentifiers: z.array(taskRepoIdentifierSchema),
-  /** Set only for `operation: "getHomeDir"`. */
-  homeDir: z.string().nullable(),
-  /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
-  validation: workspaceValidatePathResponseSchema.nullable(),
-  /** Set for `operation: "listRecentWorkspaces"` and successful recent writes. */
-  recentWorkspaces: z.array(workspaceRecentEntrySchema).nullable(),
-});
+export const workspacePrepareFoldersResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    operation: workspacePrepareFoldersOperationSchema,
+    /** Set for `operation: "prepare"`; `[]` otherwise. */
+    folders: z.array(preparedWorkspaceFolderSchema),
+    /** Set for `operation: "prepare"`; `[]` otherwise. */
+    repoIdentifiers: z.array(taskRepoIdentifierSchema),
+    /** Set only for `operation: "getHomeDir"`. */
+    homeDir: z.string().nullable(),
+    /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
+    validation: workspaceValidatePathResponseSchema.nullable(),
+    /** Set for `operation: "listRecentWorkspaces"` and successful recent writes. */
+    recentWorkspaces: z.array(workspaceRecentEntrySchema).nullable(),
+  }),
+);
 export type WorkspacePrepareFoldersResponseV11 = z.infer<
   typeof workspacePrepareFoldersResponseSchemaV11
 >;
@@ -597,25 +665,29 @@ export type WorkspacePrepareFoldersResponseV11 = z.infer<
 // successful attach/reactivation (`true`) from moving an already-active folder
 // out of context (`false`), which must not make an old workspace look newly
 // used. v1.1 callers upgrade with `true`, preserving their released behavior.
-export const workspacePrepareFoldersOperationSchemaV12 = z.enum([
-  ...workspacePrepareFoldersOperationSchema.options,
-  "forgetRecentWorkspace",
-]);
+export const workspacePrepareFoldersOperationSchemaV12 = lazySchema(() =>
+  z.enum([
+    ...workspacePrepareFoldersOperationSchema.options,
+    "forgetRecentWorkspace",
+  ]),
+);
 
-export const workspacePrepareFoldersRequestSchemaV12 =
+export const workspacePrepareFoldersRequestSchemaV12 = lazySchema(() =>
   workspacePrepareFoldersRequestSchemaV11.extend({
     operation: workspacePrepareFoldersOperationSchemaV12,
     /** Set only for `operation: "recordRecentWorkspace"`. */
     bumpRecency: z.boolean().nullable(),
-  });
+  }),
+);
 export type WorkspacePrepareFoldersRequestV12 = z.infer<
   typeof workspacePrepareFoldersRequestSchemaV12
 >;
 
-export const workspacePrepareFoldersResponseSchemaV12 =
+export const workspacePrepareFoldersResponseSchemaV12 = lazySchema(() =>
   workspacePrepareFoldersResponseSchemaV11.extend({
     operation: workspacePrepareFoldersOperationSchemaV12,
-  });
+  }),
+);
 export type WorkspacePrepareFoldersResponseV12 = z.infer<
   typeof workspacePrepareFoldersResponseSchemaV12
 >;
@@ -624,12 +696,14 @@ export type WorkspacePrepareFoldersResponseV12 = z.infer<
 // final typed segment does not exist. The existing `path` field carries the
 // target; the response uses the ordinary prepared-folder fields so creation
 // and workspace preparation stay one host operation.
-export const workspacePrepareFoldersOperationSchemaV13 = z.enum([
-  ...workspacePrepareFoldersOperationSchemaV12.options,
-  "createAndPrepare",
-]);
+export const workspacePrepareFoldersOperationSchemaV13 = lazySchema(() =>
+  z.enum([
+    ...workspacePrepareFoldersOperationSchemaV12.options,
+    "createAndPrepare",
+  ]),
+);
 
-export const workspacePrepareFoldersRequestSchemaV13 =
+export const workspacePrepareFoldersRequestSchemaV13 = lazySchema(() =>
   workspacePrepareFoldersRequestSchemaV12
     .extend({
       operation: workspacePrepareFoldersOperationSchemaV13,
@@ -652,15 +726,17 @@ export const workspacePrepareFoldersRequestSchemaV13 =
           path: ["path"],
         });
       }
-    });
+    }),
+);
 export type WorkspacePrepareFoldersRequestV13 = z.infer<
   typeof workspacePrepareFoldersRequestSchemaV13
 >;
 
-export const workspacePrepareFoldersResponseSchemaV13 =
+export const workspacePrepareFoldersResponseSchemaV13 = lazySchema(() =>
   workspacePrepareFoldersResponseSchemaV12.extend({
     operation: workspacePrepareFoldersOperationSchemaV13,
-  });
+  }),
+);
 export type WorkspacePrepareFoldersResponseV13 = z.infer<
   typeof workspacePrepareFoldersResponseSchemaV13
 >;
@@ -695,9 +771,11 @@ export type WorkspacePrepareFoldersResponseV14 = z.infer<
  * as search authority - this is the boundary that `workspace.listFileTree`
  * (which trusts the client `workspacePath`) does not enforce.
  */
-export const workspaceSearchPathsReferenceSchema = z.object({
-  root: z.string(),
-});
+export const workspaceSearchPathsReferenceSchema = lazySchema(() =>
+  z.object({
+    root: z.string(),
+  }),
+);
 export type WorkspaceSearchPathsReference = z.infer<
   typeof workspaceSearchPathsReferenceSchema
 >;
@@ -707,9 +785,11 @@ export type WorkspaceSearchPathsReference = z.infer<
  * but never the host-local mirror directory behind it; the resolver derives
  * that directory from the required request `epicId` after authorizing access.
  */
-export const workspaceEpicArtifactsSourceSchema = z.object({
-  kind: z.literal("epic-artifacts"),
-});
+export const workspaceEpicArtifactsSourceSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("epic-artifacts"),
+  }),
+);
 export type WorkspaceEpicArtifactsSource = z.infer<
   typeof workspaceEpicArtifactsSourceSchema
 >;
@@ -720,10 +800,12 @@ export type WorkspaceEpicArtifactsSource = z.infer<
  * intact: already-built renderers continue to send and receive its legacy
  * shape without learning about artifact mirrors.
  */
-export const workspaceSearchSourceSchema = z.union([
-  workspaceEpicArtifactsSourceSchema,
-  workspaceSearchPathsReferenceSchema,
-]);
+export const workspaceSearchSourceSchema = lazySchema(() =>
+  z.union([
+    workspaceEpicArtifactsSourceSchema,
+    workspaceSearchPathsReferenceSchema,
+  ]),
+);
 export type WorkspaceSearchSource = z.infer<typeof workspaceSearchSourceSchema>;
 
 /**
@@ -732,27 +814,29 @@ export type WorkspaceSearchSource = z.infer<typeof workspaceSearchSourceSchema>;
  * every one of its `limit` slots on folders (files never crowd them out) and a
  * `files` request never pays to rank/serialize folders. `both` ranks the union.
  */
-export const workspaceSearchPathsKindFilterSchema = z.enum([
-  "files",
-  "folders",
-  "both",
-]);
+export const workspaceSearchPathsKindFilterSchema = lazySchema(() =>
+  z.enum(["files", "folders", "both"]),
+);
 export type WorkspaceSearchPathsKindFilter = z.infer<
   typeof workspaceSearchPathsKindFilterSchema
 >;
 
-export const workspaceSearchPathsRequestSchema = z.object({
-  epicId: z.string(),
-  reference: workspaceSearchSourceSchema,
-  query: z.string(),
-  limit: z.number().int().min(1).max(100),
-  kinds: workspaceSearchPathsKindFilterSchema,
-});
+export const workspaceSearchPathsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    reference: workspaceSearchSourceSchema,
+    query: z.string(),
+    limit: z.number().int().min(1).max(100),
+    kinds: workspaceSearchPathsKindFilterSchema,
+  }),
+);
 export type WorkspaceSearchPathsRequest = z.infer<
   typeof workspaceSearchPathsRequestSchema
 >;
 
-export const workspaceSearchPathResultKindSchema = z.enum(["file", "folder"]);
+export const workspaceSearchPathResultKindSchema = lazySchema(() =>
+  z.enum(["file", "folder"]),
+);
 export type WorkspaceSearchPathResultKind = z.infer<
   typeof workspaceSearchPathResultKindSchema
 >;
@@ -765,11 +849,13 @@ export type WorkspaceSearchPathResultKind = z.infer<
  * joining `relPath` onto the reference root it already holds - the host does
  * NOT return a host-absolute path as search authority.
  */
-export const workspaceSearchPathResultSchema = z.object({
-  kind: workspaceSearchPathResultKindSchema,
-  relPath: z.string(),
-  name: z.string(),
-});
+export const workspaceSearchPathResultSchema = lazySchema(() =>
+  z.object({
+    kind: workspaceSearchPathResultKindSchema,
+    relPath: z.string(),
+    name: z.string(),
+  }),
+);
 export type WorkspaceSearchPathResult = z.infer<
   typeof workspaceSearchPathResultSchema
 >;
@@ -785,10 +871,9 @@ export type WorkspaceSearchPathResult = z.infer<
  *   an unsupported/errored request: the file-tree panel falls back to its local
  *   filter, and mention callers re-issue that root through the legacy RPC.
  */
-export const workspaceSearchPathsOutcomeSchema = z.enum([
-  "ready",
-  "root_unavailable",
-]);
+export const workspaceSearchPathsOutcomeSchema = lazySchema(() =>
+  z.enum(["ready", "root_unavailable"]),
+);
 export type WorkspaceSearchPathsOutcome = z.infer<
   typeof workspaceSearchPathsOutcomeSchema
 >;
@@ -798,13 +883,15 @@ export type WorkspaceSearchPathsOutcome = z.infer<
  * Epic/host/workspace/worktree selection change is detectable and discardable
  * by the caller. `truncated` marks that enumeration hit an internal cap.
  */
-export const workspaceSearchPathsAttachedRootResponseSchema = z.object({
-  epicId: z.string(),
-  root: z.string(),
-  outcome: workspaceSearchPathsOutcomeSchema,
-  results: z.array(workspaceSearchPathResultSchema),
-  truncated: z.boolean(),
-});
+export const workspaceSearchPathsAttachedRootResponseSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    root: z.string(),
+    outcome: workspaceSearchPathsOutcomeSchema,
+    results: z.array(workspaceSearchPathResultSchema),
+    truncated: z.boolean(),
+  }),
+);
 export type WorkspaceSearchPathsAttachedRootResponse = z.infer<
   typeof workspaceSearchPathsAttachedRootResponseSchema
 >;
@@ -814,21 +901,25 @@ export type WorkspaceSearchPathsAttachedRootResponse = z.infer<
  * selector rather than a mirror path, so a stale response is still detectable
  * without making the host filesystem layout part of the wire contract.
  */
-export const workspaceSearchPathsEpicArtifactsResponseSchema = z.object({
-  epicId: z.string(),
-  source: workspaceEpicArtifactsSourceSchema,
-  outcome: workspaceSearchPathsOutcomeSchema,
-  results: z.array(workspaceSearchPathResultSchema),
-  truncated: z.boolean(),
-});
+export const workspaceSearchPathsEpicArtifactsResponseSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    source: workspaceEpicArtifactsSourceSchema,
+    outcome: workspaceSearchPathsOutcomeSchema,
+    results: z.array(workspaceSearchPathResultSchema),
+    truncated: z.boolean(),
+  }),
+);
 export type WorkspaceSearchPathsEpicArtifactsResponse = z.infer<
   typeof workspaceSearchPathsEpicArtifactsResponseSchema
 >;
 
-export const workspaceSearchPathsResponseSchema = z.union([
-  workspaceSearchPathsAttachedRootResponseSchema,
-  workspaceSearchPathsEpicArtifactsResponseSchema,
-]);
+export const workspaceSearchPathsResponseSchema = lazySchema(() =>
+  z.union([
+    workspaceSearchPathsAttachedRootResponseSchema,
+    workspaceSearchPathsEpicArtifactsResponseSchema,
+  ]),
+);
 export type WorkspaceSearchPathsResponse = z.infer<
   typeof workspaceSearchPathsResponseSchema
 >;
@@ -851,35 +942,39 @@ export type WorkspaceSearchPathsResponse = z.infer<
  * outcome, distinct from a zero-match `ready`). Arguments are passed directly to
  * `rg` as an argv array - the host never builds a shell string.
  */
-export const workspaceSearchTextOptionsSchema = z.object({
-  // `false` (default) matches the query literally (`rg --fixed-strings`); `true`
-  // treats it as a regular expression. An invalid regex is reported as the
-  // `invalid_regex` outcome rather than throwing.
-  regex: z.boolean(),
-  // `false` (default) is case-insensitive; `true` forces a case-sensitive
-  // match. This mirrors the renderer's "Match case" toggle directly.
-  caseSensitive: z.boolean(),
-  // `true` requires the match to fall on word boundaries (`rg --word-regexp`).
-  wholeWord: z.boolean(),
-  // ripgrep `--glob` include / exclude filters (relative to the selected
-  // source). Include globs restrict the walked set; exclude globs are sent as
-  // negated globs (`!<glob>`). For the artifact source, a terminal `.md` is a
-  // virtual alias for its extensionless logical artifact path; the private
-  // `index.md` mirror layout is never exposed. Empty arrays impose no filter.
-  includeGlobs: z.array(z.string()),
-  excludeGlobs: z.array(z.string()),
-});
+export const workspaceSearchTextOptionsSchema = lazySchema(() =>
+  z.object({
+    // `false` (default) matches the query literally (`rg --fixed-strings`); `true`
+    // treats it as a regular expression. An invalid regex is reported as the
+    // `invalid_regex` outcome rather than throwing.
+    regex: z.boolean(),
+    // `false` (default) is case-insensitive; `true` forces a case-sensitive
+    // match. This mirrors the renderer's "Match case" toggle directly.
+    caseSensitive: z.boolean(),
+    // `true` requires the match to fall on word boundaries (`rg --word-regexp`).
+    wholeWord: z.boolean(),
+    // ripgrep `--glob` include / exclude filters (relative to the selected
+    // source). Include globs restrict the walked set; exclude globs are sent as
+    // negated globs (`!<glob>`). For the artifact source, a terminal `.md` is a
+    // virtual alias for its extensionless logical artifact path; the private
+    // `index.md` mirror layout is never exposed. Empty arrays impose no filter.
+    includeGlobs: z.array(z.string()),
+    excludeGlobs: z.array(z.string()),
+  }),
+);
 export type WorkspaceSearchTextOptions = z.infer<
   typeof workspaceSearchTextOptionsSchema
 >;
 
-export const workspaceSearchTextRequestSchema = z.object({
-  epicId: z.string(),
-  reference: workspaceSearchSourceSchema,
-  query: z.string(),
-  options: workspaceSearchTextOptionsSchema,
-  limit: z.number().int().min(1).max(1_000),
-});
+export const workspaceSearchTextRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    reference: workspaceSearchSourceSchema,
+    query: z.string(),
+    options: workspaceSearchTextOptionsSchema,
+    limit: z.number().int().min(1).max(1_000),
+  }),
+);
 export type WorkspaceSearchTextRequest = z.infer<
   typeof workspaceSearchTextRequestSchema
 >;
@@ -902,10 +997,12 @@ export const WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES =
  * not UTF-16/JS string indices, so a consumer that wants character indices
  * converts deliberately; a highlight past the truncation bound is dropped.
  */
-export const workspaceSearchTextPreviewSchema = z.object({
-  text: z.string(),
-  ranges: z.array(searchTextPreviewRangeSchema),
-});
+export const workspaceSearchTextPreviewSchema = lazySchema(() =>
+  z.object({
+    text: z.string(),
+    ranges: z.array(searchTextPreviewRangeSchema),
+  }),
+);
 export type WorkspaceSearchTextPreview = z.infer<
   typeof workspaceSearchTextPreviewSchema
 >;
@@ -918,12 +1015,14 @@ export type WorkspaceSearchTextPreview = z.infer<
  * CHARACTER column of the first submatch on the line (for editor navigation),
  * computed over the full line before preview truncation.
  */
-export const workspaceSearchTextMatchSchema = z.object({
-  relPath: z.string(),
-  lineNumber: z.number().int().positive(),
-  column: z.number().int().positive(),
-  preview: workspaceSearchTextPreviewSchema,
-});
+export const workspaceSearchTextMatchSchema = lazySchema(() =>
+  z.object({
+    relPath: z.string(),
+    lineNumber: z.number().int().positive(),
+    column: z.number().int().positive(),
+    preview: workspaceSearchTextPreviewSchema,
+  }),
+);
 export type WorkspaceSearchTextMatch = z.infer<
   typeof workspaceSearchTextMatchSchema
 >;
@@ -939,11 +1038,9 @@ export type WorkspaceSearchTextMatch = z.infer<
  *   regular expression. No matches; a distinct typed condition so the UI can
  *   show "invalid pattern" rather than a misleading empty result.
  */
-export const workspaceSearchTextOutcomeSchema = z.enum([
-  "ready",
-  "root_unavailable",
-  "invalid_regex",
-]);
+export const workspaceSearchTextOutcomeSchema = lazySchema(() =>
+  z.enum(["ready", "root_unavailable", "invalid_regex"]),
+);
 export type WorkspaceSearchTextOutcome = z.infer<
   typeof workspaceSearchTextOutcomeSchema
 >;
@@ -954,32 +1051,38 @@ export type WorkspaceSearchTextOutcome = z.infer<
  * caller. `truncated` marks that the search hit an internal result/byte/timeout
  * cap.
  */
-export const workspaceSearchTextAttachedRootResponseSchema = z.object({
-  epicId: z.string(),
-  root: z.string(),
-  outcome: workspaceSearchTextOutcomeSchema,
-  results: z.array(workspaceSearchTextMatchSchema),
-  truncated: z.boolean(),
-});
+export const workspaceSearchTextAttachedRootResponseSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    root: z.string(),
+    outcome: workspaceSearchTextOutcomeSchema,
+    results: z.array(workspaceSearchTextMatchSchema),
+    truncated: z.boolean(),
+  }),
+);
 export type WorkspaceSearchTextAttachedRootResponse = z.infer<
   typeof workspaceSearchTextAttachedRootResponseSchema
 >;
 
-export const workspaceSearchTextEpicArtifactsResponseSchema = z.object({
-  epicId: z.string(),
-  source: workspaceEpicArtifactsSourceSchema,
-  outcome: workspaceSearchTextOutcomeSchema,
-  results: z.array(workspaceSearchTextMatchSchema),
-  truncated: z.boolean(),
-});
+export const workspaceSearchTextEpicArtifactsResponseSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    source: workspaceEpicArtifactsSourceSchema,
+    outcome: workspaceSearchTextOutcomeSchema,
+    results: z.array(workspaceSearchTextMatchSchema),
+    truncated: z.boolean(),
+  }),
+);
 export type WorkspaceSearchTextEpicArtifactsResponse = z.infer<
   typeof workspaceSearchTextEpicArtifactsResponseSchema
 >;
 
-export const workspaceSearchTextResponseSchema = z.union([
-  workspaceSearchTextAttachedRootResponseSchema,
-  workspaceSearchTextEpicArtifactsResponseSchema,
-]);
+export const workspaceSearchTextResponseSchema = lazySchema(() =>
+  z.union([
+    workspaceSearchTextAttachedRootResponseSchema,
+    workspaceSearchTextEpicArtifactsResponseSchema,
+  ]),
+);
 export type WorkspaceSearchTextResponse = z.infer<
   typeof workspaceSearchTextResponseSchema
 >;

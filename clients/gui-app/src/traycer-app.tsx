@@ -47,7 +47,7 @@ import { ReadingPositionPersistLifecycleBridge } from "@/providers/reading-posit
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
-import { PendingEpicTitleFetcher } from "@/providers/pending-epic-title-fetcher";
+import { EpicSessionControllerBridge } from "@/providers/epic-session-controller-bridge";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -56,14 +56,14 @@ import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
 import { LandingDraftMirrorMount } from "@/hooks/drafts/use-landing-draft-mirror";
 import { ProvidersChangedStreamMount } from "@/providers/providers-changed-stream-mount";
-import { RateLimitQueueProvider } from "@/providers/rate-limit-queue-provider";
+import { RateLimitPollProvider } from "@/providers/rate-limit-poll-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
-import { ResourceTelemetryBridge } from "@/providers/resource-telemetry-bridge";
-import { STARTUP_NAVIGATION_INTENT_KEY } from "@/lib/host/startup-navigation-intent";
+import { AppTelemetryBridge } from "@/providers/app-telemetry-bridge";
+import { withStartupNavigationIntent } from "@/lib/host/startup-navigation-intent";
 import { createAppRouter, type AppRouter } from "@/router";
 // Side-effect import: installs the WCO → `.wco` class bridge at module
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
@@ -169,10 +169,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
   const configureShell = useCallback(() => {
     void router.navigate({
       to: "/settings/shell",
-      state: (previous) => ({
-        ...previous,
-        [STARTUP_NAVIGATION_INTENT_KEY]: true,
-      }),
+      state: (previous) => withStartupNavigationIntent(previous, "boot-card"),
     });
   }, [router]);
   // The host-unavailable card's escape hatch. `/settings/host` rather than the
@@ -182,10 +179,19 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
   const openSettings = useCallback(() => {
     void router.navigate({
       to: "/settings/host",
-      state: (previous) => ({
-        ...previous,
-        [STARTUP_NAVIGATION_INTENT_KEY]: true,
-      }),
+      state: (previous) => withStartupNavigationIntent(previous, "boot-card"),
+    });
+  }, [router]);
+  // The desktop's "Settings…" (menu, tray, jump list) arriving while the first
+  // boot surface is up. Same target and marker as the escape hatch, so an
+  // admitted launch opens Settings ▸ Host exactly as before; the added menu
+  // marker is what lets a launch that settles signed out reach the quit card
+  // instead of the sign-in page (see `SettingsLayout`).
+  const openSettingsFromMenu = useCallback(() => {
+    void router.navigate({
+      to: "/settings/host",
+      state: (previous) =>
+        withStartupNavigationIntent(previous, "desktop-menu"),
     });
   }, [router]);
   // THE FIRST of a launch's three boot surfaces - see
@@ -196,9 +202,10 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
       <HostRuntimeBootFallback
         onConfigureShell={configureShell}
         onOpenSettings={openSettings}
+        onMenuOpenSettings={openSettingsFromMenu}
       />
     ),
-    [configureShell, openSettings],
+    [configureShell, openSettings, openSettingsFromMenu],
   );
 
   return (
@@ -206,7 +213,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
       <PersistentBrowserGuestHost />
       <LazyMotion features={domMax}>
         <WindowsBridgeProvider>
-          <ResourceTelemetryBridge />
+          <AppTelemetryBridge />
           <QueryClientProvider client={queryClient}>
             <ThemeProvider>
               <TooltipProvider>
@@ -275,8 +282,8 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                         <EpicCanvasPersistLifecycleBridge>
                           <LandingTerminalPersistLifecycleBridge>
                             <LandingTerminalTombstoneRecoveryBridge />
+                            <EpicSessionControllerBridge />
                             <EpicTabExistenceReconciler />
-                            <PendingEpicTitleFetcher />
                             <HostStreamProvider>
                               <HostScopeReady scope="default-host">
                                 <WorktreeChangedStreamMount />
@@ -337,7 +344,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <WorktreeDeleteProgressToastBridge />
       <SessionImportProgressToastBridge />
       <HarnessCatalogPrefetcher />
-      <RateLimitQueueProvider />
+      <RateLimitPollProvider />
       <HistoryPruneProvider router={props.router} />
       <RouterProvider router={props.router} />
       {/*

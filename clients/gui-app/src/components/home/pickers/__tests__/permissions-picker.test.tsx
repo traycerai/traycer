@@ -1,8 +1,20 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
-import type { AutoJudgeBilling } from "@/lib/auto-mode/auto-judge-billing";
-import type { PermissionMode } from "@/components/home/data/landing-options";
+import {
+  AUTO_MID_TURN_UNRESOLVED_LOCK,
+  type AutoJudgeBilling,
+} from "@/lib/auto-mode/auto-judge-billing";
+import {
+  AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
+  type PermissionMode,
+} from "@/components/home/data/landing-options";
 
 afterEach(() => {
   cleanup();
@@ -18,13 +30,11 @@ interface RenderPickerOptions {
   readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
   readonly harnessLabel: string | null;
   readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
-  // The host-capability VETO on the "needs a newer Traycer" sentence. Stated
-  // rather than omitted: an absent prop reads as `false`, which is the
-  // pre-veto behaviour, so every case here would keep passing while the veto
-  // itself went untested.
   readonly hostKnowsAutoMode: boolean;
   readonly turnActive: boolean;
   readonly judgeBilling: AutoJudgeBilling | null;
+  readonly onOpenPermissionSettings: (() => void) | null;
+  readonly onChange: (next: PermissionMode) => void;
 }
 
 const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
@@ -32,14 +42,11 @@ const DEFAULT_RENDER_PICKER_OPTIONS: RenderPickerOptions = {
   supportedPermissionModes: null,
   harnessLabel: "Claude Code",
   catalogSupportedModes: null,
-  // A host whose catalog line CAN spell `auto`. That is the ordinary case and
-  // the one every test about the auto row wants: with `false` the option is
-  // correctly disabled, so a description/meta/notice assertion would be
-  // asserting about a row the user cannot reach. The `false` direction has its
-  // own case below.
   hostKnowsAutoMode: true,
   turnActive: false,
   judgeBilling: null,
+  onOpenPermissionSettings: null,
+  onChange: vi.fn(),
 };
 
 // Plain object-spread merge rather than `??` defaults: several cases here
@@ -55,7 +62,7 @@ function renderPicker(overrides: Partial<RenderPickerOptions>) {
     <PermissionsPicker
       value={options.value}
       disabled={false}
-      onChange={vi.fn()}
+      onChange={options.onChange}
       supportedPermissionModes={options.supportedPermissionModes}
       harnessLabel={options.harnessLabel}
       catalogSupportedModes={options.catalogSupportedModes}
@@ -63,11 +70,13 @@ function renderPicker(overrides: Partial<RenderPickerOptions>) {
       turnActive={options.turnActive}
       judgeBilling={options.judgeBilling}
       closeFocus="trigger"
+      interactive
+      onOpenPermissionSettings={options.onOpenPermissionSettings}
     />,
   );
 }
 
-describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
+describe("<PermissionsPicker /> - catalogSupportedModes copy", () => {
   it("blames a newer Traycer when the catalog lists modes but none includes auto", () => {
     renderPicker({
       supportedPermissionModes: [
@@ -77,8 +86,6 @@ describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
       ],
       harnessLabel: "Claude Code",
       catalogSupportedModes: ["supervised", "auto_accept_edits", "full_access"],
-      // Explicit, because this is the one case the veto is ABOUT: the upgrade
-      // sentence only appears for a host that cannot spell the mode.
       hostKnowsAutoMode: false,
     });
     openMenu();
@@ -139,15 +146,7 @@ describe("<PermissionsPicker /> - C6 catalogSupportedModes copy", () => {
   });
 });
 
-// FIX 2 (P1): the Auto row must be gated on the HOST's own line, not the
-// row's constraint alone - a pre-`auto` host serves unconstrained rows like
-// any other, so the row predicate lit the option up on a machine whose
-// `chat.subscribe` line cannot carry the enum.
-describe("<PermissionsPicker /> - FIX 2 (P1): Auto option gated on hostKnowsAutoMode", () => {
-  // Matched on the label span's EXACT text, not a `startsWith("Auto")`
-  // prefix: "auto_accept_edits"'s own label ("Auto-accept edits") also starts
-  // with "Auto" and sits earlier in `PERMISSION_OPTIONS` order, so a prefix
-  // match would silently grab the wrong row.
+describe("<PermissionsPicker /> - Auto option gated on hostKnowsAutoMode", () => {
   function autoMenuItem(): HTMLElement {
     const item = screen
       .getAllByRole("menuitemradio")
@@ -199,71 +198,132 @@ describe("<PermissionsPicker /> - empty supportedPermissionModes means unconstra
   });
 });
 
-describe("<PermissionsPicker /> - C1 description + meta line", () => {
-  it("shows the exact auto description with the em dash", () => {
+describe("<PermissionsPicker /> - the four labels and one-line descriptions", () => {
+  it("shows every mode's label and description, in the picker's presentation order (Experimental Auto last)", () => {
     renderPicker({});
     openMenu();
 
+    const items = screen.getAllByRole("menuitemradio");
+    expect(
+      items.map((item) => item.querySelector(".font-medium")?.textContent),
+    ).toEqual(["Supervised", "Auto-accept edits", "Full access", "Auto"]);
+
+    expect(
+      screen.getByText("Asks before every command and file change."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Edits go through. Commands still ask."),
+    ).toBeTruthy();
     expect(
       screen.getByText(
-        "Auto-approve edits. A judge reviews each command and asks you whenever it can't clearly approve — risky, unsure, or unavailable.",
+        "A judge approves routine commands and asks you about risky ones.",
       ),
     ).toBeTruthy();
+    expect(screen.getByText("Runs everything. Nothing asks.")).toBeTruthy();
   });
+});
 
-  it("shows the Traycer-credits meta line for traycer billing", () => {
-    renderPicker({ judgeBilling: { kind: "traycer" } });
+describe("<PermissionsPicker /> - Auto's Experimental badge and label", () => {
+  function menuItemFor(label: string): HTMLElement {
+    const item = screen
+      .getAllByRole("menuitemradio")
+      .find(
+        (option) => option.querySelector(".font-medium")?.textContent === label,
+      );
+    if (item === undefined) throw new Error(`${label} menu item not found`);
+    return item;
+  }
+
+  it("shows the Experimental badge on the Auto row only", () => {
+    renderPicker({});
     openMenu();
 
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Uses your Traycer credits.",
-    );
+    expect(within(menuItemFor("Auto")).getByText("Experimental")).toBeTruthy();
+    expect(
+      within(menuItemFor("Supervised")).queryByText("Experimental"),
+    ).toBeNull();
+    expect(
+      within(menuItemFor("Auto-accept edits")).queryByText("Experimental"),
+    ).toBeNull();
+    expect(
+      within(menuItemFor("Full access")).queryByText("Experimental"),
+    ).toBeNull();
   });
 
-  it("shows the provider-account meta line for provider billing", () => {
+  it("renders no reviewer/model/billing metadata on the Auto row, whatever judgeBilling names", () => {
     renderPicker({
       judgeBilling: {
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
+        kind: "traycer",
+        modelLabel: "Sonnet 5",
+        effortLabel: null,
       },
     });
     openMenu();
 
-    expect(screen.getByTestId("permission-option-meta").textContent).toBe(
-      "Uses your Claude Code account.",
-    );
+    const autoItem = menuItemFor("Auto");
+    // Not just the old "Reviewed by ..." phrasing: the fixture's own model
+    // and billing words must be absent too, so a differently-worded successor
+    // disclosure (e.g. a later `AutoJudgeLine`-style component) still fails
+    // this test rather than slipping past a pattern pinned to retired copy.
+    expect(within(autoItem).queryByText(/Reviewed by/)).toBeNull();
+    expect(within(autoItem).queryByText(/Sonnet 5/)).toBeNull();
+    expect(within(autoItem).queryByText(/uses credits/)).toBeNull();
+    // The old component's own hook: this testid no longer exists anywhere in
+    // the tree, not just off the Auto row.
+    expect(screen.queryByTestId("permission-option-meta")).toBeNull();
   });
 
-  it("renders no meta line at all when judgeBilling is null", () => {
-    renderPicker({ judgeBilling: null });
-    openMenu();
+  it("names the trigger 'Auto — Experimental' for assistive tech and the tooltip when Auto is selected", () => {
+    renderPicker({ value: "auto" });
 
-    expect(screen.queryByTestId("permission-option-meta")).toBeNull();
+    const trigger = screen.getByRole("button");
+    expect(trigger.getAttribute("aria-label")).toBe("Auto — Experimental");
+    expect(within(trigger).getByText("Experimental")).toBeTruthy();
+  });
+
+  it("leaves the trigger's accessible name unchanged for a non-Auto mode", () => {
+    renderPicker({ value: "full_access" });
+
+    const trigger = screen.getByRole("button");
+    expect(trigger.getAttribute("aria-label")).toBe("Full access");
+    expect(within(trigger).queryByText("Experimental")).toBeNull();
   });
 });
 
-describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
+describe("<PermissionsPicker /> - mid-turn notice", () => {
+  // Settled billing throughout: with a turn active, an unsettled (`null`)
+  // billing locks the Auto row instead of showing the notice - see the
+  // mid-turn lock block below.
+  const SETTLED_BILLING: AutoJudgeBilling = {
+    kind: "traycer",
+    modelLabel: "Sonnet 5",
+    effortLabel: null,
+  };
+
   it("shows the notice when a turn is active and the current value is not auto", () => {
-    renderPicker({ turnActive: true, value: "full_access" });
+    renderPicker({
+      turnActive: true,
+      value: "full_access",
+      judgeBilling: SETTLED_BILLING,
+    });
     openMenu();
 
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
-    ).toBe(
-      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
-    );
+    ).toBe("Switches now. Anything already waiting still asks you.");
   });
 
-  it("shows the notice when a turn is active and the current value is supervised - the case the old copy was most wrong about", () => {
-    renderPicker({ turnActive: true, value: "supervised" });
+  it("shows the notice when a turn is active and the current value is supervised", () => {
+    renderPicker({
+      turnActive: true,
+      value: "supervised",
+      judgeBilling: SETTLED_BILLING,
+    });
     openMenu();
 
     expect(
       screen.getByTestId("permission-option-mid-turn-notice").textContent,
-    ).toBe(
-      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
-    );
+    ).toBe("Switches now. Anything already waiting still asks you.");
   });
 
   it("is absent when no turn is active", () => {
@@ -285,37 +345,197 @@ describe("<PermissionsPicker /> - C2 mid-turn notice", () => {
   });
 });
 
-describe("<PermissionsPicker /> - C6 mid-turn notice copy tripwire", () => {
-  // This sentence is pinned to `authorizingPermissionMode` in the HOST's
-  // `traycer-host/src/domain/chat/chat-session-manager.ts` (not in this
-  // submodule, read-only reference):
-  //
-  //   function authorizingPermissionMode(execution: ActiveExecution): PermissionMode {
-  //     if (execution.permissionMode === "auto" && execution.autoJudge === null) {
-  //       return "supervised";
-  //     }
-  //     return execution.permissionMode;
-  //   }
-  //
-  // i.e. a turn that enters `auto` mid-run with no judge bound collapses to
-  // `supervised` on the host, and `AUTO_MID_TURN_NOTICE` (`landing-options.ts`)
-  // is the GUI's prose description of that fact, shown in this picker at the
-  // moment of the choice.
-  //
-  // This assertion is a COPY TRIPWIRE ONLY: it pins the exact wording so an
-  // accidental rewording here is caught. It is explicitly NOT proof that the
-  // described collapsing behaviour is correctly implemented end-to-end - no
-  // GUI-only test can actually execute `authorizingPermissionMode`, which
-  // lives in a different repository (the internal host monorepo) that this
-  // suite has no access to and never imports from.
-  it("pins the mid-turn notice's exact wording (does not, and cannot, exercise authorizingPermissionMode)", () => {
-    renderPicker({ turnActive: true, value: "full_access" });
+describe("<PermissionsPicker /> - mid-turn lock", () => {
+  const PROVIDER_NATIVE_BILLING: AutoJudgeBilling = {
+    kind: "provider-native",
+    harnessId: "claude",
+    harnessLabel: "Claude Code",
+  };
+
+  function autoMenuItem(): HTMLElement {
+    const item = screen
+      .getAllByRole("menuitemradio")
+      .find(
+        (option) =>
+          option.querySelector(".font-medium")?.textContent === "Auto",
+      );
+    if (item === undefined) throw new Error("Auto menu item not found");
+    return item;
+  }
+
+  it("disables the Auto item and shows the lock sentence, with no mid-turn notice, when billing is provider-native and a turn is active on a non-auto value", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).toContain(
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
+    );
+    expect(
+      screen.queryByTestId("permission-option-mid-turn-notice"),
+    ).toBeNull();
+  });
+
+  it("does not call onChange when the locked Auto item is selected", () => {
+    const onChange = vi.fn();
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "supervised",
+      onChange,
+    });
+    openMenu();
+
+    fireEvent.click(autoMenuItem());
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not lock Auto when the current value is already auto", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: true,
+      value: "auto",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+  });
+
+  it("does not lock Auto when no turn is active, and shows its ordinary description", () => {
+    renderPicker({
+      judgeBilling: PROVIDER_NATIVE_BILLING,
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+    expect(autoMenuItem().textContent).toContain(
+      "A judge approves routine commands and asks you about risky ones.",
+    );
+  });
+
+  it("shows the no-judge description in place of the ordinary one when billing is blocked, with no lock", () => {
+    renderPicker({
+      judgeBilling: { kind: "blocked" },
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(false);
+    expect(item.textContent).toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
+  });
+
+  it("keeps the no-judge description alongside the mid-turn notice for blocked billing during a turn", () => {
+    renderPicker({
+      judgeBilling: { kind: "blocked" },
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    // Blocked billing never locks the row (only `null` or provider-native
+    // billing does - see `autoModeMidTurnLock`), so both the substituted
+    // description and the notice below it are shown.
+    expect(item.hasAttribute("data-disabled")).toBe(false);
+    expect(item.textContent).toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
+    expect(
+      screen.getByTestId("permission-option-mid-turn-notice").textContent,
+    ).toBe("Switches now. Anything already waiting still asks you.");
+  });
+
+  it("lets an unsupported reason win over the blocked no-judge description", () => {
+    renderPicker({
+      judgeBilling: { kind: "blocked" },
+      supportedPermissionModes: null,
+      catalogSupportedModes: ["supervised", "auto_accept_edits", "full_access"],
+      hostKnowsAutoMode: false,
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).not.toContain(AUTO_JUDGE_UNAVAILABLE_DESCRIPTION);
+    expect(item.textContent).toContain(
+      "Needs a newer Traycer on this machine.",
+    );
+  });
+
+  it("does not lock Auto for traycer billing, and keeps the mid-turn notice", () => {
+    renderPicker({
+      judgeBilling: {
+        kind: "traycer",
+        modelLabel: "Sonnet 5",
+        effortLabel: null,
+      },
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+    expect(
+      screen.getByTestId("permission-option-mid-turn-notice").textContent,
+    ).toBe("Switches now. Anything already waiting still asks you.");
+  });
+
+  it("disables the Auto item with the unresolved sentence, and no notice, while billing has not settled during a turn", () => {
+    renderPicker({
+      judgeBilling: null,
+      turnActive: true,
+      value: "supervised",
+    });
+    openMenu();
+
+    const item = autoMenuItem();
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+    expect(item.textContent).toContain(AUTO_MID_TURN_UNRESOLVED_LOCK);
+    expect(
+      screen.queryByTestId("permission-option-mid-turn-notice"),
+    ).toBeNull();
+  });
+
+  it("does not lock Auto on unsettled billing when no turn is active", () => {
+    renderPicker({
+      judgeBilling: null,
+      turnActive: false,
+      value: "supervised",
+    });
+    openMenu();
+
+    expect(autoMenuItem().hasAttribute("data-disabled")).toBe(false);
+  });
+});
+
+describe("<PermissionsPicker /> - trailing 'Permission settings…' item", () => {
+  it("renders the item after a separator when a callback is given, and calls it on select", () => {
+    const onOpenPermissionSettings = vi.fn();
+    renderPicker({ onOpenPermissionSettings });
+    openMenu();
+
+    const item = screen.getByRole("menuitem", { name: "Permission settings…" });
+    expect(item).toBeTruthy();
+
+    fireEvent.click(item);
+
+    expect(onOpenPermissionSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no trailing item when onOpenPermissionSettings is null (the Settings default-mode row)", () => {
+    renderPicker({ onOpenPermissionSettings: null });
     openMenu();
 
     expect(
-      screen.getByTestId("permission-option-mid-turn-notice").textContent,
-    ).toBe(
-      "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.",
-    );
+      screen.queryByRole("menuitem", { name: "Permission settings…" }),
+    ).toBeNull();
   });
 });

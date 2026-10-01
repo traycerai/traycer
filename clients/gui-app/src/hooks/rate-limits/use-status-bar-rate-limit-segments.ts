@@ -31,6 +31,7 @@ import {
   type ProfileAccentDotInput,
 } from "@/components/providers/provider-profile-model";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { mergeOrder } from "@/lib/order-merge";
 import { sortProviderStatesByProviderOrder } from "@/lib/provider-ordering";
 import {
   isRateLimitProfileFetchEligible,
@@ -53,10 +54,12 @@ import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity"
 import { useSampledNow } from "@/lib/relative-time";
 import {
   statusBarProviderLimitSelection,
-  useLayoutStore,
+  type StatusBarProviderLimits,
   type StatusBarProviderLimitSelection,
-  type StatusBarProviderLimitSelections,
-} from "@/stores/settings/layout-store";
+} from "@/lib/layout/layout-arrangement";
+import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
+import { sampleProviderRateLimits } from "@/components/sample-workspace/sample-rate-limit-readings";
+import { SAMPLE_ACCOUNT_LABEL } from "@/components/sample-workspace/sample-workspace-scene";
 
 /**
  * The status bar's left cluster, from the watched host's provider inventory to
@@ -124,6 +127,13 @@ export interface StatusBarProviderSegmentModel {
    * (the same rule the composer's rail applies).
    */
   readonly account: ProfileAccentDotInput | null;
+  /**
+   * Whether this provider sits on the layout store's deny-list. Only ever
+   * `true` while a Customize session asked to see hidden providers too
+   * (`useStatusBarRateLimitSegments({ editing: true })`) - outside a session
+   * a hidden provider never reaches `toSegments` at all.
+   */
+  readonly hidden: boolean;
   readonly state: StatusBarProviderSegmentState;
   /**
    * Why this segment is degraded or unavailable, when the provider named a
@@ -157,7 +167,7 @@ export interface StatusBarProviderSegmentModel {
   readonly tightest: StatusBarRateLimitWindow | null;
 }
 
-/** One provider's cold-start trigger, for the queue-routed mount refresh. */
+/** One target's cold-start trigger, for the mount refresh. */
 export interface StatusBarRateLimitMountTarget {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
@@ -167,11 +177,14 @@ export interface StatusBarRateLimitMountTarget {
 
 /** Everything the one `↻` needs to fan out over the cluster's providers. */
 export interface StatusBarRateLimitRefreshModel {
-  /** Eligible `ephemeralProcess` targets, refreshed as ONE queued batch. */
-  readonly queueTargets: ReadonlyArray<{
+  /** Eligible `ephemeralProcess` targets, each refreshed by its own forced
+   *  fetch. */
+  readonly ephemeralTargets: ReadonlyArray<{
     readonly providerId: RateLimitProviderId;
     readonly profileId: string | null;
   }>;
+  /** Whether any of those targets is fetching right now. */
+  readonly ephemeralFetching: boolean;
   /** Eligible `httpFetch` observers, refreshed through their own queries. */
   readonly httpRefetches: ReadonlyArray<() => Promise<unknown>>;
   /** Whether any of those http observers is fetching right now. */
@@ -209,7 +222,7 @@ export interface StatusBarRateLimitSegments {
  *
  * Nothing here can fetch a reading: `useVisibleRateLimitProviders` observes the
  * usage cache with `PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS` (`enabled: false`) and
- * otherwise reads `providers.list`, which the app-shell queue already keeps
+ * otherwise reads `providers.list`, which the app-shell poll already keeps
  * subscribed on this window's host.
  */
 export function useStatusBarWindowedProviders(): ReadonlyArray<ConfiguredRateLimitProvider> {
@@ -287,7 +300,7 @@ function resolveTargets(
 /**
  * Whether this reader is allowed to make a reading happen.
  *
- * `live` is the strip: the http lane polls, the queue lane takes its cold start,
+ * `live` is the strip: the http lane polls, the ephemeral lane takes its cold start,
  * and the `↻` fans out. `passive` is a reader that must never cause a fetch -
  * it observes whatever the live readers have already written into the shared
  * cache and renders that. The two share every query KEY, which is the point: a
@@ -307,14 +320,14 @@ export type StatusBarRateLimitMode = "live" | "passive";
  * There are three anyway, and the extra split is deliberate. The two disabled
  * batches produce identical options but mean different things - one is a lane
  * that may never fetch here, the other a credential that cannot fetch anywhere -
- * and only the first is a queue lane. Keeping them apart is what lets
- * `mountTargets` be a plain index join over the queue batch rather than a filter
+ * and only the first is the ephemeral lane. Keeping them apart is what lets
+ * `mountTargets` be a plain index join over the ephemeral batch rather than a filter
  * over a mixed one, and it is what makes the lane split legible at the call site
  * instead of an emergent property of an equality nobody restates.
  *
  * `passive` collapses all three onto the disabled shape, LANE INCLUDED - the
  * http lane is the one that would otherwise fetch, so a mode that only silenced
- * the queue lane would silence the half that was already silent.
+ * the ephemeral lane would silence the half that was already silent.
  */
 function batchOptions(
   targets: ReadonlyArray<StatusBarRateLimitTarget>,
@@ -395,21 +408,21 @@ function liveWindows(
  * The user's selection, resolved against what the provider currently reports.
  *
  * A filter over the live list rather than a union of two lists, so the result
- * is in catalog order and a window the automatic entry and an explicit pick
- * both name appears once. An explicit pick that matches nothing live is
- * simply not there; when NONE of the selection is, the tightest stands in,
- * because a provider whose every pick has gone stale should still be judged
- * rather than disappear.
+ * is in catalog order and a picked window is drawn once. An explicit pick that
+ * matches nothing live is simply not there; when NONE of the selection is -
+ * which includes Automatic, whose pick list is empty (R1-15) - the tightest
+ * stands in, because a provider whose every pick has gone stale should still
+ * be judged rather than disappear.
  */
 function shownWindows(
   windows: ReadonlyArray<StatusBarRateLimitWindow>,
   selection: StatusBarProviderLimitSelection,
 ): ReadonlyArray<StatusBarRateLimitWindow> {
   const tightest = tightestRateLimitWindow(windows);
-  const shown = windows.filter(
-    (window) =>
-      (selection.automatic && window === tightest) ||
-      selection.limitKeys.includes(window.windowKey),
+  // An empty pick list IS Automatic (R1-15), so the tightest-only branch and
+  // the fallback below it are the same expression read twice.
+  const shown = windows.filter((window) =>
+    selection.limitKeys.includes(window.windowKey),
   );
   if (shown.length > 0) return shown;
   return tightest === null ? [] : [tightest];
@@ -432,13 +445,19 @@ interface OrderedSegment {
   readonly segment: StatusBarProviderSegmentModel;
 }
 
+interface ToSegmentsContext {
+  readonly providerLimits: StatusBarProviderLimits;
+  readonly hiddenProviders: ReadonlyArray<RateLimitProviderId>;
+  readonly now: number;
+  readonly sample: boolean;
+}
+
 function toSegments(
   targets: ReadonlyArray<StatusBarRateLimitTarget>,
   queries: ReadonlyArray<
     UseQueryResult<ProviderRateLimitEnvelope, HostRpcError>
   >,
-  selections: StatusBarProviderLimitSelections,
-  now: number,
+  context: ToSegmentsContext,
 ): ReadonlyArray<OrderedSegment> {
   return targets.map((target, index) => {
     const query = queries[index];
@@ -447,19 +466,40 @@ function toSegments(
     // transient failure is being ridden out. Resolved once and handed to both
     // halves, so the state a segment reports and the windows it draws can never
     // describe two different snapshots.
-    const retained = resolveRetainedProviderRateLimits(envelope);
-    const windows = liveWindows(retained, now);
+    //
+    // In the sample scene the invented snapshot takes the reading's place here,
+    // before the catalog and the selection, so a sample segment draws the
+    // user's picked windows under their real keys (C12). A provider with no
+    // sample windows reads nothing rather than its real envelope, which drops
+    // its segment: the scene never shows a real reading.
+    const retained = context.sample
+      ? sampleProviderRateLimits(
+          target.provider.providerId,
+          target.order,
+          context.now,
+        )
+      : resolveRetainedProviderRateLimits(envelope);
+    const windows = liveWindows(retained, context.now);
     const shown = shownWindows(
       windows,
-      statusBarProviderLimitSelection(selections, target.provider.providerId),
+      statusBarProviderLimitSelection(
+        context.providerLimits,
+        target.provider.providerId,
+      ),
     );
     return {
       order: target.order,
       segment: {
         providerId: target.provider.providerId,
         profileId: target.profileId,
-        account: target.account,
-        ...segmentState(retained, envelope, query.isError),
+        account:
+          !context.sample || target.account === null
+            ? target.account
+            : { ...target.account, label: SAMPLE_ACCOUNT_LABEL },
+        hidden: context.hiddenProviders.includes(target.provider.providerId),
+        ...(context.sample
+          ? { state: "live" as const, reason: null }
+          : segmentState(retained, envelope, query.isError)),
         windows,
         shown,
         tightest: tightestRateLimitWindow(shown),
@@ -483,18 +523,42 @@ function clusterFor(
 }
 
 /**
+ * Reorders segments provider-by-provider to match `segmentOrder`, keeping a
+ * provider's own accounts together and in the order they were already in.
+ * `mergeOrder` runs over PROVIDER ids (a segment list can hold several
+ * accounts of one provider), and a provider `mergeOrder` cannot place - one
+ * the strip is not currently drawing at all - is simply absent from its
+ * result and contributes nothing here.
+ */
+function applySegmentOrder(
+  segments: ReadonlyArray<StatusBarProviderSegmentModel>,
+  segmentOrder: ReadonlyArray<RateLimitProviderId>,
+): ReadonlyArray<StatusBarProviderSegmentModel> {
+  const presentProviderIds: RateLimitProviderId[] = [];
+  for (const segment of segments) {
+    if (!presentProviderIds.includes(segment.providerId))
+      presentProviderIds.push(segment.providerId);
+  }
+  const order = mergeOrder(segmentOrder, presentProviderIds);
+  return order.flatMap((providerId) =>
+    segments.filter((segment) => segment.providerId === providerId),
+  );
+}
+
+/**
  * The cluster's render model, over the providers the bar resolved.
  *
  * **Two lanes, three batches, never one mixed batch.** `ephemeralProcess`
  * providers (codex, claude-code, grok) spawn a CLI subprocess to read usage, so
- * the serial queue owns every fetch of theirs and the observer here must stay
- * passive. `providerRateLimitQueryOptions` disables it by LANE, which is why the
+ * every fetch of theirs goes through `fetchProviderRateLimits`, which says
+ * whether the read is forced, and the observer here must stay passive.
+ * `providerRateLimitQueryOptions` disables it by LANE, which is why the
  * ephemeral batch passes each target's real `fetchEligible` rather than a
  * hardcoded `false`: even an eligible ephemeral target observes. Passing
  * `options: null` instead would be the bug this shape exists to prevent -
  * `use-host-queries.ts` defaults a missing `enabled` to `true` and calls the
- * host directly, which for these providers means a subprocess spawned outside
- * the queue.
+ * host directly with no `force`, which the wire reads as forced: a real CLI
+ * probe on every mount.
  *
  * The `httpFetch` lane splits once more, on eligibility, for the same
  * one-options-per-batch reason: an ineligible target sharing the polling batch's
@@ -513,21 +577,45 @@ export function useStatusBarRateLimitSegments(input: {
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly profileSelection: RateLimitProfileSelection;
   readonly mode: StatusBarRateLimitMode;
+  /**
+   * A Customize session wants every provider to stay clickable, including a
+   * hidden one - so its segment is built (and marked `hidden`) instead of
+   * being filtered out before it can register a hotspot.
+   */
+  readonly editing: boolean;
+  /**
+   * The sample scene is up: every segment reads an invented snapshot instead
+   * of the user's, and names its account "Sample account". Fetching is left
+   * exactly as it is - the real strip beside the scene still owns it.
+   */
+  readonly sample: boolean;
 }): StatusBarRateLimitSegments {
   const passive = input.mode === "passive";
   const client = useHostClient();
-  const rateLimits = useLayoutStore((state) => state.statusBar.rateLimits);
+  const usageShown = useRegionShown("usageLimits");
+  const hiddenProviders = useArrangementValue("hiddenProviders");
+  const segmentOrder = useArrangementValue("usageProviders");
+  const providerLimits = useArrangementValue("providerLimits");
   // The shared 60s clock, so a window that expires while the strip is on screen
   // drops out of it within the minute rather than at the next fetch.
   const now = useSampledNow();
 
   const targets = input.providers
     .filter(
-      (provider) => !rateLimits.hiddenProviders.includes(provider.providerId),
+      (provider) =>
+        input.editing || !hiddenProviders.includes(provider.providerId),
     )
     .flatMap((provider) => resolveTargets(provider, input.profileSelection))
-    .map((target, order) => ({ ...target, order }));
-  const queueObserved = targets.filter(
+    .map((target, order) => ({
+      ...target,
+      order,
+      // Editor-only segments observe cached data without starting requests.
+      fetchEligible:
+        target.fetchEligible &&
+        usageShown &&
+        !hiddenProviders.includes(target.provider.providerId),
+    }));
+  const ephemeralObserved = targets.filter(
     (target) => target.lane === "ephemeralProcess",
   );
   const httpPolling = targets.filter(
@@ -537,15 +625,15 @@ export function useStatusBarRateLimitSegments(input: {
     (target) => target.lane === "httpFetch" && !target.fetchEligible,
   );
 
-  const queueObservedQueries = useHostQueriesWithResponseMap<
+  const ephemeralObservedQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
     ProviderRateLimitEnvelope
   >({
     client,
     cacheKeyIdentity: undefined,
-    requests: requestsFor(queueObserved),
-    options: batchOptions(queueObserved, input.mode),
+    requests: requestsFor(ephemeralObserved),
+    options: batchOptions(ephemeralObserved, input.mode),
     mapResponse: mapResponseToProviderRateLimitEnvelope,
   });
   const httpPollingQueries = useHostQueriesWithResponseMap<
@@ -579,36 +667,46 @@ export function useStatusBarRateLimitSegments(input: {
   // accounts to the order `resolveStatusBarProfileIds` gave them after the
   // lane split scattered them by eligibility; then the (stable) catalog sort
   // over providers on top.
-  const segments = sortProviderStatesByProviderOrder(
+  const canonicallyOrdered = sortProviderStatesByProviderOrder(
     [
-      ...toSegments(
-        queueObserved,
-        queueObservedQueries,
-        rateLimits.providers,
+      ...toSegments(ephemeralObserved, ephemeralObservedQueries, {
+        providerLimits,
+        hiddenProviders,
         now,
-      ),
-      ...toSegments(httpPolling, httpPollingQueries, rateLimits.providers, now),
-      ...toSegments(
-        httpObserved,
-        httpObservedQueries,
-        rateLimits.providers,
+        sample: input.sample,
+      }),
+      ...toSegments(httpPolling, httpPollingQueries, {
+        providerLimits,
+        hiddenProviders,
         now,
-      ),
+        sample: input.sample,
+      }),
+      ...toSegments(httpObserved, httpObservedQueries, {
+        providerLimits,
+        hiddenProviders,
+        now,
+        sample: input.sample,
+      }),
     ]
       .sort((left, right) => left.order - right.order)
       .map((entry) => entry.segment),
   ).filter(hasContent);
+  // The user's own arrangement wins over the canonical one - the same
+  // `mergeOrder` every persisted order field resolves through, applied here
+  // rather than baked into the store so a late-connected provider still lands
+  // beside its canonical neighbour without a migration.
+  const segments = applySegmentOrder(canonicallyOrdered, segmentOrder);
 
   return {
     cluster: clusterFor(input.providers.length, segments),
-    // Only the queue lane: an `httpFetch` observer is enabled and fetches its
+    // Only the ephemeral lane: an `httpFetch` observer is enabled and fetches its
     // own cold start on mount, so routing it through the mount hook as well
     // would put two fetches on one key. And none of it in `passive`, where a
     // cold provider stays cold: a preview that warmed the cache would be
     // reporting on a reading it caused.
-    mountTargets: queueObserved.flatMap((target, index) => {
+    mountTargets: ephemeralObserved.flatMap((target, index) => {
       if (passive || !target.fetchEligible) return [];
-      const envelope = queueObservedQueries[index].data;
+      const envelope = ephemeralObservedQueries[index].data;
       return [
         {
           providerId: target.provider.providerId,
@@ -619,7 +717,7 @@ export function useStatusBarRateLimitSegments(input: {
       ];
     }),
     refresh: {
-      queueTargets: queueObserved.flatMap((target) =>
+      ephemeralTargets: ephemeralObserved.flatMap((target) =>
         !passive && target.fetchEligible
           ? [
               {
@@ -629,6 +727,14 @@ export function useStatusBarRateLimitSegments(input: {
             ]
           : [],
       ),
+      // The passive observers still see a fetch the fetch function started on
+      // their key, so this is the ephemeral half of the spinner.
+      ephemeralFetching:
+        !passive &&
+        ephemeralObserved.some(
+          (target, index) =>
+            target.fetchEligible && ephemeralObservedQueries[index].isFetching,
+        ),
       httpRefetches: passive
         ? NO_REFETCHES
         : httpPollingQueries.map((query) => query.refetch),

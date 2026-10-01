@@ -26,6 +26,7 @@ import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { ChatPortForward } from "@traycer/protocol/host/port-forward";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -47,6 +48,7 @@ import {
   WsStreamClient,
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
 import { resolveSubmitDeliveryPolicy } from "@/lib/chats/resolve-steer-submit";
 import {
   ACCEPTED_CHAT_ACTION_RETENTION_MS,
@@ -253,6 +255,7 @@ const IMAGE_CONTENT: JsonContent = {
         b64content: "abc123",
         mimeType: "image/png",
         size: 128,
+        byHashEligible: true,
       },
     },
     {
@@ -397,6 +400,18 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     _method: Method,
     _params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    return this.session;
+  }
+
+  // `ChatStreamClient` opens through the params provider (it re-reads its
+  // skeleton-resume claim on every wire subscribe), so this is the path the
+  // chain under test actually takes.
+  override subscribeWithParamsProvider<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(
+    _method: Method,
+    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     return this.session;
   }
@@ -653,6 +668,7 @@ interface SnapshotFrameInput {
   readonly backgroundItems?: ReadonlyArray<BackgroundItem>;
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
   readonly heldUpdates?: ReadonlyArray<HeldManagedCommandUpdate>;
+  readonly portForwards?: ReadonlyArray<ChatPortForward>;
   readonly claudePendingWakes?: ReadonlyArray<ClaudePendingWake>;
   // Default to the idle/no-turn snapshot every existing caller relies on;
   // the session-stop reconnect tests need a snapshot that reports a live
@@ -704,6 +720,7 @@ function emitSnapshotWithQueuedSend(
           sender: { type: "user", userId: OWNER_ID },
           settings: SETTINGS,
           accountContext: { type: "PERSONAL" },
+          sentFromHostId: null,
           delivery: "next_turn",
           status: "pending",
           targetTurnId: null,
@@ -765,6 +782,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): Chat {
       accumulatedFileChanges: [],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [...(input.heldUpdates ?? [])],
+      portForwards: [...(input.portForwards ?? [])],
       ...(input.backgroundItems === undefined
         ? {}
         : { backgroundItems: [...input.backgroundItems] }),
@@ -816,6 +834,7 @@ function emitSnapshotWithWorktree(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       worktreeBinding,
       missingWorktreePaths: [],
     },
@@ -4255,6 +4274,7 @@ describe("createChatSessionStore", () => {
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" },
+            sentFromHostId: null,
             delivery: "next_turn",
             status: "pending",
             targetTurnId: null,
@@ -4600,6 +4620,7 @@ describe("createChatSessionStore", () => {
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" },
+            sentFromHostId: null,
             delivery: "next_turn",
             status: "pending",
             targetTurnId: null,
@@ -5300,6 +5321,7 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
     expect(harness.handle.store.getState().failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
+      messageId: frame.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
@@ -5351,6 +5373,7 @@ describe("createChatSessionStore", () => {
     // bury it instead.
     expect(harness.handle.store.getState().failedSendRestoration).toEqual({
       clientActionId: first.clientActionId,
+      messageId: first.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "Message was not confirmed after reconnect.",
@@ -6127,6 +6150,7 @@ describe("createChatSessionStore", () => {
       content: SECOND_CONTENT,
       sender: { type: "user", userId: OWNER_ID },
       settings: SETTINGS,
+      worktreeIntent: null,
     });
 
     // Billing moves; the seeded send's own context must be what is reported.
@@ -7669,6 +7693,7 @@ describe("createChatSessionStore", () => {
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" as const },
+            sentFromHostId: null,
             delivery: "next_turn",
             status: "pending",
             targetTurnId: null,
@@ -7736,6 +7761,7 @@ describe("createChatSessionStore", () => {
       content: CONTENT,
       sender: { type: "user", userId: OWNER_ID },
       settings: SETTINGS,
+      worktreeIntent: null,
     });
     const frame = harness.sent[0];
     if (frame.kind !== "send") throw new Error("Expected send frame");
@@ -7892,6 +7918,7 @@ describe("createChatSessionStore", () => {
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" as const },
+            sentFromHostId: null,
             delivery: "next_turn",
             status: "pending",
             targetTurnId: "turn-1",
@@ -7962,6 +7989,7 @@ describe("createChatSessionStore", () => {
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" as const },
+            sentFromHostId: null,
             delivery: "next_turn",
             status: "pending",
             targetTurnId: "turn-1",
@@ -8034,6 +8062,7 @@ describe("createChatSessionStore", () => {
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" as const },
+            sentFromHostId: null,
             delivery: "next_turn",
             status: "pending",
             targetTurnId: "turn-1",
@@ -8468,6 +8497,7 @@ describe("createChatSessionStore", () => {
       sender: { type: "user" as const, userId: OWNER_ID },
       settings,
       accountContext: { type: "PERSONAL" as const },
+      sentFromHostId: null,
       delivery: "next_turn" as const,
       status,
       targetTurnId: null,
@@ -9168,6 +9198,7 @@ describe("createChatSessionStore", () => {
             sender: { type: "user", userId: OWNER_ID },
             settings: SETTINGS,
             accountContext: { type: "PERSONAL" as const },
+            sentFromHostId: null,
             delivery: "next_turn",
             status: "paused",
             targetTurnId: null,
@@ -10758,6 +10789,7 @@ describe("createChatSessionStore", () => {
         accumulatedFileChanges: [],
         managedCommands: [],
         heldUpdates: [],
+        portForwards: [],
       },
     });
     callbacks.onTurnStateChanged({
@@ -10930,6 +10962,7 @@ describe("createChatSessionStore", () => {
         accumulatedFileChanges: [],
         managedCommands: [],
         heldUpdates: [],
+        portForwards: [],
       },
     });
 
@@ -13142,6 +13175,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     expect(state.pendingUserMessages).toEqual([]);
     expect(state.failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
+      messageId: frame.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
@@ -13243,6 +13277,7 @@ describe("turn-settled stranded-send reconciliation", () => {
     expect(state.pendingUserMessages).toEqual([]);
     expect(state.failedSendRestoration).toEqual({
       clientActionId: frame.clientActionId,
+      messageId: frame.messageId,
       content: CONTENT,
       browserAnnotations: [],
       reason: "The message was not recorded before the turn stopped.",
@@ -13543,6 +13578,184 @@ describe("the chat's held updates", () => {
     expect(
       harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
     ).toEqual(["cmd-live"]);
+    harness.handle.dispose();
+  });
+});
+
+// Port forwards (`chat.subscribe@1.14`) follow the exact same whole-set
+// contract as the chat's held updates just above - `onPortForwardsChanged`
+// replaces the whole `portForwards` array, guarded by the same
+// chat/epic/generation checks (`matchesChat` plus the callbacks-generation
+// swap `retry()` performs). Kept in this file rather than a standalone one:
+// `createHarness`/`emitSnapshotFrame`/`Harness` are local to this file and
+// not exported, and copying their setup (the mock `ChatSessionStoreHandle`
+// wiring, `ProtocolMockWsStreamClient`, etc.) into a new file would run well
+// past the ~150-line budget for a small addition like this one.
+describe("the chat's port forwards", () => {
+  function portForward(over: Partial<ChatPortForward>): ChatPortForward {
+    return {
+      forwardId: "forward-1",
+      description: "8080 → laptop:8080",
+      target: { hostId: "host-b", port: 8080 },
+      listen: { hostId: "host-a", requestedPort: 8080, boundPort: 8080 },
+      state: "active",
+      stateReason: null,
+      createdAtMs: 10,
+      recentEvents: [],
+      ...over,
+    };
+  }
+
+  function seededHarness(
+    portForwards: ReadonlyArray<ChatPortForward>,
+  ): Harness {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      portForwards,
+    });
+    return harness;
+  }
+
+  it("reads as an empty set before the host has said anything", () => {
+    const harness = createHarness();
+
+    // Not `undefined`: a host below `chat.subscribe@1.14` owns no forwards
+    // to show, so there is no "unknown" for a consumer to branch on.
+    expect(harness.handle.store.getState().portForwards).toEqual([]);
+    harness.handle.dispose();
+  });
+
+  it("takes the set from the snapshot", () => {
+    const harness = seededHarness([portForward({ forwardId: "forward-1" })]);
+
+    expect(
+      harness.handle.store.getState().portForwards.map((f) => f.forwardId),
+    ).toEqual(["forward-1"]);
+    harness.handle.dispose();
+  });
+
+  it("replaces the whole set on a portForwardsChanged frame - a shrink drops the stale row", () => {
+    const harness = seededHarness([
+      portForward({ forwardId: "forward-1" }),
+      portForward({ forwardId: "forward-2" }),
+    ]);
+
+    harness.callbacks().onPortForwardsChanged({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      portForwards: [portForward({ forwardId: "forward-2" })],
+    });
+
+    // The frame is the set, not a delta: `forward-1` is gone because the
+    // host stopped naming it, with no removal frame anywhere.
+    expect(
+      harness.handle.store.getState().portForwards.map((f) => f.forwardId),
+    ).toEqual(["forward-2"]);
+    harness.handle.dispose();
+  });
+
+  it("replaces the set with [] on a portForwardsChanged frame - a stopped forward leaves no row behind", () => {
+    const harness = seededHarness([portForward({ forwardId: "forward-1" })]);
+
+    harness.callbacks().onPortForwardsChanged({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      portForwards: [],
+    });
+
+    expect(harness.handle.store.getState().portForwards).toEqual([]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another chat", () => {
+    const harness = seededHarness([portForward({ forwardId: "forward-1" })]);
+
+    harness.callbacks().onPortForwardsChanged({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: "some-other-chat",
+      portForwards: [],
+    });
+
+    expect(
+      harness.handle.store.getState().portForwards.map((f) => f.forwardId),
+    ).toEqual(["forward-1"]);
+    harness.handle.dispose();
+  });
+
+  it("ignores a frame addressed to another epic", () => {
+    const harness = seededHarness([portForward({ forwardId: "forward-1" })]);
+
+    harness.callbacks().onPortForwardsChanged({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: "some-other-epic",
+      chatId: CHAT_ID,
+      portForwards: [],
+    });
+
+    expect(
+      harness.handle.store.getState().portForwards.map((f) => f.forwardId),
+    ).toEqual(["forward-1"]);
+    harness.handle.dispose();
+  });
+
+  // Same generation guard as `chat-subscribe-held-updates.test.ts`'s sibling
+  // proves for held updates: a chat/epic match alone is not enough for a
+  // frame from a stream this store has already replaced (what a retry
+  // produces - the old client is torn down but its in-flight frames still
+  // land).
+  it("ignores a port-forwards frame from a superseded stream", () => {
+    const harness = seededHarness([portForward({ forwardId: "forward-1" })]);
+    const staleCallbacks = harness.callbacks();
+
+    harness.handle.store.getState().retry();
+
+    staleCallbacks.onPortForwardsChanged({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      portForwards: [],
+    });
+    expect(
+      harness.handle.store.getState().portForwards.map((f) => f.forwardId),
+    ).toEqual(["forward-1"]);
+
+    staleCallbacks.onPortForwardsChanged({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      portForwards: [portForward({ forwardId: "forward-stale" })],
+    });
+    expect(
+      harness.handle.store.getState().portForwards.map((f) => f.forwardId),
+    ).toEqual(["forward-1"]);
+
+    // ...and the live stream is still heard, so this is a generation guard
+    // rather than a store that stopped listening.
+    harness.callbacks().onPortForwardsChanged({
+      kind: "portForwardsChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      portForwards: [portForward({ forwardId: "forward-live" })],
+    });
+
+    expect(
+      harness.handle.store.getState().portForwards.map((f) => f.forwardId),
+    ).toEqual(["forward-live"]);
     harness.handle.dispose();
   });
 });

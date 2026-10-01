@@ -70,7 +70,7 @@ export const RUNG_INELIGIBILITY_COPY: Readonly<
 > = {
   rate_limit: { profile: null, tier: null, wait: null, notify: null },
   provider_unavailable: {
-    profile: "same servers",
+    profile: "same outage",
     tier: null,
     wait: "no reset time",
     notify: null,
@@ -78,13 +78,13 @@ export const RUNG_INELIGIBILITY_COPY: Readonly<
   billing: {
     profile: null,
     tier: null,
-    wait: "nothing to wait for",
+    wait: "billing needs attention",
     notify: null,
   },
   model_unavailable: {
-    profile: "same model",
+    profile: "model still missing",
     tier: null,
-    wait: "nothing to wait for",
+    wait: "choose an available model",
     notify: null,
   },
   auth: {
@@ -94,8 +94,8 @@ export const RUNG_INELIGIBILITY_COPY: Readonly<
     notify: null,
   },
   provider_connection_failed: {
-    profile: "same network",
-    tier: "same network",
+    profile: "check the connection",
+    tier: "check the connection",
     wait: "no reset time",
     notify: null,
   },
@@ -163,7 +163,19 @@ export const REASON_ROW_NOTES: Readonly<
  * "does not author" is the D146 scope limit, and "Notify stays last" is a
  * promise `togglePolicyOverrideRung` is built to keep.
  *
- * "Cancellation window", never "grace": the vocabulary table bans the latter.
+ * "Cancellation window", never "grace": the vocabulary table bans the latter -
+ * though the rendered sentence now says "countdown to cancel", since a user-lens
+ * review found "cancellation window" was itself unexplained vocabulary. The ban
+ * is on "grace"; plain words for the same thing are fine.
+ *
+ * The user-facing sentence also drops the D146 scope limit - *"this editor does not
+ * author the wire's per-reason off value"* - which the doc above keeps. It
+ * describes what this EDITOR cannot write, a distinction visible only to
+ * someone comparing the panel against the wire format; a reader deciding
+ * whether to turn a chip off cannot act on it, and it was the clause that made
+ * the line read as engineering notes rather than guidance. Every fact the
+ * reader CAN act on survives: the retry, the notification, the missing
+ * cancellation window, and Notify's position.
  */
 export const FALLBACK_OVERRIDES_DISCLOSURE =
-  "Turning every chip off leaves the brief retry that outages and connection failures start with, and the notification at the end - but no cancellation window; this editor does not author the wire’s per-reason off value, and Notify stays last.";
+  "Turn off every option in a row and Traycer will not switch or wait for that problem - it will notify you instead. Outages and connection problems still get a brief retry first. There is no countdown to cancel.";

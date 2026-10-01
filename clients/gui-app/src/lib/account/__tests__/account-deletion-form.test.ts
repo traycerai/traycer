@@ -34,8 +34,8 @@ describe("buildAccountDeletionFormUrl", () => {
     expect(params.get("entry.833738174")).toBe("ada@example.com");
     expect(params.get("entry.671973110")).toBe("ada@example.com");
     // The sign-in method is the user's to answer: only they know whether they
-    // sign in with Email or GitHub, and a wrong prefill routes to the wrong
-    // branch.
+    // sign in with Email, GitHub or Apple, and a wrong prefill routes to the
+    // wrong branch.
     expect(params.has("entry.1825201942")).toBe(false);
   });
 

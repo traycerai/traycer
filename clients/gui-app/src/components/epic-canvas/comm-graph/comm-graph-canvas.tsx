@@ -37,12 +37,15 @@ import type {
 } from "@/lib/comm-graph/comm-graph-events";
 import {
   aggregateCommGraphEdges,
+  commGraphPeerTaskFallbackLabel,
+  commGraphPeerTaskStubs,
   type CommGraphAgentNode,
 } from "@/lib/comm-graph/comm-graph-model";
 import {
   COMM_GRAPH_NODE_HEIGHT,
   COMM_GRAPH_NODE_WIDTH,
   layoutCommGraphNodes,
+  type CommGraphLayoutNode,
 } from "@/lib/comm-graph/comm-graph-layout";
 import {
   COMM_GRAPH_AGENT_NODE_TYPE,
@@ -276,11 +279,35 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   const { resolvedTheme } = useResolvedTheme();
   const activityTiers = useEpicAgentActivityTiers();
 
+  // A cross-task row names an agent this task has no record of; it draws as a
+  // stand-in for its task (see `commGraphPeerTaskStubs`). Derived from the
+  // as-of-cursor events, so a stand-in appears with its first message.
+  const epicAgentIds = useMemo(
+    () => new Set(agents.map((agent) => agent.id)),
+    [agents],
+  );
+  const peerTaskStubs = useMemo(
+    () => commGraphPeerTaskStubs(events, epicAgentIds),
+    [epicAgentIds, events],
+  );
+  const drawableIds = useMemo(() => {
+    if (peerTaskStubs.length === 0) return agentIds;
+    const ids = new Set(agentIds);
+    for (const stub of peerTaskStubs) ids.add(stub.agentId);
+    return ids;
+  }, [agentIds, peerTaskStubs]);
   // Shared by the edge labels and both detail panels, so an agent is named the
   // same way wherever it appears.
   const nameById = useMemo(
-    () => new Map(agents.map((agent) => [agent.id, agent.name])),
-    [agents],
+    () =>
+      new Map([
+        ...agents.map((agent): [string, string] => [agent.id, agent.name]),
+        ...peerTaskStubs.map((stub): [string, string] => [
+          stub.agentId,
+          commGraphPeerTaskFallbackLabel(stub.peerEpicId),
+        ]),
+      ]),
+    [agents, peerTaskStubs],
   );
   const hostStatusById = useMemo(
     () =>
@@ -290,15 +317,26 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     [hosts],
   );
   const aggregated = useMemo(
-    () => aggregateCommGraphEdges(events, agentIds),
-    [agentIds, events],
+    () => aggregateCommGraphEdges(events, drawableIds),
+    [drawableIds, events],
   );
   // Layout takes the PAIR edges too, so dagre pulls conversing agents together
   // instead of ranking them by lineage alone. Still over the full agent set, so
   // revealing a node during playback does not re-flow the ones already placed.
   const positions = useMemo(
-    () => layoutCommGraphNodes(agents, aggregated),
-    [aggregated, agents],
+    () =>
+      layoutCommGraphNodes(
+        [
+          ...agents,
+          ...peerTaskStubs.map((stub): CommGraphLayoutNode => ({
+            id: stub.agentId,
+            parentId: null,
+            createdAt: stub.firstSeenAt,
+          })),
+        ],
+        aggregated,
+      ),
+    [aggregated, agents, peerTaskStubs],
   );
 
   const pulsingAgentId =
@@ -332,6 +370,8 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
 
   const handleNodeClick = useCallback<NodeMouseHandler<CommGraphAgentFlowNode>>(
     (_event, node) => {
+      // A stand-in has no agent detail here; its own button opens its task.
+      if (node.data.variant === "peer-task") return;
       handleSelectAgent(node.id);
     },
     [handleSelectAgent],
@@ -345,12 +385,12 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
   );
 
   const nodes = useMemo<ReadonlyArray<CommGraphAgentFlowNode>>(
-    () =>
+    () => [
       // Only agents that existed as of the cursor are drawn; the layout above
       // still ran over the full set, so revealing one does not move the rest.
-      agents
+      ...agents
         .filter((agent) => agentIds.has(agent.id))
-        .map((agent) => ({
+        .map((agent): CommGraphAgentFlowNode => ({
           id: agent.id,
           type: COMM_GRAPH_AGENT_NODE_TYPE,
           position: positions.get(agent.id) ?? { x: 0, y: 0 },
@@ -361,6 +401,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
           height: COMM_GRAPH_NODE_HEIGHT,
           draggable: false,
           data: {
+            variant: "agent",
             epicId,
             agentId: agent.id,
             kind: agent.kind,
@@ -379,6 +420,26 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
             onSelect: handleSelectAgent,
           },
         })),
+      ...peerTaskStubs.map((stub): CommGraphAgentFlowNode => ({
+        id: stub.agentId,
+        type: COMM_GRAPH_AGENT_NODE_TYPE,
+        position: positions.get(stub.agentId) ?? { x: 0, y: 0 },
+        width: COMM_GRAPH_NODE_WIDTH,
+        height: COMM_GRAPH_NODE_HEIGHT,
+        draggable: false,
+        data: {
+          variant: "peer-task",
+          agentId: stub.agentId,
+          peerEpicId: stub.peerEpicId,
+          name: commGraphPeerTaskFallbackLabel(stub.peerEpicId),
+          searchMatched: searchHighlight.agentIds.has(stub.agentId),
+          searchHighlightNonce: searchHighlight.agentIds.has(stub.agentId)
+            ? searchHighlight.requestId
+            : 0,
+          pulsing: stub.agentId === pulsingAgentId,
+        },
+      })),
+    ],
     [
       activityTiers,
       agentIds,
@@ -386,6 +447,7 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
       epicId,
       handleSelectAgent,
       hostStatusById,
+      peerTaskStubs,
       positions,
       pulsingAgentId,
       searchHighlight,

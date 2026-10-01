@@ -174,7 +174,8 @@ export function providerSupportsManagedProfiles(
   return (
     providerId === "claude-code" ||
     providerId === "codex" ||
-    providerId === "grok"
+    providerId === "grok" ||
+    providerId === "antigravity"
   );
 }
 

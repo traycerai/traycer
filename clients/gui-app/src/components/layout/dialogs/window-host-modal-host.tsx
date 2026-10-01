@@ -11,6 +11,7 @@ import {
   useHostReadinessController,
   type DefaultHostReadinessPresentation,
 } from "@/components/layout/host-readiness-controller-context";
+import { HostEnsureFailureMessage } from "@/components/host/host-ensure-failure-message";
 import { LocalBootstrapAttempts } from "@/components/host/local-bootstrap-attempts";
 import {
   BootstrapLogDisclosure,
@@ -348,7 +349,15 @@ function hasSettledFailure(
     // treated as ambient host state. Under `cold-start` the modal is on screen
     // precisely because nothing has served this window yet, which is the scope
     // that error still explains.
-    failed: presentation.provisioningError !== null,
+    //
+    // `ensureFailure` settles it too, and has none of that staleness: it is
+    // main's record of the last ensure, launch ones included, which main
+    // clears on the next success - and it is withheld while one is in flight.
+    // Without it a launch ensure that failed left this card on "Starting
+    // Traycer…" with no failure to show and nothing to retry.
+    failed:
+      presentation.provisioningError !== null ||
+      presentation.ensureFailure !== null,
     slow: presentation.stage === "slow",
   };
 }
@@ -519,6 +528,14 @@ function buildBootBody(args: {
     // alignment or none. One contract, both arms.
     return (
       <LocalHostBodyShell>
+        {/* The failed ensure's own words first: they say why, where the
+            attempt panel says what was tried. */}
+        {args.presentation.ensureFailure === null ? null : (
+          <HostEnsureFailureMessage
+            message={args.presentation.ensureFailure.message}
+            code={args.presentation.ensureFailure.code}
+          />
+        )}
         <LocalBootstrapAttempts />
         {/* No trailing peer: this arm HAS a real action row (Retry, Report
             issue, Open settings), so the toggle keeps its own line rather

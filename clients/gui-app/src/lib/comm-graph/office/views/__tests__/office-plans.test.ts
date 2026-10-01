@@ -15,6 +15,7 @@ import {
   OFFICE_SIGN_LETTER_SPACING_EM,
   OFFICE_SIGN_NARROW_PLATE_MAX_CHARS,
   OFFICE_SIGN_PADDING_X,
+  OFFICE_SIGN_PADDING_Y,
   OFFICE_SIGN_PLATE_MAX_CHARS,
   officeCivicSignText,
   officeSignCenterX,
@@ -188,7 +189,7 @@ function sceneInputFor(args: {
 }
 
 import {
-  CIVIC_KINDS,
+  CIVIC_KINDS_EXPECTED,
   CIVIC_ROADS_EXPECTED,
   CIVIC_ROOMS_EXPECTED,
 } from "@/lib/comm-graph/office/__tests__/civic-rooms-expected";
@@ -330,7 +331,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       const wantsRoad = CIVIC_ROADS_EXPECTED[viewId];
       for (const floor of withRooms) {
         expect([...floor.civic].map((room) => room.kind).sort()).toEqual(
-          [...CIVIC_KINDS].sort(),
+          [...CIVIC_KINDS_EXPECTED[viewId]].sort(),
         );
         hostsWithRooms.add(floor.hostId);
         // A street where the second table says so, and NO street where it does
@@ -360,7 +361,15 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
           return room === undefined ? 0 : room.seatIds.length;
         };
         expect(seatsOf("infirmary")).toBe(bounds.beds);
-        expect(seatsOf("waiting-room")).toBe(bounds.chairs);
+        // Towers and Building share one plaza builder that no longer stands
+        // up a waiting room at all (an awaiting agent keeps its own desk),
+        // so the capacity formula's chair count is not a room either of them
+        // owes - `CIVIC_KINDS_EXPECTED` is the one table that says so.
+        expect(seatsOf("waiting-room")).toBe(
+          CIVIC_KINDS_EXPECTED[viewId].includes("waiting-room")
+            ? bounds.chairs
+            : 0,
+        );
         // C5 and C7: a door with a counter and a counter with a queue. Neither
         // is a room anybody sits down in.
         expect(seatsOf("archive")).toBe(0);
@@ -599,13 +608,17 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         OFFICE_SIGN_FONT_PX * (0.6 + OFFICE_SIGN_LETTER_SPACING_EM);
       const measure = (text: string): number =>
         text.length * charPx + OFFICE_SIGN_PADDING_X * 2;
-      // The renderer's own two numbers for the box it paints around a plate:
-      // the baseline it drops the lettering to below the sign's art, and the
-      // vertical padding of the backing. Mirrored here with the file they come
-      // from named, the way this suite's sibling mirrors the plate's advance -
-      // they live in a `.tsx` component the office modules do not import.
+      // The baseline the renderer drops a plate's lettering to below the
+      // sign's art. Mirrored here with the file it comes from named, the way
+      // this suite's sibling mirrors the plate's advance - it lives in a
+      // `.tsx` component the office modules do not import.
+      //
+      // The backing's VERTICAL PADDING was mirrored the same way and is not
+      // any more: it is `OFFICE_SIGN_PADDING_Y`, imported above beside the
+      // horizontal one it was always the partner of. A private copy here was
+      // exactly the drift the shared constant exists to prevent, and a
+      // mirroring comment is worth no more than the sweep that checks it.
       const SIGN_LABEL_BASELINE = 11;
-      const SIGN_PADDING_Y = 2;
       const projector = view.painter.projector(layout);
       const visibleAgentIds = new Set(epic.agents.map((agent) => agent.id));
 
@@ -664,8 +677,8 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             label: `${kind} "${text}" at ${entry.sign.tile.col},${entry.sign.tile.row}`,
             left: centreX - width / 2,
             right: centreX + width / 2,
-            top: baseline - OFFICE_SIGN_FONT_PX - SIGN_PADDING_Y,
-            bottom: baseline + SIGN_PADDING_Y,
+            top: baseline - OFFICE_SIGN_FONT_PX - OFFICE_SIGN_PADDING_Y,
+            bottom: baseline + OFFICE_SIGN_PADDING_Y,
           };
         });
         // CLOSE-UP ONLY. At office zoom a civic sign is fixture lettering

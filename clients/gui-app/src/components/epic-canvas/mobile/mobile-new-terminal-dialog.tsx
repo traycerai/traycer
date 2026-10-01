@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { NewTerminalPickerBody } from "@/components/epic-canvas/sidebar/new-terminal-picker-body";
 import {
-  buildTerminalTileRef,
+  mintNewEpicTerminalTile,
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
@@ -49,7 +49,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
     (target: TerminalLaunchTarget) => {
       openTile(
         tileIntent(
-          buildTerminalTileRef(target),
+          mintNewEpicTerminalTile({ ...target, epicId }),
           { tabId },
           "explicit",
           "direct_ui",
@@ -58,7 +58,7 @@ export function MobileNewTerminalDialog(props: MobileNewTerminalDialogProps) {
       onOpenChange(false);
       if (onLaunched !== null) onLaunched();
     },
-    [openTile, tabId, onOpenChange, onLaunched],
+    [epicId, openTile, tabId, onOpenChange, onLaunched],
   );
   // A touch pointer is the one that pays for a focused text field: focusing
   // the picker's workspace search raises a software keyboard nobody asked for,

@@ -10,7 +10,6 @@ import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 
 interface RefreshHookArgs {
@@ -71,12 +70,7 @@ describe("<GitDiffPanelActions />", () => {
   it("renders layout toggle and refresh in the stable overflow menu", () => {
     const { wrapper } = setup();
     render(
-      <GitDiffPanelActions
-        epicId="epic-1"
-        tabId="tab-1"
-        collapsed={false}
-        mode="normal"
-      />,
+      <GitDiffPanelActions epicId="epic-1" tabId="tab-1" mode="normal" />,
       { wrapper },
     );
 
@@ -91,12 +85,7 @@ describe("<GitDiffPanelActions />", () => {
   it("toggles list layout from the header action", () => {
     const { wrapper } = setup();
     render(
-      <GitDiffPanelActions
-        epicId="epic-1"
-        tabId="tab-1"
-        collapsed={false}
-        mode="normal"
-      />,
+      <GitDiffPanelActions epicId="epic-1" tabId="tab-1" mode="normal" />,
       { wrapper },
     );
 
@@ -113,12 +102,7 @@ describe("<GitDiffPanelActions />", () => {
   it("explains the stable overflow trigger in a keyboard-accessible tooltip", async () => {
     const { wrapper } = setup();
     render(
-      <GitDiffPanelActions
-        epicId="epic-1"
-        tabId="tab-1"
-        collapsed={false}
-        mode="normal"
-      />,
+      <GitDiffPanelActions epicId="epic-1" tabId="tab-1" mode="normal" />,
       { wrapper },
     );
 
@@ -135,12 +119,7 @@ describe("<GitDiffPanelActions />", () => {
   it("refreshes the active root's nested snapshot slot", () => {
     const { wrapper } = setup();
     render(
-      <GitDiffPanelActions
-        epicId="epic-1"
-        tabId="tab-1"
-        collapsed={false}
-        mode="normal"
-      />,
+      <GitDiffPanelActions epicId="epic-1" tabId="tab-1" mode="normal" />,
       { wrapper },
     );
 
@@ -157,12 +136,7 @@ describe("<GitDiffPanelActions />", () => {
     });
     const { wrapper } = setup();
     render(
-      <GitDiffPanelActions
-        epicId="epic-1"
-        tabId="tab-1"
-        collapsed={false}
-        mode="normal"
-      />,
+      <GitDiffPanelActions epicId="epic-1" tabId="tab-1" mode="normal" />,
       { wrapper },
     );
 
@@ -175,31 +149,6 @@ describe("<GitDiffPanelActions />", () => {
       rootRunningDir: "/repo",
       ignoreWhitespace: true,
     });
-  });
-
-  it("expands a collapsed panel while preserving the open menu", () => {
-    const { wrapper } = setup();
-    useEpicLeftPanelStore.setState({
-      panelSectionCollapsedByPanelId: { "git-diff": true },
-    });
-    render(
-      <GitDiffPanelActions
-        epicId="epic-1"
-        tabId="tab-1"
-        collapsed
-        mode="normal"
-      />,
-      { wrapper },
-    );
-
-    openMoreMenu();
-
-    expect(
-      useEpicLeftPanelStore.getState().isPanelSectionCollapsed("git-diff"),
-    ).toBe(false);
-    expect(usePanelHeaderMenuStore.getState().openBySurfaceKey).toEqual(
-      expect.objectContaining({ '["tab-1","git-diff","more"]': true }),
-    );
   });
 });
 

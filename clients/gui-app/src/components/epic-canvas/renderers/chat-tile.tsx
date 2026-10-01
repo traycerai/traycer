@@ -33,6 +33,10 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
+import {
+  queuedPromptMessageIds,
+  queueWithoutPersistedPrompts,
+} from "@/components/chat/chat-queue-utils";
 import { ChatMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import {
   ChatForkDialog,
@@ -59,6 +63,10 @@ import {
   WorkingVerbContext,
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
+import {
+  ThinkingTokensSourceContext,
+  type ThinkingTokensSource,
+} from "@/components/chat/thinking-tokens-source";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
@@ -90,12 +98,14 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
+import { withholdUnpaintedRows } from "@/components/chat/chat-special-segment";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type {
   ChatComposerSideChatInput,
   ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
+import { suggestionOfferableWhilePending } from "@/components/chat/composer/prompt-suggestion";
 import {
   sideChatPlacementForTile,
   startSideChat,
@@ -118,6 +128,7 @@ import {
   worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { notifyChatTileSessionAcquired } from "@/components/epic-canvas/chat-prewarm-handoff";
 import { useEpicParked } from "@/lib/epics/epic-parking";
 import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
 import {
@@ -130,22 +141,26 @@ import {
   dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
   projectQueueWithPendingCancellations,
+  withdrawnMessageDeliveryId,
   type ChatSessionState,
   type ChatSessionStoreHandle,
   type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
+import type { ChatStopConfirmationTarget } from "@/stores/chats/chat-turn-lifecycle";
 import type {
   OrdinalRange,
   TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import {
   chatTranscriptEventRowId,
+  chatTranscriptJumpForTile,
   chatTranscriptJumpKey,
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
+  transcriptShowsSetupCard,
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
 } from "@/stores/chats/rendered-messages";
@@ -162,7 +177,9 @@ import {
   resolveApprovalJumpLanding,
   messageIdForTranscriptTarget,
   sentMessageAnchorId,
+  TRANSCRIPT_JUMP_TTL_MS,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
+import { TranscriptQueuePauseReasonSupportContext } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -197,16 +214,16 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import { flattenCollaborators } from "@/hooks/epics/use-epic-collaborators-query";
-import {
-  useGuiHarnessCatalogForClient,
-  type GuiHarnessCatalogEntry,
-} from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useGuiHarnessCatalogForClient } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 import { useChatSetupFailureRestoreDriver } from "@/hooks/chats/use-chat-setup-failure-restore-driver";
+import { useChatMessageDeliveryRestoreDriver } from "@/hooks/chats/use-chat-message-delivery-restore-driver";
+import { useEpicCreateSeedHoldDriver } from "@/hooks/chats/use-epic-create-seed-hold-driver";
 import { useSetupTerminalListRefreshDriver } from "@/hooks/chats/use-setup-terminal-list-refresh-driver";
 import { useSetupTerminalTabRegisterDriver } from "@/hooks/chats/use-setup-terminal-tab-register-driver";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
@@ -238,12 +255,12 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
-  agentModelKey,
   resolveAgentReasoningLabel,
   resolveAgentSenderDisplay,
   resolveSenderLabel,
   type SenderDisplayContext,
 } from "@/lib/chat/sender-display";
+import { getModelLabelIndex } from "@/lib/chat/model-label-index";
 import {
   selectEpicRunSettingsEntry,
   selectGlobalLastRunSettings,
@@ -251,7 +268,12 @@ import {
   type ComposerRunSettingsEntry,
 } from "@/stores/composer/composer-run-settings-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useAnySystemOverlayActive } from "@/stores/tabs/use-system-tab-modal";
+import {
+  useAnySystemOverlayActive,
+  useSystemTabModalActions,
+} from "@/stores/tabs/use-system-tab-modal";
+import type { TabHostSettingsOpts } from "@/stores/tabs/system-overlay-types";
+import { autoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   makeSnapshotCumulativeBundleDiffTile,
@@ -294,13 +316,12 @@ import {
   chatTileCanAct,
   findPendingInterview,
   findUnanswerableInterviews,
-  forkableAssistantMessageIdAfter,
-  latestForkableAssistantMessageId,
   selectContextUsage,
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTilePreContent } from "./chat-tile-runtime-gate";
+import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import type { ChatLoadWait, ChatTilePreContentFrame } from "./chat-pre-content";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
@@ -371,35 +392,6 @@ interface ChatTileSessionViewProps {
    * synthesized loaded and never waits.
    */
   readonly preContent: ChatTilePreContentFrame | null;
-}
-
-function buildModelReasoningLabels(
-  harnesses: ReadonlyArray<GuiHarnessCatalogEntry>,
-): ReadonlyMap<string, ReadonlyMap<string, string>> {
-  return new Map(
-    harnesses.flatMap((harness) =>
-      harness.models.map((model) =>
-        reasoningLabelEntry(
-          harness.id,
-          model.slug,
-          new Map(
-            model.supportedReasoningEfforts.map((option) => [
-              option.id,
-              option.label,
-            ]),
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-function reasoningLabelEntry(
-  harnessId: GuiHarnessCatalogEntry["id"],
-  modelSlug: string,
-  labels: ReadonlyMap<string, string>,
-): readonly [string, ReadonlyMap<string, string>] {
-  return [agentModelKey(harnessId, modelSlug), labels];
 }
 
 /**
@@ -559,6 +551,16 @@ function ChatTileForChat(props: ChatTileProps) {
     tabHostId,
     !epicParked && (chatRecord !== null || isCrossHostOpen || isCloudKnown),
   );
+  useEffect(() => {
+    if (handle !== null) {
+      notifyChatTileSessionAcquired(
+        epicId,
+        tabHostId,
+        node.id,
+        node.instanceId,
+      );
+    }
+  }, [handle, epicId, tabHostId, node.id, node.instanceId]);
   const reachability = useHostReachability(tabHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
   // while `handle === null`, and after it until the first snapshot. The
@@ -827,14 +829,6 @@ function resolveBackgroundClickTarget(
 }
 
 /**
- * How long a parked cross-tile transcript jump waits for its target row to
- * stream in before it is dropped. Generous enough to cover a cold tile pulling
- * a large transcript, short enough that a stale request cannot fire minutes
- * later and yank the reader somewhere they no longer expect.
- */
-const TRANSCRIPT_JUMP_TTL_MS = 30_000;
-
-/**
  * Which open-store a cross-tile block jump should expand. A block that names a
  * live background item follows that item's card kind; anything else (a settled
  * tool card - the usual shape for a file-write anchor) opens as a tool card.
@@ -916,6 +910,21 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       viewHandle.store.getState().reportVisibleTranscriptRange(range);
     },
     [viewHandle],
+  );
+  // Find → hydration bridge: the row chat find reads to confirm an index hit.
+  // Required hydration beside the viewport's, never a move of it.
+  const onFindReadOrdinalChange = useCallback(
+    (ordinal: number | null): void => {
+      viewHandle.store.getState().requestFindReadOrdinal(ordinal);
+    },
+    [viewHandle],
+  );
+  // The transcript's hidden-row rule reads its OWN session's answer, from
+  // whichever handle this view renders - a published or replica handle is
+  // never registered, so this is the only route that reaches it.
+  const queuePauseReasonSupport = useStore(
+    viewHandle.store,
+    (s) => s.queuePauseReasonProtocolSupported,
   );
   const hostId = useTabHostId();
   // Chat image byte reads are scoped here, once per tile, rather than per
@@ -1057,8 +1066,11 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // Parked in a store rather than called directly because the jump is issued
   // from another tile, possibly before this one exists - `openTile`
   // mounts it and the request is waiting here when it renders.
-  const transcriptJump = useChatTranscriptJumpStore(
-    (s) => s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
+  const transcriptJump = useChatTranscriptJumpStore((s) =>
+    chatTranscriptJumpForTile(
+      s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
+      props.node.instanceId,
+    ),
   );
   const consumeTranscriptJump = useChatTranscriptJumpStore(
     (s) => s.consumeJump,
@@ -1490,41 +1502,52 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
              * get a definite height (h-full on LegendList needs a real
              * containing block all the way up). The overlay dock below is
              * absolutely positioned, so it does not participate in this flex
-             * layout regardless. */}
-            <div className="relative flex min-h-0 flex-1 flex-col">
-              <ChatSessionMessagesSurface
-                snapshotLoaded={view.snapshotLoaded}
-                connectionStatus={view.connectionStatus}
-                fatalClose={view.fatalClose}
-                preSnapshotRetries={view.preSnapshotRetries}
-                preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
-                onRetry={view.onChatRetryFromUser}
-                preContent={view.preContent}
-                restoreContext={view.restoreContext}
-                node={view.node}
-                epicId={view.currentEpicId}
-                viewTabId={view.viewTabId}
-                tabHostId={view.tabHostId}
-                workspaceRoots={view.linkResolutionRoots}
-                messages={view.messages}
-                activeTurnId={view.activeTurnId}
-                transcriptWindow={view.transcriptWindow}
-                onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
-                baselineEpoch={view.transcriptBaselineEpoch}
-                hydrationSequence={view.transcriptHydrationSequence}
-                coldRewrittenMessageIds={view.coldRewrittenMessageIds}
-                backgroundItems={view.lower.backgroundItems}
-                scrollRequest={backgroundScrollRequest}
-                onScrollRequestSettled={onScrollRequestSettled}
-                surfaceVisible={view.surfaceVisible}
-                systemOverlayActive={systemOverlayActive}
-                getMessageActions={view.getMessageActions}
-                nextStepActions={view.nextStepActions}
-                planActions={view.planActions}
-                composerOverlayHeight={
-                  lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
-                }
-              />
+             * layout regardless. The definite flex height also makes this a
+             * size container for the dock panel's proportional height. */}
+            <div
+              data-chat-pane=""
+              className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
+            >
+              <TranscriptQueuePauseReasonSupportContext
+                value={queuePauseReasonSupport}
+              >
+                <ChatSessionMessagesSurface
+                  snapshotLoaded={view.snapshotLoaded}
+                  thinkingTokensSource={view.handle.store}
+                  connectionStatus={view.connectionStatus}
+                  fatalClose={view.fatalClose}
+                  preSnapshotRetries={view.preSnapshotRetries}
+                  preSnapshotReloadStartedAt={view.preSnapshotReloadStartedAt}
+                  onRetry={view.onChatRetryFromUser}
+                  preContent={view.preContent}
+                  restoreContext={view.restoreContext}
+                  node={view.node}
+                  taskTitle={view.taskTitle}
+                  epicId={view.currentEpicId}
+                  viewTabId={view.viewTabId}
+                  tabHostId={view.tabHostId}
+                  workspaceRoots={view.linkResolutionRoots}
+                  messages={view.messages}
+                  activeTurnId={view.activeTurnId}
+                  transcriptWindow={view.transcriptWindow}
+                  onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
+                  onFindReadOrdinalChange={onFindReadOrdinalChange}
+                  baselineEpoch={view.transcriptBaselineEpoch}
+                  hydrationSequence={view.transcriptHydrationSequence}
+                  coldRewrittenMessageIds={view.coldRewrittenMessageIds}
+                  backgroundItems={view.lower.backgroundItems}
+                  scrollRequest={backgroundScrollRequest}
+                  onScrollRequestSettled={onScrollRequestSettled}
+                  surfaceVisible={view.surfaceVisible}
+                  systemOverlayActive={systemOverlayActive}
+                  getMessageActions={view.getMessageActions}
+                  nextStepActions={view.nextStepActions}
+                  planActions={view.planActions}
+                  composerOverlayHeight={
+                    lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
+                  }
+                />
+              </TranscriptQueuePauseReasonSupportContext>
               {/*
                * SurfaceActivityProvider narrows catalog/provider query subscriptions
                * to the one focused pane+tab. A visible split partner keeps rendering
@@ -1759,12 +1782,10 @@ function useChatTileSessionViewModel(
   // transcript describes turns that ran on the TAB host, so a slug that host
   // does not advertise must degrade to the raw slug rather than borrow a label
   // (or a reasoning-effort label, which is version-specific) from a host that
-  // never served the turn. On a default-host tab this is the slot the
-  // app-load prefetcher already filled, so nothing changes there; on a
-  // remote-host tab the labels appear as that host's per-harness slots warm —
-  // this tile's own composer warms its selected harness on mount, and its
-  // picker warms whatever the user browses (the catalog fan-out itself is
-  // `"cached-only"` everywhere but the app-load fill).
+  // never served the turn. Labels appear as that host's per-harness slots
+  // warm: this tile's own composer warms its selected harness on mount, and
+  // its picker warms whatever the user browses. The catalog fan-out itself is
+  // `"cached-only"`.
   const tabHostCatalogClient = useTabHostClient();
   const tabModelCatalog = useGuiHarnessCatalogForClient(
     tabHostCatalogClient,
@@ -1772,20 +1793,8 @@ function useChatTileSessionViewModel(
     { enabled: false, subscribed: surfaceVisible, modelsFetch: "cached-only" },
   );
   const displayCatalog = tabModelCatalog.harnesses;
-  const modelLabels = useMemo<ReadonlyMap<string, string>>(
-    () =>
-      new Map(
-        displayCatalog.flatMap((harness) =>
-          harness.models.map((model) => [
-            agentModelKey(harness.id, model.slug),
-            model.label,
-          ]),
-        ),
-      ),
-    [displayCatalog],
-  );
-  const modelReasoningLabels = useMemo(
-    () => buildModelReasoningLabels(displayCatalog),
+  const { modelLabels, modelReasoningLabels } = useMemo(
+    () => getModelLabelIndex(displayCatalog),
     [displayCatalog],
   );
   const handoffScope = useMemo<InitialChatHandoffScope>(
@@ -1829,6 +1838,7 @@ function useChatTileSessionViewModel(
       transcriptWindow: s.transcriptWindow,
       transcriptDerived: s.transcriptDerived,
       queue: s.queue,
+      messageDelivery: s.messageDelivery,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
       steerProtocolSupported: s.steerProtocolSupported,
@@ -1852,6 +1862,9 @@ function useChatTileSessionViewModel(
       // ride this slice rather than earning a second subscription path.
       pendingFallback: s.pendingFallback,
       pendingReturn: s.pendingReturn,
+      // Changes a handful of times per turn at most (set after a turn, cleared
+      // on the next send), so it rides this slice too.
+      suggestedPrompt: s.suggestedPrompt,
       pendingBackgroundStops: s.pendingBackgroundStops,
       pendingBackgroundStopAll: s.pendingBackgroundStopAll,
       pendingBackgroundSessionStop: s.pendingBackgroundSessionStop,
@@ -1868,12 +1881,21 @@ function useChatTileSessionViewModel(
   );
   const projectedQueue = useMemo(
     () =>
-      projectQueueWithPendingCancellations(
-        state.queue,
-        state.pendingActions,
-        state.acceptedActions,
+      queueWithoutPersistedPrompts(
+        projectQueueWithPendingCancellations(
+          state.queue,
+          state.pendingActions,
+          state.acceptedActions,
+        ),
+        state.messages,
       ),
-    [state.queue, state.pendingActions, state.acceptedActions],
+    [state.acceptedActions, state.messages, state.pendingActions, state.queue],
+  );
+  // The raw queue, including a row a pending cancel has hidden from the panel.
+  // The optimistic chat row yields to any host queue item for the same prompt.
+  const queuedPromptIds = useMemo(
+    () => queuedPromptMessageIds(state.queue.items),
+    [state.queue],
   );
   const chatWorktreeStagingKeyId = useMemo(
     () =>
@@ -2048,6 +2070,8 @@ function useChatTileSessionViewModel(
       setupCardWindows:
         state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
+      queuedPromptMessageIds: queuedPromptIds,
+      withdrawnMessageId: withdrawnMessageDeliveryId(state.messageDelivery),
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
       pendingApprovals: state.pendingApprovals,
@@ -2107,23 +2131,56 @@ function useChatTileSessionViewModel(
   // detection, failed-send restoration, sending→consumed transitions
   // (via acceptedActions or via persisted messages), and the
   // waitingChat→sendMessage→markSending hop.
+  // Read from the STORE at submit time, not from the projected boolean below.
+  // The projection is a value from the last committed render and a ref of it is
+  // the last committed effect; a stream transition to a non-bridging session
+  // can be queued in the store while an image preparation is mid-flight, and
+  // neither copy knows it yet. The send gate's whole job is to answer "can this
+  // session resolve a bare hash", and only the store can answer it at the
+  // moment it is asked.
+  const getDraftBlobBridgeSupported = useCallback(
+    () => handle.store.getState().draftBlobBridgeSupported,
+    [handle.store],
+  );
+  // Declared HERE rather than beside its other readers further down: the
+  // initial-chat handoff driver below consumes it too, and a `const` used above
+  // its declaration is a TDZ error rather than a hoist. Nothing about the
+  // reasoning above changes with the position - it is still read at submit
+  // time, from the store.
   useInitialChatHandoffDriver({
     handle,
     nodeId: node.id,
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
+    getDraftBlobBridgeSupported,
   });
   useChatSetupFailureRestoreDriver({
     handle,
     nodeId: node.id,
   });
+  // The opening the host withdrew before it started (`chat.subscribe@1.15`'s
+  // delivery view) comes back from the view alone, ahead of any draft - every
+  // local copy of that message stands aside for it.
+  useChatMessageDeliveryRestoreDriver({
+    handle,
+    nodeId: node.id,
+    profileUserId: profile?.userId ?? null,
+  });
+  // Ends the create-time binding-seed hold once THIS chat's worktree
+  // provisioning has an outcome. A no-op for every tile whose (epic, chat) pair
+  // did not register one, which is every chat but a just-created one.
+  useEpicCreateSeedHoldDriver({ handle });
   // Surface the server-spawned setup terminal in the Terminals sidebar while it
   // runs - its PTY isn't created via the renderer, so nothing else refetches
   // `terminal.list`.
   useSetupTerminalListRefreshDriver({ handle });
   // Persist the setup terminal as a saved (background) canvas tab so it survives
   // a restart like a user-opened terminal, instead of vanishing (no saved tab).
-  useSetupTerminalTabRegisterDriver({ handle, viewTabId });
+  useSetupTerminalTabRegisterDriver({
+    handle,
+    viewTabId,
+    owningTileInstanceId: node.instanceId,
+  });
 
   // A chat is editable only by its own owner; every other user is read-only.
   // Gate on a KNOWN non-owner (access resolved AND not the owner) rather than a
@@ -2146,6 +2203,23 @@ function useChatTileSessionViewModel(
   const turnStopBusy = stopPending || composerActiveTurnStatus === "stopping";
   const stopDisabled = !canAct || turnStopBusy;
   const chatActions = useChatActions(handle);
+  // The queued-drain missing-hash arm. Mounted here because this is where the
+  // three things it needs already meet: the chat's durable `events`, its
+  // `queue`, and `resumeQueue`. Scoped to the TAB's host - the chat is bound to
+  // it for life, and the blob tier the re-upload has to land in is that host's.
+  const repairHostId = useTabHostId();
+  const repairHostClient = useTabHostClient();
+  useQueuedPromptBlobRepair({
+    hostId: repairHostId,
+    client: repairHostClient,
+    events: state.events,
+    queue: state.queue,
+    // The tile's own eligibility. Repairing is an OWNER action - it uploads
+    // into the author's staging tier and resumes the queue - so a read-only
+    // collaborator viewing this chat must not start one.
+    canAct,
+    resumeQueue: chatActions.resumeQueue,
+  });
   const restoreActionPending = useMemo(
     () =>
       Object.values(state.pendingActions).some(
@@ -2412,6 +2486,15 @@ function useChatTileSessionViewModel(
     }
     return [...renderedMessages, activeInlineEdit.originalMessage];
   }, [activeInlineEdit, renderedMessages]);
+  // Renderer policy, like the pinned-todo pass below: a row that paints
+  // nothing (`rowPaintsNothing`, today the legacy auto-mode judge notice)
+  // leaves the list here, so `transcriptListRows` omits its ordinal instead of
+  // the timeline framing an empty row. `useRenderedMessages` still enumerates
+  // it, because that list is held to the host's projection row for row.
+  const paintedMessages = useMemo(
+    () => withholdUnpaintedRows(displayedMessages),
+    [displayedMessages],
+  );
   // On the legacy line the rendered rows are the full history, so the pinned
   // snapshot derives from the same walk that strips the inline segments. On
   // the windowed line the rows are the HYDRATED SUBSET and the fold's answer
@@ -2422,7 +2505,7 @@ function useChatTileSessionViewModel(
   const pinnedTodoRenderState = useMemo(
     () =>
       buildPinnedTodoRenderState(
-        displayedMessages,
+        paintedMessages,
         state.transcriptDerived === null
           ? { kind: "derive" }
           : {
@@ -2432,7 +2515,7 @@ function useChatTileSessionViewModel(
               activeTurnId,
             },
       ),
-    [displayedMessages, state.transcriptDerived, activeTurnId],
+    [paintedMessages, state.transcriptDerived, activeTurnId],
   );
   const hostPendingInterviewIds = useMemo(
     () =>
@@ -2520,6 +2603,10 @@ function useChatTileSessionViewModel(
     },
     [chatActions],
   );
+  const setupCardShown = useMemo(
+    () => transcriptShowsSetupCard(renderedMessages),
+    [renderedMessages],
+  );
   const { messageActionsFor, forkAtAssistantMessage, revertOnEdit } =
     useChatMessageActions({
       dispatchUi,
@@ -2538,6 +2625,8 @@ function useChatTileSessionViewModel(
       chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
+      messageDelivery: state.messageDelivery,
+      setupCardShown,
       events: state.events,
       // `transcriptDerived !== null` is the line discriminator: on the legacy
       // line the window is an inert empty value and `messages`/`events` are
@@ -2555,61 +2644,19 @@ function useChatTileSessionViewModel(
       worktreeBinding: state.worktreeBinding,
       revertOnEditOpen: uiState.revertOnEditOpen,
       queuedCount: state.queue.items.length,
+      // The same getter the composer's submit and the handoff driver take, and
+      // for the same reason: an edit's image preparation is asynchronous, so the
+      // capability has to be read where it is used rather than captured here.
+      getDraftBlobBridgeSupported,
     });
 
-  // A primitive on purpose: `renderedMessages` takes a fresh identity every
-  // stream flush, so a callback closing over it would churn the memoized
-  // composer selector below once per flush. The latest completed boundary ID
-  // is stable across flushes (a streaming row is never forkable), so the
-  // gesture handler hanging off this stays quiet while a turn streams.
-  //
-  // On the windowed line the scan cannot run here - `renderedMessages` is the
-  // hydrated subset, and the latest completed boundary is routinely outside
-  // it (scrolled cold, or evicted). The host derives it from the whole
-  // transcript and ships it on every snapshot; `null` from it is the real
-  // "no boundary yet", never "not hydrated".
-  //
-  // But "on every snapshot" is the whole problem, because the GATE in front of
-  // the gesture below is cleared by a live `turnStateChanged` frame. A turn
-  // completes, the gate opens immediately, and the derived boundary still names
-  // the previous turn until a snapshot lands - so the fork the user asks for
-  // omits the turn they just watched finish, silently and plausibly. Two
-  // clocks. `forkableAssistantMessageIdAfter` is the second hand: it looks only
-  // PAST the host's answer, in the live tail where a just-completed turn always
-  // is, so it can move the boundary forward and never backward.
-  const latestForkBoundaryId = useMemo(() => {
-    if (state.transcriptDerived === null) {
-      return latestForkableAssistantMessageId(renderedMessages);
-    }
-    const derived = state.transcriptDerived.latestForkableAssistantMessageId;
-    return (
-      forkableAssistantMessageIdAfter(renderedMessages, derived) ?? derived
-    );
-  }, [state.transcriptDerived, renderedMessages]);
-  // The composer host picker's "switch host" gesture. Chats are host-bound for
-  // life (clone-not-migrate), so switching means FORKING onto the picked
-  // machine — through the same dialog the per-message fork buttons open,
-  // anchored at the chat's latest completed turn and preselected on the picked
-  // host. A chat mid-turn has no boundary that includes the turn the user is
-  // watching, and one that has never replied has no boundary at all; both say
-  // so instead of opening a dialog pointed at something else.
+  // Switching hosts clones the chat from the latest checkpoint available to
+  // the destination at submit time. Per-message forks still name an exact reply.
   const forkChatOnHost = useCallback(
     (targetHostId: string): void => {
-      if (composerActiveTurnStatus !== null) {
-        toast(
-          "This agent is still working — it can be forked to another host once the turn ends.",
-        );
-        return;
-      }
-      if (latestForkBoundaryId === null) {
-        toast(
-          "This agent hasn't replied yet — it can be forked to another host after its first reply.",
-        );
-        return;
-      }
-      forkAtAssistantMessage(latestForkBoundaryId, "plain", null, targetHostId);
+      forkAtAssistantMessage(null, "plain", null, targetHostId);
     },
-    [composerActiveTurnStatus, forkAtAssistantMessage, latestForkBoundaryId],
+    [forkAtAssistantMessage],
   );
 
   const snapshotTeardownHolders = useOwnerTeardownSnapshot({
@@ -2842,7 +2889,17 @@ function useChatTileSessionViewModel(
         ),
         placement: sideChatPlacementForTile(viewTabId, node.id),
         createChat: (request, callbacks) =>
-          createSideChat.mutate(request, callbacks),
+          createSideChat.mutate(request, {
+            ...callbacks,
+            onSuccess: (result) => {
+              // Consume the captured queue edit only after the fork exists;
+              // a failed create must leave the original queued prompt intact.
+              if (activeEditingQueueItemId !== null) {
+                chatActions.queueCancel(activeEditingQueueItemId);
+              }
+              callbacks.onSuccess(result);
+            },
+          }),
         onHistoryUnavailable: (reason) => {
           toast(
             reason === "no-checkpoint"
@@ -2852,12 +2909,20 @@ function useChatTileSessionViewModel(
         },
       });
       sideChatCancelsRef.current.add(cancel);
+      // The composer clears its accepted draft immediately. End that edit
+      // now too, so a delayed create cannot clear a subsequent queue edit.
+      if (activeEditingQueueItemId !== null) {
+        dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
+      }
       return true;
     },
     [
       activeHostId,
+      activeEditingQueueItemId,
+      chatActions,
       createSideChat,
       currentEpicId,
+      dispatchUi,
       node.id,
       profile,
       state.chat,
@@ -3287,17 +3352,15 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().activeTurn,
     [handle.store],
   );
-  // Read from the STORE at submit time, not from the projected boolean below.
-  // The projection is a value from the last committed render and a ref of it is
-  // the last committed effect; a stream transition to a non-bridging session
-  // can be queued in the store while an image preparation is mid-flight, and
-  // neither copy knows it yet. The send gate's whole job is to answer "can this
-  // session resolve a bare hash", and only the store can answer it at the
-  // moment it is asked.
-  const getDraftBlobBridgeSupported = useCallback(
-    () => handle.store.getState().draftBlobBridgeSupported,
-    [handle.store],
-  );
+  const getStopConfirmationTarget =
+    useCallback((): ChatStopConfirmationTarget => {
+      const live = handle.store.getState();
+      return {
+        turnId: live.activeTurn?.turnId ?? null,
+        revision: live.turnLifecycleRevision,
+        connectionEpoch: live.connectionEpoch,
+      };
+    }, [handle.store]);
   const lowerTurn = useMemo(
     () => ({
       activeTurnStatus: composerActiveTurnStatus,
@@ -3306,6 +3369,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
@@ -3316,6 +3380,7 @@ function useChatTileSessionViewModel(
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
       getActiveTurnForSteer,
+      getStopConfirmationTarget,
       stopDisabled,
       chatActions.stopTurn,
     ],
@@ -3365,6 +3430,21 @@ function useChatTileSessionViewModel(
     ],
   );
 
+  // The remote and branch this chat's binding records, which is what an
+  // approval card's "Allow from now on…" narrows its drafted rule by.
+  const ruleDraftWorkspace = useMemo(
+    () => autoModeRuleDraftWorkspace(state.worktreeBinding),
+    [state.worktreeBinding],
+  );
+  const { openSettings } = useSystemTabModalActions();
+  // The card's settings links open on THIS tab's machine: the judge and the
+  // rules it names are the ones this conversation's host applies.
+  const openSettingsOnTabHost = useCallback(
+    (opts: TabHostSettingsOpts) => {
+      openSettings({ ...opts, hostId: viewModelHostId });
+    },
+    [openSettings, viewModelHostId],
+  );
   const lowerApprovals = useMemo(
     () => ({
       pendingFileEditApprovals: state.pendingFileEditApprovals,
@@ -3373,6 +3453,8 @@ function useChatTileSessionViewModel(
       onApprovalDecision: dispatchApprovalDecision,
       highlightedApprovalId: composerHighlightBlockId,
       highlightedGeneration: composerHighlightGeneration,
+      ruleDraftWorkspace,
+      onOpenSettings: openSettingsOnTabHost,
     }),
     [
       composerHighlightBlockId,
@@ -3381,6 +3463,8 @@ function useChatTileSessionViewModel(
       state.pendingApprovals,
       dispatchFileEditApprovalDecision,
       dispatchApprovalDecision,
+      ruleDraftWorkspace,
+      openSettingsOnTabHost,
     ],
   );
 
@@ -3458,6 +3542,10 @@ function useChatTileSessionViewModel(
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      suggestedPrompt: suggestionOfferableWhilePending(
+        state.suggestedPrompt,
+        state.pendingActions,
+      ),
     }),
     [
       state.currentComposerSettings,
@@ -3473,6 +3561,8 @@ function useChatTileSessionViewModel(
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      state.suggestedPrompt,
+      state.pendingActions,
     ],
   );
 
@@ -3504,9 +3594,16 @@ function useChatTileSessionViewModel(
     [state.pendingFallback, state.pendingReturn],
   );
 
+  const chatStateTitle = state.chat?.title ?? "";
   return {
     handle,
     node,
+    // The title the tab strip shows. `node.name` is the tile's persisted
+    // opening-name snapshot, so a chat opened before its title was generated
+    // announced every finished turn as "Untitled agent" for the tile's life.
+    taskTitle:
+      projectedChatTitle ??
+      (chatStateTitle.length > 0 ? chatStateTitle : node.name),
     viewTabId,
     tileId,
     tabHostId: activeHostId,
@@ -3655,6 +3752,12 @@ function useChatTileSessionViewModel(
 
 interface ChatSessionMessagesSurfaceProps {
   readonly snapshotLoaded: boolean;
+  /**
+   * The chat session store, handed to the streaming "Thinking" label so it can
+   * subscribe to the thinking-token estimate on its own - see
+   * `ThinkingTokensSourceContext` for why a source and not the number.
+   */
+  readonly thinkingTokensSource: ThinkingTokensSource;
   readonly connectionStatus: StreamConnectionStatus;
   readonly fatalClose: FatalErrorDetails | null;
   /** Failed pre-snapshot attempts; see `ChatTilePreContent`. */
@@ -3666,6 +3769,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly preContent: ChatTilePreContentFrame | null;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: ChatSurfaceNode;
+  /** The chat's live title, for the transcript's own announcements. */
+  readonly taskTitle: string;
   readonly epicId: string;
   readonly viewTabId: string;
   readonly tabHostId: string | null;
@@ -3681,6 +3786,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly transcriptWindow: TranscriptWindow | null;
   /** Viewport-driven hydration report; see `ChatMessagesProps`. */
   readonly onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
+  /** Chat find's index-read hydration; see `ChatMessagesProps`. */
+  readonly onFindReadOrdinalChange: (ordinal: number | null) => void;
   /** Which connection's snapshot established `messages`; see `ChatMessages`. */
   readonly baselineEpoch: number;
   /** Whether a range seated these rows; see `ChatMessages`. */
@@ -3780,34 +3887,40 @@ function ChatSessionMessagesSurface(
   );
   return (
     <ChatRestoreProvider value={props.restoreContext}>
+      <MobileDrawerVisibleTilePaintReporter ready />
       <ChatPlanActionsContext.Provider value={props.planActions}>
         <WorkingVerbContext.Provider value={workingVerb}>
-          <ChatMarkdownLinkProvider
-            tabId={props.viewTabId}
-            workspaceRoots={props.workspaceRoots}
+          <ThinkingTokensSourceContext.Provider
+            value={props.thinkingTokensSource}
           >
-            <ChatMessages
-              taskTitle={props.node.name}
-              taskId={props.node.id}
-              epicId={props.epicId}
-              hostId={props.tabHostId}
-              messages={props.messages}
-              transcriptWindow={props.transcriptWindow}
-              onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
-              baselineEpoch={props.baselineEpoch}
-              hydrationSequence={props.hydrationSequence}
-              coldRewrittenMessageIds={props.coldRewrittenMessageIds}
-              backgroundItems={props.backgroundItems}
-              scrollRequest={props.scrollRequest}
-              onScrollRequestSettled={props.onScrollRequestSettled}
-              getMessageActions={props.getMessageActions}
-              nextStepActions={props.nextStepActions}
-              instanceId={props.node.instanceId}
-              visible={props.surfaceVisible}
-              systemOverlayActive={props.systemOverlayActive}
-              composerOverlayHeight={props.composerOverlayHeight}
-            />
-          </ChatMarkdownLinkProvider>
+            <ChatMarkdownLinkProvider
+              tabId={props.viewTabId}
+              workspaceRoots={props.workspaceRoots}
+            >
+              <ChatMessages
+                taskTitle={props.taskTitle}
+                taskId={props.node.id}
+                epicId={props.epicId}
+                hostId={props.tabHostId}
+                messages={props.messages}
+                transcriptWindow={props.transcriptWindow}
+                onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
+                onFindReadOrdinalChange={props.onFindReadOrdinalChange}
+                baselineEpoch={props.baselineEpoch}
+                hydrationSequence={props.hydrationSequence}
+                coldRewrittenMessageIds={props.coldRewrittenMessageIds}
+                backgroundItems={props.backgroundItems}
+                scrollRequest={props.scrollRequest}
+                onScrollRequestSettled={props.onScrollRequestSettled}
+                getMessageActions={props.getMessageActions}
+                nextStepActions={props.nextStepActions}
+                instanceId={props.node.instanceId}
+                visible={props.surfaceVisible}
+                systemOverlayActive={props.systemOverlayActive}
+                composerOverlayHeight={props.composerOverlayHeight}
+              />
+            </ChatMarkdownLinkProvider>
+          </ThinkingTokensSourceContext.Provider>
         </WorkingVerbContext.Provider>
       </ChatPlanActionsContext.Provider>
     </ChatRestoreProvider>

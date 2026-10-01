@@ -1,3 +1,4 @@
+import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   useCallback,
   useEffect,
@@ -17,10 +18,16 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { redactEmail } from "@/lib/providers/redact-email";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
+import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 import {
   AddProfileIdentityStep,
   AddProfileWaitingStep,
@@ -70,6 +77,7 @@ export function ProviderProfileReauthPanel({
   const cancelLogin = useProvidersCancelLogin();
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
+  const ensurePack = useProvidersEnsurePack();
   // The `profile` prop is LIVE, and it turns over mid-flow:
   // `providers.awaitLogin`'s hook-level `onSuccess` commits the fresh row into
   // the `providers.list` cache, and query-core awaits that before the flow's
@@ -82,7 +90,9 @@ export function ProviderProfileReauthPanel({
   // Freeze the row as it was on entry; it is the only record of who this
   // profile was when the user started, and everything below wants exactly it.
   const [entryProfile] = useState(profile);
+  const supportsLoginOwnership = useProvidersLoginOwnership();
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership,
     mode: "reauth",
     providerId: state.providerId,
     existingProfileId: entryProfile.profileId,
@@ -92,6 +102,7 @@ export function ProviderProfileReauthPanel({
     cancelLogin,
     submitLoginCode,
     touchLogin,
+    ensurePack,
     failureMessages: {
       notStarted: "Sign-in did not start. Try again when ready.",
       notFinished: "Sign-in did not finish. Try again.",
@@ -172,6 +183,8 @@ export function ProviderProfileReauthPanel({
 
       <ProviderProfileReauthState
         flow={flow}
+        providerId={state.providerId}
+        loginCapability={state.loginCapability}
         entryProfile={entryProfile}
         showWaiting={showWaiting}
         showIdentity={showIdentityCard}
@@ -193,6 +206,8 @@ export function ProviderProfileReauthPanel({
 
 function ProviderProfileReauthState({
   flow,
+  providerId,
+  loginCapability,
   entryProfile,
   showWaiting,
   showIdentity,
@@ -207,6 +222,8 @@ function ProviderProfileReauthState({
   onDone,
 }: {
   readonly flow: ProviderProfileLoginFlow;
+  readonly providerId: ProviderCliState["providerId"];
+  readonly loginCapability: ProviderCliState["loginCapability"] | null;
   /** The row as it was when the panel mounted - see the freeze at the call
    *  site. The live prop describes the account that just signed in, so it
    *  cannot narrate what this profile "was". */
@@ -229,8 +246,10 @@ function ProviderProfileReauthState({
         <AddProfileWaitingStep
           loginUrl={flow.state.kind === "waiting" ? flow.state.url : null}
           userCode={flow.state.kind === "waiting" ? flow.state.userCode : null}
+          loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={flow.startPending}
+          startingCopy={flow.startingCopy}
           cancelRequested={
             flow.state.kind === "starting" && flow.state.cancelRequested
           }
@@ -268,7 +287,14 @@ function ProviderProfileReauthState({
       {flow.state.kind === "failed" ? (
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-ui-sm text-destructive">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          <span>{flow.state.message}</span>
+          {flow.state.refusal === null ? (
+            <span>{flow.state.message}</span>
+          ) : (
+            <ProviderLoginRefusalMessage
+              providerId={providerId}
+              refusal={flow.state.refusal}
+            />
+          )}
           <ReportIssueAction
             context={createReportIssueContext({
               title: "Provider reauthentication failed",
@@ -328,6 +354,7 @@ function ProviderProfileReauthActions({
           <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
             Cancel sign-in
           </Button>
+          <ProviderLoginRefusalAction refusal={flow.state.refusal} />
           <Button
             type="button"
             size="sm"
@@ -336,7 +363,7 @@ function ProviderProfileReauthActions({
             onClick={onRetry}
           >
             {flow.busy ? <MutedAgentSpinner /> : null}
-            Retry
+            {providerLoginRetryLabel(flow.state.refusal, "Retry")}
           </Button>
         </>
       ) : null}

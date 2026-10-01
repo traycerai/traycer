@@ -1,0 +1,464 @@
+/* ---------------------------------------------------- act 2: panel layout */
+
+/* The panel is one grid so the host pill and the status line share a single
+   toolbar row while staying in the two components that own them. The act's
+   root is `display: contents` for exactly that reason - it contributes its
+   children to this grid instead of nesting a second layout inside it. */
+.onboarding-provider-panel {
+  display: grid;
+  grid-template-columns: fit-content(45%) minmax(0, 1fr);
+  grid-template-rows: 2.75rem minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+}
+.onboarding-provider-agents {
+  display: contents;
+}
+.onboarding-provider-status {
+  grid-column: 2;
+  grid-row: 1;
+}
+.onboarding-provider-agents > .onboarding-provider-status + div {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+/* The host-unavailable / connecting notice replaces the whole board. The
+   host pill is a <header>, so this reaches only that notice. */
+.onboarding-provider-panel > div:not(.onboarding-provider-agents) {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+/* ---------------------------------------------------------- act 2: grid */
+
+.onboarding-provider-scroller {
+  /* 4px so a card's focus ring is inside the scroll box, never clipped by it. */
+  padding: 0.25rem;
+  scroll-padding-block: 0.25rem;
+  /* The fades are painted only where a card is actually cut off; the data
+     attributes come from the grid's own scroll-edge observer. */
+  --fade-top: black 0;
+  --fade-bottom: black 100%;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--fade-top),
+    var(--fade-bottom),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--fade-top),
+    var(--fade-bottom),
+    transparent 100%
+  );
+}
+.onboarding-provider-scroller[data-fade-top="true"] {
+  --fade-top: black 1.75rem;
+}
+.onboarding-provider-scroller[data-fade-bottom="true"] {
+  --fade-bottom: black calc(100% - 1.75rem);
+}
+.onboarding-provider-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  align-content: start;
+  gap: 0.75rem;
+}
+
+/* ---------------------------------------------------------- act 2: cards */
+
+.onboarding-provider-card {
+  min-height: 8.5rem;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent);
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 120ms var(--onboarding-ease);
+  /* `backwards`, not `both`: a fill-forwards animation would keep owning
+     `transform` after it lands and swallow the press transition below. */
+  animation: onboarding-provider-card-in 220ms var(--onboarding-ease) backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+/* Enabled reads from across the room: an accent ring, a lifted fill, and the
+   only filled glyph on the board. */
+.onboarding-provider-card[data-enabled="true"] {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+/* Not installed: nothing here is actionable, so the whole card steps back.
+   Stated in COLOUR, not with an opacity: 0.55 over this fill drags the 13px
+   status line to about 2.3:1, and the one line a not-installed card has is the
+   line that has to be readable. Enablement still outranks it - an enabled card
+   keeps its ring either way, and the check keeps its own fill. */
+.onboarding-provider-card[data-recessive="true"] .onboarding-provider-name {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.onboarding-provider-card[data-recessive="true"]
+  .onboarding-provider-status-line,
+.onboarding-provider-card[data-recessive="true"]
+  .onboarding-provider-status-line
+  span {
+  color: var(--muted-foreground);
+}
+.onboarding-provider-card[data-recessive="true"]
+  .onboarding-provider-toggle
+  > span:first-child
+  > svg {
+  opacity: 0.6;
+}
+
+.onboarding-provider-toggle {
+  border-radius: inherit;
+  cursor: pointer;
+}
+/* The whole card is the hit target and the focus ring's shape. */
+.onboarding-provider-toggle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.onboarding-provider-toggle:disabled {
+  cursor: default;
+}
+.onboarding-provider-toggle:focus-visible {
+  outline: none;
+}
+.onboarding-provider-toggle:focus-visible::after {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.onboarding-provider-status-line {
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+/* Empty on a card with no discoveries and no sign-in to offer - the
+   not-installed state is one line and nothing else. */
+.onboarding-provider-footer:empty {
+  display: none;
+}
+
+.onboarding-provider-check {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  opacity: 0;
+  transform: scale(0.4);
+  transition:
+    opacity 140ms ease,
+    transform 200ms var(--onboarding-ease);
+}
+.onboarding-provider-card[data-enabled="true"] .onboarding-provider-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .onboarding-provider-card:has(.onboarding-provider-toggle:enabled:hover) {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 22%, transparent);
+  }
+  .onboarding-provider-card[data-enabled="true"]:has(
+      .onboarding-provider-toggle:enabled:hover
+    ) {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 75%, transparent);
+  }
+}
+.onboarding-provider-card:has(
+  .onboarding-provider-toggle:enabled:active:not(:focus-visible)
+) {
+  transform: scale(0.98);
+}
+
+@keyframes onboarding-provider-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* ------------------------------------------------- act 2: discovery popover */
+
+.onboarding-discovery-trigger {
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.onboarding-discovery-trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--foreground);
+}
+.onboarding-discovery-trigger > svg {
+  transition: transform 150ms cubic-bezier(0.2, 0, 0, 1);
+}
+.onboarding-discovery-trigger[aria-expanded="true"] > svg {
+  transform: rotate(90deg);
+}
+@media (hover: hover) and (pointer: fine) {
+  .onboarding-discovery-trigger:hover {
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
+    color: var(--foreground);
+  }
+}
+.onboarding-discovery-popover {
+  animation: none;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent),
+    0 4px 8px -4px #0003,
+    0 20px 48px -12px #0005;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .onboarding-discovery-popover[data-motion="true"][data-visible="true"] {
+    animation: discovery-open 150ms cubic-bezier(0.2, 0, 0, 1);
+  }
+  .onboarding-discovery-popover[data-motion="true"][data-visible="false"] {
+    animation: discovery-close 100ms ease-out;
+  }
+}
+@keyframes discovery-open {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes discovery-close {
+  to {
+    opacity: 0;
+    transform: scale(0.99);
+  }
+}
+.onboarding-discovery-trigger:focus-visible,
+.onboarding-discovery-trigger:focus-visible > svg {
+  transition: none;
+}
+
+/* ----------------------------------------------------------------- phone */
+
+/* A phone gets a grouped LIST, not a board: fifteen 8.5rem cards is three on
+   screen and a scroll bar for the rest. `ProviderList` renders a different
+   shape below 767px (`onboarding-provider-row*`) rather than folding the card
+   into a line with `display: contents`, which is what produced the measured
+   failures - a name truncated to "A" or "Trayce…", a status cut mid-sentence,
+   and the discovery summary running under the check badge.
+
+   The class names below exist ONLY in that shape, so most of them need no
+   media query. What does need one is the handful the desktop board shares. */
+
+/* The list's own type and colour, stated once for the act. `--muted-foreground`
+   measures 4.42:1 on this ground and the panel's glass is gone here, so the
+   meta line is lifted towards the foreground until it clears 4.5:1 - an alpha
+   of the foreground is surface-independent by construction, and mixing FROM
+   the muted token keeps the theme's own hue. */
+.onboarding-provider-row {
+  --onboarding-row-meta: color-mix(
+    in srgb,
+    var(--foreground) 45%,
+    var(--muted-foreground)
+  );
+  --onboarding-row-hairline: color-mix(
+    in srgb,
+    var(--foreground) 14%,
+    transparent
+  );
+  position: relative;
+  /* `backwards`, not `both`: a fill-forwards animation keeps owning
+     `transform` after it lands and would swallow the press scale below.
+     Opacity and translateY only, and the row is never clipped horizontally
+     while it travels. */
+  animation: onboarding-provider-card-in 220ms var(--onboarding-ease) backwards;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+/* Hairlines BETWEEN rows, never around them: the list is one object, and a
+   border per row reads as fifteen. */
+.onboarding-provider-row + .onboarding-provider-row {
+  border-top: 1px solid var(--onboarding-row-hairline);
+}
+/* Enabled reads without colour: a filled row, and a knob that has moved. */
+.onboarding-provider-row[data-enabled="true"] {
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+.onboarding-provider-row-button {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 4rem;
+  padding: 0.625rem 1rem;
+  text-align: start;
+}
+.onboarding-provider-row:has(.onboarding-provider-row-button:enabled) {
+  cursor: pointer;
+}
+.onboarding-provider-row-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.onboarding-provider-row-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* The 12pt gutter the switch never shares with text. */
+  padding-inline-end: 0.75rem;
+}
+.onboarding-provider-row-name {
+  overflow: hidden;
+  font-size: 1.0625rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.onboarding-provider-row-meta {
+  overflow: hidden;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--onboarding-row-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Not installed: nothing here is actionable. Stated in COLOUR, never with
+   opacity - an opacity on the row drags the 13pt meta line down to about
+   2.3:1, and a row that says only "Not installed" is the one row whose single
+   line has to be readable. */
+.onboarding-provider-row[data-installed="false"] .onboarding-provider-row-name {
+  color: var(--onboarding-row-meta);
+  font-weight: 400;
+}
+.onboarding-provider-row[data-installed="false"]
+  .onboarding-provider-row-glyph {
+  opacity: 0.55;
+}
+
+/* ------------------------------------------------------- phone: the switch */
+
+/* iOS proportions at iOS SIZE (51x31) crowd a 64pt row and leave the name no
+   room, so this is the same drawing at 44x26. Presentational: the row is the
+   control, and this is `aria-hidden` (see `ProviderList`). */
+.onboarding-provider-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.75rem;
+  height: 1.625rem;
+  border-radius: 999px;
+  background: var(--onboarding-row-hairline);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--foreground) 10%, transparent);
+  transition: background-color 200ms var(--onboarding-ease);
+}
+.onboarding-provider-row[data-enabled="true"] .onboarding-provider-switch {
+  background: var(--primary);
+  box-shadow: none;
+}
+.onboarding-provider-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 999px;
+  /* An alpha of the foreground rather than `--background`: a thumb the colour
+     of the page is invisible on a dark theme's track. */
+  background: color-mix(in srgb, var(--foreground) 55%, transparent);
+  transition:
+    transform 200ms var(--onboarding-ease),
+    background-color 200ms var(--onboarding-ease);
+}
+.onboarding-provider-row[data-enabled="true"]
+  .onboarding-provider-switch-thumb {
+  background: var(--primary-foreground);
+  transform: translateX(1.125rem);
+}
+.onboarding-provider-row:has(
+  .onboarding-provider-row-button:enabled:active:not(:focus-visible)
+) {
+  transform: scale(0.98);
+}
+
+/* ------------------------------------------- phone: the act around the list */
+
+@media (max-width: 767px) {
+  /* The shell's panel is full-bleed here - no padding, no radius, no glass -
+     so the act owns its own 16pt gutters. The toolbar row insets itself and
+     the list runs edge to edge with its ROWS padded instead, which is what
+     makes the hairlines read as one list rather than as fifteen cards. */
+  .onboarding-panel[data-step="providers"] .onboarding-provider-panel {
+    grid-template-columns: fit-content(50%) minmax(0, 1fr);
+    grid-template-rows: 2.75rem minmax(0, 1fr);
+    gap: 0 0.75rem;
+  }
+  .onboarding-panel[data-step="providers"] .onboarding-provider-status {
+    padding-inline-end: 1rem;
+  }
+  .onboarding-panel[data-step="providers"] .onboarding-provider-status p {
+    font-size: 0.8125rem;
+  }
+  /* No padding and no mask: the focus ring the padding protected belongs to a
+     card, and the rows draw their own inset ring instead. */
+  .onboarding-panel[data-step="providers"] .onboarding-provider-scroller {
+    padding: 0;
+    scroll-padding-block: 0;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .onboarding-panel[data-step="providers"] .onboarding-provider-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+}
+
+/* ------------------------------------------------------------- no motion */
+
+.onboarding-provider-card:has(.onboarding-provider-toggle:focus-visible),
+.onboarding-provider-card:has(.onboarding-provider-toggle:focus-visible)
+  .onboarding-provider-check {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-provider-card,
+  .onboarding-provider-row {
+    animation-name: onboarding-provider-card-fade;
+    transition:
+      background-color 150ms ease,
+      box-shadow 150ms ease;
+  }
+  /* The knob still MOVES - its position is the state, and the colour alone is
+     not allowed to carry it - it simply arrives without travelling. */
+  .onboarding-provider-switch,
+  .onboarding-provider-switch-thumb {
+    transition: background-color 150ms ease;
+  }
+  .onboarding-provider-row:has(.onboarding-provider-row-button:enabled:active) {
+    transform: none;
+  }
+  .onboarding-provider-check {
+    transition: opacity 140ms ease;
+    transform: none;
+  }
+  .onboarding-provider-card[data-enabled="true"] .onboarding-provider-check {
+    transform: none;
+  }
+  .onboarding-provider-card:has(.onboarding-provider-toggle:enabled:active) {
+    transform: none;
+  }
+  .onboarding-discovery-trigger,
+  .onboarding-discovery-trigger > svg {
+    transition: none;
+  }
+}
+@keyframes onboarding-provider-card-fade {
+  from {
+    opacity: 0;
+  }
+}

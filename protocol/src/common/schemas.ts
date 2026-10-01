@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Public sub-schemas that are not registered records - building blocks
@@ -32,22 +33,26 @@ import { z } from "zod";
  * One schema, both boundaries - the HTTP mint response and the stream provision
  * frame carry the same field and must not drift apart.
  */
-export const isoMillisecondTimestampSchema = z.iso.datetime({
-  offset: true,
-  precision: 3,
-});
+export const isoMillisecondTimestampSchema = lazySchema(() =>
+  z.iso.datetime({
+    offset: true,
+    precision: 3,
+  }),
+);
 
 /**
  * Sub-schema reused by the recursive `json-content` record. Not a
  * record itself - it has no independent lifecycle and is embedded only
  * inside `jsonContentSchema`.
  */
-export const jsonContentMarkSchema = z.object({
-  type: z.string(),
-  attrs: z.record(z.string(), z.unknown()).optional(),
-});
+export const jsonContentMarkSchema = lazySchema(() =>
+  z.object({
+    type: z.string(),
+    attrs: z.record(z.string(), z.unknown()).optional(),
+  }),
+);
 
-export const agentModeSchema = z.enum(["regular", "epic"]);
+export const agentModeSchema = lazySchema(() => z.enum(["regular", "epic"]));
 export type AgentMode = z.infer<typeof agentModeSchema>;
 export const DEFAULT_AGENT_MODE: AgentMode = "regular";
 
@@ -60,10 +65,12 @@ export const DEFAULT_AGENT_MODE: AgentMode = "regular";
  * backend's inference boundary (see `ACCOUNT_CONTEXT_HEADER`) where it maps to
  * the credit-handler `{ accountContextType, organizationId }` shape (TEAM -> ORG).
  */
-export const accountContextSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("PERSONAL") }),
-  z.object({ type: z.literal("TEAM"), teamId: z.string().min(1) }),
-]);
+export const accountContextSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({ type: z.literal("PERSONAL") }),
+    z.object({ type: z.literal("TEAM"), teamId: z.string().min(1) }),
+  ]),
+);
 export type AccountContext = z.infer<typeof accountContextSchema>;
 export const DEFAULT_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
 

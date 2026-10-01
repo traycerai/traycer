@@ -75,7 +75,10 @@ export class BlockErrorBoundary extends Component<
       return this.props.children;
     }
     return (
-      <div className="tc-node-block__error" role="alert">
+      // Out of the chat find walk: the block is counted on its own text (its
+      // find mirror), and the panel's copy would otherwise add ranges the
+      // counter never saw.
+      <div className="tc-node-block__error" role="alert" data-find-skip="">
         <div className="tc-node-block__error-title">{this.props.title}</div>
         <div className="tc-node-block__error-detail">{error.message}</div>
         <div className="tc-node-block__error-actions">

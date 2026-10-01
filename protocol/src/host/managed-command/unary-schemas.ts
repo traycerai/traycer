@@ -11,6 +11,7 @@
  * is shared across the terminal surface.
  */
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The command's lifecycle, mirroring the supervisor's own status union. There
@@ -21,24 +22,26 @@ import { z } from "zod";
  * deliberately NOT carried - it exists to prove a pid still belongs to the same
  * process across a host restart, which is nothing a viewer can act on.
  */
-export const managedCommandStatusSchema = z.discriminatedUnion("state", [
-  z.object({
-    state: z.literal("running"),
-    pid: z.number().int(),
-    startedAtMs: z.number(),
-  }),
-  z.object({ state: z.literal("stopped"), stoppedAtMs: z.number() }),
-  z.object({
-    state: z.literal("exited"),
-    // Both null when the process was lost without either being observable.
-    exitCode: z.number().int().nullable(),
-    signal: z.string().nullable(),
-    exitedAtMs: z.number(),
-  }),
-  // The host process died while this command was running; the child was reaped
-  // on the next boot.
-  z.object({ state: z.literal("interrupted"), interruptedAtMs: z.number() }),
-]);
+export const managedCommandStatusSchema = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    z.object({
+      state: z.literal("running"),
+      pid: z.number().int(),
+      startedAtMs: z.number(),
+    }),
+    z.object({ state: z.literal("stopped"), stoppedAtMs: z.number() }),
+    z.object({
+      state: z.literal("exited"),
+      // Both null when the process was lost without either being observable.
+      exitCode: z.number().int().nullable(),
+      signal: z.string().nullable(),
+      exitedAtMs: z.number(),
+    }),
+    // The host process died while this command was running; the child was reaped
+    // on the next boot.
+    z.object({ state: z.literal("interrupted"), interruptedAtMs: z.number() }),
+  ]),
+);
 export type ManagedCommandStatus = z.infer<typeof managedCommandStatusSchema>;
 
 /**
@@ -47,14 +50,16 @@ export type ManagedCommandStatus = z.infer<typeof managedCommandStatusSchema>;
  * watcher is quiet. Null on a shell that is not monitoring, where the timings
  * govern nothing and reporting them would describe a policy with no effect.
  */
-export const managedCommandCadenceSchema = z.object({
-  /** Quiet gap that completes a batch of output. */
-  debounceMs: z.number().int(),
-  /** Ceiling before output that never pauses is delivered anyway. */
-  maxWaitMs: z.number().int(),
-  /** Floor between consecutive deliveries from this one shell. */
-  throttleMs: z.number().int(),
-});
+export const managedCommandCadenceSchema = lazySchema(() =>
+  z.object({
+    /** Quiet gap that completes a batch of output. */
+    debounceMs: z.number().int(),
+    /** Ceiling before output that never pauses is delivered anyway. */
+    maxWaitMs: z.number().int(),
+    /** Floor between consecutive deliveries from this one shell. */
+    throttleMs: z.number().int(),
+  }),
+);
 export type ManagedCommandCadence = z.infer<typeof managedCommandCadenceSchema>;
 
 /**
@@ -79,47 +84,49 @@ export type ManagedCommandCadence = z.infer<typeof managedCommandCadenceSchema>;
  * Everything added since the first shipped shape is DEFAULTED, so a host too
  * old to send it still parses.
  */
-export const managedCommandSchema = z.object({
-  id: z.string(),
-  /** Output is delivered to the owning agent as it prints, not only at death. */
-  monitoring: z.boolean(),
-  /** The command's human label, shown as the row title. */
-  description: z.string(),
-  /**
-   * The command line as the agent wrote it, verbatim. Null - never `""` - when
-   * the host is too old to send it, so a surface can say "this host does not
-   * report it" instead of rendering an empty command line as fact.
-   */
-  command: z.string().nullable().default(null),
-  /** Absolute working directory the command runs in; null on an old host. */
-  cwd: z.string().nullable().default(null),
-  /** How digests are paced; null unless `monitoring`. */
-  cadence: managedCommandCadenceSchema.nullable().default(null),
-  status: managedCommandStatusSchema,
-  /**
-   * Whether a host restart brings this command back. Off, the host records
-   * a command it finds running at boot as `interrupted` and leaves it for
-   * Start; on, it respawns it - bounded by a loop breaker that parks a
-   * command whose relaunch keeps taking the host down.
-   *
-   * Defaulted `true`, NOT the new host's off-by-default: only a host
-   * predating the flag omits it (a current host always sends it, and strips
-   * it only for a peer whose contract does not name it), and such a host
-   * respawns EVERY command that was running when it went down. Reading an
-   * absent flag as `false` would show "stays down" for exactly the shells
-   * that loop.
-   */
-  relaunchOnHostRestart: z.boolean().default(true),
-  /**
-   * The chat that created the command - the row's backlink. This is the
-   * creating agent's id, which for a chat-hosted agent IS its chat id; the same
-   * equivalence the delivery path relies on to route a digest back.
-   */
-  chatId: z.string(),
-  createdAtMs: z.number(),
-  /** Last lifecycle or spec change; the list's "most recent activity" order. */
-  updatedAtMs: z.number(),
-});
+export const managedCommandSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    /** Output is delivered to the owning agent as it prints, not only at death. */
+    monitoring: z.boolean(),
+    /** The command's human label, shown as the row title. */
+    description: z.string(),
+    /**
+     * The command line as the agent wrote it, verbatim. Null - never `""` - when
+     * the host is too old to send it, so a surface can say "this host does not
+     * report it" instead of rendering an empty command line as fact.
+     */
+    command: z.string().nullable().default(null),
+    /** Absolute working directory the command runs in; null on an old host. */
+    cwd: z.string().nullable().default(null),
+    /** How digests are paced; null unless `monitoring`. */
+    cadence: managedCommandCadenceSchema.nullable().default(null),
+    status: managedCommandStatusSchema,
+    /**
+     * Whether a host restart brings this command back. Off, the host records
+     * a command it finds running at boot as `interrupted` and leaves it for
+     * Start; on, it respawns it - bounded by a loop breaker that parks a
+     * command whose relaunch keeps taking the host down.
+     *
+     * Defaulted `true`, NOT the new host's off-by-default: only a host
+     * predating the flag omits it (a current host always sends it, and strips
+     * it only for a peer whose contract does not name it), and such a host
+     * respawns EVERY command that was running when it went down. Reading an
+     * absent flag as `false` would show "stays down" for exactly the shells
+     * that loop.
+     */
+    relaunchOnHostRestart: z.boolean().default(true),
+    /**
+     * The chat that created the command - the row's backlink. This is the
+     * creating agent's id, which for a chat-hosted agent IS its chat id; the same
+     * equivalence the delivery path relies on to route a digest back.
+     */
+    chatId: z.string(),
+    createdAtMs: z.number(),
+    /** Last lifecycle or spec change; the list's "most recent activity" order. */
+    updatedAtMs: z.number(),
+  }),
+);
 export type ManagedCommand = z.infer<typeof managedCommandSchema>;
 
 /**
@@ -131,18 +138,20 @@ export type ManagedCommand = z.infer<typeof managedCommandSchema>;
  * checks against the shipped peer. The live schema carries the flag on the
  * lines opened after the release (`@1.1` of each, `chat.subscribe@1.7`+).
  */
-export const managedCommandSchemaPreRelaunch = z.object({
-  id: z.string(),
-  monitoring: z.boolean(),
-  description: z.string(),
-  command: z.string().nullable().default(null),
-  cwd: z.string().nullable().default(null),
-  cadence: managedCommandCadenceSchema.nullable().default(null),
-  status: managedCommandStatusSchema,
-  chatId: z.string(),
-  createdAtMs: z.number(),
-  updatedAtMs: z.number(),
-});
+export const managedCommandSchemaPreRelaunch = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    monitoring: z.boolean(),
+    description: z.string(),
+    command: z.string().nullable().default(null),
+    cwd: z.string().nullable().default(null),
+    cadence: managedCommandCadenceSchema.nullable().default(null),
+    status: managedCommandStatusSchema,
+    chatId: z.string(),
+    createdAtMs: z.number(),
+    updatedAtMs: z.number(),
+  }),
+);
 export type ManagedCommandPreRelaunch = z.infer<
   typeof managedCommandSchemaPreRelaunch
 >;
@@ -166,10 +175,12 @@ export function managedCommandWithoutRelaunchFlag(
  * in another epic is answered exactly as an id that never existed, so the
  * surface cannot be used to probe for commands the caller may not see.
  */
-export const managedCommandControlRequestSchema = z.object({
-  epicId: z.string(),
-  commandId: z.string(),
-});
+export const managedCommandControlRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    commandId: z.string(),
+  }),
+);
 export type ManagedCommandControlRequest = z.infer<
   typeof managedCommandControlRequestSchema
 >;
@@ -179,17 +190,21 @@ export type ManagedCommandControlRequest = z.infer<
  * stream pushes the same change to every subscriber; this is what lets the
  * caller that pressed the button settle its own row without waiting for it.
  */
-export const managedCommandControlResponseSchema = z.object({
-  command: managedCommandSchema,
-});
+export const managedCommandControlResponseSchema = lazySchema(() =>
+  z.object({
+    command: managedCommandSchema,
+  }),
+);
 export type ManagedCommandControlResponse = z.infer<
   typeof managedCommandControlResponseSchema
 >;
 
 /** The `@1.0` response: the shipped command shape, without the relaunch flag. */
-export const managedCommandControlResponseSchemaV10 = z.object({
-  command: managedCommandSchemaPreRelaunch,
-});
+export const managedCommandControlResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    command: managedCommandSchemaPreRelaunch,
+  }),
+);
 export type ManagedCommandControlResponseV10 = z.infer<
   typeof managedCommandControlResponseSchemaV10
 >;
@@ -205,11 +220,13 @@ export type ManagedCommandDeleteRequest = ManagedCommandControlRequest;
  * host keeps relaunching a shell they did not ask for is the one who needs the
  * switch. Answers with the command's post-change state, like start and stop.
  */
-export const managedCommandConfigureRequestSchema = z.object({
-  epicId: z.string(),
-  commandId: z.string(),
-  relaunchOnHostRestart: z.boolean(),
-});
+export const managedCommandConfigureRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    commandId: z.string(),
+    relaunchOnHostRestart: z.boolean(),
+  }),
+);
 export type ManagedCommandConfigureRequest = z.infer<
   typeof managedCommandConfigureRequestSchema
 >;
@@ -219,9 +236,11 @@ export type ManagedCommandConfigureRequest = z.infer<
  * output history are gone. The echoed id is what lets a caller match the
  * result to the window it should now tear down.
  */
-export const managedCommandDeleteResponseSchema = z.object({
-  commandId: z.string(),
-});
+export const managedCommandDeleteResponseSchema = lazySchema(() =>
+  z.object({
+    commandId: z.string(),
+  }),
+);
 export type ManagedCommandDeleteResponse = z.infer<
   typeof managedCommandDeleteResponseSchema
 >;
@@ -231,71 +250,81 @@ export type ManagedCommandDeleteResponse = z.infer<
  * the authoring agent already knows the command line and cwd, and list/view
  * over a dialed session must return them.
  */
-export const managedCommandAgentViewSchema = z.object({
-  id: z.string(),
-  monitor: z.boolean(),
-  debounceMs: z.number().int().nonnegative().optional(),
-  maxWaitMs: z.number().int().nonnegative().optional(),
-  throttleMs: z.number().int().nonnegative().optional(),
-  description: z.string(),
-  command: z.string(),
-  cwd: z.string(),
-  /**
-   * Reported so an agent's own configure/view round-trips the flag it can
-   * author. The human `managedCommandSchema` carries the same field; this row
-   * is the agent's view of the same command, not a second source of truth.
-   */
-  relaunchOnHostRestart: z.boolean(),
-  status: managedCommandStatusSchema,
-  logDirectory: z.string(),
-  createdByAgentId: z.string(),
-  createdAtMs: z.number(),
-  updatedAtMs: z.number(),
-  hint: z.string().optional(),
-  notice: z.string().optional(),
-});
+export const managedCommandAgentViewSchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    monitor: z.boolean(),
+    debounceMs: z.number().int().nonnegative().optional(),
+    maxWaitMs: z.number().int().nonnegative().optional(),
+    throttleMs: z.number().int().nonnegative().optional(),
+    description: z.string(),
+    command: z.string(),
+    cwd: z.string(),
+    /**
+     * Reported so an agent's own configure/view round-trips the flag it can
+     * author. The human `managedCommandSchema` carries the same field; this row
+     * is the agent's view of the same command, not a second source of truth.
+     */
+    relaunchOnHostRestart: z.boolean(),
+    status: managedCommandStatusSchema,
+    logDirectory: z.string(),
+    createdByAgentId: z.string(),
+    createdAtMs: z.number(),
+    updatedAtMs: z.number(),
+    hint: z.string().optional(),
+    notice: z.string().optional(),
+  }),
+);
 export type ManagedCommandAgentView = z.infer<
   typeof managedCommandAgentViewSchema
 >;
 
-export const managedCommandCreateRequestSchema = z.object({
-  epicId: z.string().min(1),
-  createdByAgentId: z.string().min(1),
-  command: z.string().min(1),
-  description: z.string().min(1),
-  cwd: z.string().min(1).nullable(),
-  monitor: z.boolean(),
-  debounceMs: z.number().int().nonnegative().nullable(),
-  maxWaitMs: z.number().int().nonnegative().nullable(),
-  throttleMs: z.number().int().nonnegative().nullable(),
-  /**
-   * `null` takes the host default rather than asserting one, so an agent that
-   * does not care about restart policy does not have to state one.
-   */
-  relaunchOnHostRestart: z.boolean().nullable(),
-});
+export const managedCommandCreateRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    createdByAgentId: z.string().min(1),
+    command: z.string().min(1),
+    description: z.string().min(1),
+    cwd: z.string().min(1).nullable(),
+    monitor: z.boolean(),
+    debounceMs: z.number().int().nonnegative().nullable(),
+    maxWaitMs: z.number().int().nonnegative().nullable(),
+    throttleMs: z.number().int().nonnegative().nullable(),
+    /**
+     * `null` takes the host default rather than asserting one, so an agent that
+     * does not care about restart policy does not have to state one.
+     */
+    relaunchOnHostRestart: z.boolean().nullable(),
+  }),
+);
 export type ManagedCommandCreateRequest = z.infer<
   typeof managedCommandCreateRequestSchema
 >;
 
-export const managedCommandCreateResponseSchema = z.object({
-  command: managedCommandAgentViewSchema,
-});
+export const managedCommandCreateResponseSchema = lazySchema(() =>
+  z.object({
+    command: managedCommandAgentViewSchema,
+  }),
+);
 export type ManagedCommandCreateResponse = z.infer<
   typeof managedCommandCreateResponseSchema
 >;
 
-export const managedCommandListRequestSchema = z.object({
-  epicId: z.string().min(1),
-  createdByAgentId: z.string().min(1),
-});
+export const managedCommandListRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    createdByAgentId: z.string().min(1),
+  }),
+);
 export type ManagedCommandListRequest = z.infer<
   typeof managedCommandListRequestSchema
 >;
 
-export const managedCommandListResponseSchema = z.object({
-  commands: z.array(managedCommandAgentViewSchema),
-});
+export const managedCommandListResponseSchema = lazySchema(() =>
+  z.object({
+    commands: z.array(managedCommandAgentViewSchema),
+  }),
+);
 export type ManagedCommandListResponse = z.infer<
   typeof managedCommandListResponseSchema
 >;
@@ -304,9 +333,11 @@ export const managedCommandViewRequestSchema =
   managedCommandControlRequestSchema;
 export type ManagedCommandViewRequest = ManagedCommandControlRequest;
 
-export const managedCommandViewResponseSchema = z.object({
-  command: managedCommandAgentViewSchema,
-});
+export const managedCommandViewResponseSchema = lazySchema(() =>
+  z.object({
+    command: managedCommandAgentViewSchema,
+  }),
+);
 export type ManagedCommandViewResponse = z.infer<
   typeof managedCommandViewResponseSchema
 >;
@@ -324,40 +355,48 @@ export type ManagedCommandViewResponse = z.infer<
  * author it (`traycer_run_shell`), and a configure that could not edit what
  * run could set would be a hole the agent has no other way to close.
  */
-export const managedCommandConfigureAgentShellRequestSchema = z.object({
-  epicId: z.string().min(1),
-  commandId: z.string().min(1),
-  description: z.string().min(1).nullable(),
-  monitor: z.boolean().nullable(),
-  debounceMs: z.number().int().nonnegative().nullable(),
-  maxWaitMs: z.number().int().nonnegative().nullable(),
-  throttleMs: z.number().int().nonnegative().nullable(),
-  relaunchOnHostRestart: z.boolean().nullable(),
-});
+export const managedCommandConfigureAgentShellRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    commandId: z.string().min(1),
+    description: z.string().min(1).nullable(),
+    monitor: z.boolean().nullable(),
+    debounceMs: z.number().int().nonnegative().nullable(),
+    maxWaitMs: z.number().int().nonnegative().nullable(),
+    throttleMs: z.number().int().nonnegative().nullable(),
+    relaunchOnHostRestart: z.boolean().nullable(),
+  }),
+);
 export type ManagedCommandConfigureAgentShellRequest = z.infer<
   typeof managedCommandConfigureAgentShellRequestSchema
 >;
 
-export const managedCommandConfigureAgentShellResponseSchema = z.object({
-  command: managedCommandAgentViewSchema,
-});
+export const managedCommandConfigureAgentShellResponseSchema = lazySchema(() =>
+  z.object({
+    command: managedCommandAgentViewSchema,
+  }),
+);
 export type ManagedCommandConfigureAgentShellResponse = z.infer<
   typeof managedCommandConfigureAgentShellResponseSchema
 >;
 
-export const managedCommandRestartRequestSchema = z.object({
-  epicId: z.string().min(1),
-  commandId: z.string().min(1),
-  command: z.string().min(1).nullable(),
-  cwd: z.string().min(1).nullable(),
-});
+export const managedCommandRestartRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    commandId: z.string().min(1),
+    command: z.string().min(1).nullable(),
+    cwd: z.string().min(1).nullable(),
+  }),
+);
 export type ManagedCommandRestartRequest = z.infer<
   typeof managedCommandRestartRequestSchema
 >;
 
-export const managedCommandRestartResponseSchema = z.object({
-  command: managedCommandAgentViewSchema,
-});
+export const managedCommandRestartResponseSchema = lazySchema(() =>
+  z.object({
+    command: managedCommandAgentViewSchema,
+  }),
+);
 export type ManagedCommandRestartResponse = z.infer<
   typeof managedCommandRestartResponseSchema
 >;
@@ -390,13 +429,15 @@ export type ManagedCommandRestartResponse = z.infer<
  * the 1.6 details widening leaked, and it is the reason the pre-image files are
  * literals rather than imports.
  */
-export const heldManagedCommandUpdateSchema = z.object({
-  commandId: z.string(),
-  /** The command's human label, so the row reads without a join. */
-  description: z.string(),
-  /** When the Stop commit installed the hold. */
-  heldAtMs: z.number(),
-});
+export const heldManagedCommandUpdateSchema = lazySchema(() =>
+  z.object({
+    commandId: z.string(),
+    /** The command's human label, so the row reads without a join. */
+    description: z.string(),
+    /** When the Stop commit installed the hold. */
+    heldAtMs: z.number(),
+  }),
+);
 export type HeldManagedCommandUpdate = z.infer<
   typeof heldManagedCommandUpdateSchema
 >;
@@ -414,20 +455,22 @@ export type HeldManagedCommandUpdate = z.infer<
  * epic, so a scan keyed on the chat alone would answer for a chat the caller
  * named but has no rights to.
  */
-export const managedCommandDeliverHeldRequestSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string(),
-  /**
-   * The holds to deliver; null means every hold this chat owns.
-   *
-   * An EMPTY array is rejected rather than accepted as "deliver nothing".
-   * Nothing a person can do produces it, so in practice it is a caller that
-   * meant `null` and built the array from an empty selection - and answering
-   * that with an empty, fully-successful response reads identically to a real
-   * delivery. The narrow branch is the dangerous one to make silent.
-   */
-  commandIds: z.array(z.string()).min(1).nullable(),
-});
+export const managedCommandDeliverHeldRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string(),
+    /**
+     * The holds to deliver; null means every hold this chat owns.
+     *
+     * An EMPTY array is rejected rather than accepted as "deliver nothing".
+     * Nothing a person can do produces it, so in practice it is a caller that
+     * meant `null` and built the array from an empty selection - and answering
+     * that with an empty, fully-successful response reads identically to a real
+     * delivery. The narrow branch is the dangerous one to make silent.
+     */
+    commandIds: z.array(z.string()).min(1).nullable(),
+  }),
+);
 export type ManagedCommandDeliverHeldRequest = z.infer<
   typeof managedCommandDeliverHeldRequestSchema
 >;
@@ -465,26 +508,28 @@ export type ManagedCommandDeliverHeldRequest = z.infer<
  * be distinguished in logs and telemetry without a wire break. Clients must not
  * branch on it; it is for humans reading a report.
  */
-export const managedCommandHeldReleaseFailureSchema = z.object({
-  /**
-   * The command this entry is about. Always present: a failure the host cannot
-   * attribute to one command is reported in `unattributed` instead, so that
-   * `unresolved.length` is always a count of SHELLS and can be rendered as one.
-   */
-  commandId: z.string(),
-  /** Stable identifier for logs and telemetry. Never branch on this. */
-  code: z.string(),
-  /** Whether retrying against THIS host process could ever succeed. */
-  retryable: z.boolean(),
-  /**
-   * Host-authored detail. Show it verbatim rather than composing copy from
-   * `retryable` alone: `false` covers two different human remedies - a row a
-   * NEWER build wrote (upgrade this host) and a boot load that failed (restart
-   * it) - and only this string distinguishes them, since `code` is not
-   * branchable.
-   */
-  message: z.string(),
-});
+export const managedCommandHeldReleaseFailureSchema = lazySchema(() =>
+  z.object({
+    /**
+     * The command this entry is about. Always present: a failure the host cannot
+     * attribute to one command is reported in `unattributed` instead, so that
+     * `unresolved.length` is always a count of SHELLS and can be rendered as one.
+     */
+    commandId: z.string(),
+    /** Stable identifier for logs and telemetry. Never branch on this. */
+    code: z.string(),
+    /** Whether retrying against THIS host process could ever succeed. */
+    retryable: z.boolean(),
+    /**
+     * Host-authored detail. Show it verbatim rather than composing copy from
+     * `retryable` alone: `false` covers two different human remedies - a row a
+     * NEWER build wrote (upgrade this host) and a boot load that failed (restart
+     * it) - and only this string distinguishes them, since `code` is not
+     * branchable.
+     */
+    message: z.string(),
+  }),
+);
 export type ManagedCommandHeldReleaseFailure = z.infer<
   typeof managedCommandHeldReleaseFailureSchema
 >;
@@ -514,14 +559,16 @@ export type ManagedCommandHeldReleaseFailure = z.infer<
  *
  * Same `retryable`/`code`/`message` contract as the per-command failure.
  */
-export const managedCommandHeldReleaseUnattributedSchema = z.object({
-  /** Stable identifier for logs and telemetry. Never branch on this. */
-  code: z.string(),
-  /** Whether retrying against THIS host process could ever succeed. */
-  retryable: z.boolean(),
-  /** Host-authored detail. Show it verbatim; see the per-command note. */
-  message: z.string(),
-});
+export const managedCommandHeldReleaseUnattributedSchema = lazySchema(() =>
+  z.object({
+    /** Stable identifier for logs and telemetry. Never branch on this. */
+    code: z.string(),
+    /** Whether retrying against THIS host process could ever succeed. */
+    retryable: z.boolean(),
+    /** Host-authored detail. Show it verbatim; see the per-command note. */
+    message: z.string(),
+  }),
+);
 export type ManagedCommandHeldReleaseUnattributed = z.infer<
   typeof managedCommandHeldReleaseUnattributedSchema
 >;
@@ -547,38 +594,40 @@ export type ManagedCommandHeldReleaseUnattributed = z.infer<
  * nothing else here was determined), then `released`/`unresolved` for the rows
  * you named, then `held` as context.
  */
-export const managedCommandDeliverHeldResponseSchema = z.object({
-  /** Command ids whose hold this call proved gone. */
-  released: z.array(z.string()),
-  /**
-   * In-scope commands whose release could not be proven, one entry per command.
-   * `unresolved.length` is a SHELL COUNT and safe to render as one.
-   */
-  unresolved: z.array(managedCommandHeldReleaseFailureSchema),
-  /**
-   * Failures belonging to the call rather than to any command. Check this
-   * BEFORE reading anything else: while it is non-empty, `released` and `held`
-   * are empty because nothing was determined, not because nothing was there.
-   */
-  unattributed: z.array(managedCommandHeldReleaseUnattributedSchema),
-  /**
-   * The holds the chat still owns once this call settled, as far as the host
-   * can SEE them - not a proof of completeness, and the difference matters.
-   *
-   * Its producer is derived from the host's in-memory pair set, and a delivery
-   * row this build cannot decode never becomes a pair (the reconcile pass skips
-   * it), so such a hold can never appear here. It surfaces in `unresolved`
-   * instead whenever it is in scope - but `held` is chat-wide while the proof is
-   * scoped to `commandIds`, so a narrowed Deliver can leave an undecodable hold
-   * on a SIBLING shell in neither list.
-   *
-   * So: settle the rows you asked about from `released`/`unresolved`, and treat
-   * `held` as the best current view rather than as authority to clear a row you
-   * did not name. An empty `held` alongside a non-empty `unresolved` never means
-   * "nothing is held".
-   */
-  held: z.array(heldManagedCommandUpdateSchema),
-});
+export const managedCommandDeliverHeldResponseSchema = lazySchema(() =>
+  z.object({
+    /** Command ids whose hold this call proved gone. */
+    released: z.array(z.string()),
+    /**
+     * In-scope commands whose release could not be proven, one entry per command.
+     * `unresolved.length` is a SHELL COUNT and safe to render as one.
+     */
+    unresolved: z.array(managedCommandHeldReleaseFailureSchema),
+    /**
+     * Failures belonging to the call rather than to any command. Check this
+     * BEFORE reading anything else: while it is non-empty, `released` and `held`
+     * are empty because nothing was determined, not because nothing was there.
+     */
+    unattributed: z.array(managedCommandHeldReleaseUnattributedSchema),
+    /**
+     * The holds the chat still owns once this call settled, as far as the host
+     * can SEE them - not a proof of completeness, and the difference matters.
+     *
+     * Its producer is derived from the host's in-memory pair set, and a delivery
+     * row this build cannot decode never becomes a pair (the reconcile pass skips
+     * it), so such a hold can never appear here. It surfaces in `unresolved`
+     * instead whenever it is in scope - but `held` is chat-wide while the proof is
+     * scoped to `commandIds`, so a narrowed Deliver can leave an undecodable hold
+     * on a SIBLING shell in neither list.
+     *
+     * So: settle the rows you asked about from `released`/`unresolved`, and treat
+     * `held` as the best current view rather than as authority to clear a row you
+     * did not name. An empty `held` alongside a non-empty `unresolved` never means
+     * "nothing is held".
+     */
+    held: z.array(heldManagedCommandUpdateSchema),
+  }),
+);
 export type ManagedCommandDeliverHeldResponse = z.infer<
   typeof managedCommandDeliverHeldResponseSchema
 >;

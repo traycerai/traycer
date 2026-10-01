@@ -1,3 +1,7 @@
+import type {
+  NotificationFeedDeliveryResult,
+  NotificationFeedOccurrence,
+} from "../notifications/feed-delivery";
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
 import type {
@@ -35,8 +39,16 @@ import type {
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 import type { BrowserViewBridge } from "./browser-view";
+import type {
+  HostLifecycleMode,
+  HostLifecyclePolicyWriter,
+} from "@traycer/protocol/config/host-lifecycle-policy";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
+export type {
+  HostLifecycleMode,
+  HostLifecyclePolicyWriter,
+} from "@traycer/protocol/config/host-lifecycle-policy";
 
 export interface RendererCrashTelemetryInput {
   readonly appVersion: string | null;
@@ -125,8 +137,9 @@ export interface IRunnerHost {
   /**
    * Browser-safe base URL for the AuthnV3 service. Parity with `signInUrl`:
    * shell-owned, browser-safe, read-only. Used both for sign-in URL
-   * composition and by host-side token validation against
-   * `${authnBaseUrl}/api/v3/user`.
+   * composition and by host-side token validation against the identity routes
+   * under `${authnBaseUrl}/api/v3/user` (see `shared/auth/auth-validation.ts`
+   * for which one is reached and when).
    */
   readonly authnBaseUrl: string;
 
@@ -144,7 +157,7 @@ export interface IRunnerHost {
   /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
    * shape required to mint a client `RequestContext`. ACCESS-ONLY (tech plan
-   * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it
+   * §3): a single identity lookup with NO refresh-on-401 fallback, so it
    * can never spend a refresh token - a stale token comes back `rejected` and
    * the caller routes the spend through the locked `tokenStore.rotate`. Desktop
    * shells perform this in Electron main so renderer CSP/CORS cannot turn a
@@ -653,6 +666,19 @@ export interface IRunnerHost {
   readonly hostTray: IHostTray | null;
 
   /**
+   * This machine's host lifecycle mode (when you quit Traycer, does the host
+   * keep running, stop, or ask), read and written through the desktop main
+   * process, which owns the policy file beside the host's own records.
+   *
+   * Present on the desktop in EVERY launch mode, including one booted with no
+   * local host - where `hostManagement`, `service`, `traycerCli` and
+   * `hostTray` are `null` and this is the only way to switch the local host
+   * back on. `null` on shells with no local-host concept (mobile, web, tests).
+   * Never a host RPC: the setting has to work while the host is down.
+   */
+  readonly hostLifecycle: IHostLifecycleHost | null;
+
+  /**
    * OS push permission of the DEVICE running this renderer - the phone's own
    * notification switch, not anything host-scoped. Present on shells where OS
    * push exists (the native mobile shells) and `null` everywhere else
@@ -676,6 +702,230 @@ export interface IRunnerHost {
    * to sit on a press that visibly did nothing.
    */
   readonly systemBack: ISystemBackHost | null;
+}
+
+/**
+ * Whether this desktop instance runs the local-host lanes at all. Computed
+ * ONCE at boot by the desktop main process from the lifecycle policy (`none`
+ * gives `"none"`, every other mode `"managed"`) and fixed for the life of the
+ * process, so entering or leaving `none` is restart-to-apply.
+ */
+export type LocalHostCapability = "managed" | "none";
+
+/**
+ * What the RUNNING supervisor does with the policy: `enforcing` advertises
+ * the lifecycle capability, `not-enforcing` is an older supervisor that keeps
+ * running through a CLI upgrade until the next host restart, `not-running`
+ * means there is no host to apply anything to.
+ */
+export type HostLifecycleSupervisorState =
+  | "enforcing"
+  | "not-enforcing"
+  | "not-running";
+
+/**
+ * How the running supervisor's run was started, as its `supervisor.json`
+ * records it (`admittedAs`; the protocol's `SupervisorRunAdmittedAs`):
+ * `service` - by the service manager (login, a relaunch, or this app or a
+ * `traycer host` command starting the service), the run the mode governs;
+ * `foreground` - by a person running `traycer host start` in a terminal. The
+ * mode does not govern that run, and this app leaves it alone: it never
+ * stops, restarts or updates over it (the CLI refuses those with
+ * `E_HOST_NOT_SERVICE_RUN`).
+ */
+export type HostLifecycleRunAdmission = "service" | "foreground";
+
+/**
+ * What still stands between the desired mode and the running one:
+ * `restart-app` - entering or leaving `none` ("takes effect at next launch");
+ * `restart-host` - the running host does not apply the mode until it
+ * restarts: an older supervisor ("restart the host to apply"), or, under a
+ * mode the supervisor enforces, a host started in a terminal
+ * (`applied.admittedAs === "foreground"`), which only the person who started
+ * it can restart - this app never does; `none` - nothing is pending.
+ */
+export type HostLifecyclePending = "none" | "restart-app" | "restart-host";
+
+/**
+ * The lifecycle policy as the desktop reads it: DESIRED (the policy file,
+ * which the CLI co-writes) and APPLIED (what this desktop instance runs
+ * under). Every view is built from a fresh read of the files.
+ */
+export interface HostLifecycleView {
+  readonly desired: {
+    readonly mode: HostLifecycleMode;
+    /** `0` when no valid policy file exists (Background by absence). */
+    readonly rev: number;
+    readonly updatedBy: HostLifecyclePolicyWriter | null;
+    readonly updatedAt: string | null;
+  };
+  readonly applied: {
+    readonly localHostCapability: LocalHostCapability;
+    readonly supervisor: HostLifecycleSupervisorState;
+    /**
+     * How the running supervisor's run was started, read with `supervisor`
+     * from the same record: `null` unless `supervisor` is `enforcing`, and
+     * `null` too for a supervisor from a CLI that predates the field, which
+     * says nothing either way.
+     */
+    readonly admittedAs: HostLifecycleRunAdmission | null;
+  };
+  readonly pending: HostLifecyclePending;
+}
+
+/** The stop a `→ none` transition runs, as the user confirmed it. */
+export type HostLifecycleStopChoice = "if-idle" | "force";
+
+export interface HostLifecycleSetRequest {
+  readonly mode: HostLifecycleMode;
+  /**
+   * The confirmed stop for `→ none` while this instance runs the local-host
+   * lanes: `"if-idle"` after an idle list, `"force"` after the user pressed
+   * Stop on a busy (or unknown) one. `null` for every other transition; a
+   * `→ none` that needs a stop and carries `null` is refused with
+   * `confirmation-required` and changes nothing.
+   */
+  readonly stop: HostLifecycleStopChoice | null;
+}
+
+export type HostLifecycleStopRefusal =
+  | "host-busy"
+  | "lock-busy"
+  | "update-active";
+
+export type HostLifecycleSetFailure =
+  | "confirmation-required"
+  | "stop-failed"
+  | "write-failed";
+
+/**
+ * The answer to `hostLifecycle.set`. Every arm carries a fresh view, so a
+ * surface never has to guess what the file says after a refusal.
+ *
+ * - `applied` - the policy now says the requested mode (or already did).
+ * - `stop-refused` - `→ none`'s stop was refused and the policy is unchanged.
+ *   `host-busy` is the if-idle probe finding work (show it, then retry with
+ *   `force`); `lock-busy` and `update-active` are another lifecycle actor.
+ * - `failed` - nothing was committed; `message` says why.
+ * - `superseded` - the policy changed underneath a `→ none` stop (the CLI
+ *   wrote it), so this request committed nothing and the newer choice stands.
+ */
+export type HostLifecycleSetResult =
+  | { readonly kind: "applied"; readonly view: HostLifecycleView }
+  | {
+      readonly kind: "stop-refused";
+      readonly reason: HostLifecycleStopRefusal;
+      readonly message: string;
+      readonly view: HostLifecycleView;
+    }
+  | {
+      readonly kind: "failed";
+      readonly reason: HostLifecycleSetFailure;
+      readonly message: string;
+      readonly view: HostLifecycleView;
+    }
+  | { readonly kind: "superseded"; readonly view: HostLifecycleView };
+
+/** The two modes whose quit asks the renderer anything. */
+export type HostQuitDecisionMode = "ask" | "stop-if-idle";
+
+/**
+ * Main's question to the renderer while a quit is held open.
+ *
+ * `round: "initial"` is the first ask of this quit, over a list the renderer
+ * has not been shown yet. `round: "busy"` is Stop-if-idle's first ask after
+ * its silent idle-only stop was refused: nothing was shown before it, so it
+ * is a first ask too, over a list the host has just called busy. `round:
+ * "busy-retry"` follows an idle-only stop the person had ALREADY chosen, over
+ * an idle list, that the host refused because something started in the
+ * meantime. On both busy rounds the renderer shows the fresh list and its
+ * Stop is a force. The host's refusal text never crosses: it is the CLI's
+ * instruction to its own caller, and main logs its code.
+ */
+export interface HostQuitDecisionRequest {
+  readonly requestId: string;
+  readonly mode: HostQuitDecisionMode;
+  readonly round: "initial" | "busy" | "busy-retry";
+}
+
+/**
+ * The person's answer. `remember` is the "Remember my choice" checkbox; main
+ * maps it (Keep → `background`, Stop → `linked`). `force` on Stop is `true`
+ * only after the renderer DISPLAYED a busy or unknown list (or on a `busy`
+ * or `busy-retry` round) - force only after disclosure. Cancel carries nothing:
+ * it abandons the quit and ignores the checkbox.
+ */
+export type HostQuitDecision =
+  | { readonly kind: "keep"; readonly remember: boolean }
+  | {
+      readonly kind: "stop";
+      readonly force: boolean;
+      readonly remember: boolean;
+    }
+  | { readonly kind: "cancel" };
+
+export interface HostQuitDecisionResponse {
+  readonly requestId: string;
+  readonly decision: HostQuitDecision;
+}
+
+/**
+ * Where main's quit transaction is: `stopping` while a stop runs (the modal
+ * shows progress with its buttons disabled), then `quitting`, or `cancelled`
+ * when the quit was abandoned. `requestId` names the decision request the
+ * phase belongs to, `null` for a stop no request preceded (Linked mode, and
+ * Stop-if-idle's silent attempt).
+ *
+ * `stopping` carries `idleOnly`, whether the stop running can end work:
+ * `true` for an idle-only stop, which the host refuses rather than end
+ * anything (Stop-if-idle's silent attempt, a Stop chosen over an idle list);
+ * `false` for Linked and for a forced stop. A surface names the work being
+ * ended only when it is `false`.
+ *
+ * `prompting` ends the `stopping` phase with the same `requestId` when main
+ * asks the person next - in the most recent window only, or natively. Every
+ * other window that showed that stop's progress takes it down; the quit goes
+ * on until `quitting` or `cancelled`.
+ */
+export type HostQuitPhase = "stopping" | "prompting" | "quitting" | "cancelled";
+
+export type HostQuitStateEvent =
+  | {
+      readonly requestId: string | null;
+      readonly phase: "stopping";
+      readonly idleOnly: boolean;
+    }
+  | {
+      readonly requestId: string | null;
+      readonly phase: "prompting" | "quitting" | "cancelled";
+    };
+
+/**
+ * The renderer half of the desktop's quit round-trip. A sub-capability of
+ * `IHostLifecycleHost` so a surface branches on `null` once: a shell with a
+ * lifecycle policy but no quit transaction to hold open leaves it `null`. The
+ * desktop always provides it; a window that is not listening when a quit
+ * starts gets main's own native prompt instead.
+ */
+export interface IHostQuitDecisionHost {
+  onQuitRequest(
+    handler: (request: HostQuitDecisionRequest) => void,
+  ): Disposable;
+  respondToQuitRequest(response: HostQuitDecisionResponse): Promise<void>;
+  onQuitState(handler: (event: HostQuitStateEvent) => void): Disposable;
+}
+
+/**
+ * The desktop's host lifecycle policy (see `IRunnerHost.hostLifecycle`).
+ *
+ * `onChange` fires for every change main observes, including a CLI
+ * `traycer host lifecycle set`; a consumer reflects it and never replays it.
+ */
+export interface IHostLifecycleHost {
+  get(): Promise<HostLifecycleView>;
+  set(request: HostLifecycleSetRequest): Promise<HostLifecycleSetResult>;
+  onChange(handler: (view: HostLifecycleView) => void): Disposable;
+  readonly quit: IHostQuitDecisionHost | null;
 }
 
 /**
@@ -1489,11 +1739,15 @@ export interface ITokenStore {
  *   not a rejection, deliberately: rejection semantics are load-bearing for
  *   retry loops (see `drainPendingNotifications`), and an unsupported
  *   platform must not retry forever.
+ * - Structured feed results authorize only the returned occurrence subset.
+ *   A null display means the focused renderer received that subset by relay.
+ *   Feed callers must await this decision before showing a toast or chiming.
  */
 export type NotificationShowOutcome =
   | "presented"
   | "duplicate"
-  | "undeliverable";
+  | "undeliverable"
+  | NotificationFeedDeliveryResult;
 
 /**
  * Which feed produced the notification being shown - delivery provenance,
@@ -1520,6 +1774,7 @@ export interface INotificationHost {
     deliveryKey: string | null,
     feedSource: NotificationFeedSource | null,
     foregroundAppLocal: NotificationForegroundAppLocal | null,
+    feedOccurrences: ReadonlyArray<NotificationFeedOccurrence> | null,
   ): Promise<NotificationShowOutcome>;
   onClick(handler: (payload: unknown) => void): Disposable;
   onForegroundDisplay(
@@ -1545,6 +1800,7 @@ export interface NotificationForegroundAppLocal {
 /** Plain-data main -> renderer relay used instead of an OS notification while
  * another Traycer window is focused. */
 export interface NotificationForegroundDisplay {
+  readonly feedOccurrences?: ReadonlyArray<NotificationFeedOccurrence>;
   readonly title: string;
   readonly body: string;
   readonly payload: unknown;
@@ -1555,6 +1811,12 @@ export interface NotificationForegroundDisplay {
 }
 
 export interface ITrayState {
+  /**
+   * Whether `setEpics` reaches a surface the user can see. False on shells
+   * whose tray is a no-op: the GUI then skips sourcing the list, which is a
+   * full History query.
+   */
+  readonly showsEpics: boolean;
   setEpics(epics: readonly TrayEpic[]): Promise<void>;
   setIndicator(state: TrayIndicatorState): Promise<void>;
   /**
@@ -1680,10 +1942,27 @@ export interface HostRemovalState {
   readonly removedByUser: boolean;
 }
 
-// Result of the in-app "Remove Traycer" action. The desktop stops + removes
-// the host service, the host install, and (on macOS) the SMAppService login
-// item, while preserving all `~/.traycer` user data.
-export interface TraycerUninstallResult {
+/**
+ * A host write that did not run, for a reason another click cannot fix: a
+ * host a person started in a terminal (which Traycer leaves alone), host
+ * starts suspended on a machine that runs no local host, another Traycer
+ * process holding the lock. Not a failure - a surface announces `message` as
+ * information, and nothing the route would have changed has changed.
+ */
+export interface HostMutationDeclined {
+  readonly kind: "declined";
+  readonly message: string;
+}
+
+// Result of the in-app "Remove Traycer" action: `removed`, or `declined` with
+// nothing removed and the removed-by-user mark left as it was.
+export type TraycerUninstallResult = TraycerRemoved | HostMutationDeclined;
+
+// A completed "Remove Traycer". The desktop stops + removes the host service,
+// the host install, and (on macOS) the SMAppService login item, while
+// preserving all `~/.traycer` user data.
+export interface TraycerRemoved {
+  readonly kind: "removed";
   readonly removedHost: boolean;
   /**
    * The deregistration was PERFORMED and nothing contradicted it - NOT that
@@ -1698,6 +1977,14 @@ export interface TraycerUninstallResult {
    */
   readonly serviceRegistrationRetained: boolean | null;
   readonly removedLoginItem: boolean;
+  /**
+   * A notice about the service registration the removal left in place, for
+   * the window, or `null`. Today one: the host's Scheduled Task is not this
+   * account's - another Windows user's, or one whose owner could not be
+   * confirmed, each in its own words - so it was left alone and everything of
+   * this account's was removed. Names no account.
+   */
+  readonly serviceWarning: string | null;
 }
 
 export interface HostInstalledRecord {
@@ -1823,7 +2110,9 @@ export type MutationKind =
   | "recoverIfDown"
   | "freePortAndRestart"
   | "uninstallHost"
-  | "removeTraycer";
+  | "removeTraycer"
+  | "stopHost"
+  | "refreshService";
 
 export interface MutationLaneStatus {
   readonly kind: MutationKind;
@@ -1959,6 +2248,52 @@ export interface HostControllerStatus {
   readonly reachable: boolean;
   readonly removedByUser: boolean;
   readonly checkedAt: string;
+  /**
+   * The last ensure (a converge: launch, background or one a person asked
+   * for) that ended `failed`, with the CLI's message and error code, or
+   * `null`. Desktop main owns its lifetime: set by every failed ensure and
+   * cleared by the next one that ends `ok`, or once the host is reachable, so
+   * a surface can show why the host is not up without keeping a copy of its
+   * own that outlives the failure.
+   */
+  readonly lastEnsureFailure: HostEnsureFailure | null;
+  /**
+   * Why the ready update (`updateReady`) is waiting instead of installing, or
+   * `null`: this account cannot start the service the launch apply would stop,
+   * so the apply leaves the stage in place rather than stop a host nothing
+   * could start again. Two reasons, told apart by `code` (Windows only): the
+   * host's Scheduled Task disabled in Task Scheduler by its owner, or the task
+   * not this account's - another Windows user's, or one whose owner could not
+   * be confirmed, each in its own `message`. Desktop main owns it: set when the launch
+   * apply is refused for that stage, gone once a different stage is ready,
+   * the background service is registered again from this app, or a day has
+   * passed and the next launch asks the CLI again. The update-ready row shows
+   * `message`, with an action that registers the service for a disabled task
+   * and none for another user's.
+   */
+  readonly updateDeferral: HostUpdateDeferral | null;
+}
+
+/** See `HostControllerStatus.updateDeferral`. */
+export interface HostUpdateDeferral {
+  /** Copy for the window; it names no account. */
+  readonly message: string;
+  /**
+   * The CLI's error code: `E_SERVICE_REGISTRATION_DISABLED` or
+   * `E_SERVICE_TASK_NOT_OWNED`.
+   */
+  readonly code: string;
+}
+
+/** See `HostControllerStatus.lastEnsureFailure`. */
+export interface HostEnsureFailure {
+  /** The CLI's message, for the window; main logs the code, never this. */
+  readonly message: string;
+  /**
+   * The CLI's error code (`E_SERVICE_REGISTRATION_DISABLED`, ...), or `null`
+   * for a failure that carried none.
+   */
+  readonly code: string | null;
 }
 
 // Pre-commit busy (CLI-owned apply/pin refused before the stop):
@@ -1982,6 +2317,16 @@ export type HostRestartRequestResult =
   | { readonly kind: "restarted" }
   | { readonly kind: "declined"; readonly message: string };
 
+// Result of the lifecycle card's idle-gated SERVICE restart
+// (`IHostManagement.restartHostServiceIfHostIdle`). `restarted` and
+// `declined` mean what they mean above. `host-busy` is the host's own
+// refusal: it has work in progress and nothing was stopped, so the caller
+// shows that work with Force as the explicit choice. It carries no text - the
+// CLI's refusal is an instruction to its own caller, not to the person.
+export type HostServiceRestartResult =
+  | HostRestartRequestResult
+  | { readonly kind: "host-busy" };
+
 // Per-intent result. Every mutation intent resolves ONE of these - the
 // lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
 // outcome is a normal resolved value the calling surface renders.
@@ -1995,7 +2340,11 @@ export type MutationOutcome<TOk> =
   | { readonly kind: "deferred"; readonly message: string }
   | { readonly kind: "stage-fingerprint-mismatch"; readonly message: string }
   | { readonly kind: "installed-not-converged"; readonly message: string }
-  | { readonly kind: "failed"; readonly message: string };
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly errorCode: string | null;
+    };
 
 export interface ConvergeReadyOk {
   readonly running: boolean;
@@ -2028,7 +2377,10 @@ export interface ServiceRegistrationOk {
 
 export type ApplyStagedTrigger = "launch" | "manual";
 
-export interface HostUninstallResult {
+export type HostUninstallResult = HostUninstalled | HostMutationDeclined;
+
+export interface HostUninstalled {
+  readonly kind: "uninstalled";
   readonly removedInstallDir: boolean;
   /**
    * The deregistration was PERFORMED and nothing contradicted it - NOT that
@@ -2047,6 +2399,14 @@ export interface HostUninstallResult {
    * `deregisteredService` when you need certainty.
    */
   readonly serviceRegistrationRetained: boolean | null;
+  /**
+   * A notice about the service registration the removal left in place, for
+   * the window, or `null`. Today one: the host's Scheduled Task is not this
+   * account's - another Windows user's, or one whose owner could not be
+   * confirmed, each in its own words - so it was left alone and everything of
+   * this account's was removed. Names no account.
+   */
+  readonly serviceWarning: string | null;
 }
 
 export interface HostLogsTailResult {
@@ -2065,6 +2425,15 @@ export interface FreePortAndRestartInput {
   readonly pid: number | null;
   readonly processName: string | null;
 }
+
+/** The queued free-port repair ran; carries the input it was confirmed with. */
+export interface FreePortAndRestartApplied extends FreePortAndRestartInput {
+  readonly kind: "applied";
+}
+
+export type FreePortAndRestartResult =
+  | FreePortAndRestartApplied
+  | HostMutationDeclined;
 
 export type HostTrayCommand =
   | { readonly kind: "openSettingsHost" }
@@ -2145,6 +2514,11 @@ export type DoctorRepairIntent =
  * waiting behind whatever is running is the point, and a surface reachable
  * when Settings cannot render must never learn to say no.
  *
+ * `refresh-service` ("Update service") is the one repair BOTH surfaces
+ * queue: it rewrites only the service definition, starting and stopping
+ * nothing, so landing behind another intent can disturb nothing the person
+ * chose.
+ *
  * That exemption is about TIMING only. Identity is a separate question and is
  * enforced here exactly as it is everywhere else — the console outlives the
  * host it names, and a replacement must not inherit repairs aimed at its
@@ -2154,7 +2528,12 @@ export type QueuedDoctorRepair =
   | "converge-ready"
   | "converge-latest"
   | "register-service"
-  | "restart";
+  | "restart"
+  // `host service refresh`: bring the registered service definition to the
+  // current launcher without starting or stopping anything - the same lane
+  // call a lifecycle mode change makes. Idempotent, so queueing it behind
+  // another intent is harmless; the refresh reads the definition when it runs.
+  | "refresh-service";
 
 /**
  * `declined` covers both "nothing was enqueued because this is no longer that
@@ -2276,6 +2655,8 @@ export interface IHostManagement {
   // In-app "Remove Traycer" (Settings → General → Danger Zone). Marks the
   // device as removed-by-user (suppressing auto-reinstall), tears down the
   // host service + install + macOS login item, and preserves all user data.
+  // `declined` - over a host a person started in a terminal, for one - means
+  // none of that happened.
   readonly uninstallTraycer: () => Promise<TraycerUninstallResult>;
   // Reads the persisted removal sentinel so the renderer can short-circuit to
   // the removed surface before attempting any provisioning.
@@ -2348,7 +2729,7 @@ export interface IHostManagement {
    */
   readonly freePortAndRestart: (
     input: FreePortAndRestartInput & { readonly expectedHostId: string },
-  ) => Promise<FreePortAndRestartInput>;
+  ) => Promise<FreePortAndRestartResult>;
   /**
    * The refusing twin, for the Doctor sheet a person is WATCHING.
    *
@@ -2435,6 +2816,22 @@ export interface IHostManagement {
   readonly restartHostIfIdle: (input: {
     readonly expectedHostId: string;
   }) => Promise<HostRestartRequestResult>;
+  /**
+   * The lifecycle card's "Restart host" while the running supervisor predates
+   * lifecycle enforcement: `host restart --if-idle --defer-if-parked`, a
+   * SERVICE cycle, so the supervisor itself is replaced. The cooperative
+   * `host.restart` cannot do that: it exits the host for an in-process child
+   * respawn by whatever supervisor is running, and an old one respawns only
+   * its child.
+   *
+   * Fenced on `expectedHostId` and refused when the mutation lane is occupied,
+   * exactly like {@link restartHostIfIdle} - someone is watching this one too.
+   * Unlike it, the HOST's veto stands: a busy host resolves `host-busy` and
+   * keeps running, and Force is the caller's separate, disclosed choice.
+   */
+  readonly restartHostServiceIfHostIdle: (input: {
+    readonly expectedHostId: string;
+  }) => Promise<HostServiceRestartResult>;
   /**
    * The down-host recovery console's four lifecycle repairs, identity-fenced
    * and QUEUEING. See {@link QueuedDoctorRepair} for why those two properties

@@ -43,76 +43,85 @@ import {
   sessionImportFailureReasonSchema,
   sessionImportGroupSchema,
 } from "@traycer/protocol/host/session-import/candidate";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * `providers: null` scans every provider the host has a reader for - the
  * wizard's default. A non-empty list narrows it, which is what the per-
  * provider filter inside the wizard submits.
  */
-export const sessionImportScanOpenRequestSchema = z.object({
-  // `null` means every provider; a list narrows it and must name at least one,
-  // because an empty list is a scan that can only ever return nothing - which
-  // is a client bug, not a request worth serving.
-  providers: z.array(guiHarnessIdSchema).min(1).nullable(),
-  // Epoch ms; sessions last active before this are not scanned at all. The
-  // wizard's scan-window control ("Last 2 weeks") lives here rather than as a
-  // client-side filter so the host never pays to enumerate work the user is
-  // not being shown. `null` scans everything.
-  updatedAfter: z.number().nullable(),
-});
+export const sessionImportScanOpenRequestSchema = lazySchema(() =>
+  z.object({
+    // `null` means every provider; a list narrows it and must name at least one,
+    // because an empty list is a scan that can only ever return nothing - which
+    // is a client bug, not a request worth serving.
+    providers: z.array(guiHarnessIdSchema).min(1).nullable(),
+    // Epoch ms; sessions last active before this are not scanned at all. The
+    // wizard's scan-window control ("Last 2 weeks") lives here rather than as a
+    // client-side filter so the host never pays to enumerate work the user is
+    // not being shown. `null` scans everything.
+    updatedAfter: z.number().nullable(),
+  }),
+);
 export type SessionImportScanOpenRequest = z.infer<
   typeof sessionImportScanOpenRequestSchema
 >;
 
-const sessionImportScanTotalsSchema = z.object({
-  groups: z.number().int().nonnegative(),
-  sessions: z.number().int().nonnegative(),
-  importable: z.number().int().nonnegative(),
-  alreadyInTraycer: z.number().int().nonnegative(),
-  unreadable: z.number().int().nonnegative(),
-});
+const sessionImportScanTotalsSchema = lazySchema(() =>
+  z.object({
+    groups: z.number().int().nonnegative(),
+    sessions: z.number().int().nonnegative(),
+    importable: z.number().int().nonnegative(),
+    alreadyInTraycer: z.number().int().nonnegative(),
+    unreadable: z.number().int().nonnegative(),
+  }),
+);
 export type SessionImportScanTotals = z.infer<
   typeof sessionImportScanTotalsSchema
 >;
 
-export const sessionImportScanServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("started"),
-    providers: z.array(guiHarnessIdSchema),
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("group"),
-    group: sessionImportGroupSchema,
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("providerFailed"),
-    harness: guiHarnessIdSchema,
-    reason: sessionImportFailureReasonSchema,
-    detail: z.string(),
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("complete"),
-    totals: sessionImportScanTotalsSchema,
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const sessionImportScanServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("started"),
+      providers: z.array(guiHarnessIdSchema),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("group"),
+      group: sessionImportGroupSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("providerFailed"),
+      harness: guiHarnessIdSchema,
+      reason: sessionImportFailureReasonSchema,
+      detail: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("complete"),
+      totals: sessionImportScanTotalsSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 export type SessionImportScanServerFrame = z.infer<
   typeof sessionImportScanServerFrameSchema
 >;
 
-export const sessionImportScanClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("ping"),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const sessionImportScanClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 export type SessionImportScanClientFrame = z.infer<
   typeof sessionImportScanClientFrameSchema
 >;
@@ -133,16 +142,19 @@ export type SessionImportScanClientFrame = z.infer<
  * host must therefore GATE EMISSION on the negotiated minor and never hand an
  * Antigravity row to a <1.2 subscriber.
  */
-const sessionImportCandidateSchemaPreAntigravity =
+const sessionImportCandidateSchemaPreAntigravity = lazySchema(() =>
   sessionImportCandidateSchema.extend({
     harness: guiHarnessIdSchemaPreAntigravity,
-  });
+  }),
+);
 
-const sessionImportGroupSchemaPreAntigravity = sessionImportGroupSchema.extend({
-  sessions: z.array(sessionImportCandidateSchemaPreAntigravity),
-});
+const sessionImportGroupSchemaPreAntigravity = lazySchema(() =>
+  sessionImportGroupSchema.extend({
+    sessions: z.array(sessionImportCandidateSchemaPreAntigravity),
+  }),
+);
 
-export const sessionImportScanServerFrameSchemaPreAntigravity =
+export const sessionImportScanServerFrameSchemaPreAntigravity = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("started"),
@@ -170,7 +182,8 @@ export const sessionImportScanServerFrameSchemaPreAntigravity =
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ]);
+  ]),
+);
 
 export const sessionImportScanV10 = defineStreamRpcContract({
   method: "sessionImport.scan",

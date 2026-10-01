@@ -150,6 +150,9 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
       panelId: "artifacts",
       viewTabId: "tab-1",
       queryClient,
+      // Artifacts never reach the agent-family owner-host resolution; `null`
+      // is the same "no binding mounted" default the routing suite uses.
+      hostBinding: null,
     });
 
     // The user sees the move immediately - that is the optimistic overlay the

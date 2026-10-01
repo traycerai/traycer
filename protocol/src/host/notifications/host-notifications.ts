@@ -13,14 +13,17 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
 export const HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP = 500;
 
-export const hostNotificationFilterSchemaV10 = z.enum(["all", "unread"]);
+export const hostNotificationFilterSchemaV10 = lazySchema(() =>
+  z.enum(["all", "unread"]),
+);
 export type HostNotificationFilterV10 = z.infer<
   typeof hostNotificationFilterSchemaV10
 >;
@@ -34,62 +37,65 @@ export type HostNotificationFilterV10 = z.infer<
  * adding an arm to a released ENTRY union is not (see
  * `hostNotificationEntrySchema` below).
  */
-export const hostNotificationKindSchema = z.enum([
-  "agent.stopped",
-  "agent.stalled",
-  "workspace.operation.failed",
-  "approval.requested",
-  "interview.requested",
-  "host.operation.finished",
-  "browser.human.needed",
-]);
+export const hostNotificationKindSchema = lazySchema(() =>
+  z.enum([
+    "agent.stopped",
+    "agent.stalled",
+    "workspace.operation.failed",
+    "approval.requested",
+    "interview.requested",
+    "host.operation.finished",
+    "browser.human.needed",
+  ]),
+);
 export type HostNotificationKind = z.infer<typeof hostNotificationKindSchema>;
 
-export const hostNotificationOutcomeSchema = z.enum([
-  "completed",
-  "stopped",
-  "errored",
-]);
+export const hostNotificationOutcomeSchema = lazySchema(() =>
+  z.enum(["completed", "stopped", "errored"]),
+);
 export type HostNotificationOutcome = z.infer<
   typeof hostNotificationOutcomeSchema
 >;
 
-export const hostNotificationSeveritySchema = z.enum([
-  "info",
-  "needs_action",
-  "failure",
-  "done",
-]);
+export const hostNotificationSeveritySchema = lazySchema(() =>
+  z.enum(["info", "needs_action", "failure", "done"]),
+);
 export type HostNotificationSeverity = z.infer<
   typeof hostNotificationSeveritySchema
 >;
 
-export const hostNotificationChannelIdSchema = z.enum(["renderer", "email"]);
+export const hostNotificationChannelIdSchema = lazySchema(() =>
+  z.enum(["renderer", "email"]),
+);
 export type HostNotificationChannelId = z.infer<
   typeof hostNotificationChannelIdSchema
 >;
 
-export const hostNotificationPayloadSchema = z.record(z.string(), z.unknown());
+export const hostNotificationPayloadSchema = lazySchema(() =>
+  z.record(z.string(), z.unknown()),
+);
 export type HostNotificationPayload = z.infer<
   typeof hostNotificationPayloadSchema
 >;
 
-export const hostNotificationAgentStoppedPayloadSchema = z
-  .object({
-    outcome: hostNotificationOutcomeSchema,
-    code: z.string().optional(),
-    message: z.string().optional(),
-  })
-  .catchall(z.unknown());
+export const hostNotificationAgentStoppedPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      outcome: hostNotificationOutcomeSchema,
+      code: z.string().optional(),
+      message: z.string().optional(),
+    })
+    .catchall(z.unknown()),
+);
 export type HostNotificationAgentStoppedPayload = z.infer<
   typeof hostNotificationAgentStoppedPayloadSchema
 >;
 
 const hostNotificationEntryBaseFields = {
-  id: z.string(),
-  updatedAt: z.number().int().nonnegative(),
-  readAt: z.number().int().nonnegative().nullable(),
-  sourceRef: z.string().nullable(),
+  id: lazySchema(() => z.string()),
+  updatedAt: lazySchema(() => z.number().int().nonnegative()),
+  readAt: lazySchema(() => z.number().int().nonnegative().nullable()),
+  sourceRef: lazySchema(() => z.string().nullable()),
   severity: hostNotificationSeveritySchema,
   /**
    * The entity this notification addresses, sourced from the row's durable
@@ -98,8 +104,8 @@ const hostNotificationEntryBaseFields = {
    * whose payload fails the semantic parse still addresses its entity, and
    * a payload cannot claim an entity its row does not have.
    */
-  epicId: z.string().min(1).nullable(),
-  chatId: z.string().min(1).nullable(),
+  epicId: lazySchema(() => z.string().min(1).nullable()),
+  chatId: lazySchema(() => z.string().min(1).nullable()),
 } as const;
 
 /**
@@ -111,38 +117,48 @@ const hostNotificationEntryBaseFields = {
  * FROZEN. Editing an arm here edits every released contract that carries it.
  */
 const releasedHostNotificationEntryArms = [
-  z.object({
-    ...hostNotificationEntryBaseFields,
-    kind: z.literal("agent.stopped"),
-    outcome: hostNotificationOutcomeSchema,
-    payload: hostNotificationAgentStoppedPayloadSchema,
-  }),
-  z.object({
-    ...hostNotificationEntryBaseFields,
-    kind: z.literal("agent.stalled"),
-    outcome: z.literal("errored"),
-    payload: hostNotificationPayloadSchema,
-  }),
-  z.object({
-    ...hostNotificationEntryBaseFields,
-    kind: z.literal("workspace.operation.failed"),
-    outcome: z.literal("errored"),
-    payload: hostNotificationPayloadSchema,
-  }),
-  z.object({
-    ...hostNotificationEntryBaseFields,
-    kind: z.literal("approval.requested"),
-    outcome: z.null(),
-    resolvedAt: z.number().int().nonnegative().nullable(),
-    payload: hostNotificationPayloadSchema,
-  }),
-  z.object({
-    ...hostNotificationEntryBaseFields,
-    kind: z.literal("interview.requested"),
-    outcome: z.null(),
-    resolvedAt: z.number().int().nonnegative().nullable(),
-    payload: hostNotificationPayloadSchema,
-  }),
+  lazySchema(() =>
+    z.object({
+      ...hostNotificationEntryBaseFields,
+      kind: z.literal("agent.stopped"),
+      outcome: hostNotificationOutcomeSchema,
+      payload: hostNotificationAgentStoppedPayloadSchema,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      ...hostNotificationEntryBaseFields,
+      kind: z.literal("agent.stalled"),
+      outcome: z.literal("errored"),
+      payload: hostNotificationPayloadSchema,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      ...hostNotificationEntryBaseFields,
+      kind: z.literal("workspace.operation.failed"),
+      outcome: z.literal("errored"),
+      payload: hostNotificationPayloadSchema,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      ...hostNotificationEntryBaseFields,
+      kind: z.literal("approval.requested"),
+      outcome: z.null(),
+      resolvedAt: z.number().int().nonnegative().nullable(),
+      payload: hostNotificationPayloadSchema,
+    }),
+  ),
+  lazySchema(() =>
+    z.object({
+      ...hostNotificationEntryBaseFields,
+      kind: z.literal("interview.requested"),
+      outcome: z.null(),
+      resolvedAt: z.number().int().nonnegative().nullable(),
+      payload: hostNotificationPayloadSchema,
+    }),
+  ),
 ] as const;
 
 /**
@@ -159,9 +175,8 @@ const releasedHostNotificationEntryArms = [
  * projection that keeps the arm out of every older version's rows, summaries,
  * cursors, and frames - never a post-query filter.
  */
-export const hostNotificationEntrySchema = z.discriminatedUnion(
-  "kind",
-  releasedHostNotificationEntryArms,
+export const hostNotificationEntrySchema = lazySchema(() =>
+  z.discriminatedUnion("kind", releasedHostNotificationEntryArms),
 );
 export type HostNotificationEntry = z.infer<typeof hostNotificationEntrySchema>;
 
@@ -183,18 +198,22 @@ export type HostNotificationEntry = z.infer<typeof hostNotificationEntrySchema>;
  * uses this one, so the two generic-looking kinds never become arbitrary
  * alternatives.
  */
-const hostOperationFinishedEntryArm = z.object({
-  ...hostNotificationEntryBaseFields,
-  kind: z.literal("host.operation.finished"),
-  outcome: hostNotificationOutcomeSchema,
-  payload: hostNotificationPayloadSchema,
-});
+const hostOperationFinishedEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("host.operation.finished"),
+    outcome: hostNotificationOutcomeSchema,
+    payload: hostNotificationPayloadSchema,
+  }),
+);
 
 /** Released arms plus `host.operation.finished`; list `@2.1` / feed `@1.1`. */
-export const hostNotificationEntrySchemaV21 = z.discriminatedUnion("kind", [
-  ...releasedHostNotificationEntryArms,
-  hostOperationFinishedEntryArm,
-]);
+export const hostNotificationEntrySchemaV21 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...releasedHostNotificationEntryArms,
+    hostOperationFinishedEntryArm,
+  ]),
+);
 export type HostNotificationEntryV21 = z.infer<
   typeof hostNotificationEntrySchemaV21
 >;
@@ -209,13 +228,15 @@ export type HostNotificationEntryV21 = z.infer<
  * `resolvedAt` lifecycle) so the host transport's generic prompt branch already
  * carries it and resuming resolves it - no arm-specific projection anywhere.
  */
-const browserHumanNeededEntryArm = z.object({
-  ...hostNotificationEntryBaseFields,
-  kind: z.literal("browser.human.needed"),
-  outcome: z.null(),
-  resolvedAt: z.number().int().nonnegative().nullable(),
-  payload: hostNotificationPayloadSchema,
-});
+const browserHumanNeededEntryArm = lazySchema(() =>
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("browser.human.needed"),
+    outcome: z.null(),
+    resolvedAt: z.number().int().nonnegative().nullable(),
+    payload: hostNotificationPayloadSchema,
+  }),
+);
 
 /**
  * `@2.1`'s arms plus `browser.human.needed`; list `@2.2` / feed `@1.2` /
@@ -229,11 +250,13 @@ const browserHumanNeededEntryArm = z.object({
  * catches the difference; the cloud feed's `@1.1` grows in place because it has
  * not shipped.
  */
-export const hostNotificationEntrySchemaV22 = z.discriminatedUnion("kind", [
-  ...releasedHostNotificationEntryArms,
-  hostOperationFinishedEntryArm,
-  browserHumanNeededEntryArm,
-]);
+export const hostNotificationEntrySchemaV22 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...releasedHostNotificationEntryArms,
+    hostOperationFinishedEntryArm,
+    browserHumanNeededEntryArm,
+  ]),
+);
 export type HostNotificationEntryV22 = z.infer<
   typeof hostNotificationEntrySchemaV22
 >;
@@ -398,50 +421,59 @@ export function hiddenHostNotificationKinds(
   return ALL_HOST_NOTIFICATION_KINDS.filter((kind) => !visible.has(kind));
 }
 
-export const hostNotificationCursorSchemaV10 = z.object({
-  updatedAt: z.number().int().nonnegative(),
-  id: z.string(),
-});
+export const hostNotificationCursorSchemaV10 = lazySchema(() =>
+  z.object({
+    updatedAt: z.number().int().nonnegative(),
+    id: z.string(),
+  }),
+);
 export type HostNotificationCursorV10 = z.infer<
   typeof hostNotificationCursorSchemaV10
 >;
 
-export const hostNotificationsChronologicalCursorSchema = z.object({
-  kind: z.literal("chronological"),
-  updatedAt: z.number().int().nonnegative(),
-  id: z.string(),
-});
+export const hostNotificationsChronologicalCursorSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("chronological"),
+    updatedAt: z.number().int().nonnegative(),
+    id: z.string(),
+  }),
+);
 export type HostNotificationsChronologicalCursor = z.infer<
   typeof hostNotificationsChronologicalCursorSchema
 >;
 
-export const hostNotificationsAttentionTierSchema = z.enum([
-  "blocking",
-  "failure",
-]);
+export const hostNotificationsAttentionTierSchema = lazySchema(() =>
+  z.enum(["blocking", "failure"]),
+);
 export type HostNotificationsAttentionTier = z.infer<
   typeof hostNotificationsAttentionTierSchema
 >;
 
-export const hostNotificationsAttentionCursorSchema = z.object({
-  kind: z.literal("attention"),
-  tier: hostNotificationsAttentionTierSchema,
-  updatedAt: z.number().int().nonnegative(),
-  id: z.string(),
-});
+export const hostNotificationsAttentionCursorSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("attention"),
+    tier: hostNotificationsAttentionTierSchema,
+    updatedAt: z.number().int().nonnegative(),
+    id: z.string(),
+  }),
+);
 export type HostNotificationsAttentionCursor = z.infer<
   typeof hostNotificationsAttentionCursorSchema
 >;
 
-export const hostNotificationsCursorSchema = z.discriminatedUnion("kind", [
-  hostNotificationsChronologicalCursorSchema,
-  hostNotificationsAttentionCursorSchema,
-]);
+export const hostNotificationsCursorSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    hostNotificationsChronologicalCursorSchema,
+    hostNotificationsAttentionCursorSchema,
+  ]),
+);
 
-export const hostNotificationsSummarySchema = z.object({
-  unreadCount: z.number().int().nonnegative(),
-  attentionCount: z.number().int().nonnegative(),
-});
+export const hostNotificationsSummarySchema = lazySchema(() =>
+  z.object({
+    unreadCount: z.number().int().nonnegative(),
+    attentionCount: z.number().int().nonnegative(),
+  }),
+);
 export type HostNotificationsSummary = z.infer<
   typeof hostNotificationsSummarySchema
 >;
@@ -454,7 +486,9 @@ export type HostNotificationsSummary = z.infer<
  * replicated entity-less row visible exactly once without inventing an epic
  * association that does not exist.
  */
-export const hostNotificationsHomeSchema = z.enum(["local", "cloud"]);
+export const hostNotificationsHomeSchema = lazySchema(() =>
+  z.enum(["local", "cloud"]),
+);
 export type HostNotificationsHome = z.infer<typeof hostNotificationsHomeSchema>;
 
 /**
@@ -467,18 +501,22 @@ export type HostNotificationsHome = z.infer<typeof hostNotificationsHomeSchema>;
  */
 export const HOST_NOTIFICATIONS_HOME_ORDER = ["local", "cloud"] as const;
 
-const hostNotificationsLocalPartitionSchema = z.object({
-  home: z.literal("local"),
-  order: z.literal(0),
-});
+const hostNotificationsLocalPartitionSchema = lazySchema(() =>
+  z.object({
+    home: z.literal("local"),
+    order: z.literal(0),
+  }),
+);
 
-const hostNotificationsCloudPartitionSchema = z.object({
-  home: z.literal("cloud"),
-  order: z.literal(1),
-  /** Cloud feed snapshots are complete, so their partition cursor is exact
-   * and exhausted by definition. */
-  nextCursor: z.null(),
-});
+const hostNotificationsCloudPartitionSchema = lazySchema(() =>
+  z.object({
+    home: z.literal("cloud"),
+    order: z.literal(1),
+    /** Cloud feed snapshots are complete, so their partition cursor is exact
+     * and exhausted by definition. */
+    nextCursor: z.null(),
+  }),
+);
 
 /** Every exact-removal list on the wire must be duplicate-free: a repeated
  * id would double-apply a deletion in the renderer's normalized replica. */
@@ -491,45 +529,54 @@ function nonDuplicateIdArraySchema(min: number) {
     });
 }
 
-export const hostNotificationsListRequestSchemaV10 = z.object({
-  filter: hostNotificationFilterSchemaV10,
-  limit: z.number().int().min(1).max(500),
-  cursor: hostNotificationCursorSchemaV10.optional(),
-});
+export const hostNotificationsListRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    filter: hostNotificationFilterSchemaV10,
+    limit: z.number().int().min(1).max(500),
+    cursor: hostNotificationCursorSchemaV10.optional(),
+  }),
+);
 export type HostNotificationsListRequestV10 = z.infer<
   typeof hostNotificationsListRequestSchemaV10
 >;
 
-export const hostNotificationsListResponseSchemaV10 = z.object({
-  entries: z.array(hostNotificationEntrySchema),
-  nextCursor: hostNotificationCursorSchemaV10.nullable(),
-});
+export const hostNotificationsListResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    entries: z.array(hostNotificationEntrySchema),
+    nextCursor: hostNotificationCursorSchemaV10.nullable(),
+  }),
+);
 export type HostNotificationsListResponseV10 = z.infer<
   typeof hostNotificationsListResponseSchemaV10
 >;
 
-const hostNotificationsAttentionListRequestSchema = z.object({
-  filter: z.literal("attention"),
-  limit: z.number().int().min(1).max(500),
-  cursor: hostNotificationsAttentionCursorSchema.optional(),
-});
-const hostNotificationsRecentListRequestSchema = z.object({
-  filter: z.literal("recent"),
-  limit: z.number().int().min(1).max(500),
-  cursor: hostNotificationsChronologicalCursorSchema.optional(),
-});
-const hostNotificationsUnreadRecentListRequestSchema = z.object({
-  filter: z.literal("unreadRecent"),
-  limit: z.number().int().min(1).max(500),
-  cursor: hostNotificationsChronologicalCursorSchema.optional(),
-});
-export const hostNotificationsListRequestSchema = z.discriminatedUnion(
-  "filter",
-  [
+const hostNotificationsAttentionListRequestSchema = lazySchema(() =>
+  z.object({
+    filter: z.literal("attention"),
+    limit: z.number().int().min(1).max(500),
+    cursor: hostNotificationsAttentionCursorSchema.optional(),
+  }),
+);
+const hostNotificationsRecentListRequestSchema = lazySchema(() =>
+  z.object({
+    filter: z.literal("recent"),
+    limit: z.number().int().min(1).max(500),
+    cursor: hostNotificationsChronologicalCursorSchema.optional(),
+  }),
+);
+const hostNotificationsUnreadRecentListRequestSchema = lazySchema(() =>
+  z.object({
+    filter: z.literal("unreadRecent"),
+    limit: z.number().int().min(1).max(500),
+    cursor: hostNotificationsChronologicalCursorSchema.optional(),
+  }),
+);
+export const hostNotificationsListRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("filter", [
     hostNotificationsAttentionListRequestSchema,
     hostNotificationsRecentListRequestSchema,
     hostNotificationsUnreadRecentListRequestSchema,
-  ],
+  ]),
 );
 export type HostNotificationsListRequest = z.infer<
   typeof hostNotificationsListRequestSchema
@@ -538,61 +585,74 @@ export type HostNotificationsListRequest = z.infer<
 /** The home-selected V2.2 request is a NEW union variant. Keeping the frozen
  * V2.1 variants below byte-identical is what makes this an additive minor
  * rather than a subtly rewritten released arm. */
-const hostNotificationsLocalHomeAttentionListRequestSchema =
+const hostNotificationsLocalHomeAttentionListRequestSchema = lazySchema(() =>
   hostNotificationsAttentionListRequestSchema.extend({
     home: z.literal("local"),
-  });
-const hostNotificationsLocalHomeRecentListRequestSchema =
+  }),
+);
+const hostNotificationsLocalHomeRecentListRequestSchema = lazySchema(() =>
   hostNotificationsRecentListRequestSchema.extend({
     home: z.literal("local"),
-  });
-const hostNotificationsLocalHomeUnreadRecentListRequestSchema =
+  }),
+);
+const hostNotificationsLocalHomeUnreadRecentListRequestSchema = lazySchema(() =>
   hostNotificationsUnreadRecentListRequestSchema.extend({
     home: z.literal("local"),
-  });
+  }),
+);
 /** `@2.2`: an exact durable-home projection for the local origin plane. */
-export const hostNotificationsListRequestSchemaV22 = z.union([
-  hostNotificationsLocalHomeAttentionListRequestSchema,
-  hostNotificationsLocalHomeRecentListRequestSchema,
-  hostNotificationsLocalHomeUnreadRecentListRequestSchema,
-  hostNotificationsAttentionListRequestSchema,
-  hostNotificationsRecentListRequestSchema,
-  hostNotificationsUnreadRecentListRequestSchema,
-]);
+export const hostNotificationsListRequestSchemaV22 = lazySchema(() =>
+  z.union([
+    hostNotificationsLocalHomeAttentionListRequestSchema,
+    hostNotificationsLocalHomeRecentListRequestSchema,
+    hostNotificationsLocalHomeUnreadRecentListRequestSchema,
+    hostNotificationsAttentionListRequestSchema,
+    hostNotificationsRecentListRequestSchema,
+    hostNotificationsUnreadRecentListRequestSchema,
+  ]),
+);
 export type HostNotificationsListRequestV22 = z.infer<
   typeof hostNotificationsListRequestSchemaV22
 >;
 
-export const hostNotificationsListResponseSchema = z.object({
-  entries: z.array(hostNotificationEntrySchema),
-  nextCursor: hostNotificationsCursorSchema.nullable(),
-});
+export const hostNotificationsListResponseSchema = lazySchema(() =>
+  z.object({
+    entries: z.array(hostNotificationEntrySchema),
+    nextCursor: hostNotificationsCursorSchema.nullable(),
+  }),
+);
 export type HostNotificationsListResponse = z.infer<
   typeof hostNotificationsListResponseSchema
 >;
 
 /** `@2.1` response: identical projection, widened entry union. */
-export const hostNotificationsListResponseSchemaV21 = z.object({
-  entries: z.array(hostNotificationEntrySchemaV21),
-  nextCursor: hostNotificationsCursorSchema.nullable(),
-});
+export const hostNotificationsListResponseSchemaV21 = lazySchema(() =>
+  z.object({
+    entries: z.array(hostNotificationEntrySchemaV21),
+    nextCursor: hostNotificationsCursorSchema.nullable(),
+  }),
+);
 export type HostNotificationsListResponseV21 = z.infer<
   typeof hostNotificationsListResponseSchemaV21
 >;
 
 /** `@2.2` response: identical projection, entry union widened again. */
-export const hostNotificationsListResponseSchemaV22 = z.object({
-  entries: z.array(hostNotificationEntrySchemaV22),
-  nextCursor: hostNotificationsCursorSchema.nullable(),
-});
+export const hostNotificationsListResponseSchemaV22 = lazySchema(() =>
+  z.object({
+    entries: z.array(hostNotificationEntrySchemaV22),
+    nextCursor: hostNotificationsCursorSchema.nullable(),
+  }),
+);
 export type HostNotificationsListResponseV22 = z.infer<
   typeof hostNotificationsListResponseSchemaV22
 >;
 
-export const hostNotificationsEntityRefSchema = z.object({
-  epicId: z.string(),
-  chatId: z.string().optional(),
-});
+export const hostNotificationsEntityRefSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    chatId: z.string().optional(),
+  }),
+);
 export type HostNotificationsEntityRef = z.infer<
   typeof hostNotificationsEntityRefSchema
 >;
@@ -602,9 +662,8 @@ export type HostNotificationsEntityRef = z.infer<
  * consumes Task-level (`chatId IS NULL`) rows only. `{ epicId, chatId }`
  * consumes those Task-level rows plus the named child, never sibling chats.
  */
-export const hostNotificationsMarkReadRequestSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const hostNotificationsMarkReadRequestSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ids"),
       ids: z.array(z.string()).min(1),
@@ -613,13 +672,15 @@ export const hostNotificationsMarkReadRequestSchema = z.discriminatedUnion(
       kind: z.literal("entity"),
       entity: hostNotificationsEntityRefSchema,
     }),
-  ],
+  ]),
 );
 export type HostNotificationsMarkReadRequest = z.infer<
   typeof hostNotificationsMarkReadRequestSchema
 >;
 
-export const hostNotificationsMarkReadResponseSchema = z.object({});
+export const hostNotificationsMarkReadResponseSchema = lazySchema(() =>
+  z.object({}),
+);
 export type HostNotificationsMarkReadResponse = z.infer<
   typeof hostNotificationsMarkReadResponseSchema
 >;
@@ -644,29 +705,35 @@ export type HostNotificationsMarkReadResponse = z.infer<
  * `updatedAt` alone would still match. `sourceRef` is nullable and matched
  * NULL-safely (a null token only matches a null-sourceRef row).
  */
-export const hostNotificationsResolveRequestSchema = z.object({
-  occurrences: z
-    .array(
-      z.object({
-        id: z.string(),
-        updatedAt: z.number().int().nonnegative(),
-        sourceRef: z.string().nullable(),
-      }),
-    )
-    .min(1),
-});
+export const hostNotificationsResolveRequestSchema = lazySchema(() =>
+  z.object({
+    occurrences: z
+      .array(
+        z.object({
+          id: z.string(),
+          updatedAt: z.number().int().nonnegative(),
+          sourceRef: z.string().nullable(),
+        }),
+      )
+      .min(1),
+  }),
+);
 export type HostNotificationsResolveRequest = z.infer<
   typeof hostNotificationsResolveRequestSchema
 >;
 
-export const hostNotificationsResolveResponseSchema = z.object({});
+export const hostNotificationsResolveResponseSchema = lazySchema(() =>
+  z.object({}),
+);
 export type HostNotificationsResolveResponse = z.infer<
   typeof hostNotificationsResolveResponseSchema
 >;
 
-export const hostNotificationsMarkAllReadRequestSchema = z.object({
-  beforeUpdatedAt: z.number().int().nonnegative(),
-});
+export const hostNotificationsMarkAllReadRequestSchema = lazySchema(() =>
+  z.object({
+    beforeUpdatedAt: z.number().int().nonnegative(),
+  }),
+);
 export type HostNotificationsMarkAllReadRequest = z.infer<
   typeof hostNotificationsMarkAllReadRequestSchema
 >;
@@ -674,22 +741,27 @@ export type HostNotificationsMarkAllReadRequest = z.infer<
 /** `@1.1`: restrict the destructive bulk action to the local durable-home
  * partition. Without this selector a mixed-plane host origin retains cloud
  * replicas and a mark-all would silently touch the wrong plane. */
-export const hostNotificationsMarkAllReadRequestSchemaV11 =
+export const hostNotificationsMarkAllReadRequestSchemaV11 = lazySchema(() =>
   hostNotificationsMarkAllReadRequestSchema.extend({
     home: z.literal("local").optional(),
-  });
+  }),
+);
 export type HostNotificationsMarkAllReadRequestV11 = z.infer<
   typeof hostNotificationsMarkAllReadRequestSchemaV11
 >;
 
-export const hostNotificationsMarkAllReadResponseSchema = z.object({});
+export const hostNotificationsMarkAllReadResponseSchema = lazySchema(() =>
+  z.object({}),
+);
 export type HostNotificationsMarkAllReadResponse = z.infer<
   typeof hostNotificationsMarkAllReadResponseSchema
 >;
 
-export const hostNotificationsClearAllRequestSchema = z.object({
-  beforeUpdatedAt: z.number().int().nonnegative(),
-});
+export const hostNotificationsClearAllRequestSchema = lazySchema(() =>
+  z.object({
+    beforeUpdatedAt: z.number().int().nonnegative(),
+  }),
+);
 export type HostNotificationsClearAllRequest = z.infer<
   typeof hostNotificationsClearAllRequestSchema
 >;
@@ -710,52 +782,60 @@ export type HostNotificationsClearAllRequest = z.infer<
  * absence already means "the whole origin", which is the released behaviour
  * and the only other thing a caller can want.
  */
-export const hostNotificationsClearAllRequestSchemaV11 =
+export const hostNotificationsClearAllRequestSchemaV11 = lazySchema(() =>
   hostNotificationsClearAllRequestSchema.extend({
     home: z.literal("local").optional(),
-  });
+  }),
+);
 export type HostNotificationsClearAllRequestV11 = z.infer<
   typeof hostNotificationsClearAllRequestSchemaV11
 >;
 
-export const hostNotificationsClearAllResponseSchema = z.object({});
+export const hostNotificationsClearAllResponseSchema = lazySchema(() =>
+  z.object({}),
+);
 export type HostNotificationsClearAllResponse = z.infer<
   typeof hostNotificationsClearAllResponseSchema
 >;
 
-export const hostNotificationsSubscribeOpenRequestSchemaV10 = z.object({
-  filter: hostNotificationFilterSchemaV10,
-  initialLimit: z.number().int().min(1).max(500),
-});
+export const hostNotificationsSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    filter: hostNotificationFilterSchemaV10,
+    initialLimit: z.number().int().min(1).max(500),
+  }),
+);
 export type HostNotificationsSubscribeOpenRequestV10 = z.infer<
   typeof hostNotificationsSubscribeOpenRequestSchemaV10
 >;
 
-export const hostNotificationsSubscribeOpenRequestSchema = z.object({
-  initialAttentionLimit: z.number().int().min(1).max(500),
-  initialRecentLimit: z.number().int().min(1).max(500),
-});
+export const hostNotificationsSubscribeOpenRequestSchema = lazySchema(() =>
+  z.object({
+    initialAttentionLimit: z.number().int().min(1).max(500),
+    initialRecentLimit: z.number().int().min(1).max(500),
+  }),
+);
 export type HostNotificationsSubscribeOpenRequest = z.infer<
   typeof hostNotificationsSubscribeOpenRequestSchema
 >;
 
-export const hostNotificationsChannelEmissionReasonSchema = z.enum([
-  "new",
-  "coalesced",
-]);
+export const hostNotificationsChannelEmissionReasonSchema = lazySchema(() =>
+  z.enum(["new", "coalesced"]),
+);
 export type HostNotificationsChannelEmissionReason = z.infer<
   typeof hostNotificationsChannelEmissionReasonSchema
 >;
 
-export const hostNotificationsPresenceEntitySchema = z.object({
-  epicId: z.string().optional(),
-  chatId: z.string().optional(),
-});
+export const hostNotificationsPresenceEntitySchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().optional(),
+    chatId: z.string().optional(),
+  }),
+);
 export type HostNotificationsPresenceEntity = z.infer<
   typeof hostNotificationsPresenceEntitySchema
 >;
 
-export const hostNotificationsSubscribeServerFrameSchemaV10 =
+export const hostNotificationsSubscribeServerFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
@@ -793,14 +873,14 @@ export const hostNotificationsSubscribeServerFrameSchemaV10 =
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 export type HostNotificationsSubscribeServerFrameV10 = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchemaV10
 >;
 
-export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const hostNotificationsSubscribeServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("snapshot"),
       ...textFrameFields,
@@ -862,7 +942,7 @@ export const hostNotificationsSubscribeServerFrameSchema = z.discriminatedUnion(
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ],
+  ]),
 );
 export type HostNotificationsSubscribeServerFrame = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchema
@@ -877,63 +957,77 @@ export type HostNotificationsSubscribeServerFrame = z.infer<
  * a future edit here silently rewrite it - the same reason `@1.0`'s own frames
  * are spelled out separately from the legacy `V10` union.
  */
-const hostNotificationsSnapshotSchemaV11 = z.object({
-  kind: z.literal("snapshot"),
-  ...textFrameFields,
-  attention: z.object({
-    entries: z.array(hostNotificationEntrySchemaV21),
-    nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+const hostNotificationsSnapshotSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    attention: z.object({
+      entries: z.array(hostNotificationEntrySchemaV21),
+      nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+    }),
+    recent: z.object({
+      entries: z.array(hostNotificationEntrySchemaV21),
+      nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
+    }),
+    summary: hostNotificationsSummarySchema,
   }),
-  recent: z.object({
-    entries: z.array(hostNotificationEntrySchemaV21),
-    nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
+);
+const hostNotificationsUpsertedSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("upserted"),
+    ...textFrameFields,
+    entry: hostNotificationEntrySchemaV21,
+    removedIds: nonDuplicateIdArraySchema(0),
+    summary: hostNotificationsSummarySchema,
   }),
-  summary: hostNotificationsSummarySchema,
-});
-const hostNotificationsUpsertedSchemaV11 = z.object({
-  kind: z.literal("upserted"),
-  ...textFrameFields,
-  entry: hostNotificationEntrySchemaV21,
-  removedIds: nonDuplicateIdArraySchema(0),
-  summary: hostNotificationsSummarySchema,
-});
-const hostNotificationsReadStateChangedSchemaV11 = z.object({
-  kind: z.literal("readStateChanged"),
-  ...textFrameFields,
-  ids: z.array(z.string()).min(1),
-  entityRefs: z.array(hostNotificationsEntityRefSchema),
-  readAt: z.number().int().nonnegative().nullable(),
-  resolvedAt: z.number().int().nonnegative().nullable(),
-  removedIds: nonDuplicateIdArraySchema(0),
-  summary: hostNotificationsSummarySchema,
-});
-const hostNotificationsRemovedSchemaV11 = z.object({
-  kind: z.literal("removed"),
-  ...textFrameFields,
-  removedIds: nonDuplicateIdArraySchema(1),
-  summary: hostNotificationsSummarySchema,
-});
-const hostNotificationsClearedSchemaV11 = z.object({
-  kind: z.literal("cleared"),
-  ...textFrameFields,
-  beforeUpdatedAt: z.number().int().nonnegative(),
-  removedIds: nonDuplicateIdArraySchema(0),
-  summary: hostNotificationsSummarySchema,
-});
-const hostNotificationsChannelEmissionSchemaV11 = z.object({
-  kind: z.literal("channelEmission"),
-  ...textFrameFields,
-  emissionId: z.string(),
-  channelId: hostNotificationChannelIdSchema,
-  severity: hostNotificationSeveritySchema,
-  rows: z.array(hostNotificationEntrySchemaV21).min(1),
-  reason: hostNotificationsChannelEmissionReasonSchema,
-});
-const hostNotificationsPongSchemaV11 = z.object({
-  kind: z.literal("pong"),
-  ...textFrameFields,
-});
-export const hostNotificationsSubscribeServerFrameSchemaV11 =
+);
+const hostNotificationsReadStateChangedSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("readStateChanged"),
+    ...textFrameFields,
+    ids: z.array(z.string()).min(1),
+    entityRefs: z.array(hostNotificationsEntityRefSchema),
+    readAt: z.number().int().nonnegative().nullable(),
+    resolvedAt: z.number().int().nonnegative().nullable(),
+    removedIds: nonDuplicateIdArraySchema(0),
+    summary: hostNotificationsSummarySchema,
+  }),
+);
+const hostNotificationsRemovedSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("removed"),
+    ...textFrameFields,
+    removedIds: nonDuplicateIdArraySchema(1),
+    summary: hostNotificationsSummarySchema,
+  }),
+);
+const hostNotificationsClearedSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("cleared"),
+    ...textFrameFields,
+    beforeUpdatedAt: z.number().int().nonnegative(),
+    removedIds: nonDuplicateIdArraySchema(0),
+    summary: hostNotificationsSummarySchema,
+  }),
+);
+const hostNotificationsChannelEmissionSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("channelEmission"),
+    ...textFrameFields,
+    emissionId: z.string(),
+    channelId: hostNotificationChannelIdSchema,
+    severity: hostNotificationSeveritySchema,
+    rows: z.array(hostNotificationEntrySchemaV21).min(1),
+    reason: hostNotificationsChannelEmissionReasonSchema,
+  }),
+);
+const hostNotificationsPongSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("pong"),
+    ...textFrameFields,
+  }),
+);
+export const hostNotificationsSubscribeServerFrameSchemaV11 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationsSnapshotSchemaV11,
     hostNotificationsUpsertedSchemaV11,
@@ -942,7 +1036,8 @@ export const hostNotificationsSubscribeServerFrameSchemaV11 =
     hostNotificationsClearedSchemaV11,
     hostNotificationsChannelEmissionSchemaV11,
     hostNotificationsPongSchemaV11,
-  ]);
+  ]),
+);
 export type HostNotificationsSubscribeServerFrameV11 = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchemaV11
 >;
@@ -962,20 +1057,22 @@ export type HostNotificationsSubscribeServerFrameV11 = z.infer<
  * byte-identical forever, so it cannot be a base a later edit silently
  * rewrites.
  */
-const hostNotificationsSnapshotSchemaV12 = z.object({
-  kind: z.literal("snapshot"),
-  ...textFrameFields,
-  attention: z.object({
-    entries: z.array(hostNotificationEntrySchemaV22),
-    nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+const hostNotificationsSnapshotSchemaV12 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    attention: z.object({
+      entries: z.array(hostNotificationEntrySchemaV22),
+      nextCursor: hostNotificationsAttentionCursorSchema.nullable(),
+    }),
+    recent: z.object({
+      entries: z.array(hostNotificationEntrySchemaV22),
+      nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
+    }),
+    summary: hostNotificationsSummarySchema,
   }),
-  recent: z.object({
-    entries: z.array(hostNotificationEntrySchemaV22),
-    nextCursor: hostNotificationsChronologicalCursorSchema.nullable(),
-  }),
-  summary: hostNotificationsSummarySchema,
-});
-export const hostNotificationsSubscribeServerFrameSchemaV12 =
+);
+export const hostNotificationsSubscribeServerFrameSchemaV12 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationsSnapshotSchemaV12,
     z.object({
@@ -1021,7 +1118,8 @@ export const hostNotificationsSubscribeServerFrameSchemaV12 =
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 export type HostNotificationsSubscribeServerFrameV12 = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchemaV12
 >;
@@ -1061,23 +1159,24 @@ export type HostNotificationsSubscribeServerFrameV12 = z.infer<
  */
 export const HOST_NOTIFICATIONS_FEED_PARTITION_SNAPSHOT_MINOR = 3;
 
-const hostNotificationsLocalPartitionSnapshotSchemaV13 =
+const hostNotificationsLocalPartitionSnapshotSchemaV13 = lazySchema(() =>
   hostNotificationsSnapshotSchemaV12.extend({
     kind: z.literal("partitionSnapshot"),
     partition: hostNotificationsLocalPartitionSchema,
-  });
-export const hostNotificationsSubscribeServerFrameSchemaV13 =
+  }),
+);
+export const hostNotificationsSubscribeServerFrameSchemaV13 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     hostNotificationsLocalPartitionSnapshotSchemaV13,
     ...hostNotificationsSubscribeServerFrameSchemaV12.options,
-  ]);
+  ]),
+);
 export type HostNotificationsSubscribeServerFrameV13 = z.infer<
   typeof hostNotificationsSubscribeServerFrameSchemaV13
 >;
 
-export const hostNotificationsSubscribeClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const hostNotificationsSubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       ...textFrameFields,
@@ -1090,36 +1189,41 @@ export const hostNotificationsSubscribeClientFrameSchema = z.discriminatedUnion(
       entity: hostNotificationsPresenceEntitySchema.nullable(),
       at: z.number().int().nonnegative(),
     }),
-  ],
+  ]),
 );
 export type HostNotificationsSubscribeClientFrame = z.infer<
   typeof hostNotificationsSubscribeClientFrameSchema
 >;
 
 /** Released `indicatorState@1.0` entity flags. FROZEN. */
-export const hostNotificationsIndicatorStateSchemaV10 = z.object({
-  pendingApproval: z.boolean(),
-  pendingInterview: z.boolean(),
-  unreadFailure: z.boolean(),
-  unreadDone: z.boolean(),
-});
+export const hostNotificationsIndicatorStateSchemaV10 = lazySchema(() =>
+  z.object({
+    pendingApproval: z.boolean(),
+    pendingInterview: z.boolean(),
+    unreadFailure: z.boolean(),
+    unreadDone: z.boolean(),
+  }),
+);
 export type HostNotificationsIndicatorStateV10 = z.infer<
   typeof hostNotificationsIndicatorStateSchemaV10
 >;
 
 /** `indicatorState@1.1`: pending fork truth is independent of feed read state. */
-export const hostNotificationsIndicatorStateSchema =
+export const hostNotificationsIndicatorStateSchema = lazySchema(() =>
   hostNotificationsIndicatorStateSchemaV10.extend({
     pendingFork: z.boolean(),
-  });
+  }),
+);
 export type HostNotificationsIndicatorState = z.infer<
   typeof hostNotificationsIndicatorStateSchema
 >;
 
-export const hostNotificationsIndicatorStateRequestSchema = z.object({
-  epicIds: z.array(z.string()).max(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
-  chatIds: z.array(z.string()).max(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
-});
+export const hostNotificationsIndicatorStateRequestSchema = lazySchema(() =>
+  z.object({
+    epicIds: z.array(z.string()).max(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+    chatIds: z.array(z.string()).max(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+  }),
+);
 export type HostNotificationsIndicatorStateRequest = z.infer<
   typeof hostNotificationsIndicatorStateRequestSchema
 >;
@@ -1129,104 +1233,123 @@ export type HostNotificationsIndicatorStateRequest = z.infer<
  * for chat-only callers. A chat id is not itself a durable-home key, so this
  * mapping is required for exact local-plane indicator filtering.
  */
-export const hostNotificationsIndicatorStateRequestSchemaV11 =
+export const hostNotificationsIndicatorStateRequestSchemaV11 = lazySchema(() =>
   hostNotificationsIndicatorStateRequestSchema.extend({
     home: z.literal("local").optional(),
     chatEpicIds: z.record(z.string(), z.string()).optional(),
-  });
+  }),
+);
 export type HostNotificationsIndicatorStateRequestV11 = z.infer<
   typeof hostNotificationsIndicatorStateRequestSchemaV11
 >;
 
 /** Released `indicatorState@1.0` response. FROZEN. */
-export const hostNotificationsIndicatorStateResponseSchemaV10 = z.object({
-  epics: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
-  chats: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
-});
+export const hostNotificationsIndicatorStateResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    epics: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
+    chats: z.record(z.string(), hostNotificationsIndicatorStateSchemaV10),
+  }),
+);
 export type HostNotificationsIndicatorStateResponseV10 = z.infer<
   typeof hostNotificationsIndicatorStateResponseSchemaV10
 >;
 
-export const hostNotificationsIndicatorStateResponseSchema = z.object({
-  epics: z.record(z.string(), hostNotificationsIndicatorStateSchema),
-  chats: z.record(z.string(), hostNotificationsIndicatorStateSchema),
-});
+export const hostNotificationsIndicatorStateResponseSchema = lazySchema(() =>
+  z.object({
+    epics: z.record(z.string(), hostNotificationsIndicatorStateSchema),
+    chats: z.record(z.string(), hostNotificationsIndicatorStateSchema),
+  }),
+);
 export type HostNotificationsIndicatorStateResponse = z.infer<
   typeof hostNotificationsIndicatorStateResponseSchema
 >;
 
-export const hostNotificationsChannelMatrixSchema = z.record(
-  hostNotificationSeveritySchema,
-  z.record(hostNotificationChannelIdSchema, z.boolean()),
+export const hostNotificationsChannelMatrixSchema = lazySchema(() =>
+  z.record(
+    hostNotificationSeveritySchema,
+    z.record(hostNotificationChannelIdSchema, z.boolean()),
+  ),
 );
 export type HostNotificationsChannelMatrix = z.infer<
   typeof hostNotificationsChannelMatrixSchema
 >;
 
-export const hostNotificationsSecretWriteSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("leaveUnchanged"),
-  }),
-  z.object({
-    kind: z.literal("clear"),
-  }),
-  z.object({
-    kind: z.literal("set"),
-    value: z.string().min(1),
-  }),
-]);
+export const hostNotificationsSecretWriteSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("leaveUnchanged"),
+    }),
+    z.object({
+      kind: z.literal("clear"),
+    }),
+    z.object({
+      kind: z.literal("set"),
+      value: z.string().min(1),
+    }),
+  ]),
+);
 export type HostNotificationsSecretWrite = z.infer<
   typeof hostNotificationsSecretWriteSchema
 >;
 
-export const hostNotificationsEmailSetConfigSchema = z.object({
-  host: z.string().nullable(),
-  port: z.number().int().min(1).max(65_535).nullable(),
-  user: z.string().nullable(),
-  password: hostNotificationsSecretWriteSchema,
-  from: z.string().nullable(),
-});
+export const hostNotificationsEmailSetConfigSchema = lazySchema(() =>
+  z.object({
+    host: z.string().nullable(),
+    port: z.number().int().min(1).max(65_535).nullable(),
+    user: z.string().nullable(),
+    password: hostNotificationsSecretWriteSchema,
+    from: z.string().nullable(),
+  }),
+);
 export type HostNotificationsEmailSetConfig = z.infer<
   typeof hostNotificationsEmailSetConfigSchema
 >;
 
-export const hostNotificationsConfigRequestSchema = z.object({});
+export const hostNotificationsConfigRequestSchema = lazySchema(() =>
+  z.object({}),
+);
 export type HostNotificationsConfigRequest = z.infer<
   typeof hostNotificationsConfigRequestSchema
 >;
 
-export const hostNotificationsSetConfigRequestSchema = z.object({
-  matrix: hostNotificationsChannelMatrixSchema,
-  channels: z.object({
-    renderer: z.object({}),
-    email: hostNotificationsEmailSetConfigSchema,
+export const hostNotificationsSetConfigRequestSchema = lazySchema(() =>
+  z.object({
+    matrix: hostNotificationsChannelMatrixSchema,
+    channels: z.object({
+      renderer: z.object({}),
+      email: hostNotificationsEmailSetConfigSchema,
+    }),
   }),
-});
+);
 export type HostNotificationsSetConfigRequest = z.infer<
   typeof hostNotificationsSetConfigRequestSchema
 >;
 
-export const hostNotificationsEmailConfigStateSchema = z.object({
-  host: z.string().nullable(),
-  port: z.number().int().min(1).max(65_535).nullable(),
-  user: z.string().nullable(),
-  from: z.string().nullable(),
-  credentialConfigured: z.boolean(),
-  lastError: z.string().nullable(),
-});
+export const hostNotificationsEmailConfigStateSchema = lazySchema(() =>
+  z.object({
+    host: z.string().nullable(),
+    port: z.number().int().min(1).max(65_535).nullable(),
+    user: z.string().nullable(),
+    from: z.string().nullable(),
+    credentialConfigured: z.boolean(),
+    lastError: z.string().nullable(),
+  }),
+);
 export type HostNotificationsEmailConfigState = z.infer<
   typeof hostNotificationsEmailConfigStateSchema
 >;
 
-export const hostNotificationsConfigResponseSchema = z.object({
-  matrix: hostNotificationsChannelMatrixSchema,
-  channels: z.object({
-    renderer: z.object({
-      lastError: z.string().nullable(),
+export const hostNotificationsConfigResponseSchema = lazySchema(() =>
+  z.object({
+    matrix: hostNotificationsChannelMatrixSchema,
+    channels: z.object({
+      renderer: z.object({
+        lastError: z.string().nullable(),
+      }),
+      email: hostNotificationsEmailConfigStateSchema,
     }),
-    email: hostNotificationsEmailConfigStateSchema,
   }),
-});
+);
 export type HostNotificationsConfigResponse = z.infer<
   typeof hostNotificationsConfigResponseSchema
 >;
@@ -1490,51 +1613,54 @@ export const hostNotificationsFeedSubscribeV10 = defineStreamRpcContract({
  * incremental either - the relay only ever sends whole snapshots, so there are
  * no `changes`/`removals` frames a client could apply out of order.
  */
-export const hostNotificationsCloudFeedRowSchema = z.object({
-  /**
-   * The occurrence's identity, minted by the producing host and never reused.
-   * OPAQUE to the client: it is a key, never something to parse or order by.
-   */
-  entryId: z.string().min(1).max(191),
-  /**
-   * Which machine this happened on. DISPLAY AND NAVIGATION metadata only -
-   * mutations address the entry, never the host, so a row from an offline or
-   * retired host is still fully actionable in the feed.
-   */
-  originHostId: z.string().min(1),
-  /**
-   * The grouping key (the former semantic id, `approval.requested:<chatId>`),
-   * demoted from identity. Two entries sharing it are two occurrences of the
-   * same thing; only the newest is ever visible.
-   */
-  coalesceKey: z.string().min(1).max(191),
-  /** The v1-shaped projection of the entry, so every existing renderer
-   * formatter, lifecycle classifier and payload parser reads a cloud row and a
-   * local row through one type. `id` carries the `entryId`. */
-  entry: hostNotificationEntrySchema,
-  /** Snapshotted by the producing host at creation. Accepted staleness: a
-   * later rename does not rewrite an immutable entry. */
-  presentation: z.object({
-    epicTitle: z.string().nullable(),
-    chatTitle: z.string().nullable(),
+export const hostNotificationsCloudFeedRowSchema = lazySchema(() =>
+  z.object({
+    /**
+     * The occurrence's identity, minted by the producing host and never reused.
+     * OPAQUE to the client: it is a key, never something to parse or order by.
+     */
+    entryId: z.string().min(1).max(191),
+    /**
+     * Which machine this happened on. DISPLAY AND NAVIGATION metadata only -
+     * mutations address the entry, never the host, so a row from an offline or
+     * retired host is still fully actionable in the feed.
+     */
+    originHostId: z.string().min(1),
+    /**
+     * The grouping key (the former semantic id, `approval.requested:<chatId>`),
+     * demoted from identity. Two entries sharing it are two occurrences of the
+     * same thing; only the newest is ever visible.
+     */
+    coalesceKey: z.string().min(1).max(191),
+    /** The v1-shaped projection of the entry, so every existing renderer
+     * formatter, lifecycle classifier and payload parser reads a cloud row and a
+     * local row through one type. `id` carries the `entryId`. */
+    entry: hostNotificationEntrySchema,
+    /** Snapshotted by the producing host at creation. Accepted staleness: a
+     * later rename does not rewrite an immutable entry. */
+    presentation: z.object({
+      epicTitle: z.string().nullable(),
+      chatTitle: z.string().nullable(),
+    }),
   }),
-});
+);
 export type HostNotificationsCloudFeedRow = z.infer<
   typeof hostNotificationsCloudFeedRowSchema
 >;
 
-export const hostNotificationsCloudFeedSummarySchema = z.object({
-  totalCount: z.number().int().nonnegative(),
-  unreadCount: z.number().int().nonnegative(),
-  attentionCount: z.number().int().nonnegative(),
-});
+export const hostNotificationsCloudFeedSummarySchema = lazySchema(() =>
+  z.object({
+    totalCount: z.number().int().nonnegative(),
+    unreadCount: z.number().int().nonnegative(),
+    attentionCount: z.number().int().nonnegative(),
+  }),
+);
 export type HostNotificationsCloudFeedSummary = z.infer<
   typeof hostNotificationsCloudFeedSummarySchema
 >;
 
-export const hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10 = z.object(
-  {},
-);
+export const hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10 =
+  lazySchema(() => z.object({}));
 export type HostNotificationsCloudFeedSubscribeOpenRequestV10 = z.infer<
   typeof hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10
 >;
@@ -1549,37 +1675,47 @@ export type HostNotificationsCloudFeedSubscribeOpenRequestV10 = z.infer<
  * `version` is the cloud's per-user change sequence. The client's only use for
  * it is to name the feed it is LOOKING AT when it issues a `clearAll`.
  */
-const hostNotificationsCloudFeedSnapshotSchemaV10 = z.object({
-  kind: z.literal("snapshot"),
-  ...textFrameFields,
-  connectionState: z.literal("connected"),
-  version: z.number().int().nonnegative(),
-  rows: z.array(hostNotificationsCloudFeedRowSchema),
-  summary: hostNotificationsCloudFeedSummarySchema,
-});
-const hostNotificationsCloudFeedConnectionStateSchemaV10 = z.object({
-  kind: z.literal("connectionState"),
-  ...textFrameFields,
-  connectionState: z.literal("reconnecting"),
-});
-const hostNotificationsCloudFeedPongSchemaV10 = z.object({
-  kind: z.literal("pong"),
-  ...textFrameFields,
-});
+const hostNotificationsCloudFeedSnapshotSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    connectionState: z.literal("connected"),
+    version: z.number().int().nonnegative(),
+    rows: z.array(hostNotificationsCloudFeedRowSchema),
+    summary: hostNotificationsCloudFeedSummarySchema,
+  }),
+);
+const hostNotificationsCloudFeedConnectionStateSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("connectionState"),
+    ...textFrameFields,
+    connectionState: z.literal("reconnecting"),
+  }),
+);
+const hostNotificationsCloudFeedPongSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("pong"),
+    ...textFrameFields,
+  }),
+);
 export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV10 =
-  z.discriminatedUnion("kind", [
-    hostNotificationsCloudFeedSnapshotSchemaV10,
-    hostNotificationsCloudFeedConnectionStateSchemaV10,
-    hostNotificationsCloudFeedPongSchemaV10,
-  ]);
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      hostNotificationsCloudFeedSnapshotSchemaV10,
+      hostNotificationsCloudFeedConnectionStateSchemaV10,
+      hostNotificationsCloudFeedPongSchemaV10,
+    ]),
+  );
 export type HostNotificationsCloudFeedSubscribeServerFrameV10 = z.infer<
   typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV10
 >;
 
 export const hostNotificationsCloudFeedSubscribeClientFrameSchemaV10 =
-  z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("ping"), ...textFrameFields }),
-  ]);
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("ping"), ...textFrameFields }),
+    ]),
+  );
 export type HostNotificationsCloudFeedSubscribeClientFrameV10 = z.infer<
   typeof hostNotificationsCloudFeedSubscribeClientFrameSchemaV10
 >;
@@ -1605,35 +1741,41 @@ export const hostNotificationsCloudFeedSubscribeV10 = defineStreamRpcContract({
  * (the V11 one) reads both minors; which ROWS it receives is decided
  * host-side by `visibleHostNotificationKinds` for the negotiated version.
  */
-export const hostNotificationsCloudFeedRowSchemaV11 = z.object({
-  ...hostNotificationsCloudFeedRowSchema.shape,
-  entry: hostNotificationEntrySchemaV22,
-});
+export const hostNotificationsCloudFeedRowSchemaV11 = lazySchema(() =>
+  z.object({
+    ...hostNotificationsCloudFeedRowSchema.shape,
+    entry: hostNotificationEntrySchemaV22,
+  }),
+);
 export type HostNotificationsCloudFeedRowV11 = z.infer<
   typeof hostNotificationsCloudFeedRowSchemaV11
 >;
 
-const hostNotificationsCloudFeedSnapshotSchemaV11 = z.object({
-  kind: z.literal("snapshot"),
-  ...textFrameFields,
-  connectionState: z.literal("connected"),
-  version: z.number().int().nonnegative(),
-  rows: z.array(hostNotificationsCloudFeedRowSchemaV11),
-  summary: hostNotificationsCloudFeedSummarySchema,
-});
+const hostNotificationsCloudFeedSnapshotSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...textFrameFields,
+    connectionState: z.literal("connected"),
+    version: z.number().int().nonnegative(),
+    rows: z.array(hostNotificationsCloudFeedRowSchemaV11),
+    summary: hostNotificationsCloudFeedSummarySchema,
+  }),
+);
 export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV11 =
-  z.discriminatedUnion("kind", [
-    hostNotificationsCloudFeedSnapshotSchemaV11,
-    z.object({
-      kind: z.literal("connectionState"),
-      ...textFrameFields,
-      connectionState: z.literal("reconnecting"),
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ]);
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      hostNotificationsCloudFeedSnapshotSchemaV11,
+      z.object({
+        kind: z.literal("connectionState"),
+        ...textFrameFields,
+        connectionState: z.literal("reconnecting"),
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+    ]),
+  );
 export type HostNotificationsCloudFeedSubscribeServerFrameV11 = z.infer<
   typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV11
 >;
@@ -1661,18 +1803,21 @@ export const hostNotificationsCloudFeedSubscribeV11 = defineStreamRpcContract({
  * server frame regressing against an earlier minor, which the registry
  * validator rejects outright.
  */
-const hostNotificationsCloudFeedPartitionSnapshotSchemaV12 =
+const hostNotificationsCloudFeedPartitionSnapshotSchemaV12 = lazySchema(() =>
   hostNotificationsCloudFeedSnapshotSchemaV11.extend({
     kind: z.literal("partitionSnapshot"),
     partition: hostNotificationsCloudPartitionSchema,
-  });
+  }),
+);
 export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV12 =
-  z.discriminatedUnion("kind", [
-    hostNotificationsCloudFeedPartitionSnapshotSchemaV12,
-    hostNotificationsCloudFeedSnapshotSchemaV11,
-    hostNotificationsCloudFeedConnectionStateSchemaV10,
-    hostNotificationsCloudFeedPongSchemaV10,
-  ]);
+  lazySchema(() =>
+    z.discriminatedUnion("kind", [
+      hostNotificationsCloudFeedPartitionSnapshotSchemaV12,
+      hostNotificationsCloudFeedSnapshotSchemaV11,
+      hostNotificationsCloudFeedConnectionStateSchemaV10,
+      hostNotificationsCloudFeedPongSchemaV10,
+    ]),
+  );
 export type HostNotificationsCloudFeedSubscribeServerFrameV12 = z.infer<
   typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV12
 >;
@@ -1696,9 +1841,11 @@ export const hostNotificationsCloudFeedSubscribeV12 = defineStreamRpcContract({
  * (which existed to stop a stale command hitting a reopened row) and the
  * idempotency key (which existed to stop a retry double-applying).
  */
-export const hostNotificationsCloudFeedEntryRequestSchema = z.object({
-  entryId: z.string().min(1).max(191),
-});
+export const hostNotificationsCloudFeedEntryRequestSchema = lazySchema(() =>
+  z.object({
+    entryId: z.string().min(1).max(191),
+  }),
+);
 export type HostNotificationsCloudFeedEntryRequest = z.infer<
   typeof hostNotificationsCloudFeedEntryRequestSchema
 >;
@@ -1714,9 +1861,11 @@ export type HostNotificationsCloudFeedEntryRequest = z.infer<
  * this request. `null` means "whatever is visible now", the only honest
  * reading of a clear-all issued without a snapshot to point at.
  */
-export const hostNotificationsCloudFeedClearAllRequestSchema = z.object({
-  observedVersion: z.number().int().nonnegative().nullable(),
-});
+export const hostNotificationsCloudFeedClearAllRequestSchema = lazySchema(() =>
+  z.object({
+    observedVersion: z.number().int().nonnegative().nullable(),
+  }),
+);
 export type HostNotificationsCloudFeedClearAllRequest = z.infer<
   typeof hostNotificationsCloudFeedClearAllRequestSchema
 >;
@@ -1737,20 +1886,22 @@ export type HostNotificationsCloudFeedMarkAllReadRequest = z.infer<
  * changed anywhere - the host deliberately keeps no local shadow of the cloud
  * feed to mutate optimistically. Neither is an applied mutation.
  */
-export const hostNotificationsCloudFeedMutationResponseSchema = z
-  .object({
-    status: z.enum(["applied", "unavailable"]),
-    /** The feed version after the mutation; `null` when unavailable. */
-    version: z.number().int().nonnegative().nullable(),
-  })
-  .superRefine((value, context) => {
-    if ((value.status === "applied") === (value.version !== null)) return;
-    context.addIssue({
-      code: "custom",
-      path: ["version"],
-      message: "version must be non-null exactly when status is applied",
-    });
-  });
+export const hostNotificationsCloudFeedMutationResponseSchema = lazySchema(() =>
+  z
+    .object({
+      status: z.enum(["applied", "unavailable"]),
+      /** The feed version after the mutation; `null` when unavailable. */
+      version: z.number().int().nonnegative().nullable(),
+    })
+    .superRefine((value, context) => {
+      if ((value.status === "applied") === (value.version !== null)) return;
+      context.addIssue({
+        code: "custom",
+        path: ["version"],
+        message: "version must be non-null exactly when status is applied",
+      });
+    }),
+);
 export type HostNotificationsCloudFeedMutationResponse = z.infer<
   typeof hostNotificationsCloudFeedMutationResponseSchema
 >;
@@ -1760,20 +1911,23 @@ export type HostNotificationsCloudFeedMutationResponse = z.infer<
  * server accepted its envelope but could not acknowledge this new operation;
  * the client may then use the released per-entry compatibility path.
  */
-export const hostNotificationsCloudFeedMarkAllReadResponseSchema = z
-  .object({
-    status: z.enum(["applied", "unavailable", "unsupported"]),
-    /** The feed version after the mutation; `null` when it was not applied. */
-    version: z.number().int().nonnegative().nullable(),
-  })
-  .superRefine((value, context) => {
-    if ((value.status === "applied") === (value.version !== null)) return;
-    context.addIssue({
-      code: "custom",
-      path: ["version"],
-      message: "version must be non-null exactly when status is applied",
-    });
-  });
+export const hostNotificationsCloudFeedMarkAllReadResponseSchema = lazySchema(
+  () =>
+    z
+      .object({
+        status: z.enum(["applied", "unavailable", "unsupported"]),
+        /** The feed version after the mutation; `null` when it was not applied. */
+        version: z.number().int().nonnegative().nullable(),
+      })
+      .superRefine((value, context) => {
+        if ((value.status === "applied") === (value.version !== null)) return;
+        context.addIssue({
+          code: "custom",
+          path: ["version"],
+          message: "version must be non-null exactly when status is applied",
+        });
+      }),
+);
 export type HostNotificationsCloudFeedMarkAllReadResponse = z.infer<
   typeof hostNotificationsCloudFeedMarkAllReadResponseSchema
 >;
@@ -1939,13 +2093,15 @@ function addPendingForkDefault(
  * diagnostic leak. Header VALUES never appear here - only hook identity,
  * filters, and a redacted last-result summary.
  */
-export const notificationHookLastResultSchema = z
-  .object({
-    at: z.number(),
-    ok: z.boolean(),
-    detail: z.string(),
-  })
-  .strict();
+export const notificationHookLastResultSchema = lazySchema(() =>
+  z
+    .object({
+      at: z.number(),
+      ok: z.boolean(),
+      detail: z.string(),
+    })
+    .strict(),
+);
 export type NotificationHookLastResult = z.infer<
   typeof notificationHookLastResultSchema
 >;
@@ -1967,80 +2123,90 @@ export type NotificationHookLastResult = z.infer<
  * variable names, never the resolved values. Env values are read only on the
  * host at delivery time and never cross this wire.
  */
-export const notificationHookConfigSchema = z
-  .object({
-    id: z.string().min(1),
-    name: z.string().min(1).nullable(),
-    enabled: z.boolean(),
-    /** `null` = every severity. */
-    severities: z.array(hostNotificationSeveritySchema).min(1).nullable(),
-    action: z.discriminatedUnion("type", [
-      z
-        .object({
-          type: z.literal("http"),
-          url: z.string().min(1),
-          headers: z.record(z.string().min(1), z.string()),
-        })
-        .strict(),
-      z
-        .object({
-          type: z.literal("command"),
-          command: z.string().min(1),
-          args: z.array(z.string()),
-        })
-        .strict(),
-    ]),
-  })
-  .strict();
+export const notificationHookConfigSchema = lazySchema(() =>
+  z
+    .object({
+      id: z.string().min(1),
+      name: z.string().min(1).nullable(),
+      enabled: z.boolean(),
+      /** `null` = every severity. */
+      severities: z.array(hostNotificationSeveritySchema).min(1).nullable(),
+      action: z.discriminatedUnion("type", [
+        z
+          .object({
+            type: z.literal("http"),
+            url: z.string().min(1),
+            headers: z.record(z.string().min(1), z.string()),
+          })
+          .strict(),
+        z
+          .object({
+            type: z.literal("command"),
+            command: z.string().min(1),
+            args: z.array(z.string()),
+          })
+          .strict(),
+      ]),
+    })
+    .strict(),
+);
 export type NotificationHookConfig = z.infer<
   typeof notificationHookConfigSchema
 >;
 
-export const notificationHookStatusEntrySchema = notificationHookConfigSchema
-  .extend({
-    lastResult: notificationHookLastResultSchema.nullable(),
-  })
-  .strict();
+export const notificationHookStatusEntrySchema = lazySchema(() =>
+  notificationHookConfigSchema
+    .extend({
+      lastResult: notificationHookLastResultSchema.nullable(),
+    })
+    .strict(),
+);
 export type NotificationHookStatusEntry = z.infer<
   typeof notificationHookStatusEntrySchema
 >;
 
-export const notificationHooksSaveRequestSchema = z
-  .object({ hooks: z.array(notificationHookConfigSchema) })
-  .strict();
+export const notificationHooksSaveRequestSchema = lazySchema(() =>
+  z.object({ hooks: z.array(notificationHookConfigSchema) }).strict(),
+);
 export type NotificationHooksSaveRequest = z.infer<
   typeof notificationHooksSaveRequestSchema
 >;
 
-export const notificationHooksStatusRequestSchema = z.object({}).strict();
+export const notificationHooksStatusRequestSchema = lazySchema(() =>
+  z.object({}).strict(),
+);
 export type NotificationHooksStatusRequest = z.infer<
   typeof notificationHooksStatusRequestSchema
 >;
 
-export const notificationHooksStatusResponseSchema = z
-  .object({
-    configPath: z.string().min(1),
-    configError: z.string().nullable(),
-    hooks: z.array(notificationHookStatusEntrySchema),
-  })
-  .strict();
+export const notificationHooksStatusResponseSchema = lazySchema(() =>
+  z
+    .object({
+      configPath: z.string().min(1),
+      configError: z.string().nullable(),
+      hooks: z.array(notificationHookStatusEntrySchema),
+    })
+    .strict(),
+);
 export type NotificationHooksStatusResponse = z.infer<
   typeof notificationHooksStatusResponseSchema
 >;
 
-export const notificationHooksTestRequestSchema = z
-  .object({ hookId: z.string().min(1) })
-  .strict();
+export const notificationHooksTestRequestSchema = lazySchema(() =>
+  z.object({ hookId: z.string().min(1) }).strict(),
+);
 export type NotificationHooksTestRequest = z.infer<
   typeof notificationHooksTestRequestSchema
 >;
 
-export const notificationHooksTestResponseSchema = z
-  .object({
-    outcome: z.enum(["ok", "failed", "not-found", "disabled"]),
-    detail: z.string(),
-  })
-  .strict();
+export const notificationHooksTestResponseSchema = lazySchema(() =>
+  z
+    .object({
+      outcome: z.enum(["ok", "failed", "not-found", "disabled"]),
+      detail: z.string(),
+    })
+    .strict(),
+);
 export type NotificationHooksTestResponse = z.infer<
   typeof notificationHooksTestResponseSchema
 >;

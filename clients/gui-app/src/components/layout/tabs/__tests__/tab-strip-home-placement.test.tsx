@@ -19,6 +19,10 @@
  *  - Home never consumes a `data-tab-index` digit slot: two ordinary strip
  *    tabs still read `data-tab-index` 0 and 1 with Home enabled, because the
  *    Alt-digit chords index `useHeaderTabs()`, which does not include Home.
+ *  - Home carries no count: with an unread, unresolved prompt on the merged
+ *    notification feed, the real strip still draws no badge inside the Home
+ *    tab and names it plainly "Home". The header bell is the one attention
+ *    counter; Home lists the prompts it points at.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
@@ -37,9 +41,17 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import {
+  makeApprovalPayload,
+  makeMergedNotificationRow,
+} from "@/lib/home-focus/__tests__/fixtures";
 
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
@@ -51,8 +63,40 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
+/**
+ * One prompt waiting on the user, exactly as the "Needs you" section and the
+ * bell would count it: a pending-prompt kind, unresolved, unread. A stable
+ * module-level array so the strip sees the same rows on every render.
+ */
+const PENDING_PROMPT_ROWS: ReadonlyArray<MergedNotificationRow> = [
+  makeMergedNotificationRow({
+    feedId: "host:approval-1",
+    hostKind: "approval.requested",
+    severity: "needs_action",
+    payload: makeApprovalPayload("e-a", "chat-1"),
+  }),
+];
+
+// Partial: only the merged-rows read is replaced, so the id/attention
+// projections and everything else the strip's notification providers import
+// from this module stay real.
+vi.mock(
+  "@/stores/notifications/merged-notifications",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/stores/notifications/merged-notifications")
+      >();
+    return {
+      ...actual,
+      useMergedNotificationRows: () => PENDING_PROMPT_ROWS,
+    };
+  },
+);
+
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map<string, boolean>(),
+  useRetryUnansweredTaskPinReading: () => () => undefined,
 }));
 
 // Partial: `tab-strip.tsx` also imports `epicPinDispatchAdmitted` from here,
@@ -109,6 +153,13 @@ function resetStores(): void {
   useTabsStore.setState(useTabsStore.getInitialState(), true);
 }
 
+function setHomeTabEnabled(enabled: boolean): void {
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore
+    .getState()
+    .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
+}
+
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({
     component: () => (
@@ -158,19 +209,19 @@ describe("<TabStrip /> - Home placement", () => {
         mutations: { retry: false },
       },
     });
-    useSettingsStore.setState({ homeTabEnabled: false });
+    setHomeTabEnabled(false);
     resetStores();
   });
 
   afterEach(() => {
     cleanup();
     queryClient.clear();
-    useSettingsStore.setState({ homeTabEnabled: false });
+    setHomeTabEnabled(false);
     resetStores();
   });
 
   it("renders Home as the tablist's first child, outside the scrollable strip, when the flag is on", async () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     openEpicFixture("e-a", "Alpha");
     const refA: TabRef = { kind: "epic", id: "e-a" };
     useTabsStore.setState({
@@ -186,7 +237,10 @@ describe("<TabStrip /> - Home placement", () => {
     const homeTab = await screen.findByTestId("tab-home");
     const tablist = screen.getByTestId("tab-strip");
     expect(tablist.getAttribute("role")).toBe("tablist");
-    expect(tablist.children[0]).toBe(homeTab);
+    // First in the tablist, through the `display: contents` wrapper its
+    // right-click menu hangs on - that wrapper generates no box, so Home is
+    // still the strip's own first flex item.
+    expect(tablist.children[0].contains(homeTab)).toBe(true);
 
     const scrollContainer = screen.getByTestId("header-tab-strip-scroll");
     expect(scrollContainer.contains(homeTab)).toBe(false);
@@ -194,7 +248,7 @@ describe("<TabStrip /> - Home placement", () => {
   });
 
   it("still renders on the landing route with zero tabs when the flag is on", async () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     const router = buildRouter("/");
     render(<RouterProvider router={router} />);
 
@@ -231,7 +285,7 @@ describe("<TabStrip /> - Home placement", () => {
   });
 
   it("keeps ordinary strip tabs at data-tab-index 0 and 1 - Home consumes no digit slot", async () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     openEpicFixture("e-a", "Alpha");
     openDraftFixture("draft-1");
     const refEpic: TabRef = { kind: "epic", id: "e-a" };
@@ -264,7 +318,7 @@ describe("<TabStrip /> - Home placement", () => {
   // grouped" is a property of where it renders rather than a rule anyone
   // enforces, and these pin that it stays true as the grouping feature grows.
   it("keeps Home outside a group that spans every strip tab, and first in the tablist", async () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     openEpicFixture("e-a", "Alpha");
     openDraftFixture("draft-1");
     const refEpic: TabRef = { kind: "epic", id: "e-a" };
@@ -290,7 +344,7 @@ describe("<TabStrip /> - Home placement", () => {
     const homeTab = await screen.findByTestId("tab-home");
     const tablist = screen.getByTestId("tab-strip");
     // Still the tablist's first child, and still ahead of the group's chip.
-    expect(tablist.children[0]).toBe(homeTab);
+    expect(tablist.children[0].contains(homeTab)).toBe(true);
     const chip = screen.getByRole("button", {
       name: "Work: collapse group",
     });
@@ -303,8 +357,27 @@ describe("<TabStrip /> - Home placement", () => {
     ).not.toContain("home");
   });
 
+  it("draws no badge and keeps the plain accessible name with a prompt waiting on the feed", async () => {
+    setHomeTabEnabled(true);
+    openEpicFixture("e-a", "Alpha");
+    const refEpic: TabRef = { kind: "epic", id: "e-a" };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(refEpic), ref: refEpic }],
+      activeItemId: tabItemId(refEpic),
+      stripOrder: [refEpic],
+      systemTabs: { history: null, settings: null },
+    });
+    const router = buildRouter("/epics/e-a/e-a");
+    render(<RouterProvider router={router} />);
+
+    const homeTab = await screen.findByTestId("tab-home");
+    expect(within(homeTab).queryByTestId("tab-home-badge")).toBeNull();
+    expect(homeTab.getAttribute("aria-label")).toBe("Home");
+  });
+
   it("draws no appearance of its own while every other tab carries one", async () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     openEpicFixture("e-a", "Alpha");
     const refEpic: TabRef = { kind: "epic", id: "e-a" };
     useTabsStore.setState({
@@ -348,18 +421,18 @@ describe("<TabStrip /> - pre-hydration skeleton", () => {
   }
 
   beforeEach(() => {
-    useSettingsStore.setState({ homeTabEnabled: false });
+    setHomeTabEnabled(false);
     resetStores();
   });
 
   afterEach(() => {
     cleanup();
-    useSettingsStore.setState({ homeTabEnabled: false });
+    setHomeTabEnabled(false);
     resetStores();
   });
 
   it("reserves the Home slot when the flag is on", () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     renderSkeleton();
     expect(screen.getByTestId("tab-strip-skeleton-home")).not.toBeNull();
   });

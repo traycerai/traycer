@@ -71,6 +71,12 @@ export interface UseHostQueryWithResponseMapOptions<
   readonly method: Method;
   readonly params: RequestOfMethod<Registry, Method>;
   /**
+   * Opt into the method's declared response allowance without losing query
+   * cancellation. HostClient rejects values the scheduling policy disallows;
+   * omitted keeps the ordinary transport response deadline.
+   */
+  readonly responseTimeoutMs?: number;
+  /**
    * Extra cache identity that is not sent to the host. Use this when the RPC
    * request addresses a stable resource id but the cached representation must
    * vary by a newer content identity, such as a blob hash or revision.
@@ -260,7 +266,16 @@ export function useHostQueryWithResponseMap<
       const payload =
         buildRequest === undefined ? params : buildRequest(params);
       const requestContext = args.captureRequestContext?.();
-      const response = await client.requestWithSignal(method, payload, signal);
+      const responseTimeoutMs = args.responseTimeoutMs;
+      const response =
+        responseTimeoutMs === undefined
+          ? await client.requestWithSignal(method, payload, signal)
+          : await client.requestWithOptions(method, payload, {
+              responseTimeoutMs,
+              idempotencyKey: null,
+              requiredHostMethodVersion: null,
+              signal,
+            });
       return mapResponse({
         response,
         queryClient,
@@ -353,6 +368,50 @@ export interface UseHostMutationOptions<
     variables: TVariables,
   ) => RequiredHostMethodVersion | null;
   /**
+   * A stable RETRY IDENTITY for this dispatch, evaluated per mutation so it can
+   * read the ids the variables carry (`epic.create` keys on the `epicId` it is
+   * minting). A non-null key routes the dispatch through
+   * `HostRequester.requestWithOptions`, which is the only entry point that can
+   * express a key AND the `requiredHostMethodVersion` floor above at once.
+   * Returning `null` - and omitting the option - dispatches exactly as before.
+   *
+   * READ THE ALLOWLIST on `HostRequester.requestWithIdempotencyKey` before
+   * adding a caller. A key promises that a SECOND arrival of these bytes is the
+   * same intent, which for a create is only true because hash-only content
+   * keeps the params byte-identical across a replay; for anything else it is a
+   * way to have a command applied twice under one name.
+   */
+  readonly idempotencyKey?: (variables: TVariables) => string | null;
+  /**
+   * Substitutes the response the rest of the mutation sees, with the ability to
+   * SEND AGAIN first.
+   *
+   * It exists for one shape: a 2xx body that is a refusal the client itself can
+   * remedy. `epic.create`'s `missing-attachment-bytes` is that - the host could
+   * not find bytes for a hash the message referenced, and the fix is to
+   * re-upload and ask again - and it must be handled BELOW every refusal arm,
+   * because all three of them (`onSuccess`, the create's own `.then`, the
+   * landing submission's `.then`) fire on the first refusal they see and one of
+   * them tears down state a retry still needs. Running inside `mutationFn` is
+   * what makes "only the final outcome reaches them" true.
+   *
+   * `redispatch` is the mutation function's OWN dispatch closure, already
+   * wrapped by {@link mapDispatchError} - same client, method, params, key and
+   * version floor - because the caller of this seam holds none of those and a
+   * hand-rolled second request would differ from the first in ways no type
+   * would catch (a floor refusal reading differently, a key going missing and
+   * turning the retry into a second create).
+   *
+   * Deliberately NOT the removed `preflight`: that probed on its own connection
+   * before the write, so it established a fact about a host process that could
+   * be replaced before the write landed. This acts on the write's own answer.
+   */
+  readonly resolveResponse?: (
+    response: ResponseOfMethod<Registry, Method>,
+    variables: TVariables,
+    redispatch: () => Promise<ResponseOfMethod<Registry, Method>>,
+  ) => Promise<ResponseOfMethod<Registry, Method>>;
+  /**
    * Re-shapes an error thrown by the DISPATCH before the boundary normalizes
    * it. Scoped to the dispatch on purpose: a `mapVariables` throw is already
    * the caller's own error and needs no translation.
@@ -407,8 +466,32 @@ export function useHostMutation<
         }
         const params = args.mapVariables(variables);
         const requirement = args.requiredHostMethodVersion?.(variables) ?? null;
-        const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> =>
-          requirement === null
+        const idempotencyKey = args.idempotencyKey?.(variables) ?? null;
+        // THREE branches, and the third is the only one that can carry two
+        // options at once. `requestWithOptions` is reached ONLY for a keyed
+        // dispatch, which keeps every existing mutation on the byte-identical
+        // path it has always taken - and keeps a cast-partial host-client stub
+        // (`Object.assign({} as HostClient, { request, requestWithSignal })`,
+        // which cannot fail at compile) working in the suites that never key a
+        // mutation. A suite that DOES reach a keyed mutation has to stub the
+        // member; there is no version of this that both applies the key and
+        // asks nothing of those stubs.
+        const dispatch = (): Promise<ResponseOfMethod<Registry, Method>> => {
+          if (idempotencyKey !== null) {
+            return client.requestWithOptions(args.method, params, {
+              idempotencyKey,
+              // The method's own scheduling budget. A keyed create is a small
+              // INTERACTIVE request once its images travel by hash, so there is
+              // nothing to extend - and the policy table REFUSES a budget it
+              // does not declare for the method.
+              responseTimeoutMs: null,
+              requiredHostMethodVersion: requirement,
+              // No caller cancellation, matching the two branches below. A
+              // mutation's dispatch is not tied to an observer's lifetime here.
+              signal: undefined,
+            });
+          }
+          return requirement === null
             ? client.request(args.method, params)
             : client.requestWithSignalRequiringHostMethodVersion(
                 args.method,
@@ -416,12 +499,28 @@ export function useHostMutation<
                 undefined,
                 requirement,
               );
+        };
         const mapDispatchError = args.mapDispatchError;
-        const response = await (mapDispatchError === undefined
-          ? dispatch()
-          : dispatch().catch((cause: unknown) => {
-              throw mapDispatchError(cause);
-            }));
+        // `.catch` directly on the dispatch, never chained after a `.then`: a
+        // catch downstream of a success arm also catches what that arm throws,
+        // and here that would re-map a `resolveResponse` failure into a
+        // dispatch error.
+        const mappedDispatch =
+          mapDispatchError === undefined
+            ? dispatch
+            : (): Promise<ResponseOfMethod<Registry, Method>> =>
+                dispatch().catch((cause: unknown) => {
+                  throw mapDispatchError(cause);
+                });
+        const dispatched = await mappedDispatch();
+        // Between the dispatch and `onResponse`, so a substituted response is
+        // what every arm below sees - including the caller's `onSuccess` and
+        // whatever `mutateAsync` resolves with.
+        const resolveResponse = args.resolveResponse;
+        const response =
+          resolveResponse === undefined
+            ? dispatched
+            : await resolveResponse(dispatched, variables, mappedDispatch);
         args.onResponse?.(response, variables);
         return response;
       }),

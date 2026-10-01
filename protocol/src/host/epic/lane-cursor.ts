@@ -57,6 +57,7 @@
  * of lane-specific vocabulary.
  */
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Opaque replica identity for one epic on one serving host.
@@ -65,7 +66,7 @@ import { z } from "zod";
  * to another empty epoch and silently license a resume across a replica
  * replacement, which is the one thing the field exists to prevent.
  */
-export const epicLaneAuthorityEpochSchema = z.string().min(1);
+export const epicLaneAuthorityEpochSchema = lazySchema(() => z.string().min(1));
 export type EpicLaneAuthorityEpoch = z.infer<
   typeof epicLaneAuthorityEpochSchema
 >;
@@ -79,7 +80,9 @@ export type EpicLaneAuthorityEpoch = z.infer<
  * "the lane is empty" and "the lane has no cursor" are the same fact here, and
  * one representation is better than two.
  */
-export const epicLanePositionSchema = z.number().int().nonnegative();
+export const epicLanePositionSchema = lazySchema(() =>
+  z.number().int().nonnegative(),
+);
 export type EpicLanePosition = z.infer<typeof epicLanePositionSchema>;
 
 /**
@@ -95,10 +98,12 @@ export type EpicLanePosition = z.infer<typeof epicLanePositionSchema>;
  * Nesting makes "both or neither" STRUCTURAL, so there is no cross-field
  * runtime check for a later reader to overlook.
  */
-export const epicLaneCursorSchema = z.object({
-  authorityEpoch: epicLaneAuthorityEpochSchema,
-  position: epicLanePositionSchema,
-});
+export const epicLaneCursorSchema = lazySchema(() =>
+  z.object({
+    authorityEpoch: epicLaneAuthorityEpochSchema,
+    position: epicLanePositionSchema,
+  }),
+);
 export type EpicLaneCursor = z.infer<typeof epicLaneCursorSchema>;
 
 /**
@@ -149,7 +154,9 @@ export type EpicLaneCursor = z.infer<typeof epicLaneCursorSchema>;
  * "higher revision wins" - gets it backwards, and getting it backwards
  * resurrects deleted artifacts on exactly the flaky links this design is for.
  */
-export const epicLaneRowRevisionSchema = z.number().int().nonnegative();
+export const epicLaneRowRevisionSchema = lazySchema(() =>
+  z.number().int().nonnegative(),
+);
 export type EpicLaneRowRevision = z.infer<typeof epicLaneRowRevisionSchema>;
 
 /**
@@ -199,5 +206,5 @@ export const epicLaneEpochFrameFields = {
  * lane - carries binary payloads, and it declares them per frame.
  */
 export const epicLaneTextFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;

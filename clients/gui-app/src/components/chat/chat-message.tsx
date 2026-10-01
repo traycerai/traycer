@@ -1,13 +1,15 @@
 import { memo, type ReactElement } from "react";
-import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage as ChatMessageModel,
+  MessageSegment,
+} from "@/stores/composer/chat-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
-import { ChatMessageTimestamp } from "./chat-message-timestamp";
-import { singleSpecialSegment } from "./chat-special-segment";
+import { ChatSenderOverline } from "./chat-message-timestamp";
+import { rowPaintsNothing, singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
@@ -69,8 +71,23 @@ export interface ChatMessageForkAction {
   ) => void;
 }
 
+/**
+ * Where the host is with a row it has accepted and not yet started - the
+ * chat's opening prompt, while its worktree and session are set up.
+ */
+export type ChatMessageDeliveryPhase = "pending" | "preparing";
+
 export interface ChatMessageUserActions {
   readonly type: "user";
+  /**
+   * The phase a row the host is still delivering shows under it, `null`
+   * otherwise. Such a row offers copy only (`enabled` is false and nothing is
+   * being edited); it becomes an ordinary message when it starts. A preparing
+   * row beside the chat's setup card is also `null`: the card, or once it is no
+   * longer in flight the pre-turn "Working…" row, already shows that wait (see
+   * `deliveringUserMessageActionsFor`).
+   */
+  readonly deliveryPhase: ChatMessageDeliveryPhase | null;
   readonly enabled: boolean;
   readonly confirmingDelete: boolean;
   readonly editing: ChatMessageEditing | null;
@@ -106,14 +123,11 @@ function messageAlignmentClass(message: ChatMessageModel): string {
 }
 
 // A synthesized row can carry a single full-width "special" segment (a
-// setup-card, a forked-chat-link or an imported-chat-marker) with no
-// sender/body. Render it directly,
-// bypassing the role branches below.
-function renderSingleSpecialSegment(
-  message: ChatMessageModel,
-): ReactElement | null {
-  const segment = singleSpecialSegment(message.segments);
-  if (segment === null) return null;
+// setup-card, a forked-chat-link, an imported-chat-marker or an unattended
+// auto-mode refusal) with no sender/body. Render it directly, bypassing the
+// role branches below. A special row that paints nothing never gets here -
+// see `rowPaintsNothing` in `ChatMessageImpl`.
+function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
   if (segment.kind === "setup-card") {
     return (
       <div
@@ -201,6 +215,9 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         // rendered as several rows carries it on exactly one of them; absent
         // on all the others, and on every row with no failure at all.
         manualRungAnchorId={message.manualRungAnchorId ?? null}
+        // And whether that segment's card absorbs the settled routing notice
+        // on the same row - stamped by the same projection pass.
+        routingSettledNoticeId={message.routingSettledNoticeId ?? null}
         nextStepActions={nextStepActions}
         forkAction={assistantActions?.fork ?? null}
         interviewDeliveryRetry={
@@ -213,9 +230,14 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
 
 function ChatMessageImpl(props: ChatMessageProps) {
   const { actions, message } = props;
-  const specialSegment = renderSingleSpecialSegment(message);
+  // The list withholds these rows (`withholdUnpaintedRows`); this is the same
+  // predicate for a model that reaches a `ChatMessage` some other way. It
+  // returns before the role branches below, so the row's `system` role and
+  // timestamp cannot fall through to the sender overline either.
+  if (rowPaintsNothing(message)) return null;
+  const specialSegment = singleSpecialSegment(message.segments);
   if (specialSegment !== null) {
-    return specialSegment;
+    return renderSpecialSegment(specialSegment);
   }
   if (message.role === "assistant") {
     return renderAssistantMessage(props);
@@ -231,21 +253,18 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // `statusLabel` means exactly that here - the other two labels ("Streaming",
   // "Completed") are applied under a `role === "assistant"` guard, and an
   // assistant row returns above without ever reaching this overline.
-  // The separator is drawn here but the stamp decides whether it renders, so
-  // both hang off the same predicate: a persisted row can carry an instant a
-  // `Date` cannot represent, and a lone " · " after the label is worse than no
-  // stamp at all.
+  // The stamp draws its own " · " so the two hang off one predicate: a
+  // persisted row can carry an instant a `Date` cannot represent, and the
+  // Timestamps setting can hide it, and a lone separator after the label is
+  // worse than no stamp at all.
   const sentAt = message.sentAt ?? message.createdAt;
   const sender = (
-    <span className="text-overline font-medium text-muted-foreground/60">
-      <span className="uppercase">{label}</span>
-      {message.statusLabel === null && hasRenderableMessageTime(sentAt) ? (
-        <>
-          <span aria-hidden> · </span>
-          <ChatMessageTimestamp timestamp={sentAt} />
-        </>
-      ) : null}
-    </span>
+    <ChatSenderOverline
+      label={label}
+      sentAt={sentAt}
+      stamped={message.statusLabel === null}
+      instanceId={message.id}
+    />
   );
 
   return (

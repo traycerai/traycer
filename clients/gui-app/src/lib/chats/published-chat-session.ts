@@ -319,6 +319,8 @@ export function publishedChatSessionState(
     },
     messages: input.conversion.messages,
     events: input.conversion.events,
+    messageDelivery: null,
+    unacknowledgedDeliveryRestore: null,
     queue: { status: "idle", items: [] },
     // A copy has no live host stream, so no managed commands can ever arrive.
     managedCommands: [],
@@ -327,12 +329,18 @@ export function publishedChatSessionState(
     // a placeholder: rendering a Deliver affordance on a copy would offer an
     // action that cannot be sent.
     heldUpdates: [],
+    portForwards: [],
     runStatus: "idle",
     activeTurn: null,
+    turnLifecycleRevision: 0,
     steerProtocolSupported: false,
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
     autoPermissionModeProtocolSupported: null,
+    // Not a claim about a protocol line - a copy has none - but this read-only
+    // view's rule: it has no queue surface, so it drops no queue text, and a
+    // queue-pause notice stays in the transcript. Published and replica alike.
+    queuePauseReasonProtocolSupported: false,
     draftBlobBridgeSupported: false,
     interviewDeliveryRetryProtocolSupported: false,
     turnInProgress: false,
@@ -348,10 +356,12 @@ export function publishedChatSessionState(
     transcriptDerived: null,
     accumulatedFileChangeCount: 0,
     // A published copy is static: nothing evicts, nothing jumps, and there is
-    // no stream to request hydration from. All three are the inert values.
+    // no stream to request hydration from. All are the inert values.
     coldRewrittenMessageIds: new Set(),
     jumpTargetOrdinal: null,
     requestTranscriptOrdinal: () => undefined,
+    findReadOrdinal: null,
+    requestFindReadOrdinal: () => undefined,
     accumulatedFileChangeSummaries: [],
     // A published transcript is not on the windowed line and streams no
     // chunks, so there is no generation to be waiting on.
@@ -375,6 +385,10 @@ export function publishedChatSessionState(
     // no incident at all. A consumer that must speak an outcome exactly once
     // therefore says nothing here, which is correct.
     lastFallbackOutcome: undefined,
+    // Both are live-only state the host never publishes: a frozen copy has no
+    // next prompt to suggest and no turn to be thinking in.
+    suggestedPrompt: undefined,
+    thinkingTokens: null,
     fallbackChoiceLease: null,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,
@@ -393,6 +407,9 @@ export function publishedChatSessionState(
     // but the field is part of the state shape and a second construction site
     // that forgets one is how these two drift.
     openedSubagentCardBlockIds: new Set<string>(),
+    // Nothing to hold: this surface has no wire, so it dispatches no
+    // `queueCancel` and never has a cancel's ack to answer.
+    pendingCancelRestorations: {},
     failedSendRestoration: null,
     hashOnlyRecoveries: {},
     currentComposerSettings: null,
@@ -438,6 +455,8 @@ export function publishedChatSessionState(
     stopBackgroundSession: () => null,
     pauseQueue: () => null,
     resumeQueue: () => null,
+    // A copy has no delivery view, so nothing is ever restored to acknowledge.
+    messageDeliveryRestored: () => null,
     queueEdit: () => null,
     queueCancel: () => null,
     queueReorder: () => null,
@@ -458,6 +477,7 @@ export function publishedChatSessionState(
     stateFailedSendRestoration: () => undefined,
     markNoticeDelivered: () => undefined,
     takeSetupFailedRestoration: () => null,
+    takeMessageDeliveryRestoration: () => null,
     setCurrentComposerSettings: () => undefined,
     dispose: () => undefined,
   };

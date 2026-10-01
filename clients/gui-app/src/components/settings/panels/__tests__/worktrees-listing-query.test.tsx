@@ -10,7 +10,7 @@ import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schem
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import {
   SETTINGS_WORKTREE_LIST_PAGE_LIMIT,
   listingQueryKeyFor,
@@ -463,17 +463,7 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
       expect(result.current.worktrees).toHaveLength(1);
     });
 
-    const overlayKey = hostQueryKeys.method(
-      HOST_ID,
-      "worktree.listAllForHost",
-      {
-        includeActivity: true,
-        activityPaths: ["/wt/a"],
-        cursor: null,
-        limit: null,
-        forceRefresh: false,
-      },
-    );
+    const overlayKey = perPathEnrichmentQueryKey(HOST_ID, "/wt/a");
     fixture.queryClient.setQueryData(overlayKey, {
       worktrees: [listedEntry("/wt/a", "main")],
       nextCursor: null,

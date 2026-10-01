@@ -73,6 +73,19 @@ export interface MenuControllerOptions {
     hostUpdateVersion: string | null,
   ) => boolean;
   readonly checkForUpdates: () => Promise<void>;
+  // Whether this instance runs the local-host lanes, whether the running host
+  // is a terminal's, and when either may have changed (`none` committed this
+  // session, a foreground run started or ended). Feeds
+  // `MenuState.offerRestartHost`.
+  readonly localHostLanes: MenuLocalHostLanes;
+}
+
+/** The slice of `HostLifecycleService` the menu reads. */
+export interface MenuLocalHostLanes {
+  localHostLanesActive(): boolean;
+  /** The running host's supervisor was admitted `foreground`. */
+  localHostRunIsForeground(): boolean;
+  onChange(listener: () => void): () => void;
 }
 
 export class MenuController {
@@ -116,6 +129,11 @@ export class MenuController {
     this.disposers.push(() => {
       this.options.perWindowState.off("change", onPerWindowStateChange);
     });
+    this.disposers.push(
+      this.options.localHostLanes.onChange(() => {
+        this.rebuild();
+      }),
+    );
     this.rebuild();
   }
 
@@ -142,6 +160,7 @@ export class MenuController {
     const menu = buildApplicationMenu(state, {
       command: (command, senderWindow) =>
         this.handleCommand(command, senderWindow, null),
+      toggleAppDevTools: (senderWindow) => this.toggleAppDevTools(senderWindow),
       focusWindow: (windowId) => {
         this.options.windowRegistry.focusById(windowId);
       },
@@ -202,7 +221,55 @@ export class MenuController {
       canCheckForUpdates: !isDevBuild,
       canOpenDevTools,
       hostUpdateAvailableVersion: this.hostUpdateAvailableVersion,
+      offerRestartHost:
+        this.options.localHostLanes.localHostLanesActive() &&
+        !this.options.localHostLanes.localHostRunIsForeground(),
     };
+  }
+
+  private toggleAppDevTools(senderWindow: BaseWindow | undefined): void {
+    try {
+      if (!canOpenDevTools) return;
+      // Built-in detached inspectors have no callback window; custom browser
+      // inspectors are child windows. Resolve both back to a registered app.
+      const sender = senderWindow ?? BrowserWindow.getFocusedWindow();
+      if (sender?.isDestroyed()) return;
+      const owner =
+        sender instanceof BrowserWindow
+          ? (sender.getParentWindow() ?? sender)
+          : sender;
+      const windowId =
+        owner === null
+          ? (this.options.windowRegistry
+              .records()
+              .find(
+                (record) =>
+                  record.window instanceof BrowserWindow &&
+                  !record.window.isDestroyed() &&
+                  !record.window.webContents.isDestroyed() &&
+                  record.window.webContents.isDevToolsFocused(),
+              )?.windowId ??
+            resolveSenderFocusedOrMruWindowId(
+              this.options.windowRegistry,
+              null,
+            ))
+          : resolveSenderFocusedOrMruWindowId(
+              this.options.windowRegistry,
+              owner,
+            );
+      const target = this.options.windowRegistry
+        .records()
+        .find((record) => record.windowId === windowId)?.window;
+      if (
+        target instanceof BrowserWindow &&
+        !target.isDestroyed() &&
+        !target.webContents.isDestroyed()
+      ) {
+        target.webContents.toggleDevTools();
+      }
+    } catch (err) {
+      log.warn("[menu] toggleAppDevTools failed", err);
+    }
   }
 
   // Menu/tray commands are invoked synchronously by Electron off the AppKit

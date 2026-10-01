@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -453,7 +453,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -1206,7 +1206,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -1281,7 +1281,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 5
+              "const": 6
             }
           },
           "required": [
@@ -1759,6 +1759,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                           },
                           "timestamp": {
                             "type": "number"
+                          },
+                          "providerHistory": {
+                            "type": "string",
+                            "const": "excluded"
                           }
                         },
                         "required": [
@@ -2072,6 +2076,75 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                           "type": "null"
                                                         }
                                                       ]
+                                                    },
+                                                    "receipt": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "causeLabel": {
+                                                              "type": "string"
+                                                            },
+                                                            "steps": {
+                                                              "type": "array",
+                                                              "items": {
+                                                                "type": "object",
+                                                                "properties": {
+                                                                  "kind": {
+                                                                    "default": "unknown",
+                                                                    "type": "string",
+                                                                    "enum": [
+                                                                      "switch",
+                                                                      "wait",
+                                                                      "retry",
+                                                                      "unknown"
+                                                                    ]
+                                                                  },
+                                                                  "providerLabel": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "modelLabel": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "profileLabel": {
+                                                                    "type": "string"
+                                                                  },
+                                                                  "resumedAt": {
+                                                                    "anyOf": [
+                                                                      {
+                                                                        "type": "number"
+                                                                      },
+                                                                      {
+                                                                        "type": "null"
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  "endedLabel": {
+                                                                    "type": "string"
+                                                                  }
+                                                                },
+                                                                "required": [
+                                                                  "kind",
+                                                                  "providerLabel",
+                                                                  "modelLabel",
+                                                                  "profileLabel",
+                                                                  "resumedAt",
+                                                                  "endedLabel"
+                                                                ],
+                                                                "additionalProperties": false
+                                                              }
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "causeLabel",
+                                                            "steps"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
                                                     }
                                                   },
                                                   "required": [
@@ -2089,6 +2162,37 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "browserSession": {
+                                              "type": "object",
+                                              "properties": {
+                                                "hostId": {
+                                                  "type": "string"
+                                                },
+                                                "sessionId": {
+                                                  "type": "string"
+                                                },
+                                                "tabId": {
+                                                  "type": "string"
+                                                },
+                                                "profile": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "primary",
+                                                    "isolated"
+                                                  ]
+                                                },
+                                                "title": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "hostId",
+                                                "sessionId",
+                                                "tabId",
+                                                "profile"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [

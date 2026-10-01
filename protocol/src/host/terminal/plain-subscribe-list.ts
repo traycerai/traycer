@@ -9,24 +9,29 @@ import {
   plainTerminalListStateSchema,
   plainTerminalScopeSchema,
 } from "@traycer/protocol/host/terminal/plain-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
-export const terminalPlainSubscribeListOpenRequestSchema = z.strictObject({
-  scope: plainTerminalScopeSchema,
-});
+export const terminalPlainSubscribeListOpenRequestSchema = lazySchema(() =>
+  z.strictObject({
+    scope: plainTerminalScopeSchema,
+  }),
+);
 export type TerminalPlainSubscribeListOpenRequest = z.infer<
   typeof terminalPlainSubscribeListOpenRequestSchema
 >;
 
-export const terminalPlainSubscribeListOpenRequestSchemaV10 = z.strictObject({
-  scope: plainTerminalScopeSchemaV10,
-});
+export const terminalPlainSubscribeListOpenRequestSchemaV10 = lazySchema(() =>
+  z.strictObject({
+    scope: plainTerminalScopeSchemaV10,
+  }),
+);
 
 /** Frozen snapshot-first server frames shipped in desktop/host v1.2.0-rc.1. */
-export const terminalPlainSubscribeListServerFrameSchemaV10 =
+export const terminalPlainSubscribeListServerFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.strictObject({
       kind: z.literal("snapshot"),
@@ -52,18 +57,20 @@ export const terminalPlainSubscribeListServerFrameSchemaV10 =
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 export type TerminalPlainSubscribeListServerFrameV10 = z.infer<
   typeof terminalPlainSubscribeListServerFrameSchemaV10
 >;
 
-export const terminalPlainSubscribeListClientFrameSchemaV10 =
+export const terminalPlainSubscribeListClientFrameSchemaV10 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.strictObject({
       kind: z.literal("ping"),
       ...textFrameFields,
     }),
-  ]);
+  ]),
+);
 
 /**
  * Server frames are replacement `state` plus the transport keepalive.
@@ -71,9 +78,8 @@ export const terminalPlainSubscribeListClientFrameSchemaV10 =
  * coverage. There is no upsert/delete tombstone interpretation: host
  * withdrawal is absence from the next complete replacement state.
  */
-export const terminalPlainSubscribeListServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const terminalPlainSubscribeListServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.strictObject({
       kind: z.literal("state"),
       ...textFrameFields,
@@ -83,20 +89,19 @@ export const terminalPlainSubscribeListServerFrameSchema = z.discriminatedUnion(
       kind: z.literal("pong"),
       ...textFrameFields,
     }),
-  ],
+  ]),
 );
 export type TerminalPlainSubscribeListServerFrame = z.infer<
   typeof terminalPlainSubscribeListServerFrameSchema
 >;
 
-export const terminalPlainSubscribeListClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const terminalPlainSubscribeListClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.strictObject({
       kind: z.literal("ping"),
       ...textFrameFields,
     }),
-  ],
+  ]),
 );
 export type TerminalPlainSubscribeListClientFrame = z.infer<
   typeof terminalPlainSubscribeListClientFrameSchema

@@ -36,7 +36,10 @@ export function rankSlashCommands(
   if (commands.length === 0 || trimmedQuery.length === 0) {
     return commands;
   }
-  const matches = searchFuzzyMatches(commands, trimmedQuery, FUSE_KEYS, null);
+  const matches = searchFuzzyMatches(commands, trimmedQuery, FUSE_KEYS, {
+    adjustScore: null,
+    compareTies: null,
+  });
   return resortByNameTier(matches, trimmedQuery, (command) => command.name).map(
     (match) => match.item,
   );

@@ -4,14 +4,11 @@ import {
   getEdgeDropPositionFromPoint,
   getEmptyShellDropId,
   getEpicCanvasDropPreview,
-  getLeftPanelGroupDropPreview,
   getLeftPanelRailDropPositionOnAxis,
   getSidebarReparentPanelDropId,
   getSidebarReparentRowDropId,
   readEpicCanvasDragSourceData,
   readEpicCanvasDropTargetData,
-  type EpicCanvasDropTargetData,
-  type LeftPanelSectionRect,
 } from "@/components/epic-canvas/dnd/dnd";
 describe("getEdgeDropPositionFromPoint", () => {
   const rect = {
@@ -433,14 +430,14 @@ describe("epic canvas dnd-kit data guards", () => {
     });
     expect(
       readEpicCanvasDropTargetData({
-        kind: "left-panel-group",
+        kind: "left-panel-body",
         viewTabId: "tab-a",
-        panelIds: ["chats", "git-diff"],
+        panelId: "chats",
       }),
     ).toEqual({
-      kind: "left-panel-group",
+      kind: "left-panel-body",
       viewTabId: "tab-a",
-      panelIds: ["chats", "git-diff"],
+      panelId: "chats",
     });
   });
 
@@ -620,14 +617,15 @@ describe("epic canvas dnd-kit data guards", () => {
     ).toBeNull();
     expect(
       readEpicCanvasDropTargetData({
-        kind: "left-panel-group",
-        panelIds: ["chats", "source-control"],
+        kind: "left-panel-body",
+        viewTabId: "tab-a",
+        panelId: "source-control",
       }),
     ).toBeNull();
     expect(
       readEpicCanvasDropTargetData({
-        kind: "left-panel-group",
-        panelIds: ["chats", "chats"],
+        kind: "left-panel-body",
+        panelId: "chats",
       }),
     ).toBeNull();
   });
@@ -635,8 +633,8 @@ describe("epic canvas dnd-kit data guards", () => {
 
 describe("getLeftPanelRailDropPositionOnAxis", () => {
   // Width (36) and height (30) deliberately differ, so a call site that reads
-  // the wrong extent for its axis lands in a different band instead of
-  // silently agreeing.
+  // the wrong extent for its axis lands on the wrong band instead of silently
+  // agreeing.
   const rect = {
     left: 0,
     top: 10,
@@ -644,43 +642,43 @@ describe("getLeftPanelRailDropPositionOnAxis", () => {
     height: 30,
   };
 
-  it("bands the x axis across the rect's WIDTH, not its height", () => {
-    // 30% of the 36px width is 10.8, but 30% of the 30px height is only 9 -
-    // offset 10 clears the height threshold already, so this only reads
-    // "before" when the width is what gets consulted.
+  it("splits the x axis at the rect's WIDTH bands, not its height", () => {
+    // 30% / 70% of the 36px width is 10.8 / 25.2; of the 30px height it is
+    // 9 / 21. Offset 10 sits in the width's "before" band but the height's
+    // "combine" band, and offset 22 sits in the width's "combine" band but
+    // the height's "after" band - so a call site that reads the wrong extent
+    // for its axis lands on the wrong band instead of silently agreeing.
     expect(
       getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, rect, "x"),
     ).toBe("before");
-    // 70% of the width is 25.2, 70% of the height is 21 - offset 23 clears
-    // the height threshold but not the width one, so reading height for x
-    // would answer "after" here instead of "combine".
     expect(
-      getLeftPanelRailDropPositionOnAxis({ x: 23, y: 25 }, rect, "x"),
+      getLeftPanelRailDropPositionOnAxis({ x: 22, y: 25 }, rect, "x"),
     ).toBe("combine");
-    expect(
-      getLeftPanelRailDropPositionOnAxis({ x: 30, y: 25 }, rect, "x"),
-    ).toBe("after");
   });
 
-  it("bands the y axis across the rect's HEIGHT", () => {
-    expect(
-      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 11 }, rect, "y"),
-    ).toBe("before");
-    expect(
-      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, rect, "y"),
-    ).toBe("combine");
-    expect(
-      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 39 }, rect, "y"),
-    ).toBe("after");
-  });
-
-  it("returns combine for a null rect on both axes", () => {
-    expect(
-      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, null, "x"),
-    ).toBe("combine");
-    expect(
-      getLeftPanelRailDropPositionOnAxis({ x: 10, y: 25 }, null, "y"),
-    ).toBe("combine");
+  it("splits the y axis at the rect's HEIGHT into three bands - before, combine, after (L-168)", () => {
+    // The outer 30% at each end reorders, and the middle 40% answers
+    // "combine" - joining the two panels into a stack. Of the 30px height
+    // that is offsets 0-8 before, 9-21 combine and 22-29 after; the width
+    // (36px) would put the edges at 10.8 and 25.2 instead, so the boundary
+    // rows also catch a call site reading the wrong extent.
+    const expectedByOffset = [
+      [0, "before"],
+      [8, "before"],
+      [9, "combine"],
+      [21, "combine"],
+      [22, "after"],
+      [29, "after"],
+    ] as const;
+    for (const [offset, expected] of expectedByOffset) {
+      expect(
+        getLeftPanelRailDropPositionOnAxis(
+          { x: 10, y: rect.top + offset },
+          rect,
+          "y",
+        ),
+      ).toBe(expected);
+    }
   });
 });
 
@@ -732,8 +730,8 @@ describe("getArtifactTabDropIndexFromPoint", () => {
     expect(
       getArtifactTabDropIndexFromPoint(
         {
-          kind: "left-panel-group",
-          panelIds: ["chats", "git-diff"],
+          kind: "left-panel-body",
+          panelId: "chats",
         },
         rect,
         20,
@@ -833,13 +831,13 @@ describe("getEpicCanvasDropPreview", () => {
           orientation: "vertical",
         },
         rect,
-        { x: 20, y: 50 },
+        { x: 20, y: 80 },
         false,
       ),
     ).toEqual({
       kind: "left-panel-rail",
       panelId: "artifacts",
-      position: "combine",
+      position: "after",
     });
     expect(
       getEpicCanvasDropPreview(
@@ -853,156 +851,40 @@ describe("getEpicCanvasDropPreview", () => {
     ).toEqual({
       kind: "left-panel-rail-list",
     });
+    // A drop anywhere on the open body means INTO the displayed stack
+    // (L-182): the same combine preview a middle-band drop on its rail icon
+    // takes, aimed at the target's own panelId (the stack's top).
     expect(
       getEpicCanvasDropPreview(
         {
-          kind: "left-panel-group",
-          panelIds: ["chats", "git-diff"],
+          kind: "left-panel-body",
+          panelId: "chats",
         },
         rect,
         { x: 20, y: 50 },
         false,
       ),
-    ).toBeNull();
-  });
-
-  // A rail slot is square, so which axis the bands run along is decided by the
-  // target's orientation and nothing else - the same point resolves
-  // differently on the two rails.
-  const railSlot = { left: 0, top: 0, width: 36, height: 36 };
-  /** Leading band, middle band, trailing band of the 36px slot. */
-  const bandOffsets = [4, 18, 32];
-  /** Offsets across the axis NOT being read - none of them may matter. */
-  const offAxisOffsets = [2, 18, 34];
-
-  it("bands a horizontal rail item across its width, at any pointer height", () => {
-    for (const y of offAxisOffsets) {
-      const positions = bandOffsets.map((x) =>
-        getEpicCanvasDropPreview(
-          {
-            kind: "left-panel-rail-item",
-            panelId: "artifacts",
-            orientation: "horizontal",
-          },
-          railSlot,
-          { x, y },
-          false,
-        ),
-      );
-      expect(positions).toEqual([
-        { kind: "left-panel-rail", panelId: "artifacts", position: "before" },
-        { kind: "left-panel-rail", panelId: "artifacts", position: "combine" },
-        { kind: "left-panel-rail", panelId: "artifacts", position: "after" },
-      ]);
-    }
-  });
-
-  it("keeps banding a vertical rail item down its height", () => {
-    for (const x of offAxisOffsets) {
-      const positions = bandOffsets.map((y) =>
-        getEpicCanvasDropPreview(
-          {
-            kind: "left-panel-rail-item",
-            panelId: "artifacts",
-            orientation: "vertical",
-          },
-          railSlot,
-          { x, y },
-          false,
-        ),
-      );
-      expect(positions).toEqual([
-        { kind: "left-panel-rail", panelId: "artifacts", position: "before" },
-        { kind: "left-panel-rail", panelId: "artifacts", position: "combine" },
-        { kind: "left-panel-rail", panelId: "artifacts", position: "after" },
-      ]);
-    }
-  });
-
-  it("resolves grouped left panel insertion by nearest section boundary", () => {
-    const target: Extract<
-      EpicCanvasDropTargetData,
-      { readonly kind: "left-panel-group" }
-    > = {
-      kind: "left-panel-group",
-      panelIds: ["chats", "git-diff", "file-tree"],
-    };
-    const sectionRects: ReadonlyArray<LeftPanelSectionRect> = [
-      {
-        panelId: "chats",
-        rect: { left: 0, top: 0, width: 320, height: 700 },
-      },
-      {
-        panelId: "git-diff",
-        rect: { left: 0, top: 700, width: 320, height: 420 },
-      },
-      {
-        panelId: "file-tree",
-        rect: { left: 0, top: 1120, width: 320, height: 300 },
-      },
-    ];
-
-    expect(
-      getLeftPanelGroupDropPreview(target, sectionRects, { x: 20, y: 620 }),
     ).toEqual({
-      kind: "left-panel-section",
-      panelId: "git-diff",
-      position: "before",
-    });
-    expect(
-      getLeftPanelGroupDropPreview(target, sectionRects, { x: 20, y: 1370 }),
-    ).toEqual({
-      kind: "left-panel-section",
-      panelId: "file-tree",
-      position: "after",
-    });
-    expect(
-      getLeftPanelGroupDropPreview(target, sectionRects, { x: 20, y: 1080 }),
-    ).toEqual({
-      kind: "left-panel-section",
-      panelId: "file-tree",
-      position: "before",
+      kind: "left-panel-rail",
+      panelId: "chats",
+      position: "combine",
     });
   });
 
-  it("resolves grouped left panel insertion when the dragged source section is omitted", () => {
-    const target: Extract<
-      EpicCanvasDropTargetData,
-      { readonly kind: "left-panel-group" }
-    > = {
-      kind: "left-panel-group",
-      panelIds: ["chats", "artifacts"],
-    };
-
+  // R5R-08: an unmeasured rail slot commits nothing rather than defaulting to
+  // "before" - the caller could not read where the pointer actually was.
+  it("returns no preview for a left panel rail item with no measured rect", () => {
     expect(
-      getLeftPanelGroupDropPreview(
-        target,
-        [
-          {
-            panelId: "artifacts",
-            rect: { left: 0, top: 300, width: 320, height: 400 },
-          },
-        ],
-        { x: 20, y: 310 },
+      getEpicCanvasDropPreview(
+        {
+          kind: "left-panel-rail-item",
+          panelId: "artifacts",
+          orientation: "vertical",
+        },
+        null,
+        { x: 20, y: 50 },
+        false,
       ),
-    ).toEqual({
-      kind: "left-panel-section",
-      panelId: "artifacts",
-      position: "before",
-    });
-  });
-
-  it("returns no grouped left panel insertion when no sections are measured", () => {
-    const target: Extract<
-      EpicCanvasDropTargetData,
-      { readonly kind: "left-panel-group" }
-    > = {
-      kind: "left-panel-group",
-      panelIds: ["chats"],
-    };
-
-    expect(
-      getLeftPanelGroupDropPreview(target, [], { x: 20, y: 20 }),
     ).toBeNull();
   });
 

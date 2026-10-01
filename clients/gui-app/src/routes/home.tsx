@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireSignedIn } from "@/lib/router-auth";
-import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import { HomeRoute } from "./home-route-components";
 
 export const Route = createFileRoute("/home")({

@@ -15,9 +15,10 @@ import {
   type SnapshotChatEvent,
   type SnapshotContentBlock,
 } from "@traycer/protocol/persistence/chat-sync/open-harness";
-import { chatEventTypeSchema } from "@traycer/protocol/persistence/epic/chat-events";
+import { CHAT_EVENT_TYPES } from "@traycer/protocol/persistence/epic/chat-events";
 import { assistantMessageSchema } from "@traycer/protocol/persistence/epic/messages";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The id-keyed leaves of a published chat: messages, their content blocks, and
@@ -71,12 +72,14 @@ export const KNOWN_CONTENT_BLOCK_TYPES = [
   "artifact_operation",
 ] as const;
 
-export const preservedContentBlockSchema = definePreservedVariant({
-  discriminant: "type",
-  knownVariants: KNOWN_CONTENT_BLOCK_TYPES,
-  knownSchema: snapshotContentBlockSchema,
-  label: "content block",
-});
+export const preservedContentBlockSchema = lazySchema(() =>
+  definePreservedVariant({
+    discriminant: "type",
+    knownVariants: KNOWN_CONTENT_BLOCK_TYPES,
+    knownSchema: snapshotContentBlockSchema,
+    label: "content block",
+  }),
+);
 export type PreservedContentBlock = PreservedVariant<SnapshotContentBlock>;
 
 /**
@@ -106,29 +109,35 @@ export function preserveContentBlock(
  * type. A hand copy could go stale on a field type while still passing a
  * name-only parity check.
  */
-export const chatSyncAssistantMessageSchema = z.object({
-  ...assistantMessageSchema.shape,
-  sender: snapshotAgentSenderSchema,
-  blocks: z.array(preservedContentBlockSchema),
-});
+export const chatSyncAssistantMessageSchema = lazySchema(() =>
+  z.object({
+    ...assistantMessageSchema.shape,
+    sender: snapshotAgentSenderSchema,
+    blocks: z.array(preservedContentBlockSchema),
+  }),
+);
 export type ChatSyncAssistantMessage = z.infer<
   typeof chatSyncAssistantMessageSchema
 >;
 
-export const chatSyncMessageSchema = z.discriminatedUnion("role", [
-  snapshotUserMessageSchema,
-  chatSyncAssistantMessageSchema,
-]);
+export const chatSyncMessageSchema = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    snapshotUserMessageSchema,
+    chatSyncAssistantMessageSchema,
+  ]),
+);
 export type ChatSyncMessage = z.infer<typeof chatSyncMessageSchema>;
 
 export const KNOWN_CHAT_MESSAGE_ROLES = ["user", "assistant"] as const;
 
-export const preservedChatMessageSchema = definePreservedVariant({
-  discriminant: "role",
-  knownVariants: KNOWN_CHAT_MESSAGE_ROLES,
-  knownSchema: chatSyncMessageSchema,
-  label: "chat message",
-});
+export const preservedChatMessageSchema = lazySchema(() =>
+  definePreservedVariant({
+    discriminant: "role",
+    knownVariants: KNOWN_CHAT_MESSAGE_ROLES,
+    knownSchema: chatSyncMessageSchema,
+    label: "chat message",
+  }),
+);
 export type PreservedChatMessage = PreservedVariant<ChatSyncMessage>;
 
 export function preserveChatMessage(
@@ -149,14 +158,16 @@ export function preserveChatMessage(
  * carrier reclassifies that to a minor, for the same reason it does for
  * content-block types.
  */
-export const KNOWN_CHAT_EVENT_TYPES = chatEventTypeSchema.options;
+export const KNOWN_CHAT_EVENT_TYPES = CHAT_EVENT_TYPES;
 
-export const preservedChatEventSchema = definePreservedVariant({
-  discriminant: "type",
-  knownVariants: KNOWN_CHAT_EVENT_TYPES,
-  knownSchema: snapshotChatEventSchema,
-  label: "chat event",
-});
+export const preservedChatEventSchema = lazySchema(() =>
+  definePreservedVariant({
+    discriminant: "type",
+    knownVariants: KNOWN_CHAT_EVENT_TYPES,
+    knownSchema: snapshotChatEventSchema,
+    label: "chat event",
+  }),
+);
 export type PreservedChatEvent = PreservedVariant<SnapshotChatEvent>;
 
 export function preserveChatEvent(

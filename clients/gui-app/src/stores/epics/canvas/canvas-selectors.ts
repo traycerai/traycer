@@ -17,7 +17,7 @@ import {
 } from "./types";
 import { isTileRefRecordBacked } from "./tile-schema";
 import { browserSessionTileId } from "./tile-schema/browser-tile";
-import { findPaneById } from "./tile-tree";
+import { collectPanes, findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
 import {
   findPaneTabByContentId,
@@ -507,6 +507,59 @@ export function useOpenTileContentIds(
     );
     return ids.length === 0 ? EMPTY_CONTENT_IDS : new Set(ids);
   }, [tiles]);
+}
+
+const EMPTY_CHAT_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Chat ids open as a tile ANYWHERE in this window - every view tab IN THE
+ * HEADER STRIP, every pane, background strip tabs included (a click away, not
+ * somewhere else). The drafts list reads it to mark a row `Open`, which is a
+ * question about the whole window rather than the tab the popover happens to
+ * be in.
+ *
+ * Content ids, not instance ids: the same chat can be open in two tiles and
+ * the caller wants one answer.
+ */
+export function selectOpenChatIds(state: EpicCanvasStore): ReadonlySet<string> {
+  const ids = collectOpenChatIdList(state);
+  return ids.length === 0 ? EMPTY_CHAT_IDS : new Set(ids);
+}
+
+// The list form exists for the hook below: `useShallow` compares an ARRAY
+// element-wise, so the memoized Set is rebuilt only when the ids really move.
+// SORTED for exactly that reason - the walk yields traversal order, so
+// dragging a tab within its pane (or between panes) would otherwise hand the
+// shallow compare a permuted array with identical membership and mint a new
+// Set on a change the answer does not depend on.
+//
+// Driven by `openTabOrder`, NOT by the `canvasByTabId` map: `closeTab` drops
+// the tab from the order and deliberately keeps its canvas so reopening can
+// restore it, so a walk over the map badges chats in tabs the user closed.
+// Background tabs are unaffected - they are still in the order.
+function collectOpenChatIdList(state: EpicCanvasStore): ReadonlyArray<string> {
+  const ids = new Set<string>();
+  for (const tabId of state.openTabOrder) {
+    const canvas = state.canvasByTabId[tabId];
+    if (canvas === undefined) continue;
+    for (const pane of collectPanes(canvas.root)) {
+      for (const instanceId of pane.tabInstanceIds) {
+        const ref = canvas.tilesByInstanceId[instanceId];
+        if (ref === undefined || ref.type !== "chat") continue;
+        ids.add(ref.id);
+      }
+    }
+  }
+  return [...ids].sort();
+}
+
+/** {@link selectOpenChatIds} as a hook, stable by CONTENTS across renders. */
+export function useOpenChatIds(): ReadonlySet<string> {
+  const ids = useEpicCanvasStore(useShallow(collectOpenChatIdList));
+  return useMemo(
+    () => (ids.length === 0 ? EMPTY_CHAT_IDS : new Set(ids)),
+    [ids],
+  );
 }
 
 /**

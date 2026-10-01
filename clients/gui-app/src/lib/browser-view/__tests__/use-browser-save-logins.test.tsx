@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import {
@@ -21,10 +21,19 @@ afterEach(() => {
 
 function Probe(props: { readonly bridge: BrowserViewBridge }) {
   const saveLogins = useBrowserSaveLogins(props.bridge);
+  const [settled, setSettled] = useState("unset");
   return (
     <div>
       <span data-testid="enabled">{String(saveLogins.enabled)}</span>
-      <button type="button" onClick={() => saveLogins.setEnabled(false)}>
+      <span data-testid="settled">{settled}</span>
+      <button
+        type="button"
+        onClick={() => {
+          void saveLogins
+            .setEnabled(false)
+            .then((value) => setSettled(String(value)));
+        }}
+      >
         turn off
       </button>
     </div>
@@ -84,6 +93,8 @@ describe("useBrowserSaveLogins", () => {
     await waitFor(() => {
       expect(screen.getByTestId("enabled").textContent).toBe("false");
     });
+    // The caller hears the value the machine kept, not the one it asked for.
+    expect(screen.getByTestId("settled").textContent).toBe("false");
   });
 
   it("leaves the last known value when a set rejects", async () => {
@@ -105,6 +116,10 @@ describe("useBrowserSaveLogins", () => {
     // refetch the failure triggers is what puts the toggle back.
     await waitFor(() => {
       expect(screen.getByTestId("enabled").textContent).toBe("true");
+    });
+    // A refused write settled nothing, and says so instead of throwing.
+    await waitFor(() => {
+      expect(screen.getByTestId("settled").textContent).toBe("null");
     });
   });
 

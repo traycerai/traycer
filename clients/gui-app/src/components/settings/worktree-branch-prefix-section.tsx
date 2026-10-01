@@ -227,7 +227,12 @@ export function WorktreeBranchPrefixSection(): ReactNode {
             would close the inset and break focus order instead: the slot holds
             a labelled button, so the eye would reach the field first while the
             keyboard and a screen reader still reached Reset first. */}
-        <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5 max-md:w-full">
+        <div
+          className={cn(
+            "flex max-w-full shrink-0 flex-wrap items-center gap-1.5",
+            SETTINGS_ROW_STACK.controlLine,
+          )}
+        >
           <div className="flex size-7 shrink-0 items-center justify-center">
             {showReset ? (
               <TooltipWrapper

@@ -41,10 +41,6 @@ const state = vi.hoisted(() => ({
       maxVersionsPerArtifact: 100,
       maxBytesPerArtifact: 16 * 1024 * 1024,
     },
-    storage: {
-      referencedBytes: 2 * 1024 * 1024,
-      reclaimableBytes: 1024 * 1024,
-    },
   } satisfies ArtifactVersionSettingsGetResponse,
 }));
 
@@ -106,10 +102,6 @@ describe("<ArtifactVersionSettingsSection />", () => {
         maxVersionsPerArtifact: 100,
         maxBytesPerArtifact: 16 * 1024 * 1024,
       },
-      storage: {
-        referencedBytes: 2 * 1024 * 1024,
-        reclaimableBytes: 1024 * 1024,
-      },
     };
   });
 
@@ -126,28 +118,22 @@ describe("<ArtifactVersionSettingsSection />", () => {
     expect(screen.queryByTestId("artifact-version-settings")).toBeNull();
   });
 
-  it("shows referenced and reclaimable storage without conflating them", () => {
+  it("opens the clear confirmation", () => {
     renderSettings();
 
-    expect(screen.getByText("2.0 MB referenced")).toBeTruthy();
-    expect(screen.getByText("1.0 MB reclaimable")).toBeTruthy();
-  });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Clear version history…" }),
+    );
 
-  it("can clear version records when checkpoint ownership leaves no reclaimable bytes", () => {
-    state.snapshot = {
-      ...state.snapshot,
-      storage: {
-        referencedBytes: 2 * 1024 * 1024,
-        reclaimableBytes: 0,
-      },
-    };
-
-    renderSettings();
-
-    const clearButton = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Clear version history…",
-    });
-    expect(clearButton.disabled).toBe(false);
+    expect(
+      screen.getByRole("heading", { name: "Clear version history?" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Every saved version is removed from this host and, on a Sync plan, from the cloud. Undo for agent turns is unaffected. This cannot be undone.",
+      ),
+    ).toBeTruthy();
+    expect(state.mutationCalls).toEqual([]);
   });
 
   it("explains each destructive settings confirmation before mutation", () => {
@@ -191,7 +177,7 @@ describe("<ArtifactVersionSettingsSection />", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "1.0 MB is reclaimable and will be removed. Checkpoint-owned blobs remain because checkpoints still reference them.",
+        "Every saved version is removed from this host and, on a Sync plan, from the cloud. Undo for agent turns is unaffected. This cannot be undone.",
       ),
     ).toBeTruthy();
     expect(state.mutationCalls).toEqual([]);
@@ -243,9 +229,7 @@ describe("<ArtifactVersionSettingsSection />", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Clear version history…" }),
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Clear reclaimable history" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
 
     expect(state.mutationCalls).toEqual([
       {
@@ -267,7 +251,7 @@ describe("<ArtifactVersionSettingsSection />", () => {
     ]);
   });
 
-  it("shows command results while deferring fields and storage to a later query result", () => {
+  it("shows command results while deferring fields to a later query result", () => {
     const { rerender } = render(
       <ArtifactVersionSettingsSection client={null} hostId="host-a" enabled />,
     );
@@ -290,10 +274,6 @@ describe("<ArtifactVersionSettingsSection />", () => {
         retentionDays: 7,
         maxVersionsPerArtifact: 100,
         maxBytesPerArtifact: 16 * 1024 * 1024,
-      },
-      storage: {
-        referencedBytes: 2 * 1024 * 1024,
-        reclaimableBytes: 512 * 1024,
       },
       effects: {
         captureStopped: false,
@@ -324,16 +304,11 @@ describe("<ArtifactVersionSettingsSection />", () => {
         maxVersionsPerArtifact: 250,
         maxBytesPerArtifact: 32 * 1024 * 1024,
       },
-      storage: {
-        referencedBytes: 2 * 1024 * 1024,
-        reclaimableBytes: 256 * 1024,
-      },
     };
     rerender(
       <ArtifactVersionSettingsSection client={null} hostId="host-a" enabled />,
     );
 
-    expect(screen.getByText("256.0 KB reclaimable")).toBeTruthy();
     expect(screen.getByLabelText<HTMLInputElement>("Days").value).toBe("21");
     expect(screen.getByLabelText<HTMLInputElement>("Versions").value).toBe(
       "250",

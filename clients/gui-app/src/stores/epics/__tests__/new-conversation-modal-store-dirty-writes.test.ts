@@ -56,6 +56,8 @@ function patchWith(content: JsonContent): NewConversationModalDraftPatch {
     settings: null,
     composerMode: null,
     workspace: null,
+    epicTitle: null,
+    ownerHostId: null,
     revision: 1,
     draftId: "draft-new-chat-pending",
     hostRevision: 0,

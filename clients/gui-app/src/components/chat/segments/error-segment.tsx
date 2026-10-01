@@ -2,11 +2,25 @@ import { useCallback } from "react";
 import { AlertTriangle } from "lucide-react";
 import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
-import type { AgentFailure } from "@traycer/protocol/persistence/epic/content-blocks";
-import { FallbackNoticeSettingsLink } from "@/components/chat/fallback/fallback-notice-attribution";
+import type {
+  AgentFailure,
+  AgentFailureReason,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
+import {
+  RoutingSettledCard,
+  type RoutingSettledNotice,
+} from "@/components/chat/fallback/routing-settled-card";
+import { routingSettledReportText } from "@/components/chat/fallback/routing-receipt";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
+import {
+  agentFailureHeadline,
+  agentFailurePresentation,
+  presentationForUntypedCode,
+  type AgentFailurePresentation,
+} from "@/components/chat/segments/agent-failure-presentation";
+import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { buildReportIssueDraftContext } from "@/lib/report-issue-draft-context";
 import { capturePersistedAgentError } from "@/lib/report-issue-error-capture";
@@ -40,7 +54,13 @@ function EnvCredentialSettingsAction({
       focus.setFocusHarnessId(harnessId);
       focus.setFocusTab("env");
     }
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   }, [harnessId, openSettings]);
   return (
     <div className="mt-1 flex">
@@ -63,10 +83,9 @@ interface ErrorSegmentProps {
    * The host's typed description of why the turn died, or `null` on a row from
    * before the payload existed (or one no turn produced).
    *
-   * What it decides here is which remedy the row offers. A signed-out failure
-   * gets the fallback policy link and nothing more - the re-auth banner is the
-   * path back, and a second "retry" beside it would send the same request to
-   * the same dead account.
+   * What it decides here is how the row presents, and which action leads on
+   * the failed-turn card: Switch after a rate limit or billing stop, Retry
+   * after anything else, a sign-out included (spec Flow 4).
    */
   failure: AgentFailure | null;
   /**
@@ -76,21 +95,84 @@ interface ErrorSegmentProps {
    * attempts offers them once rather than three times.
    */
   turnId: string | null;
+  /**
+   * The settled routing notice this row absorbs, or `null` - set only on the
+   * anchor error of a row the projection paired with a receipt-carrying notice
+   * (`ChatMessage.routingSettledNoticeId`). The row then renders the settled
+   * card instead of the plain failed-turn card.
+   */
+  settledNotice: RoutingSettledNotice | null;
+  /** The absorbed notice's own find unit, painted by the settled card. */
+  settledNoticeFindUnitId: string | null;
 }
 
 /**
- * The one remedy an `auth` failure's row offers.
+ * How the row presents, and its headline when it is an interruption.
  *
- * Deliberately a LINK and not an action. The chat is signed out of the account
- * this turn ran on: a retry would fail identically, and a switch would be the
- * fallback policy's decision to make rather than a button's. What the row can
- * usefully say is where the policy that governs the next failure lives - the
- * composer's re-auth banner owns the actual way back in.
+ * A typed reason decides it; a row with none is red unless its CODE is one the
+ * client can vouch for (`presentationForUntypedCode` - a torn-down session is
+ * "Session ended", not an error).
  */
-function FallbackAuthSettingsAction() {
+function errorRowPresentation(
+  reason: AgentFailureReason | null,
+  code: string | null,
+): {
+  readonly presentation: AgentFailurePresentation;
+  readonly headline: string | null;
+} {
+  if (reason === null) {
+    const untyped = presentationForUntypedCode(code);
+    if (untyped !== null) return untyped;
+  }
+  return {
+    presentation: agentFailurePresentation(reason),
+    headline: agentFailureHeadline(reason),
+  };
+}
+
+/**
+ * The row's first line: either the failure's own name, or the ERROR overline.
+ *
+ * `headline` non-null is the INTERRUPTED row and carries the reason in the same
+ * words every other routing surface uses for it - "Rate limit reached" is what
+ * the countdown card's chip says, what the per-error settings row is called,
+ * and what the transcript notice says afterwards. Sentence case, in the warning
+ * foreground, because nothing is broken.
+ *
+ * `null` keeps what the row always had. The uppercase overline and the raw code
+ * chip belong to a turn that genuinely died, where the code is the most useful
+ * thing on screen for whoever ends up reading the bug report. On the
+ * interrupted row that same chip put `rate_limit` in red monospace as the
+ * loudest element on a card about an account being out of quota - a raw reason
+ * code in front of a user, which the routing vocabulary bans everywhere else.
+ * The report-issue action still captures the code either way.
+ */
+function ErrorSegmentHeading({
+  headline,
+  harnessId,
+  code,
+}: {
+  readonly headline: string | null;
+  readonly harnessId: GuiHarnessId | null;
+  readonly code: string | null;
+}) {
+  if (headline !== null) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-warning-foreground">{headline}</span>
+      </div>
+    );
+  }
   return (
-    <div className="mt-1 flex">
-      <FallbackNoticeSettingsLink />
+    <div className="flex items-center gap-2">
+      <span className="text-overline font-semibold uppercase text-destructive">
+        {harnessId === "codex" ? "Codex turn failed" : "Error"}
+      </span>
+      {code !== null && code.length > 0 ? (
+        <span className="rounded border border-destructive/30 bg-destructive/10 px-1 font-mono text-code-xs text-destructive">
+          {code}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -98,6 +180,11 @@ function FallbackAuthSettingsAction() {
 // Static error row. Auth errors (`code: "auth"`) render here like any other
 // error - the durable transcript row is what keeps a headless (A2A-triggered)
 // auth failure visible after the composer's re-auth banner clears.
+//
+// Draws whatever error it is handed, the queue-pause notice included. Whether
+// the transcript hands that notice over is the transcript's call
+// (`hidden-transcript-notices.ts`): only the chat's session knows whether its
+// host publishes the pause reason the notice would repeat.
 export function ErrorSegment({
   code,
   findUnitId,
@@ -106,6 +193,8 @@ export function ErrorSegment({
   harnessId,
   failure,
   turnId,
+  settledNotice,
+  settledNoticeFindUnitId,
 }: ErrorSegmentProps) {
   // Built at CLICK time, never at render. This row is durable transcript: it
   // mounts whenever the chat is opened, which is one or more commits BEFORE
@@ -124,6 +213,12 @@ export function ErrorSegment({
   // public prefill stays null-bodied because both fields are host/harness-
   // supplied free text and the public context does no redaction (see the
   // hostile transcript-code test).
+  //
+  // On a settled row the routing record rides the same private message: the
+  // settled card draws none of it, so the report is the only place the raw
+  // hops and detail rows still go. Appended to the message rather than given
+  // a field of its own because `PrivateErrorCause` is the fixed shape desktop
+  // main forwards.
   const buildReportContext = useCallback(
     () =>
       buildReportIssueDraftContext(
@@ -133,47 +228,85 @@ export function ErrorSegment({
           code: null,
           source: "Chat",
         }),
-        capturePersistedAgentError({ message, code, recoverable }),
+        capturePersistedAgentError({
+          message:
+            settledNotice === null
+              ? message
+              : `${message}\n\n${routingSettledReportText(settledNotice)}`,
+          code,
+          recoverable,
+        }),
       ),
-    [code, message, recoverable],
+    [code, message, recoverable, settledNotice],
   );
+  const reportAction = (
+    <ReportIssueAction
+      context={buildReportContext}
+      presentation="icon"
+      className="-mt-1 -mr-1 shrink-0"
+    />
+  );
+  const actions =
+    turnId === null ? null : <FallbackManualRungActions turnId={turnId} />;
+  // Routing tried everything on this turn and settled: ONE card carrying the
+  // routing account and this row's actions, where this error was. The notice
+  // itself renders nothing beside it (`AssistantMessageBody`).
+  if (settledNotice !== null) {
+    return (
+      <RoutingSettledCard
+        notice={settledNotice}
+        noticeFindUnitId={settledNoticeFindUnitId}
+        reportAction={reportAction}
+        actions={actions}
+      />
+    );
+  }
+  // Which of the two rows this is. A provider refusing a turn is not a crash,
+  // and rendering it as one - red rule, uppercase ERROR, the raw reason code in
+  // a red monospace chip - made the commonest thing that happens to a working
+  // setup look like something broke. See `agent-failure-presentation.ts` for
+  // why this classification is its own question rather than routing eligibility
+  // reused for colour.
+  const { presentation, headline } = errorRowPresentation(
+    failure?.reason ?? null,
+    code,
+  );
+  const interrupted = presentation === "interrupted";
   return (
     <div
       data-chat-find-unit={findUnitId ?? undefined}
-      className="flex w-full flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-ui-sm"
+      data-failure-presentation={presentation}
+      className={cn(
+        "flex w-full flex-col gap-2 rounded-md border px-3 py-2 text-ui-sm",
+        // The status recipe (AGENTS.md "Status colors"), one class per role.
+        interrupted
+          ? "border-warning/30 bg-warning/10"
+          : "border-destructive/30 bg-destructive/5",
+      )}
     >
       <div className="flex items-start gap-2">
         <AlertTriangle
-          className="mt-0.5 size-3.5 shrink-0 text-destructive"
+          className={cn(
+            "mt-0.5 size-3.5 shrink-0",
+            interrupted ? "text-warning-foreground" : "text-destructive",
+          )}
           aria-hidden
         />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="text-overline font-semibold uppercase text-destructive">
-              {harnessId === "codex" ? "Codex turn failed" : "Error"}
-            </span>
-            {code !== null && code.length > 0 ? (
-              <span className="rounded border border-destructive/30 bg-destructive/10 px-1 font-mono text-code-xs text-destructive">
-                {code}
-              </span>
-            ) : null}
-          </div>
+          <ErrorSegmentHeading
+            headline={interrupted ? headline : null}
+            harnessId={harnessId}
+            code={code}
+          />
           <span className="whitespace-pre-wrap break-words text-foreground/90">
             {message}
           </span>
           {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
             <EnvCredentialSettingsAction harnessId={harnessId} />
           ) : null}
-          {failure?.reason === "auth" ? <FallbackAuthSettingsAction /> : null}
-          {turnId === null ? null : (
-            <FallbackManualRungActions turnId={turnId} />
-          )}
+          {actions}
         </div>
-        <ReportIssueAction
-          context={buildReportContext}
-          presentation="icon"
-          className="-mt-1 -mr-1 shrink-0"
-        />
+        {reportAction}
       </div>
     </div>
   );

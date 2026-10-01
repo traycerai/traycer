@@ -21,6 +21,16 @@ interface HostBindingMock {
   readonly hostClient: unknown;
   readonly directory: {
     readonly getLocalEntry: () => { readonly hostId: string } | null;
+    // `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+    // `HostBusyForceDeferDialog`) calls `useFocusModel()` ->
+    // `useConnectableHostIds()` -> `useHostDirectoryList()`, which reads
+    // `directory.list()` for its query and subscribes via
+    // `directory.onChange()` in an effect the moment either dialog opens.
+    // Neither answer matters to this suite; they just need to exist.
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -88,8 +98,8 @@ import {
   ExternalHostRestartTrigger,
   buildOverviewHostFixture,
   buildOverviewManagement,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -263,6 +273,8 @@ function bindingWith(hostClient: unknown): HostBindingMock {
         localHostIdMock.current === null
           ? null
           : { hostId: localHostIdMock.current },
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
     },
   };
 }
@@ -458,6 +470,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     expect(await screen.findByTestId("host-overview-updates")).toBeTruthy();
     expect(screen.queryByTestId("host-overview-updates-degraded")).toBeNull();
@@ -470,7 +483,8 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
         expectedHostId: HOST_ID,
       });
     });
-    fireEvent.click(await screen.findByText("Installation details"));
+    // The Install record is shown open: no disclosure to expand first.
+    await selectHostOverviewTab("installation");
     const installVersion = await screen.findByTestId(
       "settings-host-install-version",
     );
@@ -480,7 +494,6 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     const pencil = await screen.findByTestId("host-overview-edit-name");
     expect(pencil.getAttribute("data-degraded")).toBe("unsupported");
 
-    await openHostOverviewAdvanced();
     expect(
       await screen.findByTestId("host-overview-service-degraded"),
     ).toBeTruthy();
@@ -506,6 +519,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
@@ -545,6 +559,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     const updateNow = await screen.findByRole("button", { name: "Update now" });
@@ -841,6 +856,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
       extraHandshakeMethods: undefined,
       extra: undefined,
     });
+    await selectHostOverviewTab("updates");
 
     await screen.findByText(`v${BRIDGE_CHECK_VERSION} is available.`);
     expect(management.maintenanceUpdateCheck).toHaveBeenCalled();
@@ -1391,7 +1407,11 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
     });
     vi.mocked(management.runDoctorRepairIfIdle).mockResolvedValue({
       kind: "dispatched",
-      outcome: { kind: "failed", message: "converge failed" },
+      outcome: {
+        kind: "failed",
+        message: "converge failed",
+        errorCode: null,
+      },
     });
 
     await openHostOverviewMenu();

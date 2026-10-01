@@ -15,6 +15,11 @@ import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import { HostOverviewPanel } from "@/components/settings/panels/host-overview-panel";
+import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
+import {
+  useHostOverviewTabSelection,
+  type HostOverviewSelectTab,
+} from "@/components/settings/panels/host-overview-tab-state";
 import {
   fixActionLabel,
   parseFreePortInput,
@@ -36,10 +41,13 @@ import {
 } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsDensity } from "@/providers/settings-density-context";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { cn } from "@/lib/utils";
 import type {
   HostDoctorIssue as BridgeDoctorIssue,
   HostInstalledRecord,
   IHostManagement,
+  DoctorRepairDispatch,
   DoctorRepairIntent,
 } from "@traycer-clients/shared/platform/runner-host";
 import { use, type ReactNode } from "react";
@@ -68,18 +76,33 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
  */
 export function HostSettingsPanel() {
   const scope = useHostScope();
+  // The selected tab lives HERE, above the key below, and that split is the
+  // whole host-switch rule: every host has the same four tabs, so the page
+  // stays on the one the reader chose, while everything open for the previous
+  // host dies with the remount.
+  const { tab, selectTab, scopePending } = useHostOverviewTabSelection(scope);
   // Keyed by scoped host: every piece of page state below — an open restart
   // confirmation, a half-typed rename, a doctor sheet — belongs to ONE host.
   // Without this, a scope switch while a confirmation was open left the dialog
   // mounted and armed against the host the page had just moved away from.
   const scopeKey = scope.hostId ?? "unresolved";
-  return <HostSettingsPanelInner key={scopeKey} />;
+  // An open intent naming another machine moves the scope before paint; until
+  // it has, nothing mounts - and starts a read - against the machine the page
+  // is about to leave.
+  if (scopePending) return null;
+  return (
+    <HostSettingsPanelInner key={scopeKey} tab={tab} onSelectTab={selectTab} />
+  );
 }
 
-function HostSettingsPanelInner() {
+function HostSettingsPanelInner(props: {
+  readonly tab: HostOverviewTab;
+  readonly onSelectTab: HostOverviewSelectTab;
+}) {
   const scope = useHostScope();
   const runnerHost = useRunnerHost();
   const compact = useSettingsDensity() === "compact";
+  const isMobile = useIsMobileViewport();
   const management = runnerHost.hostManagement;
 
   // Re-provided so every hook beneath this resolves to the SELECTED host rather
@@ -155,12 +178,31 @@ function HostSettingsPanelInner() {
     compact,
     hasLocalBridge: management !== null && scopedIsLocalMachine,
     localRecoveryZone,
-    onLocalDoctorFix: (issue) => localDoctorFix.mutate(issue),
+    // `onApplied` rides the per-call `onSuccess`, and only an APPLIED outcome
+    // reaches it: a declined repair changed nothing, so the report still
+    // describes the machine, and a failed one lands in `onError` instead.
+    onLocalDoctorFix: (issue, onApplied) =>
+      localDoctorFix.mutate(issue, {
+        onSuccess: (outcome) => {
+          if (outcome.applied) onApplied();
+        },
+      }),
     localDoctorFixPendingCode: localDoctorFix.isPending
       ? localDoctorFix.variables.code
       : null,
+    tab: props.tab,
+    onSelectTab: props.onSelectTab,
   });
 
+  // The Providers scroll model, on desktop and only for the tabbed page:
+  // `fillHeight` bounds the page to the settings pane, the card below pins its
+  // header and tab bar, and only the active tab's body scrolls. The body card
+  // here is transparent - the host card inside it is the visible surface, and
+  // it is only as tall as its content, up to the pane. A phone has one scroll
+  // container already, the settings surface, so the page scrolls as one there,
+  // header included; the two page states without tabs scroll as they always
+  // have.
+  const pinned = !isMobile && !unresolved;
   const shell = (
     <SettingsPanelShell
       title="Overview"
@@ -168,7 +210,11 @@ function HostSettingsPanelInner() {
       // its Edit name control. Repeating it as the page title printed the same
       // string twice, two lines apart, and made the header look like a bug.
       description={description}
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+      fillHeight={pinned}
+      bodyClassName={cn(
+        "overflow-visible rounded-none border-none bg-transparent",
+        pinned && "flex flex-col",
+      )}
     >
       {body}
     </SettingsPanelShell>
@@ -248,8 +294,13 @@ function renderOverviewBody(input: {
   readonly hasLocalBridge: boolean;
   /** The empty-account uninstall carve-out; `null` in every other state. */
   readonly localRecoveryZone: ReactNode | null;
-  readonly onLocalDoctorFix: (issue: RpcDoctorIssue) => void;
+  readonly onLocalDoctorFix: (
+    issue: RpcDoctorIssue,
+    onApplied: () => void,
+  ) => void;
   readonly localDoctorFixPendingCode: string | null;
+  readonly tab: HostOverviewTab;
+  readonly onSelectTab: HostOverviewSelectTab;
 }): ReactNode {
   const { scope } = input;
   if (input.unresolved) {
@@ -277,6 +328,8 @@ function renderOverviewBody(input: {
       hasLocalBridge={input.hasLocalBridge}
       onLocalDoctorFix={input.onLocalDoctorFix}
       localDoctorFixPendingCode={input.localDoctorFixPendingCode}
+      tab={input.tab}
+      onSelectTab={input.onSelectTab}
     />
   );
 }
@@ -308,6 +361,30 @@ function renderOverviewBody(input: {
 type LocalDoctorFixOutcome =
   | { readonly applied: true; readonly declinedMessage: null }
   | { readonly applied: false; readonly declinedMessage: string };
+
+/**
+ * A refusing dispatch's answer as this sheet's outcome. `lane-busy`,
+ * `host-changed` and a `deferred` outcome all mean the repair did not run for
+ * a reason that is information rather than a failure - another actor holds
+ * the lane, the host was replaced, or the lane itself refused the intent
+ * (this app committed `none`, or the host was started in a terminal) - so
+ * each is a declined notice carrying its own message, never "Fix failed".
+ * Anything else that is not `ok` did fail.
+ */
+function settleDoctorDispatch(
+  dispatch: DoctorRepairDispatch,
+): LocalDoctorFixOutcome {
+  if (dispatch.kind !== "dispatched") {
+    return { applied: false, declinedMessage: dispatch.message };
+  }
+  if (dispatch.outcome.kind === "deferred") {
+    return { applied: false, declinedMessage: dispatch.outcome.message };
+  }
+  if (dispatch.outcome.kind !== "ok") {
+    throw new Error(dispatch.outcome.message);
+  }
+  return { applied: true, declinedMessage: null };
+}
 
 // Tripwire, never called: the query above is `enabled` only with a bridge.
 function skipInstalledRecord(): Promise<HostInstalledRecord | null> {
@@ -421,13 +498,7 @@ function useLocalDoctorFixMutation(
           ...input,
           expectedHostId: localHostId ?? "",
         });
-        if (dispatch.kind !== "dispatched") {
-          return { applied: false, declinedMessage: dispatch.message };
-        }
-        if (dispatch.outcome.kind !== "ok") {
-          throw new Error(dispatch.outcome.message);
-        }
-        return { applied: true, declinedMessage: null };
+        return settleDoctorDispatch(dispatch);
       }
       const repair = doctorRepairIntentFor(issue.fixAction);
       if (repair !== null && localHostId !== null) {
@@ -435,13 +506,7 @@ function useLocalDoctorFixMutation(
           repair,
           expectedHostId: localHostId,
         });
-        if (dispatch.kind !== "dispatched") {
-          return { applied: false, declinedMessage: dispatch.message };
-        }
-        if (dispatch.outcome.kind !== "ok") {
-          throw new Error(dispatch.outcome.message);
-        }
-        return { applied: true, declinedMessage: null };
+        return settleDoctorDispatch(dispatch);
       }
       // `localHostId` is null when this page's host is not this machine, and
       // an empty id is refused by every host that can name itself - the right

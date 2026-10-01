@@ -1,5 +1,38 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import {
+  isFoundTaskContext,
+  type GetTaskContextsResponse,
+  type ListTaskLight,
+  type TaskContextResolution,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -9,6 +42,18 @@ import { TabAppearanceMenu } from "../tab-appearance-menu";
 import { TabGroupChip } from "../tab-group-chip";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { HeaderTab } from "@/stores/tabs/types";
+import type { OrganizationContextValue } from "@/hooks/organization/organization-context";
+import type {
+  EpicTaskContexts,
+  UseEpicGetTaskContextsOptions,
+} from "@/hooks/epic/use-epic-get-task-contexts-query";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+interface OrganizationFixtureState {
+  organization: OrganizationContextValue | null;
+  loadTaskContext: Mock<() => Promise<GetTaskContextsResponse>>;
+}
 
 const navigation = vi.hoisted(() => ({ navigate: vi.fn(), open: vi.fn() }));
 vi.mock("@tanstack/react-router", () => ({
@@ -19,6 +64,51 @@ vi.mock("@/lib/tab-navigation", () => ({
 }));
 vi.mock("@/lib/commands/actions/new-epic", () => ({
   openNewEpicIntent: () => ({ kind: "new-epic" }),
+}));
+const organizationState = vi.hoisted((): OrganizationFixtureState => ({
+  organization: null,
+  loadTaskContext: vi.fn<() => Promise<GetTaskContextsResponse>>(),
+}));
+vi.mock("@/hooks/organization/organization-context", () => ({
+  useOrganization: () => organizationState.organization,
+}));
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: (
+    taskIds: readonly string[],
+    userId: string | null,
+    options: UseEpicGetTaskContextsOptions,
+  ): EpicTaskContexts => {
+    const query = useQuery(
+      queryOptions({
+        queryKey: hostQueryKeys.epicTaskContexts(
+          "host-1",
+          userId ?? "unknown-user",
+          taskIds,
+        ),
+        queryFn: organizationState.loadTaskContext,
+        enabled: options.enabled && userId !== null,
+        retry: false,
+      }),
+    );
+    // The query cache holds the wire response, as the real hook's does, so
+    // readers that scan other surfaces' cached batches see the real shape.
+    const tasksById = new Map<string, ListTaskLight>();
+    for (const [taskId, resolution] of Object.entries(
+      query.data?.tasks ?? {},
+    )) {
+      if (isFoundTaskContext(resolution))
+        tasksById.set(taskId, resolution.task);
+    }
+    return {
+      tasksById,
+      localHomedTaskIds: new Set(query.data?.localHomedTaskIds ?? []),
+      isFetching: query.isFetching,
+      isPending: query.isPending,
+      error: query.error,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
+    };
+  },
 }));
 
 const TAB: HeaderTab = {
@@ -36,13 +126,84 @@ const TAB: HeaderTab = {
 
 function renderMenu(): void {
   render(
-    <ContextMenu open>
-      <ContextMenuTrigger>Open</ContextMenuTrigger>
-      <ContextMenuContent>
-        <TabAppearanceMenu tab={TAB} />
-      </ContextMenuContent>
-    </ContextMenu>,
+    <QueryClientProvider client={queryClient}>
+      <ContextMenu open>
+        <ContextMenuTrigger>Open</ContextMenuTrigger>
+        <ContextMenuContent>
+          <TabAppearanceMenu tab={TAB} />
+        </ContextMenuContent>
+      </ContextMenu>
+    </QueryClientProvider>,
   );
+}
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false } },
+});
+const organizationClient = new HostClient<HostRpcRegistry>({
+  registry: hostRpcRegistry,
+  invalidator: { invalidateHostScope: () => undefined },
+  messenger: new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "request-1",
+    handlers: {},
+  }),
+});
+const activeHostId = vi
+  .spyOn(organizationClient, "getActiveHostId")
+  .mockReturnValue("host-1");
+vi.spyOn(organizationClient, "getRequestContextUserId").mockReturnValue(
+  "user-1",
+);
+
+function organizationFixture(): OrganizationContextValue {
+  return {
+    client: organizationClient,
+    supported: true,
+    userId: "user-1",
+    view: undefined,
+    register: () => () => undefined,
+    command: () => Promise.resolve(undefined),
+    refresh: () => Promise.resolve(undefined),
+    openDialog: () => undefined,
+  };
+}
+
+function remoteTask(epicId: string): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: "Alpha",
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "draft",
+        createdAt: 1,
+        updatedAt: 1,
+        createdBy: "user-1",
+        version: "1.0.0",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    pinned: false,
+  };
+}
+
+function taskContextsResponse(resolutions: {
+  readonly found: readonly string[];
+  readonly localHomed: readonly string[];
+}): GetTaskContextsResponse {
+  const tasks: GetTaskContextsResponse["tasks"] = {};
+  for (const epicId of resolutions.found) {
+    tasks[epicId] = { status: "found", task: remoteTask(epicId) };
+  }
+  return { tasks, localHomedTaskIds: [...resolutions.localHomed] };
 }
 
 describe("tab appearance and grouping controls", () => {
@@ -61,17 +222,306 @@ describe("tab appearance and grouping controls", () => {
         existing: { name: "Existing", color: "#81c995", collapsed: false },
       },
     });
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "user-1", username: "user-1" },
+    });
+    organizationState.loadTaskContext.mockReset();
   });
   afterEach(() => cleanup());
+
+  afterEach(() => {
+    organizationState.organization = null;
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+    queryClient.clear();
+  });
+
+  it("shows retry for task-context errors and restores authorized controls after recovery", async () => {
+    organizationState.organization = organizationFixture();
+    let resolveRecovery: (response: GetTaskContextsResponse) => void = () =>
+      undefined;
+    const recovery = new Promise<GetTaskContextsResponse>((resolve) => {
+      resolveRecovery = resolve;
+    });
+    organizationState.loadTaskContext
+      .mockRejectedValueOnce(new Error("task context failed"))
+      .mockImplementationOnce(() => recovery);
+    const refetchQueries = vi.spyOn(queryClient, "refetchQueries");
+    renderMenu();
+
+    const retry = await screen.findByRole("menuitem", {
+      name: /Couldn't load task organization\. Retry/i,
+    });
+    expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+    expect(screen.queryByText("Tab appearance")).toBeNull();
+
+    fireEvent.click(retry);
+    expect(refetchQueries).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.epicTaskContexts("host-1", "user-1", ["epic-a"]),
+      exact: true,
+      type: "active",
+    });
+    await waitFor(() =>
+      expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(2),
+    );
+    await act(async () => {
+      resolveRecovery(
+        taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+      );
+      await recovery;
+    });
+    expect(
+      await screen.findByRole("menuitem", { name: "Labels" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Retry/i })).toBeNull();
+    refetchQueries.mockRestore();
+  });
+
+  describe("task context already cached by another surface", () => {
+    // The tab strip resolves every open tab's context in one batch, which is a
+    // different cache entry from this tab's own single-task lookup.
+    const stripBatchKeyOnHost = (hostId: string, userId: string) =>
+      hostQueryKeys.epicTaskContexts(hostId, userId, ["epic-a", "epic-b"]);
+    const stripBatchKey = (userId: string) =>
+      stripBatchKeyOnHost("host-1", userId);
+
+    beforeEach(() => {
+      activeHostId.mockReturnValue("host-1");
+      organizationState.organization = organizationFixture();
+      // This tab's own lookup never answers, so whatever the menu shows comes
+      // from the other batch.
+      organizationState.loadTaskContext.mockReturnValue(
+        new Promise<GetTaskContextsResponse>(() => undefined),
+      );
+    });
+
+    it("shows the organization controls at once, before the tab's own lookup answers", () => {
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+      expect(
+        screen.getByRole("menuitem", { name: "Task appearance" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("menuitem", { name: "Add to group" }),
+      ).toBeTruthy();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+      expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the local tab appearance for a task the cached batch marks local-homed", () => {
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        taskContextsResponse({
+          found: ["epic-a", "epic-b"],
+          localHomed: ["epic-a"],
+        }),
+      );
+      renderMenu();
+
+      expect(screen.getByText("Tab appearance")).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+    });
+
+    it("lets the tab's own lookup take over once it answers", async () => {
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      let answerOwnLookup: (response: GetTaskContextsResponse) => void = () =>
+        undefined;
+      const ownLookup = new Promise<GetTaskContextsResponse>((resolve) => {
+        answerOwnLookup = resolve;
+      });
+      organizationState.loadTaskContext.mockReturnValue(ownLookup);
+      renderMenu();
+      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+
+      await act(async () => {
+        answerOwnLookup(
+          taskContextsResponse({ found: ["epic-a"], localHomed: ["epic-a"] }),
+        );
+        await ownLookup;
+      });
+
+      expect(await screen.findByText("Tab appearance")).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+    });
+
+    // A task deleted (or no longer visible) since the strip's batch was cached
+    // must not keep its controls once the tab's own, fresher lookup says so.
+    const unresolvedResolutions: readonly TaskContextResolution[] = [
+      { status: "confirmed-absent" },
+      { status: "unknown", reason: "not-found-or-not-permitted" },
+    ];
+    it.each(unresolvedResolutions)(
+      "drops the stand-in controls when the tab's own lookup settles as $status",
+      async (resolution) => {
+        queryClient.setQueryData(
+          stripBatchKey("user-1"),
+          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        );
+        let answerOwnLookup: (response: GetTaskContextsResponse) => void = () =>
+          undefined;
+        const ownLookup = new Promise<GetTaskContextsResponse>((resolve) => {
+          answerOwnLookup = resolve;
+        });
+        organizationState.loadTaskContext.mockReturnValue(ownLookup);
+        renderMenu();
+        expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+
+        await act(async () => {
+          answerOwnLookup({
+            tasks: { "epic-a": resolution },
+            localHomedTaskIds: [],
+          });
+          await ownLookup;
+        });
+
+        await waitFor(() =>
+          expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull(),
+        );
+        expect(
+          screen.queryByRole("menuitem", { name: "Task appearance" }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("menuitem", { name: "Add to group" }),
+        ).toBeNull();
+        expect(screen.queryByText("Tab appearance")).toBeNull();
+        expect(screen.queryByRole("menuitem", { name: /Retry/i })).toBeNull();
+      },
+    );
+
+    it.each(unresolvedResolutions)(
+      "keeps the controls away while the tab's own lookup refetches after settling as $status",
+      async (resolution) => {
+        queryClient.setQueryData(
+          stripBatchKey("user-1"),
+          taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+        );
+        // The first answer settles the lookup; every later call stays in
+        // flight, which is what a background refetch looks like to the menu.
+        organizationState.loadTaskContext
+          .mockResolvedValueOnce({
+            tasks: { "epic-a": resolution },
+            localHomedTaskIds: [],
+          })
+          .mockReturnValue(
+            new Promise<GetTaskContextsResponse>(() => undefined),
+          );
+        renderMenu();
+        await waitFor(() =>
+          expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull(),
+        );
+        const ownLookupKey = hostQueryKeys.epicTaskContexts(
+          "host-1",
+          "user-1",
+          ["epic-a"],
+        );
+
+        act(() => {
+          void queryClient.refetchQueries({
+            queryKey: ownLookupKey,
+            exact: true,
+          });
+        });
+
+        await waitFor(() =>
+          expect(organizationState.loadTaskContext).toHaveBeenCalledTimes(2),
+        );
+        expect(queryClient.isFetching({ queryKey: ownLookupKey })).toBe(1);
+        expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+        expect(
+          screen.queryByRole("menuitem", { name: "Task appearance" }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("menuitem", { name: "Add to group" }),
+        ).toBeNull();
+        expect(screen.queryByText("Tab appearance")).toBeNull();
+      },
+    );
+
+    it("offers no organization controls from a batch that did not resolve the task", () => {
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        taskContextsResponse({ found: ["epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+
+    it("ignores a batch cached for another account", () => {
+      queryClient.setQueryData(
+        stripBatchKey("user-2"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+
+    // Hosts can disagree about a task (whether it is local-homed, who can
+    // edit it), so only the host this tab's own lookup asks may stand in for it.
+    it("ignores a batch cached for another host", () => {
+      queryClient.setQueryData(
+        stripBatchKeyOnHost("host-2", "user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Task appearance" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Add to group" }),
+      ).toBeNull();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+
+    it("takes the tab's own host's answer when another host's batch disagrees", () => {
+      // Cached first, so a lookup that ignored the host would meet it first.
+      queryClient.setQueryData(
+        stripBatchKeyOnHost("host-2", "user-1"),
+        taskContextsResponse({
+          found: ["epic-a", "epic-b"],
+          localHomed: ["epic-a"],
+        }),
+      );
+      queryClient.setQueryData(
+        stripBatchKeyOnHost("host-1", "user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+
+    it("stands in with nothing while the client has no active host", () => {
+      activeHostId.mockReturnValue(null);
+      queryClient.setQueryData(
+        stripBatchKey("user-1"),
+        taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
+      );
+      renderMenu();
+
+      expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
+      expect(screen.queryByText("Tab appearance")).toBeNull();
+    });
+  });
 
   it("shows the appearance submenu and stores a color and manual icon", () => {
     renderMenu();
     fireEvent.click(screen.getByText("Tab appearance"));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Blue" }));
-    fireEvent.click(screen.getByText("Edit icon…"));
-    expect(document.activeElement).toBe(
-      screen.getByRole("textbox", { name: "Tab icon" }),
-    );
     fireEvent.change(screen.getByRole("textbox", { name: "Tab icon" }), {
       target: { value: "★" },
     });
@@ -90,6 +540,26 @@ describe("tab appearance and grouping controls", () => {
     expect(useTabsStore.getState().customizations?.["epic:tab-a"]?.color).toBe(
       "#123456",
     );
+  });
+
+  it("keeps a group's color unchanged when editing personal tab appearance", () => {
+    useTabsStore.setState({
+      customizations: {
+        "epic:tab-a": { color: null, icon: null, groupId: "existing" },
+      },
+    });
+    renderMenu();
+    fireEvent.click(screen.getByText("Tab appearance"));
+    fireEvent.change(screen.getByLabelText("Custom tab color"), {
+      target: { value: "#123456" },
+    });
+
+    expect(useTabsStore.getState().customizations?.["epic:tab-a"]?.color).toBe(
+      "#123456",
+    );
+    const groups = useTabsStore.getState().groups;
+    if (groups === undefined) throw new Error("Expected the existing group");
+    expect(groups.existing.color).toBe("#81c995");
   });
 
   it("creates a group and supports removing the tab from it", () => {
@@ -132,10 +602,13 @@ describe("tab appearance and grouping controls", () => {
     fireEvent.click(chip);
     expect(useTabsStore.getState().groups?.group.collapsed).toBe(true);
     fireEvent.contextMenu(chip);
-    fireEvent.change(screen.getByRole("textbox", { name: "Group name" }), {
+    const groupName = screen.getByRole("textbox", { name: "Group name" });
+    fireEvent.change(groupName, {
       target: { value: "Renamed" },
     });
+    fireEvent.keyDown(groupName, { key: "Enter" });
     expect(useTabsStore.getState().groups?.group.name).toBe("Renamed");
+    fireEvent.contextMenu(chip);
     fireEvent.click(screen.getByRole("button", { name: "Ungroup" }));
     expect(
       useTabsStore.getState().customizations?.["epic:tab-a"]?.groupId,

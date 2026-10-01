@@ -41,15 +41,16 @@ export interface IHostQueryInvalidator {
 /**
  * `refetchActive: false` marks the scope stale without refetching - an
  * identity transition, whose request context may already be gone.
- * `refetchActive: true` is a recovery sweep, and `recovery` names the edge
- * that fired it, which decides how much of the scope the sweep re-asks
- * (`AvailabilityRecoveryKind`).
+ * `refetchActive: true` is a host-scope sweep. `recovery` names how much of
+ * the scope it re-asks. A public-key rotation also invalidates replay-covered
+ * worktree reads: the former stream cannot vouch for a replacement machine.
  */
 export type HostQueryInvalidationOptions =
   | { readonly refetchActive: false }
   | {
       readonly refetchActive: true;
       readonly recovery: AvailabilityRecoveryKind;
+      readonly ignoreWorktreeReplayCoverage?: true;
     };
 
 /** One host-wide recovery sweep per window, with one trailing delivery. */
@@ -63,6 +64,7 @@ export const HOST_AVAILABILITY_SWEEP_WINDOW_MS = 10_000;
 interface PendingHostScopeSweep {
   emitChangeEvent: boolean;
   kind: AvailabilityRecoveryKind;
+  ignoreWorktreeReplayCoverage: boolean;
 }
 
 /**
@@ -78,6 +80,49 @@ interface HostAvailabilitySweepGate {
 
 /** Unsubscribe handle returned by `HostClient` event subscriptions. */
 export type HostClientUnsubscribe = () => void;
+
+/**
+ * Everything a caller may ask of ONE unary dispatch, in one object.
+ *
+ * The narrow entry points below (`requestWithSignal`,
+ * `requestWithIdempotencyKey`, `requestWithResponseTimeout`,
+ * `requestWithSignalRequiringHostMethodVersion`) each hard-code the three
+ * options they do not take, so no caller could combine a retry key with an
+ * extended budget, or a key with a version floor. Both combinations are now
+ * required by one flow: `drafts.putBlob` needs its digest key AND its 120 s
+ * budget, and `epic.create` needs its `epicId` key AND the `@1.2` floor that
+ * makes the keyed params byte-stable. This is that surface, and the narrow four
+ * are thin wrappers over it so there is exactly one place the messenger is
+ * called.
+ *
+ * EVERY FIELD IS REQUIRED, `null`/`undefined` included. A defaulted option here
+ * would be a silent policy: a caller that forgot the key would still dispatch,
+ * and the difference between "this call is replay-safe" and "nobody thought
+ * about it" is precisely what must not be inferred from an absent property.
+ */
+export interface HostRequestDispatchOptions {
+  /**
+   * Stable retry identity for a command. Read the allowlist note on
+   * {@link HostRequester.requestWithIdempotencyKey} before adding a caller.
+   */
+  readonly idempotencyKey: string | null;
+  /**
+   * Extended response-frame budget, validated against the method's scheduling
+   * policy entry. `null` keeps the transport default. A value the policy table
+   * does not declare for this method is refused before dispatch.
+   */
+  readonly responseTimeoutMs: number | null;
+  /**
+   * Version floor this dispatch's own handshake must clear, refused pre-send
+   * otherwise (`HostRequestOptions.requiredHostMethodVersion`).
+   */
+  readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
+  /**
+   * Caller cancellation. `undefined` is what the key and budget entry points
+   * have always passed; the version-floor one threads a real signal.
+   */
+  readonly signal: AbortSignal | undefined;
+}
 
 export interface HostClientChangeEvent {
   readonly previousHostId: string | null;
@@ -129,12 +174,39 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
   /**
    * Selects the transport-key path explicitly. A non-null key gives a command
    * a stable retry identity; `null` is the byte-equivalent no-key path used by
-   * {@link request}. Only the command queue may opt into a non-null key.
+   * {@link request}.
+   *
+   * THE ALLOWLIST, which is a review rule rather than a type: the command
+   * queue, the `epic.create` dispatch (keyed on the `epicId` it is creating,
+   * which is only stable because hash-only content keeps the params
+   * byte-identical across a replay) and `drafts.putBlob` (keyed on the blob's
+   * own sha256, so a replayed upload is the same upload). A key is a promise
+   * that a SECOND arrival of these bytes is the same intent; for anything else
+   * it is a way to have a command applied twice under one name.
+   *
+   * The latter two reach it through {@link requestWithOptions}, because each
+   * also needs a second option this entry point hard-codes.
    */
   requestWithIdempotencyKey<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     idempotencyKey: string | null,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
+  /**
+   * Every dispatch option at once (see {@link HostRequestDispatchOptions}), for
+   * the callers that need a combination the four narrow entry points cannot
+   * express - a retry key WITH an extended budget, or a retry key WITH a
+   * version floor.
+   *
+   * On the narrow requester surface, not only on the class, for the same reason
+   * `requestWithSignalRequiringHostMethodVersion` is: gui-app's mutation layer
+   * holds a requester and no `HostDirectoryEntry`, so an option it cannot
+   * express here is an option it silently does not apply.
+   */
+  requestWithOptions<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    options: HostRequestDispatchOptions,
   ): Promise<ResponseOfMethod<Registry, Method>>;
   requestWithSignal<Method extends keyof Registry & string>(
     method: Method,
@@ -403,7 +475,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           return readActiveHostId;
         }
         if (property === "request") {
-          // The entry is captured HERE, at property access, so all five
+          // The entry is captured HERE, at property access, so all six
           // request members resolve at the same instant.
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
@@ -424,6 +496,14 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
               params,
               idempotencyKey,
             );
+        }
+        if (property === "requestWithOptions") {
+          // Re-pointed like every other request member. Falling through to the
+          // generic bind below would reach `requestWithOptions` on the TARGET,
+          // which addresses no host (∅) and rejects at the preflight - i.e. the
+          // combined entry point would be the one option a routed facade could
+          // not express, which is exactly the failure its own doc warns about.
+          return target.requestForWithOptions.bind(target, resolveEntry());
         }
         if (property === "requestWithSignal") {
           return target.requestForWithSignal.bind(target, resolveEntry());
@@ -480,7 +560,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     const gate = this.hostAvailabilitySweepGates.get(hostId);
     if (gate === undefined) {
       const opened: HostAvailabilitySweepGate = {
-        sweep: this.deliverHostScopeSweep(hostId, true, kind),
+        sweep: this.deliverHostScopeSweep(hostId, true, kind, false),
         deferred: null,
       };
       this.hostAvailabilitySweepGates.set(hostId, opened);
@@ -490,7 +570,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     if (this.pendingHostScopeSweeps.get(hostId) === gate.sweep) {
       // The window's last sweep has not run yet, so this report is in its
       // tick: fold into it rather than owing a trailing sweep.
-      this.deliverHostScopeSweep(hostId, true, kind);
+      this.deliverHostScopeSweep(hostId, true, kind, false);
       return;
     }
     gate.deferred = mergeAvailabilityRecoveryKinds(gate.deferred, kind);
@@ -501,36 +581,22 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * invalidation {@link notifyHostAvailabilityRecovered} performs, with no
    * `"availability-recovered"` change event behind it.
    *
-   * TWO callers, and neither is reporting an availability recovery. The name
-   * says what the method does rather than why any one caller wants it, which
-   * is what lets both of them share it honestly:
-   *
-   *  1. A remote binding that owes a ready boundary for a host whose first
-   *     dial was still in flight. Routing that through the announcing form
-   *     would emit `"availability-recovered"`, and the runtime answers a
-   *     change by resetting the very binding delivering the news. Dropping it
-   *     instead is not an option either - `subscribeAvailabilityRecovered`
-   *     reports a RECOVERY, not current state, so a stream runtime attaching
-   *     afterwards to an already-ready session gets no replay and the queries
-   *     stranded by that dial never refetch.
-   *  2. A same-host public-key ROTATION (R-1): the host was rebuilt under its
-   *     own id, so everything cached for it describes a machine that is gone.
-   *     Nothing recovered availability there - the rotation rebuilds transport
-   *     on its own - and a reason-scoped consumer woken by an
-   *     `"availability-recovered"` it can only read as true would be acting on
-   *     an event that did not happen.
-   *
-   * This used to be `invalidateHostScopeForAvailability`, documented as
-   * existing for one caller. It has two, and a name naming one of their
-   * reasons would have to be replaced by the next one.
-   *
-   * It sweeps as a `"reconnect"` for both. A remote binding's owed ready
-   * boundary is a new session to that host, and a rotated host is a machine
-   * rebuilt under its own id, so neither can vouch for a read that settled
-   * before it.
+   * A remote binding uses this when it owes a ready boundary for a host whose
+   * first dial was still in flight. Routing that through the announcing form
+   * would emit `"availability-recovered"`, and the runtime answers a change
+   * by resetting the very binding delivering the news. Dropping it instead
+   * is not an option either: `subscribeAvailabilityRecovered` reports a
+   * RECOVERY, not current state, so a runtime attaching afterwards to an
+   * already-ready session gets no replay. This uses reconnect semantics but
+   * may trust a live replay stream for unchanged worktree reads.
    */
   invalidateHostScopeUnannounced(hostId: string): void {
-    this.deliverHostScopeSweep(hostId, false, "reconnect");
+    this.deliverHostScopeSweep(hostId, false, "reconnect", false);
+  }
+
+  /** A replaced host invalidates even worktree reads covered by its old stream. */
+  invalidateHostScopeAfterKeyRotation(hostId: string): void {
+    this.deliverHostScopeSweep(hostId, false, "reconnect", true);
   }
 
   private readonly hostAvailabilitySweepGates = new Map<
@@ -550,7 +616,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         return;
       }
       gate.deferred = null;
-      gate.sweep = this.deliverHostScopeSweep(hostId, true, deferred);
+      gate.sweep = this.deliverHostScopeSweep(hostId, true, deferred, false);
       this.armHostAvailabilitySweepGate(hostId, gate);
     }, HOST_AVAILABILITY_SWEEP_WINDOW_MS);
   }
@@ -566,6 +632,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
    * availability caller asked, and its announcement is true. Kinds merge the
    * same way: the sweep runs as a reconnect if any report in its tick was one,
    * so a rotation sweep merged with a stall still re-asks every settled read.
+   * The rotation's replay-coverage exception also survives this merge.
    *
    * Returns the pending sweep the report landed in. The recovery window keeps
    * it, so a later report in the same tick can fold into it.
@@ -579,6 +646,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     hostId: string,
     emitChangeEvent: boolean,
     kind: AvailabilityRecoveryKind,
+    ignoreWorktreeReplayCoverage: boolean,
   ): PendingHostScopeSweep {
     const pending = this.pendingHostScopeSweeps.get(hostId);
     if (pending !== undefined) {
@@ -586,15 +654,23 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         pending.emitChangeEvent = true;
       }
       pending.kind = mergeAvailabilityRecoveryKinds(pending.kind, kind);
+      pending.ignoreWorktreeReplayCoverage ||= ignoreWorktreeReplayCoverage;
       return pending;
     }
-    const entry: PendingHostScopeSweep = { emitChangeEvent, kind };
+    const entry: PendingHostScopeSweep = {
+      emitChangeEvent,
+      kind,
+      ignoreWorktreeReplayCoverage,
+    };
     this.pendingHostScopeSweeps.set(hostId, entry);
     queueMicrotask(() => {
       this.pendingHostScopeSweeps.delete(hostId);
       this.invalidator.invalidateHostScope(hostId, {
         refetchActive: true,
         recovery: entry.kind,
+        ...(entry.ignoreWorktreeReplayCoverage
+          ? { ignoreWorktreeReplayCoverage: true }
+          : {}),
       });
       // No active-host gate: there is no active host. The event carries the
       // host it is about, and consumers that care which one filter on
@@ -732,6 +808,20 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 
   /**
+   * {@link HostRequester.requestWithOptions} - the instance-level face of
+   * {@link requestForWithOptions}, for callers that hold a client rather than a
+   * directory entry.
+   */
+  async requestWithOptions<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    options: HostRequestDispatchOptions,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    // ∅ — see `request`.
+    return this.requestForWithOptions(null, method, params, options);
+  }
+
+  /**
    * Releases a cancelled TanStack Query's active latest/join raw call. This
    * is for bespoke query functions that predate `requestWithSignal`; normal
    * query builders propagate their cancellation signal directly.
@@ -810,20 +900,72 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     signal: AbortSignal | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.scheduleRequest(entry, method, params, signal, (authority) =>
-      this.messenger.request(method, params, {
-        idempotencyKey: null,
-        authority,
-        // Every dispatch this client originates is a caller's FIRST attempt.
-        // The replay requirement is raised one layer down, by
-        // `createRetryingMessenger`, and only for the attempts that follow a
-        // failure whose retryability a negotiated key earned.
-        replayMustBeKeyed: false,
-        // No floor: an ordinary caller dispatches whatever the handshake
-        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
-        // opt-in.
-        requiredHostMethodVersion: null,
-      }),
+    return this.requestForWithOptions(entry, method, params, {
+      idempotencyKey: null,
+      responseTimeoutMs: null,
+      // No floor: an ordinary caller dispatches whatever the handshake
+      // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+      // opt-in.
+      requiredHostMethodVersion: null,
+      signal,
+    });
+  }
+
+  /**
+   * The ONE place this client calls the messenger, and the entry point every
+   * narrow variant above and below funnels into. See
+   * {@link HostRequestDispatchOptions} for why the combination exists at all
+   * and why nothing in it is defaulted.
+   *
+   * `responseTimeoutMs` is validated against the method's scheduling-policy
+   * entry before anything is scheduled, exactly as the budget-only entry point
+   * has always done: the policy table is where "this method may wait" is
+   * declared, and a caller naming a budget the table does not know is refused
+   * rather than granted one.
+   */
+  requestForWithOptions<Method extends keyof Registry & string>(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    options: HostRequestDispatchOptions,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { idempotencyKey, responseTimeoutMs, requiredHostMethodVersion } =
+      options;
+    if (responseTimeoutMs !== null) {
+      const expectedTimeout = this.schedulingPolicyTimeout(method);
+      if (expectedTimeout === null || expectedTimeout !== responseTimeoutMs) {
+        return Promise.reject(
+          new Error(
+            `Host method '${method}' does not permit response timeout ${responseTimeoutMs}`,
+          ),
+        );
+      }
+    }
+    return this.scheduleRequest(
+      entry,
+      method,
+      params,
+      options.signal,
+      (authority) => {
+        const requestOptions = {
+          idempotencyKey,
+          authority,
+          // Every dispatch this client originates is a caller's FIRST attempt.
+          // The replay requirement is raised one layer down, by
+          // `createRetryingMessenger`, and only for the attempts that follow a
+          // failure whose retryability a negotiated key earned.
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion,
+        };
+        return responseTimeoutMs === null
+          ? this.messenger.request(method, params, requestOptions)
+          : this.messenger.requestWithResponseTimeout(
+              method,
+              params,
+              responseTimeoutMs,
+              requestOptions,
+            );
+      },
     );
   }
 
@@ -866,14 +1008,12 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     signal: AbortSignal | undefined,
     requiredHostMethodVersion: RequiredHostMethodVersion,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.scheduleRequest(entry, method, params, signal, (authority) =>
-      this.messenger.request(method, params, {
-        idempotencyKey: null,
-        authority,
-        replayMustBeKeyed: false,
-        requiredHostMethodVersion,
-      }),
-    );
+    return this.requestForWithOptions(entry, method, params, {
+      idempotencyKey: null,
+      responseTimeoutMs: null,
+      requiredHostMethodVersion,
+      signal,
+    });
   }
 
   requestForWithIdempotencyKey<Method extends keyof Registry & string>(
@@ -882,19 +1022,17 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     idempotencyKey: string | null,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.scheduleRequest(entry, method, params, undefined, (authority) =>
-      this.messenger.request(method, params, {
-        idempotencyKey,
-        authority,
-        // A key the CALLER supplied, which is not the same as a replay that
-        // requires one - see the sibling above.
-        replayMustBeKeyed: false,
-        // No floor: an ordinary caller dispatches whatever the handshake
-        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
-        // opt-in.
-        requiredHostMethodVersion: null,
-      }),
-    );
+    return this.requestForWithOptions(entry, method, params, {
+      // A key the CALLER supplied, which is not the same as a replay that
+      // requires one - see `requestForWithOptions`.
+      idempotencyKey,
+      responseTimeoutMs: null,
+      // No floor: an ordinary caller dispatches whatever the handshake
+      // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+      // opt-in.
+      requiredHostMethodVersion: null,
+      signal: undefined,
+    });
   }
 
   requestForWithResponseTimeout<Method extends keyof Registry & string>(
@@ -903,27 +1041,12 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const expectedTimeout = this.schedulingPolicyTimeout(method);
-    if (expectedTimeout === null || expectedTimeout !== responseTimeoutMs) {
-      return Promise.reject(
-        new Error(
-          `Host method '${method}' does not permit response timeout ${responseTimeoutMs}`,
-        ),
-      );
-    }
-    return this.scheduleRequest(entry, method, params, undefined, (authority) =>
-      this.messenger.requestWithResponseTimeout(
-        method,
-        params,
-        responseTimeoutMs,
-        {
-          idempotencyKey: null,
-          authority,
-          replayMustBeKeyed: false,
-          requiredHostMethodVersion: null,
-        },
-      ),
-    );
+    return this.requestForWithOptions(entry, method, params, {
+      idempotencyKey: null,
+      responseTimeoutMs,
+      requiredHostMethodVersion: null,
+      signal: undefined,
+    });
   }
 
   private scheduleRequest<Method extends keyof Registry & string>(

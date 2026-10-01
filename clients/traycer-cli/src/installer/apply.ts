@@ -13,12 +13,15 @@ import { readHostStagedRecord } from "../manifest/host-staged";
 import { hostHomeDir, hostStagedDir } from "../store/paths";
 import { resolveChatStoreSurveyRoots } from "../host/chat-store-survey-roots";
 import { assertHostNotBusy } from "../host/busy-check";
+import { refuseDesktopDisruptionOfForegroundRun } from "../host/foreground-host-run";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import {
   assertHostStoreFormatFloor,
   storeFormatFloorTargetVersion,
 } from "../host/store-format-floor";
 import type { ServiceState } from "../service";
 import { createServiceInstallLifecycle } from "../service/install-lifecycle";
+import type { ServiceRegistrationWarning } from "../service/registration-owner";
 import { reconcileHostStageWithAttempt } from "./stage-reconcile";
 import {
   commitInstallFromSource,
@@ -73,6 +76,13 @@ export interface ApplyHostOptions {
   // POSIX swap). Rejected on Windows, where the service stop is load-
   // bearing for releasing file handles the rename needs.
   readonly noService: boolean;
+  /**
+   * Who asked: `--lifecycle-origin`, as `host/update-mutation.ts`'s facade
+   * received it. Under `desktop`, a foreground run (a `traycer host start` in
+   * a terminal) refuses the apply before the busy gate
+   * (`refuseDesktopDisruptionOfForegroundRun`).
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
   readonly onProgress: (info: ProgressInfo) => void;
   /** See `commitInstallFromSource` for the final-actuator contract. */
   readonly verifyMutationCapability: () => Promise<void>;
@@ -205,6 +215,12 @@ export type ApplyHostOutcome =
       // successful "applied" outcome, never a thrown error - "installed,
       // not converged", never "update ready".
       readonly postSwapError: string | null;
+      // Non-null iff the post-swap re-registration finished without starting
+      // the host for a reason that is not a failure - the registration is
+      // kept disabled as its owner left it, or is another user's
+      // (`ServiceInstallLifecycleState.postSwapWarning`). The bytes are
+      // committed and `runningActivated` is false.
+      readonly postSwapWarning: ServiceRegistrationWarning | null;
     }
   | {
       readonly outcome: "stage-fingerprint-mismatch";
@@ -354,6 +370,18 @@ export async function applyHost(
     logger,
   });
 
+  // Past every no-op decision and BEFORE the busy gate, `--force` included: a
+  // desktop apply never stops a host a person started in a terminal, and a
+  // busy probe here would only turn that refusal into a busy prompt whose
+  // `--force` answer kills it. The stage stays where it is for the next apply.
+  // `noService` stops nothing and is not refused.
+  if (!opts.noService) {
+    await refuseDesktopDisruptionOfForegroundRun(
+      "host apply",
+      opts.environment,
+      opts.lifecycleOrigin,
+    );
+  }
   if (!opts.noService && !opts.force) {
     await assertHostNotBusy(opts.environment);
   }
@@ -421,9 +449,13 @@ export async function applyHost(
   // into-field behavior IS this function's no-rollback contract; no
   // separate try/catch needed here.
   const postSwapError = lifecycleHandle?.state.postSwapError ?? null;
+  const postSwapWarning = lifecycleHandle?.state.postSwapWarning ?? null;
+  // A re-registration kept disabled (or refused as another user's) started
+  // nothing, so it activated nothing either.
   const runningActivated =
     lifecycleHandle !== null &&
     postSwapError === null &&
+    postSwapWarning === null &&
     lifecycleHandle.state.postSwapAction !== "none";
   const serviceLifecycle: ApplyServiceLifecycleFacts | null =
     lifecycleHandle === null
@@ -460,5 +492,6 @@ export async function applyHost(
     installGeneration,
     serviceLifecycle,
     postSwapError,
+    postSwapWarning,
   };
 }

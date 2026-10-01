@@ -160,6 +160,9 @@ describe("SystemTabModalHost theme editor integration", () => {
     modalProbe.current?.openSettings({
       section: "appearance",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
 
     const settings = await screen.findByRole("dialog", { name: "Settings" });
@@ -167,6 +170,8 @@ describe("SystemTabModalHost theme editor integration", () => {
       expect(document.body.style.pointerEvents).toBe("none");
     });
 
+    // Static overlay bodies expose their controls with the frame: deferring
+    // these bodies regressed boot and first-open timing in production builds.
     const darkPicker = within(settings).getByRole("button", {
       name: "Dark theme",
     });

@@ -192,7 +192,14 @@ export function useProfileCopySettingsNavigation(): ProfileCopySettingsNavigatio
       });
       focus.setFocusTab("usage");
       closeFlow();
-      openSettings({ section: "providers", resetToGeneral: false });
+      openSettings({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+        // The providers focus set above carries the destination host.
+        hostId: null,
+      });
     },
     [closeFlow, openSettings],
   );
@@ -209,7 +216,14 @@ export function useProfileCopySettingsNavigation(): ProfileCopySettingsNavigatio
         tab: "general",
       });
       closeFlow();
-      openSettings({ section: "providers", resetToGeneral: false });
+      openSettings({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+        // The providers focus set above carries the destination host.
+        hostId: null,
+      });
     },
     [closeFlow, openSettings],
   );

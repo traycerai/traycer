@@ -78,7 +78,11 @@ import type {
  */
 export interface HomeFocusRowActions {
   readonly openPrompt: (row: FocusPromptRow) => void;
-  readonly openAgent: (epicId: string, agentId: string) => void;
+  readonly openAgent: (
+    epicId: string,
+    agentId: string,
+    hostId: string | null,
+  ) => void;
   readonly openTask: (epicId: string) => void;
   /** The job's own chat, not just its task - a background row names a shell in
    * one conversation, and landing on the task would make the user find it. */

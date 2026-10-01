@@ -68,7 +68,12 @@ function historyResult(
     isFetching: false,
     error: null,
     hostId: "host-1",
+    // The identity the fixture's rows belong to. The palette source never
+    // reads it; it is here so the stub still satisfies the hook's contract.
+    currentUserId: "user-1",
+    activityRefreshScope: "fixture-recent-list",
     refetch: () => Promise.resolve(),
+    refetchTasks: () => Promise.resolve(),
     fetchNextPage: () => undefined,
     hasNextPage: false,
     isFetchingNextPage: false,
@@ -76,6 +81,8 @@ function historyResult(
     // it, so `false` is the quiet fixture rather than a claim that a cloud
     // page is settled.
     cloudPagePending: false,
+    // Settled, like `isPending`: the palette source never reads the count.
+    isCountPending: false,
   };
 }
 

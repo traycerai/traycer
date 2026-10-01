@@ -454,6 +454,44 @@
 }
 
 /*
+ * Chat find inside a block (see `lib/find-engine/find-blocks.ts`).
+ *
+ * `.tc-find-mirror` holds the source a block was counted on where the find
+ * walk can reach it. It
+ * takes part in layout (a hit inside it can be scrolled to) but paints nothing
+ * and cannot be selected, so a copy of the block never carries it.
+ *
+ * `data-find-hit` marks blocks with source hits: `match` tints the block,
+ * `active` outlines the block containing the current occurrence. Navigation
+ * pulses its outline via Web Animations; passive repaints never pulse.
+ */
+.tc-find-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: pre;
+  pointer-events: none;
+  user-select: none;
+}
+
+.tc-node-mermaid[data-find-hit],
+.tc-node-wireframe[data-find-hit] {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+}
+
+.tc-node-mermaid[data-find-hit="active"],
+.tc-node-wireframe[data-find-hit="active"] {
+  outline: 2px solid color-mix(in srgb, var(--primary) 75%, transparent);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+/*
  * Block floating toolbar. Hidden by default; shown when the NodeView is
  * hovered, focused (`focus-within`), or selected. Kept above the content
  * with `z-index: 2` so it doesn't fall behind overlapping SVG in mermaid.

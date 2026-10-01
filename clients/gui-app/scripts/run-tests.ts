@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+// The real-browser regressions are NOT run from here: they are Playwright
+// specs (`browser-tests/`, `bun run test:browser`) and CI runs them in their
+// own workflow (`.github/workflows/browser-regressions.yml`).
+
 const testArgs = process.argv.slice(2);
 
 /**
@@ -74,7 +78,7 @@ function runVitest(configPath: string, filePath: string | undefined): number {
   // because the child never got to print one. Surface the signal explicitly
   // and return 128+n, the shell convention, so the next occurrence is
   // self-identifying instead of ambiguous. Do not exit here: a red main
-  // suite used to skip the follow-up config and the browser regressions.
+  // suite used to skip the follow-up config.
   if (result.signal !== null) {
     const signalExit = SIGNAL_EXIT_CODES[result.signal] ?? 1;
     console.error(
@@ -99,17 +103,6 @@ function readShardValue(args: string[]): string | undefined {
 
 const shard = readShardValue(testArgs);
 const runsFirstShard = shard === undefined || shard.split("/", 1)[0] === "1";
-const shardValueArgs = new Set<string>(
-  shard !== undefined && testArgs.includes("--shard") ? [shard] : [],
-);
-const runsWholeSuite = !testArgs.some(
-  (arg) => !arg.startsWith("-") && !shardValueArgs.has(arg),
-);
-// The env var keeps its original name because CI sets it by that name
-// (`test.yml`); it now gates every browser regression, not just the diff-edit
-// one. Renaming it would be a workflow change riding inside an unrelated fix.
-const runsBrowserRegressions =
-  runsWholeSuite && process.env.RUN_DIFF_EDIT_BROWSER_REGRESSION === "1";
 
 function firstFailure(current: number, next: number): number {
   return current !== 0 ? current : next;
@@ -132,81 +125,5 @@ if (runsFirstShard) {
       "src/hooks/terminal/__tests__/use-epic-terminal-durable-create.test.tsx",
     ),
   );
-  if (runsBrowserRegressions) {
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/diff-edit-browser-regression.mjs"),
-    );
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/pierre-tree-zoom-browser-regression.mjs"),
-    );
-    // Same gate, same reason: the claim is "after Cancel the window is usable
-    // again", and jsdom has no hit testing, so only a real layout engine can
-    // tell a released modal from a modal that merely stopped being asserted
-    // about. Runs behind the same env flag rather than a second one - a browser
-    // check nobody enables is a coverage gap wearing a test's name.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs"),
-    );
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs"),
-    );
-    // Same gate again, and the strongest case for it in this list: the boot
-    // card's escape hatch is lost to an INPUT-DISPATCH rule - a press whose
-    // element is removed before release emits no click at all - and jsdom
-    // dispatches `click` directly, so every jsdom test of that button passes
-    // on the broken build. Ablated before wiring: reverting the button to
-    // `onClick` turns this red (0 activations) while its ordinary-click
-    // premise stays green.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/boot-escape-hatch-press-browser.mjs"),
-    );
-    // Same gate: the toast close button's touch visibility is a MEDIA-QUERY
-    // question and jsdom evaluates none, so a jsdom test sees identical class
-    // names on a phone and a desktop. Ablated before wiring: an unscoped
-    // hide, a missing hit area and a missing mobile-app offset each turn it
-    // red.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/toast-close-button-touch-browser.mjs"),
-    );
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/docx-preview-browser-regression.mjs"),
-    );
-    // A CSS duration accidentally applied to transition-property: all sends
-    // Floating UI surfaces from the viewport corner on mount and re-anchor;
-    // only a real browser can measure that layout and style interpolation.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/panel-motion-position-browser.mjs"),
-    );
-    // NOT here, deliberately, and each for its own reason:
-    // - `scripts/window-host-modal-alignment-browser.mjs` measures the
-    //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
-    //   `HostBootCard` superseded when the boot card became a CENTRED surface
-    //   (`local-host-loading.tsx`: "the card is centred now"). Run against the
-    //   current component it reports the centring as a 58px misalignment. It
-    //   is a manual instrument for the left-aligned arrangement it was written
-    //   for, not a gate on the current one; re-base it before wiring it here.
-    // - `scripts/toast-over-modal-hittest.mjs` prints hit-test figures and
-    //   asserts nothing, so a gate on it would be a gate on a number nobody
-    //   reads - run it by hand.
-  }
 }
 process.exit(exitCode);
-
-function runBrowserRegression(scriptPath: string): number {
-  const result = spawnSync(process.execPath, [scriptPath], {
-    stdio: "inherit",
-  });
-  if (result.error !== undefined) throw result.error;
-  if (result.signal !== null) {
-    return SIGNAL_EXIT_CODES[result.signal] ?? 1;
-  }
-  return result.status ?? 1;
-}

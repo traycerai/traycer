@@ -5,17 +5,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SETTINGS_SEARCH_FIXTURES } from "@/components/settings/__tests__/settings-search-fixture-registry";
+import { LAYOUT_LAUNCH_ENTRIES } from "@/components/layout-editor/layout-search.definitions";
 import type {
   AnySettingsSectionCollection,
   SettingsDefinition,
   SettingsSearchEntry,
 } from "@/lib/settings-search/settings-definitions";
+import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import {
   SETTINGS_SEARCH_COLLECTIONS,
   SETTINGS_SEARCH_ENTRIES,
 } from "@/lib/settings-search/settings-search-entries";
-import { settingsSearchResultKey } from "@/lib/settings-search/settings-search";
-import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
+import {
+  searchSettings,
+  settingsSearchResultKey,
+} from "@/lib/settings-search/settings-search";
+import {
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "@/lib/settings-sections";
 
 /**
  * The index is assembled from one collection per section, and each collection
@@ -51,7 +59,23 @@ const indexedAnchors = SETTINGS_SEARCH_ENTRIES.flatMap((entry) =>
   entry.anchor === null ? [] : [entry.anchor],
 );
 
+const NO_BRIDGES: SettingsAvailabilityContext = {
+  runnerHost: null,
+  featureSettings: null,
+  mobileApp: false,
+};
+
 describe("settings search index", () => {
+  it("routes the former Data & migration wording to the Data tab", () => {
+    const [first] = searchSettings("data & migration", NO_BRIDGES);
+
+    expect(first.entry).toMatchObject({
+      section: "host",
+      label: "Data",
+      anchor: "host-overview-tab-data",
+    });
+  });
+
   it("gives every entry a section that exists", () => {
     const sectionIds = new Set(SETTINGS_SECTIONS.map((section) => section.id));
     const unknown = SETTINGS_SEARCH_ENTRIES.filter(
@@ -85,19 +109,28 @@ describe("settings search index", () => {
     expect(thin).toEqual([]);
   });
 
-  it("indexes no anchor on a host-scoped section", () => {
-    // Every card on a host-scoped page is dropped or concealed for an
-    // unresolved, connecting or vanished host, so only the page — or a
-    // region with a `null` anchor — is a stable destination there.
+  it("indexes an anchor on a host-scoped section only where the executor lands it with no usable host", () => {
+    // Only an element outside `HostScopeGate` is a stable destination on a
+    // host-scoped page (Permissions' tab bar and its app-scoped Modes row), and
+    // the executor is what proves it: an anchored entry there is allowed only
+    // when that section's registered fixture mounts it under a connecting host.
     const hostSections = new Set(
       SETTINGS_SECTIONS.filter((section) => section.group === "host").map(
         (section) => section.id,
       ),
     );
-    const anchored = SETTINGS_SEARCH_ENTRIES.filter(
-      (entry) => hostSections.has(entry.section) && entry.anchor !== null,
+    const provenWithoutAHost = new Set<SettingsSectionId>(
+      SETTINGS_SEARCH_FIXTURES.filter(
+        (fixture) => fixture.hostScope === "connecting",
+      ).map((fixture) => fixture.section),
+    );
+    const unproven = SETTINGS_SEARCH_ENTRIES.filter(
+      (entry) =>
+        hostSections.has(entry.section) &&
+        entry.anchor !== null &&
+        !provenWithoutAHost.has(entry.section),
     ).map(settingsSearchResultKey);
-    expect(anchored).toEqual([]);
+    expect(unproven).toEqual([]);
   });
 
   it("writes no anchor in the common literal form", () => {
@@ -145,10 +178,16 @@ describe("settings search assembly", () => {
     expect(unassembled).toEqual([]);
   });
 
-  it("is exactly the concatenation of its collections' entries", () => {
-    expect(SETTINGS_SEARCH_ENTRIES).toEqual(
-      SETTINGS_SEARCH_COLLECTIONS.flatMap((collection) => collection.entries),
-    );
+  it("is exactly its collections' entries, then the Layout launch results", () => {
+    // The launch results belong to no collection (there is no panel to render
+    // them from); they are generated from the region registry, appended after
+    // every section's.
+    expect(SETTINGS_SEARCH_ENTRIES).toEqual([
+      ...SETTINGS_SEARCH_COLLECTIONS.flatMap(
+        (collection) => collection.entries,
+      ),
+      ...LAYOUT_LAUNCH_ENTRIES,
+    ]);
   });
 });
 

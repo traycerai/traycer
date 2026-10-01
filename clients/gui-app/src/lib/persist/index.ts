@@ -11,6 +11,7 @@ export {
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
+  deliveryRestoreAckKey,
   epicCanvasKey,
   githubMentionFiltersKey,
   lastLocalHostIdKey,
@@ -35,9 +36,9 @@ export {
   CURRENT_PERSIST_VERSION,
   basePersistOptions,
 } from "@/lib/persist/persist-options";
+export { installCrossWindowRehydrate } from "@/lib/persist/cross-window-rehydrate";
 export { seedPersistedStateFromLegacyKeys } from "@/lib/persist/seed-from-legacy-keys";
 export {
   clearAndResetPersistedStore,
   retargetPersistedStore,
 } from "@/lib/persist/zustand-persist-lifecycle";
-export { clearAllPersistedStores } from "@/lib/persist/wipe";

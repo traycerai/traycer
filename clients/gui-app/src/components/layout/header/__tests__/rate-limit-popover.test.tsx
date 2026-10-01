@@ -79,22 +79,14 @@ type MockState = {
     fetchEligibility?: RateLimitFetchEligibility;
   }>;
   results: Record<string, QueryResult>;
-  draining: boolean;
-  // Keyed the same way as `mocks.results` (`resultKey`) - the per-target
-  // queued/fetching registry snapshot `useRateLimitQueueTargetPhase` reads.
-  // Defaults to `null` (not tracked) for any key not present.
-  targetPhases: Record<string, "queued" | "fetching">;
-  forcedTargets: Record<string, boolean>;
-  // Targets whose single delayed follow-up read is spent, so nothing is coming
-  // back to collect an answer we stopped waiting for. Its own fixture rather
-  // than derived from the phase: the whole point is that an IDLE target can be
-  // in either state, and only this one stops the failure being suppressed.
-  followUpExhaustedTargets: Record<string, boolean>;
   traycerUsageFetching: boolean;
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
-  enqueue: Mock<(...args: unknown[]) => Promise<void>>;
-  enqueueBatch: Mock<(...args: unknown[]) => Promise<void>>;
+  // Every profile fetch is now an INDEPENDENT call - one per target, each
+  // carrying its own `force` on the wire (never in a shared cache key or a
+  // batch array). See `provider-rate-limit-fetch.test.ts` for the mechanism
+  // itself; this fixture only proves each call site here dispatches it right.
+  fetchProviderRateLimits: Mock<(...args: unknown[]) => Promise<unknown>>;
   refreshProfileStatus: Mock<(...args: unknown[]) => Promise<unknown>>;
   consumeReset: Mock<
     (
@@ -131,15 +123,10 @@ function coldAuthUser(): MockAuthUser {
 const mocks = vi.hoisted<MockState>(() => ({
   configured: [],
   results: {},
-  draining: false,
-  targetPhases: {},
-  forcedTargets: {},
-  followUpExhaustedTargets: {},
   traycerUsageFetching: false,
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
-  enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
-  enqueueBatch: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  fetchProviderRateLimits: vi.fn((..._args: unknown[]) => Promise.resolve()),
   refreshProfileStatus: vi.fn((..._args: unknown[]) => Promise.resolve()),
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
@@ -157,7 +144,7 @@ const mocks = vi.hoisted<MockState>(() => ({
     refetch: vi.fn(() => Promise.resolve({})),
   },
 }));
-const queueScope = vi.hoisted(() => ({ hostId: "host-1" }));
+const fetchScope = vi.hoisted(() => ({ hostId: "host-1" }));
 
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
@@ -178,44 +165,6 @@ vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
       },
       profiles: provider.profiles ?? [],
     })),
-}));
-vi.mock("@/hooks/rate-limits/use-is-rate-limit-queue-draining", () => ({
-  useIsRateLimitQueueDraining: () => mocks.draining,
-}));
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
-  useRateLimitQueueTargetPhase: (
-    providerId: string,
-    profileId: string | null,
-  ) => mocks.targetPhases[resultKey(providerId, profileId)] ?? null,
-  // Folded from the same fixture the single-target hook reads, so one test
-  // fixture drives the row copy AND the button state consistently. Only
-  // "fetching" counts - a merely QUEUED target must stay clickable so the
-  // click can promote it - and a target NOT in this list can never affect a
-  // control.
-  useAnyRateLimitQueueTargetFetching: (
-    targets: ReadonlyArray<{
-      readonly providerId: string;
-      readonly profileId: string | null;
-    }>,
-  ) =>
-    targets.some(
-      (target) =>
-        mocks.targetPhases[resultKey(target.providerId, target.profileId)] ===
-        "fetching",
-    ),
-  // Read from its own fixture rather than derived from the phase: the point of
-  // the flag is that two targets in the SAME "queued" phase behave
-  // differently, so a mock that inferred it from the phase could not express
-  // the case under test.
-  useIsRateLimitQueueTargetForced: (
-    providerId: string,
-    profileId: string | null,
-  ) => mocks.forcedTargets[resultKey(providerId, profileId)] ?? false,
-  useIsRateLimitReadFollowUpExhausted: (
-    providerId: string,
-    profileId: string | null,
-  ) =>
-    mocks.followUpExhaustedTargets[resultKey(providerId, profileId)] ?? false,
 }));
 vi.mock("@/hooks/host/use-host-provider-rate-limits-query", () => ({
   useHostProviderRateLimitsQuery: (
@@ -292,8 +241,8 @@ vi.mock(
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-scope", () => ({
-  useRateLimitQueueScope: () => queueScope,
+vi.mock("@/hooks/rate-limits/use-provider-rate-limit-fetch-scope", () => ({
+  useProviderRateLimitFetchScope: () => fetchScope,
 }));
 vi.mock(
   "@/hooks/providers/use-consume-rate-limit-reset-credit-mutation",
@@ -304,20 +253,12 @@ vi.mock(
     }),
   }),
 );
-vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
-  // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy -
-  // an object-literal binding would freeze the original fn at module load.
-  enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
-  enqueueRateLimitFetchBatch: (...args: unknown[]) =>
-    mocks.enqueueBatch(...args),
-  enqueueRateLimitFetchForScope: (...args: unknown[]) =>
-    mocks.enqueue(...args.slice(1)),
-  // The scope argument is dropped so the batch assertions keep asserting what
-  // they always did - WHICH targets are enqueued. That the scope is this
-  // subtree's rather than the app-shell default is a different claim, proved
-  // by `use-rate-limit-queue-scope`'s own suite.
-  enqueueRateLimitFetchBatchForScope: (...args: unknown[]) =>
-    mocks.enqueueBatch(...args.slice(1)),
+vi.mock("@/lib/rate-limits/provider-rate-limit-fetch", () => ({
+  // Wrapper (not `mocks.fetchProviderRateLimits` directly) so `beforeEach` can
+  // swap the spy - an object-literal binding would freeze the original fn at
+  // module load.
+  fetchProviderRateLimits: (...args: unknown[]) =>
+    mocks.fetchProviderRateLimits(...args),
 }));
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
@@ -340,9 +281,23 @@ vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
 
 import { RateLimitPopover } from "@/components/layout/header/rate-limit-popover";
 import { useRateLimitPopoverStore } from "@/stores/rate-limits/rate-limit-popover-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
+import type { StatusBarShownProfiles } from "@/lib/layout/layout-arrangement";
+import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 const NOW = Date.now();
+
+// jsdom's own window width, which `useIsMobileViewport` reads as a desktop;
+// a case that needs the mobile branch narrows it and `afterEach` puts it back.
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+const MOBILE_VIEWPORT_WIDTH = 500;
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
 
 /**
  * One host, followed. The picker row only appears when there is a choice to
@@ -353,6 +308,35 @@ const SINGLE_HOST_SCOPE = hostScopeFixture({});
 
 function resultKey(providerId: string, profileId: string | null): string {
   return profileId === null ? providerId : `${providerId}:${profileId}`;
+}
+
+/**
+ * A provider's membership in the hidden deny-list, toggled - the test double
+ * for `StatusBarVisibilityMenu`'s own click handler (`hiddenProviders`
+ * mapping), reused here since this suite drives the same store field without
+ * going through that menu.
+ */
+function toggleStatusBarProvider(providerId: RateLimitProviderId): void {
+  const arrangement = useLayoutStore.getState().arrangement;
+  const hiddenProviders = arrangement.hiddenProviders.includes(providerId)
+    ? arrangement.hiddenProviders.filter((id) => id !== providerId)
+    : [...arrangement.hiddenProviders, providerId];
+  useLayoutStore.getState().setArrangement({ ...arrangement, hiddenProviders });
+}
+
+/**
+ * Both readings, because the strip stays on screen for either one of them
+ * (L-156). The eye's own gate is no longer whether this physical STRIP is
+ * drawn - see `setUsageLimitsShown` below - but moving a reading off the
+ * strip entirely (`"header"`) is still exercised by the placement tests, so
+ * this stays.
+ */
+function setStatusBarPlacement(usageHost: "status-bar" | "header"): void {
+  useLayoutStore.getState().setArrangement({
+    ...useLayoutStore.getState().arrangement,
+    usageHost,
+    resourceHost: usageHost,
+  });
 }
 
 function envelopeFor(
@@ -853,15 +837,12 @@ function renderCodexPopover(): HTMLElement {
 beforeEach(() => {
   mocks.configured = [];
   mocks.results = {};
-  mocks.draining = false;
-  mocks.targetPhases = {};
-  mocks.forcedTargets = {};
-  mocks.followUpExhaustedTargets = {};
   mocks.traycerUsageFetching = false;
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
-  mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
-  mocks.enqueueBatch = vi.fn((..._args: unknown[]) => Promise.resolve());
+  mocks.fetchProviderRateLimits = vi.fn((..._args: unknown[]) =>
+    Promise.resolve(),
+  );
   mocks.refreshProfileStatus = vi.fn((..._args: unknown[]) =>
     Promise.resolve(),
   );
@@ -895,6 +876,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   setMobileApp(false);
+  setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
   useDesktopDialogStore.setState({
     activeDialog: null,
     reportIssueAvailable: false,
@@ -947,6 +929,9 @@ describe("<RateLimitPopover /> zero-provider state", () => {
     expect(mocks.openSettings).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -1275,7 +1260,9 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("22% used")).toBeTruthy();
 
     act(() => {
-      useLayoutStore.getState().setStatusBarPercentMode("remaining");
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "remaining" });
     });
     // The words are the strip's own (`windowPercentText`), so the popover
     // under the footer and the footer never state one limit two ways.
@@ -1284,7 +1271,9 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.queryByText("4% used")).toBeNull();
 
     act(() => {
-      useLayoutStore.getState().setStatusBarPercentMode("used");
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "used" });
     });
     expect(screen.getByText("4% used")).toBeTruthy();
     expect(screen.queryByText("96% remaining")).toBeNull();
@@ -1436,15 +1425,15 @@ describe("<RateLimitPopover /> rail", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Show Work in status bar" }),
     );
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
-    ).toEqual({ "host-a": { codex: ["work-profile"] } });
+    expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual({
+      "host-a": { codex: ["work-profile"] },
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Show Default Codex in status bar" }),
     );
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
-    ).toEqual({ "host-a": { codex: ["work-profile", null] } });
+    expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual({
+      "host-a": { codex: ["work-profile", null] },
+    });
 
     // The eye reads its pressed state through the selection the caller
     // resolved (a static double here), so re-render with both checked before
@@ -1464,9 +1453,7 @@ describe("<RateLimitPopover /> rail", () => {
         name: "Hide Default Codex from status bar",
       }),
     );
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.shownProfiles,
-    ).toEqual({});
+    expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual({});
   });
 
   it("reads checked accounts for the viewed host and highlights exactly those cards", () => {
@@ -1557,7 +1544,7 @@ describe("<RateLimitPopover /> rail", () => {
 
   it("hides the eye for a provider hidden from the strip", () => {
     configureTwoAccountProviders();
-    useLayoutStore.getState().toggleStatusBarProvider("codex");
+    toggleStatusBarProvider("codex");
     renderPopover();
 
     expect(
@@ -1566,6 +1553,145 @@ describe("<RateLimitPopover /> rail", () => {
     expect(
       screen.getByRole("button", { name: "Show Personal in status bar" }),
     ).toBeTruthy();
+  });
+
+  // The eye governs a segment wherever the reading currently draws - the
+  // status bar, the tab strip, or the phone header - since G6 every
+  // placement reads through the same selector. What used to gate the eye on
+  // "is the physical status-bar strip on screen" (`useStatusBarShown`) now
+  // gates it on the usageLimits region's own Shown
+  // (`useRegionShown("usageLimits")`, `ProfileRateLimitProviderBlock`'s
+  // `readingShown`): with no reading anywhere there is no segment for the
+  // highlight to point at and none for the eye to govern, so both go until it
+  // returns - and neither cares which placement it returns to.
+  describe("while the reading is hidden", () => {
+    function expectNoEyeAndNoHighlight(): void {
+      expect(
+        screen.queryByTestId("rate-limit-profile-status-bar-eye"),
+      ).toBeNull();
+      expect(document.querySelectorAll('[aria-current="true"]')).toHaveLength(
+        0,
+      );
+    }
+
+    /** The one field `readingShown` actually reads (`overrides.usageLimits.shown`). */
+    function setUsageLimitsShown(shown: boolean): void {
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { shown: shown ? "shown" : "hidden" });
+    }
+
+    /** A real check in the store for the viewed host. */
+    function checkWorkProfile(): StatusBarShownProfiles {
+      const checked: StatusBarShownProfiles = {
+        "host-a": { codex: ["work-profile"] },
+      };
+      useLayoutStore.getState().setArrangement({
+        ...useLayoutStore.getState().arrangement,
+        shownProfiles: checked,
+      });
+      return checked;
+    }
+
+    it("draws neither the eye nor the highlight while usageLimits is hidden, and keeps the checks for its return", () => {
+      configureTwoAccountProviders();
+      // A real check in the store for the viewed host, and the selection the
+      // caller would resolve from it.
+      const checked = checkWorkProfile();
+      mocks.profileSelection = {
+        shownProfiles: { codex: ["work-profile"] },
+        lastProfileByHarness: { claude: "personal-profile" },
+      };
+      setUsageLimitsShown(false);
+      renderPopover();
+
+      // The cards themselves are unchanged; only the strip controls go.
+      expect(screen.getByText("Work")).toBeTruthy();
+      expect(screen.getByText("Personal")).toBeTruthy();
+      expectNoEyeAndNoHighlight();
+      // The check is untouched - withheld, not cleared.
+      expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual(
+        checked,
+      );
+
+      // ...and takes effect again the moment the reading returns.
+      cleanup();
+      setUsageLimitsShown(true);
+      renderPopover();
+
+      expect(
+        screen
+          .getByRole("button", { name: "Hide Work from status bar" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      expect(
+        screen
+          .getByTestId("rate-limit-profile-card-codex-work-profile")
+          .getAttribute("aria-current"),
+      ).toBe("true");
+      expect(useLayoutStore.getState().arrangement.shownProfiles).toEqual(
+        checked,
+      );
+    });
+
+    // The placement the reading currently lives at is no longer the gate.
+    // Moving it off the physical status bar and into the header (the tab
+    // strip) used to blank the eye, because that specific surface stopped
+    // rendering - now the reading itself moved with the placement and is
+    // still on screen, so the eye and the highlight stay with it.
+    it("keeps the eye and the highlight under the header placement, since the reading still draws there", () => {
+      configureTwoAccountProviders();
+      checkWorkProfile();
+      mocks.profileSelection = {
+        shownProfiles: { codex: ["work-profile"] },
+        lastProfileByHarness: { claude: "personal-profile" },
+      };
+      setStatusBarPlacement("header");
+      renderPopover();
+
+      expect(statusBarEyes()).toHaveLength(4);
+      expect(
+        screen
+          .getByTestId("rate-limit-profile-card-codex-work-profile")
+          .getAttribute("aria-current"),
+      ).toBe("true");
+    });
+
+    it("keeps following usageLimits Shown on a mobile viewport too, regardless of the mobile footer switch", () => {
+      configureTwoAccountProviders();
+      mocks.profileSelection = {
+        shownProfiles: { codex: ["work-profile"] },
+        lastProfileByHarness: {},
+      };
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+      setUsageLimitsShown(false);
+      renderPopover();
+
+      expectNoEyeAndNoHighlight();
+
+      cleanup();
+      setUsageLimitsShown(true);
+      renderPopover();
+
+      expect(statusBarEyes()).toHaveLength(4);
+      expect(
+        screen
+          .getByTestId("rate-limit-profile-card-codex-work-profile")
+          .getAttribute("aria-current"),
+      ).toBe("true");
+      // The provider rule still applies on top: a hidden provider has no
+      // segment on a reading that IS shown.
+      cleanup();
+      toggleStatusBarProvider("codex");
+      renderPopover();
+
+      expect(
+        screen.queryByRole("button", { name: "Hide Work from status bar" }),
+      ).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Show Personal in status bar" }),
+      ).toBeTruthy();
+    });
   });
 
   it("renders no eye for a provider that reports no profiles", () => {
@@ -1703,7 +1829,7 @@ describe("<RateLimitPopover /> rail", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     expect(screen.queryByRole("button", { name: "Refresh Codex" })).toBeNull();
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
   });
 
   it("keeps the ambient row passive while making the authenticated managed row refreshable", () => {
@@ -1743,19 +1869,18 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Terminal")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Refresh all" })).toBeTruthy();
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     expect(screen.getByRole("button", { name: "Refresh Codex" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Refresh Codex" }));
-    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
-      [
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: "work-profile",
-        },
-      ],
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledWith(
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: "work-profile",
+      },
       { force: true },
     );
   });
@@ -1802,8 +1927,7 @@ describe("<RateLimitPopover /> rail", () => {
       providerId: "codex",
       profileId: "work-profile",
     });
-    expect(mocks.enqueue).not.toHaveBeenCalled();
-    expect(mocks.enqueueBatch).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
     expect(usageQuery.refetch).not.toHaveBeenCalled();
   });
 
@@ -1847,7 +1971,7 @@ describe("<RateLimitPopover /> rail", () => {
       screen.getByRole("switch", { name: "Allow agents to use Work" }).dataset
         .state,
     ).toBe("unchecked");
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
   });
 
   it("shows a signed-out message and label for an unauthenticated ambient profile with no cached usage at all", () => {
@@ -1871,10 +1995,10 @@ describe("<RateLimitPopover /> rail", () => {
     expect(
       screen.getByText("Signed out — sign in to refresh usage."),
     ).toBeTruthy();
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
   });
 
-  it("shows Queued… copy for one profile row whose target is queued, without affecting a sibling profile's row", () => {
+  it("shows Refreshing for one profile row whose OWN query is fetching, without affecting a sibling profile's row", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -1899,28 +2023,33 @@ describe("<RateLimitPopover /> rail", () => {
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
-      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
-    };
-    mocks.targetPhases = {
-      [resultKey("codex", "work-profile")]: "queued",
+      [resultKey("codex", "work-profile")]: {
+        ...readyResult(codexReady()),
+        isFetching: true,
+      },
     };
 
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
 
-    expect(screen.getByText("Queued…")).toBeTruthy();
-    // Only one "Queued…" - the ambient row (untracked) still shows its
-    // ordinary relative-time copy, not a second "Queued…".
-    expect(screen.getAllByText("Queued…")).toHaveLength(1);
+    expect(screen.getByText("Refreshing")).toBeTruthy();
+    // Only one "Refreshing" - the ambient row's own query is idle, so it
+    // still shows its ordinary relative-time copy, not a borrowed one.
+    // `RateLimitProviderProfileRow` renders that copy through
+    // `ProfileUsageUpdatedLabel`, which - unlike the single-provider header's
+    // `UsageLimitUpdatedLabel` - has no "Updated " prefix; at 10s old it
+    // buckets to "Just now" (`formatRelativeTimestamp`).
+    expect(screen.getAllByText("Refreshing")).toHaveLength(1);
+    expect(screen.getByText("Just now")).toBeTruthy();
   });
 
-  it("skips open-time refresh only for a row whose summary is fresh AND cached; a stale-summary cached row still enqueues", () => {
+  it("skips open-time refresh only for a row whose summary is fresh AND cached; a stale-summary cached row still fetches", () => {
     // The mount hook (`useRefreshProviderRateLimitsOnMount`) now skips ONLY
     // when the host-persisted summary (`usageUpdatedAt`) is fresh AND a
     // detailed value is cached - see its own suite's skip matrix. The ambient
     // row here has both, so it stays passive on open; the work-profile row's
     // summary is past the freshness window despite carrying a cached value,
-    // so opening the popover still enqueues a pull for it.
+    // so opening the popover still fetches it.
     mocks.configured = [
       {
         providerId: "codex",
@@ -1950,11 +2079,15 @@ describe("<RateLimitPopover /> rail", () => {
 
     renderPopover();
 
-    expect(mocks.enqueue).toHaveBeenCalledTimes(1);
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: false, profileId: "work-profile" },
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledWith(
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: "work-profile",
+      },
+      { force: false },
     );
   });
 
@@ -2312,6 +2445,9 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(mocks.openSettings).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
     expect(useProvidersFocusStore.getState()).toMatchObject({
       focusHarnessId: "opencode",
@@ -2477,15 +2613,15 @@ describe("<RateLimitPopover /> per-provider states", () => {
   });
 
   it("shows Refreshing instead of an updated timestamp while this target is fetching", () => {
-    // The label's `refreshing` state is now driven by this exact target's own
-    // queue-registry phase (`useRateLimitQueueTargetPhase`), not the
-    // lane-wide `draining` flag - see the "queued/fetching" describe block
-    // below for the row-level truthful-copy coverage this replaces.
+    // The label's `refreshing` state is this exact target's own
+    // `query.isFetching` - the same TanStack query key `fetchProviderRateLimits`
+    // writes to - not a separate registry.
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    mocks.targetPhases = { codex: "fetching" };
+    mocks.results = {
+      codex: { ...readyResult(codexReady()), isFetching: true },
+    };
     renderPopover();
 
     const label = screen.getByText("Refreshing");
@@ -2495,31 +2631,33 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(screen.queryByText(/^Updated /)).toBeNull();
   });
 
-  it("does not show Refreshing from the lane-wide draining flag alone - only this target's own phase drives it", () => {
+  it("does not show Refreshing from a DIFFERENT provider's own isFetching - only this target's own query key drives it", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    // A DIFFERENT target occupies the shared lane; this provider's own target
-    // is untracked (not queued, not fetching).
-    mocks.draining = true;
+    mocks.results = {
+      // Codex's own target is untracked (idle); claude-code's is fetching.
+      codex: readyResult(codexReady()),
+      "claude-code": { ...readyResult(claudeReady()), isFetching: true },
+    };
     renderPopover();
 
-    expect(screen.queryByText("Refreshing")).toBeNull();
+    // Overview stacks every configured provider's card at once, so
+    // claude-code's own fetching state is already on screen here, on ITS OWN
+    // card - exactly one "Refreshing", coexisting with codex's ordinary
+    // "Updated ..." copy on its sibling card. What this test guards against
+    // is that state bleeding onto codex's card, not its mere presence before
+    // claude-code's tab is clicked.
+    expect(screen.getAllByText("Refreshing")).toHaveLength(1);
     expect(screen.getByText(/^Updated /)).toBeTruthy();
-  });
 
-  it("shows Queued… copy instead of an updated timestamp while this target waits behind another", () => {
-    mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
-    ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    mocks.targetPhases = { codex: "queued" };
-    renderPopover();
-
-    expect(screen.getByText("Queued…")).toBeTruthy();
-    expect(screen.queryByText("Refreshing")).toBeNull();
-    expect(screen.queryByText(/^Updated /)).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude Code" }));
+    expect(screen.getByText("Refreshing")).toBeTruthy();
   });
 
   it("shows a signed-out message instead of the usage body for an ambient provider that is signed out with no cached usage", () => {
@@ -2540,7 +2678,6 @@ describe("<RateLimitPopover /> per-provider states", () => {
       screen.getByText("Signed out — sign in to refresh usage."),
     ).toBeTruthy();
     expect(screen.queryByText("4% used")).toBeNull();
-    expect(screen.queryByText("Queued…")).toBeNull();
   });
 
   it("shows a plain error message with no inline retry control when a fetch never succeeded", () => {
@@ -2567,12 +2704,16 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Refresh Codex" }));
-    // Codex is ephemeralProcess -> the header's refresh routes through the
-    // serial queue, same as retrying used to.
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: true, profileId: null },
+    // Codex is ephemeralProcess -> the header's refresh routes through
+    // `fetchProviderRateLimits`, same as retrying used to.
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledWith(
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: null,
+      },
+      { force: true },
     );
   });
 
@@ -2661,51 +2802,19 @@ describe("<RateLimitPopover /> Refresh all", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    mocks.targetPhases = { codex: "fetching" };
+    mocks.results = {
+      codex: { ...readyResult(codexReady()), isFetching: true },
+    };
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("stays clickable while its target is merely QUEUED, so the click can promote it", () => {
-    // An enqueue for an already-queued target sets `pending.force = true`.
-    // That promotion is the only thing stopping the pull being skipped by its
-    // second freshness/cool-down check, or reaching the host as `force: false`
-    // and being answered from the gauge cache - so disabling here would make
-    // the click that does that work impossible.
-    mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
-    ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    mocks.targetPhases = { codex: "queued" };
-    renderPopover();
-    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
-    expect((refreshAll as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("stays enabled while the lane drains for a target this button does not refresh", () => {
-    // The dead-control regression: `RefreshIconButton` DISABLES on `refreshing`
-    // and its trigger no-ops while set, with no timeout cap on the external
-    // half - so gating on the lane-wide draining flag meant a background sweep
-    // of a provider this popover isn't even showing turned "Refresh all" off
-    // for that sweep's full response budget.
-    mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
-    ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    mocks.draining = true;
-    mocks.targetPhases = { "claude-code": "fetching" };
-    renderPopover();
-    const refreshAll = screen.getByRole("button", { name: "Refresh all" });
-    expect((refreshAll as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("is disabled while an httpFetch provider is fetching, even though the ephemeralProcess queue isn't draining", () => {
-    // Regression: "Refresh all" used to read only the ephemeralProcess queue's
-    // draining flag, so an all-httpFetch popover (or one mid-invalidation on
-    // just its httpFetch providers) never visibly spun despite actively
-    // refreshing.
+  it("is disabled while an httpFetch provider is fetching, even though no ephemeralProcess target is", () => {
+    // Regression: "Refresh all" used to read only the ephemeralProcess lane's
+    // shared draining flag, so an all-httpFetch popover (or one
+    // mid-invalidation on just its httpFetch providers) never visibly spun
+    // despite actively refreshing.
     mocks.configured = [
       { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
     ];
@@ -2720,7 +2829,6 @@ describe("<RateLimitPopover /> Refresh all", () => {
         isFetching: true,
       },
     };
-    mocks.draining = false;
     renderPopover();
     const refreshAll = screen.getByRole("button", { name: "Refresh all" });
     expect((refreshAll as HTMLButtonElement).disabled).toBe(true);
@@ -2769,19 +2877,20 @@ describe("<RateLimitPopover /> Refresh all", () => {
     ]);
   });
 
-  it("keeps a single ephemeralProcess provider's own refresh button disabled while ITS target is fetching, even though its own isFetching has already settled", () => {
+  it("keeps a single ephemeralProcess provider's own refresh button disabled while its own query is fetching", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
     ];
-    mocks.results = { codex: readyResult(codexReady()) };
-    mocks.targetPhases = { codex: "fetching" };
+    mocks.results = {
+      codex: { ...readyResult(codexReady()), isFetching: true },
+    };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
     expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("leaves a provider's own refresh button live while a DIFFERENT provider's target holds the lane", () => {
+  it("leaves a provider's own refresh button live while a DIFFERENT provider's own target is fetching", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
       {
@@ -2792,17 +2901,15 @@ describe("<RateLimitPopover /> Refresh all", () => {
     ];
     mocks.results = {
       codex: readyResult(codexReady()),
-      "claude-code": readyResult(claudeReady()),
+      "claude-code": { ...readyResult(claudeReady()), isFetching: true },
     };
-    mocks.draining = true;
-    mocks.targetPhases = { "claude-code": "fetching" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
     expect((refreshCodex as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("enqueues every ephemeralProcess profile in one parallel refresh batch", () => {
+  it("fires one independent fetchProviderRateLimits call per ephemeralProcess profile, all at once - not a serialized batch", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -2835,29 +2942,41 @@ describe("<RateLimitPopover /> Refresh all", () => {
       "claude-code": readyResult(claudeReady()),
     };
     renderPopover();
-    mocks.enqueue.mockClear();
+    mocks.fetchProviderRateLimits.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
-    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
-      [
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: null,
-        },
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: "work-profile",
-        },
-        {
-          providerId: "claude-code",
-          accountContext: { type: "PERSONAL" },
-          profileId: null,
-        },
-      ],
+    // Three targets, three INDEPENDENT calls - no batch array, no shared
+    // promise chain between them.
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledTimes(3);
+    expect(mocks.fetchProviderRateLimits).toHaveBeenNthCalledWith(
+      1,
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: null,
+      },
       { force: true },
     );
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).toHaveBeenNthCalledWith(
+      2,
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: "work-profile",
+      },
+      { force: true },
+    );
+    expect(mocks.fetchProviderRateLimits).toHaveBeenNthCalledWith(
+      3,
+      fetchScope,
+      {
+        providerId: "claude-code",
+        accountContext: { type: "PERSONAL" },
+        profileId: null,
+      },
+      { force: true },
+    );
   });
 
   it("targets the managed profile id, not null, when refreshing a provider with exactly one managed profile", () => {
@@ -2883,19 +3002,18 @@ describe("<RateLimitPopover /> Refresh all", () => {
       [resultKey("codex", "work-profile")]: readyResult(codexReady()),
     };
     renderPopover();
-    mocks.enqueue.mockClear();
+    mocks.fetchProviderRateLimits.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
-    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
-      [
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: "work-profile",
-        },
-      ],
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledWith(
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: "work-profile",
+      },
       { force: true },
     );
-    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   // This popover IS reachable on the phone - `MobileAppHeader` renders
@@ -3056,13 +3174,16 @@ describe("<RateLimitPopover /> rail settings", () => {
     expect(mocks.openSettings).toHaveBeenCalledWith({
       section: "layout",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
     // The anchor cannot ride on `openSettings`, which carries a section and
     // nothing finer - it travels in the reveal store the Layout panel's
     // watcher polls, exactly as a settings search result's does.
     expect(useSettingsSearchStore.getState().pendingReveal).toMatchObject({
       section: "layout",
-      anchor: "layout-status-bar",
+      anchor: "layout-surface-status-bar",
     });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -3124,6 +3245,9 @@ describe("<RateLimitPopover /> manage provider links", () => {
     expect(mocks.openSettings).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
     expect(useProvidersFocusStore.getState()).toMatchObject({
       focusHarnessId: "codex",
@@ -3209,7 +3333,7 @@ describe("<RateLimitPopover /> manage provider links", () => {
 });
 
 describe("<RateLimitPopover /> per-provider refresh", () => {
-  it("routes an httpFetch provider's refresh through refetch, not the queue", () => {
+  it("routes an httpFetch provider's refresh through refetch, not fetchProviderRateLimits", () => {
     const refetch = vi.fn(() => Promise.resolve({}));
     mocks.configured = [
       { providerId: "kilocode", lane: "httpFetch", profiles: undefined },
@@ -3236,7 +3360,7 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     const callsBeforeClick = refetch.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh Kilo Code" }));
     expect(refetch.mock.calls.length).toBe(callsBeforeClick + 1);
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).not.toHaveBeenCalled();
   });
 
   it("refreshes every profile in parallel from one provider-heading control", () => {
@@ -3275,25 +3399,30 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     expect(screen.queryByRole("button", { name: "Refresh Work" })).toBeNull();
     fireEvent.click(refreshProvider);
 
-    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
-      [
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: null,
-        },
-        {
-          providerId: "codex",
-          accountContext: { type: "PERSONAL" },
-          profileId: "work-profile",
-        },
-      ],
+    expect(mocks.fetchProviderRateLimits).toHaveBeenCalledTimes(2);
+    expect(mocks.fetchProviderRateLimits).toHaveBeenNthCalledWith(
+      1,
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: null,
+      },
       { force: true },
     );
-    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.fetchProviderRateLimits).toHaveBeenNthCalledWith(
+      2,
+      fetchScope,
+      {
+        providerId: "codex",
+        accountContext: { type: "PERSONAL" },
+        profileId: "work-profile",
+      },
+      { force: true },
+    );
   });
 
-  it("keeps profile cards out of a shared loading state while the provider refresh queue drains", () => {
+  it("keeps profile cards out of a shared loading state - each reflects only its own query's isFetching", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -3317,11 +3446,9 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
       },
     ];
     mocks.results = {
-      codex: readyResult(codexReady()),
+      codex: { ...readyResult(codexReady()), isFetching: true },
       [resultKey("codex", "work-profile")]: readyResult(codexReady()),
     };
-    // Only the ambient target is fetching; the managed sibling is idle.
-    mocks.targetPhases = { codex: "fetching" };
     renderPopover();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
 
@@ -3330,31 +3457,18 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
         .getByRole("button", { name: "Refresh Codex" })
         .getAttribute("disabled"),
     ).not.toBeNull();
-    // Exactly one card reports Refreshing - the one actually fetching. The
-    // shared lane must not put the sibling profile into a loading state too.
+    // Exactly one card reports Refreshing - the ambient one, whose own query
+    // is fetching. The idle managed sibling must not borrow that state.
     expect(screen.getAllByText("Refreshing")).toHaveLength(1);
   });
 
-  // REPLACES a pin that asserted the opposite - that the lane-wide `draining`
-  // flag SHOULD disable every ephemeralProcess control, on the reasoning that
-  // "queue items run one at a time (each provider click is one parallel profile
-  // batch), so this matches a 'refresh round is in progress' mental model".
-  //
-  // That reasoning rested on a premise that no longer holds: draining used to
-  // imply a round the USER started. Background target polling
-  // (`selectBackgroundRateLimitTargets`) now drains the lane on a timer with no
-  // user action at all, so the lane-wide rule silently disabled every control
-  // for a sweep nobody asked for. Combined with `RefreshIconButton` both
-  // disabling AND no-opping its trigger, and no timeout cap on the external
-  // half of `useRefreshSpinner`, one wedged probe held every control dead for
-  // its full response budget - and made the queue's force promotion
-  // unreachable, since the click that promotes a queued pull was blocked in
-  // exactly the state where promoting matters.
-  //
-  // Pinned in the new direction: a control reflects ONLY its own targets. Do
-  // not restore the lane-wide gate without also removing the no-op-while-
-  // disabled behaviour of the trigger.
-  it("leaves each ephemeralProcess provider's control live while only the OTHER provider's targets are in the queue", () => {
+  // Pinned direction: a control reflects ONLY its own targets' own
+  // `query.isFetching`, never a shared or lane-wide flag. There is no longer
+  // any shared state a control even COULD read instead - `fetchProviderRateLimits`
+  // dispatches one independent request per target with no serialization, so a
+  // background sweep of one provider cannot hold a DIFFERENT provider's
+  // control dead for its response budget the way the old shared queue could.
+  it("leaves each ephemeralProcess provider's control live while only a DIFFERENT provider's targets are fetching", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -3397,29 +3511,27 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
         ],
       },
     ];
+    // Both of claude-code's targets are fetching; codex's are not.
     mocks.results = {
       codex: readyResult(codexReady()),
       [resultKey("codex", "work-profile")]: readyResult(codexReady()),
-      "claude-code": readyResult(claudeReady()),
-      [resultKey("claude-code", "team-profile")]: readyResult(claudeReady()),
-    };
-    // The lane is draining, but only claude-code's targets are actually in it.
-    mocks.draining = true;
-    mocks.targetPhases = {
-      "claude-code": "fetching",
-      [resultKey("claude-code", "team-profile")]: "queued",
+      "claude-code": { ...readyResult(claudeReady()), isFetching: true },
+      [resultKey("claude-code", "team-profile")]: {
+        ...readyResult(claudeReady()),
+        isFetching: true,
+      },
     };
     renderPopover();
 
-    // Codex has nothing of its own in the lane: its control stays live, and no
+    // Codex has nothing of its own fetching: its control stays live, and no
     // card of its borrows the other provider's loading state.
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const refreshCodex = screen.getByRole("button", { name: "Refresh Codex" });
     expect((refreshCodex as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByText("Refreshing")).toBeNull();
 
-    // Claude Code owns the queued work, so its own control is the one gated -
-    // and its fetching row is the only place "Refreshing" appears.
+    // Claude Code owns the fetching targets, so its own control is the one
+    // gated - and its two fetching rows are where "Refreshing" appears.
     fireEvent.click(screen.getByRole("tab", { name: "Claude Code" }));
     const refreshClaude = screen.getByRole("button", {
       name: "Refresh Claude Code",
@@ -3688,6 +3800,21 @@ describe("<RateLimitPopover /> host picker", () => {
 
     expect(setHostId).toHaveBeenCalledWith("host-b");
     expect(makeActive).not.toHaveBeenCalled();
+  });
+
+  it("'Manage hosts…' opens the Overview on Updates, not the retired Status tab", () => {
+    renderPopoverWithScope(twoHostScope({}), false);
+
+    fireEvent.click(screen.getByTestId("settings-host-switcher"));
+    fireEvent.click(screen.getByTestId("settings-host-switcher-manage"));
+
+    expect(mocks.openSettings).toHaveBeenCalledWith({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: null,
+    });
   });
 });
 

@@ -176,20 +176,17 @@ describe("ProfileUsageSidecar states", () => {
     ).toBeDefined();
   });
 
-  it.each([
-    { refreshStatus: "queued" as const, copy: "Queued" },
-    { refreshStatus: "refreshing" as const, copy: "Refreshing" },
-  ])("keeps cached detail visible while $refreshStatus", async (state) => {
+  it("keeps cached detail visible while refreshing", async () => {
     const retained = staleEntry();
     render(
       <ProfileUsageSidecar
         anchor={anchor}
         profile={PROFILE}
-        entry={{ ...retained, refreshStatus: state.refreshStatus }}
+        entry={{ ...retained, refreshStatus: "refreshing" }}
         isHostReady
       />,
     );
-    expect(await screen.findByText(state.copy)).toBeDefined();
+    expect(await screen.findByText("Refreshing")).toBeDefined();
     expect(screen.getByText("Current session")).toBeDefined();
     expect(screen.getByTestId("profile-usage-refresh-spinner")).toBeDefined();
     expectDisabledButton("Retry usage for Work");

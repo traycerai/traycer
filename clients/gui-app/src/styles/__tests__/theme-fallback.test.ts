@@ -65,4 +65,26 @@ describe("theme fallback stylesheet", () => {
       ).toBe(expected.replace(/\s+/g, ""));
     }
   });
+
+  it("scopes the whole base dark palette onto a subtree, and `dark:` follows it", () => {
+    const scope =
+      /@utility theme-base-dark\s*\{([^{}]*)\}/s.exec(FALLBACK_CSS)?.[1] ?? "";
+    expect(scope).toMatch(/color-scheme:\s*dark;/);
+    const declarations = declarationsIn(scope);
+    const darkColors = new Map(Object.entries(baseThemeColors.dark));
+    // Every token the applier writes on <html> from the base palette, so no
+    // token of the active theme leaks into the scope.
+    expect([...declarations.keys()].sort()).toEqual(
+      Object.keys(baseThemeColors.light).sort(),
+    );
+    for (const [token, light] of Object.entries(baseThemeColors.light)) {
+      expect(
+        declarations.get(token)?.replace(/\s+/g, ""),
+        `scoped --${token}`,
+      ).toBe((darkColors.get(token) ?? light).replace(/\s+/g, ""));
+    }
+    expect(INDEX_CSS).toMatch(
+      /@custom-variant dark \(&:is\(\.dark \*, \.theme-base-dark \*\)\);/,
+    );
+  });
 });

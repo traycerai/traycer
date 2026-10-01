@@ -53,19 +53,23 @@ import {
   refineConsentRevisionRequiresStopOwners,
   worktreeEntryScriptsSchema,
 } from "@traycer/protocol/host/worktree-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const worktreeDeleteByPathOpenRequestSchema = z.object({
-  worktreePath: z.string(),
-  scripts: worktreeEntryScriptsSchema.nullable().default(null),
-});
+export const worktreeDeleteByPathOpenRequestSchema = lazySchema(() =>
+  z.object({
+    worktreePath: z.string(),
+    scripts: worktreeEntryScriptsSchema.nullable().default(null),
+  }),
+);
 export type WorktreeDeleteByPathOpenRequest = z.infer<
   typeof worktreeDeleteByPathOpenRequestSchema
 >;
 
-export const worktreeDeleteByPathOpenRequestSchemaV11 =
+export const worktreeDeleteByPathOpenRequestSchemaV11 = lazySchema(() =>
   worktreeDeleteByPathOpenRequestSchema.extend({
     stopOwners: z.boolean().default(false),
-  });
+  }),
+);
 export type WorktreeDeleteByPathOpenRequestV11 = z.infer<
   typeof worktreeDeleteByPathOpenRequestSchemaV11
 >;
@@ -77,27 +81,31 @@ export type WorktreeDeleteByPathOpenRequestV11 = z.infer<
  * The existing digest and `stopOwners: true` parse constraints remain frozen.
  * Remove the field only after the protocol minor-removal window permits it.
  */
-export const worktreeDeleteByPathOpenRequestSchemaV12 =
+export const worktreeDeleteByPathOpenRequestSchemaV12 = lazySchema(() =>
   worktreeDeleteByPathOpenRequestSchemaV11
     .extend({
       expectedHoldersRevision: expectedHoldersRevisionFieldSchema,
     })
-    .superRefine(refineConsentRevisionRequiresStopOwners);
+    .superRefine(refineConsentRevisionRequiresStopOwners),
+);
 export type WorktreeDeleteByPathOpenRequestV12 = z.infer<
   typeof worktreeDeleteByPathOpenRequestSchemaV12
 >;
 
-const worktreeDeletePhaseSchema = z.enum(["teardown", "remove"]);
+const worktreeDeletePhaseSchema = lazySchema(() =>
+  z.enum(["teardown", "remove"]),
+);
 export type WorktreeDeletePhase = z.infer<typeof worktreeDeletePhaseSchema>;
 
-const worktreeDeleteOutputChannelSchema = z.enum(["stdout", "stderr"]);
+const worktreeDeleteOutputChannelSchema = lazySchema(() =>
+  z.enum(["stdout", "stderr"]),
+);
 export type WorktreeDeleteOutputChannel = z.infer<
   typeof worktreeDeleteOutputChannelSchema
 >;
 
-export const worktreeDeleteByPathServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const worktreeDeleteByPathServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("started"),
       hasTeardown: z.boolean(),
@@ -128,20 +136,19 @@ export const worktreeDeleteByPathServerFrameSchema = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteByPathServerFrame = z.infer<
   typeof worktreeDeleteByPathServerFrameSchema
 >;
 
-export const worktreeDeleteByPathClientFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
+export const worktreeDeleteByPathClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteByPathClientFrame = z.infer<
   typeof worktreeDeleteByPathClientFrameSchema
@@ -155,9 +162,8 @@ export const worktreeDeleteByPathStreamV10 = defineStreamRpcContract({
   clientFrameSchema: worktreeDeleteByPathClientFrameSchema,
 });
 
-export const worktreeDeleteByPathServerFrameSchemaV11 = z.discriminatedUnion(
-  "kind",
-  [
+export const worktreeDeleteByPathServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("started"),
       hasTeardown: z.boolean(),
@@ -189,7 +195,7 @@ export const worktreeDeleteByPathServerFrameSchemaV11 = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteByPathServerFrameV11 = z.infer<
   typeof worktreeDeleteByPathServerFrameSchemaV11
@@ -212,9 +218,8 @@ export const worktreeDeleteByPathStreamV11 = defineStreamRpcContract({
  * terminal `failed` frame still parses — dropping it would leave a pending
  * delete unsettled.
  */
-export const worktreeDeleteByPathServerFrameSchemaV12 = z.discriminatedUnion(
-  "kind",
-  [
+export const worktreeDeleteByPathServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("started"),
       hasTeardown: z.boolean(),
@@ -251,7 +256,7 @@ export const worktreeDeleteByPathServerFrameSchemaV12 = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteByPathServerFrameV12 = z.infer<
   typeof worktreeDeleteByPathServerFrameSchemaV12
@@ -276,9 +281,8 @@ export const worktreeDeleteByPathOpenRequestSchemaV13 =
 export type WorktreeDeleteByPathOpenRequestV13 =
   WorktreeDeleteByPathOpenRequestV12;
 
-export const worktreeDeleteByPathServerFrameSchemaV13 = z.discriminatedUnion(
-  "kind",
-  [
+export const worktreeDeleteByPathServerFrameSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("started"),
       hasTeardown: z.boolean(),
@@ -315,7 +319,7 @@ export const worktreeDeleteByPathServerFrameSchemaV13 = z.discriminatedUnion(
       kind: z.literal("pong"),
       hasBinaryPayload: z.literal(false),
     }),
-  ],
+  ]),
 );
 export type WorktreeDeleteByPathServerFrameV13 = z.infer<
   typeof worktreeDeleteByPathServerFrameSchemaV13

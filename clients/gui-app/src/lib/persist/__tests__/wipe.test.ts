@@ -10,7 +10,6 @@ const flushActiveDesktopPerWindowProjection = vi.fn<() => Promise<void>>(() =>
 const drainDesktopTabsPersistence = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
-const publishPromptStashReset = vi.fn<() => void>();
 const resetTabRecoveryHistory = vi.fn<() => Promise<void>>(() =>
   Promise.resolve(),
 );
@@ -20,9 +19,6 @@ vi.mock("@/lib/windows/per-window-projection-debounce", () => ({
 }));
 vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
   drainDesktopTabsPersistence: () => drainDesktopTabsPersistence(),
-}));
-vi.mock("@/lib/composer/prompt-stash-channel", () => ({
-  publishPromptStashReset: () => publishPromptStashReset(),
 }));
 vi.mock("@/lib/tab-recovery/history", () => ({
   resetTabRecoveryHistory: () => resetTabRecoveryHistory(),
@@ -47,7 +43,14 @@ vi.mock("@/lib/appearance/appearance-cache", () => ({
 }));
 
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
+import { persistKey } from "@/lib/persist/keys";
+import { STASH_DB_NAME } from "@/lib/drafts/stash-migration";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import { SKELETON_RESUME_DB_NAME } from "@/stores/chats/skeleton-resume-durable-cache";
+
+const SKELETON_RESUME_PRESENT_KEY = persistKey(
+  "chat-skeleton-resume-present-v1",
+);
 
 function createMockStorage(seed: Record<string, string>): Storage {
   const map = new Map<string, string>(Object.entries(seed));
@@ -90,6 +93,7 @@ const LOCAL_SEED: Record<string, string> = {
   "traycer-gui-app:composer-run-settings:anon": "{}",
   "traycer-gui-app:open-epic:u1:e1": "{}",
   "traycer-gui-app:reading-position:u1:epic-1:view:native:tile-1": "{}",
+  [SKELETON_RESUME_PRESENT_KEY]: '["account-scoped-chat-key"]',
   "traycer.token": "secret-auth-token",
   "some-unrelated-key": "keep-me",
   "traycer-gui-appX:foo": "must-not-be-swept",
@@ -130,7 +134,6 @@ let reloadSpy: Mock<() => void>;
 beforeEach(() => {
   flushActiveDesktopPerWindowProjection.mockClear();
   drainDesktopTabsPersistence.mockClear();
-  publishPromptStashReset.mockClear();
   resetTabRecoveryHistory.mockReset();
   resetTabRecoveryHistory.mockResolvedValue(undefined);
   clearAppearanceCache.mockClear();
@@ -171,6 +174,7 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(snapshotKeys(localStorageMock)).toEqual(
       ["traycer.token", "some-unrelated-key", "traycer-gui-appX:foo"].sort(),
     );
+    expect(localStorageMock.getItem(SKELETON_RESUME_PRESENT_KEY)).toBeNull();
     expect(snapshotKeys(sessionStorageMock)).toEqual(
       [
         "traycer.session",
@@ -235,8 +239,9 @@ describe("clearAllPersistedStores — blanket-prefix sweep", () => {
     expect(order[order.length - 1]).toBe("reload");
     // hostClear precedes every sweep removal.
     expect(order[0]).toBe("hostClear");
-    // 4 local + 2 session persisted keys are swept (the seeds above).
-    expect(order.filter((e) => e.includes("removeItem")).length).toBe(6);
+    // Seven seeded prefix keys are swept; the resume clear also removes its
+    // presence hint after the prefix sweep.
+    expect(order.filter((e) => e.includes("removeItem")).length).toBe(8);
   });
 
   it("awaits `hostClear` BEFORE sweeping (a rejecting clear aborts the sweep + reload)", async () => {
@@ -319,6 +324,10 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     "traycer-gui-app:window-7:landing-images",
     "traycer-gui-app:default:file-edit-recovery",
     "traycer-gui-app:window-7:file-edit-recovery",
+    "traycer-gui-app:anon:transcript-images",
+    "traycer-gui-app:user-1:transcript-images",
+    "traycer-gui-app:anon:transcript-image-meta",
+    "traycer-gui-app:user-1:transcript-image-meta",
     "traycer-gui-app:some-other-store",
     "unrelated-app-db",
   ];
@@ -347,29 +356,33 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     return { deleted };
   }
 
-  it("deletes only known renderer dbs (landing-image, file-edit-recovery, prompt-stash, tab-recovery); same-prefix + unrelated dbs survive", async () => {
+  it("deletes known renderer dbs (including skeleton resume); same-prefix + unrelated dbs survive", async () => {
     const { deleted } = installIndexedDB({
       databases: () => Promise.resolve(DB_NAMES.map((name) => ({ name }))),
     });
 
     await clearAllPersistedStores({ hostClear: null });
 
-    // Landing partitions come from enumeration; prompt-stash and the fixed
-    // appearance db are always deleted by exact name even when enumeration
-    // never lists them.
+    // Renderer partitions come from enumeration; the legacy stash, fixed
+    // appearance, and skeleton resume db are deleted by exact name even when
+    // enumeration never lists them.
     expect(deleted.sort()).toEqual(
       [
         "traycer-gui-app:default:landing-images",
-        "traycer-gui-app:prompt-stash",
+        STASH_DB_NAME,
         "traycer-gui-app:appearance",
         "traycer-gui-app:window-7:landing-images",
         "traycer-gui-app:default:file-edit-recovery",
         "traycer-gui-app:window-7:file-edit-recovery",
+        "traycer-gui-app:anon:transcript-images",
+        "traycer-gui-app:user-1:transcript-images",
+        "traycer-gui-app:anon:transcript-image-meta",
+        "traycer-gui-app:user-1:transcript-image-meta",
+        SKELETON_RESUME_DB_NAME,
         "traycer-gui-app:tab-recovery",
       ].sort(),
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
-    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
   });
 
   it("clears the appearance cache during the wipe", async () => {
@@ -388,6 +401,17 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     await clearAllPersistedStores({ hostClear: null });
 
     expect(deleted).toContain(APPEARANCE_DB_NAME);
+  });
+
+  it("deletes the skeleton resume presence hint and fixed database", async () => {
+    const { deleted } = installIndexedDB({
+      databases: () => Promise.resolve([]),
+    });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(localStorageMock.getItem(SKELETON_RESUME_PRESENT_KEY)).toBeNull();
+    expect(deleted).toContain(SKELETON_RESUME_DB_NAME);
   });
 
   it("still reloads when clearAppearanceCache rejects (best-effort, does not abort the wipe)", async () => {
@@ -427,36 +451,6 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
 
     expect(order[0]).toBe("appearance-clear");
     expect(order[order.length - 1]).toBe("reload");
-  });
-
-  it("notifies peer windows only after the prompt-stash database is deleted", async () => {
-    const order: string[] = [];
-    const value = {
-      databases: vi.fn(() => Promise.resolve([])),
-      deleteDatabase: vi.fn((name: string) => {
-        const { request, fire } = fakeDeleteRequest();
-        queueMicrotask(() => {
-          order.push(`deleted:${name}`);
-          fire();
-        });
-        return request;
-      }),
-    };
-    Object.defineProperty(globalThis, "indexedDB", {
-      configurable: true,
-      writable: true,
-      value,
-    });
-    publishPromptStashReset.mockImplementation(() => order.push("reset"));
-
-    await clearAllPersistedStores({ hostClear: null });
-
-    expect(order).toEqual([
-      "deleted:traycer-gui-app:prompt-stash",
-      "deleted:traycer-gui-app:tab-recovery",
-      "deleted:traycer-gui-app:appearance",
-      "reset",
-    ]);
   });
 
   it("drops the dbs AFTER the storage sweep and BEFORE the reload", async () => {
@@ -531,7 +525,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("still deletes the fixed prompt-stash db when `indexedDB.databases` is absent", async () => {
+  it("still deletes the fixed legacy stash db when `indexedDB.databases` is absent", async () => {
     const deleteDatabase = vi.fn((_name: string) => {
       const { request, fire } = fakeDeleteRequest();
       queueMicrotask(fire);
@@ -549,12 +543,25 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     ).resolves.toBeUndefined();
 
     // Without enumeration, landing partitions cannot be found - accepted gap -
-    // but the single known prompt-stash name is always deleted.
+    // but the single known legacy stash name is always deleted.
+    //
+    // Deliberately the LITERAL historical name, not `STASH_DB_NAME`: this is
+    // the one assertion that pins what the retired prompt-stash repository
+    // actually wrote. Production, the migration reader and every other
+    // assertion here share that constant, so a typo in it would leave the real
+    // db on disk untouched while all of them still agreed with each other.
     expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
+    expect(STASH_DB_NAME).toBe("traycer-gui-app:prompt-stash");
+    expect(deleteDatabase).toHaveBeenCalledWith(
+      "traycer-gui-app:anon:transcript-images",
+    );
+    expect(deleteDatabase).toHaveBeenCalledWith(
+      "traycer-gui-app:anon:transcript-image-meta",
+    );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("still deletes prompt stash and reloads when database enumeration rejects", async () => {
+  it("still deletes the legacy stash db and reloads when database enumeration rejects", async () => {
     const deleteDatabase = vi.fn((_name: string) => {
       const { request, fire } = fakeDeleteRequest();
       queueMicrotask(fire);
@@ -573,8 +580,10 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
       clearAllPersistedStores({ hostClear: null }),
     ).resolves.toBeUndefined();
 
-    expect(deleteDatabase).toHaveBeenCalledWith("traycer-gui-app:prompt-stash");
-    expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
+    expect(deleteDatabase).toHaveBeenCalledWith(STASH_DB_NAME);
+    expect(deleteDatabase).toHaveBeenCalledWith(
+      "traycer-gui-app:anon:transcript-images",
+    );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
   });
 

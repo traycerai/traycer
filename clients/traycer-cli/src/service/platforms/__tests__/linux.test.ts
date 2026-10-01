@@ -1,9 +1,18 @@
 import { execFile } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { extractExecStartTokens } from "@traycer-clients/shared/host-lifecycle";
 const pidMetadata = vi.hoisted(() => ({
   metadata: null as { pid: number } | null,
@@ -39,12 +48,54 @@ vi.mock("../../../host/pid-metadata", () => ({
   },
 }));
 
+// Isolation for the linger-ordering `install()` calls this file adds below
+// (the "systemd unit install — linger ordering" describe): `installService`
+// resolves `serviceManifestPath` through the real `os.homedir()`
+// (`~/.config/systemd/user/<label>.service`), exactly like
+// `linux-install-flow.test.ts` documents for its own isolation. Every other
+// test in this file only reads the STRING `buildSystemdUnit` returns or
+// exercises `start`/`restart`/`relaunchAfterRestart` (none of which touch the
+// manifest path), so this mock is scoped to not disturb them - only the
+// install-flow describe below calls `controller.install`.
+const TEST_UNIT_DIR = mkdtempSync(join(tmpdir(), "traycer-linux-unit-test-"));
+vi.mock("../../label", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../label")>();
+  return {
+    ...actual,
+    serviceManifestPath: (label: { readonly id: string }) =>
+      join(TEST_UNIT_DIR, `${label.id}.service`),
+  };
+});
+
+afterAll(async () => {
+  await rm(TEST_UNIT_DIR, { recursive: true, force: true });
+});
+
 import {
   buildSystemdUnit,
   createLinuxController,
   setRestartStopGracesForTests,
+  type ProcessRunner,
 } from "../linux";
+import { SYSTEMD_UNIT_SERVICE_DIRECTIVES } from "../../systemd-unit-directives";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+import {
+  ProcessRunError,
+  ProcessTimeoutError,
+  type RunOptions,
+  type RunResult,
+} from "../../process-runner";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+  STDERR_FLUSH_TIMEOUT_MS,
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
+} from "../../spawn-edge-bounds";
 import type { ServiceLabel } from "../../label";
 import type { ServiceController } from "../../index";
 
@@ -575,11 +626,11 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
   });
 
   it("the user-facing `host stop` still uses the manager's stop verb - this round does not change that path", async () => {
-    // Repointed from a vacuous assertion (cold review B): the absent
+    // Repointed from a vacuous assertion (cold review B): the unit's
     // `TimeoutStopSec` is not a ceiling the update's ladder sits under, since
     // `systemctl kill` runs no stop job. It IS a live dependency of the plain
     // `host stop` path, which keeps `systemctl stop` and therefore keeps
-    // depending on systemd's 90s default. Pinning that the two paths diverged
+    // depending on the unit's stop bound. Pinning that the two paths diverged
     // is the true proposition.
     const { controller, commands } = recordingController();
 
@@ -664,5 +715,562 @@ describe("Q13: stopForRestart signals the unit instead of stopping it", () => {
 
     const flat = commands.map((c) => c.join(" "));
     expect(flat.some((c) => /systemctl --user stop\b/.test(c))).toBe(false);
+  });
+});
+
+// The recycle timeout fix: `systemctl restart`/`start` wait for the job
+// they queue, and a `restart` job's stop half can run the whole
+// `TimeoutStopSec` before the start even begins - so the runner timeout for
+// these calls must outlive that bound, not the old flat 15s. A runner
+// TIMEOUT past the new budget is reported unconfirmed (`systemctlJobFailure`),
+// never as a failed restart/start, because killing `systemctl` withdraws
+// nothing systemd already queued.
+describe("recycle timeout (systemctl restart / start)", () => {
+  interface RecordedRunCall {
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly options: RunOptions;
+  }
+
+  function stageRecycleRunner(
+    verb: "restart" | "start",
+    behavior: (
+      args: readonly string[],
+      options: RunOptions,
+    ) => Promise<RunResult>,
+  ): { calls: RecordedRunCall[]; controller: ServiceController } {
+    const calls: RecordedRunCall[] = [];
+    const runner: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === "systemctl" && args[1] === verb)
+        return behavior(args, options);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    return { calls, controller: createLinuxController(runner) };
+  }
+
+  async function resolveSuccess(): Promise<RunResult> {
+    return { stdout: "", stderr: "", exitCode: 0 };
+  }
+
+  // (b) A simulated duration between the old 15s bound and the new one.
+  async function simulatedTwentySeconds(
+    args: readonly string[],
+    options: RunOptions,
+  ): Promise<RunResult> {
+    const simulatedDurationMs = 20_000;
+    if (simulatedDurationMs > options.timeoutMs) {
+      throw new ProcessRunError(
+        `systemctl ${args.join(" ")} timed out after ${options.timeoutMs}ms (killed via SIGTERM): `,
+        "systemctl",
+        args,
+        -1,
+        "",
+        "",
+      );
+    }
+    return { stdout: "", stderr: "", exitCode: 0 };
+  }
+
+  // (c) CONTROL: systemd's own answer, not a timeout.
+  async function genuineFailure(
+    verb: string,
+    unit: string,
+    args: readonly string[],
+  ): Promise<RunResult> {
+    throw new ProcessRunError(
+      `systemctl ${args.join(" ")} exited with code 1: Job for ${unit} failed.\n`,
+      "systemctl",
+      args,
+      1,
+      "",
+      `Job for ${unit} failed.\n`,
+    );
+  }
+
+  // (e) PAST THE BOUND: the runner's own timer killed systemctl.
+  async function pastTheBound(args: readonly string[]): Promise<RunResult> {
+    throw new ProcessTimeoutError(
+      `systemctl ${args.join(" ")} timed out after 52000ms (killed via SIGTERM): `,
+      "systemctl",
+      args,
+      -1,
+      "",
+      "",
+      52_000,
+    );
+  }
+
+  const independentFloorMs =
+    SHUTDOWN_FORCE_EXIT_MS +
+    STDERR_END_WAIT_TIMEOUT_MS +
+    STDERR_FLUSH_TIMEOUT_MS +
+    CRASH_REPORT_SCAN_TIMEOUT_MS +
+    STOP_EXIT_GRACE_MARGIN_MS +
+    15_000;
+  const pinnedTimeoutMs = SYSTEMD_TIMEOUT_STOP_SECONDS * 1_000 + 15_000;
+
+  describe("controller.restart / relaunchAfterRestart(forcedRecycle: true)", () => {
+    it("gives systemctl restart a timeout past the stop-job bound", async () => {
+      const { calls, controller } = stageRecycleRunner(
+        "restart",
+        resolveSuccess,
+      );
+
+      await expect(
+        controller.restart(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+
+      const restartCall = calls.find(
+        (c) => c.command === "systemctl" && c.args[1] === "restart",
+      );
+      expect(restartCall?.args).toEqual([
+        "--user",
+        "restart",
+        "ai.traycer.host.dev.service",
+      ]);
+      const timeoutMs = restartCall?.options.timeoutMs;
+      // Independent floor, built only from symbols that exist on the
+      // unmodified code (protocol lifecycle constants + crash-diagnostics
+      // waits + the 15s the start half always had).
+      expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+      expect(timeoutMs).toBe(pinnedTimeoutMs);
+    });
+
+    it("relaunchAfterRestart(forcedRecycle: true) gives systemctl restart the same timeout", async () => {
+      const { calls, controller } = stageRecycleRunner(
+        "restart",
+        resolveSuccess,
+      );
+
+      await expect(
+        controller.relaunchAfterRestart(labelFor("ai.traycer.host.dev"), {
+          forcedRecycle: true,
+        }),
+      ).resolves.toBeUndefined();
+
+      const restartCall = calls.find(
+        (c) => c.command === "systemctl" && c.args[1] === "restart",
+      );
+      const timeoutMs = restartCall?.options.timeoutMs;
+      expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+      expect(timeoutMs).toBe(pinnedTimeoutMs);
+    });
+
+    it("a restart slower than the old 15s bound but inside the new one still resolves", async () => {
+      const { controller } = stageRecycleRunner(
+        "restart",
+        simulatedTwentySeconds,
+      );
+
+      await expect(
+        controller.restart(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a genuine systemd failure still reports the restart as failed", async () => {
+      const { controller } = stageRecycleRunner("restart", (args) =>
+        genuineFailure("restart", "ai.traycer.host.dev.service", args),
+      );
+
+      await expect(
+        controller.restart(labelFor("ai.traycer.host.dev")),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("systemctl restart failed for"),
+      });
+    });
+
+    it("a runner timeout past the new bound reports the restart as unconfirmed, not failed", async () => {
+      const { controller } = stageRecycleRunner("restart", pastTheBound);
+
+      const rejection: unknown = await controller
+        .restart(labelFor("ai.traycer.host.dev"))
+        .then(() => null)
+        .catch((error: unknown) => error);
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("did not return within 52000ms"),
+      });
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("unconfirmed"),
+      });
+      expect(rejection).not.toMatchObject({
+        message: expect.stringContaining("failed for"),
+      });
+      expect(rejection).toMatchObject({
+        details: expect.objectContaining({ timedOut: true, timeoutMs: 52_000 }),
+      });
+    });
+  });
+
+  describe("controller.start", () => {
+    it("gives systemctl start the same timeout as restart", async () => {
+      const { calls, controller } = stageRecycleRunner("start", resolveSuccess);
+
+      await expect(
+        controller.start(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+
+      const startCall = calls.find(
+        (c) => c.command === "systemctl" && c.args[1] === "start",
+      );
+      expect(startCall?.args).toEqual([
+        "--user",
+        "start",
+        "ai.traycer.host.dev.service",
+      ]);
+      const timeoutMs = startCall?.options.timeoutMs;
+      expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+      expect(timeoutMs).toBe(pinnedTimeoutMs);
+    });
+
+    it("a start slower than the old 15s bound but inside the new one still resolves", async () => {
+      const { controller } = stageRecycleRunner(
+        "start",
+        simulatedTwentySeconds,
+      );
+
+      await expect(
+        controller.start(labelFor("ai.traycer.host.dev")),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a genuine systemd failure still reports the start as failed", async () => {
+      const { controller } = stageRecycleRunner("start", (args) =>
+        genuineFailure("start", "ai.traycer.host.dev.service", args),
+      );
+
+      await expect(
+        controller.start(labelFor("ai.traycer.host.dev")),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("systemctl start failed for"),
+      });
+    });
+
+    it("a runner timeout past the new bound reports the start as unconfirmed, not failed", async () => {
+      const { controller } = stageRecycleRunner("start", pastTheBound);
+
+      const rejection: unknown = await controller
+        .start(labelFor("ai.traycer.host.dev"))
+        .then(() => null)
+        .catch((error: unknown) => error);
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("did not return within 52000ms"),
+      });
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("unconfirmed"),
+      });
+      expect(rejection).not.toMatchObject({
+        message: expect.stringContaining("failed for"),
+      });
+      expect(rejection).toMatchObject({
+        details: expect.objectContaining({ timedOut: true, timeoutMs: 52_000 }),
+      });
+    });
+  });
+});
+
+// UNIT-TEXT PIN: the exact `[Service]` directives `buildSystemdUnit` emits,
+// in emission order. The internal host's unit reader
+// (`traycer-host/src/domain/update/cli-invocation/legacy-linux.ts`
+// `EMITTED_SERVICE_KEYS` / `EMITTED_SERVICE_VALUES`) mirrors this list and
+// admits nothing else, so a change here needs the same change there.
+describe("systemd unit — [Service] directive pin", () => {
+  it("buildSystemdUnit emits TimeoutStopSec=37 inside [Service]", () => {
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+
+    expect(unit).toContain("\nTimeoutStopSec=37\n");
+
+    const serviceSection = unit
+      .split(/\n\[Service\]\n/)[1]
+      ?.split(/\n\[Install\]/)[0];
+    expect(serviceSection).toBeDefined();
+    const keys = (serviceSection ?? "")
+      .split("\n")
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((line) => line.split("=")[0]);
+
+    expect(keys).toEqual([
+      "Type",
+      "SyslogIdentifier",
+      "ExecStart",
+      "OOMPolicy",
+      "Restart",
+      "RestartSec",
+      "TimeoutStopSec",
+    ]);
+  });
+
+  it("SYSTEMD_UNIT_SERVICE_DIRECTIVES pins the fixed values and their order", () => {
+    expect(SYSTEMD_UNIT_SERVICE_DIRECTIVES).toEqual({
+      Type: "simple",
+      SyslogIdentifier: null,
+      ExecStart: null,
+      OOMPolicy: "continue",
+      Restart: "on-failure",
+      RestartSec: "5",
+      TimeoutStopSec: "37",
+    });
+    expect(Object.keys(SYSTEMD_UNIT_SERVICE_DIRECTIVES)).toEqual([
+      "Type",
+      "SyslogIdentifier",
+      "ExecStart",
+      "OOMPolicy",
+      "Restart",
+      "RestartSec",
+      "TimeoutStopSec",
+    ]);
+  });
+
+  // The two tests above pin two DIFFERENT things - the emitted text, and the
+  // constant object - and neither one alone proves the emitter actually
+  // reads the constant rather than carrying its own parallel copy that
+  // happens to agree today. This one parses the REAL `buildSystemdUnit`
+  // output's `[Service]` section (skipping blanks and `#` comments) and
+  // pins it directly against `SYSTEMD_UNIT_SERVICE_DIRECTIVES`: same keys,
+  // same order, and - for every directive whose pinned value is not `null`
+  // (the two per-install directives, `SyslogIdentifier`/`ExecStart`) - the
+  // exact emitted value. A drift between the emitter and the constant, in
+  // either the key order or a fixed value, reddens here even if both of the
+  // narrower pins above were each individually kept in sync by hand.
+  it("the emitted [Service] section parses back to exactly SYSTEMD_UNIT_SERVICE_DIRECTIVES, keys in order and every fixed value", () => {
+    const unit = buildSystemdUnit({
+      label: labelFor("ai.traycer.host.dev"),
+      cli: { command: "/home/test/.traycer/cli/bin/traycer", args: [] },
+    });
+
+    const serviceSection = unit
+      .split(/\n\[Service\]\n/)[1]
+      ?.split(/\n\[Install\]/)[0];
+    expect(serviceSection).toBeDefined();
+    const entries = (serviceSection ?? "")
+      .split("\n")
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((line) => {
+        const eq = line.indexOf("=");
+        return [line.slice(0, eq), line.slice(eq + 1)] as const;
+      });
+
+    expect(entries.map(([key]) => key)).toEqual(
+      Object.keys(SYSTEMD_UNIT_SERVICE_DIRECTIVES),
+    );
+    const pinned = new Map<string, string | null>(
+      Object.entries(SYSTEMD_UNIT_SERVICE_DIRECTIVES),
+    );
+    for (const [key, value] of entries) {
+      const fixed = pinned.get(key);
+      if (fixed !== null) {
+        expect(value).toBe(fixed);
+      }
+    }
+  });
+});
+
+describe("Linux controller — spawn-edge placement", () => {
+  const label = labelFor("ai.traycer.host.dev");
+
+  // The publish spy and the runner push into ONE shared log, in the order
+  // they actually happen.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function loggingRunner(log: string[]): ProcessRunner {
+    return async (_command, args) => {
+      log.push(args.join(" "));
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+  }
+
+  // `systemctl --user <verb> <unit>` - the verb is always the second token.
+  function verbOf(entry: string): string {
+    return entry.split(" ")[1] ?? "";
+  }
+
+  function expectPublishImmediatelyPrecedes(
+    log: readonly string[],
+    verb: string,
+  ): void {
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      log.slice(0, publishIndex).some((entry) => verbOf(entry) === verb),
+    ).toBe(false);
+    const next = log[publishIndex + 1];
+    expect(next).toBeDefined();
+    expect(next !== undefined && verbOf(next) === verb).toBe(true);
+  }
+
+  it("start: publish is immediately before the systemctl start verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.start(label),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "start");
+  });
+
+  it("restart: publish is immediately before the systemctl restart verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(label),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "restart");
+  });
+
+  it("relaunchAfterRestart (forced recycle): publish is immediately before the systemctl restart verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "restart");
+  });
+
+  it("relaunchAfterRestart (not forced): publish is immediately before the systemctl start verb", async () => {
+    const { log, publish } = makeSharedLog();
+    const controller = createLinuxController(loggingRunner(log));
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "start");
+  });
+
+  it("relaunchAfterRestart: a refused publication propagates raw, by identity - a restart intent means the manager owes the comeback", async () => {
+    const runner: ProcessRunner = async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 0,
+    });
+    const controller = createLinuxController(runner);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+  });
+});
+
+// The mechanism, not just the diff: `loginctl enable-linger` runs BEFORE the
+// install edge now, not after `enable --now` - see linux.ts `installService`'s
+// doc comment (linger held the controller call open past the launch, pushing
+// the host-start lease end past HOST_START_ADOPTION_MAX_AGE_MS's 140s cap:
+// 62s + 30s + 50s = 142s). One shared ordered log, exactly like the
+// spawn-edge-placement describe above, so the assertion is about the actual
+// sequence of runner calls plus the publish - not two separately-kept
+// counters that could each look right while disagreeing about order.
+describe("systemd unit install — linger ordering (the mechanism)", () => {
+  const label = labelFor("ai.traycer.host.dev");
+
+  // Local copy of the "Linux controller — spawn-edge placement" describe's
+  // helper (function-scoped to that block, not reachable from here): the
+  // publish spy and the runner push into ONE shared log, in the order they
+  // actually happen.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function loggingRunner(log: string[]): ProcessRunner {
+    return async (command, args) => {
+      log.push(`${command} ${args.join(" ")}`);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+  }
+
+  function installWith(
+    runner: ProcessRunner,
+    publish: () => Promise<null>,
+    enableLinger: boolean,
+  ): Promise<void> {
+    const controller = createLinuxController(runner);
+    return runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger,
+      }),
+    );
+  }
+
+  afterEach(async () => {
+    await rm(join(TEST_UNIT_DIR, `${label.id}.service`), { force: true });
+    vi.unstubAllEnvs();
+  });
+
+  it("enableLinger: true - loginctl enable-linger runs after show-environment and BEFORE the install-edge publish, and enable --now is the LAST runner call", async () => {
+    // Best-effort linger only fires when a USER identity is available
+    // (`tryEnableLinger` no-ops on an empty string); stub it so the
+    // assertion doesn't depend on the ambient environment this suite
+    // happens to run in.
+    vi.stubEnv("USER", "golden-user");
+    const { log, publish } = makeSharedLog();
+    const runner = loggingRunner(log);
+
+    await installWith(runner, publish, true);
+
+    const showEnvIndex = log.findIndex((entry) =>
+      entry.startsWith("systemctl --user show-environment"),
+    );
+    const lingerIndex = log.findIndex((entry) =>
+      entry.startsWith("loginctl enable-linger"),
+    );
+    const publishIndex = log.indexOf("publish");
+
+    expect(showEnvIndex).toBeGreaterThanOrEqual(0);
+    expect(lingerIndex).toBeGreaterThan(showEnvIndex);
+    expect(publishIndex).toBeGreaterThan(lingerIndex);
+    // `enable --now` is the last runner call the successful install issues -
+    // linger already ran, off the grant's clock, before the edge.
+    expect(log[log.length - 1]).toBe(
+      `systemctl --user enable --now ${label.id}.service`,
+    );
+  });
+
+  it("enableLinger: false - loginctl is never called", async () => {
+    vi.stubEnv("USER", "golden-user");
+    const { log, publish } = makeSharedLog();
+    const runner = loggingRunner(log);
+
+    await installWith(runner, publish, false);
+
+    expect(log.some((entry) => entry.startsWith("loginctl"))).toBe(false);
   });
 });

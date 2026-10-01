@@ -906,7 +906,7 @@ function inactivityHeadline(
     case "turn-ended":
       return `${receiverLabel} finished its turn without replying`;
     case "user-stopped":
-      return `${receiverLabel} was stopped by the user before it could reply`;
+      return `${receiverLabel} was stopped before it could reply`;
     case "errored":
       return detail !== undefined && detail.length > 0
         ? `${receiverLabel} ran into an error before replying: ${detail}`

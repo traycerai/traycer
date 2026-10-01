@@ -1,6 +1,9 @@
 import { AuthBrandSplash } from "@/components/auth/auth-brand-splash";
 import { useAuthSplashCover } from "@/hooks/auth/use-auth-splash-cover";
-import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
+import {
+  BRAND_DARK_GROUND_CLASS,
+  BRAND_DARK_TOKENS_CLASS,
+} from "@/components/auth/brand-surface";
 import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
@@ -61,7 +64,9 @@ export function AuthLandingPage(props: {
       className={cn(
         "relative isolate flex min-h-full flex-1 overflow-hidden text-white",
         BRAND_DARK_GROUND_CLASS,
+        BRAND_DARK_TOKENS_CLASS,
       )}
+      data-testid="auth-landing-page"
     >
       <PhotoBloom />
 

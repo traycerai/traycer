@@ -10,6 +10,21 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
+// The in-progress lift (`useInProgressHistoryItems`) backfills a running task
+// no listed page carries through `epic.getTaskContexts`, which needs a host
+// runtime this suite deliberately does not mount. Inert here: nothing is
+// running in these fixtures, so the lift has nothing to lift either way.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(),
+    localHomedTaskIds: new Set<string>(),
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+    refetchBatches: [],
+  }),
+}));
+
 const tabNavigationMocks = vi.hoisted(() => ({
   activateTabIntent: vi.fn(),
 }));
@@ -50,7 +65,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import { ScopedEpicsListPanel } from "./scoped-panel-harness";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -85,6 +100,12 @@ const testState = vi.hoisted(() => ({
   items: [] as HistoryItem[],
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
+}));
+
+// The desktop scope bar names the host through the directory, which needs a
+// runtime provider this fixture does not mount.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -174,8 +195,10 @@ function renderPanel() {
     component: () => (
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <EpicsListPanel
-            variant="embedded"
+          <ScopedEpicsListPanel
+            initialScope="all"
+            onScopeSpy={null}
+            variant="page"
             className={undefined}
             onSelectEpic={null}
             onOpenItem={null}

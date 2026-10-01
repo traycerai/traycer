@@ -38,7 +38,7 @@ function press(overlay: HTMLElement): void {
 
 describe("screencast arm path", () => {
   it("pre-arms once on hover and stays idempotent across a storm", () => {
-    const { controller, overlay, sent } = mountController();
+    const { controller, overlay, sent } = mountController(undefined);
     controller.notePresentedSequence(7);
 
     fireEvent.pointerEnter(overlay);
@@ -55,7 +55,7 @@ describe("screencast arm path", () => {
   });
 
   it("supersedes an in-flight pre-arm with a real arm on a press", () => {
-    const { controller, overlay, sent } = mountController();
+    const { controller, overlay, sent } = mountController(undefined);
     controller.notePresentedSequence(7);
 
     fireEvent.pointerEnter(overlay);
@@ -74,7 +74,7 @@ describe("screencast arm path", () => {
   });
 
   it("stops hovering from re-claiming after the host denied one", () => {
-    const { controller, overlay, sent } = mountController();
+    const { controller, overlay, sent } = mountController(undefined);
     controller.notePresentedSequence(7);
 
     fireEvent.pointerEnter(overlay);
@@ -96,7 +96,7 @@ describe("screencast arm path", () => {
   });
 
   it("holds the claim but drives nothing until a gesture engages control", () => {
-    const mounted = mountController();
+    const mounted = mountController(undefined);
     const { controller, overlay, sent, engaged } = mounted;
     controller.notePresentedSequence(7);
 
@@ -125,7 +125,7 @@ describe("screencast arm path", () => {
   });
 
   it("keeps the arm across a focus exit", () => {
-    const { controller, overlay, imeInput, sent } = mountController();
+    const { controller, overlay, imeInput, sent } = mountController(undefined);
     controller.notePresentedSequence(7);
 
     fireEvent.focus(imeInput);

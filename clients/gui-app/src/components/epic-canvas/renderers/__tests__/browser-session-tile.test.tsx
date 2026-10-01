@@ -199,6 +199,22 @@ function sessionsContextValue() {
 const toastHarness = vi.hoisted(() => ({
   error: vi.fn(),
 }));
+const consumeBrowserAttention = vi.hoisted(() =>
+  vi.fn<(target: unknown, active: boolean) => void>(),
+);
+vi.mock("@/hooks/notifications/use-browser-attention", () => ({
+  useConsumeBrowserAttention: consumeBrowserAttention,
+}));
+vi.mock(
+  "@/components/epic-tabs/pane-visibility-context",
+  async (importActual) => {
+    const actual =
+      await importActual<
+        typeof import("@/components/epic-tabs/pane-visibility-context")
+      >();
+    return { ...actual, usePaneFocused: () => true };
+  },
+);
 vi.mock("sonner", () => ({
   toast: {
     error: toastHarness.error,
@@ -410,6 +426,7 @@ function tileElement(paneId: string): ReactElement {
       viewTabId="view-1"
       paneId={paneId}
       epicId="epic-1"
+      isActive
     />
   );
 }
@@ -511,6 +528,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
     harness.items = [];
@@ -520,6 +538,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -738,6 +757,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />,
       );
 
@@ -755,6 +775,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />,
       );
       expect(screen.getByTestId("managed-electron-tab")).toBeTruthy();
@@ -773,6 +794,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />,
       );
 
@@ -811,6 +833,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -825,6 +848,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -845,6 +869,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
     expect(screen.queryByTestId("browser-runtime-demotion-note")).toBeNull();
@@ -861,6 +886,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -885,6 +911,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -902,6 +929,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -920,6 +948,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -935,6 +964,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
     expect(screen.getByTestId("browser-runtime-demotion-note")).toBeTruthy();
@@ -952,6 +982,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -978,6 +1009,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -1335,6 +1367,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />
       </TabBodySelectedContext.Provider>,
     );
@@ -1348,6 +1381,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />
       </TabBodySelectedContext.Provider>,
     );
@@ -1369,6 +1403,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />
       </StrictMode>,
     );
@@ -1429,6 +1464,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />
       </TabBodySelectedContext.Provider>,
     );
@@ -1443,6 +1479,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
           viewTabId="view-1"
           paneId="pane-1"
           epicId="epic-1"
+          isActive
         />
       </TabBodySelectedContext.Provider>,
     );
@@ -1463,6 +1500,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
     await act(async () => {
@@ -1477,6 +1515,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />,
     );
 
@@ -2028,6 +2067,7 @@ describe("BrowserSessionTile pending presentation", () => {
         viewTabId="view-1"
         paneId="pane-1"
         epicId="epic-1"
+        isActive
       />
     );
   }
@@ -2108,5 +2148,38 @@ describe("BrowserSessionTile pending presentation", () => {
     };
     expect(payload.name).toBe("click-to-placeholder");
     expect(payload.fields.requestId).toBe("req-pending-1");
+  });
+});
+
+describe("BrowserSessionTile attention consumption wiring", () => {
+  beforeEach(() => {
+    harness.items = [session("ready", "electron")];
+    consumeBrowserAttention.mockClear();
+  });
+
+  it("targets its own browser tab and passes isActive through", () => {
+    const { rerender } = render(tileElement("pane-1"));
+    expect(consumeBrowserAttention).toHaveBeenLastCalledWith(
+      {
+        epicId: "epic-1",
+        hostId: NODE.hostId,
+        sessionId: NODE.sessionId,
+        tabId: NODE.tabId,
+      },
+      true,
+    );
+    rerender(
+      <BrowserSessionTile
+        node={NODE}
+        viewTabId="view-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        isActive={false}
+      />,
+    );
+    expect(consumeBrowserAttention).toHaveBeenLastCalledWith(
+      expect.anything(),
+      false,
+    );
   });
 });

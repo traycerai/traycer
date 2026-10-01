@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { History } from "lucide-react";
 import { useRouterState } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { useBindingForAction } from "@/stores/settings/keybinding-store";
  * descriptor's `matchesPath`.
  */
 export function HistoryButton() {
+  const placement = useColumnOverlayPlacement("foot");
   const { openHistory } = useSystemTabModalActions();
   const historyOverlayActive = useSystemOverlayActive("history");
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -28,11 +30,18 @@ export function HistoryButton() {
     openHistory();
   };
   return (
-    <TooltipWrapper label={tooltip} side="top" sideOffset={6} align={undefined}>
+    <TooltipWrapper
+      label={tooltip}
+      side={placement?.side ?? "top"}
+      sideOffset={6}
+      align={placement?.align}
+    >
       <Button
         type="button"
         variant="muted"
         size="icon-sm"
+        // Non-editable chrome, dimmed while a layout session is live (4.2).
+        data-layout-passive
         aria-label="History"
         aria-haspopup="dialog"
         aria-expanded={isActive}

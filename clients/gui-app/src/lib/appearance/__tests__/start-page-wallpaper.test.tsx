@@ -42,12 +42,14 @@ import {
   applyCuratedStartPageWallpaper,
   chooseStartPageWallpaper,
   removeStartPageWallpaper,
+  resetRetainedStartPageWallpaperImageForTests,
   useStartPageWallpaperImage,
 } from "@/lib/appearance/start-page-wallpaper";
 import type { CuratedWallpaper } from "@/lib/appearance/curated-wallpapers";
 
 describe("useStartPageWallpaperImage", () => {
   beforeEach(() => {
+    resetRetainedStartPageWallpaperImageForTests();
     cacheMocks.read.mockReset();
     cacheMocks.remove.mockResolvedValue(undefined);
     useSettingsStore.setState({ startPageWallpaper: null });
@@ -97,6 +99,267 @@ describe("useStartPageWallpaperImage", () => {
       await Promise.resolve();
     });
     expect(result.current).toEqual({ url: currentUrl, name: "latest.png" });
+  });
+
+  it("paints the retained image on the first render of a remount", async () => {
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["bytes"], { type: "image/png" }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() =>
+      expect(first.result.current.url).toBe("blob:wallpaper"),
+    );
+    expect(first.result.current.name).toBe("horse.png");
+    first.unmount();
+
+    // The remount must not wait on this read. A host switch remounts the
+    // start page, and an empty first render is the full-screen flash.
+    cacheMocks.read.mockReturnValue(new Promise<Blob>(() => undefined));
+    const second = renderHook(() => useStartPageWallpaperImage());
+    expect(second.result.current).toEqual({
+      url: "blob:wallpaper",
+      name: "horse.png",
+    });
+  });
+
+  it("does not paint a retained image when the wallpaper name changed", async () => {
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["bytes"], { type: "image/png" }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() =>
+      expect(first.result.current.url).toBe("blob:wallpaper"),
+    );
+    first.unmount();
+
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "dunes.webp",
+        curatedId: "dunes",
+      },
+    });
+    cacheMocks.read.mockReturnValue(new Promise<Blob>(() => undefined));
+    const second = renderHook(() => useStartPageWallpaperImage());
+    expect(second.result.current).toEqual({ url: null, name: null });
+  });
+
+  it("does not paint a retained image when the same name was replaced", async () => {
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["bytes"], { type: "image/png" }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() =>
+      expect(first.result.current.url).toBe("blob:wallpaper"),
+    );
+    first.unmount();
+
+    // Remove bumps the blob revision. Putting the same file name back without
+    // a new read must not reuse the previous object URL.
+    await act(async () => {
+      await removeStartPageWallpaper();
+    });
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "horse.png",
+        curatedId: null,
+      },
+    });
+    cacheMocks.read.mockReturnValue(new Promise<Blob>(() => undefined));
+    const second = renderHook(() => useStartPageWallpaperImage());
+    expect(second.result.current).toEqual({ url: null, name: null });
+  });
+
+  it("shares one object URL between two mounted readers", async () => {
+    let created = 0;
+    const revoked = new Set<string>();
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      created += 1;
+      return `blob:shared-${created}`;
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation((url: string) => {
+      revoked.add(url);
+    });
+    let resolveRead: (blob: Blob) => void = () => undefined;
+    cacheMocks.read.mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveRead = resolve;
+      }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "shared.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    const second = renderHook(() => useStartPageWallpaperImage());
+
+    act(() => {
+      resolveRead(new Blob(["shared"], { type: "image/png" }));
+    });
+
+    await waitFor(() => expect(first.result.current.url).toBe("blob:shared-1"));
+    expect(second.result.current.url).toBe("blob:shared-1");
+    expect(revoked.has("blob:shared-1")).toBe(false);
+    expect(created).toBe(1);
+  });
+
+  it("rereads a same-name replacement on remount without blanking first", async () => {
+    let created = 0;
+    const revoked = new Set<string>();
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      created += 1;
+      return `blob:replace-${created}`;
+    });
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation((url: string) => {
+      revoked.add(url);
+    });
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "wallpaper.png",
+        curatedId: null,
+      },
+    });
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["original"], { type: "image/png" }),
+    );
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() =>
+      expect(first.result.current.url).toBe("blob:replace-1"),
+    );
+    first.unmount();
+
+    cacheMocks.read.mockResolvedValue(
+      new Blob(["replacement"], { type: "image/png" }),
+    );
+    const second = renderHook(() => useStartPageWallpaperImage());
+    expect(second.result.current.url).toBe("blob:replace-1");
+
+    await waitFor(() =>
+      expect(second.result.current.url).toBe("blob:replace-2"),
+    );
+    expect(revoked.has("blob:replace-2")).toBe(false);
+  });
+
+  it("keeps an in-flight read while another reader is still mounted", async () => {
+    let created = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      created += 1;
+      return `blob:live-${created}`;
+    });
+    let resolveRead: (blob: Blob) => void = () => undefined;
+    cacheMocks.read.mockReturnValue(
+      new Promise<Blob>((resolve) => {
+        resolveRead = resolve;
+      }),
+    );
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "shared.png",
+        curatedId: null,
+      },
+    });
+    const first = renderHook(() => useStartPageWallpaperImage());
+    const second = renderHook(() => useStartPageWallpaperImage());
+    first.unmount();
+
+    act(() => {
+      resolveRead(new Blob(["still-live"], { type: "image/png" }));
+    });
+
+    await waitFor(() => expect(second.result.current.url).toBe("blob:live-1"));
+    expect(cacheMocks.read).toHaveBeenCalledTimes(1);
+  });
+
+  it("rereads after a remount inherits a read the previous mount left running", async () => {
+    const urls = new Map<string, Blob>();
+    let created = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+      created += 1;
+      const url = `blob:orphan-${created}`;
+      urls.set(url, blob as Blob);
+      return url;
+    });
+    const original = new Blob(["original"], { type: "image/png" });
+    const replacement = new Blob(["replacement"], { type: "image/png" });
+    let releaseBytes: (buffer: ArrayBuffer) => void = () => undefined;
+    const gated = new Promise<ArrayBuffer>((resolve) => {
+      releaseBytes = resolve;
+    });
+    const originalBytes = await original.arrayBuffer();
+    vi.spyOn(original, "arrayBuffer").mockReturnValue(gated);
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "dither",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: "wallpaper.png",
+        curatedId: null,
+      },
+    });
+    cacheMocks.read.mockResolvedValueOnce(original);
+    const first = renderHook(() => useStartPageWallpaperImage());
+    await waitFor(() => expect(cacheMocks.read).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    first.unmount();
+
+    cacheMocks.read.mockResolvedValue(replacement);
+    const second = renderHook(() => useStartPageWallpaperImage());
+    await act(async () => {
+      releaseBytes(originalBytes.slice(0));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      const url = second.result.current.url;
+      expect(url).not.toBeNull();
+      expect(urls.get(url ?? "")).toBe(replacement);
+    });
+    expect(cacheMocks.read).toHaveBeenCalledTimes(2);
   });
 });
 

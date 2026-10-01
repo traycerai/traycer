@@ -3,6 +3,7 @@ export {
   isMobileApp,
   setMobileApp,
   setMobileAppPlatform,
+  setPhoneLayoutOnly,
 } from "@/lib/mobile-app";
 export {
   DESKTOP_RETENTION_PROFILE,

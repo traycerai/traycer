@@ -106,19 +106,28 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import type { EpicCommunicationGraphEvent } from "@traycer/protocol/host/epic/communication-graph";
-import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
-import { __setCommGraphSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
-import {
-  __commGraphSubscriptionRefCountForTests,
-  __resetCommGraphRegistryForTests,
-} from "@/lib/comm-graph/comm-graph-registry";
-import { useCommGraphTimelineStore } from "@/stores/epics/comm-graph-timeline-store";
-import { useCommGraphRowOpenStore } from "@/stores/epics/comm-graph-row-open-store";
 import type {
-  CommGraphSubscriptionHandlers,
-  CommGraphSubscriptionRequest,
-} from "@/lib/comm-graph/comm-graph-subscription";
+  EpicCommunicationGraphEvent,
+  HostCommunicationGraphCloudFeedEvent,
+} from "@traycer/protocol/host/epic/communication-graph";
+import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
+import { __setCommGraphCloudSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
+import {
+  __resetCommGraphCloudRegistryForTests,
+  getCommGraphCloudSubscriptionManager,
+} from "@/lib/comm-graph/comm-graph-cloud-registry";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
+import {
+  COMM_GRAPH_PLAYBACK_SPEEDS,
+  useCommGraphTimelineStore,
+} from "@/stores/epics/comm-graph-timeline-store";
+import { useCommGraphRowOpenStore } from "@/stores/epics/comm-graph-row-open-store";
+import type { CommGraphSubscriptionHandlers } from "@/lib/comm-graph/comm-graph-subscription";
+import type {
+  CommGraphCloudSubscriptionHandlers,
+  CommGraphCloudSubscriptionRequest,
+} from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   chatTranscriptJumpKey,
   useChatTranscriptJumpStore,
@@ -135,16 +144,114 @@ const LATE_CHAT_ID = "chat-late";
 const TUI_ID = "tui-1";
 const TUI_B_ID = "tui-b";
 const HOST_A = "host-a";
-// A second host makes the per-host initialization boundary observable: hosts
-// hand over their snapshots independently, so one host's history can arrive
-// long after another host is already live.
+// A second ORIGIN host, not a second subscription: there is one relay per
+// epic, and both hosts' rows arrive through it, tagged by `originHostId`. This
+// still exercises per-origin attribution (which agent node a row's pulse or
+// detail belongs to) even though the feed's own arrival boundary is shared.
 const HOST_B = "host-b";
 const LATE_CREATED_AT = 5_000;
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 const harness = createEpicSessionTestHarness(EPIC_ID);
 let queryClient: QueryClient;
-const openedByHost = new Map<string, CommGraphSubscriptionHandlers>();
-const openRequests: CommGraphSubscriptionRequest[] = [];
+
+/**
+ * There is exactly ONE relay stream per epic now, not one subscription per
+ * origin host - so `openedByHost` is no longer a record of real per-host
+ * dials. It stays as the per-test-case seam this file drives, keyed by the
+ * SAME constant host ids as before: each entry is a thin adapter matching the
+ * OLD per-host handler shape, and every one of them forwards to the single
+ * live relay, stamping its own key on as `originHostId`. Every call site below
+ * (`deliverSnapshot`, `deliverEventFrom`, and the handful of direct
+ * `openedByHost.get(...)` calls) is therefore unchanged - what changed is only
+ * what is on the other end.
+ */
+const relayHandlers: { current: CommGraphCloudSubscriptionHandlers | null } = {
+  current: null,
+};
+const openRequests: CommGraphCloudSubscriptionRequest[] = [];
+let nextIngestVersion = 0;
+
+function toCloudEvent(
+  hostId: string,
+  event: EpicCommunicationGraphEvent,
+): HostCommunicationGraphCloudFeedEvent {
+  nextIngestVersion += 1;
+  return {
+    // Matches the OLD local convention exactly (`commGraphEventKey` prefers
+    // `eventId` when present) so every existing `${HOST_A}:${id}`-shaped
+    // test id keeps meaning the same row.
+    eventId: `${hostId}:${event.id}`,
+    originHostId: hostId,
+    originSequence: event.id,
+    ingestVersion: nextIngestVersion,
+    kind: event.kind,
+    capturedAt: event.timestamp,
+    senderAgentId: event.senderAgentId,
+    receiverAgentId: event.receiverAgentId,
+    responseId: event.responseId,
+    inReplyTo: event.inReplyTo,
+    expectReply: event.expectReply,
+    messageText: event.messageText,
+    noticeReason: event.noticeReason,
+    originKind: event.originKind,
+    originChatId: event.originChatId,
+    originRefId: event.originRefId,
+    peerEpicId: event.peerEpicId,
+    historicalUpload: false,
+  };
+}
+
+function adapterFor(hostId: string): CommGraphSubscriptionHandlers {
+  return {
+    onSnapshot: (events, headId) => {
+      const cloudEvents = events.map((event) => toCloudEvent(hostId, event));
+      // The old wire's `null` meant "empty log, no boundary row". The cloud
+      // feed's ingest-version counter has no such sentinel - a fresh, empty
+      // feed legitimately hands back its current (zero) head - so an empty
+      // delivery still stamps a real, present boundary.
+      void headId;
+      const headVersion =
+        cloudEvents.length === 0
+          ? nextIngestVersion
+          : Math.max(
+              ...cloudEvents.map((cloudEvent) => cloudEvent.ingestVersion),
+            );
+      relayHandlers.current?.onSnapshot(cloudEvents, headVersion, null);
+      // The old per-host boundary considered a delivered snapshot immediately
+      // caught up (`initialHistoryCaughtUp` in the local manager derives this
+      // from boundary+cursor alone - no separate signal). The cloud manager
+      // instead needs an explicit "caught up" wire frame, distinct from the
+      // snapshot itself - so this adapter fires it right behind the
+      // snapshot, preserving what every existing call site already means:
+      // "this host handed over its history, in full, in one shot".
+      const caughtUpEvent = cloudEvents.find(
+        (cloudEvent) => cloudEvent.ingestVersion === headVersion,
+      );
+      relayHandlers.current?.onCaughtUp(
+        caughtUpEvent === undefined
+          ? null
+          : {
+              ingestVersion: caughtUpEvent.ingestVersion,
+              eventId: caughtUpEvent.eventId,
+            },
+        headVersion,
+      );
+    },
+    onEvent: (event) => {
+      relayHandlers.current?.onEvent(toCloudEvent(hostId, event));
+    },
+    onStatus: (status) => {
+      relayHandlers.current?.onStatus(status);
+    },
+  };
+}
+
+const openedByHost = new Map<string, CommGraphSubscriptionHandlers>([
+  [HOST_A, adapterFor(HOST_A)],
+  [HOST_B, adapterFor(HOST_B)],
+]);
 
 function seedDoc(doc: Y.Doc): void {
   const epic = doc.getMap("epic");
@@ -220,6 +327,7 @@ function message(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }
@@ -242,6 +350,7 @@ function created(
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
     ...overrides,
   };
 }
@@ -273,9 +382,10 @@ async function renderSurfaces(children: ReactNode): Promise<void> {
   await act(async () => {
     await Promise.resolve();
   });
+  // ONE relay now, not one dial per origin host - readiness is "the relay
+  // opened", not "every host's own subscription opened".
   await waitFor(() => {
-    expect(openedByHost.has(HOST_A)).toBe(true);
-    expect(openedByHost.has(HOST_B)).toBe(true);
+    expect(openRequests.length).toBeGreaterThanOrEqual(1);
   });
 }
 
@@ -368,8 +478,13 @@ async function seekToIndex(index: number): Promise<void> {
 }
 
 beforeEach(() => {
-  openedByHost.clear();
-  __resetCommGraphRegistryForTests();
+  // Frames publish as they are applied: these cases read the snapshot in the
+  // tick they push in.
+  __setCommGraphDataCommitWindowMsForTests(0);
+  relayHandlers.current = null;
+  nextIngestVersion = 0;
+  useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  __resetCommGraphCloudRegistryForTests();
   useCommGraphTimelineStore.setState({ stateByEpicId: {} });
   useCommGraphRowOpenStore.setState({ openRowKeysByEpicId: {} });
   tileNavigationMocks.openTile.mockClear();
@@ -379,20 +494,24 @@ beforeEach(() => {
   });
   harness.install(seedDoc, "owner");
   openRequests.length = 0;
-  __setCommGraphSubscriptionOpenerForTests((request) => {
+  __setCommGraphCloudSubscriptionOpenerForTests((request) => {
     openRequests.push(request);
-    openedByHost.set(request.hostId, request.handlers);
+    relayHandlers.current = request.handlers;
     return { close: () => undefined };
   });
 });
 
 afterEach(() => {
-  __setCommGraphSubscriptionOpenerForTests(null);
-  __resetCommGraphRegistryForTests();
+  // Unmount BEFORE the auth store flips - see the cloud-authority hook
+  // suite's afterEach for why.
+  cleanup();
+  __setCommGraphCloudSubscriptionOpenerForTests(null);
+  useAuthStore.getState().setSignedOut();
+  __resetCommGraphCloudRegistryForTests();
   useCommGraphTimelineStore.setState({ stateByEpicId: {} });
   harness.teardown();
   queryClient.clear();
-  cleanup();
+  __setCommGraphDataCommitWindowMsForTests(null);
 });
 
 /**
@@ -526,57 +645,47 @@ describe("CommGraphTile projection", () => {
     });
   });
 
-  it("does not pulse a second host's history that lands after the first host is live", async () => {
+  it("does not pulse either origin host's rows out of the feed's one combined initial snapshot, and pulses a later live row from either host", async () => {
+    // There is ONE relay per epic now, not one per-host dial with its own
+    // boundary - the cloud feed hands over every origin host's history
+    // together, in a single delivery, and the whole feed shares one
+    // boundary. This replaces two prior cases that pinned per-host
+    // boundaries independently: "does not pulse a second host's history
+    // that lands after the first host is live" (the race it guarded against
+    // - one host's backlog arriving in a SEPARATE delivery after another
+    // host was already live - cannot happen against a single relay) and
+    // "pulses live rows from every host once each has its own boundary"
+    // (there is no longer a per-host boundary to have).
     await renderTile();
-    deliverSnapshot([message({ id: 1, timestamp: 100 })]);
-    await waitFor(() => {
-      expect(screen.getByTestId(markerTestId(1))).toBeDefined();
+    act(() => {
+      relayHandlers.current?.onSnapshot(
+        [
+          toCloudEvent(HOST_A, message({ id: 1, timestamp: 100 })),
+          toCloudEvent(
+            HOST_B,
+            message({
+              id: 1,
+              timestamp: 300,
+              senderAgentId: TUI_B_ID,
+              receiverAgentId: CHAT_ID,
+            }),
+          ),
+        ],
+        nextIngestVersion,
+        null,
+      );
     });
-
-    // Host B hands over its whole history LATE, and its rows sort above
-    // everything host A has. Against a single global mark this reads as a burst
-    // of activity; against host B's OWN boundary it is exactly what it is.
-    deliverSnapshotFrom(HOST_B, [
-      message({
-        id: 1,
-        timestamp: 300,
-        senderAgentId: TUI_B_ID,
-        receiverAgentId: CHAT_ID,
-      }),
-      message({
-        id: 2,
-        timestamp: 400,
-        senderAgentId: TUI_B_ID,
-        receiverAgentId: CHAT_ID,
-      }),
-    ]);
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId(`comm-graph-transport-marker-${HOST_B}:2`),
-      ).toBeDefined();
-    });
-    expect(pulsingOf(TUI_B_ID)).toBe("false");
-    expect(pulsingOf(CHAT_ID)).toBe("false");
-  });
-
-  it("pulses live rows from every host once each has its own boundary", async () => {
-    await renderTile();
-    deliverSnapshot([message({ id: 1, timestamp: 100 })]);
-    deliverSnapshotFrom(HOST_B, [
-      message({
-        id: 1,
-        timestamp: 300,
-        senderAgentId: TUI_B_ID,
-        receiverAgentId: CHAT_ID,
-      }),
-    ]);
     await waitFor(() => {
       expect(
         screen.getByTestId(`comm-graph-transport-marker-${HOST_B}:1`),
       ).toBeDefined();
     });
+    // Neither host's row in the initial snapshot counts as an arrival.
+    expect(pulsingOf(CHAT_ID)).toBe("false");
+    expect(pulsingOf(TUI_B_ID)).toBe("false");
 
+    // A live row from either origin host afterward still pulses its own
+    // node - origin attribution survives collapsing onto one relay.
     deliverEventFrom(HOST_A, halfEdge({ id: 2, timestamp: 500 }));
     await waitFor(() => {
       expect(pulsingOf(CHAT_ID)).toBe("true");
@@ -966,17 +1075,14 @@ describe("CommGraphTile projection", () => {
  * ONE subscription. These are the tests that hold that seam.
  */
 describe("comm-graph subscription sharing", () => {
-  it("opens exactly one subscription per host the epic reaches", async () => {
+  it("opens exactly one relay subscription for the epic", async () => {
     await renderTile();
 
-    // One claim, one manager, one dial per host.
-    expect(__commGraphSubscriptionRefCountForTests(EPIC_ID)).toBe(1);
-    expect(
-      openRequests.filter((request) => request.hostId === HOST_A),
-    ).toHaveLength(1);
-    expect(
-      openRequests.filter((request) => request.hostId === HOST_B),
-    ).toHaveLength(1);
+    // One claim, one manager, one relay - not one dial per origin host.
+    expect(getCommGraphCloudSubscriptionManager(EPIC_ID).isAttached()).toBe(
+      true,
+    );
+    expect(openRequests).toHaveLength(1);
   });
 
   it("holds the cursor across a surface unmounting and coming back", async () => {
@@ -998,11 +1104,12 @@ describe("comm-graph subscription sharing", () => {
       ).toBe("false");
     });
 
-    // The surface goes away: the refcount drops to zero and the manager
-    // DETACHES (keeping events, cursors and per-host boundaries) rather than
-    // being disposed.
+    // The surface goes away: the claim releases and the manager DETACHES
+    // (keeping its events and cursor) rather than being disposed.
     cleanup();
-    expect(__commGraphSubscriptionRefCountForTests(EPIC_ID)).toBe(0);
+    expect(getCommGraphCloudSubscriptionManager(EPIC_ID).isAttached()).toBe(
+      false,
+    );
 
     await renderTile();
 
@@ -1480,16 +1587,40 @@ describe("comm-graph transport", () => {
     ).toBe("Pause playback");
   });
 
-  it("cycles playback speed", async () => {
+  it("cycles playback speed through the whole ladder and back to the start", async () => {
+    // IT USED TO ASSERT ONE PRESS, 1x to 2x - which is green for any ladder
+    // that starts the same way, including the one that stopped at 4x and made
+    // a long replay unwatchable. Walking the whole cycle is what makes this a
+    // test of the control rather than of its first step.
     await renderWithEvents(2);
-    const speed = screen.getByTestId("comm-graph-transport-speed");
-    expect(speed.textContent).toBe("1×");
-    fireEvent.click(speed);
-    await waitFor(() => {
-      expect(screen.getByTestId("comm-graph-transport-speed").textContent).toBe(
-        "2×",
-      );
-    });
+    const readSpeed = (): string =>
+      screen.getByTestId("comm-graph-transport-speed").textContent;
+    expect(readSpeed()).toBe("1×");
+
+    // From 1x forwards, wrapping, until it comes back: the label at every rung
+    // has to be that rung, in the ladder's own order.
+    const from = COMM_GRAPH_PLAYBACK_SPEEDS.indexOf(1);
+    expect(from).toBeGreaterThanOrEqual(0);
+    for (let step = 1; step <= COMM_GRAPH_PLAYBACK_SPEEDS.length; step += 1) {
+      const expected =
+        COMM_GRAPH_PLAYBACK_SPEEDS[
+          (from + step) % COMM_GRAPH_PLAYBACK_SPEEDS.length
+        ];
+      fireEvent.click(screen.getByTestId("comm-graph-transport-speed"));
+      await waitFor(() => {
+        expect(readSpeed()).toBe(`${expected}×`);
+      });
+    }
+    // A full cycle is a round trip, not a dead end at the top.
+    expect(readSpeed()).toBe("1×");
+  });
+
+  it("offers a rung fast enough to replay a long session", () => {
+    // The feedback this answers is about a NUMBER ("even at 4x, the graph is
+    // filling super slow"), so the number is what is pinned. Asserted on the
+    // ladder rather than through the control, because getting there is what
+    // the case above is for.
+    expect(Math.max(...COMM_GRAPH_PLAYBACK_SPEEDS)).toBeGreaterThanOrEqual(32);
   });
 
   it("offers no play control for an epic with nothing captured", async () => {

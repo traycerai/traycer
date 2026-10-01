@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Host <-> client wire shapes for reading a PUBLISHED chat out of the cloud.
@@ -62,18 +63,22 @@ import { z } from "zod";
  * SUCCESS value: rendering the other row would show one person's chat under
  * another person's list entry, which is a privacy bug wearing a UI costume.
  */
-export const cloudChatIdentitySchema = z.object({
-  taskId: z.string().min(1),
-  chatId: z.string().min(1),
-  ownerUserId: z.string().min(1),
-});
+export const cloudChatIdentitySchema = lazySchema(() =>
+  z.object({
+    taskId: z.string().min(1),
+    chatId: z.string().min(1),
+    ownerUserId: z.string().min(1),
+  }),
+);
 export type CloudChatIdentity = z.infer<typeof cloudChatIdentitySchema>;
 
-export const cloudChatVisibilitySchema = z.enum(["private", "task"]);
+export const cloudChatVisibilitySchema = lazySchema(() =>
+  z.enum(["private", "task"]),
+);
 export type CloudChatVisibility = z.infer<typeof cloudChatVisibilitySchema>;
 
 /** Lowercase hex sha256 - the only form a content address is written in. */
-const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const sha256HexSchema = lazySchema(() => z.string().regex(/^[0-9a-f]{64}$/));
 
 // ---- List -------------------------------------------------------------- //
 
@@ -99,43 +104,47 @@ const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
  * addresses bytes by content digest through an authorized identity triple, and
  * a key is not something it should ever hold.
  */
-export const cloudChatSummarySchema = z.object({
-  identity: cloudChatIdentitySchema,
-  ownerHostId: z.string().min(1),
-  createdAt: z.number(),
-  visibility: cloudChatVisibilitySchema,
-  title: z.string().nullable(),
-  isTitleEditedByUser: z.boolean(),
-  parentChatId: z.string().nullable(),
-  isArchived: z.boolean(),
-  runSettingsSummary: z.string().nullable(),
-  metadataUpdatedAt: z.number(),
-  /**
-   * Digest of the current head document's exact bytes, or `null` before the
-   * owning host publishes a first head.
-   *
-   * Doubles as the client's integrity check on the resolve that follows: the
-   * head arrives as a string, and this is what those bytes must hash to.
-   */
-  headSha256: sha256HexSchema.nullable(),
-  /** Null until the owning host publishes a first head. */
-  publishedAt: z.number().nullable(),
-  /**
-   * Sequence the published head was pinned at; null when unpublished.
-   *
-   * A listing and staleness projection, host-asserted. No authority decision
-   * reads it - two forked histories both number their turns, so ordering by seq
-   * permits exactly the overwrite the head digest exists to refuse.
-   */
-  throughRecordSeq: z.number().int().nonnegative().nullable(),
-  /** True when the signed-in user owns this chat (their private rows list too). */
-  isOwnedByViewer: z.boolean(),
-});
+export const cloudChatSummarySchema = lazySchema(() =>
+  z.object({
+    identity: cloudChatIdentitySchema,
+    ownerHostId: z.string().min(1),
+    createdAt: z.number(),
+    visibility: cloudChatVisibilitySchema,
+    title: z.string().nullable(),
+    isTitleEditedByUser: z.boolean(),
+    parentChatId: z.string().nullable(),
+    isArchived: z.boolean(),
+    runSettingsSummary: z.string().nullable(),
+    metadataUpdatedAt: z.number(),
+    /**
+     * Digest of the current head document's exact bytes, or `null` before the
+     * owning host publishes a first head.
+     *
+     * Doubles as the client's integrity check on the resolve that follows: the
+     * head arrives as a string, and this is what those bytes must hash to.
+     */
+    headSha256: sha256HexSchema.nullable(),
+    /** Null until the owning host publishes a first head. */
+    publishedAt: z.number().nullable(),
+    /**
+     * Sequence the published head was pinned at; null when unpublished.
+     *
+     * A listing and staleness projection, host-asserted. No authority decision
+     * reads it - two forked histories both number their turns, so ordering by seq
+     * permits exactly the overwrite the head digest exists to refuse.
+     */
+    throughRecordSeq: z.number().int().nonnegative().nullable(),
+    /** True when the signed-in user owns this chat (their private rows list too). */
+    isOwnedByViewer: z.boolean(),
+  }),
+);
 export type CloudChatSummary = z.infer<typeof cloudChatSummarySchema>;
 
-export const listCloudChatsRequestSchema = z.object({
-  taskId: z.string().min(1),
-});
+export const listCloudChatsRequestSchema = lazySchema(() =>
+  z.object({
+    taskId: z.string().min(1),
+  }),
+);
 export type ListCloudChatsRequest = z.infer<typeof listCloudChatsRequestSchema>;
 
 /**
@@ -145,9 +154,11 @@ export type ListCloudChatsRequest = z.infer<typeof listCloudChatsRequestSchema>;
  * correct answers and anything caching this must key on the viewer as well as
  * the task.
  */
-export const listCloudChatsResponseSchema = z.object({
-  chats: z.array(cloudChatSummarySchema),
-});
+export const listCloudChatsResponseSchema = lazySchema(() =>
+  z.object({
+    chats: z.array(cloudChatSummarySchema),
+  }),
+);
 export type ListCloudChatsResponse = z.infer<
   typeof listCloudChatsResponseSchema
 >;
@@ -170,9 +181,8 @@ export type ResolveCloudChatHeadRequest = z.infer<
  * v1's server-side gate bought: a reader that cannot interpret a publication
  * spends no part egress on it.
  */
-export const resolveCloudChatHeadOutcomeSchema = z.discriminatedUnion(
-  "status",
-  [
+export const resolveCloudChatHeadOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
     z.object({
       status: z.literal("ok"),
       /**
@@ -203,56 +213,60 @@ export const resolveCloudChatHeadOutcomeSchema = z.discriminatedUnion(
       status: z.literal("ambiguous-identity"),
       resolvedOwnerUserId: z.string().min(1),
     }),
-  ],
+  ]),
 );
 export type ResolveCloudChatHeadOutcome = z.infer<
   typeof resolveCloudChatHeadOutcomeSchema
 >;
 
-export const resolveCloudChatHeadResponseSchema = z
-  .object({
-    /** Null exactly when `outcome.status === "missing"` - no row, no summary. */
-    chat: cloudChatSummarySchema.nullable(),
-    outcome: resolveCloudChatHeadOutcomeSchema,
-  })
-  // The doc line above is a validated invariant, not prose: a "missing"
-  // outcome with a summary attached (or a resolved outcome without one)
-  // is a malformed response either way, and every consumer branches on
-  // `outcome.status` while reading `chat` - so the contract refuses the
-  // combination rather than letting one consumer discover it at runtime.
-  .superRefine((response, ctx) => {
-    const chatMustBeNull = response.outcome.status === "missing";
-    if ((response.chat === null) !== chatMustBeNull) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["chat"],
-        message: chatMustBeNull
-          ? 'A "missing" outcome carries no summary - `chat` must be null.'
-          : "A resolved outcome must carry its summary - `chat` must not be null.",
-      });
-    }
-  });
+export const resolveCloudChatHeadResponseSchema = lazySchema(() =>
+  z
+    .object({
+      /** Null exactly when `outcome.status === "missing"` - no row, no summary. */
+      chat: cloudChatSummarySchema.nullable(),
+      outcome: resolveCloudChatHeadOutcomeSchema,
+    })
+    // The doc line above is a validated invariant, not prose: a "missing"
+    // outcome with a summary attached (or a resolved outcome without one)
+    // is a malformed response either way, and every consumer branches on
+    // `outcome.status` while reading `chat` - so the contract refuses the
+    // combination rather than letting one consumer discover it at runtime.
+    .superRefine((response, ctx) => {
+      const chatMustBeNull = response.outcome.status === "missing";
+      if ((response.chat === null) !== chatMustBeNull) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["chat"],
+          message: chatMustBeNull
+            ? 'A "missing" outcome carries no summary - `chat` must be null.'
+            : "A resolved outcome must carry its summary - `chat` must not be null.",
+        });
+      }
+    }),
+);
 export type ResolveCloudChatHeadResponse = z.infer<
   typeof resolveCloudChatHeadResponseSchema
 >;
 
 // ---- Read one part ----------------------------------------------------- //
 
-export const readCloudChatPartRequestSchema = z.object({
-  ...cloudChatIdentitySchema.shape,
-  /** The part's whole address. The client got it out of the head it parsed. */
-  sha256: sha256HexSchema,
-  /**
-   * The length the HEAD promises for this part.
-   *
-   * Sent so the host can apply a staging ceiling without parsing the head - the
-   * one number it needs to bound a transfer, handed to it rather than read out
-   * of a document it must not interpret. It is NOT the authority on what the
-   * bytes are: the client checks the delivered length and digest against its own
-   * copy of the head, so a client that lied here only lies to itself.
-   */
-  declaredByteLength: z.number().int().nonnegative(),
-});
+export const readCloudChatPartRequestSchema = lazySchema(() =>
+  z.object({
+    ...cloudChatIdentitySchema.shape,
+    /** The part's whole address. The client got it out of the head it parsed. */
+    sha256: sha256HexSchema,
+    /**
+     * The length the HEAD promises for this part.
+     *
+     * Sent so the host can apply a staging ceiling without parsing the head - the
+     * one number it needs to bound a transfer, handed to it rather than read out
+     * of a document it must not interpret. It is NOT the authority on what the
+     * bytes are: the client checks the delivered length and digest against its own
+     * copy of the head, so a client that lied here only lies to itself.
+     */
+    declaredByteLength: z.number().int().nonnegative(),
+  }),
+);
 export type ReadCloudChatPartRequest = z.infer<
   typeof readCloudChatPartRequestSchema
 >;
@@ -278,24 +292,28 @@ export type ReadCloudChatPartRequest = z.infer<
  * transport error would make it indistinguishable from a dropped socket, which
  * IS retryable. Genuine transport failures still throw.
  */
-export const readCloudChatPartOutcomeSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("ok"),
-    /** Base64 of the RAW part bytes - what `sha256` is over. */
-    bytesBase64: z.string(),
-    /** Length of the DECODED bytes, so a client can check what it decoded. */
-    byteLength: z.number().int().nonnegative(),
-  }),
-  z.object({ status: z.literal("not-found") }),
-  z.object({ status: z.literal("ambiguous-identity") }),
-]);
+export const readCloudChatPartOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("ok"),
+      /** Base64 of the RAW part bytes - what `sha256` is over. */
+      bytesBase64: z.string(),
+      /** Length of the DECODED bytes, so a client can check what it decoded. */
+      byteLength: z.number().int().nonnegative(),
+    }),
+    z.object({ status: z.literal("not-found") }),
+    z.object({ status: z.literal("ambiguous-identity") }),
+  ]),
+);
 export type ReadCloudChatPartOutcome = z.infer<
   typeof readCloudChatPartOutcomeSchema
 >;
 
-export const readCloudChatPartResponseSchema = z.object({
-  outcome: readCloudChatPartOutcomeSchema,
-});
+export const readCloudChatPartResponseSchema = lazySchema(() =>
+  z.object({
+    outcome: readCloudChatPartOutcomeSchema,
+  }),
+);
 export type ReadCloudChatPartResponse = z.infer<
   typeof readCloudChatPartResponseSchema
 >;
@@ -315,10 +333,12 @@ export type ReadCloudChatPartResponse = z.infer<
  * `unavailable`. An enum would make every new kind a breaking change to this
  * method.
  */
-export const cloudChatPayloadRefSchema = z.object({
-  kind: z.string().min(1),
-  sha256: sha256HexSchema,
-});
+export const cloudChatPayloadRefSchema = lazySchema(() =>
+  z.object({
+    kind: z.string().min(1),
+    sha256: sha256HexSchema,
+  }),
+);
 export type CloudChatPayloadRef = z.infer<typeof cloudChatPayloadRefSchema>;
 
 export const listCloudChatPayloadsRequestSchema = cloudChatIdentitySchema;
@@ -351,9 +371,8 @@ export type ListCloudChatPayloadsRequest = z.infer<
  * READ, with the refs that chat's own rows hold - never "is this digest
  * anywhere".
  */
-export const listCloudChatPayloadsOutcomeSchema = z.discriminatedUnion(
-  "status",
-  [
+export const listCloudChatPayloadsOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
     z.object({
       status: z.literal("ok"),
       refs: z.array(cloudChatPayloadRefSchema),
@@ -371,23 +390,27 @@ export const listCloudChatPayloadsOutcomeSchema = z.discriminatedUnion(
      * surface must say "never published", not "could not reach the cloud".
      */
     z.object({ status: z.literal("not-found") }),
-  ],
+  ]),
 );
 export type ListCloudChatPayloadsOutcome = z.infer<
   typeof listCloudChatPayloadsOutcomeSchema
 >;
 
-export const listCloudChatPayloadsResponseSchema = z.object({
-  outcome: listCloudChatPayloadsOutcomeSchema,
-});
+export const listCloudChatPayloadsResponseSchema = lazySchema(() =>
+  z.object({
+    outcome: listCloudChatPayloadsOutcomeSchema,
+  }),
+);
 export type ListCloudChatPayloadsResponse = z.infer<
   typeof listCloudChatPayloadsResponseSchema
 >;
 
-export const readCloudChatPayloadRequestSchema = z.object({
-  ...cloudChatIdentitySchema.shape,
-  ref: cloudChatPayloadRefSchema,
-});
+export const readCloudChatPayloadRequestSchema = lazySchema(() =>
+  z.object({
+    ...cloudChatIdentitySchema.shape,
+    ref: cloudChatPayloadRefSchema,
+  }),
+);
 export type ReadCloudChatPayloadRequest = z.infer<
   typeof readCloudChatPayloadRequestSchema
 >;
@@ -405,9 +428,8 @@ export type ReadCloudChatPayloadRequest = z.infer<
  * A transport failure is NOT this. It throws, so a client retries rather than
  * caching a permanent "unavailable" for a payload one bad request away.
  */
-export const readCloudChatPayloadOutcomeSchema = z.discriminatedUnion(
-  "status",
-  [
+export const readCloudChatPayloadOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
     z.object({
       status: z.literal("ok"),
       /** Base64 of the RAW payload bytes - what `ref.sha256` is over. */
@@ -422,15 +444,17 @@ export const readCloudChatPayloadOutcomeSchema = z.discriminatedUnion(
      * opening.
      */
     z.object({ status: z.literal("ambiguous-identity") }),
-  ],
+  ]),
 );
 export type ReadCloudChatPayloadOutcome = z.infer<
   typeof readCloudChatPayloadOutcomeSchema
 >;
 
-export const readCloudChatPayloadResponseSchema = z.object({
-  outcome: readCloudChatPayloadOutcomeSchema,
-});
+export const readCloudChatPayloadResponseSchema = lazySchema(() =>
+  z.object({
+    outcome: readCloudChatPayloadOutcomeSchema,
+  }),
+);
 export type ReadCloudChatPayloadResponse = z.infer<
   typeof readCloudChatPayloadResponseSchema
 >;
@@ -451,18 +475,22 @@ export type ReadCloudChatPayloadResponse = z.infer<
  * The response carries the updated row so a client can reconcile its list
  * cache without a second list hop.
  */
-export const setCloudChatVisibilityRequestSchema = z.object({
-  taskId: z.string().min(1),
-  chatId: z.string().min(1),
-  visibility: cloudChatVisibilitySchema,
-});
+export const setCloudChatVisibilityRequestSchema = lazySchema(() =>
+  z.object({
+    taskId: z.string().min(1),
+    chatId: z.string().min(1),
+    visibility: cloudChatVisibilitySchema,
+  }),
+);
 export type SetCloudChatVisibilityRequest = z.infer<
   typeof setCloudChatVisibilityRequestSchema
 >;
 
-export const setCloudChatVisibilityResponseSchema = z.object({
-  chat: cloudChatSummarySchema,
-});
+export const setCloudChatVisibilityResponseSchema = lazySchema(() =>
+  z.object({
+    chat: cloudChatSummarySchema,
+  }),
+);
 export type SetCloudChatVisibilityResponse = z.infer<
   typeof setCloudChatVisibilityResponseSchema
 >;
@@ -475,18 +503,22 @@ export type SetCloudChatVisibilityResponse = z.infer<
  * `applyToExisting: true` also bulk-updates existing owned rows. `updatedCount`
  * is the number of rows whose stored visibility actually changed.
  */
-export const setChatSharingDefaultRequestSchema = z.object({
-  taskId: z.string().min(1),
-  defaultVisibility: cloudChatVisibilitySchema,
-  applyToExisting: z.boolean(),
-});
+export const setChatSharingDefaultRequestSchema = lazySchema(() =>
+  z.object({
+    taskId: z.string().min(1),
+    defaultVisibility: cloudChatVisibilitySchema,
+    applyToExisting: z.boolean(),
+  }),
+);
 export type SetChatSharingDefaultRequest = z.infer<
   typeof setChatSharingDefaultRequestSchema
 >;
 
-export const setChatSharingDefaultResponseSchema = z.object({
-  updatedCount: z.number().int().nonnegative(),
-});
+export const setChatSharingDefaultResponseSchema = lazySchema(() =>
+  z.object({
+    updatedCount: z.number().int().nonnegative(),
+  }),
+);
 export type SetChatSharingDefaultResponse = z.infer<
   typeof setChatSharingDefaultResponseSchema
 >;

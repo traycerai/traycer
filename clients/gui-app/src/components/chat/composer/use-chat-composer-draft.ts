@@ -28,6 +28,18 @@ interface UseChatComposerDraftArgs {
   readonly editorRef: RefObject<ComposerPromptEditorHandle | null>;
   /** Bumped by the owner when `ComposerPromptEditor` fires `onEditorReady`. */
   readonly editorReadyTick: number;
+  /**
+   * Display snapshots recorded on this chat's draft row so the drafts list
+   * can name it once this composer is gone (the titles come from the
+   * open-epic projector, which only exists while the epic is open). `null`
+   * before the projector has answered - and, on the mobile standalone chat
+   * view, for the whole lifetime of the mount, since this composer renders
+   * there with no `<EpicSessionProvider>` to read. The store treats a `null`
+   * as "not answered" and keeps whatever label it already has, so neither
+   * case blanks a row the drafts list can name.
+   */
+  readonly chatTitle: string | null;
+  readonly epicTitle: string | null;
 }
 
 export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
@@ -107,6 +119,28 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
       unbindComposerDraftHost(args.chatId, args.hostId);
     };
   }, [args.chatId, args.epicId, args.hostId, bindTarget]);
+
+  // Kept out of the bind effect above for two reasons: a title arriving late
+  // would tear down and re-register the host binding, and the setter is a
+  // no-op until this chat HAS a row - which happens on the first keystroke,
+  // not on mount. `draftId` is the signal for exactly that moment, so the
+  // labels land on the row the list will show.
+  const setComposerDraftTitles = useComposerDraftStore(
+    (state) => state.setComposerDraftTitles,
+  );
+  const draftId = useComposerDraftStore(
+    (state) => state.drafts[args.chatId]?.draftId ?? null,
+  );
+  useEffect(() => {
+    if (draftId === null) return;
+    setComposerDraftTitles(args.chatId, args.chatTitle, args.epicTitle);
+  }, [
+    args.chatId,
+    args.chatTitle,
+    args.epicTitle,
+    draftId,
+    setComposerDraftTitles,
+  ]);
 
   return {
     initialContent,

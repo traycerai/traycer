@@ -295,10 +295,11 @@ export function LinkCodeSignIn(props: {
             {noticeLine}
             {/* A real button in the hero's stack, not a bare text line
                 wedged between two buttons — outline keeps it clearly
-                subordinate to the Scan primary. The hero paints white text
-                over its backdrop while `outline` sets a surface with no text
-                color of its own, so the label pins its foreground - otherwise
-                it inherits the hero's white onto the light surface. */}
+                subordinate to the Scan primary. `outline` sets a surface but
+                no text colour, so the label is the hero's white; it stays
+                legible because the sign-in page scopes the dark palette onto
+                everything it draws, which keeps that surface dark in every
+                theme. */}
             {/* Gated like Scan: a claim is one attempt, and opening the
                 entry form mid-claim offers a second one with nothing useful
                 to type — no approver surface shows a code while a claim

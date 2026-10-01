@@ -762,7 +762,7 @@ describe("planMissionControl", () => {
     expect(scene.whereabouts(patient.id)).toBe(ward.name);
   });
 
-  it("gives two hosts two host signs and two host bands on one floor", () => {
+  it("gives two hosts two host bands on one floor, with no host name plaque for either", () => {
     const epic = makeTestEpic("two-hosts", 60, 1);
     const planned = planFresh(epic, VIEWPORT_WIDE);
     const layout = planned.layout;
@@ -773,11 +773,10 @@ describe("planMissionControl", () => {
     // while seats keep the agent host the colour bands are drawn from.
     expect(floor.hostId).toBeNull();
 
-    const hostSigns = layout.signs.filter((sign) => sign.kind === "host");
-    expect(hostSigns).toHaveLength(2);
-    expect(new Set(hostSigns.map((sign) => sign.hostId))).toEqual(
-      new Set(["host-a", "host-b"]),
-    );
+    // The plaques naming each host are gone - a simplification, not a bug -
+    // but the attribution they named is still carried on the seats/bands
+    // below, which is what the rest of this case still proves.
+    expect(layout.signs.some((sign) => sign.kind === "host")).toBe(false);
 
     const consoleHostIds = new Set<string>();
     for (const seat of layout.seats.values()) {
@@ -1456,26 +1455,6 @@ describe("mission-control cold-review findings", () => {
     );
     expect(steps.length).toBeGreaterThanOrEqual(2);
     expect(exposedStepPixels(draws, steps)).toBeGreaterThan(0);
-  });
-
-  it("keeps every host foot sign inside the projected world", () => {
-    const fixture = makeTestEpic("many-roots", 20, 1);
-    const epic: OfficeTestEpic = {
-      ...fixture,
-      agents: fixture.agents.map((agent, index) => ({
-        ...agent,
-        hostId: `host-${String(index).padStart(2, "0")}`,
-      })),
-    };
-    const scene = sceneOf(epic);
-    const layout = requireLayout(scene);
-    const width = scene.worldSize().width;
-    const out = layout.signs.filter(
-      (sign) =>
-        sign.kind === "host" &&
-        (sign.tile.col + sign.widthTiles) * OFFICE_TILE > width,
-    );
-    expect(out).toEqual([]);
   });
 
   it("keeps an arriving character inside the projector bounds", () => {
@@ -2252,7 +2231,7 @@ describe("mission control plates: fixup 5 - plates fit their own arc segment and
     expect(resolvedAt(thresholds[3] * 0.5)).toBeUndefined();
   });
 
-  it("leaves the HQ board, the Lounge area sign and the host signs as this fixup found them", () => {
+  it("leaves the HQ board and the Lounge area sign as this fixup found them, with no host name plaque", () => {
     const epic = makeTestEpic("triage", 309, 1);
     const layout = planFresh(epic, VIEWPORT_WIDE).layout;
 
@@ -2274,13 +2253,9 @@ describe("mission control plates: fixup 5 - plates fit their own arc segment and
     expect(area.tile.col).toBeGreaterThan(board.tile.col + board.widthTiles);
     expect(area.rungs).toBeUndefined();
 
-    const hostSigns = layout.signs.filter((sign) => sign.kind === "host");
-    expect(hostSigns.length).toBeGreaterThan(0);
-    for (const sign of hostSigns) {
-      expect(sign.widthTiles).toBe(2);
-      expect(sign.tile.row).toBe(layout.rows - 1);
-      expect(sign.rungs).toBeUndefined();
-    }
+    // The bottom-left host name plaques are gone (a simplification) - host
+    // attribution is still carried on the seats and bands, never on a sign.
+    expect(layout.signs.some((sign) => sign.kind === "host")).toBe(false);
   });
 });
 

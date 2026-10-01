@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * # "Is this pending question askable, and where?"
@@ -57,20 +58,22 @@ import type { ContentBlock } from "@traycer/protocol/persistence/epic/schemas";
  * both halves and settles it; until then, unjudged.
  */
 
-export const interviewAnswerabilitySchema = z.object({
-  blockId: z.string(),
-  /**
-   * The ordinal of the row that renders this question's card, or `null` when
-   * no row does.
-   *
-   * The ordinal is what makes the answer actionable rather than merely
-   * non-destructive: the client hydrates it, the row seats, the card appears
-   * and the question can be answered. Without it a cold question would only
-   * stop being mis-reported as stuck - it would still render nothing, and the
-   * chat would sit blocked with no affordance at all.
-   */
-  ordinal: z.number().int().nonnegative().nullable(),
-});
+export const interviewAnswerabilitySchema = lazySchema(() =>
+  z.object({
+    blockId: z.string(),
+    /**
+     * The ordinal of the row that renders this question's card, or `null` when
+     * no row does.
+     *
+     * The ordinal is what makes the answer actionable rather than merely
+     * non-destructive: the client hydrates it, the row seats, the card appears
+     * and the question can be answered. Without it a cold question would only
+     * stop being mis-reported as stuck - it would still render nothing, and the
+     * chat would sit blocked with no affordance at all.
+     */
+    ordinal: z.number().int().nonnegative().nullable(),
+  }),
+);
 export type InterviewAnswerability = z.infer<
   typeof interviewAnswerabilitySchema
 >;

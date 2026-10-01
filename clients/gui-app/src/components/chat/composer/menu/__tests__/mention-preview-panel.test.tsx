@@ -1,7 +1,8 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MentionPreview } from "@/lib/composer/types";
+import { setNativeKeyboardState } from "@/lib/native-keyboard";
 
 import { MentionPreviewPanel } from "../mention-preview-panel";
 import { panelFitFor } from "../mention-preview-panel-fit";
@@ -566,5 +567,56 @@ describe("MentionPreviewPanel", () => {
 
     const panel = document.querySelector('[data-slot="mention-preview-panel"]');
     expect(panel?.textContent).toBe("/home/u/.traycer/worktreesorfeature");
+  });
+});
+
+describe("MentionPreviewPanel and the software keyboard", () => {
+  afterEach(() => {
+    setNativeKeyboardState({ open: false, transitioning: false });
+    document.documentElement.style.removeProperty("--keyboard-inset");
+  });
+
+  // Every positioning pass reads the active row's rect, so its reads count
+  // the passes. A keyboard opening or closing moves nothing floating-ui
+  // observes, so the panel has to be told.
+  it("repositions when the keyboard opens and again when it closes", async () => {
+    const row = document.createElement("div");
+    row.setAttribute("data-active", "true");
+    const rowRect = vi.fn(() => new DOMRect(40, 100, 200, 32));
+    row.getBoundingClientRect = rowRect;
+    const preview: MentionPreview = {
+      kind: "text",
+      primary: "does a thing",
+      secondary: null,
+      mono: false,
+    };
+
+    render(
+      <MentionPreviewPanel
+        panelRef={makePanelRef()}
+        listRef={makeListRef(row)}
+        activeIndex={0}
+        preview={preview}
+        disabledReason={null}
+      />,
+    );
+    await flush();
+    const passesBeforeOpen = rowRect.mock.calls.length;
+    expect(passesBeforeOpen).toBeGreaterThan(0);
+
+    document.documentElement.style.setProperty("--keyboard-inset", "336px");
+    act(() => {
+      setNativeKeyboardState({ open: true, transitioning: true });
+    });
+    await flush();
+    const passesAfterOpen = rowRect.mock.calls.length;
+    expect(passesAfterOpen).toBeGreaterThan(passesBeforeOpen);
+
+    document.documentElement.style.setProperty("--keyboard-inset", "0px");
+    act(() => {
+      setNativeKeyboardState({ open: false, transitioning: false });
+    });
+    await flush();
+    expect(rowRect.mock.calls.length).toBeGreaterThan(passesAfterOpen);
   });
 });

@@ -1,18 +1,8 @@
 /**
  * The `comm-graph` tile body: the per-epic communication graph CANVAS.
  *
- * Unlike every other tile, this one is NOT bound to a host on the LOCAL plane -
- * it opens one `epic.communicationGraph.subscribe` per host the epic's agents
- * live on and merges the frames, so it must never read `useTabHostId()` (its
- * own ref carries an inert placeholder host for exactly that reason).
- *
- * The CLOUD relay is a separate question and rides the tab's host. The cloud
- * feed is the same rows from any relay, so the only thing that choice decides
- * is which link carries it - and this epic tab is already riding one, which is
- * the host `useEpicSessionHostId()` names. That host is passed down to
- * `useCommGraphSnapshot`, which puts it first among the dialable relay
- * candidates and keeps the rest in ID order as failover. The per-host local
- * merge above is untouched by it.
+ * Cloud history is authoritative. One relay carries the epic's events,
+ * preferring the epic session host among available relay candidates.
  *
  * CANVAS PLUS TRANSPORT. The graph fills the tile and a media-player bar is
  * docked under it: play/pause, speed, and a scrubber whose track carries one
@@ -36,19 +26,10 @@ import type {
   OfficeViewChoice,
 } from "@/stores/epics/canvas/types";
 import { CommGraphCanvas } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
-import {
-  CommGraphOfficeCanvas,
-  FIT_PADDING,
-} from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
-import {
-  decideOfficeView,
-  type OfficeAutoDecision,
-  type OfficeAutoProbe,
-} from "@/lib/comm-graph/office/office-auto";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 import { officeBenchOverride } from "@/components/epic-canvas/comm-graph/office/office-bench";
-import { OfficeAutoAnnouncer } from "@/components/epic-canvas/comm-graph/office/office-auto-announcer";
 import { OfficeViewPicker } from "@/components/epic-canvas/comm-graph/office/office-view-picker";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { CommGraphViewModeToggle } from "@/components/epic-canvas/comm-graph/comm-graph-view-mode-toggle";
@@ -68,17 +49,6 @@ export interface CommGraphTileProps {
   readonly node: CommGraphTileRef;
   readonly viewTabId: string;
 }
-
-/**
- * What a canvas that does not know its view yet is mounted as.
- *
- * It has to be mounted to be MEASURED - the box Auto decides on is the one
- * left after the directory and the panels - but `ready` is false until Auto
- * answers, so this view is never planned and never drawn. The Floor is the
- * fallback everywhere else in the office for the same reason: it is the one
- * view that has always existed.
- */
-const MEASURING_VIEW_ID: OfficeViewId = "floor";
 
 /**
  * The framing a tile gets when the office under it changes out from under the
@@ -108,8 +78,8 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
  * named the arriving view. Both can be true with no office writer having run -
  * a mode switch replaces the object for free, and a record can have named that
  * view since long before the move (a tile saved under a Settings default of
- * Towers, reopened while the default is Auto, carries
- * `officeCameraView: "towers"` over a camera nothing has touched). That was
+ * Building, reopened while the default is Floor, carries
+ * `officeCameraView: "building"` over a camera nothing has touched). That was
  * fixup 12's defect, and no cleverer key fixes it: a camera-object key leaks
  * on the two the reviewer named - `officeCamera: null` is a legitimate armed
  * value, so `null` cannot also be the unarmed sentinel, and a write the store
@@ -128,7 +98,7 @@ interface OfficeCameraWitness {
 /**
  * WHICH WRITER moved the resolved view, which is the whole question.
  *
- * Auto's answer, a re-pick of Auto and an explicit pick each write the camera
+ * An explicit view pick writes the camera
  * they mean in the SAME store write, so nothing is owed once one of them has
  * landed. A Settings default change is not a write to this tile: it moves the
  * resolved view from outside, and the reset that follows is an effect - a
@@ -139,7 +109,7 @@ interface OfficeCameraWitness {
  */
 function nextArmed(
   witness: OfficeCameraWitness,
-  resolvedViewId: OfficeViewId | null,
+  resolvedViewId: OfficeViewId,
   defaultChoice: OfficeViewChoice,
 ): boolean {
   // ARMING ONLY. This used to decide the release too, by INFERRING it from the
@@ -150,11 +120,6 @@ function nextArmed(
   // replaces. A release is now something a writer SAYS (`releaseWitness`),
   // never something the store's shape implies.
   if (witness.view === resolvedViewId) return witness.armed;
-  // The DEFAULT moving is what arms this, and it is not inferred from the
-  // shape of the value (whether the record differs, whether either side of the
-  // move is `null`), which is what earlier versions of this rule got wrong. An
-  // Auto outcome resolving `null -> concrete` under an unchanged default is
-  // not a default move and must not arm.
   return witness.defaultChoice !== defaultChoice;
 }
 
@@ -165,7 +130,7 @@ function nextArmed(
  */
 function nextOfficeCameraWitness(
   witness: OfficeCameraWitness,
-  resolvedViewId: OfficeViewId | null,
+  resolvedViewId: OfficeViewId,
   defaultChoice: OfficeViewChoice,
 ): OfficeCameraWitness {
   const armed = nextArmed(witness, resolvedViewId, defaultChoice);
@@ -190,7 +155,7 @@ function nextOfficeCameraWitness(
  * that actually mounts is the one built from the adjusted decision.
  */
 function useWitnessedOfficeViewMove(
-  resolvedViewId: OfficeViewId | null,
+  resolvedViewId: OfficeViewId,
   defaultChoice: OfficeViewChoice,
 ): { readonly witnessedMove: boolean; readonly releaseWitness: () => void } {
   const [witness, setWitness] = useState<OfficeCameraWitness>(() => ({
@@ -245,18 +210,12 @@ function useWitnessedOfficeViewMove(
  */
 function officeViewForCanvas(
   view: CommGraphTileViewState,
-  resolvedViewId: OfficeViewId | null,
+  resolvedViewId: OfficeViewId,
   witnessedMove: boolean,
 ): CommGraphTileViewState {
   // The Graph reads `x`, `y`, `zoom` as its own, which since D68 is exactly
   // what they are. Nothing to project.
   if (view.mode !== "office") return view;
-  // Auto has not answered yet, so there is no view for a camera to be about.
-  // Still projected, and deliberately: the office canvas IS mounted here (on
-  // the measuring view, withheld by `ready`), and `createOfficeRuntime` reads
-  // the three fields once on its first render - so handing it the raw view
-  // would seat the office in the GRAPH's camera for the life of that runtime.
-  if (resolvedViewId === null) return { ...view, ...NEUTRAL_CAMERA };
   const framesAnotherView =
     witnessedMove ||
     (view.officeCameraView !== null &&
@@ -310,52 +269,6 @@ function EmptyCommGraph(props: { readonly tileInstanceId: string }) {
       </p>
     </div>
   );
-}
-
-/**
- * What the chip and picker SAY, withheld while the office is measuring.
- *
- * The decision is local state and outlives the persisted outcome it was taken
- * for: when the default re-enters Auto and clears that outcome for
- * remeasurement, `resolvedViewId` goes null - the same measuring surface the
- * canvas shows - a beat before the fresh measurement overwrites the decision.
- * Showing the old one across that gap advertises the previous view, agent count
- * and fit: stale for the length of a delayed history catch-up, and liable to
- * contradict what the remeasurement lands on. Gating on `resolvedViewId` keeps
- * the chip in lockstep with the canvas instead.
- */
-function shownDecisionFor(
-  resolvedViewId: OfficeViewId | null,
-  decision: OfficeAutoDecision | null,
-): OfficeAutoDecision | null {
-  return resolvedViewId === null ? null : decision;
-}
-
-/**
- * Whether the feed a tile waits on is SETTLED.
- *
- * An epic whose agents are all unattributed - legacy rows carrying a null
- * `hostId` - has no host feed to catch up from at all: `useCommGraphAgents`
- * keeps nulls out of `hostIds`, and the subscription reports
- * `initialHistoryCaughtUp: false` for as long as its own host set is empty.
- * Together those left Auto on the blank `measuring…` surface forever on such an
- * epic, because the measure gate could never open. An empty SOURCE set is
- * SETTLED, not pending: there is nothing left to arrive.
- *
- * Answered from the same `useCommGraphAgents` result the population comes from,
- * so there is no window where the agents are loaded but their host list is not:
- * when the caller has agents and this has no hosts, every one of those agents is
- * genuinely hostless. Deciding it here rather than inside the subscription keeps
- * the subscription's "no host has reported" meaning intact, and avoids a mount
- * race where a not-yet-dialed host set would read as caught up.
- *
- * Its own function so the tile stays under its complexity ceiling.
- */
-function isFeedSettled(
-  hostIds: ReadonlyArray<string>,
-  initialHistoryCaughtUp: boolean,
-): boolean {
-  return hostIds.length === 0 || initialHistoryCaughtUp;
 }
 
 export function CommGraphTile(props: CommGraphTileProps) {
@@ -414,36 +327,8 @@ export function CommGraphTile(props: CommGraphTileProps) {
   const settingsDefaultView = useSettingsStore(
     (state) => state.agentOfficeDefaultView,
   );
-  // The generation this tile's Auto outcome must match to be trusted. It bumps
-  // on every default change, so a tile CLOSED while the default left Auto and
-  // returned reads a different generation than its stamp on remount and
-  // re-measures - the case the mounted witness below cannot see.
-  const settingsDefaultGeneration = useSettingsStore(
-    (state) => state.agentOfficeDefaultViewGeneration,
-  );
   const choice: OfficeViewChoice = node.view.officeView ?? settingsDefaultView;
-  // An Auto OUTCOME is TRUSTED - safe to render, and safe for the effect below
-  // to skip re-measuring - unless it is a STALE INHERITED one. A tile that
-  // explicitly picked Auto (`officeView !== null`) does not follow the global
-  // default, so its outcome is always trusted; a tile INHERITING the default
-  // (`officeView === null`) trusts its outcome only while the stamped
-  // generation still matches the current default. The same predicate gates
-  // both sites so they cannot drift: withhold at render AND re-measure in the
-  // effect, or neither.
-  const officeAutoOutcomeTrusted =
-    node.view.officeView !== null ||
-    node.view.officeAutoGeneration === settingsDefaultGeneration;
-  // A trusted Auto outcome, or `null` when it is stale and must be re-measured.
-  const trustedAutoView: OfficeViewId | null = officeAutoOutcomeTrusted
-    ? node.view.officeAutoView
-    : null;
-  // `null` means "Auto has not answered yet", which is the one state where
-  // this tile does not know what it is drawing. A stale inherited outcome
-  // resolves to `null` too: rendering the old view would flash the wrong office
-  // (and pay its planning cost) in the window before the effect re-measures, so
-  // the measuring surface is withheld until a fresh outcome is stamped.
-  const resolvedViewId: OfficeViewId | null =
-    choice === "auto" ? trustedAutoView : choice;
+  const resolvedViewId: OfficeViewId = choice;
 
   // The live half of the evidence below: a `null` record cannot carry a
   // default change this tile is watching happen, so the tile remembers it.
@@ -462,14 +347,6 @@ export function CommGraphTile(props: CommGraphTileProps) {
   // this guarantee.
   const handleOfficeCameraChange = useCallback(
     (camera: CommGraphTileCamera) => {
-      // Auto has not resolved yet: the canvas mounted here is the blank
-      // MEASURING surface (withheld by `ready`), and a pan or zoom on it frames
-      // no view. Persisting it would stamp the store with a camera whose
-      // framedView is null, which Auto's keep arm then adopts on a Floor
-      // outcome - opening the resolved office at an arbitrary framing built
-      // against an empty scene, possibly entirely off screen, instead of
-      // auto-fitting. Ignore the write until there is a view for it to be about.
-      if (resolvedViewId === null) return;
       updateOfficeCamera(viewTabId, node.id, camera, resolvedViewId);
       // The office has framed the arriving view with its own hands, which is
       // the strongest release there is: whatever the witness was holding out
@@ -479,105 +356,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
     [node.id, releaseWitness, resolvedViewId, updateOfficeCamera, viewTabId],
   );
 
-  // Auto's own state: the measurement in hand (for the chip and the picker's
-  // Auto row), and a revision that ticks on every re-pick.
-  const [autoDecision, setAutoDecision] = useState<OfficeAutoDecision | null>(
-    null,
-  );
-  // Withheld while the office is measuring; see shownDecisionFor.
-  const shownAutoDecision = shownDecisionFor(resolvedViewId, autoDecision);
-  const [autoRevision, setAutoRevision] = useState(0);
-  // The latest probe, in a ref: it changes with every batch of rows, and the
-  // decision reads it once. Holding it in state would re-render this tile -
-  // and with it the canvas - on every event that arrives.
-  const probeRef = useRef<OfficeAutoProbe | null>(null);
-  /**
-   * WHICH CANVAS the measurement in `probeRef` came from, or `null` for none.
-   *
-   * State rather than a ref because validity is read during render, and a
-   * string rather than a boolean because that is what makes a stale
-   * measurement impossible instead of merely short-lived: a probe is valid
-   * exactly while the canvas that reported it is still the one mounted. Every
-   * later report for the SAME canvas sets the same string, which React bails
-   * out of, so a batch of rows costs no render.
-   */
-  const [probeKey, setProbeKey] = useState<string | null>(null);
-  /**
-   * WHICH CANVAS a measurement would be about: the mounted view, the Auto
-   * request that asked for it, and the mode the tile is in.
-   *
-   * The canvas withdraws its own probe when it goes, but it cannot be relied
-   * on to get the word out first - a torn-down canvas reports nothing - so the
-   * tile drops the measurement on its own transitions as well. Same string as
-   * the mount key below, deliberately: what remounts the canvas is exactly
-   * what invalidates its measurement.
-   */
-  const canvasKey = `${node.view.mode}:${resolvedViewId ?? "measuring"}:${autoRevision}`;
+  const canvasKey = `${node.view.mode}:${resolvedViewId}`;
+  const drawReady = agents.length > 0 && node.view.mode === "office";
 
-  /**
-   * A measurement is a claim about ONE canvas, and it is WITHDRAWN when that
-   * canvas stops being the one on screen.
-   *
-   * The canvas reports `null` when it loses eligibility or unmounts - a
-   * remount, a re-pick of Auto, a switch to Graph - because merely ceasing to
-   * emit would leave the last measurement standing. A decision taken from a
-   * departed canvas is a decision about a box that is no longer there: it
-   * picked an office while the tile was hidden, wrote a neutral camera over
-   * the Graph's, and answered a re-pick from the box the detail panel had
-   * shrunk. Withdrawal is what makes the next decision wait for the new box.
-   */
-  const handleAutoProbe = useCallback(
-    (probe: OfficeAutoProbe | null) => {
-      probeRef.current = probe;
-      setProbeKey(probe === null ? null : canvasKey);
-    },
-    [canvasKey],
-  );
-
-  /**
-   * DRAW READY: there is an office to draw, and a box to draw it in.
-   *
-   * The agent snapshot has loaded (a non-empty set: `EmptyCommGraph` below is
-   * what distinguishes an empty epic from a pending one), the canvas has
-   * reported a probe - which it only does once it is eligible and laid out,
-   * after the directory and any panel have taken their width - and the office
-   * is the mode this tile is in.
-   *
-   * The CAUGHT-UP FEED is deliberately NOT one of them. It was, and an office
-   * that waits for it is only as available as the feed: when the local server
-   * lost its database the tile drew nothing in any view for twenty-five
-   * minutes while the Graph beside it drew every node from this same snapshot.
-   * The office is a drawing of the AGENT LIST, which is a different input with
-   * a different owner - the events decide who is busy, not who exists - so a
-   * feed that is behind is a fact to say out loud (the chip below), not a
-   * reason to draw nothing. Auto's own gate is the one the feed belongs to,
-   * and it keeps it.
-   */
-  const drawReady =
-    agents.length > 0 &&
-    // Derived, not stored: the moment the mounted canvas changes, the old
-    // canvas's measurement stops being about anything on screen.
-    probeKey === canvasKey &&
-    // The office is what is being measured; a tile showing the Graph has no
-    // office canvas, and the last one's numbers describe a box that is gone.
-    node.view.mode === "office";
-
-  // A hostless epic has no feed to catch up from, so it is settled the moment
-  // its population is; see `isFeedSettled`.
-  const feedSettled = isFeedSettled(hostIds, snapshot.initialHistoryCaughtUp);
-
-  /**
-   * MEASURE READY: drawable, and the population Auto measures is the settled
-   * one.
-   *
-   * Auto partitions the office to measure how much of it fits, so a partition
-   * built while the feed is still replaying would choose a view by the shape
-   * of an office that is about to change - and the outcome is PERSISTED, so it
-   * would outlive the half-replayed statuses it was taken from. The chip reads
-   * `measuring…` for as long as this is false, which is the state the plan
-   * asks for.
-   */
-  const measureReady = drawReady && feedSettled;
+  // Only the cloud relay can declare its initial history caught up.
+  const feedSettled = snapshot.initialHistoryCaughtUp;
 
   const viewForCanvas = useMemo(
     () => officeViewForCanvas(node.view, resolvedViewId, witnessedMove),
@@ -612,43 +395,8 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // Only a tile still FOLLOWING the default moves; an explicit pick owns its
     // own framing.
     if (node.view.officeView !== null) return;
-    // THE DEFAULT ENTERED AUTO - cleared in EITHER mode, BEFORE the office-only
-    // gate below. `officeAutoView` holds the OUTCOME of the last Auto run this
-    // tile followed, and the epic or the tile's box may have changed shape
-    // since; left in place it lets the Auto effect's `officeAutoView !== null`
-    // guard skip measurement, so the office reopens on a stale Floor/Towers
-    // pick. That includes the default returning to Auto while the GRAPH is up
-    // and no office canvas is mounted: gating this on office mode swallowed
-    // that case, and nothing else clears the dormant outcome (the witness arm
-    // retires the office CAMERA but never `officeAutoView`). Since D68 these
-    // are the office's own fields, not the Graph's `x`/`y`/`zoom`, so clearing
-    // them touches no Graph framing. Nothing frames a view until Auto answers.
-    if (settingsDefaultView === "auto") {
-      if (
-        node.view.officeAutoView === null &&
-        node.view.officeCamera === null &&
-        node.view.officeCameraView === null
-      ) {
-        return;
-      }
-      updateView(viewTabId, node.id, {
-        ...node.view,
-        officeCamera: null,
-        officeAutoView: null,
-        officeAutoGeneration: null,
-        officeCameraView: null,
-      });
-      releaseWitness();
-      return;
-    }
-    // The default moved to a CONCRETE view. THIS retire is the office's to make
-    // only while it is on screen: neutralising the camera for the arriving view
-    // while the Graph is up is unnecessary, because the record-disagreement
-    // effect below retires it on the next office mount from the mismatch this
-    // leaves in the record. The auto case above needs no such gate - it clears
-    // the office's own dormant fields, which no later effect will.
     if (node.view.mode !== "office") return;
-    const before = previous === "auto" ? node.view.officeAutoView : previous;
+    const before = previous;
     if (before === settingsDefaultView) return;
     updateView(viewTabId, node.id, {
       ...node.view,
@@ -702,45 +450,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // The RECORD arm needs a destination to compare the stamp against, so it
     // still waits for one. The WITNESS arm below does not - see there.
     const recordNamesAnotherView =
-      resolvedViewId !== null &&
       node.view.officeCameraView !== null &&
       node.view.officeCameraView !== resolvedViewId;
-    // The case the record cannot answer: the default moved under this tile
-    // while the record ALREADY named the arriving view, so the stamp agrees
-    // and the camera is stale anyway. The stamp is about the camera's past;
-    // the witness is about a writer that has not run yet.
-    //
-    // Gated on there BEING a camera: this arm exists to retire a stale one,
-    // and a witnessed move over a `null` camera has nothing to retire - the
-    // projection is neutral regardless, and a stale stamp with no camera is
-    // the arm above's business.
-    //
-    // AND IT DOES NOT WAIT FOR A DESTINATION. A default that moves to Auto
-    // leaves `resolvedViewId` null until Auto answers, and this used to
-    // return there - so the stale camera stayed persisted across the whole
-    // interval, and Auto's keep arm then preserved it on a Floor outcome and
-    // stamped the result (Finding D). A held move over a real camera is stale
-    // whatever the destination turns out to be, so it is retired now and
-    // stamped `null`: nobody has framed a view that has not been chosen yet.
-    //
-    // Settling the STORE rather than teaching the keep arm to decline is the
-    // sufficient direction, and for the reason requirement 3 exists: a reload
-    // in that interval loses the witness entirely, and any rule that depends
-    // on it surviving is defeated by the reload the interval invites.
     const witnessDistrustsTheCamera =
       witnessedMove && node.view.officeCamera !== null;
     if (!recordNamesAnotherView && !witnessDistrustsTheCamera) return;
-    // Retire through the OFFICE-CAMERA reducer, not a whole-view replace. This
-    // arm only means to drop the stale camera and re-stamp the framed view; a
-    // `{...node.view}` spread also writes back every OTHER field from this
-    // render's now-stale closure. When the followed-default effect above fires
-    // in the SAME commit - a default returning to Auto dirties both - its
-    // `officeAutoView: null` clear was undone by this spread resurrecting the
-    // dormant outcome, so the Auto effect's `officeAutoView !== null` guard
-    // still skipped and the tile reopened on the stale pick. Patching only the
-    // two fields this arm owns leaves that clear (and any other concurrently
-    // changed field) at its current store value, so the two effects commute.
-    // The neutral camera collapses to the `null` armed value in the reducer.
     updateOfficeCamera(viewTabId, node.id, NEUTRAL_CAMERA, resolvedViewId);
     // The write above RELEASES the witness with it, and the two are
     // load-bearing on each other: the release is explicit (a by-value no-op in
@@ -757,134 +471,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
     witnessedMove,
   ]);
 
-  /**
-   * AUTO, run ONCE per decision and persisted.
-   *
-   * The gate is a FRESH outcome - `officeAutoView` set AND stamped with the
-   * current default generation - so a mode toggle, an LRU remount or a restart
-   * re-reads a measured outcome rather than re-deciding, which is what keeps a
-   * saved camera pointing at the view it was saved on. A default change bumps
-   * the generation, so an outcome measured under an older default (including one
-   * this tile was closed for) no longer matches and re-measures.
-   */
-  useEffect(() => {
-    // A missing or stale generation - the default changed since, including an
-    // Auto->concrete->Auto round-trip this tile was closed for - re-measures,
-    // as does no outcome at all. A quiet remount or restart matches and re-reads
-    // the saved outcome instead.
-    if (choice !== "auto") return;
-    // A non-null outcome that is still TRUSTED is re-read, not re-decided - the
-    // same `officeAutoOutcomeTrusted` predicate the render resolution uses, so
-    // the two never drift. An INHERITING tile whose stamp no longer matches the
-    // current default re-measures (the default round-trip it was closed for,
-    // Finding D68); an EXPLICIT Auto pick does not follow the default, so its
-    // outcome stands regardless of generation (re-deciding it would clear a
-    // manually framed Towers/Building camera the write only keeps for Floor) -
-    // an explicit re-pick re-measures through the pick path, which nulls the
-    // outcome rather than leaning on this gate.
-    if (node.view.officeAutoView !== null && officeAutoOutcomeTrusted) {
-      return;
-    }
-    if (!measureReady) return;
-    const probe = probeRef.current;
-    if (probe === null) return;
-    const decision = decideOfficeView(probe.input, probe.canvas, FIT_PADDING);
-    setAutoDecision(decision);
-    // A FIRST measurement that lands anywhere but the Floor neutralises the
-    // camera in the same write: a tile that predates this choice carries a
-    // camera framed for the Floor, and reopening it on a Building through
-    // those numbers is a view of empty space. An outcome of Floor is the view
-    // that camera was for, so it keeps it.
-    //
-    // AND ONLY A CAMERA NOTHING DISTRUSTS. Under shape (b) the held-witness
-    // arm has always retired a stale camera before Auto can answer - the move
-    // that arms it also sends `resolvedViewId` to `null`, which changes the
-    // canvas key, and Auto cannot decide until the remounted canvas reports a
-    // fresh probe a commit later. So this guard closes nothing today; it is
-    // here so the arm states the rule it relies on instead of resting on that
-    // ordering, which a change to the effect's gates would silently undo.
-    //
-    // AND ONLY A CAMERA THE RECORD DOES NOT CONTRADICT. D52's exception is a
-    // legacy camera with NO stamp - one that names ANOTHER view is not that
-    // exception, it is the record vouching against the camera, and preserving
-    // through it also overwrites the stamp, destroying the only evidence there
-    // was. That is reachable with no witness at all: a tile evicted before the
-    // default moved to Auto reopens stamped `towers` over a Towers camera, a
-    // fresh mount arms nothing, and the record arm below waits for a
-    // destination Auto has not chosen yet (Finding E).
-    const recordVouchesForTheCamera =
-      node.view.officeCameraView === null ||
-      node.view.officeCameraView === decision.view;
-    const camera: CommGraphTileCamera | null =
-      decision.view === "floor" && recordVouchesForTheCamera && !witnessedMove
-        ? node.view.officeCamera
-        : null;
-    updateView(viewTabId, node.id, {
-      ...node.view,
-      officeCamera: camera,
-      officeAutoView: decision.view,
-      // Stamp the generation this outcome was measured under, so a later
-      // default change - witnessed here or not - invalidates it on the next
-      // mount instead of reopening a pick taken against a different epic shape.
-      officeAutoGeneration: settingsDefaultGeneration,
-      // Whichever arm ran, the camera now frames THIS view - the Floor's
-      // because it was already the Floor's, the neutral one because it was
-      // just made for it.
-      officeCameraView: decision.view,
-    });
-    releaseWitness();
-  }, [
-    choice,
-    measureReady,
-    node.id,
-    node.view,
-    officeAutoOutcomeTrusted,
-    releaseWitness,
-    settingsDefaultGeneration,
-    updateView,
-    witnessedMove,
-    viewTabId,
-  ]);
-
-  /**
-   * A pick. Choosing the view you are already on is a no-op - EXCEPT Auto,
-   * which is a command rather than a value: an epic that has doubled in size
-   * since it was measured is exactly when somebody asks again.
-   */
   const handleOfficeViewChange = useCallback(
     (next: OfficeViewChoice) => {
-      if (next === "auto") {
-        setAutoDecision(null);
-        // What makes a re-pick that lands on the SAME view still remount: the
-        // key carries this, so the office is re-partitioned from scratch
-        // rather than kept because the answer happened not to change.
-        setAutoRevision((revision) => revision + 1);
-        updateView(viewTabId, node.id, {
-          ...node.view,
-          officeCamera: null,
-          officeView: "auto",
-          officeAutoView: null,
-          // Nothing measured yet; Auto's own write stamps the generation.
-          officeAutoGeneration: null,
-          // Nothing is drawn until Auto answers, so the neutral camera is
-          // about no view yet; Auto's own write names it.
-          officeCameraView: null,
-        });
-        // A pick is the person naming the view themselves, which settles
-        // whatever a default move left owed.
-        releaseWitness();
-        return;
-      }
       if (next === node.view.officeView) return;
-      // Picking the view that is ALREADY on screen pins it without moving
-      // anything: this tile was following the settings default, or Auto had
-      // landed here, and the person is nailing that down. The camera frames
-      // that same office, so only a view that genuinely changes invalidates
-      // it - the same reason the mode toggle guards its own reset.
-      // The same three questions Auto's keep arm asks, and safe by the same
-      // ordering: whether the distrust comes from a held witness or from a
-      // record naming another view, the effect retires the camera before any
-      // pick can run. Stated rather than relied upon.
       const recordVouchesForTheCamera =
         node.view.officeCameraView === null ||
         node.view.officeCameraView === next;
@@ -930,35 +519,8 @@ export function CommGraphTile(props: CommGraphTileProps) {
     (mode: CommGraphTileViewState["mode"]) => {
       // Pressing the mode you are already in is not a mode change.
       if (mode === node.view.mode) return;
-      // D68: A MODE SWITCH IS NOT A CAMERA EVENT. Nothing is reset, in either
-      // direction - the mode is the only thing that moves.
-      //
-      // This used to neutralise the viewport, and had to: there was one camera
-      // for both renderers, measured in flow units by one and sprite pixels by
-      // the other, so carrying it across would have opened the incoming mode
-      // off-screen while still counting as user-framed. The reset was standing
-      // in for ownership. Now each renderer HAS a camera - `x`/`y`/`zoom` are
-      // the graph's, `officeCamera` the office's - so there is nothing left
-      // for a switch to protect, and the reset only destroyed the framing the
-      // person was going to come back to (the live re-run's N10).
-      //
-      // FLUSH the office's pending framing INTO this same write. A drag, wheel
-      // or Fit within the 150ms persist debounce is still pending when leaving
-      // the office unmounts its canvas, and that unmount cancels the timer -
-      // right for a view pick (a pan on the old view must not land on the new
-      // one), but here it would lose the framing the promise above says a
-      // switch keeps. Folding it in - rather than letting the canvas write it
-      // separately - is what stops this stale `node.view` from clobbering it a
-      // beat later. Neutral collapses to the `null` armed camera, exactly as
-      // the office camera reducer does.
-      // Only when leaving a RESOLVED office: a gesture on the blank measuring
-      // surface frames no view (the same reason `handleOfficeCameraChange`
-      // ignores a write while `resolvedViewId` is null), and the canvas's own
-      // unmount cleanup still cancels the timer either way.
       const pending =
-        mode === "graph" && resolvedViewId !== null
-          ? (officeFlushRef.current?.() ?? null)
-          : null;
+        mode === "graph" ? (officeFlushRef.current?.() ?? null) : null;
       updateView(viewTabId, node.id, {
         ...node.view,
         ...(pending === null
@@ -990,8 +552,6 @@ export function CommGraphTile(props: CommGraphTileProps) {
     agentIds: projection.visibleAgentIds,
     events: projection.asOfEvents,
     hosts: snapshot.hosts,
-    // The same settled signal the Auto gate uses, so a hostless epic's chip
-    // does not sit on "catching up" for a feed that has nothing to send.
     initialHistoryCaughtUp: feedSettled,
     playing: projection.playing,
     pulse: projection.pulse,
@@ -1028,29 +588,15 @@ export function CommGraphTile(props: CommGraphTileProps) {
       <div className="min-h-0 min-w-0 flex-1">
         {node.view.mode === "office" ? (
           <CommGraphOfficeCanvas
-            // ONE VIEW ALIVE, by construction. A view change is an unmount and
-            // a mount through the path a mode change already takes, so the
-            // existing cleanup releases the scene, the runtime, the frame
-            // gate, both observers, the static layer and the persist debounce,
-            // and the new mount builds exactly one scene for exactly one view.
-            // The revision is what makes a re-pick of Auto that lands on the
-            // same view remount anyway.
             key={canvasKey}
             {...canvasProps}
             onCameraChange={handleOfficeCameraChange}
-            officeView={OFFICE_VIEWS[resolvedViewId ?? MEASURING_VIEW_ID]}
-            ready={resolvedViewId !== null && drawReady}
-            // No resolved view yet: this is the Auto measuring surface. A
-            // transient detail panel must not take width from the box Auto
-            // measures, since it resets when the resolved view remounts.
-            measuring={resolvedViewId === null}
-            onAutoProbe={handleAutoProbe}
+            officeView={OFFICE_VIEWS[resolvedViewId]}
+            ready={drawReady}
             onRegisterFlush={registerOfficeFlush}
             viewPicker={
               <OfficeViewPicker
                 choice={choice}
-                autoViewId={resolvedViewId}
-                decision={shownAutoDecision}
                 onChoose={handleOfficeViewChange}
               />
             }
@@ -1059,34 +605,6 @@ export function CommGraphTile(props: CommGraphTileProps) {
           <CommGraphCanvas {...canvasProps} />
         )}
       </div>
-      {/*
-       * AUTO'S OUTCOME, ANNOUNCED AND NOT DRAWN, and only where Auto is the
-       * thing deciding - a person who picked a view themselves has nothing to
-       * be told. The visible chip this replaces is gone on purpose (feedback
-       * round 1), but it was also the only live region on this surface: the
-       * picker's trigger carries a fixed `aria-label="Office view"`, so with
-       * the chip deleted the measuring -> decided transition happened silently
-       * for anyone not watching the canvas. `sr-only` keeps the sentence and
-       * none of the pixels.
-       *
-       * OUTSIDE THE KEYED CANVAS, and that placement is the whole point.
-       *
-       * `canvasKey` changes the moment Auto resolves, which remounts
-       * `CommGraphOfficeCanvas` and everything passed through it. A live region
-       * that remounts does not announce: its new text arrives as the initial
-       * content of a brand-new `role="status"` node rather than as a change to
-       * one the screen reader was already watching, so the decided view is
-       * exactly the sentence that gets lost. Mounted out here it survives the
-       * remount and updates in place - which is the only way it says anything
-       * at all, since measuring -> decided IS the announcement.
-       */}
-      <OfficeAutoAnnouncer
-        mode={node.view.mode}
-        choice={choice}
-        decision={shownAutoDecision}
-        restoredView={trustedAutoView}
-      />
-
       <CommGraphTransportBar epicId={node.epicId} events={snapshot.events} />
     </div>
   );

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateVersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   agentGuiListHarnessesDowngradeV7ToV1,
@@ -443,10 +444,13 @@ describe("providers.list major 7 downgrades still carry rows after the 7.1 line 
 // ── 4. Registry loads with the expected latestMinor per line ───────────────
 
 describe("hostRpcRegistry loads with the catalog lines at their expected latestMinor", () => {
-  // Module-load validation already enforces "a downgrade must start at the
-  // line's latest minor" - importing the registry at all would throw if that
-  // were violated. This makes the expectation a legible, named assertion
-  // rather than relying on the import succeeding silently.
+  // Construction is structural-only. The full validator still enforces
+  // "a downgrade must start at the line's latest minor"; the named
+  // latestMinor assertions below are the legible counterpart.
+  it("passes full schema compatibility", () => {
+    expect(() => validateVersionedRpcRegistry(hostRpcRegistry)).not.toThrow();
+  });
+
   it("agent.gui.listHarnesses major 7 -> latestMinor 1 (authStatus)", () => {
     expect(hostRpcRegistry["agent.gui.listHarnesses"][7].latestMinor).toBe(1);
     expect(

@@ -1,0 +1,38 @@
+---
+title: "Resource monitor"
+description: "See CPU and memory for your agents, shells and processes, and stop or kill selected work."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/resource-monitor.mp4" label="Inspect resource use and stop selected work" />
+
+The resource monitor shows how much CPU and memory Traycer's work is using on a host, broken down by agent, shell and process.
+
+## Open It
+
+- Click the resource monitor in the status bar at the bottom of the window.
+- Or press ⇧Esc / Shift+Esc.
+
+To show it in the header instead, open [Settings › Layout](/settings/layout), set **Placement** to **Header**, and turn on **Show resource monitor in header**. Layout also chooses what the status bar segment shows: its **Scope** (**Host** or **Desktop app**) and its **Metrics** (**CPU**, **Memory**, **Processes** and **RAM share**).
+
+## What It Shows
+
+- **Totals** for the host: **CPU**, memory and **RAM share**. The memory label depends on the platform, such as "Resident memory (RSS)" or "Proportional memory (PSS)".
+- **Agents and their work.** Expand an agent to see the shells and operating-system processes it started. The host's other processes, such as provider servers, are grouped under **Other**.
+- **Traycer Desktop.** The app's own **Main** and **Renderer** processes.
+
+Use the host picker at the top to look at another host. Process lists come from the host itself, so they aren't available while that host is offline.
+
+Search with **Search resources…**, and sort by **Memory**, **CPU**, **Name** or **Tab order**.
+
+## Stop Or Kill Work
+
+Hover a row to stop or kill it, then confirm. Press Enter to confirm or Esc to keep it running.
+
+| Action | Applies to | What happens |
+|---|---|---|
+| **Stop** | Shells, terminals and agents on the Terminal interface | Nothing is destroyed. A shell stays listed and can be restarted; an agent goes to sleep and resumes on its next message. |
+| **Kill** | A Chat-interface agent's processes and other processes | The process is ended. |
+
+To act on several rows at once, click **Select processes to kill**, check the rows, and click the action button. Its label names both verbs when the selection mixes them, such as **Stop 1 · Kill 1** for one shell and one Chat agent process. Read it before you click.

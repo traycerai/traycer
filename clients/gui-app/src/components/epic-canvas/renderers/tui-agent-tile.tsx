@@ -304,6 +304,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
           agentId={sessionId}
           viewTabId={props.viewTabId}
@@ -794,9 +795,15 @@ function TuiAgentTileLive(
   // not a loading skeleton that would wait forever for a session no one is
   // going to start.
   //
-  // `hostHasSession === null` deliberately keeps waiting: that is the list
-  // still loading, which is not evidence of anything.
-  if (isCloudReplica && hostHasSession === false) {
+  // `null` deliberately keeps waiting: that is the list still loading, which
+  // is not evidence of anything. Keyed on the SETTLED verdict, which holds
+  // across a background refetch, so this arm and the one below do not flip
+  // to the loading body and back on every `terminal.list` invalidation. Both
+  // branches mount a `TerminalAgentWorktreeNotice` (at different positions),
+  // whose refresh driver invalidates the list on mount - so a flip here fed
+  // itself forever, and a restored sleeping tile never left the skeleton.
+  const hostSessionSettled = bootstrap.hostSessionSettled;
+  if (isCloudReplica && hostSessionSettled === false) {
     return (
       <TerminalDeadTileBanner
         reason="not-running-remotely"
@@ -809,19 +816,21 @@ function TuiAgentTileLive(
     );
   }
 
-  // OWN-HOST AND ASLEEP, in a tile nobody asked for. The host reports no live
-  // session (`false`, not `null` - that is the list still loading and is not
-  // evidence of anything) and the record says the agent is sleeping, so there
+  // OWN-HOST AND ASLEEP, in a tile nobody asked for. The last settled list
+  // reports no live session (`false`, not `null` - that is the list still
+  // loading and is not evidence of anything) and the record says the agent is
+  // sleeping, so there
   // is nothing to attach to and this tile is not going to create one on its
   // own. The honest end state is the notice, not a skeleton waiting forever.
   //
   // Deliberately NOT the dead-tile banner the replica arm uses: that banner
   // says an agent is somewhere this client cannot reach it, and this one is
   // right here, intact, one click from resuming the same conversation.
-  if (isSleepingUnrequested && hostHasSession === false) {
+  if (isSleepingUnrequested && hostSessionSettled === false) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
           agentId={sessionId}
           viewTabId={props.viewTabId}
@@ -845,6 +854,7 @@ function TuiAgentTileLive(
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.node.instanceId}
           hostId={hostId}
           agentId={props.node.id}
           viewTabId={props.viewTabId}
@@ -867,6 +877,7 @@ function TuiAgentTileLive(
   return (
     <TerminalAgentTileShell tileId={props.tileId}>
       <TerminalAgentPreLaunchToolbar
+        owningTileInstanceId={props.node.instanceId}
         hostId={hostId}
         hostClient={hostClient}
         epicId={epicId}
@@ -1108,6 +1119,7 @@ function buildForkTarget(input: {
 }
 
 interface TerminalAgentPreLaunchToolbarProps {
+  readonly owningTileInstanceId: string;
   readonly hostId: string;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
@@ -1394,6 +1406,7 @@ function TerminalAgentPreLaunchToolbar(
           downward Popover overlay, so it never reflows the terminal below. */}
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <TerminalAgentWorktreeNotice
+          owningTileInstanceId={props.owningTileInstanceId}
           hostId={props.hostId}
           agentId={props.agent.id}
           viewTabId={props.viewTabId}
@@ -1440,6 +1453,7 @@ function TerminalAgentPreLaunchToolbar(
  *    yet. Returns null (no empty strip) when there is no notice to show.
  */
 function TerminalAgentWorktreeNotice(props: {
+  readonly owningTileInstanceId: string;
   readonly hostId: string;
   readonly agentId: string;
   readonly viewTabId: string;
@@ -1474,7 +1488,11 @@ function TerminalAgentWorktreeNotice(props: {
   // Register the running setup PTY as a background canvas tab so it auto-appears
   // in the canvas and survives a host/GUI restart (the host keeps no terminal
   // state across restarts - persistence comes only from a saved canvas tab).
-  useTuiSetupTerminalTabRegisterDriver({ binding, viewTabId: props.viewTabId });
+  useTuiSetupTerminalTabRegisterDriver({
+    binding,
+    viewTabId: props.viewTabId,
+    owningTileInstanceId: props.owningTileInstanceId,
+  });
   const model = useMemo(
     () =>
       buildTuiAgentSetupCardModel(binding, { epicId, ownerId: props.agentId }),

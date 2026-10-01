@@ -3,14 +3,23 @@ import {
   isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
   retainDisplayedPrPanel,
-  resolveActiveVisibleGroupIndex,
+  resolveDisplayedPanelId,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
-import {
-  DEFAULT_LEFT_PANEL_ID,
-  type LeftPanelId,
-} from "@/stores/epics/left-panel-store";
+import { DEFAULT_LEFT_PANEL_ID } from "@/stores/epics/left-panel-store";
+import { type LeftPanelId } from "@/lib/left-panel-ids";
+import { RAIL_REGION_BY_PANEL, type RailEntry } from "@/lib/layout/rail";
+
+/** A rail holding exactly these panels, in this order. */
+function railOf(
+  panelIds: ReadonlyArray<LeftPanelId>,
+): ReadonlyArray<RailEntry> {
+  return panelIds.map((panelId): RailEntry => ({
+    kind: "panel",
+    id: RAIL_REGION_BY_PANEL[panelId],
+  }));
+}
 
 const BASE_CONTEXT: LeftPanelAvailabilityContext = {
   commentsPanelRevealed: false,
@@ -143,49 +152,51 @@ describe("epic left panel registry", () => {
     });
   });
 
-  describe("resolveActiveVisibleGroupIndex", () => {
-    it("picks the group holding the active panel", () => {
+  describe("resolveDisplayedPanelId", () => {
+    it("draws the active panel when it is visible", () => {
       expect(
-        resolveActiveVisibleGroupIndex(
-          [["chats"], ["terminals", "artifacts"], ["sharing"]],
+        resolveDisplayedPanelId(
+          ["chats", "terminals", "artifacts", "sharing"],
           "artifacts",
         ),
-      ).toBe(1);
+      ).toBe("artifacts");
     });
 
-    it("falls back to the default panel's group when the active one is hidden", () => {
-      expect(
-        resolveActiveVisibleGroupIndex([["terminals"], ["chats"]], "sharing"),
-      ).toBe(1);
+    it("falls back to the default panel when the active one is hidden", () => {
+      expect(resolveDisplayedPanelId(["terminals", "chats"], "sharing")).toBe(
+        DEFAULT_LEFT_PANEL_ID,
+      );
     });
 
-    it("falls back to the first visible group when the default is hidden too", () => {
+    it("falls back to the first visible panel when the default is hidden too", () => {
       // Hiding Agents must not resurrect it: the body renders whatever is
-      // still in the rail, and the rail highlights that same group.
-      expect(
-        resolveActiveVisibleGroupIndex([["terminals"], ["sharing"]], "chats"),
-      ).toBe(0);
+      // still in the rail, and the rail highlights that same icon.
+      expect(resolveDisplayedPanelId(["terminals", "sharing"], "chats")).toBe(
+        "terminals",
+      );
     });
 
     it("reports nothing visible", () => {
-      expect(resolveActiveVisibleGroupIndex([], "chats")).toBeNull();
+      expect(resolveDisplayedPanelId([], "chats")).toBeNull();
     });
   });
 
   describe("retainDisplayedPrPanel", () => {
-    it("retains PRs in the fallback group when the active panel is hidden", () => {
+    it("retains PRs while the user is looking at them", () => {
       const retained = retainDisplayedPrPanel(
-        [{ panelIds: ["chats", "pull-requests"] }, { panelIds: ["terminals"] }],
-        "terminals",
-        context({ visibilityOverrideById: { terminals: false } }),
+        railOf(["chats", "pull-requests", "terminals"]),
+        "pull-requests",
+        context({}),
       );
 
       expect(retained.hasPullRequests).toBe(true);
     });
 
-    it("retains PRs in the first visible group when Chats is hidden too", () => {
+    it("retains PRs when they are the panel the body falls back to", () => {
+      // Every panel before Pull Requests is hidden, including Agents, so the
+      // body lands on PRs even though nothing selected it.
       const retained = retainDisplayedPrPanel(
-        [{ panelIds: ["chats", "pull-requests"] }, { panelIds: ["terminals"] }],
+        railOf(["chats", "pull-requests"]),
         "terminals",
         context({
           visibilityOverrideById: { chats: false, terminals: false },
@@ -195,10 +206,20 @@ describe("epic left panel registry", () => {
       expect(retained.hasPullRequests).toBe(true);
     });
 
+    it("does not retain PRs behind a panel the body is actually drawing", () => {
+      const retained = retainDisplayedPrPanel(
+        railOf(["chats", "pull-requests"]),
+        "chats",
+        context({}),
+      );
+
+      expect(retained.hasPullRequests).toBe(false);
+    });
+
     it("does not bypass an explicit Pull Requests hide", () => {
       const retained = retainDisplayedPrPanel(
-        [{ panelIds: ["chats", "pull-requests"] }],
-        "chats",
+        railOf(["chats", "pull-requests"]),
+        "pull-requests",
         context({
           visibilityOverrideById: { "pull-requests": false },
         }),

@@ -4,14 +4,14 @@ import "../../../../../__tests__/test-browser-apis";
  * The mobile drawer's Home row is the phone's ONLY way back to the always-
  * available Home surface: the desktop tab strip, its route guard and its
  * keybinding chord are all hidden on the phone shell, so this row is the sole
- * entry point there. It exists only while the `homeTabEnabled` settings flag
- * is on, and it must sit ABOVE "New task" - the drawer's one filled, primary
- * action - so a thumb reaching for the drawer's first row lands on returning
- * home before it lands on starting something new. A tap must both close the
- * drawer AND actually select Home in the shared tab layout (`activeItemId`
- * clears to `null` while every open item is preserved) - closing the drawer
- * while leaving the previously active tab still selected underneath it would
- * be a silent no-op dressed up as navigation.
+ * entry point there. It exists only while the layout store's `homeTab.shown`
+ * value is on, and it must sit ABOVE "New task" - the drawer's one filled,
+ * primary action - so a thumb reaching for the drawer's first row lands on
+ * returning home before it lands on starting something new. A tap must both
+ * close the drawer AND actually select Home in the shared tab layout
+ * (`activeItemId` clears to `null` while every open item is preserved) -
+ * closing the drawer while leaving the previously active tab still selected
+ * underneath it would be a silent no-op dressed up as navigation.
  *
  * This is a SEPARATE file rather than an extension of
  * `mobile-nav-drawer.test.tsx` because that file's shared, file-wide
@@ -44,7 +44,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { emptyTabStripLayout, tabItemId } from "@/stores/tabs/layout";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 
 // One-time, real reconciliation install - mirrors `tab-navigation.test.ts`,
@@ -71,6 +74,21 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
+}));
+
+// The in-progress lift (`useInProgressHistoryItems`) backfills a running task
+// no listed page carries through `epic.getTaskContexts`, which needs a host
+// runtime this suite deliberately does not mount. Inert here: nothing is
+// running in these fixtures, so the lift has nothing to lift either way.
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: () => ({
+    tasksById: new Map(),
+    localHomedTaskIds: new Set<string>(),
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+    refetchBatches: [],
+  }),
 }));
 
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
@@ -144,6 +162,13 @@ function renderDrawer(): void {
   );
 }
 
+function setHomeTabEnabled(enabled: boolean): void {
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore
+    .getState()
+    .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
+}
+
 describe("MobileNavDrawer Home row", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -159,7 +184,7 @@ describe("MobileNavDrawer Home row", () => {
         avatarUrl: null,
       },
     });
-    useSettingsStore.setState({ homeTabEnabled: false });
+    setHomeTabEnabled(false);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
     TabNav.__resetTabNavigationControllerForTesting();
@@ -173,14 +198,14 @@ describe("MobileNavDrawer Home row", () => {
     // Reset LAST, and to the disabled default: a leaked `true` here would
     // silently turn the Home row on for every other suite that renders the
     // drawer after this file runs in the same worker.
-    useSettingsStore.setState({ homeTabEnabled: false });
+    setHomeTabEnabled(false);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
     setMobileApp(false);
   });
 
   it("renders above New task when the Home tab is enabled", async () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     renderDrawer();
 
     const home = await screen.findByTestId("mobile-nav-home");
@@ -194,7 +219,7 @@ describe("MobileNavDrawer Home row", () => {
   });
 
   it("is absent from the drawer when the Home tab is disabled", async () => {
-    useSettingsStore.setState({ homeTabEnabled: false });
+    setHomeTabEnabled(false);
     renderDrawer();
     await screen.findByTestId("mobile-nav-new-task");
 
@@ -202,7 +227,7 @@ describe("MobileNavDrawer Home row", () => {
   });
 
   it("closes the drawer and selects Home, preserving the open tab", async () => {
-    useSettingsStore.setState({ homeTabEnabled: true });
+    setHomeTabEnabled(true);
     // Seed a real, already-active epic tab through the same activation seam
     // the component uses, so the click has a concrete prior selection to
     // clear rather than starting from an already-empty layout.

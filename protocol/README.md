@@ -60,3 +60,26 @@ Persistence versions are negotiated and evolved separately from RPC versions.
 See [`src/persistence/COMPATIBILITY.md`](src/persistence/COMPATIBILITY.md) for
 the same-major rules, breaking-change policy, and frozen epic-schema review
 workflow.
+
+## Opening a new minor on a stream — the pins a local run does not reach
+
+Freezing the old line and registering the new one is the visible half. These
+are the places that know the old number; the protocol's own compile and tests
+touch none of them, and CI finds each one separately.
+
+1. `src/framework/__tests__/versioned-stream-rpc.test.ts` restates
+   `latestMinor` for every stream, on purpose. Move the literal.
+2. `clients/shared/host-transport/*-stream-client.ts` may parse with an explicit
+   `...ServerFrameSchemaV<N>`. A stale `N` does not fail: it silently strips the
+   new key. The subscribe floor negotiates the latest minor, so tests beside it
+   that assert a literal minor break too.
+3. `clients/traycer-cli/src/internal/__tests__/host-rpc.test.ts` asserts by
+   identity against the registry's latest `serverFrameSchema`.
+
+Grep the tree for `ServerFrameSchemaV<old>` and `latestMinor).toBe(`, and run
+those three suites before calling the bump done.
+
+One trap is on the other side of the wire. A floor that means "the minor where
+feature X arrived" must be a literal. Written as `registry.latestMinor` it is
+right on the day it is written and wrong the day the next minor opens: it slides
+up with the ceiling and refuses every peer still on the line that introduced X.

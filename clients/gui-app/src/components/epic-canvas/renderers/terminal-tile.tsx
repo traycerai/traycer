@@ -349,16 +349,16 @@ function LegacyTerminalTileLive(
       }),
     [cwd],
   );
-  // A sign-in terminal is the HOST's session, not this tile's. Re-creating
-  // the id here would spawn a bare shell with none of the provider's spawn env
-  // - a prompt that looks like the sign-in terminal but cannot sign anyone in,
-  // and no error saying so. The tile attaches when the session is live and
-  // offers a restart when it is not; it never creates.
+  // Setup and sign-in terminals are created by the host. Reusing their IDs
+  // here either hits a deletion tombstone or starts a bare shell without the
+  // original setup command or provider environment. These tiles only attach;
+  // the owning setup/sign-in flow is responsible for starting another run.
   const signInProviderId =
     props.node.origin === "provider-login"
       ? (props.node.originProviderId ?? null)
       : null;
   const isSignInTerminal = props.node.origin === "provider-login";
+  const isSetupTerminal = props.node.origin === "setup";
   const managerOwned = props.node.lifecycleOwner === "manager";
   const bootstrap = useTerminalTileBootstrap({
     hostId,
@@ -374,7 +374,7 @@ function LegacyTerminalTileLive(
     // Manager-owned list rows stay on the live session even without
     // setup/provider origin enrichment; missing enrichment fails closed
     // rather than recreating a bare shell.
-    adoptOnly: isSignInTerminal || managerOwned,
+    adoptOnly: isSignInTerminal || isSetupTerminal || managerOwned,
   });
   const closeExitedTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
@@ -464,29 +464,14 @@ function LegacyTerminalTileLive(
   }
 
   if (bootstrap.handle === null) {
-    // The starting state occupies the SAME layout box the live terminal will
-    // (outer column + relative flex-1), so the measurement probe underneath
-    // measures the real grid before the create/subscribe are dispatched -
-    // see `TerminalGridMeasureProbe`. The status text overlays it.
     return (
-      <div
-        className="flex h-full w-full min-h-0 flex-col bg-canvas"
-        data-testid={`terminal-tile-${props.tileId}`}
-      >
-        <div className="relative min-h-0 flex-1">
-          <TerminalGridMeasureProbe
-            sessionId={sessionId}
-            hostId={hostId}
-            instanceId={instanceId}
-            tileKind="terminal"
-            chrome="padded"
-            onMeasured={bootstrap.reportMeasuredGrid}
-          />
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-ui-sm text-muted-foreground">
-            Starting terminal session…
-          </div>
-        </div>
-      </div>
+      <UnattachedLegacyTerminal
+        node={props.node}
+        tileId={props.tileId}
+        hostHasSession={bootstrap.hostHasSession}
+        onMeasured={bootstrap.reportMeasuredGrid}
+        onClose={closeExitedTile}
+      />
     );
   }
 
@@ -515,6 +500,60 @@ function LegacyTerminalTileLive(
           : null
       }
     />
+  );
+}
+
+function UnattachedLegacyTerminal(props: {
+  readonly node: SupportedEpicTerminalRef;
+  readonly tileId: string;
+  readonly hostHasSession: boolean | null;
+  readonly onMeasured: (cols: number, rows: number) => void;
+  readonly onClose: () => void;
+}): ReactNode {
+  const hostId = useTabHostId();
+  // A missing row cannot authorize recreating setup. Keep the tab available
+  // for attachment if a cached list catches up; only an observed exit in the
+  // parent closes it automatically.
+  if (props.node.origin === "setup" && props.hostHasSession === false) {
+    return (
+      <div
+        className="flex h-full w-full flex-col items-center justify-center gap-2 bg-canvas p-4 text-center text-ui-sm text-muted-foreground"
+        data-testid={`terminal-tile-${props.tileId}`}
+      >
+        <p>Setup terminal is unavailable.</p>
+        <p>Retry setup from the agent’s setup controls.</p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onClose}
+        >
+          Close
+        </Button>
+      </div>
+    );
+  }
+
+  // Measure in the live terminal's layout box before create/subscribe.
+  return (
+    <div
+      className="flex h-full w-full min-h-0 flex-col bg-canvas"
+      data-testid={`terminal-tile-${props.tileId}`}
+    >
+      <div className="relative min-h-0 flex-1">
+        <TerminalGridMeasureProbe
+          sessionId={props.node.id}
+          hostId={hostId}
+          instanceId={props.node.instanceId}
+          tileKind="terminal"
+          chrome="padded"
+          onMeasured={props.onMeasured}
+        />
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-ui-sm text-muted-foreground">
+          Starting terminal session…
+        </div>
+      </div>
+    </div>
   );
 }
 

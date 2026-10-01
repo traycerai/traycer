@@ -39,4 +39,16 @@ export const SETTINGS_ROW_STACK = {
   label: "max-md:min-w-[70%]",
   /** Control: holds its intrinsic width rather than shrink into the label's. */
   control: "max-md:shrink-0",
+  /**
+   * Control that should USE the line it wrapped onto instead of keeping its
+   * desktop width with dead space beside it - a field or a picker, where the
+   * extra width is what the content needs, rather than a button, which would
+   * only stretch.
+   *
+   * It belongs on the row's own flex ITEM, beside `control`: a percentage width
+   * resolves against the containing block, and an auto-sized `shrink-0` item
+   * has none until its contents have been measured - so the same class one
+   * level down shrink-wraps to the content it was meant to widen.
+   */
+  controlLine: "max-md:w-full",
 } as const;

@@ -72,6 +72,24 @@ export function hostDirectoryEntryModule(): {
   return { useHostDirectoryEntry: () => ({ hostId: "host-test" }) };
 }
 
+/**
+ * `useHostDirectoryEntry` above answers no `kind`, so
+ * `use-screencast-session.ts`'s `hostIsMac` derivation falls through to this
+ * hook to look up the bound host's platform. Mocked to a deterministic empty
+ * result (no registered hosts) rather than left to the real TanStack Query
+ * hook, which needs `useHostBinding`/`useAuthStore` wiring this fixture does
+ * not provide - `data: null` here is what an unmocked call would ALSO
+ * resolve to once its disabled-while-signed-out query settles, but pinning
+ * it explicitly keeps `hostIsMac` at its "platform unknown" `null` on the
+ * very first render, deterministically, for every suite that mounts a peek
+ * tile through this fixture.
+ */
+export function registeredHostsModule(): {
+  useRegisteredHosts: () => { data: null };
+} {
+  return { useRegisteredHosts: () => ({ data: null }) };
+}
+
 export function hostStreamClientForModule(hookState: PeekHookState): {
   useHostStreamClientFor: () => FakeStreamClient | null;
 } {

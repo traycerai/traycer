@@ -41,6 +41,8 @@ describe("composer revision event contract", () => {
         hostId: "host-1",
         editorRef: { current: handle },
         editorReadyTick: 1,
+        chatTitle: null,
+        epicTitle: null,
       }),
     );
 

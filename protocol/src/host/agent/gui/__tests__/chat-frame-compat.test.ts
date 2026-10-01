@@ -13,6 +13,7 @@ import {
   chatSubscribeV110,
   chatSubscribeV111,
   chatSubscribeV112,
+  chatSubscribeClientFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchemaV16,
   chatSubscribeSnapshotServerFrameShallowSchema,
   chatSubscribeServerFrameSchema,
@@ -86,22 +87,27 @@ function resumeQueueFrame(): ChatSubscribeClientFrame {
 }
 
 function sendFrame(): ChatSubscribeClientFrame {
-  return chatSubscribeV17.clientFrameSchema.parse({
-    kind: "send",
-    ...OWNER,
-    messageId: "message-1",
-    content: { type: "doc", content: [] },
-    sender: { type: "user", userId: "user-1" },
-    settings: {
-      harnessId: "codex",
-      model: "gpt-5.4",
-      permissionMode: "supervised",
-      reasoningEffort: "high",
-      agentMode: "epic",
-    },
-    accountContext: { type: "PERSONAL" },
-    browserAnnotations: [],
-  });
+  // A `1.7` peer's frame, normalized up through the live schema exactly as the
+  // host's resolver does it: the frozen line has no `sentFromHostId`, and the
+  // live parse is what fills its `null`.
+  return chatSubscribeClientFrameSchema.parse(
+    chatSubscribeV17.clientFrameSchema.parse({
+      kind: "send",
+      ...OWNER,
+      messageId: "message-1",
+      content: { type: "doc", content: [] },
+      sender: { type: "user", userId: "user-1" },
+      settings: {
+        harnessId: "codex",
+        model: "gpt-5.4",
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        agentMode: "epic",
+      },
+      accountContext: { type: "PERSONAL" },
+      browserAnnotations: [],
+    }),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

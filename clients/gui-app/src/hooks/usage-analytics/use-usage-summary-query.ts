@@ -8,6 +8,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { getViewerTimeZone } from "@/lib/usage-analytics/viewer-timezone";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
 /**
  * The window picker offers 7/30/90; 365 is the activity heatmap's fixed
@@ -111,6 +112,7 @@ export function useUsageSummaryForClient(
     cacheKeyIdentity: undefined,
     client,
     method: "host.usage.summary",
+    responseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     params: request,
     options: { enabled, poll },
   });

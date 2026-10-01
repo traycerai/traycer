@@ -46,17 +46,21 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  EpicsListPanel,
-  type EpicsListPanelVariant,
-} from "@/components/epics/epics-list-panel";
+import { ScopedEpicsListPanel } from "./scoped-panel-harness";
+import type { EpicsListPanelVariant } from "@/components/epics/epics-list-panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  ListTaskLight,
+  ListTasksCompleteness,
+} from "@traycer/protocol/host/epic/unary-schemas";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  patchHistorySearch,
+} from "@/lib/history-search";
 import {
   __resetTabNavigationControllerForTesting,
   openPhaseMigrationIntent,
@@ -119,6 +123,18 @@ const testState = vi.hoisted(() => ({
   setPinnedMutate: vi.fn<(variables: SetEpicPinnedVariables) => void>(),
   refetch: vi.fn<() => Promise<void>>(),
   fetchNextPage: vi.fn<() => void>(),
+  /** Epics an agent is working on right now, per the agent-activity store. */
+  workingEpicIds: new Set<string>() as ReadonlySet<string>,
+  /** Rows `epic.getTaskContexts` can answer, keyed by epic id. */
+  backfillTasks: new Map<string, ListTaskLight>(),
+  /** The id lists the in-progress lift asked that batch about. */
+  backfillIdCalls: [] as ReadonlyArray<string>[],
+}));
+
+// The desktop scope bar names the host through the directory, which needs a
+// runtime provider this fixture does not mount.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -141,7 +157,35 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     hasNextPage: false,
     isFetchingNextPage: false,
     cloudPagePending: testState.cloudPagePending,
+    currentUserId: "user-test",
   }),
+}));
+
+// The in-progress lift's two inputs, mocked at their own boundaries so the
+// real `useInProgressHistoryItems` / `withInProgressFirst` pair runs here: the
+// store says WHICH epics are running, and the by-id batch answers the running
+// epics no listed page carries.
+vi.mock("@/stores/use-own-turn-epic-ids", () => ({
+  useOwnTurnEpicIds: (): ReadonlySet<string> => testState.workingEpicIds,
+}));
+
+vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
+  useEpicGetTaskContexts: (taskIds: ReadonlyArray<string>) => {
+    testState.backfillIdCalls.push([...taskIds]);
+    return {
+      tasksById: new Map(
+        taskIds.flatMap((taskId) => {
+          const task = testState.backfillTasks.get(taskId);
+          return task === undefined ? [] : [[taskId, task] as const];
+        }),
+      ),
+      localHomedTaskIds: new Set<string>(),
+      isFetching: false,
+      error: null,
+      refetch: () => Promise.resolve(),
+      refetchBatches: [],
+    };
+  },
 }));
 
 vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
@@ -210,6 +254,41 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   };
 }
 
+/**
+ * A row as `epic.getTaskContexts` hands it back - what the shared activity projection
+ * backfills a running epic from when no listed page carries it.
+ */
+function backfillTask(overrides: {
+  readonly id: string;
+  readonly title: string;
+  readonly updatedAtMs: number;
+}): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: overrides.id,
+        title: overrides.title,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: overrides.updatedAtMs,
+        createdBy: "user-test",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned: false,
+  };
+}
+
 function renderPanel(variant: EpicsListPanelVariant, initialEntry: string) {
   return renderPanelWithOpenItem(variant, initialEntry, null);
 }
@@ -226,7 +305,9 @@ function renderPanelWithOpenItem(
     getParentRoute: () => rootRoute,
     path: "/",
     component: () => (
-      <EpicsListPanel
+      <ScopedEpicsListPanel
+        initialScope="all"
+        onScopeSpy={null}
         variant={variant}
         className={undefined}
         onSelectEpic={null}
@@ -384,6 +465,9 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     testState.fetchNextPage.mockReset();
     testState.refetch.mockReset();
     testState.refetch.mockResolvedValue(undefined);
+    testState.workingEpicIds = new Set<string>();
+    testState.backfillTasks = new Map<string, ListTaskLight>();
+    testState.backfillIdCalls = [];
     tabNavigationMocks.activateTabIntent.mockReset();
     __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -407,9 +491,80 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
 
+  // Recent uses the shared durable/optimistic activity projection on every
+  // surface. Missing turn rows are fetched together; listed rows are not.
+  describe("optimistic activity ordering", () => {
+    it("puts a turn-active task no listed page carries at the top", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "b", epicId: "b", title: "listed two" }),
+      ];
+      testState.workingEpicIds = new Set(["z"]);
+      testState.backfillTasks = new Map([
+        ["z", backfillTask({ id: "z", title: "running", updatedAtMs: 1 })],
+      ]);
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(3);
+      expect(cards[0]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).toEqual(["z"]);
+    });
+
+    it("moves a listed turn-active task to the top without duplicating it", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "b", epicId: "b", title: "listed two" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(3);
+      expect(cards[0]?.textContent).toContain("running");
+      expect(
+        cards.filter((card) => card.textContent.includes("running")).length,
+      ).toBe(1);
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
+    });
+
+    it("leaves the order alone while a search is active", async () => {
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "best match" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      useHistorySearchStore.setState({
+        search: patchHistorySearch(DEFAULT_HISTORY_SEARCH, { query: "match" }),
+      });
+      renderPanel("page", "/");
+      const cards = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(cards.length).toBe(2);
+      expect(cards[0]?.textContent).toContain("best match");
+      expect(cards[1]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).toEqual([]);
+    });
+
+    it("uses the same activity ordering on desktop", async () => {
+      setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+      testState.items = [
+        historyItem({ id: "a", epicId: "a", title: "listed one" }),
+        historyItem({ id: "c", epicId: "c", title: "running" }),
+      ];
+      testState.workingEpicIds = new Set(["c"]);
+      renderPanel("page", "/");
+      const rows = await screen.findAllByTestId("epics-list-row-card");
+
+      expect(rows[0]?.textContent).toContain("running");
+      expect(testState.backfillIdCalls.at(-1)).not.toContain("c");
+    });
+  });
+
   describe("swipe tray", () => {
     it("opens the tray on a leftward drag well past half the tray width", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       openTrayByDrag(card);
@@ -420,7 +575,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("stays closed on a leftward drag of only a few px", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 300, 100);
@@ -438,7 +593,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // outright at 10px, well before any commit distance is even evaluated -
     // this case is a pure distance check with no timing dependency.
     it("stays closed on a rightward drag of any distance", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 300, 100);
@@ -458,7 +613,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // against, so a regression that widened the guard to the closed state
     // would still be caught here.
     it("stays closed on a rightward drag starting inside the reserved edge zone", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 10, 100);
@@ -471,7 +626,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("stays closed on a vertical drag", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       firePointerDown(card, 300, 100);
@@ -492,7 +647,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
       expect(cards).toHaveLength(2);
 
@@ -508,7 +663,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("closes an open tray when the list scrolls", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -532,7 +687,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // contrasting case to the in-strip one below - the row is free to claim
     // this drag.
     it("closes an already-open tray on a rightward drag past half the tray width", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -556,7 +711,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // inset, is never tracked, so the tray stays open however far past its
     // commit distance the drag travels.
     it("leaves an open tray open on a rightward close-swipe starting inside the reserved edge zone", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -590,7 +745,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // half-tray commit distance, or the exploit this case pins would go
     // unnoticed even while it silently mis-captured the pointer.
     it("yields the drawer strip even when a prior undecided pointer left its tracker resident", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -618,7 +773,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // tray's open state is left exactly where it was - a pure distance check,
     // like the closed-state "few px" case above.
     it("leaves an already-open tray open on a rightward drag of only a few px", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -637,7 +792,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
   describe("tray actions", () => {
     it("opens the shared confirm dialog on delete, without deleting immediately", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       fireEvent.click(await screen.findByTestId("epics-list-row-tray-delete"));
 
@@ -646,7 +801,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("calls the set-pinned mutation with the flipped pin state", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       fireEvent.click(await screen.findByTestId("epics-list-row-tray-pin"));
 
@@ -665,7 +820,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isLocalHome: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const pin = await screen.findByRole("button", {
         name: "Pinning Local only epic needs a newer Traycer host",
@@ -684,7 +839,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isPreservedOrphan: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const pin = await screen.findByRole("button", {
         name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
@@ -697,7 +852,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("reveals the inline title input on rename", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       fireEvent.click(await screen.findByTestId("epics-list-row-tray-rename"));
 
@@ -716,7 +871,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         localRows: "present",
         sort: "loaded-union",
       };
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const unavailable = await screen.findByTestId("epics-list-unavailable");
       expect(unavailable).not.toBeNull();
@@ -733,7 +888,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         sort: "server",
       };
       useAuthStore.setState({ status: "unverified" });
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const unavailable = await screen.findByTestId("epics-list-unavailable");
       expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
@@ -753,7 +908,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         localRows: "present",
         sort: "loaded-union",
       };
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const rows = await screen.findByTestId("epics-list-rows");
       expect(rows.textContent).toContain("Local");
@@ -779,7 +934,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       useHistorySearchStore.setState({
         search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
       });
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(
         await screen.findByTestId("epics-list-unavailable"),
@@ -791,7 +946,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     it("shows the explicit cloud-pending state when local storage is empty", async () => {
       testState.items = [];
       testState.cloudPagePending = true;
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
       expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
@@ -801,7 +956,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
   describe("tap and long press", () => {
     it("opens the task on a plain tap", async () => {
       const onOpenItem = vi.fn();
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
 
       fireEvent.click(
         await screen.findByRole("link", {
@@ -828,7 +983,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Legacy phase row",
         }),
       ];
-      const router = renderPanel("embedded", "/");
+      const router = renderPanel("page", "/");
 
       fireEvent.click(
         await screen.findByRole("link", { name: "Open task Legacy phase row" }),
@@ -854,7 +1009,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
     it("closes an open tray on tap instead of opening the task", async () => {
       const onOpenItem = vi.fn();
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -878,7 +1033,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
 
     it("enters selection mode on a stationary 450ms hold, and swallows the trailing click", async () => {
       const onOpenItem = vi.fn();
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -902,7 +1057,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not enter selection mode when the press moves past the hold's slop before 450ms", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -929,19 +1084,24 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanelWithOpenItem("embedded", "/", onOpenItem);
+      renderPanelWithOpenItem("page", "/", onOpenItem);
       const cards = await screen.findAllByTestId("epics-list-row-card");
+      const secondCard = cards.find((card) =>
+        card.textContent.includes("Second history item"),
+      );
+      if (secondCard === undefined)
+        throw new Error("second row was not rendered");
 
       // Long-press the second row to enter selection mode; the first row's
       // checkbox starts unselected, so clicking it below is the toggle under
       // test rather than a re-toggle of the row the hold already selected.
       vi.useFakeTimers();
-      firePointerDown(cards[1], 300, 100);
+      firePointerDown(secondCard, 300, 100);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(460);
       });
       vi.useRealTimers();
-      firePointerUp(cards[1], 300, 100);
+      firePointerUp(secondCard, 300, 100);
 
       const checkbox = screen.getByRole("checkbox", {
         name: "Select Open from landing",
@@ -967,19 +1127,24 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           permissionRole: "viewer",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
+      const firstCard = cards.find((card) =>
+        card.textContent.includes("Open from landing"),
+      );
+      if (firstCard === undefined)
+        throw new Error("first row was not rendered");
 
       // Long-press the first, deletable row to enter selection mode - a
       // viewer-only row's own long press is disabled, since a row nobody may
       // select has nothing to hold into selection mode.
       vi.useFakeTimers();
-      firePointerDown(cards[0], 300, 100);
+      firePointerDown(firstCard, 300, 100);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(460);
       });
       vi.useRealTimers();
-      firePointerUp(cards[0], 300, 100);
+      firePointerUp(firstCard, 300, 100);
 
       const viewerCheckbox = screen.getByRole("checkbox", {
         name: "Select Viewer only row",
@@ -1002,7 +1167,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // included because a hold rarely lands perfectly still, and it stays
     // under the hold's own 6px slop so the press still completes.
     it("enters selection mode from a long-press with slight drift, with the tray absent and the card untranslated", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -1027,7 +1192,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("hides an already-open tray when a long-press on the same row enters selection mode", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
       openTrayByDrag(card);
       expect(
@@ -1063,7 +1228,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
       openTrayByDrag(cards[0]);
       expect(
@@ -1091,7 +1256,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not open the tray on a leftward drag past the commit distance while in selection mode, and leaves the card untranslated", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -1117,7 +1282,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("restores the swipe once selection mode is cancelled", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const card = await screen.findByTestId("epics-list-row-card");
 
       vi.useFakeTimers();
@@ -1162,7 +1327,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           title: "Second history item",
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const cards = await screen.findAllByTestId("epics-list-row-card");
 
       // The first row's pointer goes down and is left resting - no pointerup,
@@ -1215,7 +1380,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // classifier's 15px activation distance without yet reaching the
     // trigger, and the second lands raw travel exactly on it.
     it("refetches on a raw downward travel of 64px, the trigger threshold", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1227,7 +1392,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch a raw downward travel of 63px, just under the trigger threshold", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1239,7 +1404,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch on a downward drag that stops short of the trigger threshold", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1251,7 +1416,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch an armed pull ended by touchcancel", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1267,7 +1432,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     // is what catches a surface left translated with nothing left to release
     // it.
     it("cancels an armed pull when a second finger touches down, stranding no translate", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
 
       fireTouchStart(scroller, [{ identifier: 1, clientX: 100, clientY: 100 }]);
@@ -1283,7 +1448,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch a downward drag when the list is scrolled away from its top", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
       scroller.scrollTop = 50;
 
@@ -1295,7 +1460,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
 
     it("does not refetch a downward drag while a text input is focused", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
       const scroller = await screen.findByTestId("mobile-history-scroller");
       const input = document.createElement("input");
       document.body.appendChild(input);
@@ -1317,7 +1482,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isPreservedOrphan: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const glyph = await screen.findByTestId(
         "epics-list-row-provenance-preserved-orphan-epic-from-history",
@@ -1332,7 +1497,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isLocalHome: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(
         await screen.findByTestId(
@@ -1348,7 +1513,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isLocalHome: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const label = await screen.findByTestId(
         "epics-list-row-provenance-label-local-only",
@@ -1368,7 +1533,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         throw new Error("expected a preceding timestamp sibling span");
       }
       expect(timestamp.className).toMatch(/\btruncate\b/);
-      expect(timestamp.textContent).toMatch(/^updated/);
+      expect(timestamp.textContent).toMatch(/^activity/);
     });
 
     it("renders the preserved-orphan provenance label with a destructive tint", async () => {
@@ -1378,7 +1543,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
           isPreservedOrphan: true,
         }),
       ];
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       const label = await screen.findByTestId(
         "epics-list-row-provenance-label-preserved-orphan",
@@ -1399,11 +1564,11 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         throw new Error("expected a preceding timestamp sibling span");
       }
       expect(timestamp.className).toMatch(/\btruncate\b/);
-      expect(timestamp.textContent).toMatch(/^updated/);
+      expect(timestamp.textContent).toMatch(/^activity/);
     });
 
     it("renders neither provenance label for an ordinary row carrying no marker", async () => {
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       await screen.findByTestId("epics-list-row-card");
       expect(
@@ -1417,15 +1582,68 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
   });
 
+  describe("scope bar stays desktop-only", () => {
+    it("shows no scope control and keeps the top chrome and task-only search on a phone", async () => {
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+      renderPanel("page", "/");
+
+      const input = await screen.findByRole("searchbox", {
+        name: "Search tasks",
+      });
+      expect(input).not.toBeNull();
+      expect(screen.queryByRole("tablist")).toBeNull();
+      expect(screen.queryByRole("tab")).toBeNull();
+      expect(
+        screen.queryByRole("region", { name: /^Message matches/ }),
+      ).toBeNull();
+      const chrome = screen.getByTestId("panel-chrome-bar");
+      expect(
+        within(chrome).getByRole("button", { name: "Refresh tasks" }),
+      ).not.toBeNull();
+      expect(
+        within(chrome).getByRole("button", { name: "Select history items" }),
+      ).not.toBeNull();
+    });
+  });
+
   describe("desktop untouched", () => {
     it("keeps the desktop row chrome at a desktop viewport width", async () => {
       setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
-      renderPanel("embedded", "/");
+      renderPanel("page", "/");
 
       expect(await screen.findByTestId("epics-list-row-pin")).not.toBeNull();
       expect(screen.getByTestId("epics-list-row-delete")).not.toBeNull();
       expect(screen.getByTestId("epics-list-row-edit-title")).not.toBeNull();
       expect(screen.queryByTestId("epics-list-row-tray")).toBeNull();
     });
+  });
+
+  describe("oldest sort timestamp", () => {
+    it.each([
+      ["phone", MOBILE_VIEWPORT_WIDTH],
+      ["desktop", DESKTOP_VIEWPORT_WIDTH],
+    ] as const)(
+      "shows the updated timestamp on %s rows",
+      async (_label, width) => {
+        setViewportWidth(width);
+        testState.items = [
+          historyItem({
+            recentAtMs: 1_700_000_100_000,
+            recentLabel: "just now",
+            updatedLabel: "about 2 hours ago",
+          }),
+        ];
+        useHistorySearchStore.setState({
+          search: { ...DEFAULT_HISTORY_SEARCH, sort: "oldest" },
+        });
+
+        renderPanel("page", "/");
+
+        expect(
+          await screen.findByText("updated about 2 hours ago"),
+        ).not.toBeNull();
+        expect(screen.queryByText("activity just now")).toBeNull();
+      },
+    );
   });
 });

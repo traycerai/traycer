@@ -219,16 +219,31 @@ describe("layout independence", () => {
     const chords = chordsFor(["mod+w"], "other");
 
     expect(chords.match(TEST_WINDOW, keyDown("w", CTRL))).not.toBeNull();
-    // AZERTY puts `z` where US has `w`. Pre-existing: ⌘W never reached the
-    // tile's close on that layout, because only the digits were new.
+    // AZERTY puts `z` where US has `w`, so the physical KeyW position is
+    // ALSO the reader's undo/redo key there. isTextHistoryShortcut takes
+    // priority over any physical-key chord (below), so this specific
+    // keystroke - Ctrl+Z printed at physical KeyW - is page-owned undo, not
+    // the tile's mod+w. A key genuinely printing `w` (layoutKeyDown below)
+    // still reaches the mod+w chord.
     expect(
       chords.match(TEST_WINDOW, layoutKeyDown("KeyW", "z", CTRL)),
-    ).not.toBeNull();
+    ).toBeNull();
     // And the key that PRINTS `w` there is a different physical key, so it
     // must NOT claim the chord.
     expect(
       chords.match(TEST_WINDOW, layoutKeyDown("KeyZ", "w", CTRL)),
     ).toBeNull();
+  });
+
+  it("still matches mod+w from a layout position that does not print z", () => {
+    const chords = chordsFor(["mod+w"], "other");
+    // QWERTZ (German): physical KeyW prints "w" (unlike AZERTY), so nothing
+    // about the text-history guard is in play here - a control case showing
+    // the fix above is specific to the AZERTY Z/W swap, not a blanket loss
+    // of physical-key matching on non-US layouts.
+    expect(
+      chords.match(TEST_WINDOW, layoutKeyDown("KeyW", "w", CTRL)),
+    ).not.toBeNull();
   });
 
   it("falls back to the character when there is no usable code", () => {
@@ -246,6 +261,68 @@ describe("layout independence", () => {
     ).not.toBeNull();
     expect(
       chords.match(TEST_WINDOW, layoutKeyDown("Lang1", "w", CTRL)),
+    ).not.toBeNull();
+  });
+});
+
+/**
+ * `isTextHistoryShortcut` guards `match()` before any physical-key chord
+ * derivation, so undo/redo stay page-owned even when a reader's rebind (or a
+ * layout collision, covered above) would otherwise claim the same token.
+ */
+describe("text-history protection", () => {
+  const META = {
+    meta: true,
+    control: false,
+    shift: false,
+    alt: false,
+  } as const;
+  const CTRL = {
+    meta: false,
+    control: true,
+    shift: false,
+    alt: false,
+  } as const;
+
+  it("never lets a registered mod+z chord claim Cmd+Z on darwin - undo stays page-owned", () => {
+    const chords = chordsFor(["mod+z"], "darwin");
+    expect(chords.match(TEST_WINDOW, keyDown("z", META))).toBeNull();
+  });
+
+  it("still matches a registered ctrl+z chord on darwin - Control is not the mac history modifier", () => {
+    const chords = chordsFor(["ctrl+z"], "darwin");
+    expect(chords.match(TEST_WINDOW, keyDown("z", CTRL))).not.toBeNull();
+  });
+
+  it("protects Shift+Cmd+Z (redo) on darwin the same way", () => {
+    const chords = chordsFor(["mod+shift+z"], "darwin");
+    expect(
+      chords.match(TEST_WINDOW, keyDown("Z", { ...META, shift: true })),
+    ).toBeNull();
+  });
+
+  it("protects bare Ctrl+Z on non-darwin even against a registered mod+z chord", () => {
+    // Off darwin, `mod` resolves to Control, so without the guard this would
+    // be exactly the case "folds a registered ctrl chord onto mod off
+    // darwin" (above) demonstrates matching.
+    const chords = chordsFor(["mod+z"], "other");
+    expect(chords.match(TEST_WINDOW, keyDown("z", CTRL))).toBeNull();
+  });
+
+  it("protects Ctrl+Y (redo) on non-darwin even against a registered mod+y chord", () => {
+    const chords = chordsFor(["mod+y"], "other");
+    expect(chords.match(TEST_WINDOW, keyDown("y", CTRL))).toBeNull();
+  });
+
+  it("does not protect an unrelated letter under the history modifier", () => {
+    const chords = chordsFor(["mod+j"], "darwin");
+    expect(chords.match(TEST_WINDOW, keyDown("j", META))).not.toBeNull();
+  });
+
+  it("does not protect Alt+Cmd+Z on darwin (an extra modifier changes the chord)", () => {
+    const chords = chordsFor(["mod+alt+z"], "darwin");
+    expect(
+      chords.match(TEST_WINDOW, keyDown("z", { ...META, alt: true })),
     ).not.toBeNull();
   });
 });

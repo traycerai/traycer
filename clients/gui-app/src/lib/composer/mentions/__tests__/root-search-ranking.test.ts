@@ -36,9 +36,16 @@ function candidate(
     label: string;
     detail?: string;
     description?: string;
+    path?: string;
+    pickedAt?: number;
   },
 ): RootSearchCandidate {
-  return { entry: entry(fields), providerId };
+  return {
+    entry: entry(fields),
+    providerId,
+    path: fields.path ?? null,
+    pickedAt: fields.pickedAt ?? null,
+  };
 }
 
 /** A PR/issue row: identity in `labelPrefix`, title in `label`. */
@@ -61,6 +68,8 @@ function githubCandidate(fields: {
       disabledReason: null,
     },
     providerId: "pull-requests",
+    path: null,
+    pickedAt: null,
   };
 }
 
@@ -265,6 +274,141 @@ describe("rankRootSearchEntries", () => {
     ];
 
     expect(rankedLabels(candidates, "stop")[0]).toBe("Stop the busy-loop");
+  });
+});
+
+describe("path rows", () => {
+  it("ranks a folder whose name exactly matches above files inside it that also start with the query", () => {
+    const withPath: RootSearchCandidate[] = [
+      candidate("files", {
+        id: "f1",
+        label: "composer-content.ts",
+        detail: "src/lib/composer",
+        description: "src/lib/composer",
+        path: "src/lib/composer/composer-content.ts",
+      }),
+      candidate("files", {
+        id: "f2",
+        label: "composer-clipboard.ts",
+        detail: "src/lib/composer",
+        description: "src/lib/composer",
+        path: "src/lib/composer/composer-clipboard.ts",
+      }),
+      candidate("folders", {
+        id: "d1",
+        label: "composer",
+        detail: "src/lib",
+        description: "src/lib",
+        path: "src/lib/composer/",
+      }),
+    ];
+    expect(rankedLabels(withPath, "compos")[0]).toBe("composer");
+
+    // CONTROL: the same rows in the pre-fix shape - no `path`, so ranking
+    // falls back to `detail`/`description` (the dirname, counted twice).
+    // Proves the fixture actually discriminates between the two ranking
+    // strategies rather than the folder winning either way.
+    const withoutPath: RootSearchCandidate[] = withPath.map((entry) => ({
+      ...entry,
+      path: null,
+    }));
+    expect(rankedLabels(withoutPath, "compos")[0]).not.toBe("composer");
+  });
+
+  it("matches a query spanning a path boundary on the full path, and the shorter path wins the tie", () => {
+    const candidates: RootSearchCandidate[] = [
+      candidate("files", {
+        id: "f1",
+        label: "types.ts",
+        detail: "src/lib/composer",
+        path: "src/lib/composer/types.ts",
+      }),
+      candidate("folders", {
+        id: "d1",
+        label: "composer",
+        detail: "src/lib",
+        path: "src/lib/composer/",
+      }),
+    ];
+    const ranked = rankRootSearchEntries(candidates, "lib/comp");
+    expect(ranked.matchedCount).toBe(2);
+    expect(ranked.entries[0].label).toBe("composer");
+  });
+
+  it("never lets provider order decide a tie - a recent pick wins over a stranger", () => {
+    const candidates: RootSearchCandidate[] = [
+      candidate("files", {
+        id: "f1",
+        label: "auth.ts",
+        path: "src/lib/auth.ts",
+      }),
+      candidate("folders", {
+        id: "d1",
+        label: "auth.ts",
+        path: "src/lib/auth.ts",
+        pickedAt: 1000,
+      }),
+    ];
+    expect(
+      rankRootSearchEntries(candidates, "auth").entries.map((item) => item.id),
+    ).toEqual(["d1", "f1"]);
+  });
+
+  it("never lets provider order decide a tie - falls back to the shorter-path rule", () => {
+    const candidates: RootSearchCandidate[] = [
+      candidate("files", {
+        id: "f1",
+        label: "auth.ts",
+        path: "src/lib/composer/mentions/auth.ts",
+      }),
+      candidate("folders", {
+        id: "d1",
+        label: "auth.ts",
+        path: "src/lib/auth.ts",
+      }),
+    ];
+    expect(
+      rankRootSearchEntries(candidates, "auth").entries.map((item) => item.id),
+    ).toEqual(["d1", "f1"]);
+  });
+
+  it("nudges recency but never crosses tiers - a picked substring hit stays below a fresh prefix hit", () => {
+    const candidates: RootSearchCandidate[] = [
+      candidate("files", {
+        id: "f-prefix",
+        label: "auth-helpers.ts",
+        path: "src/auth-helpers.ts",
+      }),
+      candidate("files", {
+        id: "f-substring",
+        label: "oauth.ts",
+        path: "src/oauth.ts",
+        pickedAt: 1,
+      }),
+    ];
+    expect(rankedLabels(candidates, "auth")).toEqual([
+      "auth-helpers.ts",
+      "oauth.ts",
+    ]);
+  });
+
+  it("reorders inside a tier by recency", () => {
+    const candidates: RootSearchCandidate[] = [
+      candidate("files", {
+        id: "a",
+        label: "auth-a.ts",
+        path: "src/auth-a.ts",
+      }),
+      candidate("files", {
+        id: "b",
+        label: "auth-b.ts",
+        path: "src/auth-b.ts",
+        pickedAt: 5,
+      }),
+    ];
+    expect(
+      rankRootSearchEntries(candidates, "auth").entries.map((item) => item.id),
+    ).toEqual(["b", "a"]);
   });
 });
 

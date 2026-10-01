@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -17,6 +18,10 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { modLabel } from "@/lib/keybindings/platform";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  tryReserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   BrowserSessionsContext,
@@ -370,6 +375,7 @@ import * as Y from "yjs";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
+import * as chatPrewarmHandoff from "@/components/epic-canvas/chat-prewarm-handoff";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -734,6 +740,7 @@ function emitChatSnapshotWithMessages(input: {
       accumulatedFileChanges: [],
       managedCommands: [...(input.managedCommands ?? [])],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -781,6 +788,81 @@ function hostUserMessage(): Message {
     timestamp: 1,
     sessionAnchor: null,
   };
+}
+
+const EDIT_IMAGE_HASH = "e".repeat(64);
+const EDIT_IMAGE_BYTES = 3 * 1024 * 1024;
+
+/**
+ * The fixture message, carrying one hash-only image the edit will inherit.
+ *
+ * Spelled out rather than spread over {@link hostUserMessage}: `Message` is a
+ * union discriminated on `role`, and a spread-then-override object literal is
+ * checked against the whole union at once, which resolves to the assistant
+ * member and rejects `message`. The discriminant has to be written here.
+ */
+function hostUserMessageWithImage(): Message {
+  return {
+    role: "user",
+    messageId: "message-1",
+    sender: { type: "user", userId: "owner-1" },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "edit-img-1",
+                  fileName: "shot.png",
+                  hash: EDIT_IMAGE_HASH,
+                  b64content: null,
+                  mimeType: "image/png",
+                  size: EDIT_IMAGE_BYTES,
+                  byHashEligible: true,
+                },
+              },
+              { type: "text", text: "Host chat content" },
+            ],
+          },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1,
+    sessionAnchor: null,
+  };
+}
+
+/**
+ * Free space in the image byte budget, to the byte.
+ *
+ * Binary-searched through the only observable the module exposes - what it
+ * will and will not admit - because the answer has to be a DELTA here: this
+ * tile mounts a real composer, and asserting an absolute figure would pin
+ * whatever else that composer happens to be holding. Every probe releases, so
+ * measuring never changes the thing measured.
+ */
+function measureFreeImageBytes(): number {
+  let admissible = 0;
+  let refused = LANDING_IMAGE_BUDGET_BYTES + 1;
+  while (refused - admissible > 1) {
+    const mid = Math.floor((admissible + refused) / 2);
+    const reservation = tryReserveLandingImageBudget([
+      { hash: null, bytes: mid },
+    ]);
+    if (reservation === null) {
+      refused = mid;
+      continue;
+    }
+    reservation.release();
+    admissible = mid;
+  }
+  return admissible;
 }
 
 // Neither this suite's remembered pair (Claude) nor its default provider
@@ -888,6 +970,40 @@ function nextStepsAssistantMessage(): Message {
     ],
     timestamp: 2,
     turnId: "turn-next-steps",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
+/** One of several records one assistant turn folds together. */
+function foldedTurnRecord(messageId: string, timestamp: number): Message {
+  return {
+    role: "assistant",
+    messageId,
+    startedAt: timestamp,
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "codex",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "text",
+        blockId: `text-${messageId}`,
+        text: `Output of ${messageId}`,
+        status: "completed",
+        timestamp,
+        providerNotice: null,
+      },
+    ],
+    timestamp,
+    turnId: "turn-folded",
     usage: null,
     reasoningEffort: null,
     serviceTier: null,
@@ -1165,10 +1281,20 @@ function approvalState(
 }
 
 function renderChatTile() {
+  return renderChatTileWithNode(CHAT_ARTIFACT);
+}
+
+function renderChatTileWithNode(node: {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: "chat";
+  readonly name: string;
+  readonly hostId: string;
+}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(chatTileTestTree(queryClient, true, CHAT_ARTIFACT));
+  return render(chatTileTestTree(queryClient, true, node));
 }
 
 function renderSwitchableChatTile() {
@@ -1187,7 +1313,13 @@ function renderSwitchableChatTile() {
 function chatTileTestTree(
   queryClient: QueryClient,
   chatVisible: boolean,
-  node: typeof CHAT_ARTIFACT,
+  node: {
+    readonly id: string;
+    readonly instanceId: string;
+    readonly type: "chat";
+    readonly name: string;
+    readonly hostId: string;
+  },
 ) {
   return (
     <TestRouterProvider>
@@ -1355,6 +1487,8 @@ describe("<ChatTile />", () => {
           origin: null,
           publication: null,
           supersedes: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -1459,6 +1593,33 @@ describe("<ChatTile />", () => {
     });
     await waitForChatTileLoaded();
     expect(screen.getByText("Host chat content")).not.toBeNull();
+  });
+
+  it("signals the hosted tile's instance ID, not the view tab ID, after acquiring its chat handle", async () => {
+    const handoffSpy = vi.spyOn(
+      chatPrewarmHandoff,
+      "notifyChatTileSessionAcquired",
+    );
+
+    renderChatTileWithNode({
+      ...CHAT_ARTIFACT,
+      instanceId: "actual-tile-instance",
+    });
+
+    await waitFor(() => {
+      expect(handoffSpy).toHaveBeenCalledWith(
+        EPIC_ID,
+        HOST_ID,
+        CHAT_ARTIFACT.id,
+        "actual-tile-instance",
+      );
+    });
+    expect(handoffSpy).not.toHaveBeenCalledWith(
+      EPIC_ID,
+      HOST_ID,
+      CHAT_ARTIFACT.id,
+      "tab-test",
+    );
   });
 
   it("stays gated for a record-less chat when the cloud row belongs to someone else", async () => {
@@ -1800,6 +1961,49 @@ describe("<ChatTile />", () => {
     const frame = chatHarness.sent[0];
     if (frame.kind !== "send") throw new Error("expected send frame");
     expect(frame.deliveryPolicy).toBe("auto");
+  });
+
+  // W-10. The helper-level cases in `landing-image-gc-holder-roots` and
+  // `composer-holder-image-bytes` drive `useImageContentRoot` directly and
+  // release it by UNMOUNTING, which is the park. That is not what Escape or
+  // Cancel does: this tile stays mounted and its `currentContent` goes to null,
+  // so those cases stayed green with the tile's hook call deleted and with the
+  // ref's content update broken. This one goes through the real wiring - the
+  // tile's own call, the reducer's begin and clear - and asserts the DELTA, so
+  // it fails if the charge is wrong in either direction.
+  it("charges an open inline edit's images and releases them on Cancel, without unmounting", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: null,
+        messages: [hostUserMessageWithImage()],
+        activeTurn: null,
+      });
+    });
+    await waitForChatTileLoaded();
+
+    // Before the edit exists, the message's own image is the transcript's, not
+    // a holder's: nothing in this renderer is keeping those bytes alive.
+    const beforeEdit = measureFreeImageBytes();
+
+    fireEvent.click(getButtonByAriaLabel("Edit message"));
+
+    // `beginInlineEdit` seeds `currentContent` from the saved message, so the
+    // edit is now the holder and the image is charged.
+    const duringEdit = measureFreeImageBytes();
+    expect(beforeEdit - duringEdit).toBe(EDIT_IMAGE_BYTES);
+
+    fireEvent.click(getButtonByAriaLabel("Cancel edit"));
+
+    // Cancel clears the reducer's inline edit. The tile is STILL MOUNTED and
+    // the hook is still registered - it is the content that went to null - and
+    // the bytes have to come back anyway.
+    expect(measureFreeImageBytes()).toBe(beforeEdit);
   });
 
   it("sends delete-message-suffix after inline confirmation", async () => {
@@ -2862,6 +3066,7 @@ describe("<ChatTile />", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: AUTO_SESSION_SETTINGS,
           accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
           delivery: "next_turn",
           status: "fallback",
           targetTurnId: null,
@@ -2957,6 +3162,7 @@ describe("<ChatTile />", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: AUTO_SESSION_SETTINGS,
           accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
           delivery: "next_turn",
           status: "fallback",
           targetTurnId: null,
@@ -3046,6 +3252,7 @@ describe("<ChatTile />", () => {
           sender: { type: "user", userId: "owner-1" },
           settings: AUTO_SESSION_SETTINGS,
           accountContext: { type: "PERSONAL" as const },
+          sentFromHostId: null,
           delivery: "next_turn",
           status: "fallback",
           targetTurnId: null,
@@ -3522,6 +3729,7 @@ describe("<ChatTile />", () => {
             b64content: "zzz",
             mimeType: "image/png",
             size: 64,
+            byHashEligible: true,
           },
         },
       ],
@@ -3686,6 +3894,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "same_turn",
         status: "pending",
         targetTurnId: "turn-1",
@@ -3706,6 +3915,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "fallback",
         targetTurnId: null,
@@ -3788,7 +3998,7 @@ describe("<ChatTile />", () => {
       Array.from({ length: 8 }, (_, index) => ({
         kind: "prompt" as const,
         queueItemId: `queue-${index}`,
-        messageId: `message-${index}`,
+        messageId: `scroll-message-${index}`,
         message: {
           kind: "user",
           content: QUEUED_CONTENT,
@@ -3797,6 +4007,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn" as const,
         status: "pending" as const,
         targetTurnId: null,
@@ -3832,6 +4043,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -3867,6 +4079,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -3942,6 +4155,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -3998,6 +4212,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4056,6 +4271,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4076,6 +4292,7 @@ describe("<ChatTile />", () => {
         sender: { type: "user", userId: "owner-1" },
         settings: QUEUED_SETTINGS,
         accountContext: { type: "PERSONAL" as const },
+        sentFromHostId: null,
         delivery: "next_turn",
         status: "pending",
         targetTurnId: null,
@@ -4200,6 +4417,51 @@ describe("<ChatTile />", () => {
     });
   });
 
+  /**
+   * Find in one tile navigates THAT tile to an older hit through this same
+   * jump. The chat can be open in a second tile (`duplicateTab`), which must
+   * neither move nor swallow a jump addressed to the other.
+   */
+  it("leaves a jump addressed to another tile of the same chat to that tile", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    // Parked by find in the chat's other tile.
+    act(() => {
+      useChatTranscriptJumpStore.setState({
+        requestsByChatId: {
+          [key]: {
+            target: { kind: "end" },
+            requestId: 1_000,
+            tileInstanceId: "inst-chat-2",
+          },
+        },
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).not.toBeUndefined();
+
+    // The same wait is enough for this tile to act on its own jump.
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestTileJump(HOST_ID, CHAT_ARTIFACT.id, CHAT_ARTIFACT.instanceId, {
+          kind: "end",
+        });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
+
   it("resolves a durable assistant message id to its projected transcript row", async () => {
     renderChatTile();
     await waitForChatTileLoaded();
@@ -4236,6 +4498,50 @@ describe("<ChatTile />", () => {
     });
     expect(
       document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
+  /**
+   * History's own case: a hit names the record it matched, and a turn folded
+   * from several records renders under the LAST one's id. A hit on an earlier
+   * record named no row, so the jump stayed parked until its TTL dropped it.
+   */
+  it("resolves an earlier record of a turn folded from several records", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    const key = chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id);
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          messageId: "folded-first",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [
+          hostUserMessage(),
+          foldedTurnRecord("folded-first", 2),
+          foldedTurnRecord("folded-last", 3),
+        ],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-folded"]'),
     ).not.toBeNull();
   });
 
@@ -4880,6 +5186,360 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     expect(retryFromUser).toHaveBeenCalledTimes(1);
+  });
+
+  describe("turn-completed announcement title", () => {
+    const REF_NAME = "Untitled agent";
+
+    function seedDocWithChatTitle(title: string) {
+      return (doc: Y.Doc): void => {
+        seedDocWithChat(doc);
+        const chat = doc.getMap("epic").get("chats");
+        if (!(chat instanceof Y.Map)) throw new Error("expected chats map");
+        const record: unknown = chat.get(CHAT_ARTIFACT.id);
+        if (!(record instanceof Y.Map)) throw new Error("expected chat record");
+        record.set("title", title);
+      };
+    }
+
+    function liveRegionText(): string {
+      const region = document.querySelector(
+        '[role="status"][aria-live="polite"][aria-atomic="true"]',
+      );
+      return region === null ? "" : region.textContent;
+    }
+
+    async function announcedAfterCompletedTurn(input: {
+      readonly liveTitle: string;
+      readonly stateTitle: string;
+    }): Promise<string> {
+      harness.teardown();
+      chatHarness.teardown();
+      harness.install(seedDocWithChatTitle(input.liveTitle), "editor");
+      chatHarness.install("owner", []);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      // The tile ref keeps its opening-name snapshot, as a chat opened before
+      // its title was generated does.
+      render(
+        chatTileTestTree(queryClient, true, {
+          ...CHAT_ARTIFACT,
+          name: REF_NAME,
+        }),
+      );
+      await waitForChatTileLoaded();
+
+      const callbacks = chatHarness.callbacks();
+      const withStateTitle: ChatStreamCallbacks = {
+        ...callbacks,
+        onSnapshot: (frame) => {
+          callbacks.onSnapshot({
+            ...frame,
+            snapshot: {
+              ...frame.snapshot,
+              chat: { ...frame.snapshot.chat, title: input.stateTitle },
+            },
+          });
+        },
+      };
+      const assistant = nextStepsAssistantMessage();
+      act(() => {
+        emitChatSnapshotWithMessages({
+          callbacks: withStateTitle,
+          access: "owner",
+          queueItems: [],
+          settings: null,
+          messages: [hostUserMessage(), assistant],
+          activeTurn: null,
+        });
+      });
+      await settleLegendList();
+      return liveRegionText();
+    }
+
+    it("announces the projected live title, not the ref's opening-name snapshot", async () => {
+      // Restoring `taskTitle={props.node.name}` announces "Untitled agent
+      // finished responding." here: the ref name is REF_NAME while the store
+      // holds "Real Title", so the exact-text assertion goes red.
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "Real Title",
+        stateTitle: "State Title",
+      });
+      expect(text).toBe("Real Title finished responding.");
+    });
+
+    it("falls back to the chat state title when the live title is empty", async () => {
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "",
+        stateTitle: "State Title",
+      });
+      expect(text).toBe("State Title finished responding.");
+    });
+
+    it("falls back to the ref name when both titles are empty", async () => {
+      const text = await announcedAfterCompletedTurn({
+        liveTitle: "",
+        stateTitle: "",
+      });
+      expect(text).toBe("Untitled agent finished responding.");
+    });
+  });
+
+  // The host retires the composer's prompt suggestion on any send (an
+  // edit-and-resend included) and broadcasts that clear BEFORE it acks the
+  // action, so between the click and the ack the store still holds the value the
+  // send retires. The tile must not offer it in that window. These drive the
+  // real tile, composer and session store through host frames and read the
+  // composer's live placeholder, which is where the suggestion shows. The
+  // suite's seeded "pending message" draft hides any placeholder, so each test
+  // takes the composer through the states the user would: text typed, sent (the
+  // composer clears itself on an accepted dispatch), and, where the test needs
+  // it, emptied again.
+  describe("prompt suggestion while a send is unacknowledged", () => {
+    const SUGGESTION = "run the tests";
+    const NEXT_SUGGESTION = "check the logs";
+    const EDIT_PLACEHOLDER = "Edit message";
+    const EMPTY_DRAFT: JsonContent = {
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    };
+
+    // Every composer editor on screen: the tile's composer, plus the inline
+    // editor while a sent message is being edited. `getAll*` throws when there
+    // is none, so an absence assertion below cannot pass on an empty screen.
+    function composerPlaceholders(): string[] {
+      return screen
+        .getAllByTestId("composer-editor")
+        .map((editor) => editor.getAttribute("aria-placeholder") ?? "");
+    }
+
+    function emptyTheComposerDraft(): void {
+      act(() => {
+        useComposerDraftStore
+          .getState()
+          .replaceDraft(CHAT_ARTIFACT.id, EMPTY_DRAFT, null);
+      });
+    }
+
+    function emitTurnState(
+      activeTurn: ChatActiveTurn | null,
+      suggestedPrompt: string | undefined,
+    ): void {
+      act(() => {
+        chatHarness.callbacks().onTurnStateChanged({
+          kind: "turnStateChanged",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          runStatus: runStatusForActiveTurn(activeTurn),
+          activeTurn,
+          suggestedPrompt,
+        });
+      });
+    }
+
+    function emitHostSuggestion(suggestedPrompt: string | undefined): void {
+      emitTurnState(null, suggestedPrompt);
+    }
+
+    function acceptFirstSentMessage(): string {
+      const frame = chatHarness.sent[0];
+      if (frame.kind !== "send") throw new Error("expected send frame");
+      act(() => {
+        chatHarness.callbacks().onMessageAccepted({
+          kind: "messageAccepted",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          message: {
+            role: "user",
+            messageId: frame.messageId,
+            sender: { type: "user", userId: "owner-1" },
+            message: {
+              kind: "user",
+              content: PENDING_DRAFT_CONTENT,
+              browserAnnotations: [],
+            },
+            timestamp: 3,
+            sessionAnchor: null,
+          },
+        });
+      });
+      return frame.messageId;
+    }
+
+    function ackFirstSentAction(
+      action: "send" | "editUserMessage",
+      status: "accepted" | "rejected",
+    ): void {
+      const frame = chatHarness.sent[0];
+      if (frame.kind !== action) throw new Error(`expected ${action} frame`);
+      act(() => {
+        chatHarness.callbacks().onActionAck({
+          kind: "actionAck",
+          hasBinaryPayload: false,
+          epicId: EPIC_ID,
+          chatId: CHAT_ARTIFACT.id,
+          clientActionId: frame.clientActionId,
+          action,
+          status,
+          reason: status === "rejected" ? "The host refused the send." : null,
+          code: null,
+          backgroundStopTaskIds: [],
+          token: null,
+        });
+      });
+    }
+
+    // Sends the seeded draft. The composer empties itself on the dispatch, so
+    // nothing but the suggestion gate is left to decide the placeholder.
+    function sendTheSeededDraft(): void {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(chatHarness.sent.map((frame) => frame.kind)).toEqual(["send"]);
+      expect(screen.getByTestId("composer-editor").textContent).toBe("");
+    }
+
+    async function renderWithHostSuggestion(): Promise<void> {
+      renderChatTile();
+      await waitForChatTileLoaded();
+      emitHostSuggestion(SUGGESTION);
+    }
+
+    it("offers the host's suggestion as the placeholder once the composer is empty", async () => {
+      await renderWithHostSuggestion();
+      // The seeded draft hides it...
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+
+      emptyTheComposerDraft();
+
+      expect(composerPlaceholders()).toContain(SUGGESTION);
+    });
+
+    it("withholds the suggestion once a send is dispatched and until the host acks it", async () => {
+      await renderWithHostSuggestion();
+
+      sendTheSeededDraft();
+
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+    });
+
+    it("offers the suggestion again when the host rejects the send without clearing it", async () => {
+      await renderWithHostSuggestion();
+      sendTheSeededDraft();
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+
+      ackFirstSentAction("send", "rejected");
+      // A refused send hands the prompt back to the composer; the user emptying
+      // it again is what lets the placeholder show.
+      emptyTheComposerDraft();
+
+      await waitFor(() => {
+        expect(composerPlaceholders()).toContain(SUGGESTION);
+      });
+    });
+
+    it("leaves no suggestion when the host clears it ahead of accepting the send", async () => {
+      await renderWithHostSuggestion();
+      sendTheSeededDraft();
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+
+      // The host's order: the clearing frame, then the accept and its ack, then
+      // the turn it starts.
+      emitHostSuggestion(undefined);
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+      const messageId = acceptFirstSentMessage();
+      ackFirstSentAction("send", "accepted");
+      emitTurnState(
+        { ...runningActiveTurn(), userMessageId: messageId },
+        undefined,
+      );
+
+      // The ack has lifted the gate, so the held value is the host's own again,
+      // and it is cleared: it must not revert to the suggestion the send retired.
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+      // ...and the gate really is open, so that absence is the store's, not the
+      // pending action's: the suggestion the host publishes when the turn ends
+      // is offered.
+      emitHostSuggestion(NEXT_SUGGESTION);
+      expect(composerPlaceholders()).toContain(NEXT_SUGGESTION);
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+    });
+
+    it("withholds the suggestion while an edit-and-resend is unacknowledged, then offers it again on a rejection", async () => {
+      await renderWithHostSuggestion();
+      emptyTheComposerDraft();
+      expect(composerPlaceholders()).toContain(SUGGESTION);
+
+      fireEvent.click(getButtonByAriaLabel("Edit message"));
+      pasteInlineEditText(" updated");
+      fireEvent.click(getButtonByAriaLabel("Send edit"));
+
+      expect(chatHarness.sent.map((frame) => frame.kind)).toEqual([
+        "editUserMessage",
+      ]);
+      expect(composerPlaceholders()).toContain(EDIT_PLACEHOLDER);
+      expect(composerPlaceholders()).not.toContain(SUGGESTION);
+
+      ackFirstSentAction("editUserMessage", "rejected");
+
+      await waitFor(() => {
+        expect(composerPlaceholders()).toContain(SUGGESTION);
+      });
+    });
+
+    // → accepts the offered suggestion through the real editor. The fill
+    // re-reads the LIVE document, because the draft can change before the offer
+    // re-renders; when it declines, the key must keep moving the caret.
+    describe("accepting it with ArrowRight", () => {
+      const TYPED_TEXT = "a draft typed a moment ago";
+
+      function pasteIntoTheComposer(text: string): void {
+        fireEvent.paste(screen.getByTestId("composer-editor"), {
+          clipboardData: {
+            files: [],
+            items: [],
+            types: ["text/plain"],
+            getData: (type: string) => (type === "text/plain" ? text : ""),
+          },
+        });
+      }
+
+      it("fills the empty composer with the suggestion and takes the key", async () => {
+        await renderWithHostSuggestion();
+        emptyTheComposerDraft();
+        expect(composerPlaceholders()).toContain(SUGGESTION);
+
+        const editor = screen.getByTestId("composer-editor");
+        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        fireEvent(editor, event);
+
+        expect(editor.textContent).toBe(SUGGESTION);
+        expect(event.defaultPrevented).toBe(true);
+      });
+
+      it("neither fills nor takes the key when the draft changed before the offer re-rendered", async () => {
+        await renderWithHostSuggestion();
+        emptyTheComposerDraft();
+        expect(composerPlaceholders()).toContain(SUGGESTION);
+
+        const editor = screen.getByTestId("composer-editor");
+        const event = createEvent.keyDown(editor, { key: "ArrowRight" });
+        // One act scope: React commits nothing until it exits, so the paste
+        // reaches the live editor while the tile still holds the offer, and
+        // the key is handled against that stale offer.
+        act(() => {
+          pasteIntoTheComposer(TYPED_TEXT);
+          expect(editor.textContent).toBe(TYPED_TEXT);
+          expect(composerPlaceholders()).toContain(SUGGESTION);
+          fireEvent(editor, event);
+        });
+
+        expect(event.defaultPrevented).toBe(false);
+        expect(editor.textContent).toBe(TYPED_TEXT);
+        expect(composerPlaceholders()).not.toContain(SUGGESTION);
+      });
+    });
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

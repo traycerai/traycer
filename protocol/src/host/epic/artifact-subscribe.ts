@@ -65,6 +65,7 @@ import {
   epicLaneEpochFrameFields,
   epicLaneTextFrameFields,
 } from "@traycer/protocol/host/epic/lane-cursor";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The state a reattaching client already holds for THIS body, so the host can
@@ -85,37 +86,41 @@ import {
  * the params it passed and the params that were parsed for what is logically
  * one attach.
  */
-export const artifactSubscribeSeedOfferSchema = z.object({
-  /**
-   * The `docGuid` this client's replica was seeded from - taken off the `doc`
-   * frame that seeded it, never derived from `artifactId`. A body that was
-   * deleted and recreated has a NEW guid under the same artifact id, so the
-   * artifact id cannot answer "is my replica the same document as yours".
-   */
-  knownDocGuid: z.string().min(1),
-  /**
-   * Base64 `Y.encodeStateVector` of the replica the client still holds. The
-   * host answers `Y.encodeStateAsUpdate(doc, thisVector)` - everything it has
-   * that the client does not.
-   */
-  stateVectorBase64: z.string().min(1),
-});
+export const artifactSubscribeSeedOfferSchema = lazySchema(() =>
+  z.object({
+    /**
+     * The `docGuid` this client's replica was seeded from - taken off the `doc`
+     * frame that seeded it, never derived from `artifactId`. A body that was
+     * deleted and recreated has a NEW guid under the same artifact id, so the
+     * artifact id cannot answer "is my replica the same document as yours".
+     */
+    knownDocGuid: z.string().min(1),
+    /**
+     * Base64 `Y.encodeStateVector` of the replica the client still holds. The
+     * host answers `Y.encodeStateAsUpdate(doc, thisVector)` - everything it has
+     * that the client does not.
+     */
+    stateVectorBase64: z.string().min(1),
+  }),
+);
 export type ArtifactSubscribeSeedOffer = z.infer<
   typeof artifactSubscribeSeedOfferSchema
 >;
 
-export const artifactSubscribeOpenRequestSchemaV10 = z.object({
-  epicId: z.string().min(1),
-  artifactId: z.string().min(1),
-  /**
-   * The epic replica generation this attach is made under - `epicGeneration` in
-   * the governing invariant, spelled `authorityEpoch` here because it is the
-   * same value the records lane stamps and two names for one epoch is exactly
-   * the drift these lanes exist to avoid.
-   */
-  authorityEpoch: epicLaneAuthorityEpochSchema,
-  seedOffer: artifactSubscribeSeedOfferSchema.optional(),
-});
+export const artifactSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    artifactId: z.string().min(1),
+    /**
+     * The epic replica generation this attach is made under - `epicGeneration` in
+     * the governing invariant, spelled `authorityEpoch` here because it is the
+     * same value the records lane stamps and two names for one epoch is exactly
+     * the drift these lanes exist to avoid.
+     */
+    authorityEpoch: epicLaneAuthorityEpochSchema,
+    seedOffer: artifactSubscribeSeedOfferSchema.optional(),
+  }),
+);
 export type ArtifactSubscribeOpenRequestV10 = z.infer<
   typeof artifactSubscribeOpenRequestSchemaV10
 >;
@@ -139,11 +144,9 @@ export type ArtifactSubscribeOpenRequestV10 = z.infer<
  * - `bodyUnavailable` - the artifact exists and the host cannot currently
  *   materialize its body. NOT necessarily terminal - see `terminal`.
  */
-export const artifactSubscribeUnavailableCodeSchema = z.enum([
-  "staleAuthorityEpoch",
-  "artifactNotFound",
-  "bodyUnavailable",
-]);
+export const artifactSubscribeUnavailableCodeSchema = lazySchema(() =>
+  z.enum(["staleAuthorityEpoch", "artifactNotFound", "bodyUnavailable"]),
+);
 export type ArtifactSubscribeUnavailableCode = z.infer<
   typeof artifactSubscribeUnavailableCodeSchema
 >;
@@ -160,12 +163,11 @@ export type ArtifactSubscribeUnavailableCode = z.infer<
  * where it does not is a host bug, not a routing instruction.
  */
 const artifactSubscribeAddressFields = {
-  artifactId: z.string().min(1),
+  artifactId: lazySchema(() => z.string().min(1)),
 } as const;
 
-export const artifactSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const artifactSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     /**
      * The body seed. Binary payload is either a full
      * `Y.encodeStateAsUpdate` over the host's doc, or a DELTA against the
@@ -286,15 +288,14 @@ export const artifactSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("pong"),
       ...epicLaneTextFrameFields,
     }),
-  ],
+  ]),
 );
 export type ArtifactSubscribeServerFrameV10 = z.infer<
   typeof artifactSubscribeServerFrameSchemaV10
 >;
 
-export const artifactSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const artifactSubscribeClientFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     /**
      * A local edit, pushed to the host. `docGuid` is the generation guard on
      * the WRITE path: a host that has reseeded the body since this client last
@@ -317,7 +318,7 @@ export const artifactSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
       kind: z.literal("ping"),
       ...epicLaneTextFrameFields,
     }),
-  ],
+  ]),
 );
 export type ArtifactSubscribeClientFrameV10 = z.infer<
   typeof artifactSubscribeClientFrameSchemaV10
@@ -328,5 +329,80 @@ export const artifactSubscribeV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
   serverFrameSchema: artifactSubscribeServerFrameSchemaV10,
+  clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
+});
+
+// ─── `artifact.subscribe@1.1` - additive: the `bodySync` frame ────────────
+//
+// A host serves an artifact body from its local copy the moment that copy is
+// hydrated, and reconciles it with the cloud behind the editor. `@1.0` could
+// not say which of the two the body in front of the reader is: a body the
+// host held but had not yet synced was reported `unavailable / retrying` for
+// the whole cloud sync, and the tile showed "Reconnecting to this document…"
+// over a document the host already had. `@1.1` adds one frame that says it,
+// so the tile can show the editor and a "Syncing…" affordance beside it.
+//
+// @1.0 stays installed and FROZEN: a peer that negotiated it never receives
+// `bodySync`, and the host gates on the negotiated minor rather than assuming
+// the peer will tolerate an unknown frame kind.
+
+/**
+ * Where the body the host is serving stands against the cloud.
+ *
+ * - `syncing` - served from the host's local copy; the cloud has not yet
+ *   reconciled with it. Edits are accepted and durable on the host, and reach
+ *   the cloud when the sync completes.
+ * - `synced` - the host's copy has completed its sync with the cloud.
+ *
+ * A host whose body has no cloud side at all (a local-only epic) sends
+ * neither, and ABSENCE is the only honest reading then: it is not a claim of
+ * either state. Later connection drops are the epic-level
+ * `cloudSyncStatus`'s to report on `epic.status.subscribe`, not this frame's;
+ * `synced` is not withdrawn by a socket flap.
+ */
+export const artifactBodySyncStateSchema = lazySchema(() =>
+  z.enum(["syncing", "synced"]),
+);
+export type ArtifactBodySyncState = z.infer<typeof artifactBodySyncStateSchema>;
+
+/**
+ * The body's sync state, sent after each `doc` frame and again whenever it
+ * changes. It describes the body the most recent `doc` frame seeded: a client
+ * forgets it on every `doc` and every `unavailable` frame, and the host
+ * re-sends it after the next `doc`.
+ */
+const artifactSubscribeBodySyncFrameSchemaV11 = lazySchema(() =>
+  z.object({
+    kind: z.literal("bodySync"),
+    ...epicLaneEpochFrameFields,
+    ...artifactSubscribeAddressFields,
+    state: artifactBodySyncStateSchema,
+    hasBinaryPayload: z.literal(false),
+  }),
+);
+
+export const artifactSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  // Read inside the thunk: a module-scope `.options` read builds `@1.0`'s
+  // union at import.
+  z.discriminatedUnion("kind", [
+    ...artifactSubscribeServerFrameSchemaV10.options,
+    artifactSubscribeBodySyncFrameSchemaV11,
+  ]),
+);
+export type ArtifactSubscribeServerFrameV11 = z.infer<
+  typeof artifactSubscribeServerFrameSchemaV11
+>;
+
+/**
+ * The minor at which `bodySync` exists. A producer gates on it per
+ * subscription; a consumer on a lower minor never sees the frame.
+ */
+export const ARTIFACT_SUBSCRIBE_BODY_SYNC_MINOR = 1;
+
+export const artifactSubscribeV11 = defineStreamRpcContract({
+  method: "artifact.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: artifactSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: artifactSubscribeServerFrameSchemaV11,
   clientFrameSchema: artifactSubscribeClientFrameSchemaV10,
 });

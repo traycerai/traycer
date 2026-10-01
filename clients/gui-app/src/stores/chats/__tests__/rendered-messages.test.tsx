@@ -17,7 +17,10 @@ import type {
   ChatQueueSteerMode,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { LiveAssistantMessage } from "@/stores/chats/chat-session-store";
+import type {
+  LiveAssistantMessage,
+  PendingUserMessage,
+} from "@/stores/chats/chat-session-store";
 import type { MessageSegment } from "@/stores/composer/chat-store";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import {
@@ -29,6 +32,7 @@ import type {
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
+import { messageIdForBlock } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import {
@@ -154,6 +158,7 @@ function steerRequestedQueueItem(
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: mode === "safe_point" ? "same_turn" : "next_turn",
     status: "steer_requested",
     targetTurnId: "turn-1",
@@ -444,6 +449,7 @@ const CANONICAL_RENDERED_MESSAGES_INPUT: RenderedMessagesInput = {
   events: [],
   rowContext: {},
   pendingUserMessages: [],
+  withdrawnMessageId: null,
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
@@ -485,6 +491,27 @@ function renderRenderedMessages(patch: Partial<RenderedMessagesInput>) {
 }
 
 describe("useRenderedMessages", () => {
+  it("keeps a message-delivery accepted row (providerHistory: excluded) as the canonical visible row, not hidden or duplicated", () => {
+    // `providerHistory: "excluded"` is a PROVIDER-context fact (this row is
+    // withheld from the model until the delivery reaches `started`) - it must
+    // never be read as a UI visibility flag, and the rendered row carries no
+    // trace of it at all (the phase footer and row actions are driven
+    // entirely by `messageDelivery`/`deliveryPhase`, computed elsewhere). The
+    // row is the one and only representation of this prompt in the
+    // transcript; there is no separate queue-derived bubble for it to
+    // collide with.
+    const accepted = {
+      ...userMessage("message-1"),
+      providerHistory: "excluded" as const,
+    };
+    const driver = renderRenderedMessages({ messages: [accepted] });
+
+    expect(driver.result.current).toHaveLength(1);
+    const row = driver.result.current.at(0);
+    expect(row?.persistentMessageId).toBe("message-1");
+    expect(row?.role).toBe("user");
+  });
+
   it("projects an explicitly anchored send failure into a stable inline error row", () => {
     const failure = {
       eventId: "queued-preparation-failure",
@@ -3774,6 +3801,174 @@ const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
   serviceTier: null,
 };
 
+function withdrawnPendingMessage(
+  clientActionId: string,
+  messageId: string,
+  timestamp: number,
+): PendingUserMessage {
+  return {
+    clientActionId,
+    messageId,
+    content: CONTENT,
+    attachments: [],
+    sender: { type: "user", userId: "owner-1" },
+    settings: SETTINGS,
+    accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
+    timestamp,
+    restore: { content: CONTENT, browserAnnotations: [] },
+    restoreWorktreeIntent: null,
+  };
+}
+
+describe("useRenderedMessages: withdrawn opening", () => {
+  it("hides a withdrawn message's PERSISTED row, leaving other persisted rows untouched", () => {
+    const messages = [userMessage("message-1"), userMessage("message-2")];
+    const control = renderRenderedMessages({ messages });
+    const withdrawn = renderRenderedMessages({
+      messages,
+      withdrawnMessageId: "message-1",
+    });
+    expect(control.result.current.map((message) => message.id)).toEqual([
+      "message-1",
+      "message-2",
+    ]);
+    expect(withdrawn.result.current.map((message) => message.id)).toEqual([
+      "message-2",
+    ]);
+  });
+
+  it("hides a withdrawn message's OPTIMISTIC (pending) row, leaving other pending rows untouched", () => {
+    const pendingUserMessages = [
+      withdrawnPendingMessage("action-1", "message-1", 1000),
+      withdrawnPendingMessage("action-2", "message-2", 2000),
+    ];
+    const control = renderRenderedMessages({ pendingUserMessages });
+    const withdrawn = renderRenderedMessages({
+      pendingUserMessages,
+      withdrawnMessageId: "message-1",
+    });
+    expect(control.result.current.map((message) => message.id)).toEqual([
+      "message-1",
+      "message-2",
+    ]);
+    expect(withdrawn.result.current.map((message) => message.id)).toEqual([
+      "message-2",
+    ]);
+  });
+
+  it("hides a withdrawn message's ACTIVE-TURN (nested steer) row, leaving the surrounding assistant parts untouched", () => {
+    // Mirrors "retains a hidden trailing retry boundary..." above: a steer
+    // block during a still-running turn nests a user row inside the
+    // activeTurn-sourced rendering, not the persisted one - this is the only
+    // way a "user" row lands in that bucket, so it is the one that proves the
+    // gate applies there too, not only to the ordinary persisted/pending rows.
+    const content = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+    const assistant = codexAssistantMessage("turn-withdrawn-steer", 2000);
+    assistant.blocks = [
+      plainTextBlock("answer-before-steer", 2001, "Answer before steer."),
+      {
+        type: "steer",
+        blockId: "steer:withdrawn",
+        status: "completed",
+        timestamp: 2002,
+        queueItemId: "queue-withdrawn",
+        messageId: "message-1",
+        mode: "safe_point",
+        sender: null,
+        content,
+      },
+    ];
+    const steered = {
+      ...userMessage("message-1"),
+      message: { kind: "user" as const, content, browserAnnotations: [] },
+      timestamp: 2002,
+    };
+    const baseInput = {
+      messages: [assistant, steered],
+      activeTurn: { ...RUNNING_ACTIVE_TURN, turnId: "turn-withdrawn-steer" },
+      runStatus: "running" as const,
+    };
+
+    const control = renderRenderedMessages(baseInput);
+    const withdrawn = renderRenderedMessages({
+      ...baseInput,
+      withdrawnMessageId: "message-1",
+    });
+
+    const controlIds = control.result.current.map((message) => message.id);
+    const withdrawnIds = withdrawn.result.current.map((message) => message.id);
+    expect(controlIds).toContain("message-1");
+    expect(withdrawnIds).not.toContain("message-1");
+    // Nothing else moved: the withdrawn gate removes exactly that one row and
+    // leaves the surrounding assistant parts in place, at the same ids.
+    expect(withdrawnIds).toEqual(controlIds.filter((id) => id !== "message-1"));
+  });
+
+  it("draws no record-less stopped boundary for a withdrawn message: the event that names it anchors nothing", () => {
+    // A legacy chat can carry a `turn.stopped` naming the opening from a stop
+    // in the old setup window; on upgrade the opening is withdrawn. Without
+    // the withdrawn id, the event synthesizes a stopped assistant row anchored
+    // to the (hidden) user row - an orphan boundary under an empty transcript.
+    const stopped: ChatEvent = {
+      eventId: "event:turn.stopped:turn-pre-setup:11000",
+      type: "turn.stopped",
+      timestamp: 11_000,
+      clientActionId: null,
+      actor: null,
+      message: "Stop requested by owner.",
+      turnId: "turn-pre-setup",
+      messageId: "message-1",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: { reason: "Stop requested by owner." },
+    };
+    const control = renderRenderedMessages({
+      messages: [userMessage("message-1")],
+      events: [stopped],
+    });
+    expect(control.result.current.map((message) => message.id)).toEqual([
+      "message-1",
+      "assistant:turn-pre-setup",
+    ]);
+    const withdrawn = renderRenderedMessages({
+      messages: [userMessage("message-1")],
+      events: [stopped],
+      withdrawnMessageId: "message-1",
+    });
+    expect(withdrawn.result.current).toEqual([]);
+  });
+
+  it("a withdrawn id naming no row in this chat changes nothing", () => {
+    const messages = [userMessage("message-1"), userMessage("message-2")];
+    const control = renderRenderedMessages({ messages });
+    const withdrawn = renderRenderedMessages({
+      messages,
+      withdrawnMessageId: "message-does-not-exist",
+    });
+    expect(withdrawn.result.current.map((message) => message.id)).toEqual(
+      control.result.current.map((message) => message.id),
+    );
+  });
+
+  it("a null view renders identically to passing no withdrawnMessageId at all", () => {
+    const messages = [userMessage("message-1"), userMessage("message-2")];
+    const withDefault = renderRenderedMessages({ messages });
+    const withExplicitNull = renderRenderedMessages({
+      messages,
+      withdrawnMessageId: null,
+    });
+    expect(
+      withExplicitNull.result.current.map((message) => message.id),
+    ).toEqual(withDefault.result.current.map((message) => message.id));
+  });
+});
+
 describe("useRenderedMessages fork link integration", () => {
   it("projects chat.forked events into fork-source link rows", () => {
     const { result } = renderRenderedMessages({
@@ -4240,6 +4435,30 @@ describe("useRenderedMessages setup card integration", () => {
     // The persisted row wins (real send metadata, statusLabel null), not the
     // pending echo (statusLabel "Pending").
     expect(m1Rows[0].statusLabel).toBeNull();
+  });
+
+  it("drops a pending user echo whose messageId is already queued", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m0")],
+      pendingUserMessages: [
+        {
+          clientActionId: "action-1",
+          messageId: "echo-msg",
+          content: CONTENT,
+          attachments: [],
+          sender: { type: "user", userId: "owner-1" },
+          settings: SETTINGS,
+          accountContext: { type: "PERSONAL" },
+          deliveryPolicy: null,
+          timestamp: 1010,
+          restore: { content: CONTENT, browserAnnotations: [] },
+          restoreWorktreeIntent: null,
+        },
+      ],
+      queuedPromptMessageIds: new Set(["echo-msg"]),
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m0"]);
   });
 
   it("suppresses the pre-turn Working indicator while setup gates", () => {
@@ -6609,5 +6828,493 @@ describe("assistant turn render cache invalidation", () => {
 
     const after = driver.result.current.find((row) => row.role === "assistant");
     expect(textOf(after)).toContain("corrected answer");
+  });
+});
+
+describe("useRenderedMessages: a subagent's own conversation nests under its card", () => {
+  type AssistantBlock = Extract<
+    Message,
+    { role: "assistant" }
+  >["blocks"][number];
+
+  function subagentBlock(
+    blockId: string,
+    spawnToolCallId: string | null,
+  ): AssistantBlock {
+    return {
+      type: "subagent",
+      agentType: null,
+      blockId,
+      name: "worker",
+      task: "Do the thing.",
+      progressUpdates: [],
+      result: null,
+      status: "completed",
+      timestamp: 2001,
+      startedAt: 2001,
+      spawnToolCallId,
+      stopped: false,
+      workflowMeta: null,
+    };
+  }
+
+  function childText(
+    blockId: string,
+    parentBlockId: string,
+    text: string,
+  ): AssistantBlock {
+    return { ...plainTextBlock(blockId, 2002, text), parentBlockId };
+  }
+
+  function childReasoning(
+    blockId: string,
+    parentBlockId: string,
+  ): AssistantBlock {
+    return {
+      type: "reasoning",
+      blockId,
+      status: "completed",
+      timestamp: 2003,
+      content: "thinking it over",
+      startedAt: null,
+      parentBlockId,
+    };
+  }
+
+  function childError(blockId: string, parentBlockId: string): AssistantBlock {
+    return {
+      type: "error",
+      blockId,
+      status: "completed",
+      timestamp: 2004,
+      parentBlockId,
+      message: "aborted",
+      recoverable: false,
+      code: null,
+      failure: null,
+    };
+  }
+
+  function toolBlock(
+    blockId: string,
+    toolName: string,
+    parentBlockId: string | null,
+    error: string | null,
+  ): AssistantBlock {
+    return {
+      type: "tool_call",
+      blockId,
+      toolName,
+      ...toolCallInputFields(toolName, { description: "run it" }),
+      error,
+      agentMessageSend: null,
+      managedCommand: null,
+      agentMessageReceipt: null,
+      progress: null,
+      backgroundOutput: null,
+      backgroundTask: false,
+      stopped: false,
+      status: "completed",
+      timestamp: 2005,
+      startedAt: 2005,
+      endedAt: 2006,
+      imageResults: [],
+      ...(parentBlockId === null ? {} : { parentBlockId }),
+    };
+  }
+
+  function edit(
+    blockId: string,
+    parentBlockId: string,
+    beforeHash: string,
+    afterHash: string,
+  ): AssistantBlock {
+    return editAtPath(blockId, parentBlockId, "/repo/src/a.ts", [
+      beforeHash,
+      afterHash,
+    ]);
+  }
+
+  function childSubagent(
+    blockId: string,
+    parentBlockId: string,
+  ): AssistantBlock {
+    return { ...subagentBlock(blockId, null), parentBlockId };
+  }
+
+  function editAtPath(
+    blockId: string,
+    parentBlockId: string,
+    filePath: string,
+    [beforeHash, afterHash]: readonly [string, string],
+  ): AssistantBlock {
+    return {
+      type: "file_change",
+      blockId,
+      filePath,
+      operation: "edit",
+      diffSource: "snapshot",
+      beforeHash: beforeHash.repeat(64),
+      afterHash: afterHash.repeat(64),
+      additions: 1,
+      deletions: 1,
+      reason: "snapshot",
+      status: "completed",
+      timestamp: 2007,
+      parentBlockId,
+    };
+  }
+
+  function segmentsFor(blocks: ReadonlyArray<AssistantBlock>) {
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [...blocks],
+    };
+    return renderRenderedMessages({ messages: [assistant] }).result.current;
+  }
+
+  function onlyCard(segments: ReadonlyArray<MessageSegment>): SubagentSegment {
+    const card = segments.find((segment) => segment.kind === "subagent");
+    if (card === undefined) {
+      throw new Error("expected a subagent card");
+    }
+    return card;
+  }
+
+  it("nests a Claude live record's text, reasoning and tool children in block order", () => {
+    const rows = segmentsFor([
+      subagentBlock("task-1", null),
+      childText("t1", "task-1", "first words"),
+      childReasoning("r1", "task-1"),
+      toolBlock("tool-1", "Read", "task-1", null),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    const card = onlyCard(segments);
+    expect(card.children.map((child) => child.id)).toEqual([
+      "t1",
+      "r1",
+      "tool-1",
+    ]);
+    expect(card.children.map((child) => child.kind)).toEqual([
+      "text",
+      "reasoning",
+      "tool",
+    ]);
+    expect(segments.map((segment) => segment.kind)).toEqual(["subagent"]);
+  });
+
+  it("nests a Codex import's parented text and reasoning under the thread-id card", () => {
+    const rows = segmentsFor([
+      subagentBlock("thread-abc", null),
+      childReasoning("r1", "thread-abc"),
+      childText("t1", "thread-abc", "codex answer"),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(onlyCard(segments).children.map((child) => child.kind)).toEqual([
+      "reasoning",
+      "text",
+    ]);
+    expect(
+      segments.some((s) => s.kind === "text" || s.kind === "reasoning"),
+    ).toBe(false);
+  });
+
+  it("nests an OpenCode import's parented text and error under the card", () => {
+    const rows = segmentsFor([
+      subagentBlock("child-session", null),
+      childText("t1", "child-session", "partial work"),
+      childError("e1", "child-session"),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(onlyCard(segments).children.map((child) => child.kind)).toEqual([
+      "text",
+      "error",
+    ]);
+    expect(segments.some((s) => s.kind === "text" || s.kind === "error")).toBe(
+      false,
+    );
+  });
+
+  it("re-casts a Skill tool that owns children as a subagent card with the tool's id", () => {
+    const rows = segmentsFor([
+      toolBlock("toolu_skill", "Skill", null, null),
+      childText("t1", "toolu_skill", "skill prose"),
+      toolBlock("tool-1", "Read", "toolu_skill", null),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(segments.map((segment) => segment.kind)).toEqual(["subagent"]);
+    const card = onlyCard(segments);
+    expect(card.id).toBe("toolu_skill");
+    expect(card.name).toBe("Skill");
+    expect(card.children.map((child) => child.id)).toEqual(["t1", "tool-1"]);
+  });
+
+  it("appends a failed Skill tool's error as the card's trailing error child", () => {
+    const rows = segmentsFor([
+      toolBlock("toolu_skill", "Skill", null, "boom"),
+      childText("t1", "toolu_skill", "skill prose"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    const last = card.children.at(-1);
+    expect(last?.kind).toBe("error");
+    expect(last?.id).toBe("toolu_skill:error");
+    if (last?.kind === "error") expect(last.message).toBe("boom");
+  });
+
+  it("serves the nested shape when only a text block's parentBlockId changes", () => {
+    const build = (textParent: string | null): Message => ({
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        subagentBlock("task-1", null),
+        textParent === null
+          ? plainTextBlock("t1", 2002, "same words")
+          : childText("t1", textParent, "same words"),
+      ],
+    });
+    const driver = renderRenderedMessages({ messages: [build(null)] });
+    expect(
+      (driver.result.current[0]?.segments ?? []).map((s) => s.kind),
+    ).toEqual(["subagent", "text"]);
+
+    driver.patch({ messages: [build("task-1")] });
+    const segments = driver.result.current[0]?.segments ?? [];
+    expect(segments.map((s) => s.kind)).toEqual(["subagent"]);
+    expect(onlyCard(segments).children.map((child) => child.id)).toEqual([
+      "t1",
+    ]);
+  });
+
+  it("still drops the Agent spawn row when the card has text children", () => {
+    const rows = segmentsFor([
+      toolBlock("toolu_1", "Agent", null, null),
+      subagentBlock("agent-1", "toolu_1"),
+      childText("t1", "agent-1", "prose"),
+    ]);
+    const segments = rows[0]?.segments ?? [];
+    expect(segments.some((s) => s.kind === "tool" && s.id === "toolu_1")).toBe(
+      false,
+    );
+    expect(onlyCard(segments).children.map((c) => c.id)).toEqual(["t1"]);
+  });
+
+  it("still includes a subagent child's file change in the completed turn's Changes group", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+    ]);
+    const group = (rows[0]?.segments ?? []).find(
+      (segment) => segment.kind === "file_change_group",
+    );
+    if (group === undefined) {
+      throw new Error("expected a file change group");
+    }
+    expect(group.files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+    ]);
+  });
+
+  it("still merges two same-path file changes inside a card into one row", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    const files = card.children.filter((child) => child.kind === "file_change");
+    expect(files).toHaveLength(1);
+    expect(files[0]?.filePath).toBe("/repo/src/a.ts");
+  });
+
+  function childShape(card: SubagentSegment): ReadonlyArray<string> {
+    return card.children.map((child) => `${child.kind}:${child.id}`);
+  }
+
+  it("keeps a subagent's prose between two same-path edits, so the later edit is not pulled above it", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      childText("t1", "agent-1", "now the second change"),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    expect(childShape(card)).toEqual([
+      "file_change:fc-1",
+      "text:t1",
+      "file_change:fc-2",
+    ]);
+    const files = card.children.filter((child) => child.kind === "file_change");
+    expect(files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+      "/repo/src/a.ts",
+    ]);
+  });
+
+  const boundaries: ReadonlyArray<{
+    name: string;
+    kind: string;
+    build: (blockId: string, parentBlockId: string) => AssistantBlock;
+  }> = [
+    { name: "a reasoning child", kind: "reasoning", build: childReasoning },
+    { name: "an error child", kind: "error", build: childError },
+    { name: "a nested subagent card", kind: "subagent", build: childSubagent },
+  ];
+
+  it.each(boundaries)(
+    "treats $name as a boundary that two same-path edits do not merge across",
+    ({ kind, build }) => {
+      const rows = segmentsFor([
+        subagentBlock("agent-1", null),
+        edit("fc-1", "agent-1", "a", "b"),
+        build("boundary-1", "agent-1"),
+        edit("fc-2", "agent-1", "b", "c"),
+      ]);
+      const card = onlyCard(rows[0]?.segments ?? []);
+      expect(childShape(card)).toEqual([
+        "file_change:fc-1",
+        `${kind}:boundary-1`,
+        "file_change:fc-2",
+      ]);
+    },
+  );
+
+  it("does not treat a tool row as a boundary: same-path edits around it merge where the first edit was", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      toolBlock("tool-1", "Read", "agent-1", null),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    expect(childShape(card)).toEqual(["file_change:fc-1+fc-2", "tool:tool-1"]);
+    const merged = card.children.at(0);
+    if (merged?.kind !== "file_change") {
+      throw new Error("expected the merged file row first");
+    }
+    expect(merged.filePath).toBe("/repo/src/a.ts");
+    expect(merged.beforeHash).toBe("a".repeat(64));
+    expect(merged.afterHash).toBe("c".repeat(64));
+  });
+
+  it("lists a path once in the completed turn's Changes group even when the card keeps its edits in separate runs", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      childText("t1", "agent-1", "now the second change"),
+      edit("fc-2", "agent-1", "b", "c"),
+    ]);
+    const group = (rows[0]?.segments ?? []).find(
+      (segment) => segment.kind === "file_change_group",
+    );
+    if (group === undefined) {
+      throw new Error("expected a file change group");
+    }
+    expect(group.files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+    ]);
+  });
+
+  it("keeps different files' runs apart and still merges same-path edits inside the second run", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      edit("fc-1", "agent-1", "a", "b"),
+      childText("t1", "agent-1", "on to the next file"),
+      editAtPath("fc-2", "agent-1", "/repo/src/b.ts", ["a", "b"]),
+      editAtPath("fc-3", "agent-1", "/repo/src/b.ts", ["b", "c"]),
+    ]);
+    const card = onlyCard(rows[0]?.segments ?? []);
+    expect(childShape(card)).toEqual([
+      "file_change:fc-1",
+      "text:t1",
+      "file_change:fc-2+fc-3",
+    ]);
+    const files = card.children.filter((child) => child.kind === "file_change");
+    expect(files.map((file) => file.filePath)).toEqual([
+      "/repo/src/a.ts",
+      "/repo/src/b.ts",
+    ]);
+  });
+
+  it("resolves a parented text child's block id to its row for jump-to-block", () => {
+    const rows = segmentsFor([
+      subagentBlock("agent-1", null),
+      childText("t1", "agent-1", "prose"),
+    ]);
+    expect(messageIdForBlock(rows, "t1")).toBe(rows[0]?.id);
+    expect(messageIdForBlock(rows, "t1")).not.toBeNull();
+  });
+
+  function steerBlock(blockId: string, timestamp: number): AssistantBlock {
+    return {
+      blockId,
+      status: "completed",
+      timestamp,
+      parentBlockId: null,
+      type: "steer",
+      queueItemId: `queue:${blockId}`,
+      messageId: `steered:${blockId}`,
+      content: CONTENT,
+      mode: "safe_point",
+      sender: null,
+    };
+  }
+
+  it("homes a parented child into the first slice's card and hides the slice it emptied, renumbering nothing", () => {
+    const build = (childParent: string | null): Message => ({
+      ...assistantMessage("turn-steer", 2000),
+      blocks: [
+        subagentBlock("task-1", null),
+        steerBlock("S1", 2010),
+        childParent === null
+          ? plainTextBlock("child", 2011, "child prose")
+          : childText("child", childParent, "child prose"),
+        steerBlock("S2", 2020),
+        plainTextBlock("final", 2021, "final answer"),
+      ],
+    });
+    const withParent = renderRenderedMessages({ messages: [build("task-1")] })
+      .result.current;
+    const without = renderRenderedMessages({ messages: [build(null)] }).result
+      .current;
+
+    // (a) the same rows under the same ids, less the one slice homing emptied:
+    // the plan is not renumbered, the emptied slice hides like a slice of
+    // hidden retries.
+    const withoutAssistants = without.filter((row) => row.role === "assistant");
+    expect(withoutAssistants).toHaveLength(3);
+    const emptiedId = withoutAssistants[1]?.id;
+    expect(withParent.map((row) => row.id)).toEqual(
+      without.map((row) => row.id).filter((id) => id !== emptiedId),
+    );
+    expect(withParent.map((row) => row.role)).toEqual(
+      without.filter((row) => row.id !== emptiedId).map((row) => row.role),
+    );
+
+    const assistants = withParent.filter((row) => row.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    // (b) the child prose is inside the FIRST assistant row's card only.
+    const card = onlyCard(assistants[0]?.segments ?? []);
+    expect(card.children.map((child) => child.id)).toEqual(["child"]);
+    for (const row of withParent) {
+      expect(
+        row.segments.some(
+          (segment) => segment.kind === "text" && segment.id === "child",
+        ),
+      ).toBe(false);
+    }
+    // (c) no bare row between the two steers: they are adjacent.
+    const steerIndices = withParent.flatMap((row, index) =>
+      row.role === "assistant" ? [] : [index],
+    );
+    expect(steerIndices).toHaveLength(2);
+    expect(steerIndices[1]).toBe((steerIndices[0] ?? -2) + 1);
+    // (d) the unparented final answer stays top-level in the last row.
+    const last = assistants.at(-1);
+    expect(last?.id).toBe(withoutAssistants[2]?.id);
+    expect(
+      (last?.segments ?? []).some(
+        (segment) =>
+          segment.kind === "text" && segment.markdown === "final answer",
+      ),
+    ).toBe(true);
   });
 });

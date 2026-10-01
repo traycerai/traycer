@@ -2,14 +2,10 @@ import { readTabStripLayout } from "@/stores/tabs/store";
 import { captureHeaderLocation } from "@/lib/tab-recovery/header-layout";
 import {
   recordClosedHeaderTab,
-  recordClosedCanvas,
-  recordClosedCanvasPane,
   pruneRecoveryEpics,
   pruneRecoveryTiles,
   discardRecoveryTab,
-  withoutTabRecovery,
 } from "@/lib/tab-recovery/history";
-import { restoreClosedCanvas } from "@/lib/tab-recovery/restore-canvas";
 // This file owns the store interface, the zustand store creation (header-tab
 // + canvas actions), and the persistence/desktop-bridge wiring. The
 // supporting layers live in sibling modules:
@@ -396,16 +392,6 @@ export interface EpicCanvasStore {
   openEpicTabInBackground: (epicId: string, name: string | undefined) => string;
   /** Coordinator-only restoration of an exact saved task view. */
   restoreTabForRecovery: (tab: EpicViewTab, canvas: EpicCanvasState) => void;
-  restoreCanvasForRecovery: (
-    tabId: string,
-    recovery: {
-      readonly before: EpicCanvasState;
-      readonly after: EpicCanvasState;
-      readonly instanceIds: readonly string[];
-      readonly paneIds?: readonly string[];
-      readonly focus: boolean;
-    },
-  ) => void;
   /**
    * Close the tab as a user-visible header action: remove it from
    * `openTabOrder`, update active/recent pointers, and keep `tabsById[tabId]`
@@ -499,8 +485,8 @@ export interface EpicCanvasStore {
    * addressing that exact instanceId resolves directly after the reopen.
    * Evicts the now-live entry from `closedTilePayloadsByTabId` - a later
    * close re-captures it - and restores its pending-create marker while the
-   * optimistic record is still projecting. Back/forward's preview-reopen path
-   * (`history-navigation.ts`) is the only caller.
+   * optimistic record is still projecting. Shared by back/forward navigation
+   * and notification jumps to closed tiles.
    */
   restoreClosedTilePreview: (
     tabId: string,
@@ -700,10 +686,11 @@ export interface EpicCanvasStore {
     targetPaneId: string,
   ) => string | null;
   closeCanvasTab: (tabId: string, paneId: string, tileTabId: string) => void;
-  closeConfirmedDeletedChatTiles: (
+  closeConfirmedDeletedAgentTiles: (
     epicId: string,
-    chatId: string,
+    agentId: string,
     hostId: string,
+    agentType: "chat" | "terminal-agent",
   ) => void;
   prepareCloseCanvasTabFocusTarget: (
     tabId: string,
@@ -755,6 +742,7 @@ export interface EpicCanvasStore {
     tabId: string,
     artifactId: string,
     name: string,
+    hostId: string | null,
   ) => void;
   /**
    * Refresh the persisted fallback `name` of every terminal tile bound to
@@ -1560,24 +1548,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               ? state.openTabOrder
               : [...state.openTabOrder, tab.tabId],
           }));
-        },
-        restoreCanvasForRecovery: (tabId, recovery) => {
-          // Rebuilding a collapsed group can remount surviving views. Capture
-          // their live reading positions before the structural change.
-          const current = canvasForExistingTab(get(), tabId);
-          if (current !== null)
-            flushChatTabViewportHandoff(
-              collectPanes(current.root).flatMap((pane) => pane.tabInstanceIds),
-            );
-          set((state) =>
-            updateTabCanvas(state, tabId, (canvas) =>
-              restoreClosedCanvas(canvas, recovery.before, recovery.after, {
-                instanceIds: recovery.instanceIds,
-                paneIds: recovery.paneIds,
-                focus: recovery.focus,
-              }),
-            ),
-          );
         },
         closeTab: (tabId) => {
           if (isTabCloseLocked({ kind: "epic", id: tabId })) return;
@@ -2690,18 +2660,17 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             });
           });
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-          recordClosedCanvas(
-            get().tabsById[tabId],
-            beforeCanvas,
-            get().canvasByTabId[tabId],
-            false,
-          );
         },
 
-        closeConfirmedDeletedChatTiles: (epicId, chatId, hostId) => {
+        closeConfirmedDeletedAgentTiles: (
+          epicId,
+          agentId,
+          hostId,
+          agentType,
+        ) => {
           // Snapshot every matching instance before closing any of them: a
           // close can dissolve its pane and rewrite the surrounding tree.
-          // The host is part of chat identity, so a same-id peer on another
+          // The host is part of agent identity, so a same-id peer on another
           // machine must remain open.
           const targets: Array<{
             readonly tabId: string;
@@ -2717,8 +2686,8 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               pane.tabInstanceIds.forEach((instanceId) => {
                 const tile = canvas.tilesByInstanceId[instanceId];
                 if (
-                  tile?.type === "chat" &&
-                  tile.id === chatId &&
+                  tile?.type === agentType &&
+                  tile.id === agentId &&
                   tile.hostId === hostId
                 ) {
                   targets.push({ tabId, paneId: pane.id, instanceId });
@@ -2730,15 +2699,30 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           pruneRecoveryTiles(
             (tile, ownerEpicId) =>
               ownerEpicId === epicId &&
-              tile.type === "chat" &&
-              tile.id === chatId &&
+              tile.type === agentType &&
+              tile.id === agentId &&
               tile.hostId === hostId,
           );
-          withoutTabRecovery(() =>
-            targets.forEach(({ tabId, paneId, instanceId }) => {
-              get().closeCanvasTab(tabId, paneId, instanceId);
-            }),
-          );
+          targets.forEach(({ tabId, paneId, instanceId }) => {
+            get().closeCanvasTab(tabId, paneId, instanceId);
+          });
+          // Closing captures Back/Forward payloads; a confirmed deletion
+          // retires both those entries and any older closed instances.
+          const afterClose = get();
+          for (const [tabId, tab] of Object.entries(afterClose.tabsById)) {
+            if (tab?.epicId !== epicId) continue;
+            for (const [instanceId, payload] of Object.entries(
+              afterClose.closedTilePayloadsByTabId[tabId] ?? {},
+            )) {
+              if (
+                payload?.node.type === agentType &&
+                payload.node.id === agentId &&
+                payload.node.hostId === hostId
+              ) {
+                afterClose.discardClosedTilePayload(tabId, instanceId);
+              }
+            }
+          }
         },
 
         prepareCloseCanvasTabFocusTarget: (tabId, paneId, tileTabId) => {
@@ -2775,12 +2759,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-          recordClosedCanvas(
-            get().tabsById[tabId],
-            beforeCanvas,
-            get().canvasByTabId[tabId],
-            true,
-          );
         },
 
         closeRightCanvasTabs: (tabId, paneId, tileTabId) => {
@@ -2801,12 +2779,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-          recordClosedCanvas(
-            get().tabsById[tabId],
-            beforeCanvas,
-            get().canvasByTabId[tabId],
-            true,
-          );
         },
 
         prepareCloseRightCanvasTabsFocusTarget: (tabId, paneId, tileTabId) => {
@@ -2842,12 +2814,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-          recordClosedCanvas(
-            get().tabsById[tabId],
-            beforeCanvas,
-            get().canvasByTabId[tabId],
-            true,
-          );
         },
 
         prepareCloseAllCanvasTabsFocusTarget: (tabId, paneId) => {
@@ -2880,12 +2846,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             }),
           );
           trackClosedCanvasTiles(beforeCanvas, get().canvasByTabId[tabId]);
-          recordClosedCanvasPane(
-            get().tabsById[tabId],
-            beforeCanvas,
-            get().canvasByTabId[tabId],
-            paneId,
-          );
         },
 
         prepareCloseCanvasPaneFocusTarget: (tabId, paneId) => {
@@ -2909,17 +2869,19 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           return null;
         },
 
-        renameArtifactInTab: (tabId, artifactId, name) => {
+        renameArtifactInTab: (tabId, artifactId, name, hostId) => {
           const trimmed = name.trim();
           if (trimmed.length === 0) return;
           set((state) => {
             const tab = state.tabsById[tabId];
             if (tab === undefined) return state;
             const canvasPatch = updateTabCanvas(state, tabId, (canvas) =>
-              renameArtifact(canvas, artifactId, trimmed),
+              renameArtifact(canvas, artifactId, trimmed, hostId),
             );
             const records = state.artifactTreeByEpicId[tab.epicId] ?? [];
-            const target = records.find((r) => r.id === artifactId);
+            const matches = (r: EpicNodeRecord) =>
+              r.id === artifactId && (hostId === null || r.hostId === hostId);
+            const target = records.find(matches);
             if (target === undefined || target.name === trimmed) {
               return canvasPatch;
             }
@@ -2928,7 +2890,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
               artifactTreeByEpicId: {
                 ...state.artifactTreeByEpicId,
                 [tab.epicId]: records.map((r) =>
-                  r.id === artifactId ? { ...r, name: trimmed } : r,
+                  matches(r) ? { ...r, name: trimmed } : r,
                 ),
               },
             };
@@ -3661,6 +3623,7 @@ export {
   makeSelectIsActivePane,
   makeSelectIsActiveTile,
   makeSelectTabActivation,
+  selectOpenChatIds,
   useActiveEpicArtifactId,
   useActiveEpicArtifactRef,
   useActiveEpicId,
@@ -3671,6 +3634,7 @@ export {
   useIsActiveEpicArtifact,
   useIsActivePane,
   useIsActiveTile,
+  useOpenChatIds,
   useOpenEpicTabs,
   useOpenTileContentIds,
   usePaneTabRefs,

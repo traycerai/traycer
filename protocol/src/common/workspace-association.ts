@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const workspaceDirectoriesSchema = {
-  primaryWorkspace: z.string(),
-  secondaryWorkspaces: z.array(z.string()).default([]),
+  primaryWorkspace: lazySchema(() => z.string()),
+  secondaryWorkspaces: lazySchema(() => z.array(z.string()).default([])),
 };
 
 /**
@@ -14,10 +15,12 @@ const workspaceDirectoriesSchema = {
  * persisted session anchor; doing so can launch a new turn in stale historical
  * directories.
  */
-export const providerWorkspaceSchema = z.object({
-  workspaceKind: z.literal("provider"),
-  ...workspaceDirectoriesSchema,
-});
+export const providerWorkspaceSchema = lazySchema(() =>
+  z.object({
+    workspaceKind: z.literal("provider"),
+    ...workspaceDirectoriesSchema,
+  }),
+);
 export type ProviderWorkspace = z.infer<typeof providerWorkspaceSchema>;
 
 /**
@@ -28,10 +31,12 @@ export type ProviderWorkspace = z.infer<typeof providerWorkspaceSchema>;
  * ProviderWorkspace. The discriminator intentionally prevents accidentally
  * passing this object to SDK launch paths.
  */
-export const sessionWorkspaceSnapshotSchema = z.object({
-  workspaceKind: z.literal("session-snapshot"),
-  ...workspaceDirectoriesSchema,
-});
+export const sessionWorkspaceSnapshotSchema = lazySchema(() =>
+  z.object({
+    workspaceKind: z.literal("session-snapshot"),
+    ...workspaceDirectoriesSchema,
+  }),
+);
 export type SessionWorkspaceSnapshot = z.infer<
   typeof sessionWorkspaceSnapshotSchema
 >;

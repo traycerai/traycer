@@ -253,8 +253,13 @@ function ThemeSlot({
           : APPEARANCE.definitions.darkTheme
       }
       labelStatus={active ? "Active" : undefined}
+      controlSpansLine
       control={
-        <div className="flex w-[min(40cqw,24rem)] min-w-0 items-center gap-1">
+        // A share of the panel beside the label; the whole line once the row
+        // has stacked, so the theme's name reads instead of being squeezed
+        // into the third of the row the label leaves. Both arms are scoped, so
+        // which width applies never depends on utility source order.
+        <div className="flex min-w-0 items-center gap-1 max-md:w-full md:w-[min(40cqw,24rem)]">
           <ThemePicker
             appearance={appearance}
             id={id}
@@ -327,9 +332,14 @@ function ThemePicker({
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md border border-border/70 bg-foreground/3 px-2.5 py-2 text-ui-sm outline-none transition-colors hover:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-ring"
         >
           <PaletteSwatch colors={colors} />
+          {/* One line, ellipsed - a name is user input and can be a single
+              unbroken word, which wrapping would split letter by letter. What
+              is ellipsed is still THERE: the whole name stays in the DOM, so
+              the `aria-describedby` above reads it out in full, and the list
+              this trigger opens shows every name on its own row. */}
           <span
             id={`${pickerId}-value`}
-            className="min-w-0 flex-1 break-words text-start"
+            className="min-w-0 flex-1 truncate text-start"
           >
             {name}
           </span>

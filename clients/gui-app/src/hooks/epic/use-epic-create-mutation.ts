@@ -14,7 +14,6 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
-  EpicCreateRefusal,
   ListTasksFacets,
   ListTasksResponse,
   ListTaskLight,
@@ -35,12 +34,24 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
-import { openLocalStoreRepair } from "@/stores/local-store/local-store-repair-store";
-import { toast } from "sonner";
+import {
+  createOutcomeIsDecidable,
+  pollEpicExistence,
+} from "@/lib/epics/epic-existence-poll";
+import { reportEpicCreateRefusal } from "@/lib/epics/report-epic-create-refusal";
+import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
+import {
+  currentDraftBlobOwnerId,
+  invalidateDraftBlobConfirmations,
+  putDraftBlobs,
+} from "@/lib/drafts/draft-blob-transport";
+import {
+  armEpicCreateSeedHoldTimer,
+  invalidateBindingListingsExceptHeld,
+} from "@/lib/worktree/pending-epic-create-seeds";
 import {
   Analytics,
   AnalyticsEvent,
@@ -108,6 +119,59 @@ export function useEpicCreateForClient(
       return variables;
     },
     requiredHostMethodVersion: () => createRequiresLocalFirstHost(),
+    // The epic this request is MINTING, which makes a replay of the frame the
+    // same create rather than a second one. Only stable because hash-only
+    // content keeps the params byte-identical across that replay - an inlined
+    // create re-encodes megabytes of base64 and would fingerprint differently -
+    // so the key and the by-hash submit are one change, not two.
+    //
+    // GUI ONLY, by construction: host-agent sessions advertise
+    // `capabilities: []` and the transport strips the key there, so the
+    // create-ambiguity fix does not reach the host-to-host path.
+    idempotencyKey: (variables) => variables.epic.id,
+    // The `missing-attachment-bytes` retry, and it lives HERE - inside the
+    // mutation function, below every refusal arm - for a reason the arms
+    // themselves make plain. Three of them fire on the first refusal they see:
+    // `onSuccess` below, `createLandingEpic`'s own `.then` (which tears down
+    // the binding seed) and `finalizeSubmission`'s `.then` (which settles the
+    // attempt). A retry one layer up would have destroyed the seed before
+    // succeeding, so only the FINAL outcome may reach them.
+    //
+    // One re-upload and one re-dispatch, and exactly one: `resolveResponse` is
+    // not re-entered for the response `redispatch` returns, so a second refusal
+    // is what the arms see. The re-dispatch is under the SAME key on purpose -
+    // the host discards this refusal from its idempotency cache, and without
+    // that discard the cached refusal would replay for the whole 10-minute TTL
+    // because the retry's params are byte-identical.
+    //
+    // NOT the `local-store-unavailable` path. That refusal's remedy is a
+    // person's (rebind the store) and its Repair button starts a NEW submit
+    // with a fresh `epicId`; this one's remedy is the client's own and reuses
+    // the id it already minted.
+    resolveResponse: async (response, variables, redispatch) => {
+      if (response.refusal?.kind !== "missing-attachment-bytes") {
+        return response;
+      }
+      const hostId = client?.getActiveHostId() ?? null;
+      if (client === null || hostId === null) return response;
+      const content = variables.chat?.initialMessage?.content ?? null;
+      if (content === null) return response;
+      // The hash-only nodes, which are exactly the ones the host was asked to
+      // resolve. `putDraftBlobs` directly rather than the submit path's
+      // confirm helper: the whole point is to re-upload bytes this renderer
+      // already believes are on the host, so the confirmed-blob memo must be
+      // bypassed, not consulted.
+      const hashes = hashOnlyImageHashes(content);
+      if (hashes.length === 0) return response;
+      // RETRACTED FIRST, which bypassing alone does not do. This refusal is the
+      // client's only evidence that the memo is wrong; leaving the entries
+      // standing means any hash whose re-upload fails here (no local bytes, a
+      // digest mismatch) still reads as confirmed to the NEXT message that
+      // carries it, which then skips the upload on a disproved ack.
+      invalidateDraftBlobConfirmations(hostId, hashes);
+      await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
+      return redispatch();
+    },
     mapDispatchError: asCreateWithoutCloudVerdictError,
     options: {
       onMutate: (variables) => {
@@ -144,6 +208,16 @@ export function useEpicCreateForClient(
         Analytics.getInstance().track(AnalyticsEvent.TaskCreated, {
           mode: taskCreationMode(variables.chat),
         });
+        // ARM THE BACKSTOP BEFORE THE `ctx.hostId === null` RETURN BELOW, and
+        // per PAIR rather than per epic. A no-op unless this exact create
+        // registered a marker entry, and it reads that entry's own captured
+        // host - so a create whose `onMutate` captured no host (a pinned client
+        // whose directory row resolved between `onMutate` and the pre-flight)
+        // cannot leave a HELD entry with no timer to ever release it.
+        armEpicCreateSeedHoldTimer(
+          variables.epic.id,
+          variables.chat?.chatId ?? null,
+        );
         if (ctx.hostId === null) return;
         // The new epic's workspace folders are seeded into the host's
         // warm-slot create context by `epic.create`, but the just-mounted
@@ -151,12 +225,14 @@ export function useEpicCreateForClient(
         // seed landed (and the chat flow has no follow-up worktree RPC to
         // refresh it, unlike the terminal-agent flow). Refetch now that the
         // epic exists so the workspace chip reflects the attached folders.
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            ctx.hostId,
-            "worktree.listBindingsForEpic",
-          ),
-        });
+        //
+        // Through the shared helper, which skips an epic a DEFERRED create is
+        // still holding on this host: on that path the host has no binding row
+        // to answer with until the queued drain's `git worktree add` lands, so
+        // this refetch would return `{ rows: [] }` and clobber the seed for the
+        // whole provisioning window. Every other epic's listing refetches here
+        // exactly as before.
+        invalidateBindingListingsExceptHeld(queryClient, ctx.hostId);
         // Ingest the freshly-created TaskLight (returned by the cloud-side
         // create step) into the cached cloud-tasks history so the new epic
         // shows up in the history list immediately. The cloud query is
@@ -166,52 +242,60 @@ export function useEpicCreateForClient(
         if (task === null || task === undefined) return;
         patchCreatedTaskIntoCloudTaskCaches(queryClient, ctx, task);
       },
-      onError: (error, variables) => {
+      onError: (error, variables, ctx) => {
         Analytics.getInstance().track(AnalyticsEvent.TaskCreationFailed, {
           source: "direct_ui",
           mode: taskCreationMode(variables.chat),
           blocker: analyticsBlockerFromError(error),
         });
-        toastFromHostError(error, "Couldn't create epic.");
-      },
-    },
-  });
-}
-
-/**
- * Surface a refused create, with the host's own words.
- *
- * `message` and `remedy` are rendered VERBATIM. That is the whole point of the
- * typed arm: before it, the host flattened both into a thrown `RPC_ERROR`
- * string with the epic id and no delimiter, so this side could recover neither
- * and showed "Couldn't create epic." - which reads as a network or account
- * problem and sends people chasing the wrong thing. The schema constrains both
- * to non-empty strings a host wrote for a person, so passing them through is
- * now the honest rendering rather than the lossy one.
- *
- * `hostId` is the client the create was DISPATCHED on, captured in `onMutate`.
- * It is the machine whose store refused, and on a pinned composer it is not the
- * window's effective host - repairing the latter would rebind a healthy store,
- * report success, and leave the refusing one untouched.
- *
- * No `hostId` means no action, not a guessed one. The remedy still renders, and
- * it is a sentence the user can act on at the machine itself; an affordance
- * pointed at an unknown host is the one outcome worse than no affordance.
- */
-function reportEpicCreateRefusal(
-  refusal: EpicCreateRefusal,
-  hostId: string | null,
-): void {
-  if (hostId === null) {
-    toast.error(refusal.message, { description: refusal.remedy });
-    return;
-  }
-  toast.error(refusal.message, {
-    description: refusal.remedy,
-    action: {
-      label: "Repair",
-      onClick: () => {
-        openLocalStoreRepair({ hostId, refusal });
+        // NO LONGER UNCONDITIONAL. "May or may not have gone through" is the
+        // right sentence only where the outcome is genuinely unknowable, and
+        // now that this create carries `idempotencyKey = epicId` a dropped
+        // RESPONSE leaves an epic the host can be asked about BY NAME. So the
+        // two decidable conditions look before they speak, and only those two:
+        // the ambiguous post-send drop, and the `keyReuseConflict` that says
+        // the host has already run something under this key. Every other error
+        // keeps today's immediate toast, because for it the ambiguity is real.
+        //
+        // FIRE AND FORGET, not awaited. TanStack awaits a mutation's lifecycle
+        // callbacks, so awaiting a 60s poll here would hold `isPending` - and
+        // with it the composer's `canSubmit` - for the whole budget.
+        //
+        // AND ONLY FOR A CHAT CREATE. For `chat: null` - the terminal-agent
+        // flow - a found epic does not mean the gesture succeeded: that flow
+        // chains `agent.tui.prepareLaunch` and `epic.createTuiAgent` after this
+        // call, and none of them ran. Its rejection arm drops the create marker
+        // and leaves the user on a tile with no agent, so the notice is still
+        // the honest thing to say and suppressing it would be silence over a
+        // half-finished launch.
+        if (
+          (variables.chat ?? null) === null ||
+          !createOutcomeIsDecidable(error)
+        ) {
+          toastFromHostError(error, "Couldn't create epic.");
+          return;
+        }
+        void pollEpicExistence({
+          client,
+          // The host the create was DISPATCHED on, captured in `onMutate`. A
+          // pinned composer's client and the window's effective host diverge,
+          // and polling the wrong one answers about the wrong machine.
+          hostId: ctx?.hostId ?? null,
+          epicId: variables.epic.id,
+        }).then(
+          (verdict) => {
+            // Silence ONLY on a positive find. `absent` and `unknown` are
+            // different facts warranting the same words: the first says the
+            // create did not land, the second says the poll could not tell -
+            // and a poll that could not tell leaves the outcome exactly as
+            // ambiguous as it was, which is what this notice describes.
+            if (verdict === "exists") return;
+            toastFromHostError(error, "Couldn't create epic.");
+          },
+          () => {
+            toastFromHostError(error, "Couldn't create epic.");
+          },
+        );
       },
     },
   });

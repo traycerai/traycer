@@ -1,5 +1,10 @@
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import { guiHarnessOptionSchema } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import {
+  guiHarnessOptionSchema,
+  type AgentReasoningEffortOption,
+  type GuiAgentModelOption,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
+import type { AutoJudgeSelection } from "@traycer/protocol/host/auto-mode/contracts";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -11,12 +16,20 @@ import {
   providerIdToGuiHarnessId,
 } from "@/lib/provider-ordering";
 import {
+  AUTO_MID_TURN_UNRESOLVED_LOCK,
   autoJudgeBillingFor,
   autoJudgeBillingForRun,
-  autoJudgeMetaLine,
-  autoJudgeSelfBillingWarning,
+  autoJudgeEffortLabel,
+  autoJudgeGetKnowsReasoningEffort,
+  autoJudgeSetStoresReasoningEffort,
+  autoJudgeTarget,
+  autoModeMidTurnLock,
   harnessHasNativeAutoJudge,
+  negotiatedLineReaches,
   providerRunsItsOwnJudge,
+  type AutoJudgeBilling,
+  type AutoJudgeTarget,
+  type AutoJudgeTargetInput,
 } from "@/lib/auto-mode/auto-judge-billing";
 
 const CLAUDE_HARNESS_ID = providerIdToGuiHarnessId("claude-code");
@@ -65,6 +78,7 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
  */
 function harnessRow(overrides: {
   readonly nativeAutoJudge: boolean;
+  readonly judgeDefaultModel?: string | null;
 }): GuiHarnessOption {
   return guiHarnessOptionSchema.parse({
     id: CLAUDE_HARNESS_ID,
@@ -74,6 +88,7 @@ function harnessRow(overrides: {
     modes: ["gui"],
     requiresApiKey: false,
     nativeAutoJudge: overrides.nativeAutoJudge,
+    judgeDefaultModel: overrides.judgeDefaultModel ?? null,
   });
 }
 
@@ -116,64 +131,6 @@ describe("autoJudgeBillingFor", () => {
   });
 });
 
-describe("autoJudgeSelfBillingWarning", () => {
-  it("returns null when the judge is Traycer's own - nothing of the user's is spent", () => {
-    expect(autoJudgeSelfBillingWarning({ kind: "traycer" })).toBeNull();
-  });
-
-  it("quotes Traycer's own Copilot premium-request call rate for the copilot harness", () => {
-    expect(
-      autoJudgeSelfBillingWarning({
-        kind: "provider",
-        harnessId: "copilot",
-        harnessLabel: "Copilot",
-      }),
-    ).toBe(
-      "Judge calls are Copilot premium requests, charged to your monthly allowance — an hour of Auto mode can use 60–350 of it.",
-    );
-  });
-
-  it("states the generic 'on top of your chat replies' sentence for any other provider harness", () => {
-    expect(
-      autoJudgeSelfBillingWarning({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      }),
-    ).toBe(
-      "Judge calls use your own Claude Code account, on top of your chat replies — a reviewed command can take more than one call.",
-    );
-  });
-});
-
-describe("autoJudgeMetaLine", () => {
-  it("names Traycer credits for the traycer kind", () => {
-    expect(autoJudgeMetaLine({ kind: "traycer" })).toBe(
-      "Uses your Traycer credits.",
-    );
-  });
-
-  it("names the provider's own account for the provider kind", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "provider",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      }),
-    ).toBe("Uses your Claude Code account.");
-  });
-
-  it("names the provider's own classifier, at no extra cost, for the provider-native kind", () => {
-    expect(
-      autoJudgeMetaLine({
-        kind: "provider-native",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
-      }),
-    ).toBe("Reviewed by Claude Code's own classifier — no extra cost.");
-  });
-});
-
 describe("providerRunsItsOwnJudge", () => {
   it("is true for a provider row whose stored autoJudge is 'provider'", () => {
     expect(
@@ -195,15 +152,8 @@ describe("providerRunsItsOwnJudge", () => {
     ).toBe(false);
   });
 
-  // The important one: a host old enough to predate `providers.list@9.1`
-  // omits the key entirely rather than defaulting it, and `providerAutoJudgeFor`'s
-  // `?? "traycer"` is what turns an ABSENT key into the same false this test
-  // asserts - not a coincidence, the one read seam that fallback lives behind.
   it("is false when the row carries no autoJudge key at all (a host predating providers.list@9.1)", () => {
     const row = providerState({});
-    // `autoJudge` is `.optional()` on the wire; asserting the key is really
-    // absent (not merely undefined-valued) is what makes this case distinct
-    // from the "traycer" case above rather than a restatement of it.
     expect("autoJudge" in row).toBe(false);
 
     expect(
@@ -247,11 +197,6 @@ describe("providerRunsItsOwnJudge", () => {
     ).toBe(false);
   });
 
-  // The defect this field exists to fix: `autoJudge` is a PREFERENCE that
-  // outlives the CAPABILITY it once delegated to (a host downgrade, or a
-  // provider that lost the feature), so the stored "provider" selection alone
-  // must not be enough - the catalog row has to say the classifier still
-  // exists.
   it("is false for a stored 'provider' selection when the catalog row is not capable (nativeAutoJudge: false)", () => {
     expect(
       providerRunsItsOwnJudge({
@@ -293,9 +238,6 @@ describe("providerRunsItsOwnJudge", () => {
   });
 });
 
-// Extracted from `providerRunsItsOwnJudge` because a second caller
-// (`useAutoJudgeBilling`'s `providerJudgeUnknown`) now needs the same
-// question for a different purpose - see the doc on the function.
 describe("harnessHasNativeAutoJudge", () => {
   it("is true for a matching row with nativeAutoJudge: true", () => {
     expect(
@@ -334,125 +276,252 @@ describe("harnessHasNativeAutoJudge", () => {
   });
 });
 
-describe("autoJudgeBillingForRun", () => {
-  it("resolves to provider-native for the RUN harness even when judgeHarnessId is 'traycer' - the defect this exists to fix", () => {
+describe("autoJudgeTarget", () => {
+  const BASE_INPUT: AutoJudgeTargetInput = {
+    selection: null,
+    effective: undefined,
+    blocked: undefined,
+    runHarnessId: null,
+    runModelSlug: "",
+    runJudgeDefaultModel: null,
+  };
+
+  it("is 'none' whatever blocked says, when effective is null", () => {
     expect(
-      autoJudgeBillingForRun({
-        judgeHarnessId: "traycer",
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: null,
+        blocked: { reason: "provider-disabled" },
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("is 'none' when effective is undefined but blocked names a reason", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: undefined,
+        blocked: { reason: "unsupported-harness" },
+      }),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("resolves the stored selection when effective is undefined (a pre-1.1 host) and a selection exists", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        selection: {
+          harnessId: "claude",
+          model: "sonnet",
+          profileId: null,
+          reasoningEffort: null,
+        },
+        effective: undefined,
+        blocked: undefined,
+      }),
+    ).toEqual({ kind: "judge", harnessId: "claude", modelSlug: "sonnet" });
+  });
+
+  it("is 'unknown' when effective is undefined and there is no stored selection", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        selection: null,
+        effective: undefined,
+        blocked: undefined,
+      }),
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("resolves selection/default sources directly from effective", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: {
+          harnessId: "traycer",
+          model: "sonnet-5",
+          source: "default",
+        },
+      }),
+    ).toEqual({ kind: "judge", harnessId: "traycer", modelSlug: "sonnet-5" });
+
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { harnessId: "claude", model: "opus", source: "selection" },
+      }),
+    ).toEqual({ kind: "judge", harnessId: "claude", modelSlug: "opus" });
+  });
+
+  it("under fallback, names the run harness's judgeDefaultModel when it has one", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
         runHarnessId: "claude",
-        isProviderNative: true,
-        blocked: null,
-        judgeRecordUnrunnable: false,
+        runModelSlug: "sonnet-in-composer",
+        runJudgeDefaultModel: "claude-judge-default",
       }),
     ).toEqual({
-      kind: "provider-native",
+      kind: "judge",
       harnessId: "claude",
-      harnessLabel: "Claude Code",
+      modelSlug: "claude-judge-default",
     });
   });
 
-  it("resolves to provider-native for the RUN harness even when judgeHarnessId names a different provider", () => {
+  it("under fallback, falls back to the composer's own model when the run harness names no judge default", () => {
     expect(
-      autoJudgeBillingForRun({
-        judgeHarnessId: "copilot",
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
         runHarnessId: "claude",
-        isProviderNative: true,
-        blocked: null,
-        judgeRecordUnrunnable: false,
+        runModelSlug: "sonnet-in-composer",
+        runJudgeDefaultModel: null,
       }),
     ).toEqual({
-      kind: "provider-native",
+      kind: "judge",
       harnessId: "claude",
-      harnessLabel: "Claude Code",
+      modelSlug: "sonnet-in-composer",
     });
   });
 
-  it("falls through to autoJudgeBillingFor(judgeHarnessId) when isProviderNative is false", () => {
+  // The wire accepts `judgeDefaultModel: ""`, and Settings' `judgeSwitchModel`
+  // reads it as "no default"; the composer must reach the same answer for the
+  // same row rather than naming a blank model.
+  it("under fallback, reads an empty judgeDefaultModel as no default and names the composer's model", () => {
     expect(
-      autoJudgeBillingForRun({
-        judgeHarnessId: "claude",
-        runHarnessId: "codex",
-        isProviderNative: false,
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        runHarnessId: "claude",
+        runModelSlug: "sonnet-in-composer",
+        runJudgeDefaultModel: "",
+      }),
+    ).toEqual({
+      kind: "judge",
+      harnessId: "claude",
+      modelSlug: "sonnet-in-composer",
+    });
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        runHarnessId: "claude",
+        runModelSlug: "",
+        runJudgeDefaultModel: "",
+      }),
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("under fallback, is 'unknown' when there is no run harness", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        runHarnessId: null,
+      }),
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("under fallback, is 'unknown' when there is neither a judge default model nor a composer model", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        runHarnessId: "claude",
+        runModelSlug: "",
+        runJudgeDefaultModel: null,
+      }),
+    ).toEqual({ kind: "unknown" });
+  });
+
+  // Finding: under Automatic's fallback, a conversation that itself runs on
+  // the `traycer` harness has NO fallback judge - the host's
+  // `autoJudgeCandidates` excludes a second Traycer candidate, so the person
+  // is asked. `autoJudgeTarget` must recognise `runHarnessId === "traycer"`
+  // under `source: "fallback"` and answer 'none' rather than naming a
+  // traycer judge for a traycer-hosted run.
+  it("is 'none' under Automatic's fallback when the run itself is on the traycer harness - no second Traycer candidate exists", () => {
+    expect(
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
         blocked: null,
-        judgeRecordUnrunnable: false,
+        runHarnessId: "traycer",
+        runModelSlug: "traycer:some-model",
+        runJudgeDefaultModel: null,
       }),
-    ).toEqual(autoJudgeBillingFor("claude"));
+    ).toEqual({ kind: "none" });
   });
-});
 
-describe("autoJudgeSelfBillingWarning (provider-native)", () => {
-  it("returns null for the provider-native kind - nothing extra is spent, the provider reviews for free", () => {
+  it("is 'none' under the same fallback even when the traycer harness's own catalog names a judgeDefaultModel", () => {
     expect(
-      autoJudgeSelfBillingWarning({
-        kind: "provider-native",
-        harnessId: "claude",
-        harnessLabel: "Claude Code",
+      autoJudgeTarget({
+        ...BASE_INPUT,
+        effective: { source: "fallback" },
+        blocked: null,
+        runHarnessId: "traycer",
+        runModelSlug: "traycer:some-model",
+        runJudgeDefaultModel: "traycer:judge",
       }),
-    ).toBeNull();
+    ).toEqual({ kind: "none" });
   });
-});
 
-describe("autoJudgeBillingForRun (blocked)", () => {
-  const BLOCKED_REASONS = [
-    "provider-disabled",
-    "no-default",
-    "unsupported-harness",
-  ] as const;
-
-  // A REAL, non-traycer `judgeHarnessId` on every case - the defect this
-  // guards against was a stored provider selection getting billed to that
-  // provider's account even though the host had already said it cannot run
-  // that judge. With `judgeHarnessId: "traycer"` the fall-through case and
-  // the blocked case would look identical, so the choice of fixture matters.
-  it.each(BLOCKED_REASONS)(
-    "resolves to blocked for reason '%s' - a stored provider judge must not be billed once the host reports it cannot run",
-    (reason) => {
-      expect(
-        autoJudgeBillingForRun({
-          judgeHarnessId: "claude",
-          runHarnessId: "codex",
-          isProviderNative: false,
-          blocked: { reason },
-          judgeRecordUnrunnable: false,
-        }),
-      ).toEqual({ kind: "blocked" });
-    },
-  );
-
-  // Wire-compat: an older host that predates the `blocked` field omits it
-  // rather than sending `null`, and `autoJudgeBillingForRun` must treat the
-  // two identically so an old host's disclosure doesn't regress to "blocked"
-  // by default.
-  it("treats blocked: undefined exactly like blocked: null", () => {
-    const input = {
-      judgeHarnessId: "claude",
-      runHarnessId: "codex",
+  it("composes to 'blocked' billing for a traycer-hosted run under fallback", () => {
+    const target = autoJudgeTarget({
+      ...BASE_INPUT,
+      effective: { source: "fallback" },
+      blocked: null,
+      runHarnessId: "traycer",
+      runModelSlug: "traycer:some-model",
+      runJudgeDefaultModel: null,
+    });
+    const billing = autoJudgeBillingForRun({
+      runHarnessId: "traycer",
       isProviderNative: false,
-      judgeRecordUnrunnable: false,
-    };
-    const withNull = autoJudgeBillingForRun({ ...input, blocked: null });
-    const withUndefined = autoJudgeBillingForRun({
-      ...input,
-      blocked: undefined,
+      target,
+      judgeModelLabel: null,
+      judgeEffortLabel: null,
       judgeRecordUnrunnable: false,
     });
-
-    expect(withUndefined).toEqual(withNull);
-    expect(withUndefined).toEqual(autoJudgeBillingFor("claude"));
+    expect(billing).toEqual({ kind: "blocked" });
   });
 
-  // Precedence: provider-native wins over a blocker on Traycer's judge. That
-  // provider's own classifier decides inside the agent turn regardless of
-  // what Traycer's judge can or can't run, so a blocker here describes a call
-  // that was never going to happen - reporting "blocked" would tell the user
-  // nothing reviews their commands when the provider itself does, for free.
-  it("resolves to provider-native, not blocked, when the run is provider-native and the host also reports a blocker", () => {
+  // Provider-native precedence is unaffected by the fix above: a run whose
+  // OWN provider reviews its own commands never consults the traycer-hosted
+  // fallback question at all. Probably already green.
+  it("keeps provider-native precedence for a run on the file's own CLAUDE_HARNESS_ID constant, whatever the target names", () => {
+    const billing = autoJudgeBillingForRun({
+      runHarnessId: CLAUDE_HARNESS_ID,
+      isProviderNative: true,
+      target: { kind: "none" },
+      judgeModelLabel: null,
+      judgeEffortLabel: null,
+      judgeRecordUnrunnable: false,
+    });
+    expect(billing).toEqual({
+      kind: "provider-native",
+      harnessId: CLAUDE_HARNESS_ID,
+      harnessLabel: "Claude Code",
+    });
+  });
+});
+
+describe("autoJudgeBillingForRun", () => {
+  const JUDGE_TARGET: AutoJudgeTarget = {
+    kind: "judge",
+    harnessId: "claude",
+    modelSlug: "sonnet",
+  };
+
+  it("resolves to provider-native for the RUN harness whatever the target names", () => {
     expect(
       autoJudgeBillingForRun({
-        judgeHarnessId: "traycer",
         runHarnessId: "claude",
         isProviderNative: true,
-        blocked: { reason: "no-default" },
+        target: { kind: "judge", harnessId: "traycer", modelSlug: "sonnet-5" },
+        judgeModelLabel: null,
+        judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
       }),
     ).toEqual({
@@ -461,37 +530,58 @@ describe("autoJudgeBillingForRun (blocked)", () => {
       harnessLabel: "Claude Code",
     });
   });
-});
 
-// FIX 3 (P2): the client-side sibling of the host's `blocked` reason - a
-// stored judge whose explicit `profileId` its provider no longer offers,
-// which the host cannot report at all (`AutoJudgeBlocked.reason` has no
-// missing-profile member).
-describe("autoJudgeBillingForRun (judgeRecordUnrunnable)", () => {
-  it("resolves to blocked when the stored judge's profile is unavailable, even with no host-reported blocker", () => {
+  it("resolves to blocked when the target is 'none', whatever else is true", () => {
     expect(
       autoJudgeBillingForRun({
-        judgeHarnessId: "claude",
         runHarnessId: "codex",
         isProviderNative: false,
-        blocked: null,
+        target: { kind: "none" },
+        judgeModelLabel: null,
+        judgeEffortLabel: null,
+        judgeRecordUnrunnable: false,
+      }),
+    ).toEqual({ kind: "blocked" });
+  });
+
+  it("provider-native takes precedence over a 'none' target", () => {
+    expect(
+      autoJudgeBillingForRun({
+        runHarnessId: "claude",
+        isProviderNative: true,
+        target: { kind: "none" },
+        judgeModelLabel: null,
+        judgeEffortLabel: null,
+        judgeRecordUnrunnable: false,
+      }),
+    ).toEqual({
+      kind: "provider-native",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+    });
+  });
+
+  it("resolves to blocked when judgeRecordUnrunnable is true, even for an otherwise-named target", () => {
+    expect(
+      autoJudgeBillingForRun({
+        runHarnessId: "codex",
+        isProviderNative: false,
+        target: JUDGE_TARGET,
+        judgeModelLabel: "Sonnet",
+        judgeEffortLabel: null,
         judgeRecordUnrunnable: true,
       }),
     ).toEqual({ kind: "blocked" });
   });
 
-  // Precedence: provider-native wins over judgeRecordUnrunnable for the
-  // SAME reason it wins over the host's own `blocked` field just above - a
-  // provider running its own classifier never consults Traycer's stored
-  // judge record, so a vanished profile on that record describes a call that
-  // was never going to happen either way.
-  it("resolves to provider-native, not blocked, when the run is provider-native and the stored judge's profile is also unavailable", () => {
+  it("provider-native takes precedence over judgeRecordUnrunnable", () => {
     expect(
       autoJudgeBillingForRun({
-        judgeHarnessId: "claude",
         runHarnessId: "claude",
         isProviderNative: true,
-        blocked: null,
+        target: JUDGE_TARGET,
+        judgeModelLabel: "Sonnet",
+        judgeEffortLabel: null,
         judgeRecordUnrunnable: true,
       }),
     ).toEqual({
@@ -501,27 +591,456 @@ describe("autoJudgeBillingForRun (judgeRecordUnrunnable)", () => {
     });
   });
 
-  it("falls through to autoJudgeBillingFor(judgeHarnessId) when judgeRecordUnrunnable is false", () => {
+  it("returns null for an unknown target", () => {
     expect(
       autoJudgeBillingForRun({
-        judgeHarnessId: "claude",
         runHarnessId: "codex",
         isProviderNative: false,
-        blocked: null,
+        target: { kind: "unknown" },
+        judgeModelLabel: null,
+        judgeEffortLabel: null,
         judgeRecordUnrunnable: false,
       }),
-    ).toEqual(autoJudgeBillingFor("claude"));
+    ).toBeNull();
+  });
+
+  it("resolves to traycer with the model label, when the target's harness bills to traycer", () => {
+    expect(
+      autoJudgeBillingForRun({
+        runHarnessId: "codex",
+        isProviderNative: false,
+        target: { kind: "judge", harnessId: "traycer", modelSlug: "sonnet-5" },
+        judgeModelLabel: "Sonnet 5",
+        judgeEffortLabel: null,
+        judgeRecordUnrunnable: false,
+      }),
+    ).toEqual({ kind: "traycer", modelLabel: "Sonnet 5", effortLabel: null });
+  });
+
+  it("resolves to provider with the model label, when the target's harness bills to a provider account", () => {
+    expect(
+      autoJudgeBillingForRun({
+        runHarnessId: "codex",
+        isProviderNative: false,
+        target: JUDGE_TARGET,
+        judgeModelLabel: "Sonnet",
+        judgeEffortLabel: null,
+        judgeRecordUnrunnable: false,
+      }),
+    ).toEqual({
+      kind: "provider",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+      modelLabel: "Sonnet",
+      effortLabel: null,
+    });
+  });
+
+  it("falls back to the raw model slug for modelLabel when the catalog has no row for it", () => {
+    expect(
+      autoJudgeBillingForRun({
+        runHarnessId: "codex",
+        isProviderNative: false,
+        target: JUDGE_TARGET,
+        judgeModelLabel: null,
+        judgeEffortLabel: null,
+        judgeRecordUnrunnable: false,
+      }),
+    ).toEqual({
+      kind: "provider",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+      modelLabel: "sonnet",
+      effortLabel: null,
+    });
+  });
+
+  it("resolves to traycer with the model and effort labels, when the target's harness bills to traycer and an effort is named", () => {
+    expect(
+      autoJudgeBillingForRun({
+        runHarnessId: "codex",
+        isProviderNative: false,
+        target: { kind: "judge", harnessId: "traycer", modelSlug: "sonnet-5" },
+        judgeModelLabel: "Sonnet 5",
+        judgeEffortLabel: "Low",
+        judgeRecordUnrunnable: false,
+      }),
+    ).toEqual({ kind: "traycer", modelLabel: "Sonnet 5", effortLabel: "Low" });
+  });
+
+  it("resolves to provider with the model and effort labels, when the target's harness bills to a provider account and an effort is named", () => {
+    expect(
+      autoJudgeBillingForRun({
+        runHarnessId: "codex",
+        isProviderNative: false,
+        target: JUDGE_TARGET,
+        judgeModelLabel: "Sonnet",
+        judgeEffortLabel: "Low",
+        judgeRecordUnrunnable: false,
+      }),
+    ).toEqual({
+      kind: "provider",
+      harnessId: "claude",
+      harnessLabel: "Claude Code",
+      modelLabel: "Sonnet",
+      effortLabel: "Low",
+    });
   });
 });
 
-describe("autoJudgeMetaLine / autoJudgeSelfBillingWarning (blocked)", () => {
-  it("autoJudgeMetaLine tells the user no judge will run for the blocked kind", () => {
-    expect(autoJudgeMetaLine({ kind: "blocked" })).toBe(
-      "No judge can run on this machine, so Auto mode will ask you.",
+describe("autoModeMidTurnLock", () => {
+  const PROVIDER_NATIVE_BILLING: AutoJudgeBilling = {
+    kind: "provider-native",
+    harnessId: "claude",
+    harnessLabel: "Claude Code",
+  };
+
+  it("locks with the exact sentence when a turn is active, the current mode isn't auto, and billing is provider-native", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: PROVIDER_NATIVE_BILLING,
+      }),
+    ).toBe(
+      "Claude Code's built-in classifier starts with your next turn. To switch now, pick Traycer's judge in Providers ▸ Claude Code ▸ Permissions.",
     );
   });
 
-  it("autoJudgeSelfBillingWarning returns null for the blocked kind - nothing is spent when nothing runs", () => {
-    expect(autoJudgeSelfBillingWarning({ kind: "blocked" })).toBeNull();
+  it("is null when no turn is active, even for provider-native billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: false,
+        currentModeIsAuto: false,
+        judgeBilling: PROVIDER_NATIVE_BILLING,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the current mode is already auto, even for provider-native billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: true,
+        judgeBilling: PROVIDER_NATIVE_BILLING,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for traycer billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: {
+          kind: "traycer",
+          modelLabel: "Sonnet 5",
+          effortLabel: null,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for provider billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: {
+          kind: "provider",
+          harnessId: "claude",
+          harnessLabel: "Claude Code",
+          modelLabel: "Sonnet",
+          effortLabel: null,
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for blocked billing", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: { kind: "blocked" },
+      }),
+    ).toBeNull();
+  });
+
+  it("locks with the unresolved sentence when a turn is active, the current mode isn't auto, and billing has not settled", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: false,
+        judgeBilling: null,
+      }),
+    ).toBe(AUTO_MID_TURN_UNRESOLVED_LOCK);
+  });
+
+  it("is null for unsettled billing when no turn is active", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: false,
+        currentModeIsAuto: false,
+        judgeBilling: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for unsettled billing when the current mode is already auto", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: true,
+        judgeBilling: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null for a null judgeBilling when the current mode is already auto", () => {
+    expect(
+      autoModeMidTurnLock({
+        turnActive: true,
+        currentModeIsAuto: true,
+        judgeBilling: null,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("autoJudgeGetKnowsReasoningEffort", () => {
+  it("is false for null - no handshake yet", () => {
+    expect(autoJudgeGetKnowsReasoningEffort(null)).toBe(false);
+  });
+
+  it("is false for {major: 1, minor: 2} - predates the 1.3 line (1.2 is the last-pick line, which runs the model's own default)", () => {
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 1 })).toBe(
+      false,
+    );
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 2 })).toBe(
+      false,
+    );
+  });
+
+  it("is true for exactly {major: 1, minor: 3}", () => {
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 3 })).toBe(true);
+  });
+
+  it("is true for {major: 1, minor: 4} - a later 1.x minor", () => {
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 1, minor: 4 })).toBe(true);
+  });
+
+  it("is false for {major: 2, minor: 0} - a different major line", () => {
+    expect(autoJudgeGetKnowsReasoningEffort({ major: 2, minor: 0 })).toBe(
+      false,
+    );
+  });
+});
+
+// The effort FOOTER's gate, on the `set` line, through the same comparison as
+// the label gate above (`negotiatedLineReaches`).
+describe("autoJudgeSetStoresReasoningEffort", () => {
+  it("is false for null - no handshake yet", () => {
+    expect(autoJudgeSetStoresReasoningEffort(null)).toBe(false);
+  });
+
+  it("is false for {major: 1, minor: 1} and {major: 1, minor: 2} - the request upgrade resets the effort", () => {
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 1 })).toBe(
+      false,
+    );
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 2 })).toBe(
+      false,
+    );
+  });
+
+  it("is true for {major: 1, minor: 3} and later 1.x minors", () => {
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 3 })).toBe(
+      true,
+    );
+    expect(autoJudgeSetStoresReasoningEffort({ major: 1, minor: 4 })).toBe(
+      true,
+    );
+  });
+
+  it("is false for {major: 2, minor: 0} - a different major line", () => {
+    expect(autoJudgeSetStoresReasoningEffort({ major: 2, minor: 0 })).toBe(
+      false,
+    );
+  });
+});
+
+describe("negotiatedLineReaches", () => {
+  const LINE = { major: 3, minor: 4 } as const;
+
+  it("reaches the line at its own minor and past it, within its major", () => {
+    expect(negotiatedLineReaches({ major: 3, minor: 4 }, LINE)).toBe(true);
+    expect(negotiatedLineReaches({ major: 3, minor: 9 }, LINE)).toBe(true);
+  });
+
+  it("does not reach it from an earlier minor, another major, or no handshake", () => {
+    expect(negotiatedLineReaches({ major: 3, minor: 3 }, LINE)).toBe(false);
+    expect(negotiatedLineReaches({ major: 4, minor: 4 }, LINE)).toBe(false);
+    expect(negotiatedLineReaches({ major: 2, minor: 9 }, LINE)).toBe(false);
+    expect(negotiatedLineReaches(null, LINE)).toBe(false);
+  });
+});
+
+describe("autoJudgeEffortLabel", () => {
+  function reasoningEffort(
+    id: string,
+    label: string | null,
+  ): AgentReasoningEffortOption {
+    return { id, label: label ?? id, description: null };
+  }
+
+  /** Minimal GuiAgentModelOption fixture - only the fields this function
+   * reads matter (slug, harnessId, supportedReasoningEfforts). */
+  function judgeModel(
+    slug: string,
+    harnessId: GuiAgentModelOption["harnessId"],
+    supportedReasoningEfforts: ReadonlyArray<AgentReasoningEffortOption>,
+  ): GuiAgentModelOption {
+    return {
+      harnessId,
+      slug,
+      label: slug,
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [...supportedReasoningEfforts],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      metadata: {},
+    };
+  }
+
+  const JUDGE_TARGET_EFFORT: AutoJudgeTarget = {
+    kind: "judge",
+    harnessId: "claude",
+    modelSlug: "claude-sonnet",
+  };
+  const MODELS_WITH_EFFORTS: ReadonlyArray<GuiAgentModelOption> = [
+    judgeModel("claude-sonnet", "claude", [
+      reasoningEffort("high", null),
+      reasoningEffort("low", null),
+    ]),
+  ];
+
+  it("is null when the target names no judge (kind 'unknown')", () => {
+    expect(
+      autoJudgeEffortLabel({
+        target: { kind: "unknown" },
+        selection: null,
+        hostKnowsEffort: true,
+        models: MODELS_WITH_EFFORTS,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the target names no judge (kind 'none')", () => {
+    expect(
+      autoJudgeEffortLabel({
+        target: { kind: "none" },
+        selection: null,
+        hostKnowsEffort: true,
+        models: MODELS_WITH_EFFORTS,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the host predates judge efforts (hostKnowsEffort: false)", () => {
+    expect(
+      autoJudgeEffortLabel({
+        target: JUDGE_TARGET_EFFORT,
+        selection: null,
+        hostKnowsEffort: false,
+        models: MODELS_WITH_EFFORTS,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the model catalog has not answered (models: undefined)", () => {
+    expect(
+      autoJudgeEffortLabel({
+        target: JUDGE_TARGET_EFFORT,
+        selection: null,
+        hostKnowsEffort: true,
+        models: undefined,
+      }),
+    ).toBeNull();
+  });
+
+  it("is null when the target's model advertises no reasoning efforts", () => {
+    expect(
+      autoJudgeEffortLabel({
+        target: JUDGE_TARGET_EFFORT,
+        selection: null,
+        hostKnowsEffort: true,
+        models: [judgeModel("claude-sonnet", "claude", [])],
+      }),
+    ).toBeNull();
+  });
+
+  it("names the lowest advertised effort when there is no stored selection", () => {
+    expect(
+      autoJudgeEffortLabel({
+        target: JUDGE_TARGET_EFFORT,
+        selection: null,
+        hostKnowsEffort: true,
+        models: MODELS_WITH_EFFORTS,
+      }),
+    ).toBe("low");
+  });
+
+  it("names the stored selection's effort when the selection names the same harness and model as the target", () => {
+    const selection: AutoJudgeSelection = {
+      harnessId: "claude",
+      model: "claude-sonnet",
+      profileId: null,
+      reasoningEffort: "high",
+    };
+    expect(
+      autoJudgeEffortLabel({
+        target: JUDGE_TARGET_EFFORT,
+        selection,
+        hostKnowsEffort: true,
+        models: MODELS_WITH_EFFORTS,
+      }),
+    ).toBe("high");
+  });
+
+  it("falls back to the lowest advertised effort when the stored selection names an effort the model no longer advertises", () => {
+    const selection: AutoJudgeSelection = {
+      harnessId: "claude",
+      model: "claude-sonnet",
+      profileId: null,
+      reasoningEffort: "xhigh",
+    };
+    expect(
+      autoJudgeEffortLabel({
+        target: JUDGE_TARGET_EFFORT,
+        selection,
+        hostKnowsEffort: true,
+        models: MODELS_WITH_EFFORTS,
+      }),
+    ).toBe("low");
+  });
+
+  it("falls back to the lowest advertised effort when the stored selection names a different harness/model than the target (e.g. Automatic's fallback)", () => {
+    const selection: AutoJudgeSelection = {
+      harnessId: "codex",
+      model: "gpt-5",
+      profileId: null,
+      reasoningEffort: "high",
+    };
+    expect(
+      autoJudgeEffortLabel({
+        target: JUDGE_TARGET_EFFORT,
+        selection,
+        hostKnowsEffort: true,
+        models: MODELS_WITH_EFFORTS,
+      }),
+    ).toBe("low");
   });
 });

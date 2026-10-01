@@ -39,6 +39,7 @@ const DISABLED_CAPABILITIES: TileChromeCapabilities = {
   back: false,
   forward: false,
   reload: false,
+  stop: false,
   zoom: false,
   devtools: false,
   find: false,
@@ -77,6 +78,7 @@ function makeController(
     onBack: () => undefined,
     onForward: () => undefined,
     onReload: () => undefined,
+    onStop: () => undefined,
     onZoomOut: () => undefined,
     onZoomIn: () => undefined,
     onResetZoom: () => undefined,
@@ -460,11 +462,13 @@ describe("<BrowserTileToolbar /> address first-focus", () => {
 describe("<BrowserTileToolbar /> reload loading", () => {
   afterEach(cleanup);
 
-  it("moves the spinner into Reload while loading and restores it when idle", () => {
+  it("turns Reload into Stop while loading and back again when idle", () => {
     const onReload = vi.fn();
+    const onStop = vi.fn();
     const controller: TileController = {
       ...makeController(PRIMARY_TILE_CHROME_CAPABILITIES, ANNOTATION),
       onReload,
+      onStop,
     };
     const { rerender } = render(
       <TooltipProvider>
@@ -476,11 +480,11 @@ describe("<BrowserTileToolbar /> reload loading", () => {
       </TooltipProvider>,
     );
 
-    const reload = (): HTMLElement =>
-      screen.getByRole("button", { name: "Reload" });
-
-    expect(reload()).toHaveProperty("disabled", false);
-    expect(reload().getAttribute("aria-busy")).not.toBe("true");
+    expect(screen.getByRole("button", { name: "Reload" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     expect(screen.queryByTestId("browser-reload-loading")).toBeNull();
 
     rerender(
@@ -493,13 +497,15 @@ describe("<BrowserTileToolbar /> reload loading", () => {
       </TooltipProvider>,
     );
 
-    expect(reload()).toHaveProperty("disabled", false);
-    expect(reload().getAttribute("aria-busy")).toBe("true");
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
     const spinner = screen.getByTestId("browser-reload-loading");
-    expect(reload().contains(spinner)).toBe(true);
+    expect(stop.contains(spinner)).toBe(false);
+    expect(screen.getByRole("status", { name: "Page loading" })).toBeTruthy();
 
-    fireEvent.click(reload());
-    expect(onReload).toHaveBeenCalledOnce();
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onReload).not.toHaveBeenCalled();
 
     rerender(
       <TooltipProvider>
@@ -511,8 +517,40 @@ describe("<BrowserTileToolbar /> reload loading", () => {
       </TooltipProvider>,
     );
 
-    expect(reload()).toHaveProperty("disabled", false);
-    expect(reload().getAttribute("aria-busy")).not.toBe("true");
+    expect(screen.getByRole("button", { name: "Reload" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     expect(screen.queryByTestId("browser-reload-loading")).toBeNull();
+  });
+
+  it("keeps the spinner inside Reload while loading when the runtime cannot stop", () => {
+    const onReload = vi.fn();
+    const controller: TileController = {
+      ...makeController(
+        { ...PRIMARY_TILE_CHROME_CAPABILITIES, stop: false },
+        ANNOTATION,
+      ),
+      onReload,
+    };
+    render(
+      <TooltipProvider>
+        <BrowserTileToolbar
+          controller={controller}
+          pictureInPicture={null}
+          loading
+        />
+      </TooltipProvider>,
+    );
+
+    const reload = screen.getByRole("button", { name: "Reload" });
+    expect(reload.getAttribute("aria-busy")).toBe("true");
+    const spinner = screen.getByTestId("browser-reload-loading");
+    expect(reload.contains(spinner)).toBe(true);
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+
+    fireEvent.click(reload);
+    expect(onReload).toHaveBeenCalledOnce();
   });
 });

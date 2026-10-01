@@ -82,11 +82,31 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     clientForHostIdMock.current(hostId),
 }));
 
+// `LocalHostRestartFlow`'s `RestartHostConfirmDialog` renders
+// `HostRestartSessions` whenever `open && hostId !== null` - which is the
+// INITIAL confirm, not only a busy-verdict follow-up - so every Force
+// restart… test here that resolves a local host id mounts it the moment the
+// dialog opens. It calls `useFocusModel()`, which reaches
+// `useEpicGetTaskContexts()` -> `useHostClient()` from `@/lib/host/runtime`,
+// and that hook throws outside a real `<HostRuntimeProvider>` - this file
+// mocks `useHostBinding` directly instead of standing one up (same as
+// `local-host-restart-flow.test.tsx`). This suite is about the banner's own
+// wiring (attempt phases, Force restart dispatch), not the sessions list or
+// the wider task/notification/auth stack `useFocusModel` reaches into, so
+// it's mocked at its own leaf module - the same boundary as
+// `use-host-directory-list-query` and `use-host-client-for-host-id` above.
+vi.mock("@/hooks/home-focus/use-focus-model", async () => {
+  const { EMPTY_FOCUS_MODEL } =
+    await import("@/lib/home-focus/build-focus-model");
+  return { useFocusModel: () => EMPTY_FOCUS_MODEL };
+});
+
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    warning: vi.fn(),
     message: vi.fn(),
   },
 }));
@@ -127,7 +147,7 @@ import type {
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
-  HostStatusUpdateOperation,
+  HostStatusUpdateOperationV2,
   HostStatusUpdateProgress,
 } from "@traycer/protocol/host/status/index";
 import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -136,6 +156,7 @@ import {
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { HOST_UPDATE_SERVICE_DISABLED_MESSAGE } from "@traycer-clients/shared/platform/host-service-notices";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
@@ -171,6 +192,8 @@ const UP_TO_DATE_STATUS: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 function makeManagement(): IHostManagement {
@@ -194,7 +217,9 @@ function makeManagement(): IHostManagement {
     registerService: vi.fn(notImplemented("registerService")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
-    freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
+    freePortAndRestart: vi.fn((input) =>
+      Promise.resolve({ kind: "applied" as const, ...input }),
+    ),
     runDoctorRepairQueued: vi.fn(() =>
       Promise.resolve({ kind: "applied" as const }),
     ),
@@ -214,6 +239,9 @@ function makeManagement(): IHostManagement {
       notImplemented("maintenanceInstallVersion"),
     ),
     restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    restartHostServiceIfHostIdle: vi.fn(
+      notImplemented("restartHostServiceIfHostIdle"),
+    ),
     runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
     getHostName: vi.fn(() =>
       Promise.resolve({
@@ -266,7 +294,7 @@ function bindLocalHost(
 }
 
 function attemptStatus(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -284,8 +312,8 @@ function attemptStatus(
 }
 
 function baseAttempt(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -389,7 +417,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   // 1. Every banner state names its phase.
   const STATE_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation;
+    readonly operation: HostStatusUpdateOperationV2;
     readonly expectedPhrase: RegExp;
   }> = [
     {
@@ -436,15 +464,6 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       name: "verifying",
       operation: baseAttempt({ phase: "verifying" }),
       expectedPhrase: /Verifying updated host to v2\.1\.0/,
-    },
-    {
-      name: "complete",
-      operation: baseAttempt({
-        phase: "complete",
-        execution: "terminal",
-        liveness: "terminal",
-      }),
-      expectedPhrase: /Updated to v2\.1\.0/,
     },
     {
       name: "failed (via liveness interrupted)",
@@ -722,7 +741,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   // controls checked directly.
   const ISOLATION_CASES: ReadonlyArray<{
     readonly name: string;
-    readonly operation: HostStatusUpdateOperation | null;
+    readonly operation: HostStatusUpdateOperationV2 | null;
     readonly updateProgress: HostStatusUpdateProgress | null;
   }> = [
     {
@@ -915,6 +934,60 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       ).toBeNull();
     });
 
+    it("a failed attempt with the store-format floor code says so in safe copy, offers Settings › Host and NO Retry", async () => {
+      openSettingsMock.mockClear();
+      bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              phase: "failed",
+              execution: "terminal",
+              error: {
+                code: "E_HOST_STORE_FORMAT_FLOOR",
+                message: "raw refusal; pass --accept-store-format-loss",
+                phase: "applying",
+              },
+            }),
+          ),
+      });
+      renderBanner(undefined);
+      const phase = await findPhaseText();
+      expect(phase).toContain("Settings › Host");
+      expect(phase).not.toContain("--accept-store-format-loss");
+      expect(
+        screen.queryByTestId("host-update-banner-operation-retry"),
+      ).toBeNull();
+      fireEvent.click(
+        await screen.findByTestId("host-update-banner-open-host-settings"),
+      );
+      expect(openSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ section: "host" }),
+      );
+    });
+
+    it("a failed attempt with any OTHER error code keeps Retry and offers no Settings action", async () => {
+      bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              phase: "failed",
+              execution: "terminal",
+              error: {
+                code: "E_SOMETHING_ELSE",
+                message: "disk on fire",
+                phase: "applying",
+              },
+            }),
+          ),
+      });
+      renderBanner(undefined);
+      expect(await findPhaseText()).toContain("disk on fire");
+      await screen.findByTestId("host-update-banner-operation-retry");
+      expect(
+        screen.queryByTestId("host-update-banner-open-host-settings"),
+      ).toBeNull();
+    });
+
     it("Retry dispatches applyStaged", async () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
@@ -1009,6 +1082,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           onRestart={null}
           onForceUpdate={null}
           cliFloorBlocked={false}
+          foregroundHeldFinish={null}
+          // Panel-level in production (`useHostUpdateCompletion`); this
+          // failed attempt is not dismissed, which is the only half of the
+          // completion the card itself reads (`completion.dismissed`).
+          completion={{ dismissed: false, dismiss: null }}
         />,
       );
       const card = screen.getByTestId("host-overview-operation-card");
@@ -1047,14 +1125,154 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       renderBanner(undefined);
       await screen.findByTestId("host-update-banner");
     });
+  });
 
-    it("a completed attempt auto-collapses after HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS", async () => {
+  // G9 — the landing page never shows a success view at all. Product decision
+  // (superseding G7's now-removed auto-collapse test and the "complete" case
+  // in STATE_CASES above): a completed or finalizing-record update is
+  // Settings-only. Landing shows nothing for it, on first read, once retained
+  // as a stale record, and across a genuine live transition into it — and it
+  // never writes to the shared acknowledgement store that Settings owns.
+  describe("G9 — landing shows no success view for a completed/finalizing-record update", () => {
+    it("a FRESH completed attempt shows no banner", async () => {
+      const hostStatus = vi.fn(() =>
+        attemptStatus(
+          baseAttempt({
+            attemptId: "attempt-fresh-complete",
+            phase: "complete",
+            execution: "terminal",
+            liveness: "terminal",
+          }),
+        ),
+      );
+      bindLocalHost({ "host.status": hostStatus });
+      const queryClient = renderBanner(undefined);
+      // Settle the read before asserting absence — otherwise this passes
+      // vacuously on the initial loading frame, before the `complete`
+      // attempt was ever fetched. `bindLocalHost`'s override REPLACES the
+      // fixture's own handler, so its `hostStatusCalls()` counter never
+      // increments for an overridden method — the handler's own `vi.fn()`
+      // is what has to be awaited here.
+      await waitFor(() => {
+        expect(hostStatus).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(queryClient.isFetching()).toBe(0);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    });
+
+    it("a FINALIZING-RECORD attempt (refused completion write, host running the target) shows no banner", async () => {
+      const hostStatus = vi.fn(() =>
+        attemptStatus(
+          baseAttempt({
+            attemptId: "attempt-finalizing",
+            phase: "verifying",
+            liveness: "interrupted",
+            // `attemptStatus` fixes the reply's `hostVersion` at "1.5.0";
+            // `concludesAsFinalizingRecord` routes here only when the
+            // target matches the version the host is already running.
+            targetVersion: "1.5.0",
+          }),
+        ),
+      );
+      bindLocalHost({ "host.status": hostStatus });
+      const queryClient = renderBanner(undefined);
+      await waitFor(() => {
+        expect(hostStatus).toHaveBeenCalled();
+      });
+      await waitFor(() => {
+        expect(queryClient.isFetching()).toBe(0);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    });
+
+    it("a STALE (retained) completed attempt — the host unreachable, last known phase complete — shows no banner", async () => {
+      bindLocalHost({
+        "host.status": () => {
+          throw new Error("host is not answering");
+        },
+      });
+      const staleCompleteStatus: HostControllerStatus = {
+        ...UP_TO_DATE_STATUS,
+        reachable: false,
+        localAttempt: {
+          attemptId: "attempt-stale-complete",
+          generation: 1,
+          sequence: 4,
+          targetVersion: "2.1.0",
+          phase: "complete",
+          continuation: null,
+          updatedAt: "2026-05-15T00:00:00Z",
+          error: null,
+          liveness: "unknown",
+          livenessObservedAtMs: null,
+        },
+      };
+      const getHostControllerStatus = vi.fn(() =>
+        Promise.resolve(staleCompleteStatus),
+      );
+      const queryClient = renderBanner(
+        createFakeRunnerHost({
+          hostManagement: { ...makeManagement(), getHostControllerStatus },
+        }),
+      );
+
+      // Await the retained `complete` localAttempt data itself, not just a
+      // settled query client that could still be mid-initial-fetch.
+      await waitFor(() => {
+        expect(getHostControllerStatus).toHaveBeenCalled();
+      });
+      await getHostControllerStatus.mock.results[0]?.value;
+      await waitFor(() => {
+        expect(queryClient.isFetching()).toBe(0);
+      });
+
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+    });
+
+    it("a genuine live transition from active to complete removes the banner — a real success is not shown, not merely never rendered", async () => {
+      let calls = 0;
+      bindLocalHost({
+        "host.status": () => {
+          calls += 1;
+          if (calls === 1) {
+            return attemptStatus(
+              baseAttempt({
+                attemptId: "attempt-transition",
+                phase: "downloading",
+              }),
+            );
+          }
+          return attemptStatus(
+            baseAttempt({
+              attemptId: "attempt-transition",
+              phase: "complete",
+              execution: "terminal",
+              liveness: "terminal",
+            }),
+          );
+        },
+      });
+      const queryClient = renderBanner(undefined);
+      expect(await findPhaseText()).toMatch(/Downloading/);
+
+      await queryClient.refetchQueries({ type: "active" });
+      await waitFor(() => {
+        expect(calls).toBeGreaterThan(1);
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      });
+    });
+
+    it("landing writes no acknowledgement for a completed attempt, even past HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS — it never runs the completion hook at all", async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       bindLocalHost({
         "host.status": () =>
           attemptStatus(
             baseAttempt({
-              attemptId: "attempt-complete-1",
+              attemptId: "attempt-no-ack",
               phase: "complete",
               execution: "terminal",
               liveness: "terminal",
@@ -1062,21 +1280,50 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           ),
       });
       renderBanner(undefined);
-      await screen.findByTestId("host-update-banner");
-      expect(
-        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
-      ).not.toContain("attempt-complete-1");
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      });
 
       await vi.advanceTimersByTimeAsync(
         HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS + 100,
       );
 
-      await waitFor(() => {
-        expect(screen.queryByTestId("host-update-banner")).toBeNull();
-      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
       expect(
         useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
-      ).toContain("attempt-complete-1");
+      ).not.toContain("attempt-no-ack");
+    });
+
+    it("Settings shows a completed attempt while the landing banner (mounted beside it) shows nothing", async () => {
+      const fixture = bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              attemptId: "attempt-settings-only",
+              phase: "complete",
+              execution: "terminal",
+              liveness: "terminal",
+            }),
+          ),
+      });
+      recordNegotiatedHostMethods(LOCAL_HOST_ID, [
+        "host.status",
+        "host.identity.get",
+        "host.identity.set",
+        "host.getInstallationInfo",
+        "host.restart",
+        "host.doctor",
+        "host.update.check",
+        "host.update.install",
+        "diagnostics.logs.tail",
+      ]);
+      renderBannerWithRealOverview(fixture.client);
+
+      const card = await screen.findByTestId("host-overview-operation-card");
+      await waitFor(() => {
+        expect(card.textContent).toMatch(/Updated to v2\.1\.0/);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
     });
   });
 
@@ -1124,6 +1371,55 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
     // Never the attempt-driven copy - the unbound arm has no attempt to read.
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
+  });
+
+  // The launch apply waits over a service registration its owner switched off
+  // (`HostControllerStatus.updateDeferral`): the row says so and offers the ONE
+  // action that finishes it, fenced to this machine's host like any Doctor
+  // repair - Update now would swap the bytes and still leave the host stopped.
+  it("an update-ready row with an updateDeferral shows the message and Enable background service, not Update now; the click dispatches Doctor's register-service fenced to the local host", async () => {
+    bindLocalHost({ "host.status": () => attemptStatus({ kind: "none" }) });
+    const runDoctorRepairQueued = vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    );
+    const management: IHostManagement = {
+      ...makeManagement(),
+      getHostControllerStatus: vi.fn(() =>
+        Promise.resolve<HostControllerStatus>({
+          ...UP_TO_DATE_STATUS,
+          latestVersion: "1.4.2",
+          stagedVersion: "1.4.2",
+          updateReady: true,
+          updateDeferral: {
+            message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+            code: "E_SERVICE_REGISTRATION_DISABLED",
+          },
+        }),
+      ),
+      runDoctorRepairQueued,
+    };
+    renderBanner(createFakeRunnerHost({ hostManagement: management }));
+
+    const notice = await screen.findByTestId(
+      "host-update-banner-service-disabled",
+    );
+    expect(notice.textContent).toBe(HOST_UPDATE_SERVICE_DISABLED_MESSAGE);
+    expect(screen.queryByRole("button", { name: /Update now/i })).toBeNull();
+    // Not a failure: the info tint, never the destructive one.
+    const banner = screen.getByRole("status", {
+      name: /Traycer host update waiting/i,
+    });
+    expect(banner.className).not.toContain("destructive");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Enable background service/i }),
+    );
+    await waitFor(() => {
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "register-service",
+        expectedHostId: LOCAL_HOST_ID,
+      });
+    });
   });
 
   // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).

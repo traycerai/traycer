@@ -21,6 +21,11 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { lastLocalHostIdKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * The app's ONE background cadence for `GET /api/v3/hosts`.
@@ -167,8 +172,17 @@ export class HostDirectoryService implements IHostDirectoryService {
    * and every live local snapshot. Never cleared, only replaced: the id is a
    * durable machine fact, and a stale value can only neutralise the twin of a
    * host this machine no longer runs - which nothing should relay-dial anyway.
+   *
+   * A shell with NO local host (`IRunnerHost.hasLocalHost === false`: the
+   * phone, and a desktop launched in the `none` lifecycle mode) never holds
+   * one. There is no host of this machine's to protect, and a remembered id
+   * would rewrite this machine's OLD registry row - still listed, and now
+   * possibly served by a host the person moved elsewhere - into a
+   * non-dialable local entry. That row stays what the registry says it is.
    */
-  private lastKnownLocalHostId: string | null = loadPersistedLocalHostId();
+  private lastKnownLocalHostId: string | null;
+  /** `IRunnerHost.hasLocalHost`, fixed for the life of the shell. */
+  private readonly hasLocalHost: boolean;
   private remoteEntries: readonly HostDirectoryEntry[] = [];
   /**
    * The snapshot most recently fanned out through `emit()`, kept so the poll
@@ -237,8 +251,8 @@ export class HostDirectoryService implements IHostDirectoryService {
   >();
   private localSubscription: Disposable | null = null;
   private started = false;
-  private refreshIntervalId: number | null = null;
-  private visibilityDocument: Document | null = null;
+  private stopVisiblePoll: (() => void) | null = null;
+  private stopPushVisibility: (() => void) | null = null;
   /**
    * The shell's own registry cadence, when it has one (desktop's main process
    * — redesign P4.1/F22). Non-null means this window arms NO interval of its
@@ -280,23 +294,12 @@ export class HostDirectoryService implements IHostDirectoryService {
    * signed-in session until a later read succeeds.
    */
   private lastCommitIdentity: string | null = null;
-  private readonly handleVisibilityChange = (): void => {
-    if (this.isDocumentHidden()) {
-      return;
-    }
-    // Resume from hidden: refresh now AND rearm the poll clock from this
-    // point, so the already-scheduled tick (whatever was left of its
-    // pre-hidden schedule) doesn't also fire moments later.
-    this.armPollInterval();
-    void this.refresh();
-  };
-
   /**
-   * The push-riding twin of {@link handleVisibilityChange}: no poll clock to
-   * rearm, so a resume acts only on a push that arrived while hidden.
+   * Resume while riding the shell's registry push: no poll clock to rearm, so
+   * a show acts only on a push that arrived while hidden.
    */
   private readonly handleVisibilityChangeWhileRidingPushes = (): void => {
-    if (this.isDocumentHidden() || !this.pushMissedWhileHidden) {
+    if (!isDocumentVisible() || !this.pushMissedWhileHidden) {
       return;
     }
     this.pushMissedWhileHidden = false;
@@ -306,6 +309,10 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   constructor(options: HostDirectoryServiceOptions) {
     this.runnerHost = options.runnerHost;
+    this.hasLocalHost = options.runnerHost.hasLocalHost;
+    this.lastKnownLocalHostId = this.hasLocalHost
+      ? loadPersistedLocalHostId()
+      : null;
     this.onRegistryPollTick = options.onRegistryPollTick;
     this.remoteFetcher =
       options.remoteFetcher === null ? fetchRemoteHosts : options.remoteFetcher;
@@ -390,8 +397,11 @@ export class HostDirectoryService implements IHostDirectoryService {
     // exactly the reinstall this guard exists for - the host is down, so no
     // snapshot will seed it either. The shell's pid metadata is the one source
     // that still answers in that window. A shell without a local host (web,
-    // mobile) answers `null` and nothing is neutralised.
-    await this.seedLocalHostIdFromShell();
+    // mobile, a `none` desktop launch) is not asked at all: nothing of its own
+    // exists to neutralise.
+    if (this.hasLocalHost) {
+      await this.seedLocalHostIdFromShell();
+    }
     // The seed introduced an await BEFORE the subscription exists, so a
     // provider that unmounts or swaps its runner mid-flight can call
     // `dispose()` while nothing is registered yet. Without this recheck
@@ -403,8 +413,14 @@ export class HostDirectoryService implements IHostDirectoryService {
       return;
     }
     this.localSubscription = this.runnerHost.onLocalHostChange((snapshot) => {
-      this.localEntry = toLocalEntry(snapshot);
-      if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
+      // A shell with no local host has no local ENTRY either, whatever a
+      // snapshot says: the directory answers for this launch's capability.
+      this.localEntry = this.hasLocalHost ? toLocalEntry(snapshot) : null;
+      if (
+        this.hasLocalHost &&
+        snapshot !== null &&
+        snapshot.hostId !== this.lastKnownLocalHostId
+      ) {
         this.adoptLocalHostId(snapshot.hostId);
       }
       appLogger.info("[host-directory] local host snapshot changed", {
@@ -697,6 +713,18 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
+   * Every host the account is known to have, or `null` while
+   * {@link hasSettledFleet} is false: before the registry has answered, the
+   * rows are a local-only snapshot that cannot say which other machines exist.
+   * The flag and the rows are read together here, so a caller asking "is every
+   * machine accounted for" never pairs one listing with another's flag.
+   */
+  knownHostIds(): readonly string[] | null {
+    if (!this.hasObservedRemoteListing) return null;
+    return this.snapshot().map((entry) => entry.hostId);
+  }
+
+  /**
    * Whether an attempt to read the registry has FINISHED under the current
    * identity, whatever it said - see {@link hasConcludedRemoteAttempt}.
    *
@@ -746,7 +774,7 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   private startRefreshPolling(): void {
-    if (this.refreshIntervalId !== null) {
+    if (this.stopVisiblePoll !== null) {
       return;
     }
     if (typeof window === "undefined") {
@@ -768,12 +796,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (this.subscribeToShellRegistryPushes()) {
       return;
     }
-    this.visibilityDocument = typeof document === "undefined" ? null : document;
     this.armPollInterval();
-    this.visibilityDocument?.addEventListener(
-      "visibilitychange",
-      this.handleVisibilityChange,
-    );
   }
 
   /**
@@ -813,7 +836,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       // own `GET /api/v3/hosts` on each of main's 60 s ticks - the very fetch
       // the removed per-window timer used to skip. The push is remembered and
       // acted on when the window next becomes visible.
-      if (this.isDocumentHidden()) {
+      if (!isDocumentVisible()) {
         this.pushMissedWhileHidden = true;
         return;
       }
@@ -823,9 +846,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       return false;
     }
     this.registrySubscription = subscription;
-    this.visibilityDocument = typeof document === "undefined" ? null : document;
-    this.visibilityDocument?.addEventListener(
-      "visibilitychange",
+    this.stopPushVisibility = subscribeDocumentVisibility(
       this.handleVisibilityChangeWhileRidingPushes,
     );
     return true;
@@ -854,58 +875,44 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (typeof window === "undefined") {
       return;
     }
-    if (this.refreshIntervalId !== null) {
-      window.clearInterval(this.refreshIntervalId);
-    }
-    this.refreshIntervalId = window.setInterval(() => {
-      if (this.isDocumentHidden()) {
-        return;
-      }
-      void this.refresh();
-      // THE APP'S ONE LIVENESS TIMER (redesign P4.1 / F22). This tick used to
-      // have a twin: a second 60s `refetchInterval` on the registered-hosts
-      // query, against the same `GET /api/v3/hosts`, which this file's own
-      // comment already called out as not the goal. The twin is gone and the
-      // TanStack observers ride this tick instead.
-      //
-      // INVALIDATE rather than seed, and the distinction is load-bearing.
-      // This poll's fetcher returns already-projected `HostDirectoryEntry`
-      // rows, not the raw `HostListResponse` the Settings surfaces read their
-      // registry metadata from - and that query reaches the registry through
-      // `AuthService.fetchRegisteredHosts(era)`, whose issue-time credential
-      // fence exists precisely to refuse a fetch whose bearer belongs to a
-      // different era. Handing it data fetched on this path would route
-      // around that fence. Invalidating instead lets it refetch through its
-      // own, still fenced, and costs nothing when no such surface is mounted:
-      // an invalidation with no ACTIVE observer marks stale and issues no
-      // request.
-      if (this.onRegistryPollTick !== null) {
-        this.onRegistryPollTick();
-      }
-    }, HOST_DIRECTORY_REFRESH_POLL_MS);
+    this.stopVisiblePoll?.();
+    this.stopVisiblePoll = startVisibleInterval({
+      tick: () => {
+        void this.refresh();
+        // THE APP'S ONE LIVENESS TIMER (redesign P4.1 / F22). This tick used to
+        // have a twin: a second 60s `refetchInterval` on the registered-hosts
+        // query, against the same `GET /api/v3/hosts`, which this file's own
+        // comment already called out as not the goal. The twin is gone and the
+        // TanStack observers ride this tick instead.
+        //
+        // INVALIDATE rather than seed, and the distinction is load-bearing.
+        // This poll's fetcher returns already-projected `HostDirectoryEntry`
+        // rows, not the raw `HostListResponse` the Settings surfaces read their
+        // registry metadata from - and that query reaches the registry through
+        // `AuthService.fetchRegisteredHosts(era)`, whose issue-time credential
+        // fence exists precisely to refuse a fetch whose bearer belongs to a
+        // different era. Handing it data fetched on this path would route
+        // around that fence. Invalidating instead lets it refetch through its
+        // own, still fenced, and costs nothing when no such surface is mounted:
+        // an invalidation with no ACTIVE observer marks stale and issues no
+        // request.
+        if (this.onRegistryPollTick !== null) {
+          this.onRegistryPollTick();
+        }
+      },
+      intervalMs: HOST_DIRECTORY_REFRESH_POLL_MS,
+      fireOnShow: true,
+    });
   }
 
   private stopRefreshPolling(): void {
     this.registrySubscription?.dispose();
     this.registrySubscription = null;
-    if (this.refreshIntervalId !== null && typeof window !== "undefined") {
-      window.clearInterval(this.refreshIntervalId);
-    }
-    this.refreshIntervalId = null;
-    this.visibilityDocument?.removeEventListener(
-      "visibilitychange",
-      this.handleVisibilityChange,
-    );
-    this.visibilityDocument?.removeEventListener(
-      "visibilitychange",
-      this.handleVisibilityChangeWhileRidingPushes,
-    );
-    this.visibilityDocument = null;
+    this.stopVisiblePoll?.();
+    this.stopVisiblePoll = null;
+    this.stopPushVisibility?.();
+    this.stopPushVisibility = null;
     this.pushMissedWhileHidden = false;
-  }
-
-  private isDocumentHidden(): boolean {
-    return this.visibilityDocument !== null && this.visibilityDocument.hidden;
   }
 
   /**
@@ -1242,7 +1249,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * that is already happening, and stops for good on the first answer.
    */
   private async reseedLocalHostIdIfUnknown(): Promise<void> {
-    if (this.lastKnownLocalHostId !== null) {
+    if (!this.hasLocalHost || this.lastKnownLocalHostId !== null) {
       return;
     }
     await this.seedLocalHostIdFromShell();

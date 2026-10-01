@@ -1,11 +1,10 @@
+import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import type { ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { ChatComposerBannerPortal } from "@/components/chat/composer/chat-composer-banner-portal";
 import type { ComposerTopBannerKind } from "@/components/chat/composer/chat-composer-top-banner";
 import type { HostRpcRegistry } from "@/lib/host";
-import { FallbackGraceMenu, FallbackWaitingMenu } from "./fallback-card-menus";
-import { FallbackGraceCard } from "./fallback-grace-card";
-import { FallbackReturnBanner } from "./fallback-return-banner";
 import {
   returnBannerLowUsage,
   type ComposerRateLimitAdvisory,
@@ -15,10 +14,11 @@ import {
   fallbackWaitingCardVisible,
   type ChatProviderFallbackState,
 } from "./fallback-state";
-import { FallbackWaitingCard } from "./fallback-waiting-card";
+import { RoutingCard } from "./routing-card";
 
 /**
- * The composer's two provider-fallback banner slots.
+ * The composer's two routing-card slots: the live traversal's card (countdown
+ * or waiting) and the switch-back offer. Both draw the one `RoutingCard`.
  *
  * Extracted from `ChatComposerImpl` rather than inlined there for two reasons,
  * and the second is the one that matters.
@@ -32,7 +32,7 @@ import { FallbackWaitingCard } from "./fallback-waiting-card";
  * comment claiming the opposite: that the two predicates are kept separate
  * "so a traversal state that neither claims must fail to render rather than
  * fall through to whichever branch happens to be last." A sixth traversal
- * state added upstream would have rendered a grace card describing a state it
+ * state added upstream would have rendered a countdown describing a state it
  * knows nothing about. Here each predicate is checked on its own and an
  * unclaimed state renders nothing, which is what the comment always said.
  */
@@ -89,6 +89,7 @@ export function ChatComposerFallbackBanners({
         client={client}
         chatId={chatId}
         epicId={epicId}
+        hostId={hostId}
         canAct={canAct}
       />
     </>
@@ -96,7 +97,7 @@ export function ChatComposerFallbackBanners({
 }
 
 /**
- * The waiting card and the grace card share one slot and are chosen by two
+ * The waiting and countdown states share one slot and are chosen by two
  * INDEPENDENT predicates - never by an else-branch. See the note above.
  */
 function FallbackPendingBanner({
@@ -119,27 +120,20 @@ function FallbackPendingBanner({
   // BY VALUE, never by key presence: on a live `chat.subscribe@1.10` frame the
   // host sets the key unconditionally and `undefined` is what CLEARS the card,
   // so a `"pending" in ...` test would pin it open for the life of the chat.
+  //
+  // Nothing else gates it: the card has no hide control (clutter cuts,
+  // 2026-09-27), so it is on screen for exactly as long as the traversal is.
   if (!visible || pending === undefined) return null;
   if (fallbackWaitingCardVisible(pending)) {
     return (
       <FallbackBannerSlot>
-        <FallbackWaitingCard
-          pending={pending}
+        <RoutingCard
+          state={{ kind: "waiting", pending }}
           client={client}
           chatId={chatId}
           epicId={epicId}
           hostId={hostId}
           canAct={canAct}
-          menu={
-            <FallbackWaitingMenu
-              pending={pending}
-              client={client}
-              epicId={epicId}
-              chatId={chatId}
-              hostId={hostId}
-              canAct={canAct}
-            />
-          }
         />
       </FallbackBannerSlot>
     );
@@ -147,23 +141,13 @@ function FallbackPendingBanner({
   if (fallbackGraceCardVisible(pending)) {
     return (
       <FallbackBannerSlot>
-        <FallbackGraceCard
-          pending={pending}
+        <RoutingCard
+          state={{ kind: "countdown", pending }}
           client={client}
           chatId={chatId}
           epicId={epicId}
           hostId={hostId}
           canAct={canAct}
-          menu={
-            <FallbackGraceMenu
-              pending={pending}
-              client={client}
-              epicId={epicId}
-              chatId={chatId}
-              hostId={hostId}
-              canAct={canAct}
-            />
-          }
         />
       </FallbackBannerSlot>
     );
@@ -178,6 +162,7 @@ function FallbackReturnBannerSlot({
   client,
   chatId,
   epicId,
+  hostId,
   canAct,
 }: {
   readonly visible: boolean;
@@ -186,17 +171,25 @@ function FallbackReturnBannerSlot({
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly chatId: string;
   readonly epicId: string;
+  readonly hostId: string;
   readonly canAct: boolean;
 }) {
   if (!visible || offer === undefined) return null;
   return (
     <FallbackBannerSlot>
-      <FallbackReturnBanner
-        offer={offer}
-        lowUsage={returnBannerLowUsage(rateLimitAdvisory, offer.fallbackTuple)}
+      <RoutingCard
+        state={{
+          kind: "return",
+          offer,
+          lowUsage: returnBannerLowUsage(
+            rateLimitAdvisory,
+            offer.fallbackTuple,
+          ),
+        }}
         client={client}
         chatId={chatId}
         epicId={epicId}
+        hostId={hostId}
         canAct={canAct}
       />
     </FallbackBannerSlot>
@@ -213,10 +206,17 @@ function FallbackReturnBannerSlot({
  * would have drifted.
  */
 function FallbackBannerSlot({ children }: { readonly children: ReactNode }) {
+  const readingWidth = useReadingWidthStyle();
   return (
     <ChatComposerBannerPortal>
       <div className="pointer-events-none px-4">
-        <div className="pointer-events-auto mx-auto w-full max-w-3xl bg-canvas pt-4">
+        <div
+          className={cn(
+            "pointer-events-auto mx-auto w-full bg-canvas pt-4",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
           {children}
         </div>
       </div>

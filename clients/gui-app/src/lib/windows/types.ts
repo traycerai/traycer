@@ -114,7 +114,13 @@ export interface DesktopPerWindowStatePatch {
 export type DesktopAuthSessionStatus =
   | "signed-out"
   | "signing-in"
-  | "signed-in";
+  | "signed-in"
+  | "unverified";
+
+export type DesktopLocalAuthSessionRestoreResult =
+  | "restored"
+  | "superseded"
+  | "unavailable";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -728,15 +734,30 @@ export interface DesktopReportIssueForm {
   readonly privateDiagnostics?: DesktopPrivateDiagnostics;
 }
 
-// Four states, not a nullable id: "no DSN" and "flush timed out" used to
+// Five states, not a nullable id: "no DSN" and "flush timed out" used to
 // collapse onto the same `reportId: null`, which claimed failure for reports
 // that may have arrived. `failed` is reserved for definite non-delivery;
 // `unconfirmed` never claims failure and never claims delivery.
+//
+// `queued` means the desktop's offline transport is holding the envelope and
+// will replay it on its own - so the dialog says that and offers NO resend
+// (the report id is reused, so a resend would collapse at ingest against the
+// replay). `rate-limited` is the one failure with a remedy: `retryAfterSeconds`
+// is when to try again, or `null` when nothing said when.
+//
+// MIRRORED BY HAND from `clients/desktop/src/ipc-contracts/window-types.ts`
+// (`SupportSubmitReportResult`). Not protocol; edit both.
 export type DesktopSubmitReportResult =
   | { readonly status: "delivered"; readonly reportId: string }
+  | { readonly status: "queued"; readonly reportId: string }
   | { readonly status: "unconfirmed"; readonly reportId: string }
   | { readonly status: "unavailable" }
-  | { readonly status: "failed"; readonly reason: "error" };
+  | { readonly status: "failed"; readonly reason: "error" }
+  | {
+      readonly status: "failed";
+      readonly reason: "rate-limited";
+      readonly retryAfterSeconds: number | null;
+    };
 
 export interface DesktopSupportBridge {
   getSnapshot(): Promise<DesktopSupportSnapshot>;
@@ -862,13 +883,18 @@ export interface DesktopWindowsBridge {
   };
   authSession: {
     get(): Promise<DesktopAuthSessionSnapshot>;
+    /** Absent on older shells; only main's stored pair can establish local identity. */
+    restoreLocal?(expected: {
+      readonly userId: string;
+      readonly token: string;
+    }): Promise<DesktopLocalAuthSessionRestoreResult>;
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
     /**
      * Withdraws main's verification of the session it holds - the renderer's
-     * TERMINAL verdict loss, which `set` cannot carry because the status an
-     * `unverified` flattens to signs sibling windows out. Optional +
+     * TERMINAL verdict loss. Local restoration preserves an existing signed-in
+     * session, so it cannot carry that loss. Optional +
      * capability-probed like `perWindowState.clear`: a desktop shell built
      * before the channel existed has no `revoke`, and the bridge degrades to
      * the pre-channel behaviour (main keeps its verification until the

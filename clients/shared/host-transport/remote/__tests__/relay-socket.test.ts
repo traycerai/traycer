@@ -877,3 +877,30 @@ describe("RelaySocket (client leg) attach-URL scheme gate", () => {
     }
   });
 });
+
+describe("RelaySocket onTextBytes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports a text frame's exact UTF-8 byte length, not its UTF-16 string length", () => {
+    const onTextBytes = vi.fn();
+    const handlers = makeHandlers({ onTextBytes });
+    const { stream } = openSocket(handlers);
+
+    // Two emoji: 2 UTF-16 code units each (a surrogate pair), 4 UTF-8 bytes
+    // each. `"\u{1F600}".length` is 2, but its UTF-8 encoding is 4 bytes -
+    // counting `.length` would report 4 for this frame, not 8.
+    const text = "\u{1F600}\u{1F600}";
+    expect(text.length).toBe(4);
+
+    stream.emitText(text);
+
+    expect(onTextBytes).toHaveBeenCalledTimes(1);
+    expect(onTextBytes).toHaveBeenCalledWith(8);
+  });
+});

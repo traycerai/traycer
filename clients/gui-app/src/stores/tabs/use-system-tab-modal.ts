@@ -8,6 +8,7 @@ import { getHistoryController } from "@/lib/persistent-history";
 import { hrefPathname } from "@/lib/routes";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
+import { armSettingsOpenIntent } from "@/stores/tabs/settings-open-intent-store";
 import {
   resolveHistoryTabIntent,
   resolveSettingsTabIntent,
@@ -25,6 +26,8 @@ import {
   type SystemTabOverlayView,
 } from "@/lib/system-tab-overlay-search";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { historyScopeToParams } from "@/lib/history-scope";
+import { consumeHistoryScopeForPromotion } from "@/lib/history-scope-handoff";
 import { historySearchToParams } from "@/lib/history-search";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import {
@@ -46,7 +49,11 @@ export interface SystemTabModalApi {
   readonly openHistory: () => void;
   readonly close: () => void;
   readonly setSection: (section: SettingsSectionId) => void;
-  readonly promoteToTab: () => void;
+  /**
+   * Promotes the open modal into its strip tab. `onRejected` runs when the tab
+   * navigation is refused, leaving the modal open (`abandonOverlayPromotion`).
+   */
+  readonly promoteToTab: (onRejected: () => void) => void;
   /** Returns `true` when the modal is currently open for `kind`. */
   readonly isOverlayActive: (kind: SystemOverlayKind) => boolean;
 }
@@ -77,6 +84,11 @@ export function useSystemTabModalActions(): SystemTabModalActions {
 
   const openSettings = useCallback(
     (opts: OpenSettingsModalOpts) => {
+      // The tab and draft ride a one-shot store rather than any of the three
+      // navigations below, because only two of them are routes: armed first,
+      // so the page reads the same intent whichever surface mounts it. A call
+      // with neither clears what an earlier one left unconsumed.
+      armSettingsOpenIntent(opts);
       // On phones the two-pane modal never opens: settings is only the
       // full-page drill-down. Every modal entry point (user menu, deep-links,
       // the bridge for palette/keybindings) funnels through here, so this one
@@ -100,6 +112,7 @@ export function useSystemTabModalActions(): SystemTabModalActions {
             resetToGeneral: opts.resetToGeneral,
           }),
           "focus-existing",
+          null,
         );
         return;
       }
@@ -140,7 +153,11 @@ export function useSystemTabModalActions(): SystemTabModalActions {
     }
     const historyTab = useTabsStore.getState().systemTabs.history;
     if (historyTab !== null) {
-      navigateToTabClearingOverlay(resolveHistoryTabIntent(), "focus-existing");
+      navigateToTabClearingOverlay(
+        resolveHistoryTabIntent(),
+        "focus-existing",
+        null,
+      );
       return;
     }
     void router.navigate({
@@ -222,13 +239,17 @@ export function useSystemTabModalController(): SystemTabModalApi {
   const actions = useSystemTabModalActions();
   const navigateToTabClearingOverlay = useNavigateToTabClearingOverlay();
 
-  const promoteToTab = useCallback(() => {
-    if (active === null) return;
-    navigateToTabClearingOverlay(
-      overlayPromotionIntent(active),
-      "promote-modal",
-    );
-  }, [active, navigateToTabClearingOverlay]);
+  const promoteToTab = useCallback(
+    (onRejected: () => void) => {
+      if (active === null) return;
+      navigateToTabClearingOverlay(
+        overlayPromotionIntent(active),
+        "promote-modal",
+        onRejected,
+      );
+    },
+    [active, navigateToTabClearingOverlay],
+  );
 
   const isOverlayActive = useCallback(
     (kind: SystemOverlayKind): boolean => active?.kind === kind,
@@ -260,23 +281,32 @@ export function useSystemTabModalController(): SystemTabModalApi {
 function useNavigateToTabClearingOverlay(): (
   target: TabNavigationIntent,
   source: TabActivationSource,
+  onRejected: (() => void) | null,
 ) => void {
   const router = useRouter();
   return useCallback(
-    (target: TabNavigationIntent, source: TabActivationSource): void => {
+    (
+      target: TabNavigationIntent,
+      source: TabActivationSource,
+      onRejected: (() => void) | null,
+    ): void => {
       // Promotion carries the modal's visible state regardless of whether a
       // History tab already exists. Ordinary header activation intentionally
       // omits it so the navigation controller can restore the tab-owned route
       // snapshot instead.
       const historySearch =
         target.kind === "history" && source === "promote-modal"
-          ? historySearchToParams(useHistorySearchStore.getState().search)
+          ? {
+              ...historySearchToParams(useHistorySearchStore.getState().search),
+              ...historyScopeToParams(consumeHistoryScopeForPromotion()),
+            }
           : null;
       activateTabIntent(router.navigate, target, {
         search: (prev) => ({
           ...withOverlayCleared(prev),
           ...(historySearch ?? {}),
         }),
+        ...(onRejected === null ? {} : { onRejected }),
       });
     },
     [router],

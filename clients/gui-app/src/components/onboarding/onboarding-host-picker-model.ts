@@ -8,18 +8,11 @@ import type { HostScope } from "@/components/settings/host-scope/use-host-scope"
 // for a module that exports components alone, and this file is what the stage
 // gates and the page's selection logic import.
 
-/**
- * The tour's host selection: ONE pick for the whole tour, shown identically on
- * the two acts that read a real machine - session import and the agent guide.
- *
- * It is held in the page's own state rather than in a store, because it is a
- * choice about this tour and must not outlive it or leak into Settings.
- */
+/** One device selection shared by the provider and import screens. */
 export interface OnboardingHostPicker {
   readonly scope: HostScope;
   /**
-   * Commits a new pick. The page saves the current host's guide draft FIRST -
-   * see `selectHost` in `onboarding-page.tsx` - so this is never a bare setter.
+   * Selects the device whose providers and sessions the tour reads.
    */
   readonly onSelectHost: (hostId: string) => void;
   /**

@@ -798,6 +798,26 @@ function withExecPath<T>(execPath: string, run: () => Promise<T>): Promise<T> {
   });
 }
 
+// A staging refresh takes the cross-process CLI lock (`cli-lock.ts` /
+// `@traycer-clients/shared/host-lock/cross-process-lock`), and building the
+// lock's acquisition metadata reads this process's own start time and start
+// identity (`ownProcessStartTimeMsAsync` / `ownProcessStartIdentityAsync` in
+// `@traycer-clients/shared/host-lock/process-identity`). Both are cached
+// once per process, and a cold cache fills itself with a real `ps` spawn on
+// POSIX - which lands in this file's `execFile` mock exactly like a slot
+// probe, indistinguishable from one by path alone. `vi.resetModules()` in
+// `beforeEach` makes every test's cache cold again, so a test that stages
+// must warm both caches first through their synchronous twins (real,
+// unmocked `execFileSync` reads - this suite's `node:child_process` mock
+// replaces only `execFile`) or its spawned-paths assertion sees that "ps"
+// alongside the probes it actually cares about.
+async function warmOwnProcessCaches(): Promise<void> {
+  const { ownProcessStartIdentity, ownProcessStartTimeMs } =
+    await import("@traycer-clients/shared/host-lock/process-identity");
+  ownProcessStartIdentity();
+  ownProcessStartTimeMs();
+}
+
 // The identity staging writes: same bytes AND the source's mtime mirrored
 // onto the copy. Tests that want a slot the refresh should consider FRESH
 // build it this way rather than hand-setting timestamps.
@@ -2258,6 +2278,7 @@ it.skipIf(process.platform === "win32")(
     writeFileSync(running, runningBytes);
     const resolvedTarget = realpathSync(linkTarget);
     slotProbeControl.versionForPath.set(resolvedTarget, "0.0.0-alpha.1\n");
+    await warmOwnProcessCaches();
 
     const result = await withExecPath(running, () =>
       refreshWellKnownSlotIfStale(ENVIRONMENT),
@@ -2303,6 +2324,7 @@ it.skipIf(process.platform === "win32")(
     writeFileSync(running, runningBytes);
     // No `versionForPath` entry for the target: it cannot say what it is.
     const resolvedTarget = realpathSync(linkTarget);
+    await warmOwnProcessCaches();
 
     const result = await withExecPath(running, () =>
       refreshWellKnownSlotIfStale(ENVIRONMENT),

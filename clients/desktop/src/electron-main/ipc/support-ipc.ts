@@ -1,7 +1,10 @@
 import type { IpcMainInvokeEvent } from "electron";
 import { app, shell, systemPreferences } from "electron";
 import { log } from "../app/logger";
-import { showNativeNotification } from "../notifications";
+import {
+  showNativeFeedNotification,
+  showNativeNotification,
+} from "../notifications";
 import { safelyOpenExternal } from "../app/security";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
@@ -28,6 +31,7 @@ import type {
 } from "../../ipc-contracts/window-types";
 import type {
   DesktopNotificationFeedSource,
+  DesktopNotificationFeedOccurrence,
   DesktopNotificationForegroundAppLocal,
   DesktopNotificationForegroundDisplay,
 } from "../../ipc-contracts/notification-types";
@@ -157,6 +161,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       deliveryKey: unknown,
       feedSource: unknown,
       foregroundAppLocal: unknown,
+      feedOccurrences: unknown,
     ) => {
       assertString(title, "notifications.show");
       assertString(body, "notifications.show");
@@ -170,13 +175,40 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       }
       const parsedForegroundAppLocal =
         parseForegroundAppLocal(foregroundAppLocal);
+      const occurrences = parseNotificationFeedOccurrences(feedOccurrences);
+      const parsedFeedSource = parseNotificationFeedSource(feedSource);
+      const forwardDisplay = (
+        display: DesktopNotificationForegroundDisplay,
+      ): void => {
+        const delivered = bridge.deliverForegroundNotificationDisplay(
+          readSenderWebContentsId(event),
+          display,
+        );
+        if (!delivered) {
+          throw new Error(
+            "notifications.show could not reach the focused renderer",
+          );
+        }
+      };
+      if (occurrences !== null) {
+        if (parsedForegroundAppLocal !== null) {
+          throw new Error(
+            "notifications.show cannot mix feed and app-local delivery",
+          );
+        }
+        return showNativeFeedNotification(
+          occurrences,
+          (entryPayload) => bridge.deliverNotificationClick(entryPayload),
+          forwardDisplay,
+        );
+      }
       const foregroundDisplay: DesktopNotificationForegroundDisplay = {
         title,
         body,
         payload,
         replaceKey,
         deliveryKey,
-        feedSource: parseNotificationFeedSource(feedSource),
+        feedSource: parsedFeedSource,
         foregroundAppLocal: parsedForegroundAppLocal,
       };
       return showNativeNotification({
@@ -185,17 +217,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
         replaceKey,
         deliveryKey,
         onClick: () => bridge.deliverNotificationClick(payload),
-        onForegroundSuppressed: () => {
-          const delivered = bridge.deliverForegroundNotificationDisplay(
-            readSenderWebContentsId(event),
-            foregroundDisplay,
-          );
-          if (!delivered) {
-            throw new Error(
-              "notifications.show could not reach the focused renderer",
-            );
-          }
-        },
+        onForegroundSuppressed: () => forwardDisplay(foregroundDisplay),
       });
     },
   );
@@ -299,6 +321,64 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       );
     },
   );
+}
+
+function parseNotificationFeedOccurrences(
+  value: unknown,
+): ReadonlyArray<DesktopNotificationFeedOccurrence> | null {
+  // Older renderer/preload pairs omit this argument.
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 5_000) {
+    throw new Error(
+      "notifications.show requires a non-empty bounded feed batch",
+    );
+  }
+  return value.map((entry: unknown): DesktopNotificationFeedOccurrence => {
+    if (
+      entry === null ||
+      typeof entry !== "object" ||
+      !("key" in entry) ||
+      typeof entry.key !== "string" ||
+      entry.key.length === 0 ||
+      !("userId" in entry) ||
+      (entry.userId !== null && typeof entry.userId !== "string") ||
+      !("chimeEventType" in entry) ||
+      (entry.chimeEventType !== "needs_action" &&
+        entry.chimeEventType !== "failure" &&
+        entry.chimeEventType !== "done" &&
+        entry.chimeEventType !== "info") ||
+      !("title" in entry) ||
+      typeof entry.title !== "string" ||
+      !("body" in entry) ||
+      typeof entry.body !== "string" ||
+      !("replaceKey" in entry) ||
+      typeof entry.replaceKey !== "string" ||
+      !("payload" in entry) ||
+      !("originHostId" in entry) ||
+      (entry.originHostId !== null && typeof entry.originHostId !== "string") ||
+      !("epicId" in entry) ||
+      (entry.epicId !== null && typeof entry.epicId !== "string") ||
+      !("chatId" in entry) ||
+      (entry.chatId !== null && typeof entry.chatId !== "string") ||
+      !("feedSource" in entry) ||
+      (entry.feedSource !== "host" && entry.feedSource !== "cloud")
+    ) {
+      throw new Error("notifications.show requires valid feed occurrences");
+    }
+    return {
+      key: entry.key,
+      userId: entry.userId,
+      chimeEventType: entry.chimeEventType,
+      title: entry.title,
+      body: entry.body,
+      payload: entry.payload,
+      replaceKey: entry.replaceKey,
+      feedSource: entry.feedSource,
+      originHostId: entry.originHostId,
+      epicId: entry.epicId,
+      chatId: entry.chatId,
+    };
+  });
 }
 
 function parseNotificationFeedSource(

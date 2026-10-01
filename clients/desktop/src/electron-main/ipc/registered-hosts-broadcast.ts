@@ -97,6 +97,19 @@ export function registerRegisteredHostsBroadcast(
   fleet: DesktopHostFleetSource,
 ): void {
   const timer = setInterval(() => {
+    // Skipped while the local host is pushing the registry to this process
+    // (`local-host-inventory-subscription.ts`): that push arrives through
+    // `acceptPushedRows`, which is the same adoption this tick's `refresh()`
+    // performs, from a read the host made anyway. Two readers of one lease is
+    // exactly the duplication this module exists to collapse.
+    //
+    // Read per TICK rather than used to stop and restart the timer, so the
+    // cadence has one owner and one lifetime. A flag that got stuck `true`
+    // would be the only way this could silence the fallback, and the
+    // subscription sets it `false` for every way its stream can be less than
+    // healthy - a drop, a host restart, a method the host does not serve, or
+    // rows the host itself marked stale.
+    if (fleet.isPushActive()) return;
     void fleet.refresh();
   }, REGISTERED_HOSTS_POLL_MS);
   // The cadence must never be what keeps the main process alive.

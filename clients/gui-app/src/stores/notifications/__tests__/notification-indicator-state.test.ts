@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { HostNotificationsCloudFeedRow } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationsCloudFeedRow,
+  HostNotificationsCloudFeedRowV11,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   mergeHostPendingForkIntoCloudIndicators,
   selectCloudNotificationIndicatorProjection,
@@ -211,6 +214,43 @@ describe("cloud notification indicator derivation", () => {
   ): Record<string, HostNotificationsCloudFeedRow> {
     return Object.fromEntries(rows.map((entry) => [entry.entryId, entry]));
   }
+
+  it("does not light the chat's approval glyph for an unresolved browser prompt", () => {
+    const browserRow: HostNotificationsCloudFeedRowV11 = {
+      entryId: "browser-1",
+      originHostId: "host-b",
+      coalesceKey: "browser.human.needed:chat-1",
+      entry: {
+        id: "browser-1",
+        updatedAt: 1,
+        readAt: null,
+        kind: "browser.human.needed",
+        sourceRef: null,
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        payload: {
+          kind: "browser_human_needed",
+          epicId: "epic-1",
+          chatId: "chat-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+          reason: "sign in",
+        },
+      },
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+    const result = selectCloudNotificationIndicators(
+      { "browser-1": browserRow },
+      ["epic-1"],
+      ["chat-1"],
+    );
+
+    expect(result.chats).toEqual({});
+    expect(result.epics).toEqual({});
+  });
 
   it("uses the origin's durable terminal ordering cursor", () => {
     const result = selectCloudNotificationIndicators(

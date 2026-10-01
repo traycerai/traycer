@@ -18,8 +18,10 @@ import {
   profileCopyOutcomesPollActivity,
   type ProfileCopyPollActivity,
 } from "@/lib/profile-copy/profile-copy-model";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -399,12 +401,38 @@ const HARNESS_RESET_LANES: ReadonlySet<string> = new Set([
   HARNESS_ALL_AVAILABLE_POLL_LANE.id,
 ]);
 
+const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
+  id: "a2a-peer-pending",
+  initialDelayMs: 2 * SECOND_MS,
+  maxDelayMs: 5 * MINUTE_MS,
+};
+
 const LATEST_SCHEDULING = {
   mode: "latest",
   joinResponseTimeoutMs: null,
 } as const;
 
 export const HOST_METHOD_POLL_TABLE = {
+  "organization.read": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.refresh": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.history": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.command": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Settings > Browser's saved-logins list. A bounded read that can coalesce,
   // and no cadence: the list changes only when the person on this screen
   // clears a row or a site writes a cookie, and the group refetches on the
@@ -524,10 +552,10 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
-  // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
-  // queue requests with this extended response budget so a slow-but-successful
-  // probe is not discarded client-side while the host finishes it; the value
-  // is declared once in `rate-limit-timing.ts` and must match exactly.
+  // Claude refresh-safe probe alone is budgeted 90s). `fetchProviderRateLimits`
+  // requests with this extended response budget so a slow-but-successful probe
+  // is not discarded client-side while the host finishes it; the value is
+  // declared once in `rate-limit-timing.ts` and must match exactly.
   "host.getRateLimitUsage": {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
@@ -698,8 +726,16 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The countdown card's "Switch now" (the verb runs whatever step the host
+  // planned), on the same terms as `cancel`: it names the revision it expects,
+  // so two rapid presses are two requests.
+  "chat.fallback.proceed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The destination menu's candidate list, and the ONE fallback method that is
-  // not `fifo`. The other four mutate and name the revision they expect, so two
+  // not `fifo`. The other five mutate and name the revision they expect, so two
   // rapid answers must stay two ordered requests. This one is read-only - no
   // probe, no gauge write, no record write - so a later read supersedes an
   // earlier one and `LATEST_SCHEDULING` is the honest scheduling: a user who
@@ -890,6 +926,20 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.listHarnessModels": { ...LATEST_SCHEDULING, poll: null },
   "agent.list": { ...LATEST_SCHEDULING, poll: null },
+  "agent.resolveMessagePeer": {
+    ...LATEST_SCHEDULING,
+    // Once titled, live projection/remount refresh owns titles. A newly
+    // created peer may still be awaiting automatic title generation.
+    poll: defineConditionPolicy("agent.resolveMessagePeer", {
+      classify: (data) =>
+        data === undefined || data.peer === null || data.peer.title === null
+          ? A2A_PEER_PENDING_POLL_LANE
+          : false,
+      initialErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      staleDataErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
   // Sending a message enqueues it in the recipient's inbox.
   "agent.sendMessage": {
     mode: "fifo",
@@ -923,7 +973,6 @@ export const HOST_METHOD_POLL_TABLE = {
   // Archiving retires the agent record; fifo so a tap is not coalesced away.
   "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
-  "host.directory.list": { ...LATEST_SCHEDULING, poll: null },
   // Internal profile-copy contracts still need scheduling rows because this
   // table is exhaustive over the shared registry. Rows grant no authority:
   // the host rejects user principals on all four coordination verbs.
@@ -975,6 +1024,76 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dial-only lease verbs: one host calls these on another, never the
+  // renderer. Here because this table is exhaustive over the registry. `fifo`
+  // because each acquires, releases or ends a lease and must never coalesce.
+  "host.portForward.acquireLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.releaseLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.leaseEnded": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The host-level forwards listing: only the newest answer means anything.
+  //
+  // Opt-in polling (`poll: true`), for one caller: Settings ▸ Overview ▸ Ports,
+  // whose tab trigger carries a count of these rows. The host has no change
+  // signal for port forwards - nothing is pushed when a forward stops, binds or
+  // is cut from another machine - so with no cadence the count kept whatever
+  // the page read on open. Every 15 seconds while the page is open and the
+  // window is visible (never in the background) was the user's call.
+  "portForward.listForHost": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
+  // Stopping a forward and cutting a lease both tear down live sockets.
+  "portForward.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "portForward.cutLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only, like `host.agent.createFromRemoteSender` below: the agent's
+  // host calls these on the machine its browser realm lives on, never the
+  // renderer. They are here because this table is exhaustive over the
+  // registry. `fifo` for both - a cell is a side-effecting script and a
+  // release retires a realm, so neither may be coalesced with another call.
+  "browser.repl.runCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.releaseRealm": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.stopCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only in the other direction: the machine running a browser realm
+  // asks the agent's host for a person's decision. Never the renderer; here
+  // for exhaustiveness. `fifo` - each question is its own card and must
+  // never be coalesced with another.
+  "browser.repl.requestApproval": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Dial-only: one host calls this on another, never the renderer. It is here
   // because this table is exhaustive over the registry, not because the GUI
   // has a caller. `fifo` matches `agent.create`, whose effect it shares -
@@ -1004,16 +1123,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Pinning changes a task's persisted ordering preference.
   "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Opt-in (`poll: true`) and short, for one reader only: the pending-title
-  // fetcher (`providers/pending-epic-title-fetcher.tsx`) re-asks for a
-  // just-created epic's title while generation is in flight and no session is
-  // mounted to learn it from. Every other reader leaves `poll` unset and is
-  // not polled. Bounded by the 30s title-generation backstop, so the cadence
-  // sets how quickly a background tab picks up its name, not how long it asks.
-  "epic.getTaskContexts": {
-    ...LATEST_SCHEDULING,
-    poll: { kind: "fixed", intervalMs: 2 * SECOND_MS },
-  },
+  "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
   // Creating an epic persists a new collaboration root.
   "epic.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Batch deletion permanently removes the selected epics.
@@ -1420,6 +1530,10 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: null,
   },
+  "epic.getChatRunSettingsBatch": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   // The terminal-agent RECORD read (TUI eviction), the sibling of
   // `epic.listChatRecords` above and polled at its exact cadence for its
   // exact reasons: the facts it serves are committed to the host's registry
@@ -1452,8 +1566,17 @@ export const HOST_METHOD_POLL_TABLE = {
   "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Unary byte channel, same posture as `epic.readChatAttachment`.
-  "drafts.putBlob": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Unary byte channel, same posture as `epic.readChatAttachment` - but the
+  // only one of the drafts methods whose BODY is megabytes rather than KB, so
+  // it is also the only one that declares a budget. The value is declared once
+  // in `draft-blob-transport-budget.ts` and must match exactly: `putDraftBlobs`
+  // names it on every dispatch, and the host client refuses a budget this table
+  // does not declare for the method.
+  "drafts.putBlob": {
+    mode: "fifo",
+    joinResponseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },
   // Polled: no host-pushed invalidation channel exists for this event today
   // (see the implementation report), so without a cadence a fork detected
@@ -2235,6 +2358,10 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A bounded read of the host's recent-decisions log (Permissions ▸ Activity).
+  // The tab refetches on mount and on its own refresh; a cadence here would
+  // wake the host for a log that grows only while an Auto mode turn runs.
+  "autoJudge.listRecent": { ...LATEST_SCHEDULING, poll: null },
   "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
   // Last-write-wins on the server, so ordering is the client's job: rapid
   // saves must reach the host in the order the user made them. `fifo` is not
@@ -2255,6 +2382,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // stuck pending forever with no other trigger (ticket-7 fixup-01).
   "host.usage.summary": {
     ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
     poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
   },
 } satisfies HostMethodPolicyTable;

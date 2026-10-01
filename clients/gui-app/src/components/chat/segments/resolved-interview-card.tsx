@@ -24,12 +24,22 @@ import {
 } from "@/components/chat/segments/interview-review-model";
 import {
   InterviewDraftStatus,
+  InterviewMarkdown,
   InterviewQuestionHeader,
   InterviewQuestionPager,
   INTERVIEW_DRAFT_EVIDENCE_CLASS,
   StaticInterviewOptions,
 } from "@/components/chat/segments/interview-visuals";
 import { cn } from "@/lib/utils";
+
+// A note is the user's aside on an answer: quieter than the answer itself. The
+// prose body colour is a Typography variable, so the muted tone has to be set
+// through it rather than a text-colour utility the prose wrapper would win over.
+const NOTE_PROSE_CLASS = cn(
+  "italic",
+  "[--tw-prose-body:var(--color-muted-foreground)]",
+  "[--tw-prose-invert-body:var(--color-muted-foreground)]",
+);
 import {
   useChatCollapsibleTileInstanceId,
   useChatFindActiveTargetUnitId,
@@ -451,9 +461,8 @@ function ReviewPage(props: {
               valueIndex: index,
             }) ?? undefined
           }
-          className="text-ui-xs italic text-muted-foreground/80"
         >
-          {note}
+          <InterviewMarkdown markdown={note} className={NOTE_PROSE_CLASS} />
         </div>
       ))}
     </div>
@@ -605,9 +614,8 @@ function FallbackAnswer(props: {
         <div
           key={stringOccurrenceKey(props.answer.notes, note, index)}
           data-chat-find-unit={props.noteFindUnitIds[index] ?? undefined}
-          className="text-ui-xs italic text-muted-foreground/80"
         >
-          {note}
+          <InterviewMarkdown markdown={note} className={NOTE_PROSE_CLASS} />
         </div>
       ))}
     </div>

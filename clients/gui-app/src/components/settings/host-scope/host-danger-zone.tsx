@@ -1,35 +1,20 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
+import type { TraycerRemoved } from "@traycer-clients/shared/platform/runner-host";
 import { toast } from "sonner";
-import { useQueryClient } from "@tanstack/react-query";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
-import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDeregisterHostFromAccount } from "@/hooks/auth/use-deregister-host-mutation";
 import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
+import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
+import { HOST_FOREGROUND_REMOVE_TRAYCER_REASON } from "@/lib/host/host-lifecycle-copy";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
-import { toastFromHostError } from "@/lib/host-error-toast";
-import { hostQueryKeys, snapshotsMutationKeys } from "@/lib/query-keys";
-import type { HostRpcRegistry } from "@/lib/host";
-import {
-  HostScopeConnecting,
-  HostScopeGate,
-} from "@/components/settings/host-scope/host-scope-gate";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
-
-const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
-
-interface ClearLocalSnapshotsMutationContext {
-  readonly hostId: string | null;
-  readonly userId: string | null;
-}
 
 /**
  * Destructive actions that belong to a MACHINE.
@@ -46,17 +31,13 @@ export function HostDangerZone(props: {
   readonly scope: HostScope;
 }): ReactNode {
   const { scope } = props;
+  const { hostManagement } = useRunnerHost();
   if (scope.host === null) return null;
-  // The two rows sit on DIFFERENT capability planes, and one gate around both
-  // was the last place this branch still confused them.
-  //
-  // Clearing snapshots is host RPC and needs a live route, so it stays behind
-  // the gate — which also keeps the gate's explanation of WHY it is missing.
-  // Removing Traycer is the local CLI bridge (`hostManagement.uninstallTraycer()`)
-  // and needs no route at all; the moment someone reaches for it is precisely
-  // the moment there isn't one, on a host that is stopped, broken or wedged.
-  // Gating it too took the only way to remove a broken install out of the app
-  // that installed it, in the one state anyone wants it.
+  if (scope.host.isLocalMachine && hostManagement === null) return null;
+  if (!scope.host.isLocalMachine && !scope.host.registered) return null;
+  // Both removal paths stay available when the host cannot answer RPCs.
+  // Local uninstall uses the CLI bridge; remote account removal writes to the
+  // account. File edit snapshots are host RPC and now live in the Data tab.
   return (
     <SettingsGroup
       group={HOST_OVERVIEW.definitions.dangerZone}
@@ -65,17 +46,7 @@ export function HostDangerZone(props: {
       dataTestId="host-danger-zone"
       fill={false}
     >
-      <HostScopeGate
-        scope={scope}
-        skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
-      >
-        <ClearFileEditSnapshotsRow scope={scope} />
-      </HostScopeGate>
-      {/* The remote counterpart sits on a THIRD capability plane: not host RPC
-          and not the local CLI bridge, but an account write. So it is outside
-          the gate for the same reason "Remove Traycer" is — it needs no route,
-          and a host you cannot reach is a common reason to want it gone. */}
-      <HostRemovalRow host={scope.host} />
+      <HostRemovalRow host={scope.host} onRemoved={scope.returnToActive} />
     </SettingsGroup>
   );
 }
@@ -92,7 +63,10 @@ export function HostDangerZone(props: {
  * Account removal is registered-only: a directory-only host has no membership to
  * end, so the row would be a destructive control with nothing behind it.
  */
-function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
+function HostRemovalRow(props: {
+  readonly host: HostScopeOption;
+  readonly onRemoved: () => void;
+}): ReactNode {
   const { host } = props;
   if (host.isLocalMachine) return <RemoveTraycerRow />;
   if (!host.registered) return null;
@@ -104,6 +78,7 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
       key={host.hostId}
       hostId={host.hostId}
       hostName={host.name}
+      onRemoved={props.onRemoved}
     />
   );
 }
@@ -113,8 +88,8 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
  *
  * NEVER the word "deregister" in copy, and the collision is not hypothetical:
  * this app already says "Deregister" for OS-SERVICE deregistration in the
- * Advanced disclosure one card away, which is a machine-local repair operation
- * with nothing in common with this one.
+ * Installation group just above, on the same tab, which is a machine-local
+ * repair operation with nothing in common with this one.
  *
  * The copy is written against what `POST /api/v3/hosts/:hostId/deregister`
  * actually does. It stamps `deregisteredAt` and clears the presence lease; it
@@ -136,12 +111,21 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
  * exists. Coming back requires the host to be set up again on that machine —
  * and because the row is deregistered rather than revoked, a re-enrollment
  * re-adopts the SAME id with its policy preserved.
+ *
+ * A successful removal hands the page back to the active host (`onRemoved`).
+ * Otherwise Settings stays pinned to the id just removed, and the next list
+ * refresh resolves that pin to the `vanished` notice - "<uuid> is no longer
+ * registered" - for a removal the user confirmed seconds ago. That notice is
+ * for a host that disappears out from under the page; here the user asked for
+ * the removal and the toast names it, so following the active host again is
+ * not the silent retarget `resolveScopedHost` refuses.
  */
 function RemoveFromAccountRow(props: {
   readonly hostId: string;
   readonly hostName: string;
+  readonly onRemoved: () => void;
 }): ReactNode {
-  const { hostId, hostName } = props;
+  const { hostId, hostName, onRemoved } = props;
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Closing over `hostId` is NOT by itself what stops a scope change from
   // retargeting an open confirmation - a re-render with a new prop rebuilds
@@ -188,130 +172,10 @@ function RemoveFromAccountRow(props: {
             onSuccess: () => {
               setConfirmOpen(false);
               toast.success(`Removed ${hostName} from this account`);
+              // Last: it moves the scope, which remounts this row's page.
+              onRemoved();
             },
           });
-        }}
-      />
-    </>
-  );
-}
-
-function ClearFileEditSnapshotsRow(props: {
-  readonly scope: HostScope;
-}): ReactNode {
-  const { scope } = props;
-  // The scope moving to another host underneath this open dialog is handled
-  // at the boundary, not here: `HostScopeGate` keys this subtree by host, so
-  // a host switch unmounts the dialog with everything else. A confirmation
-  // armed against one machine cannot survive to be retargeted at another.
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const queryClient = useQueryClient();
-  const currentUserId = useAuthStore(
-    (state) => state.contextMetadata?.userId ?? state.profile?.userId ?? null,
-  );
-  const hostLabel = scope.hostLabel;
-  const client = scope.client;
-
-  const storageSizeQuery = useHostQuery<
-    HostRpcRegistry,
-    "snapshots.getLocalStorageSize"
-  >({
-    cacheKeyIdentity: undefined,
-    client,
-    method: "snapshots.getLocalStorageSize",
-    params: SNAPSHOTS_LOCAL_STORAGE_PARAMS,
-    options: null,
-  });
-
-  const clearSnapshotsMutation = useHostMutation<
-    HostRpcRegistry,
-    "snapshots.clearLocalSnapshots",
-    ClearLocalSnapshotsMutationContext
-  >({
-    client,
-    method: "snapshots.clearLocalSnapshots",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: snapshotsMutationKeys.clearLocalSnapshots(),
-      onMutate: () => ({
-        hostId: client === null ? null : client.getActiveHostId(),
-        userId: currentUserId,
-      }),
-      onSuccess: (result, _variables, context) => {
-        if (context.hostId !== null) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.method<
-              HostRpcRegistry,
-              "snapshots.getLocalStorageSize"
-            >(
-              context.hostId,
-              "snapshots.getLocalStorageSize",
-              SNAPSHOTS_LOCAL_STORAGE_PARAMS,
-            ),
-          });
-        }
-        if (context.hostId !== null && context.userId !== null) {
-          useLocalSnapshotClearStore
-            .getState()
-            .markCleared(context.userId, context.hostId, Date.now());
-        }
-        setConfirmOpen(false);
-        toast.success("Cleared file edit snapshots", {
-          description: `${formatSnapshotBytes(result.clearedBytes)} removed.`,
-        });
-      },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't clear file edit snapshots."),
-    },
-  });
-
-  return (
-    <>
-      <SettingsRow
-        row={HOST_OVERVIEW.definitions.fileEditSnapshots}
-        status={`Pre-edit file snapshots for Undo, and cached long plan content, stored on ${hostLabel}. This data stays on that host and is never synced.`}
-        control={
-          <div className="flex flex-col items-end gap-2">
-            <div
-              className="font-mono text-code-xs text-muted-foreground"
-              data-testid="settings-local-snapshots-size"
-            >
-              <SnapshotsSize query={storageSizeQuery} />
-            </div>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              disabled={client === null || clearSnapshotsMutation.isPending}
-              data-testid="settings-clear-file-edit-snapshots"
-              onClick={() => {
-                setConfirmOpen(true);
-              }}
-            >
-              {clearSnapshotsMutation.isPending ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId="settings-clear-file-edit-snapshots-spinner"
-                  variant={undefined}
-                />
-              ) : null}
-              Clear snapshots
-            </Button>
-          </div>
-        }
-      />
-      <ConfirmDestructiveDialog
-        blockedReason={null}
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title={`Clear file edit snapshots on ${hostLabel}?`}
-        description={`Cleared snapshots on ${hostLabel} cannot be restored. Conversation history and checkpoint records stay visible, but Undo is disabled for past turns on that host.`}
-        cascadeSummary={null}
-        actionLabel="Clear snapshots"
-        isPending={clearSnapshotsMutation.isPending}
-        onConfirm={() => {
-          if (client === null) return;
-          clearSnapshotsMutation.mutate(SNAPSHOTS_LOCAL_STORAGE_PARAMS);
         }}
       />
     </>
@@ -346,51 +210,32 @@ export function LocalRecoveryDangerZone(): ReactNode {
   );
 }
 
-/**
- * Uninstalling the host is the most host-scoped action there is, so it lives
- * on the host's own page rather than beside app-global resets in General.
- * Local host only — there is no remote uninstall verb.
- */
-function RemoveTraycerRow(): ReactNode {
-  const { hostManagement } = useRunnerHost();
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const uninstall = useRunnerUninstallTraycer();
-  if (hostManagement === null) return null;
+interface RemovedTraycerStatusProps {
+  readonly removed: TraycerRemoved;
+  readonly blockedReason: string | null;
+  readonly reasonId: string;
+  readonly onRetry: () => void;
+}
 
-  if (uninstall.isSuccess) {
-    if (uninstall.data.serviceRegistrationRetained === true) {
-      return (
-        <SettingsRow
-          row={HOST_OVERVIEW.definitions.removalIncomplete}
-          control={
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              data-testid="settings-retry-uninstall"
-              onClick={() => uninstall.mutate()}
-            >
-              Try again
-            </Button>
-          }
-        />
-      );
-    }
-    if (uninstall.data.serviceRegistrationRetained === null) {
-      return (
-        <SettingsRow
-          row={HOST_OVERVIEW.definitions.removalUnverified}
-          control={
-            <span className="text-muted-foreground text-xs">
-              Check terminal
-            </span>
-          }
-        />
-      );
-    }
+function RemovedTraycerStatus(props: RemovedTraycerStatusProps): ReactNode {
+  const { removed, blockedReason, reasonId } = props;
+  const reasonHint =
+    blockedReason === null ? undefined : (
+      <span id={reasonId}>{blockedReason}</span>
+    );
+  // The host's Scheduled Task is not this account's (another Windows user's,
+  // or one whose owner could not be confirmed - main's copy says which): the
+  // removal left it alone on purpose and removed everything of this
+  // account's, so there is nothing to try again. Say so on the finished row.
+  if (removed.serviceWarning !== null) {
     return (
       <SettingsRow
         row={HOST_OVERVIEW.definitions.removed}
+        hint={
+          <span data-testid="settings-remove-traycer-service-warning">
+            {removed.serviceWarning}
+          </span>
+        }
         control={
           <Button
             type="button"
@@ -405,17 +250,107 @@ function RemoveTraycerRow(): ReactNode {
       />
     );
   }
-
-  return (
-    <>
+  if (removed.serviceRegistrationRetained === true) {
+    return (
       <SettingsRow
-        row={HOST_OVERVIEW.definitions.removeTraycer}
+        row={HOST_OVERVIEW.definitions.removalIncomplete}
+        hint={reasonHint}
         control={
           <Button
             type="button"
             variant="destructive"
             size="sm"
-            disabled={uninstall.isPending}
+            disabled={blockedReason !== null}
+            aria-describedby={blockedReason === null ? undefined : reasonId}
+            data-testid="settings-retry-uninstall"
+            onClick={props.onRetry}
+          >
+            Try again
+          </Button>
+        }
+      />
+    );
+  }
+  if (removed.serviceRegistrationRetained === null) {
+    return (
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removalUnverified}
+        control={
+          <span className="text-muted-foreground text-xs">Check terminal</span>
+        }
+      />
+    );
+  }
+  return (
+    <SettingsRow
+      row={HOST_OVERVIEW.definitions.removed}
+      control={
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          data-testid="settings-quit-after-uninstall"
+          onClick={() => requestAppQuit()}
+        >
+          Quit Traycer
+        </Button>
+      }
+    />
+  );
+}
+
+/**
+ * Uninstalling the host is the most host-scoped action there is, so it lives
+ * on the host's own page rather than beside app-global resets in General.
+ * Local host only — there is no remote uninstall verb.
+ */
+function RemoveTraycerRow(): ReactNode {
+  const { hostManagement } = useRunnerHost();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const uninstall = useRunnerUninstallTraycer();
+  // THIS machine's host was started in a terminal: removing Traycer would stop
+  // a run this app did not start, and the CLI refuses it. Withheld with the
+  // reason on every control that removes - the row's button, its confirm (a
+  // run that began under an open dialog) and the incomplete state's retry.
+  const blockedReason = useLocalHostForegroundRun()
+    ? HOST_FOREGROUND_REMOVE_TRAYCER_REASON
+    : null;
+  const reasonId = useId();
+  if (hostManagement === null) return null;
+  const reasonHint =
+    blockedReason === null ? undefined : (
+      <span id={reasonId}>{blockedReason}</span>
+    );
+
+  // Only a removal that RAN switches the row. A `declined` one removed
+  // nothing, so the row stays on Remove Traycer and the hook's notice says why.
+  const removed =
+    uninstall.isSuccess && uninstall.data.kind === "removed"
+      ? uninstall.data
+      : null;
+  if (removed !== null) {
+    return (
+      <RemovedTraycerStatus
+        removed={removed}
+        blockedReason={blockedReason}
+        reasonId={reasonId}
+        onRetry={() => uninstall.mutate()}
+      />
+    );
+  }
+
+  return (
+    <>
+      <SettingsRow
+        row={HOST_OVERVIEW.definitions.removeTraycer}
+        hint={reasonHint}
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={uninstall.isPending || blockedReason !== null}
+            aria-describedby={blockedReason === null ? undefined : reasonId}
             data-testid="settings-remove-traycer"
             onClick={() => setConfirmOpen(true)}
           >
@@ -431,7 +366,7 @@ function RemoveTraycerRow(): ReactNode {
         }
       />
       <ConfirmDestructiveDialog
-        blockedReason={null}
+        blockedReason={blockedReason}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Remove Traycer from this computer?"
@@ -447,42 +382,4 @@ function RemoveTraycerRow(): ReactNode {
       />
     </>
   );
-}
-
-function SnapshotsSize(props: {
-  readonly query: {
-    readonly isPending: boolean;
-    readonly isError: boolean;
-    readonly data: { readonly bytes: number } | undefined;
-  };
-}): ReactNode {
-  const { query } = props;
-  if (query.isPending) {
-    return (
-      <span className="inline-flex items-center gap-1.5">
-        <AgentSpinningDots
-          className={undefined}
-          testId="settings-local-snapshots-size-spinner"
-          variant={undefined}
-          tone="muted"
-        />
-        Calculating
-      </span>
-    );
-  }
-  if (query.isError) return "Unavailable";
-  return formatSnapshotBytes(query.data?.bytes ?? 0);
-}
-
-function formatSnapshotBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"] as const;
-  const exponent = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = bytes / 1024 ** exponent;
-  const precision =
-    exponent === 0 || value >= 10 || Number.isInteger(value) ? 0 : 1;
-  return `${value.toFixed(precision)} ${units[exponent] ?? "TB"}`;
 }

@@ -10,9 +10,9 @@ import type { HostRequestSpec } from "@/hooks/host/use-host-queries";
 import { useHostQueriesWithResponseMap } from "@/hooks/host/use-host-queries";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
-import { useIsRateLimitQueueDraining } from "@/hooks/rate-limits/use-is-rate-limit-queue-draining";
 import { useRunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 import type { HostRpcRegistry } from "@/lib/host";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 import {
   isRateLimitCapableProvider,
   isRateLimitProfileFetchEligible,
@@ -20,7 +20,7 @@ import {
   resolveRateLimitFetchEligibility,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
-import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import {
   mapResponseToProviderRateLimitEnvelope,
   type ProviderRateLimitEnvelope,
@@ -67,20 +67,21 @@ const EMPTY_RATE_LIMIT_REQUESTS: ReadonlyArray<
  * `PASSIVE_PROVIDER_RATE_LIMIT_OPTIONS` (`enabled: false`), so calling this
  * hook - on picker mount, profile-menu open, hover, focus, or row change -
  * never itself initiates a `host.getRateLimitUsage` request. It only
- * reflects whatever another actor (the shared serial queue, an explicit
- * refresh from this same hook, or another mounted observer of the same host)
- * has already written into that exact `(host, provider, profile)` cache key.
+ * reflects whatever another actor (the app-shell poll, an explicit refresh
+ * from this same hook, or another mounted observer of the same host) has
+ * already written into that exact `(host, provider, profile)` cache key.
  *
  * Explicit refresh addresses exactly one `(host, provider, profile)`: the
- * `ephemeralProcess` lane (codex, claude-code) routes through the shared
- * serial queue via `target.queueScope` (never the default-host-bound
- * `useRateLimitQueueScope`), so a refresh from a tab-scoped picker still
- * serializes against every other host's subprocess work; the `httpFetch`
- * lane (openrouter, kilocode) refetches this profile's own passive query
- * directly - no shared queue to route through, preserving that lane's
- * existing concurrent-refresh behavior. Refresh is independent of profile
- * selection and picker/menu open state - each entry's `refresh` is a plain
- * function a caller invokes for whichever profile it is previewing.
+ * `ephemeralProcess` lane (codex, claude-code, grok) calls
+ * `fetchProviderRateLimits` with `target.fetchScope` - the tab's pinned host,
+ * never the default-host-bound `useProviderRateLimitFetchScope` - so a
+ * refresh from a tab-scoped picker reads and writes the host that tab runs
+ * on; the `httpFetch` lane (openrouter, kilocode, huggingface, opencode,
+ * cursor, antigravity) refetches this profile's own passive query directly,
+ * keyed by its profile id - which only antigravity, among those, has more
+ * than one of. Refresh is independent of profile selection and
+ * picker/menu open state - each entry's `refresh` is a plain function a
+ * caller invokes for whichever profile it is previewing.
  */
 export function useProfileUsageComparison({
   runTargetHostId,
@@ -92,7 +93,6 @@ export function useProfileUsageComparison({
     enabled: target.isReady,
     subscribed: true,
   });
-  const draining = useIsRateLimitQueueDraining();
   const rateLimitProviderId: RateLimitProviderId | null =
     isRateLimitCapableProvider(providerId) ? providerId : null;
   const lane =
@@ -114,8 +114,11 @@ export function useProfileUsageComparison({
   // this hook's mount time. Mirrors `useTrayEpicsSource`'s `nowMs` pattern.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
+    return startVisibleInterval({
+      tick: () => setNow(Date.now()),
+      intervalMs: 60_000,
+      fireOnShow: true,
+    });
   }, []);
 
   const requests = useMemo(() => {
@@ -159,8 +162,6 @@ export function useProfileUsageComparison({
       );
       const refreshStatus = deriveProfileUsageRefreshStatus({
         isFetchingThisProfile: query?.isFetching ?? false,
-        queueDraining: draining,
-        lane,
       });
       const fetchEligible =
         fetchEligibility !== null &&
@@ -170,11 +171,14 @@ export function useProfileUsageComparison({
           return;
         }
         if (lane === "ephemeralProcess") {
-          await enqueueRateLimitFetchForScope(
-            target.queueScope,
-            rateLimitProviderId,
-            DEFAULT_ACCOUNT_CONTEXT,
-            { force, profileId },
+          await fetchProviderRateLimits(
+            target.fetchScope,
+            {
+              providerId: rateLimitProviderId,
+              accountContext: DEFAULT_ACCOUNT_CONTEXT,
+              profileId,
+            },
+            { force },
           );
           return;
         }
@@ -182,11 +186,12 @@ export function useProfileUsageComparison({
         await query.refetch();
       };
       const refresh = (): Promise<void> => runFetch(true);
-      // Automatic callers only: the queue's `force: false` path skips
-      // still-fresh cache and honors the usage-fetch cool-down, so this can
-      // never re-trip a tripped server-side limit the way a forced refresh
-      // loop could. (The httpFetch lane has no such queue - its refetch is a
-      // cheap direct HTTP call either way.)
+      // Automatic callers only: `force: false` skips a still-fresh cache entry
+      // here and lets the host answer from its gauge inside its floors -
+      // including the long floor it keeps after a Claude `usage_fetch_failed`
+      // - so this can never re-trip a tripped server-side limit the way a
+      // forced refresh loop could. (The httpFetch lane's refetch is a cheap
+      // direct HTTP call either way.)
       const ensureFresh = (): Promise<void> => runFetch(false);
       map.set(profileId, {
         profileId,
@@ -201,14 +206,13 @@ export function useProfileUsageComparison({
     return map;
   }, [
     cacheQueries,
-    draining,
     fetchEligibility,
     lane,
     now,
     profiles,
     providerId,
     rateLimitProviderId,
-    target.queueScope,
+    target.fetchScope,
   ]);
 
   return { hostId: target.hostId, isReady: target.isReady, entries };

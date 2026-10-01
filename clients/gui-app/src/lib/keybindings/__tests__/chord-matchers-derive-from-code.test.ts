@@ -102,26 +102,32 @@ const CODE_DERIVED_MATCHERS: ReadonlyArray<{
  */
 const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.ts": 3,
-  "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 1,
+  "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 2,
   // These reads drive viewport editing and resize-handle navigation. They do
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
+  // Bare ArrowRight accepts an offered suggestion: a named platform
+  // navigation/acceptance key, not a registered physical chord.
+  "gui-app/src/components/chat/composer/chat-composer-editor-slot.tsx": 1,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
-  "gui-app/src/components/chat/composer/prompt-stash-control.tsx": 7,
+  "gui-app/src/components/chat/composer/prompt-suggestion.ts": 1,
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
+  // Escape steps the open-as-chat view back one breadcrumb level; a named
+  // non-printable key, not a registered shortcut.
+  "gui-app/src/components/chat/subagent-chat-view.tsx": 1,
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 8,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
   "gui-app/src/components/epic-canvas/canvas/pane-opener.tsx": 1,
   "gui-app/src/components/epic-canvas/canvas/tab-strip.tsx": 2,
   "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx": 1,
   "gui-app/src/components/epic-canvas/document-preview/document-search-bar.tsx": 2,
-  "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": 7,
   "gui-app/src/components/epic-canvas/pip/agent-browser-pip.tsx": 6,
   "gui-app/src/components/epic-canvas/renderers/managed-command-output-tile.tsx": 3,
   "gui-app/src/components/epic-canvas/renderers/terminal-tile-xterm.tsx": 5,
@@ -130,12 +136,37 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-artifact-search.tsx": 9,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-chat-tree.tsx": 3,
   "gui-app/src/components/epic-canvas/sidebar/epic-sidebar-filter.ts": 2,
+  // First-use dropdown mounting: Enter/Space/ArrowDown open a row dropdown on
+  // its first press, and that key is replayed once the menu root mounts.
+  // These are platform navigation keys, not registered shortcut identity.
+  "gui-app/src/components/epic-canvas/sidebar/use-sidebar-row-dropdown-mount.ts": 2,
   "gui-app/src/components/epic-canvas/tile-find/tile-find-bar.tsx": 3,
   "gui-app/src/components/epic-canvas/tile-select-all-bridge.tsx": 2,
-  "gui-app/src/components/epics/epics-list-panel.tsx": 2,
+  "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": 7,
+  // Enter/Space on a row's overlay link, plus the search box's Escape (clears a
+  // non-empty query; not a registered chord).
+  "gui-app/src/components/epics/epics-list-panel.tsx": 3,
+  // The layout editor's sortable list: Space grabs a row (or activates it in
+  // an unordered list), Enter activates, arrows move a grabbed row or, with
+  // Alt, reorder it (L-31), and Escape cancels a grab. All named keys, none of
+  // them a registered chord.
+  "gui-app/src/components/layout-editor/inspector/sortable-list.tsx": 5,
+  // The editor's own Mod+Z / Mod+Shift+Z, matched by the letter the user
+  // reads - see PRINTABLE_CHARACTER_MATCHES - plus the session's Escape, which
+  // pops one inspector level or closes the editor. Escape is a named key.
+  "gui-app/src/components/layout-editor/layout-editor.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
-  "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 4,
+  // A group's chip and its side-strip header open the group editor on F2,
+  // ContextMenu and Shift+F10: named keys, none of them a registered chord.
+  "gui-app/src/components/layout/tabs/side-strip/side-tab-group-header.tsx": 3,
+  "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 3,
+  // The guided tour's card answers arrows, Enter and Escape by name; none is
+  // a registered chord.
+  // Arrows, Home and End walking the minimap's own list - named keys inside an
+  // open card, not chords.
+  "gui-app/src/components/minimap/minimap-list-card.tsx": 4,
+  "gui-app/src/components/onboarding/onboarding-coachmark.tsx": 4,
   "gui-app/src/components/onboarding/onboarding-page.tsx": 4,
   "gui-app/src/components/providers/profile-dropdown.tsx": 4,
   "gui-app/src/components/remote-folder-picker-dialog.tsx": 4,
@@ -143,15 +174,19 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/settings/controls/chord-capture-core.tsx": 2,
   "gui-app/src/components/worktree/worktree-pr-state-icons.tsx": 2,
   "gui-app/src/editor-core/links/artifact-link-popover.tsx": 3,
-  "gui-app/src/editor-core/nodes/mermaid/pan-zoom-svg-viewer.tsx": 7,
   "gui-app/src/hooks/use-primary-action-shortcut.ts": 1,
-  "gui-app/src/lib/browser-view/sessions/screencast-controller.ts": 4,
-  "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 2,
+  "gui-app/src/lib/browser-view/sessions/screencast-controller.ts": 2,
+  "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": 4,
   "gui-app/src/lib/keybindings/bare-key-owner.ts": 1,
   "gui-app/src/lib/keybindings/chord.ts": 4,
   "gui-app/src/lib/notifications/notification-feed-keyboard-navigation.ts": 1,
   "gui-app/src/lib/terminal-line-edit.ts": 6,
   "gui-app/src/providers/keybinding-provider.tsx": 2,
+  // The mac/non-mac history-modifier check, kept separate from every
+  // registered chord matcher above: it reads the character so it can
+  // recognise the SAME convention (Cmd/Ctrl+Z, Ctrl+Y) regardless of which
+  // physical key a layout puts it on - see PRINTABLE_CHARACTER_MATCHES.
+  "shared/keybindings/text-history-shortcut.ts": 1,
 };
 
 /**
@@ -188,8 +223,8 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
     why: "platform mod+A select-all convention",
   },
   "gui-app/src/lib/browser-view/sessions/screencast-input-encoding.ts": {
-    chars: ["v"],
-    why: "the clipboard paste convention - see isScreencastPasteChord",
+    chars: ["v", "y"],
+    why: "the clipboard paste convention (see isScreencastPasteChord), plus the non-mac Ctrl+Y redo spelling - screencastHistoryKey re-derives the viewer's history gesture by character so it can translate it across a mac/non-mac viewer-host pair, the same deliberate character-matching exception as isTextHistoryShortcut",
   },
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": {
     chars: ["r"],
@@ -199,17 +234,17 @@ const PRINTABLE_CHARACTER_MATCHES: Readonly<
     chars: ["r"],
     why: "single-letter accelerator on a visible label inside an open menu",
   },
-  "gui-app/src/components/chat/composer/prompt-stash-control.tsx": {
-    chars: ["d"],
-    why: "single-letter accelerator on a visible label inside an open menu",
+  "gui-app/src/components/layout-editor/layout-editor.tsx": {
+    chars: ["z"],
+    why: "platform mod+Z undo convention, scoped to an open Customize session and matched where the letter is",
   },
-  "gui-app/src/components/epic-canvas/image-preview/image-preview.tsx": {
-    chars: ["+", "-", "0", "=", "F", "_", "f"],
-    why: "unmodified viewer keys: the character typed IS the request, and both spellings are accepted precisely because layouts differ",
+  "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": {
+    chars: ["c", "d"],
+    why: "single-letter accelerators on visible labels inside the open drafts list",
   },
-  "gui-app/src/editor-core/nodes/mermaid/pan-zoom-svg-viewer.tsx": {
+  "gui-app/src/components/epic-canvas/zoom-controls/zoom-controls.tsx": {
     chars: ["+", "-", "0", "=", "F", "_", "f"],
-    why: "unmodified viewer keys, as above",
+    why: "unmodified viewer keys: the character typed IS the request, and both spellings are accepted precisely because layouts differ - shared by every zoomable surface (image preview, image diff, PDF/Word document toolbars, the Mermaid/SVG pan-zoom viewer) since they all render this one cluster",
   },
   "gui-app/src/components/epic-canvas/comm-graph/office/comm-graph-office-canvas.tsx":
     {

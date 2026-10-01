@@ -4,6 +4,7 @@ import {
   type ChatEvent,
   type ChatImportedMetadata,
 } from "@traycer/protocol/persistence/epic/chat-events";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * # Canonical transcript row order
@@ -234,19 +235,21 @@ export function importedChatMarkerRowSource(
  * both are present. Gating on three fields would be three ways to silently
  * draw nothing where the host meant to say something.
  */
-const autoJudgeUnattendedDenialMetadataSchema = z.object({
-  autoJudge: z.object({
-    attendanceReason: z.literal("agent-created"),
-    // `.catch(null)` rather than a required string: a half-written bag must
-    // cost the SENTENCE, never the row, because the row's existence is what an
-    // ordinal is numbered from. `.catch` covers `undefined` too - an absent key
-    // is a failed parse of a non-optional schema - so no `.default` beside it.
-    // `.min(1)` is the same empty-string rule `renderableMetadataString`
-    // enforces above: `""` reads as absent, here as there.
-    rule: z.string().min(1).nullable().catch(null),
-    reason: z.string().min(1).nullable().catch(null),
+const autoJudgeUnattendedDenialMetadataSchema = lazySchema(() =>
+  z.object({
+    autoJudge: z.object({
+      attendanceReason: z.literal("agent-created"),
+      // `.catch(null)` rather than a required string: a half-written bag must
+      // cost the SENTENCE, never the row, because the row's existence is what an
+      // ordinal is numbered from. `.catch` covers `undefined` too - an absent key
+      // is a failed parse of a non-optional schema - so no `.default` beside it.
+      // `.min(1)` is the same empty-string rule `renderableMetadataString`
+      // enforces above: `""` reads as absent, here as there.
+      rule: z.string().min(1).nullable().catch(null),
+      reason: z.string().min(1).nullable().catch(null),
+    }),
   }),
-});
+);
 
 /** What an unattended auto-mode refusal row renders. */
 export interface AutoJudgeUnattendedDenialRowSource {
@@ -282,11 +285,74 @@ export function autoJudgeUnattendedDenialRowSource(
   };
 }
 
+/**
+ * The markers a host stamps on an auto-mode judge notice, one per kind:
+ * `unavailable` (the judge could not run, so commands go to the user),
+ * `policy-not-applied` (a policy file is not, or not wholly, the one deciding)
+ * and `fallback` (Automatic's judge switched from Traycer inference to the
+ * conversation's own provider, billed there). The host writes exactly these
+ * three and nothing else under `metadata.autoJudge` as a string
+ * (`autoJudgeNoticeMarker` in its session manager).
+ */
+export const AUTO_JUDGE_NOTICE_MARKERS = [
+  "unavailable",
+  "policy-not-applied",
+  "fallback",
+] as const;
+
+export type AutoJudgeNoticeMarker = (typeof AUTO_JUDGE_NOTICE_MARKERS)[number];
+
+const autoJudgeNoticeMetadataSchema = lazySchema(() =>
+  z.object({ autoJudge: z.enum(AUTO_JUDGE_NOTICE_MARKERS) }),
+);
+
+/** What an auto-mode judge notice row renders. */
+export interface AutoJudgeNoticeRowSource {
+  readonly marker: AutoJudgeNoticeMarker;
+  /** The host's notice, verbatim - the row's whole body. */
+  readonly message: string;
+}
+
+/**
+ * The auto-mode judge notice row's content, or `null` when this event draws no
+ * row.
+ *
+ * Hosts USED to write each notice as a `permission.blocked` event carrying
+ * the text as its `message` and one of {@link AUTO_JUDGE_NOTICE_MARKERS}
+ * under `metadata.autoJudge` - once per session per kind. No host writes them
+ * any more: the judge's reason rides the approval card it escalated to, and a
+ * durable line read as a present fault long after the mode was switched. The
+ * reader stays because rows already on disk keep their ORDINAL - this
+ * function is part of `eventMaterializesTranscriptRow`, and dropping the row
+ * would renumber every transcript holding one. Clients paint the row as
+ * nothing.
+ *
+ * Gated on the MARKER, never on the event type alone: the host has older
+ * `permission.blocked` emitters that carry no marker and draw no row, and they
+ * must keep drawing none or every transcript holding one would renumber. An
+ * empty or absent message draws nothing either - the notice text is the row -
+ * which is the same empty-string rule {@link renderableMetadataString}
+ * enforces. `turnId` is deliberately not read: a notice emitted with no turn
+ * running carries `null`, and the row sorts on the event's own timestamp.
+ * Shaped like {@link forkedChatLinkRowSource} for the same reason - the
+ * renderer filters on this rather than on a copy of it.
+ */
+export function autoJudgeNoticeRowSource(
+  event: ChatEvent,
+): AutoJudgeNoticeRowSource | null {
+  if (event.type !== "permission.blocked") return null;
+  if (event.message === null || event.message.length === 0) return null;
+  const parsed = autoJudgeNoticeMetadataSchema.safeParse(event.metadata);
+  if (!parsed.success) return null;
+  return { marker: parsed.data.autoJudge, message: event.message };
+}
+
 export function eventMaterializesTranscriptRow(event: ChatEvent): boolean {
   return (
     forkedChatLinkRowSource(event) !== null ||
     notificationAnchorRowSource(event) !== null ||
     importedChatMarkerRowSource(event) !== null ||
-    autoJudgeUnattendedDenialRowSource(event) !== null
+    autoJudgeUnattendedDenialRowSource(event) !== null ||
+    autoJudgeNoticeRowSource(event) !== null
   );
 }

@@ -77,6 +77,38 @@ const RAW_ACTUATOR_PATTERNS = [
   /\b(?:start|stop|uninstall|relaunch)Host(?:Service|ForRestart|AfterRestart)Legacy\s*\(/,
   /\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*["'](?:launchctl|pkill|osascript|xattr|codesign|msiexec(?:\.exe)?|schtasks|taskkill)["']/,
 ];
+// Named exports from a `/service/platforms/*` module that do not MUTATE the
+// OS service, process tree or filesystem - verified by reading each
+// implementation. (`readWindowsServiceTaskOwnership` still does real OS
+// work - one `schtasks /Query /XML` and, for a non-SID principal, an account
+// SID lookup - it is read-only, not offline; the exception is about mutation,
+// not about touching the OS at all.) A platform import is not itself an
+// actuator (see the "platform import by itself" comment below); binding
+// every named import from that path to the generic "service-platform"
+// actuator bucket made calling one of THESE indistinguishable from calling
+// `install`/`stop`/etc, so a plain status read or error-shape check flagged
+// as a raw actuator.
+//
+// Keyed by `<module file stem>/<exported name>`, NOT by name alone: an
+// export is exempted only when it is the verified one from the verified
+// module. A same-named export from a DIFFERENT platform module is not
+// covered by this set and still classifies as `service-platform` - see the
+// "wrong module" fixture below. (A future change to one of THESE modules
+// that turned the SAME name into a mutator would still match the exemption -
+// this key is a verified-as-of-now binding, not a standing guarantee against
+// the verified source changing.)
+const PLATFORM_READ_ONLY_EXPORTS = new Set([
+  // windows-task-gate.ts: a pure `error instanceof CliError && error.code ===
+  // ...` predicate - no task query, no spawn.
+  "windows-task-gate/isServiceTaskNotOwnedError",
+  // windows.ts: one read-only `schtasks /Query /XML` (see its own doc
+  // comment) plus, for a non-SID principal, an in-memory-compared account SID
+  // lookup - never a write verb.
+  "windows/readWindowsServiceTaskOwnership",
+  // windows.ts (`taskXmlEnabledState`, aliased on export): parses an XML
+  // string already in hand into an enabled/disabled verdict - no I/O.
+  "windows/windowsTaskXmlEnabledState",
+]);
 const DIRECT_CONTROLLER_ACTUATOR_PATTERN =
   /\b(?:controller|opts\.controller|this\.controller)\.(?:install|uninstall|stop|start|restart|stopForRestart|relaunchAfterRestart|retireCompetingRegistration)\s*\(/;
 const RETRY_ACTUATOR_PATTERN =
@@ -335,6 +367,14 @@ function semanticRawActuatorCall(
     );
     const platform = /\/service\/platforms\//.test(modulePath);
     if (!installer && !platform) return;
+    // The normalized module identity a read-only exception is qualified by:
+    // the file stem after the last `/service/platforms/` segment, independent
+    // of how many `../` levels the importing file is away from it. Every
+    // real platform module is a direct child of that directory (no further
+    // subpath), so this is exact, not a prefix guess.
+    const platformModule = platform
+      ? (/\/service\/platforms\/([^/]+)$/.exec(modulePath)?.[1] ?? null)
+      : null;
     const named = node.importClause.namedBindings;
     if (named === undefined) return;
     if (ts.isNamespaceImport(named)) {
@@ -344,10 +384,18 @@ function semanticRawActuatorCall(
     if (ts.isNamedImports(named)) {
       for (const element of named.elements) {
         if (element.isTypeOnly) continue;
+        // The ORIGINAL exported name (never the local alias): the exception
+        // and the `service-platform` classification both key on what the
+        // module actually exports, so `import { readWindowsServiceTaskOwnership
+        // as readOwnership }` is unaffected by the rename either way.
         const exported = element.propertyName?.getText() ?? element.name.text;
+        const readOnly =
+          platform &&
+          platformModule !== null &&
+          PLATFORM_READ_ONLY_EXPORTS.has(`${platformModule}/${exported}`);
         bindings.set(
           element.name.text,
-          platform ? "service-platform" : exported,
+          platform && !readOnly ? "service-platform" : exported,
         );
       }
     }
@@ -2074,6 +2122,53 @@ describe("host update contender architecture boundary", () => {
         false,
       ),
     ).toBe(false);
+    // A named import of a genuine platform reader/classifier, called
+    // directly, is not an actuator - the exact shape of `provision.ts` and
+    // `update-service-unstartable.ts`, which only check ownership/enabled
+    // state and classify an error, never install/uninstall/stop/start. The
+    // exception is qualified by module (`windows`/`windows-task-gate`) AND
+    // exported name, not by name alone - see the next fixture for the case
+    // this guards against.
+    expect(
+      semanticRawActuatorCall(
+        'import { readWindowsServiceTaskOwnership, windowsTaskXmlEnabledState } from "../service/platforms/windows"; async function checkOwnership(label: ServiceLabel) { const ownership = await readWindowsServiceTaskOwnership(label); return windowsTaskXmlEnabledState(ownership.xml).kind === "disabled"; }',
+        false,
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      semanticRawActuatorCall(
+        'import { isServiceTaskNotOwnedError } from "../service/platforms/windows-task-gate"; function handle(error: unknown) { return isServiceTaskNotOwnedError(error); }',
+        false,
+        false,
+      ),
+    ).toBe(false);
+    // WRONG MODULE, same exported name: no such export exists in the real
+    // tree today - this is a guard-precision fixture, not a claim of a
+    // current unauthorized actuator. If some OTHER platform module ever
+    // exported a same-named `readWindowsServiceTaskOwnership` (a mutating
+    // re-export, or an unrelated function that happens to share the name),
+    // the module-qualified exception must NOT cover it - only
+    // `windows/readWindowsServiceTaskOwnership` is exempted, never the bare
+    // name.
+    expect(
+      semanticRawActuatorCall(
+        'import { readWindowsServiceTaskOwnership } from "../service/platforms/macos"; async function checkOwnership(label: ServiceLabel) { return readWindowsServiceTaskOwnership(label); }',
+        false,
+        false,
+      ),
+    ).toBe(true);
+    // A named import of a real platform mutator, called directly (not
+    // through a namespace), must still be caught: the fix narrows which
+    // (module, export) pairs count, not whether a direct named-import call
+    // can.
+    expect(
+      semanticRawActuatorCall(
+        'import { stop } from "../service/platforms/windows"; async function forceStop(label: ServiceLabel) { await stop(label); }',
+        false,
+        false,
+      ),
+    ).toBe(true);
   });
 
   it("inspects the allowlisted facade bodies for a concrete authority verifier", async () => {

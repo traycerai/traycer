@@ -11,6 +11,7 @@ import type {
   ImageBytesResult,
   ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
+import { persistTranscriptImageBytes } from "@/lib/attachments/transcript-image-bytes-store";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
@@ -99,12 +100,12 @@ function chatPlaneReadSelector(
 }
 
 /**
- * How long a one-shot byte read (clipboard re-inline, prompt stash) waits before
- * giving up and treating the image as unresolvable.
+ * How long a one-shot byte read (clipboard re-inline, draft image resolution)
+ * waits before giving up and treating the image as unresolvable.
  *
- * These two callers are not renderers: nothing paints while they run, and both
- * have a defined "couldn't get it" behavior (drop the image from the clipboard
- * write / fail the stash save). An unbounded wait would hang a Cmd+C instead,
+ * These callers are not renderers: nothing paints while they run, and each has
+ * a defined "couldn't get it" behavior (drop the image from the clipboard
+ * write / report it unavailable). An unbounded wait would hang a Cmd+C instead,
  * which is what the old `hasAttachmentBytes` pre-check existed to avoid - the
  * bound replaces that pre-check rather than being added on top of it.
  */
@@ -128,6 +129,7 @@ export const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 8_000;
  * app reload. Keyed on the pair, an upgrade re-probes exactly once.
  */
 const hostBuildsWithoutChatAttachmentRead = new Set<string>();
+let chatHostSupportGeneration = 0;
 
 /**
  * The key a verdict is remembered under, or `null` when it must not be
@@ -155,11 +157,12 @@ function hostBuildKey(scope: ChatAttachmentScopeValue): string | null {
 }
 
 /**
- * Test-only: forgets every remembered `E_HOST_UNSUPPORTED` verdict. The set is
- * module-global and deliberately session-lived, so a suite that exercises the
- * unsupported path would otherwise poison every later test in the same file.
+ * Forgets every remembered `E_HOST_UNSUPPORTED` verdict. Host ids belong to
+ * an account; identity teardown must not leave account A's probe pinning
+ * account B's session.
  */
-export function resetChatAttachmentHostSupportForTests(): void {
+export function resetChatAttachmentHostSupport(): void {
+  chatHostSupportGeneration += 1;
   hostBuildsWithoutChatAttachmentRead.clear();
 }
 
@@ -193,6 +196,7 @@ async function readChatAttachmentFromHost(
   if (buildKey !== null && hostBuildsWithoutChatAttachmentRead.has(buildKey)) {
     return null;
   }
+  const probeGeneration = chatHostSupportGeneration;
   // `plane` is omitted rather than sent as `null` when there is no selector:
   // it is an OPTIONAL literal on the wire, so a null would fail the host's
   // parse instead of reading as "no preference".
@@ -240,7 +244,11 @@ async function readChatAttachmentFromHost(
     return { bytes, mediaType: response.mediaType };
   } catch (error: unknown) {
     if (isHostUnsupported(error)) {
-      if (buildKey !== null) {
+      if (
+        buildKey !== null &&
+        !signal.aborted &&
+        probeGeneration === chatHostSupportGeneration
+      ) {
         hostBuildsWithoutChatAttachmentRead.add(buildKey);
       }
       return null;
@@ -328,7 +336,11 @@ export function useChatImageFetcher(): ScopedImageBytesFetcher {
     [scope, handle],
   );
   return useMemo<ScopedImageBytesFetcher>(
-    () => ({ scopeKey: chatAttachmentScopeKey(handle, scope), fetch }),
+    () =>
+      persistTranscriptImageBytes({
+        scopeKey: chatAttachmentScopeKey(handle, scope),
+        fetch,
+      }),
     [handle, scope, fetch],
   );
 }
@@ -372,12 +384,12 @@ export type ChatAttachmentByteReader = (
  * answers `null` instead of throwing and gives up after
  * `CHAT_ATTACHMENT_READ_TIMEOUT_MS`.
  *
- * For the two non-rendering consumers - the clipboard re-inline on a copied
- * user message and the prompt stash's hash resolution. Both used to pre-check
- * `hasAttachmentBytes` and read the doc directly; both now go through the host,
- * so both need a bound instead of a pre-check. `null` keeps their existing skip
- * behavior verbatim: the clipboard write leaves the image as a bare hash, and
- * the stash reports the image as unavailable.
+ * For the non-rendering consumers - the clipboard re-inline on a copied user
+ * message, and draft hash resolution. These used to pre-check
+ * `hasAttachmentBytes` and read the doc directly; they now go through the host,
+ * so they need a bound instead of a pre-check. `null` keeps their existing skip
+ * behavior verbatim: the clipboard write leaves the image as a bare hash, and a
+ * draft reports the image as unavailable.
  *
  * Bytes only, deliberately: both consumers re-attach the image to a model that
  * already carries its own media type, so the host's sniffed verdict has no
@@ -386,11 +398,24 @@ export type ChatAttachmentByteReader = (
  * Deliberately NOT routed through `imageBlobCache`: that cache hands back a
  * blob URL, not bytes, and its entries are reference-counted against mounted
  * renderers. A copy is neither.
+ *
+ * THIS WINDOW'S COMPOSER STORE IS TRIED FIRST here, unlike in the rendering
+ * fetcher, where it is the last leg. Both resolve the same hash - the fetcher's
+ * chain falls through to that store too - so this is about WHICH leg answers
+ * first, and hash-first composers changed the answer. An image attached to a
+ * chat draft but not yet SENT now lives only in this window's store; before,
+ * such a node carried its own inline base64 and never reached this resolver at
+ * all. Asking the host first would mean a round-trip per image, on every prompt
+ * stash save of an unsent draft, that is now routinely a miss - and on a remote
+ * host that is a network round-trip. The reorder cannot return the wrong bytes:
+ * the store is content-addressed, so a hit under `hash` IS that image.
  */
 export function useChatAttachmentByteReader(): ChatAttachmentByteReader {
   const fetcher = useChatImageFetcher();
   return useCallback<ChatAttachmentByteReader>(
     async (hash) => {
+      const local = await getImageBytes(hash).catch(() => undefined);
+      if (local !== undefined) return local;
       const controller = new AbortController();
       const timer = setTimeout(
         () => controller.abort(),

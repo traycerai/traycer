@@ -10,6 +10,10 @@ const declarations = Object.entries(baseThemeColors.light).map(
     return `  --${token}: ${light === dark ? light : `light-dark(${light}, ${dark ?? light})`};`;
   },
 );
+const baseDarkDeclarations = Object.entries({
+  ...baseThemeColors.light,
+  ...baseThemeColors.dark,
+}).map(([token, value]) => `  --${token}: ${value};`);
 writeFileSync(
   new URL("../src/styles/theme-fallback.css", import.meta.url),
   [
@@ -30,6 +34,13 @@ writeFileSync(
     "}",
     ":root.dark {",
     "  color-scheme: dark;",
+    "}",
+    "/* A subtree painted on a fixed dark ground, whatever theme is active: the",
+    "   base dark palette, declared on the element so it outranks the tokens the",
+    "   theme applier writes on <html>, and the `dark:` variant follows it. */",
+    "@utility theme-base-dark {",
+    "  color-scheme: dark;",
+    ...baseDarkDeclarations,
     "}",
     "",
   ].join("\n"),

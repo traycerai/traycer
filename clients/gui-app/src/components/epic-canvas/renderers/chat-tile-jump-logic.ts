@@ -28,6 +28,17 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * and reads the host's answer only where its own reads have nothing.
  */
 
+/**
+ * How long a parked cross-tile transcript jump waits for its target row to
+ * stream in before it is dropped. Generous enough to cover a cold tile pulling
+ * a large transcript, short enough that a stale request cannot fire minutes
+ * later and yank the reader somewhere they no longer expect.
+ *
+ * Also the bound on a chat find index read waiting for its row's ordinal: the
+ * same wait on the same host, with the same cost of waiting forever.
+ */
+export const TRANSCRIPT_JUMP_TTL_MS = 30_000;
+
 type BackgroundBlockSearchNode =
   | MessageSegment
   | {
@@ -94,6 +105,10 @@ export function messageIdForBlock(
  * notifications describe the terminal edge of that persisted assistant
  * record, and the completion marker is stamped on the final assistant slice
  * in the current transcript projection.
+ *
+ * A turn folded from several records carries only its LAST record as
+ * `persistentMessageId`; an earlier one resolves through the row's
+ * `turnMessageIds`, onto the turn's first row.
  */
 export function messageIdForTranscriptTarget(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -106,7 +121,13 @@ export function messageIdForTranscriptTarget(
     const message = messages[index];
     if (message.persistentMessageId === messageId) return message.id;
   }
-  return null;
+  // An earlier record of a turn folded from several: the turn renders under
+  // its last record's id, and a History or find hit names the record it
+  // matched. The turn's first row, which is where its text starts.
+  const folded = messages.find(
+    (message) => message.turnMessageIds?.includes(messageId) === true,
+  );
+  return folded?.id ?? null;
 }
 
 /**
@@ -369,7 +390,12 @@ export function coldJumpOrdinal(
   }
 }
 
-function skeletonOrdinalOf(
+/**
+ * The ordinal the skeleton places `rowId` at, or `null` when no skeleton entry
+ * names it. A user or steer row's id is its message id; an assistant record's
+ * row ids are turn-keyed.
+ */
+export function skeletonOrdinalOf(
   transcriptWindow: TranscriptWindow,
   rowId: string,
 ): number | null {

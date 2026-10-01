@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Doc-replica read for one chat: the fallback for a chat whose owning host is
@@ -11,22 +12,26 @@ import { z } from "zod";
  * session, no seed, no write. See the host resolver for why it must be
  * structurally incapable of writing (the single-writer invariant).
  */
-export const chatReplicaReadRequestSchema = z.object({
-  epicId: z.string().min(1),
-  chatId: z.string().min(1),
-});
+export const chatReplicaReadRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    chatId: z.string().min(1),
+  }),
+);
 export type ChatReplicaReadRequest = z.infer<
   typeof chatReplicaReadRequestSchema
 >;
 
-export const chatReplicaReadChatRecordSchema = z.object({
-  chatId: z.string().min(1),
-  title: z.string(),
-  userId: z.string(),
-  hostId: z.string(),
-  createdAt: z.number().int().nonnegative(),
-  updatedAt: z.number().int().nonnegative(),
-});
+export const chatReplicaReadChatRecordSchema = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1),
+    title: z.string(),
+    userId: z.string(),
+    hostId: z.string(),
+    createdAt: z.number().int().nonnegative(),
+    updatedAt: z.number().int().nonnegative(),
+  }),
+);
 export type ChatReplicaReadChatRecord = z.infer<
   typeof chatReplicaReadChatRecordSchema
 >;
@@ -39,37 +44,47 @@ export type ChatReplicaReadChatRecord = z.infer<
  * re-parse per record with per-block tolerance. Same philosophy as the
  * published-copy conversion (`convertPublishedChat`).
  */
-const chatReplicaReadRawRecordSchema = z.record(z.string(), z.unknown());
+const chatReplicaReadRawRecordSchema = lazySchema(() =>
+  z.record(z.string(), z.unknown()),
+);
 
-export const chatReplicaReadOkOutcomeSchema = z.object({
-  status: z.literal("ok"),
-  chat: chatReplicaReadChatRecordSchema,
-  messages: z.array(chatReplicaReadRawRecordSchema),
-  events: z.array(chatReplicaReadRawRecordSchema),
-});
+export const chatReplicaReadOkOutcomeSchema = lazySchema(() =>
+  z.object({
+    status: z.literal("ok"),
+    chat: chatReplicaReadChatRecordSchema,
+    messages: z.array(chatReplicaReadRawRecordSchema),
+    events: z.array(chatReplicaReadRawRecordSchema),
+  }),
+);
 export type ChatReplicaReadOkOutcome = z.infer<
   typeof chatReplicaReadOkOutcomeSchema
 >;
 
 /** No doc-resident content for this chat on the serving host. */
-export const chatReplicaReadAbsentOutcomeSchema = z.object({
-  status: z.literal("absent"),
-});
+export const chatReplicaReadAbsentOutcomeSchema = lazySchema(() =>
+  z.object({
+    status: z.literal("absent"),
+  }),
+);
 export type ChatReplicaReadAbsentOutcome = z.infer<
   typeof chatReplicaReadAbsentOutcomeSchema
 >;
 
-export const chatReplicaReadOutcomeSchema = z.discriminatedUnion("status", [
-  chatReplicaReadOkOutcomeSchema,
-  chatReplicaReadAbsentOutcomeSchema,
-]);
+export const chatReplicaReadOutcomeSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    chatReplicaReadOkOutcomeSchema,
+    chatReplicaReadAbsentOutcomeSchema,
+  ]),
+);
 export type ChatReplicaReadOutcome = z.infer<
   typeof chatReplicaReadOutcomeSchema
 >;
 
-export const chatReplicaReadResponseSchema = z.object({
-  outcome: chatReplicaReadOutcomeSchema,
-});
+export const chatReplicaReadResponseSchema = lazySchema(() =>
+  z.object({
+    outcome: chatReplicaReadOutcomeSchema,
+  }),
+);
 export type ChatReplicaReadResponse = z.infer<
   typeof chatReplicaReadResponseSchema
 >;

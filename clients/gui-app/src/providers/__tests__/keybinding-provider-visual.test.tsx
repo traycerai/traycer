@@ -29,9 +29,9 @@ import type { ReasoningFooterConfig } from "@/components/home/pickers/harness-mo
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import type { ReactNode } from "react";
@@ -300,7 +300,7 @@ function advance(ms: number): void {
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
-  useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   __resetTabNavigationControllerForTesting();
 }
 
@@ -470,7 +470,7 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     // One flip per physical press, off the default footer. Without the repeat
     // guard the OS would walk the bar between header and footer for as long as
     // the chord is held and leave it wherever the last repeat landed.
-    expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+    expect(useLayoutStore.getState().arrangement.usageHost).toBe("header");
     expect(first.defaultPrevented).toBe(true);
     expect(repeated.defaultPrevented).toBe(true);
   });

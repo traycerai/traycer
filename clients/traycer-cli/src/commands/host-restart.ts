@@ -6,6 +6,8 @@ import {
 import { writePostFinalizeMarkerFile } from "./cli-finalize-upgrade";
 import { assertHostNotBusy } from "../host/busy-check";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
+import { refuseForegroundHostRun } from "../host/foreground-host-run";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
@@ -21,13 +23,19 @@ import {
   stopHostForRestartWithAttempt,
 } from "../host/update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import {
+  describeNonterminalRecordRecovery,
+  parkedActivationRelaunchable,
+} from "../host/parked-activation-relaunch";
 import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
 import {
+  defaultHelperArmWaitDeps,
   defaultSpawnImpl,
   defaultWriteImpl,
   reconcilePostFinalizeMarker,
   scheduleFinalizationHelper,
+  type HelperArmWaitDeps,
   type ReconcileOutcome,
   type ScheduleHelperResult,
   type SpawnImpl,
@@ -51,9 +59,11 @@ import {
 // On Windows the *current CLI process* (the one running this command)
 // is itself executing from the live `.exe`, so even after the
 // supervisor releases its lock, renameSync still fails with EBUSY.
-// For that case we hand off to a detached helper that waits for the
-// CLI process to exit and then completes the swap + service start
-// asynchronously. See upgrade/finalize-helper.ts.
+// For that case we hand off to a helper that waits for the CLI process
+// to exit and then completes the swap + service start asynchronously -
+// but only once the helper has confirmed it is running (`armed`). A
+// helper that cannot be confirmed leaves the start to this command. See
+// upgrade/finalize-helper.ts.
 //
 // A failed in-process finalize is non-fatal: the service is still
 // started, the pending state remains visible in Doctor, and the next
@@ -103,10 +113,22 @@ import {
 // lock that guards the stop/restart below. It also removes the second copy of
 // the policy: which phases are recoverable is `recoveryActionFor`'s call in
 // shared, and no caller re-derives it.
+//
+// ## A desktop request over a terminal-started host
+//
+// A host started by `traycer host start` in a terminal (a `foreground` run) is
+// not the service's, and the app never tears it down: Linked governs the
+// service-run host only. A DESKTOP-origin restart - plain, `--if-idle` or
+// `--force` - is refused `E_HOST_NOT_SERVICE_RUN` first inside the lock,
+// before the busy probe, the stop, the finalize or the relaunch
+// (`refuseForegroundHostRun`, shared with `host stop` and
+// `host free-port-and-restart`). A terminal restart is unchanged.
 export interface HostRestartArgs {
   readonly ifIdle: boolean;
   readonly force: boolean;
   readonly deferIfParked: boolean;
+  /** Who asked: `desktop` for every restart the app issues. */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
@@ -133,10 +155,38 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
         admission: "recovery-maintenance",
       },
       async (capability, _cliLock, contenderContext) => {
+        if (args.lifecycleOrigin === "desktop") {
+          await refuseForegroundHostRun(
+            "host restart",
+            ctx.runtime.environment,
+            args.lifecycleOrigin,
+          );
+        }
         if (args.ifIdle) {
           await assertHostNotBusy(ctx.runtime.environment);
         }
-        if (contenderContext.recoveryAction === "stop-only") {
+        const stopOnly = contenderContext.recoveryAction === "stop-only";
+        // Compared for EVERY stop-only record, deferred ones included: the
+        // guidance rendered below describes this record, and a deferred park
+        // that matches the install must not be called stale (traycer#2208
+        // review). `null` is an unreadable install record; it acts as "not
+        // relaunchable" and reads as "unknown".
+        const parkMatchesInstall = stopOnly
+          ? await parkedActivationRelaunchable(
+              ctx.runtime.environment,
+              contenderContext.activeAttempt,
+            )
+          : false;
+        // `--defer-if-parked` is decided BEFORE the match is acted on: that
+        // caller (Desktop's force-restart) runs its own activation once this
+        // command reports `deferred`, so a matching park must still defer
+        // rather than be activated here behind its back.
+        if (stopOnly && !args.deferIfParked && parkMatchesInstall === true) {
+          // A matching park: fall through to the ordinary restart below, which
+          // IS the activation restart the park is waiting for (see
+          // `host/parked-activation-relaunch.ts` for why a park, and only a
+          // park, may be continued this way).
+        } else if (stopOnly) {
           // Classified from the record under the SAME lock acquisition that
           // guards the action below, so no contender can change the record
           // between the decision and its effect.
@@ -150,15 +200,21 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             // admitted activation flow either way.
             return {
               kind: "deferred-for-parked-activation" as const,
+              record: contenderContext.activeAttempt,
+              parkMatchesInstall,
               attestation: await attestInstallRuntime(ctx.runtime.environment),
             };
           }
-          // An activate-continuation record proves that packaged-Mac bytes
-          // are waiting for the update executor's explicit activation edge.
-          // Force restart remains a usable recovery control, but relaunching
-          // the generic supervisor here could activate those parked bytes
-          // outside that continuation. Stop the current service safely and
-          // leave the parked record for the admitted activation flow.
+          // An ACTIVE activate-continuation record (`applying`, or
+          // `preparing/activate`) proves that bytes are placed and an
+          // executor may still be mid-flight outside the lock (the
+          // packaged-macOS executor releases between its spans). Relaunching
+          // the generic supervisor here could activate those bytes outside
+          // that continuation, so stop the current service safely and leave
+          // the record for the admitted activation flow. A parked record that
+          // does NOT match the installed bytes lands here too: the supervisor
+          // would refuse that relaunch at spawn anyway, and a stop that says
+          // so beats a "restart" that exits 0 having started nothing.
           await stopHostServiceWithAttempt(
             capability,
             {
@@ -171,9 +227,12 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             controller,
             label,
             { force: args.force },
+            "unconditional",
           );
           return {
             kind: "stopped-for-parked-activation" as const,
+            record: contenderContext.activeAttempt,
+            parkMatchesInstall,
             attestation: await attestInstallRuntime(ctx.runtime.environment),
           };
         }
@@ -186,6 +245,7 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
             platform: osPlatform(),
             spawnImpl: defaultSpawnImpl,
             writeImpl: defaultWriteImpl,
+            armWait: defaultHelperArmWaitDeps,
             force: args.force,
           },
           capability,
@@ -211,6 +271,18 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
     // now down" from "your host is still up, activation is pending".
     const deferredForParkedActivation =
       locked.kind === "deferred-for-parked-activation";
+    // The record the stop-only classification was made from, and the install
+    // comparison made against it under the same lock, so the guidance is about
+    // THAT record: a deferred park may still match (Desktop activates it), a
+    // stopped one did not (a matching one took the restart above), and an
+    // active record is a different sentence again.
+    const recovery =
+      locked.kind === "restarted" || locked.record === null
+        ? null
+        : describeNonterminalRecordRecovery(
+            locked.record,
+            locked.parkMatchesInstall,
+          );
     return {
       data: {
         restarted,
@@ -226,8 +298,8 @@ export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
       human: restarted
         ? humanForRestart(label.id, locked.result)
         : deferredForParkedActivation
-          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation`
-          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation`,
+          ? `left service '${label.id}' untouched because a packaged update is waiting for its explicit activation${recovery === null ? "" : `: ${recovery}`}`
+          : `stopped service '${label.id}' without relaunch because a packaged update is waiting for its explicit activation; the host is now down${recovery === null ? "" : `: ${recovery}`}`,
       exitCode: 0,
     };
   };
@@ -241,19 +313,21 @@ interface RestartFinalizeArgs {
   readonly platform: NodeJS.Platform;
   readonly spawnImpl: SpawnImpl;
   readonly writeImpl: WriteImpl;
+  readonly armWait: HelperArmWaitDeps;
   readonly force: boolean;
 }
 
 export interface RestartFinalizeResult {
   readonly finalize: FinalizePendingCliUpgradeOutcome;
-  // Set when this restart scheduled a detached helper to complete the
-  // swap after the current CLI process exits.
+  // Set when this restart tried to hand the swap to a helper that runs
+  // after the current CLI process exits, whether or not it armed.
   readonly helper: ScheduleHelperResult | null;
   // Set when a prior helper attempt left a marker the host-restart
   // command consumed at the top of this run.
   readonly markerReconcile: ReconcileOutcome | null;
-  // True when the helper takes ownership of starting the service. When
-  // true we deliberately skip the controller.start() call.
+  // True only when the helper ARMED - its script is running - and so
+  // owns starting the service. When true we deliberately skip the
+  // relaunch.
   readonly helperOwnsServiceStart: boolean;
 }
 
@@ -285,6 +359,9 @@ async function restartWithPendingCliUpgradeFinalizeWithAttempt(
       relaunchHostAfterRestartWithAttempt(
         capability,
         contenderOptions,
+        // The restart's relaunch leg: `maintenance` whoever asked for the
+        // restart, desktop or terminal (`host/lifecycle-origin.ts`).
+        "maintenance",
         args.controller,
         args.label,
         stopped,
@@ -324,9 +401,11 @@ async function restartWithActuators(
 
   // 3. Windows-specific: if the live binary is still locked after stop
   //    (because the *current CLI process* holds its own .exe), hand
-  //    the swap off to a detached helper. The helper will start the
-  //    service once the swap completes, so we deliberately do NOT
-  //    call controller.start() here.
+  //    the swap off to a helper. Once it has ARMED it starts the
+  //    service after the swap, so we deliberately do NOT relaunch here.
+  //    Any other outcome - it never ran, or not within the wait - falls
+  //    through to the relaunch below: a helper that never runs must not
+  //    leave the host stopped.
   let helper: ScheduleHelperResult | null = null;
   let helperOwnsServiceStart = false;
   if (finalize.status === "still-locked" && args.platform === "win32") {
@@ -339,8 +418,9 @@ async function restartWithActuators(
       platform: args.platform,
       spawnImpl: args.spawnImpl,
       writeImpl: args.writeImpl,
+      armWait: args.armWait,
     });
-    helperOwnsServiceStart = helper.status === "scheduled";
+    helperOwnsServiceStart = helper.status === "armed";
   }
 
   if (!helperOwnsServiceStart) {
@@ -400,13 +480,13 @@ function humanForRestart(
 ): string {
   const base = `requested restart for service '${labelId}'`;
   const reconcilePrefix = describeMarkerReconcile(result.markerReconcile);
-  if (result.helper !== null && result.helper.status === "scheduled") {
-    return `${reconcilePrefix}${base}; cli upgrade live binary held by current CLI process - scheduled detached helper (pid=${
+  if (result.helper !== null && result.helper.status === "armed") {
+    return `${reconcilePrefix}${base}; cli upgrade live binary held by current CLI process - armed finalize helper (pid=${
       result.helper.helperPid ?? "?"
-    }) to complete the swap after this process exits`;
+    }) completes the swap and starts the service after this process exits`;
   }
   if (result.helper !== null && result.helper.status === "failed") {
-    return `${reconcilePrefix}${base}; cli upgrade helper failed to launch (${result.helper.errorMessage}) - pending state retained`;
+    return `${reconcilePrefix}${base}; cli upgrade helper did not arm (${result.helper.errorMessage}) - service relaunched, pending state retained`;
   }
   const outcome = result.finalize;
   switch (outcome.status) {

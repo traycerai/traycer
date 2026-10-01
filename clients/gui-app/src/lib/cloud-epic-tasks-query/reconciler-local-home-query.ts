@@ -1,11 +1,13 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, replaceEqualDeep } from "@tanstack/react-query";
 import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
 import {
   fetchCloudEpicTasksFirstPageByHostId,
+  isListTasksResponse,
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query/query";
+import { admitCloudEpicTasksFirstPage } from "@/lib/cloud-epic-tasks-query/cache";
 
 const LOCAL_HOME_LIST_METHOD = "epic.listTasks" as const;
 
@@ -64,8 +66,8 @@ export function epicTabLocalHomeListQueryOptions(
  *
  * Separate from {@link epicTabLocalHomeListQueryOptions} in key and in purpose.
  * The reconciler's entry is keyed to one destructive run and must fail closed
- * against a later principal; this one is an ordinary reactive read whose
- * staleness costs a stale pin glyph. Sharing its cache entry would tie a
+ * against a later principal; this one is an ordinary reactive read supplying tab pin glyphs and
+ * Current tasks rows. Sharing its cache entry would tie a
  * tab-strip render to a reconciliation run's lifetime.
  *
  * `population` - the local-homed open epic ids this host has to answer for -
@@ -90,6 +92,13 @@ export function epicPinReadingListQueryOptions(args: {
       args.params,
       args.population,
     ),
+    structuralSharing: (previous, incoming) =>
+      replaceEqualDeep(
+        previous,
+        isListTasksResponse(incoming)
+          ? admitCloudEpicTasksFirstPage(incoming, args)
+          : incoming,
+      ),
     // COST, stated because it is a consequence of the key and not an oversight:
     // a new population is a new cache entry, so while its page is in flight the
     // rows this host had already answered report `pinnedKnown: false` again for

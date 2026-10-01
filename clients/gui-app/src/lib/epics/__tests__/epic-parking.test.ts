@@ -117,6 +117,11 @@ function HandoffAndToasts(props: {
     nodeId: props.handle.store.getState().chatId,
     scope: props.scope,
     profileUserId: "user-1",
+    // Never consulted here: this file registers no handoff, so the driver's
+    // resend never runs and the getter is not called. `false` is the
+    // conservative answer for a mount that is only present to own the
+    // restore/state decision these cases are about.
+    getDraftBlobBridgeSupported: () => false,
   });
   return createElement(ChatTileErrorNoticeToasts, { handle: props.handle });
 }
@@ -275,10 +280,12 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
     },
     restoreWorktreeIntent: null,
     displayWorktreeIntent: null,
+    sentContentHashes: null,
     messageConfirmedByHost: false,
     accountContext: null,
     deliveryPolicy: null,
     hashOnlyRetry: false,
+    sentFromHostId: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -430,6 +437,7 @@ function emitOwnerChatSnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -707,6 +715,7 @@ function emitOwnerChatSnapshotWithQueue(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -757,6 +766,7 @@ function emitOwnerWindowedChatSnapshot(
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: 1,
       rowCount: 0,
       indexRevision: null,
@@ -804,6 +814,7 @@ function queuedPromptItemFixture(
     sender: SEND_SENDER,
     settings: SEND_SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

@@ -23,6 +23,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { UsageSettingsPanelForClient } from "@/components/settings/panels/usage-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 type UsageSummaryResponse = ResponseOfMethod<
@@ -146,6 +147,7 @@ function renderPanel(usageSummary: UsageSummaryResponse | undefined): {
 } {
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: { invalidateHostScope: () => undefined },
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

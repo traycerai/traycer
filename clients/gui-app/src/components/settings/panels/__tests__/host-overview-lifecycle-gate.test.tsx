@@ -19,11 +19,28 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
-);
+// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+// `HostBusyForceDeferDialog`, both reachable from this suite's restart
+// confirms) calls `useFocusModel()` -> `useConnectableHostIds()` ->
+// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
+// at render time and subscribes via `directory.onChange` in an effect. A
+// binding mock with no `directory` throws ("Invalid value used as weak map
+// key" / "directory.onChange is not a function") the moment the confirm
+// dialog opens, so every fixture below needs one even though this suite
+// never reads its answer.
+interface HostBindingMock {
+  readonly hostClient: unknown;
+  readonly directory: {
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
+    readonly getLocalEntry: () => null;
+  };
+}
+const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
+  current: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -59,7 +76,7 @@ import type {
   IRunnerHost,
   LocalAttemptFacts,
 } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -124,6 +141,8 @@ const LOCAL_CONTROLLER_STATUS_BASE: HostControllerStatus = {
   localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-08-27T00:00:00.000Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
 };
 
 function scopeFrom(
@@ -139,6 +158,23 @@ function scopeFrom(
     hostId,
     status: "ready",
     client: fixture.client,
+  };
+}
+
+/**
+ * A host binding whose `directory` answers with an empty listing and inert
+ * change subscription — this suite never asserts on the directory itself,
+ * only on the fact that `HostRestartSessions` can mount beneath it without
+ * throwing.
+ */
+function bindingWith(hostClient: unknown): HostBindingMock {
+  return {
+    hostClient,
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalEntry: () => null,
+    },
   };
 }
 
@@ -204,8 +240,8 @@ function renderPanelPersistent(): { rerender: () => void } {
 }
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -245,7 +281,7 @@ function localAttempt(
 }
 
 function statusWith(
-  operation: HostStatusUpdateOperation | null,
+  operation: HostStatusUpdateOperationV2 | null,
   extra: Partial<ResponseOfMethod<HostRpcRegistry, "host.status">> | undefined,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
@@ -299,7 +335,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -348,7 +384,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel(undefined);
 
@@ -373,7 +409,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -412,7 +448,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -449,7 +485,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel(undefined);
 
@@ -460,6 +496,13 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       expect(await editNameDisabled()).toBe(true);
     });
     expect(await restartMenuAriaDisabled()).toBe("true");
+    // The scope stays USABLE throughout this test (only the read itself goes
+    // unhealthy below), so the notices strip's operation card stays on
+    // screen the whole time — unlike (c2), where the scope itself goes
+    // unusable and the offline notice replaces it instead.
+    expect(
+      (await screen.findByTestId("host-overview-operation-phase")).textContent,
+    ).toBe("Downloading update to v2.1.0");
     // Close the menu before advancing time — leaving a Radix dropdown open
     // across an unrelated state change is not part of what this test proves.
     fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
@@ -480,6 +523,16 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       expect(await editNameDisabled()).toBe(false);
     });
     expect(await restartMenuAriaDisabled()).not.toBe("true");
+    // THE DISCRIMINATING CHECK, now visible on the card itself rather than on
+    // a since-deleted header pill: the retained view genuinely demoted to
+    // `kind: "unknown"` — `describeUpdateOperation`'s phrase table marks a
+    // demoted view "Last seen: …", which is a DIFFERENT sentence than the
+    // live one above, not merely the same words re-rendered. A view that
+    // stayed (wrongly) "live" here would still read "Downloading update to
+    // v2.1.0" with no "Last seen:" prefix.
+    expect(
+      screen.getByTestId("host-overview-operation-phase").textContent,
+    ).toBe("Last seen: Downloading update to v2.1.0");
 
     // Open the restart confirmation NOW THAT the gate has released, and prove
     // it STAYS open — the render-time close at `anyPending && !ownDispatch`
@@ -510,17 +563,21 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     // is no surface here that is gated by `holdsLifecycleGate` alone without
     // also being gated by `usable`.
     //
-    // What DOES stay reachable independent of `usable` is
-    // `HostOverviewOperationCard` (`host-overview-panel.tsx:920`,
-    // `operationView === null ? null : (<HostOverviewOperationCard .../>)`) —
-    // gated only on the retained data existing at all, never on the scope's
-    // usability. Its phase sentence is exactly `holdsLifecycleGate`'s input
-    // wired through `describeUpdateOperation`, so this is the assertion that
-    // isolates the wiring gap the coordinator flagged: if `hasLiveSource`
-    // were hard-coded `true` at the `observationFromCanonicalRead` call site
-    // instead of carrying `usable`, this card would go on reading "Downloading
-    // update to v2.1.0" (LIVE) forever, on a host the scope has already
-    // given up on.
+    // T2 changed WHERE this shows up, not whether it is guarded: the notices
+    // strip only draws `HostOverviewOperationCard` while `!offline`
+    // (`host-overview-panel.tsx`'s `operationShown`), and `offline` follows
+    // `!usable` directly — so once the scope goes unusable the card is
+    // withdrawn OUTRIGHT and the offline notice becomes the strip's only
+    // wording, carrying the same retained phase itself
+    // (`describeHostOfflineNotice`). That withdrawal is unconditional on
+    // `usable` alone, which is what isolates the wiring gap the coordinator
+    // flagged: if `hasLiveSource` were hard-coded `true` at the
+    // `observationFromCanonicalRead` call site instead of carrying `usable`,
+    // the demotion below would silently fail — but the operation card would
+    // still be gone either way, because THIS gate never looked at the
+    // observation's liveness in the first place. The assertion that isolates
+    // the wiring gap is therefore the offline notice's own text below, not a
+    // side-by-side card comparison.
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -530,7 +587,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -561,17 +618,38 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
 
     // THE FIX: the retained attempt demotes to "last known" the moment the
     // scope stops being usable, exactly as it does when the READ itself turns
-    // unhealthy in (c) — same predicate, different input.
+    // unhealthy in (c) — same predicate, different input. T2's Status tab
+    // withholds the update card entirely once the host can't be reached (the
+    // offline notice is the tab's ONLY unreachable wording then, and it
+    // carries the retained phase itself), so the retained "Last seen: …"
+    // sentence now lives there rather than on `host-overview-operation-card`.
     await waitFor(() => {
       expect(
-        screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toBe("Last seen: Downloading update to v2.1.0");
+        screen.getByTestId("host-overview-offline-notice").textContent,
+      ).toContain(
+        "Can't reach host-a — last seen while downloading update to v2.1.0.",
+      );
     });
+    expect(screen.queryByTestId("host-overview-operation-phase")).toBeNull();
 
     // And the orthogonal rule holds too: an unusable scope withdraws the
     // controls rather than merely disabling them.
     expect(screen.queryByTestId("host-overview-edit-name")).toBeNull();
     expect(screen.queryByTestId("host-overview-menu")).toBeNull();
+
+    // `describeLastSeenUpdateClause` (the offline notice's clause) reads the
+    // live kind OR a retained `lastKnownKind` through the identical phrase
+    // table, so its text alone does not distinguish a genuinely demoted view
+    // from one that stayed live — and the surface that USED to make that
+    // distinction (the header pill's own table, "Last seen: updating" vs.
+    // "Downloading…") no longer exists: T2 deleted the pill outright, and the
+    // operation card that still carries a demoted-vs-live table is itself
+    // withdrawn here by the `offline` gate above. The demotion mechanism
+    // itself stays covered independent of this scenario — see
+    // `deriveHostOverviewVersionTag`'s and `inFlightUpdateKind`'s retained-view
+    // cases in `host-overview-notices.test.tsx`, and (c) above, where the
+    // scope stays usable and the operation card's own "Last seen: …" phrasing
+    // is directly visible.
   });
 
   it("(c3) an open restart confirmation CLOSES when the scope turns unusable — the withdrawal of the Restart control, one commit late", async () => {
@@ -594,7 +672,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -649,7 +727,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const management = buildOverviewManagement({
       getHostControllerStatus: vi.fn(() =>
@@ -692,7 +770,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const management = buildOverviewManagement({
       getHostControllerStatus: vi.fn(() =>
@@ -751,10 +829,28 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = {
         ...scopeFrom("host-a", fixture),
         status: "unreachable",
+        // T2's Status tab withholds the offline notice (and shows the update
+        // card instead) only while the health word already reads
+        // "Restarting…" - the same word this scope's own restart is
+        // narrating. Without this the default fixture health ("online") made
+        // the tab treat this restart as an ordinary disconnect and draw the
+        // offline notice over the operation card this pin is about.
+        host: hostScopeOptionFixture({
+          hostId: "host-a",
+          isLocalMachine: true,
+          connectable: true,
+          health: {
+            state: "restarting",
+            label: "Restarting…",
+            detail: "Expected restart — reconnecting.",
+            tone: "idle",
+            live: false,
+          },
+        }),
       };
       const livenessObservedAtMs = Date.now();
       const management = buildOverviewManagement({
@@ -842,7 +938,7 @@ describe("HostOverviewPanel — the WIRE leg's freshness is its own read's insta
         },
       });
       recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-      hostBindingMock.current = { hostClient: fixture.client };
+      hostBindingMock.current = bindingWith(fixture.client);
       scopeOverrides.current = scopeFrom("host-a", fixture);
       renderPanel(undefined);
 

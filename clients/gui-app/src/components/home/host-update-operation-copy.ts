@@ -3,6 +3,8 @@ import type {
   FleetUpdateViewKind,
 } from "@/lib/host/fleet-update/fleet-update-view";
 import { formatHostTransfer } from "@/lib/host/host-progress-copy";
+import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
+import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
 
 /**
  * The one place an update phase becomes words.
@@ -173,7 +175,7 @@ const PHASE_SENTENCE: Record<
   reconnecting: () => "Waiting for host to reconnect",
   verifying: ({ to }) => `Verifying updated host${to}`,
   complete: ({ target }) => completeSentence(target),
-  failed: ({ view }) => failedSentence(view.errorMessage),
+  failed: ({ view }) => failedSentence(view.errorMessage, view.errorCode),
   // The success first, because the ORDER is the message: the update landed, and
   // the leftover is bookkeeping. Leading with the bookkeeping would read as a
   // qualification on the success.
@@ -256,6 +258,73 @@ function phaseSentence(
   });
 }
 
+function whilePhase(
+  kind: FleetUpdateViewKind,
+): (context: PhaseSentenceContext) => string {
+  return (context) => {
+    const sentence = PHASE_SENTENCE[kind](context);
+    return `while ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`;
+  };
+}
+
+const LAST_SEEN_CLAUSE: Record<
+  FleetUpdateViewKind,
+  ((context: PhaseSentenceContext) => string) | null
+> = {
+  updating: whilePhase("updating"),
+  downloading: whilePhase("downloading"),
+  preparing: whilePhase("preparing"),
+  applying: whilePhase("applying"),
+  verifying: whilePhase("verifying"),
+  restarting: whilePhase("restarting"),
+  reconnecting: ({ to }) => `while restarting to finish the update${to}`,
+  "waiting-for-work": ({ to }) =>
+    `while the update${to} waited for work to finish`,
+  "waiting-to-activate": ({ target }) =>
+    target === null
+      ? "with an update installed and waiting for a restart"
+      : `with v${target} installed and waiting for a restart`,
+  complete: null,
+  failed: null,
+  "finalizing-record": null,
+  "verification-refused": null,
+  unavailable: null,
+  unknown: null,
+  idle: null,
+};
+
+/**
+ * The phase a host was last seen in, as the clause the Overview's offline
+ * notice carries ("Can't reach build-box — last seen 3h ago, while downloading
+ * update to v1.5.1."), or `null` when no update was in flight.
+ *
+ * Reads the RETAINED phase (`lastKnownKind`) for an `unknown` view and the
+ * view's own kind otherwise. Only the in-flight phases earn a clause, the same
+ * set the picker's retained word calls "updating"; a failure or a finished
+ * update is not something the host was in the middle of.
+ *
+ * The running phases reuse {@link PHASE_SENTENCE}, so the clause and the card
+ * cannot disagree about a version suffix. The two parks and the reconnect
+ * are worded here because their card sentences are instructions ("restart
+ * host to finish") or name a wait that no longer applies. A clause has to
+ * describe the past.
+ */
+export function describeLastSeenUpdateClause(
+  view: FleetUpdateView,
+): string | null {
+  const kind = view.kind === "unknown" ? view.lastKnownKind : view.kind;
+  if (kind === null) return null;
+  const clause = LAST_SEEN_CLAUSE[kind];
+  if (clause === null) return null;
+  const target = view.targetVersion;
+  return clause({
+    view,
+    cliFloorBlocked: false,
+    target,
+    to: versionSuffix(target),
+  });
+}
+
 /**
  * Names the BLOCKER rather than the phase, because this is the one active state
  * a person can act on — and the count is what makes the Force affordance beside
@@ -312,7 +381,13 @@ function completeSentence(targetVersion: string | null): string {
     : `Updated to v${targetVersion}`;
 }
 
-function failedSentence(errorMessage: string | null): string {
+function failedSentence(
+  errorMessage: string | null,
+  errorCode: string | null,
+): string {
+  if (errorCode === HOST_STORE_FORMAT_FLOOR_CODE) {
+    return `Update failed: ${hostUpdateFailureMessage(errorCode, errorMessage ?? "")}`;
+  }
   return errorMessage === null
     ? "Update failed"
     : `Update failed: ${errorMessage}`;

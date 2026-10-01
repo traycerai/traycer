@@ -1,49 +1,26 @@
-import { type CSSProperties, type ReactNode } from "react";
-import { UserMenu } from "@/components/auth/user-menu";
+import type { ReactNode } from "react";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
 import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
-import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
+import { useMobileHeaderActive } from "@/components/layout/header/use-mobile-header-active";
 import { DesktopMenuBar } from "@/components/layout/header/desktop-menu-bar";
-import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
-import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
-import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
-import { NotificationsBell } from "@/components/notifications/notifications-bell";
+import {
+  HeaderBarCluster,
+  HeaderIdentity,
+  HeaderNotificationsBell,
+} from "@/components/layout/header/header-actions";
+import {
+  isFramelessDesktop,
+  NO_DRAG_STYLE,
+  titleBarSpacerStyle,
+  WINDOW_LEADING_INSET_CLASS,
+  WINDOW_TRAILING_INSET_CLASS,
+} from "@/components/layout/header/title-bar-drag";
 import { cn } from "@/lib/utils";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
-import { useLayoutStore } from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
-
-// Frameless-desktop detection: Electron's preload bridge exposes
-// `window.runnerHost` via `contextBridge.exposeInMainWorld`. Browser
-// shells never see it. Reliable in Electron 42 with sandbox + app://
-// scheme + Chromium UA reduction (UA sniffing is not).
-function isFramelessDesktop(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    Object.prototype.hasOwnProperty.call(window, "runnerHost")
-  );
-}
-
-// `-webkit-app-region` isn't in the standard CSSProperties typings.
-const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
-const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
-
-// Drag style for the header's title-bar spacers: only frameless desktop shells
-// use them as an OS drag region, and only while no header overlay needs the
-// title bar to receive clicks (see `useTitleBarDraggingSuppressed`).
-function titleBarSpacerStyle(
-  framelessDesktop: boolean,
-  dragSuppressed: boolean,
-): CSSProperties | undefined {
-  if (!framelessDesktop) return undefined;
-  return dragSuppressed ? NO_DRAG_STYLE : DRAG_STYLE;
-}
 
 export type AppHeaderVariant = "app" | "host-loading";
 
@@ -57,10 +34,10 @@ export interface AppHeaderProps {
  * and tab row at every zoom level.
  */
 export function AppHeader(props: AppHeaderProps): ReactNode {
-  const isMobile = useIsMobileViewport();
-  const desktopMenus = useDesktopMenuBarActive();
-  // A zoomed desktop window still needs its menu row and native control insets.
-  if (props.variant === "app" && isMobile && !desktopMenus) {
+  // A zoomed desktop window still needs its menu row and native control insets;
+  // the same predicate forces the effective tab strip placement to the top.
+  const mobileHeaderActive = useMobileHeaderActive();
+  if (props.variant === "app" && mobileHeaderActive) {
     return <MobileAppHeader />;
   }
   return <DesktopAppHeader variant={props.variant} />;
@@ -95,19 +72,35 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         // The height is a shared token: the boot surfaces reserve this exact
         // slot so their card does not move when the header appears under it.
         APP_HEADER_HEIGHT_CLASS,
-        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-[1.5px] after:bg-border/90 after:content-['']",
-        { "after:inset-x-[var(--radius-xl)]": showTabStrip },
+        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
+        { "md:bg-transparent md:after:hidden": showTabStrip },
         framelessDesktop
           ? cn(
               "pl-3 pr-3",
-              "wco:pl-[env(titlebar-area-x,82px)]",
-              "wco:pr-[max(12px,calc(100vw-env(titlebar-area-x,82px)-env(titlebar-area-width,100vw)+12px))]",
+              WINDOW_LEADING_INSET_CLASS,
+              WINDOW_TRAILING_INSET_CLASS,
             )
           : "px-3",
       )}
     >
       <DesktopMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
+      {/* The header's LEFT cluster (L-156): its own box, because the header
+          row has no gap of its own and the right-hand cluster's box is the
+          one this mirrors. It sits left of the tab strip and right of the
+          window's own controls, so a reading moved here lands beside the
+          navigation rather than inside the tabs. Empty for the shipped
+          arrangement, where both readings are in the strip, and an empty box
+          takes no room. Shrinkable: its readings give way before the tabs and
+          the header's own controls do (G6 review A). */}
+      {navDisabled ? null : (
+        <div
+          className="relative z-10 flex min-w-0 items-center gap-2"
+          style={framelessDesktop ? NO_DRAG_STYLE : undefined}
+        >
+          <HeaderBarCluster side="left" />
+        </div>
+      )}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor
@@ -127,12 +120,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
           style={spacerDragStyle}
         />
       ) : null}
-      <div
-        className={cn(
-          "relative z-10 flex min-w-0 flex-1 items-center self-end",
-          draggable && "[-webkit-app-region:drag]",
-        )}
-      >
+      <div className={tabStripBoxClass(showTabStrip, draggable)}>
         {showTabStrip ? <TabStrip /> : null}
       </div>
       <div
@@ -145,96 +133,32 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         )}
         style={spacerDragStyle}
       />
+      {/* Shrinkable for the readings in it alone: the controls after them
+          never give way (G6 review A). */}
       <div
-        className="relative z-10 flex shrink-0 items-center gap-2"
+        className="relative z-10 flex min-w-0 items-center gap-2"
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
-        {!navDisabled ? <AppUpdateHeaderButton /> : null}
-        {!navDisabled ? <HeaderUsageControls /> : null}
-        {!navDisabled ? <HistoryButton /> : null}
-        {showBell ? <HeaderNotificationsBell /> : null}
-        <HeaderIdentity showAppSettings={!navDisabled} />
+        {!navDisabled ? <AppUpdateHeaderButton layout="icon" /> : null}
+        {!navDisabled ? <HeaderBarCluster side="right" /> : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {!navDisabled ? <HistoryButton /> : null}
+          {showBell ? <HeaderNotificationsBell /> : null}
+          <HeaderIdentity showAppSettings={!navDisabled} />
+        </div>
       </div>
     </header>
   );
 }
 
 /**
- * The header's half of "exactly one surface owns the usage gauge and the
- * resource monitor". Under the `status-bar` placement both move to the strip
- * and this renders nothing.
- *
- * The DESKTOP header's half only: `MobileAppHeader` keeps both controls
- * unconditionally, because a mobile viewport does not answer this question
- * with `placement` at all - the footer there is its own opt-in switch, and a
- * header that respected `status-bar` would leave a phone with neither control
- * until someone found that switch.
- *
- * `showGlobalResourceMonitor` still gates the resource button on top of this —
- * the two settings answer different questions ("do I want a resource monitor
- * at all" vs "where do the usage controls live"), so under the footer the
- * segment is governed by the status bar's own `resources.enabled` instead.
+ * The tab strip's box. The tabs keep a floor of the header, so readings moved
+ * up here shrink before they do (G6 review A).
  */
-function HeaderUsageControls(): ReactNode {
-  const showGlobalResourceMonitor = useSettingsStore(
-    (state) => state.showGlobalResourceMonitor,
+function tabStripBoxClass(showTabStrip: boolean, draggable: boolean): string {
+  return cn(
+    "relative z-10 flex flex-1 items-center",
+    showTabStrip ? "min-w-[30%]" : "min-w-0",
+    draggable && "[-webkit-app-region:drag]",
   );
-  const inHeader = useLayoutStore(
-    (state) => state.statusBar.placement === "header",
-  );
-  if (!inHeader) return null;
-  return (
-    <>
-      <RateLimitIconButton />
-      {showGlobalResourceMonitor ? (
-        // Unconditionally the owner of `app.resources.open`: this whole
-        // component is behind `inHeader`, so the strip's own popover is not
-        // mounted while this one is.
-        <ResourceMonitorPopover
-          trigger="header-button"
-          className={undefined}
-          claimsOpenAction
-        />
-      ) : null}
-    </>
-  );
-}
-
-// Hiding the bell when signed-out keeps the notifications-store +
-// runner-host subscriptions from mounting for a signed-out session.
-//
-// `admitsLocalPlane`, not `status === "signed-in"`: the notification centre
-// is a LOCAL-plane surface with cloud lanes inside it. For an `unverified`
-// session the session provider deliberately keeps the host-notification and
-// agent-activity lanes running and withholds only the cloud-backed ones
-// behind its own verdict gate - and on a desktop-width header this bell is
-// the ONLY entry point to those lanes, so gating it on the cloud verdict left
-// locally served failures, approvals and agent activity accumulating with no
-// way to see or act on them. Found in review.
-export function HeaderNotificationsBell() {
-  const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
-  if (!admitted) {
-    return null;
-  }
-  return <NotificationsBell />;
-}
-
-interface HeaderIdentityProps {
-  readonly showAppSettings: boolean;
-}
-
-function HeaderIdentity(props: HeaderIdentityProps) {
-  const profile = useAuthStore((state) => state.profile);
-  const isSignedIn = useAuthStore((state) => state.status === "signed-in");
-  if (isSignedIn && profile !== null) {
-    return (
-      <UserMenu
-        userName={profile.userName}
-        email={profile.email}
-        avatarUrl={profile.avatarUrl ?? null}
-        showAppSettings={props.showAppSettings}
-      />
-    );
-  }
-  return <SignInButton layout="compact" />;
 }

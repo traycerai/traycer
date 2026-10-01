@@ -335,6 +335,40 @@ describe("KeybindingProvider screencast armed flag", () => {
     unregister();
   });
 
+  // Editing conventions win over the app-forwarded exemption too, not only
+  // over the browser-scoped rows above: a reader can REBIND an app-forwarded
+  // action (defaults never land on Z/Y today) onto the same token undo/redo
+  // uses, and without the `isTextHistoryShortcut` guard that rebind would
+  // route the keystroke to the app dispatcher while armed - the streamed
+  // mirror of the native `BrowserViewChords.match` guard.
+  it("does not forward a rebound app-forwarded chord that collides with the history shortcut", () => {
+    const router = buildProviderRouterSource("/");
+    const openPalette = vi.fn();
+    const unregister = registerDynamicActionHandler(
+      "app.palette.open",
+      openPalette,
+    );
+    useKeybindingStore.setState({
+      bindings: { ...getDefaultBindings(), "app.palette.open": "mod+z" },
+    });
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    const { releasePageKeys } = armWithReleaseSpy();
+    let consumed = true;
+    act(() => {
+      consumed = dispatchWindowKey("keydown", {
+        code: "KeyZ",
+        key: "z",
+        ...platformModKeys(),
+      }).defaultPrevented;
+    });
+
+    expect(openPalette).not.toHaveBeenCalled();
+    expect(consumed).toBe(false);
+    expect(releasePageKeys).not.toHaveBeenCalled();
+    unregister();
+  });
+
   it("ignores a stale release from a superseded owner", () => {
     const store = useScreencastArmedStore.getState();
     store.claim("owner-a", () => undefined);

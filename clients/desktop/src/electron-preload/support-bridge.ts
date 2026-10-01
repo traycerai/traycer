@@ -20,6 +20,7 @@ import type {
 } from "../ipc-contracts/window-types";
 import type {
   DesktopNotificationFeedSource,
+  DesktopNotificationFeedOccurrence,
   DesktopNotificationForegroundAppLocal,
   DesktopNotificationForegroundDisplay,
   DesktopNotificationShowOutcome,
@@ -98,6 +99,7 @@ export interface SupportBridgeSurface {
       deliveryKey: string | null,
       feedSource: DesktopNotificationFeedSource | null,
       foregroundAppLocal: DesktopNotificationForegroundAppLocal | null,
+      feedOccurrences: ReadonlyArray<DesktopNotificationFeedOccurrence> | null,
     ): Promise<DesktopNotificationShowOutcome>;
     onClick(handler: Listener<unknown>): Disposable;
     onForegroundDisplay(
@@ -179,6 +181,7 @@ export function buildSupportBridge(
         deliveryKey,
         feedSource,
         foregroundAppLocal,
+        feedOccurrences,
       ) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.notificationShow,
@@ -189,6 +192,7 @@ export function buildSupportBridge(
           deliveryKey,
           feedSource,
           foregroundAppLocal,
+          feedOccurrences,
         ) as Promise<DesktopNotificationShowOutcome>,
       onClick: (handler) =>
         subscribe<unknown>(RunnerHostEvent.notificationClick, handler),

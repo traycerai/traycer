@@ -1,0 +1,75 @@
+---
+title: "Review Mode"
+description: "Agentic code review with thorough exploration and analysis. Perfect for comprehensive code quality checks where you want deep insights into implementation details, potential issues, and improvement opportunities."
+keywords: ['review mode', 'agentic code review', 'code quality checks', 'comprehensive analysis', 'implementation review', 'code exploration', 'potential issues', 'improvement opportunities', 'deep insights', 'code analysis', 'quality assurance', 'review comments', 'severity categorization', 'bug', 'performance', 'security', 'clarity']
+---
+
+<Frame>
+<iframe
+  className="w-full aspect-video rounded-xl"
+  src="https://www.youtube.com/embed/R4yizcg5LH4?rel=0&cc_load_policy=1&cc_lang_pref=en"
+  title="Review mode"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowFullScreen
+></iframe>
+</Frame>
+
+<Steps>
+  <Step title="1. User Query">
+    State your goal, expected outcome, and constraints.
+
+    <Accordion title="What context can I provide?">
+      Optional context:
+
+      - **Files**: Source files, config files, documentation, test files.
+      - **Folders**: Component directories, feature folders, asset directories.
+      - **Images**: UI mockups, error screenshots.
+      - **Git**:
+        - **Diff against uncommitted changes**: Changes that haven't been committed yet.
+        - **Diff against 'main'**: Changes compared to the main/default branch.
+        - **Diff against branch**: Changes compared to a specific branch of your choice.
+        - **Diff against commit**: Changes compared to a specific commit.
+    </Accordion>
+
+  </Step>
+  <Step title="2. Comprehensive Code Review">
+    Traycer performs an agentic code review with:
+
+    - **Deep code exploration** across files and dependencies.
+    - **Implementation analysis** to understand context and impact.
+    - **Review comments** categorized by category - Bug, Performance, Security, Clarity.
+
+   Review the findings and address comments based on category and impact.
+
+   If you are not satisfied with the comments received, and want to provide feedback, *iterate* to refine it until it fits your goal.
+  </Step>
+
+  <Step title="3. Complete">
+    Finalize, commit, and ship.
+  </Step>
+</Steps>
+
+## Review comment categories
+
+<Frame>
+<img
+  src="/images/review-category.png"
+  alt="Review categories"
+  className="rounded-lg"
+/>
+</Frame>
+
+Traycer organizes review comments by category to help you understand and prioritize issues:
+
+- **Bug**: Functional issues, logic errors, or incorrect implementations that need fixing.
+- **Performance**: Inefficiencies, bottlenecks, or optimization opportunities that affect speed or resource usage.
+- **Security**: Vulnerabilities, unsafe practices, or potential security risks that need attention.
+- **Clarity**: Code readability, maintainability, documentation, or style improvements.
+
+## Fixing review comments
+
+You have three options for addressing review comments:
+
+- **Fix individual comments**: Use the coding agent icon button next to each comment to address specific issues one at a time.
+- **Fix selected comments**: Enable selection mode to choose multiple comments, then send the selected comments to your [agent](/extension/integrations/agents) for fixing.
+- **Fix all comments**: Use the **Fix all in** button to have your [agent](/extension/integrations/agents) address all review comments at once.

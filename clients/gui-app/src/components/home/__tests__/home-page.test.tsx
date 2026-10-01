@@ -77,6 +77,9 @@ const homeMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   getActiveHostId: vi.fn(() => "host-home"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-home"),
+  // The directory's LOCAL host id - the machine typing, deliberately distinct
+  // from `getActiveHostId` (the target host the chat is created on).
+  getLocalHostId: vi.fn<() => string | null>(() => "host-local-typing"),
   getActiveHost: vi.fn(() => ({
     hostId: "host-home",
     label: "Local",
@@ -130,6 +133,11 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => ({
     request: homeMocks.request,
+    // `epic.create` is dispatched with an idempotency key, which only the
+    // combined entry point can carry, so a client stub that stops at `request`
+    // fails at RUN time on the first create this suite drives.
+    requestWithOptions: (method: string, payload: unknown): Promise<unknown> =>
+      homeMocks.request(method, payload),
     getActiveHostId: homeMocks.getActiveHostId,
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
@@ -154,6 +162,8 @@ function useTestPlacementTarget(): LandingPlacementTarget {
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({
     request: homeMocks.request,
+    requestWithOptions: (method: string, payload: unknown): Promise<unknown> =>
+      homeMocks.request(method, payload),
     getActiveHostId: homeMocks.getActiveHostId,
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
@@ -173,10 +183,18 @@ vi.mock("@/lib/host/runtime", () => ({
   getHostBindingSnapshot: () => ({
     hostClient: {
       request: homeMocks.request,
+      requestWithOptions: (
+        method: string,
+        payload: unknown,
+      ): Promise<unknown> => homeMocks.request(method, payload),
       getActiveHostId: homeMocks.getActiveHostId,
       getActiveHost: homeMocks.getActiveHost,
       getRequestContextUserId: homeMocks.getRequestContextUserId,
     },
+    // The create stamps `sentFromHostId` from the directory's local host at
+    // submit - see `homeMocks.getLocalHostId` for the default and the
+    // sender-host-placement cases below for the assertions.
+    directory: { getLocalHostId: homeMocks.getLocalHostId },
   }),
 }));
 
@@ -366,8 +384,8 @@ vi.mock("@/components/home/host-update-banner", () => ({
   HostUpdateBanner: () => <div data-testid="host-update-banner-slot" />,
 }));
 
-vi.mock("@/components/epics/epics-list-panel", () => ({
-  EpicsListPanel: () => <div data-testid="epics-list-panel" />,
+vi.mock("@/components/home/current-tasks-section", () => ({
+  CurrentTasksSection: () => <div data-testid="current-tasks-section" />,
 }));
 
 vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
@@ -469,6 +487,8 @@ describe("<HomePage />", () => {
     homeMocks.request.mockReset();
     homeMocks.getActiveHostId.mockReset();
     homeMocks.getActiveHostId.mockReturnValue("host-home");
+    homeMocks.getLocalHostId.mockReset();
+    homeMocks.getLocalHostId.mockReturnValue("host-local-typing");
     homeMocks.getActiveHost.mockReset();
     homeMocks.getActiveHost.mockReturnValue({
       hostId: "host-home",
@@ -551,7 +571,7 @@ describe("<HomePage />", () => {
     queryClient.clear();
   });
 
-  it("renders the embedded epics list normally, but unmounts it while a system modal occludes the home page", () => {
+  it("renders the Current tasks section normally, but unmounts it while a system modal occludes the home page", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
     });
@@ -560,7 +580,7 @@ describe("<HomePage />", () => {
         <HomePage />
       </QueryClientProvider>,
     );
-    expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+    expect(screen.queryByTestId("current-tasks-section")).not.toBeNull();
     expect(screen.getByTestId("landing-composer").dataset.activityEnabled).toBe(
       "true",
     );
@@ -571,14 +591,14 @@ describe("<HomePage />", () => {
         <HomePage />
       </QueryClientProvider>,
     );
-    expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
     expect(screen.getByTestId("landing-composer").dataset.activityEnabled).toBe(
       "false",
     );
     queryClient.clear();
   });
 
-  it("drops the embedded epics list at phone width, keeping the hero and composer", () => {
+  it("drops the Current tasks section at phone width, keeping the hero and composer", () => {
     homeMocks.isMobile = true;
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -591,7 +611,7 @@ describe("<HomePage />", () => {
 
     // The hamburger drawer already carries "Recent tasks" + "View all" off the
     // same useHistoryQuery, so the inline copy is pure duplication here.
-    expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+    expect(screen.queryByTestId("current-tasks-section")).toBeNull();
     expect(screen.getByTestId("home-hero")).not.toBeNull();
     expect(screen.getByTestId("landing-composer")).not.toBeNull();
     queryClient.clear();
@@ -612,7 +632,7 @@ describe("<HomePage />", () => {
     fireEvent.click(screen.getByTestId("home-view-history"));
 
     // Same drawer the header hamburger opens - that is where "Recent tasks"
-    // lives once the embedded list is dropped at this width.
+    // lives once the Current tasks section is dropped at this width.
     expect(useMobileNavStore.getState().open).toBe(true);
     queryClient.clear();
   });
@@ -834,6 +854,77 @@ describe("<HomePage />", () => {
         { workspacePath: "/tmp/gui-app" },
         { workspacePath: "/tmp/host" },
       ],
+    });
+    queryClient.clear();
+  });
+
+  // `sentFromHostId` names the machine the user is TYPING on (the local
+  // host), never the target host the chat is created on. This suite's
+  // default mocks already diverge - `getLocalHostId` answers
+  // "host-local-typing", `getActiveHostId` answers "host-home" - so a reader
+  // quietly replaced by the target host would fail this alongside one
+  // replaced by a constant.
+  it("stamps the initial message's sentFromHostId with the local host id, not the target host", async () => {
+    homeMocks.getActiveHostId.mockReturnValue("host-target-different");
+    homeMocks.request.mockResolvedValue({ roomInfo: null });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("landing-submit"));
+
+    await waitFor(() => {
+      expect(
+        homeMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    const createEpicCall = homeMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: {
+        hostId: "host-target-different",
+        initialMessage: { sentFromHostId: "host-local-typing" },
+      },
+    });
+    queryClient.clear();
+  });
+
+  // The null path stays pinned: no local host bound sends no sender host,
+  // rather than falling back to the target host.
+  it("sends a null sentFromHostId when the directory has no local host", async () => {
+    homeMocks.getLocalHostId.mockReturnValue(null);
+    homeMocks.request.mockResolvedValue({ roomInfo: null });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("landing-submit"));
+
+    await waitFor(() => {
+      expect(
+        homeMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+
+    const createEpicCall = homeMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    expect(createEpicCall?.[1]).toMatchObject({
+      chat: { initialMessage: { sentFromHostId: null } },
     });
     queryClient.clear();
   });
@@ -1176,7 +1267,7 @@ describe("<HomePage />", () => {
   });
 
   describe("appearance wallpaper visibility and layout stability", () => {
-    it("mounts the appearance layer only while the tab is visible", () => {
+    it("keeps the appearance layer mounted across tab visibility and folder edits", () => {
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false, gcTime: 0 } },
       });
@@ -1189,15 +1280,29 @@ describe("<HomePage />", () => {
       expect(screen.queryByTestId("appearance-wallpaper-stub")).not.toBeNull();
       expect(homeMocks.appearanceEvents).toEqual(["mount"]);
 
+      const layer = screen.getByTestId("appearance-wallpaper-stub");
+
+      // A retained tab going hidden and back must not remount the wallpaper:
+      // a remount re-reads the blob and repaints from scratch (visible flash).
       homeMocks.tabActivity = { visible: false, focused: false };
       rerender(tree());
-      expect(screen.queryByTestId("appearance-wallpaper-stub")).toBeNull();
-      expect(homeMocks.appearanceEvents).toEqual(["mount", "unmount"]);
-
       homeMocks.tabActivity = { visible: true, focused: true };
       rerender(tree());
-      expect(screen.queryByTestId("appearance-wallpaper-stub")).not.toBeNull();
-      expect(homeMocks.appearanceEvents).toEqual(["mount", "unmount", "mount"]);
+
+      // Attaching a workspace folder re-renders the surface, not the wallpaper.
+      act(() => {
+        setGlobalWorkspaceFolders(["/tmp/attached"], {
+          "/tmp/attached": {
+            path: "/tmp/attached",
+            name: "attached",
+            repoIdentifier: null,
+            hostId: TEST_HOST_ID,
+          },
+        });
+      });
+
+      expect(screen.getByTestId("appearance-wallpaper-stub")).toBe(layer);
+      expect(homeMocks.appearanceEvents).toEqual(["mount"]);
       queryClient.clear();
     });
 
@@ -1230,7 +1335,7 @@ describe("<HomePage />", () => {
       );
       const composerInstanceId =
         screen.getByTestId("landing-composer").dataset.instanceId;
-      expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+      expect(screen.queryByTestId("current-tasks-section")).not.toBeNull();
       expect(
         screen.getByTestId("home-hero").parentElement?.className,
       ).not.toContain("invisible");
@@ -1257,7 +1362,7 @@ describe("<HomePage />", () => {
       // Nothing above or below the composer any more, so it centres itself in
       // the surface instead of staying anchored to the top of its row.
       expect(composerPlacement()).toBe("centered");
-      expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+      expect(screen.queryByTestId("current-tasks-section")).toBeNull();
       expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
         composerInstanceId,
       );
@@ -1275,7 +1380,7 @@ describe("<HomePage />", () => {
         screen.getByTestId("home-hero").parentElement?.className,
       ).not.toContain("invisible");
       expect(composerPlacement()).toBe("top");
-      expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+      expect(screen.queryByTestId("current-tasks-section")).not.toBeNull();
       expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
         composerInstanceId,
       );

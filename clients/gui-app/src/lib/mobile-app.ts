@@ -33,6 +33,35 @@ export function isMobileApp(): boolean {
   return mobileApp;
 }
 
+let phoneLayoutOnly = false;
+
+/**
+ * LAYOUT policy: "is this a bundle that ships only the phone layout?"
+ *
+ * A fourth signal, and deliberately not a synonym for the one above. The
+ * installed app is a phone-layout product on every device, an iPad as much as
+ * an iPhone, and its stylesheet disables every Tailwind breakpoint to match
+ * (`clients/mobile/src/web/index.native.css`). This flag is how JS agrees
+ * with that CSS, so `useIsMobileViewport()` reads it and `isMobileApp()`
+ * keeps deciding no layout at all.
+ *
+ * The mobile entry sets both from `Capacitor.isNativePlatform()`, because it
+ * is served to TWO runtimes: the installed Capacitor app, and a plain browser
+ * tab, which the internal launcher serves as its `gui-app` dev stream. That
+ * tab gets neither flag - it is not the product, and it loads the stylesheet
+ * with the real breakpoints, so width decides its layout like any other
+ * window. Keep the two flags apart all the same: a surface that is phone-only
+ * without being the installed app, or the reverse, must not have to lie to one
+ * to get the other.
+ */
+export function setPhoneLayoutOnly(value: boolean): void {
+  phoneLayoutOnly = value;
+}
+
+export function isPhoneLayoutOnly(): boolean {
+  return phoneLayoutOnly;
+}
+
 /** The native shells the installed app ships in. */
 export type MobileAppPlatform = "ios" | "android";
 

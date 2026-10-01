@@ -160,6 +160,7 @@ import {
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * One artifact record on the records lane.
@@ -188,20 +189,22 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
  * was never released - so this is the first line to carry it, and it is frozen
  * from here.
  */
-export const epicArtifactRecordSchema = z.discriminatedUnion("kind", [
-  specArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-  ticketArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-  storyArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-  reviewArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-]);
+export const epicArtifactRecordSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    specArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    ticketArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    storyArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    reviewArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+  ]),
+);
 export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
 
 /**
@@ -224,20 +227,22 @@ export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
  * delete-then-recreate from a recreate-then-delete). See
  * {@link epicLaneRowRevisionSchema} rule 2.
  */
-export const epicDeletedArtifactRecordSchema = z.discriminatedUnion("kind", [
-  deletedSpecArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-  deletedTicketArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-  deletedStoryArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-  deletedReviewArtifactSchema
-    .omit({ artifactRoomId: true })
-    .extend(epicLaneRowRevisionFields),
-]);
+export const epicDeletedArtifactRecordSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    deletedSpecArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedTicketArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedStoryArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+    deletedReviewArtifactSchema
+      .omit({ artifactRoomId: true })
+      .extend(epicLaneRowRevisionFields),
+  ]),
+);
 export type EpicDeletedArtifactRecord = z.infer<
   typeof epicDeletedArtifactRecordSchema
 >;
@@ -269,31 +274,33 @@ const ticketStatusSchemaForFrozenTombstone = getRecordSchema(
   "latest",
 );
 const frozenDeletedArtifactRecordFieldsV10 = {
-  id: z.string(),
-  title: z.string(),
-  deletedAt: z.string(),
+  id: lazySchema(() => z.string()),
+  title: lazySchema(() => z.string()),
+  deletedAt: lazySchema(() => z.string()),
   ...epicLaneRowRevisionFields,
 } as const;
-export const epicDeletedArtifactRecordSchemaV10 = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("spec"),
-    ...frozenDeletedArtifactRecordFieldsV10,
-  }),
-  z.object({
-    kind: z.literal("ticket"),
-    ...frozenDeletedArtifactRecordFieldsV10,
-    status: ticketStatusSchemaForFrozenTombstone,
-  }),
-  z.object({
-    kind: z.literal("story"),
-    ...frozenDeletedArtifactRecordFieldsV10,
-    status: ticketStatusSchemaForFrozenTombstone,
-  }),
-  z.object({
-    kind: z.literal("review"),
-    ...frozenDeletedArtifactRecordFieldsV10,
-  }),
-]);
+export const epicDeletedArtifactRecordSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("spec"),
+      ...frozenDeletedArtifactRecordFieldsV10,
+    }),
+    z.object({
+      kind: z.literal("ticket"),
+      ...frozenDeletedArtifactRecordFieldsV10,
+      status: ticketStatusSchemaForFrozenTombstone,
+    }),
+    z.object({
+      kind: z.literal("story"),
+      ...frozenDeletedArtifactRecordFieldsV10,
+      status: ticketStatusSchemaForFrozenTombstone,
+    }),
+    z.object({
+      kind: z.literal("review"),
+      ...frozenDeletedArtifactRecordFieldsV10,
+    }),
+  ]),
+);
 export type EpicDeletedArtifactRecordV10 = z.infer<
   typeof epicDeletedArtifactRecordSchemaV10
 >;
@@ -307,10 +314,12 @@ export type EpicDeletedArtifactRecordV10 = z.infer<
  * precisely so this lane does not have to block on a cloud room to hand the
  * renderer a title.
  */
-export const epicMetaSchema = z.object({
-  title: z.string(),
-  updatedAt: z.number(),
-});
+export const epicMetaSchema = lazySchema(() =>
+  z.object({
+    title: z.string(),
+    updatedAt: z.number(),
+  }),
+);
 export type EpicMeta = z.infer<typeof epicMetaSchema>;
 
 /**
@@ -351,10 +360,12 @@ export type EpicMeta = z.infer<typeof epicMetaSchema>;
  * record makes `revision` OPTIONAL, silently deleting the guard on the one
  * frame that most needs it.
  */
-export const epicStateMetaProjectionSchema = z.object({
-  ...epicLaneRowRevisionFields,
-  meta: epicMetaSchema,
-});
+export const epicStateMetaProjectionSchema = lazySchema(() =>
+  z.object({
+    ...epicLaneRowRevisionFields,
+    meta: epicMetaSchema,
+  }),
+);
 export type EpicStateMetaProjection = z.infer<
   typeof epicStateMetaProjectionSchema
 >;
@@ -369,10 +380,12 @@ export type EpicStateMetaProjection = z.infer<
  * entity's revision AFTER this commit, so a consumer applies the patch only
  * when it strictly exceeds the revision it holds.
  */
-export const epicStateMetaPatchSchema = z.object({
-  ...epicLaneRowRevisionFields,
-  meta: epicMetaSchema.partial(),
-});
+export const epicStateMetaPatchSchema = lazySchema(() =>
+  z.object({
+    ...epicLaneRowRevisionFields,
+    meta: epicMetaSchema.partial(),
+  }),
+);
 export type EpicStateMetaPatch = z.infer<typeof epicStateMetaPatchSchema>;
 
 /**
@@ -407,10 +420,12 @@ export type EpicStateMetaPatch = z.infer<typeof epicStateMetaPatchSchema>;
  * overwrite lane state. The set revision is what a later `agent.roles.list`
  * minor would carry to close the gap properly.
  */
-export const epicStateRoleClaimsProjectionSchema = z.object({
-  ...epicLaneRowRevisionFields,
-  claims: z.array(roleClaimSchema),
-});
+export const epicStateRoleClaimsProjectionSchema = lazySchema(() =>
+  z.object({
+    ...epicLaneRowRevisionFields,
+    claims: z.array(roleClaimSchema),
+  }),
+);
 export type EpicStateRoleClaimsProjection = z.infer<
   typeof epicStateRoleClaimsProjectionSchema
 >;
@@ -439,10 +454,12 @@ export type EpicStateRoleClaimsProjection = z.infer<
  *   can genuinely land after a newer push. Apply an upsert only when its
  *   revision strictly EXCEEDS the one held.
  */
-export const epicCommentThreadRecordSchema = commentThreadWireSchema.extend({
-  artifactId: z.string().min(1),
-  ...epicLaneRowRevisionFields,
-});
+export const epicCommentThreadRecordSchema = lazySchema(() =>
+  commentThreadWireSchema.extend({
+    artifactId: z.string().min(1),
+    ...epicLaneRowRevisionFields,
+  }),
+);
 export type EpicCommentThreadRecord = z.infer<
   typeof epicCommentThreadRecordSchema
 >;
@@ -464,11 +481,13 @@ export type EpicCommentThreadRecord = z.infer<
  * reconnect. Without it, "removed" is a fact with no position, and the
  * client seam has nowhere to put it.
  */
-export const epicCommentThreadRemovalSchema = z.object({
-  artifactId: z.string().min(1),
-  threadId: z.string().min(1),
-  ...epicLaneRowRevisionFields,
-});
+export const epicCommentThreadRemovalSchema = lazySchema(() =>
+  z.object({
+    artifactId: z.string().min(1),
+    threadId: z.string().min(1),
+    ...epicLaneRowRevisionFields,
+  }),
+);
 export type EpicCommentThreadRemoval = z.infer<
   typeof epicCommentThreadRemovalSchema
 >;
@@ -501,11 +520,9 @@ export type EpicCommentThreadRemoval = z.infer<
  * pessimistic branch every time - throwing away hot artifact docs on every
  * compaction.
  */
-export const epicStateSnapshotBasisSchema = z.enum([
-  "cold",
-  "authorityEpochChanged",
-  "resumeTooOld",
-]);
+export const epicStateSnapshotBasisSchema = lazySchema(() =>
+  z.enum(["cold", "authorityEpochChanged", "resumeTooOld"]),
+);
 export type EpicStateSnapshotBasis = z.infer<
   typeof epicStateSnapshotBasisSchema
 >;
@@ -521,16 +538,18 @@ export type EpicStateSnapshotBasis = z.infer<
  * client bug, so the honest encoding is the one where the intent is always
  * stated.
  */
-export const epicStateSubscribeOpenRequestSchemaV10 = z.object({
-  epicId: z.string().min(1),
-  /**
-   * The furthest point on THIS lane the client has already applied, or `null`
-   * for a cold open. Only rows above it are delivered, and only when the host
-   * can still serve from there - otherwise the answer is a fresh `snapshot`
-   * naming the basis, never an error and never silence.
-   */
-  resume: epicLaneCursorSchema.nullable(),
-});
+export const epicStateSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    /**
+     * The furthest point on THIS lane the client has already applied, or `null`
+     * for a cold open. Only rows above it are delivered, and only when the host
+     * can still serve from there - otherwise the answer is a fresh `snapshot`
+     * naming the basis, never an error and never silence.
+     */
+    resume: epicLaneCursorSchema.nullable(),
+  }),
+);
 export type EpicStateSubscribeOpenRequestV10 = z.infer<
   typeof epicStateSubscribeOpenRequestSchemaV10
 >;
@@ -544,55 +563,57 @@ export type EpicStateSubscribeOpenRequestV10 = z.infer<
  * row populations below are the whole of the lane's state, and a merge would
  * silently retain rows the host has since forgotten.
  */
-const epicStateSubscribeSnapshotFrameSchemaV10 = z.object({
-  kind: z.literal("snapshot"),
-  ...epicLaneEpochFrameFields,
-  /**
-   * This snapshot's HIGH-WATER MARK: the lane position the row set below
-   * reflects. Deltas at or below it are already contained in this frame and
-   * must be dropped; the buffered deltas the resolver flushes after this frame
-   * begin above it.
-   *
-   * Carried on the snapshot rather than inferred from the first delta because
-   * a quiet epic may never send one, and a client that had to wait for a delta
-   * to learn its own cursor could not persist a resume point at all.
-   */
-  position: epicLanePositionSchema,
-  basis: epicStateSnapshotBasisSchema,
-  /**
-   * Whether this snapshot reflects a replica the host has RECONCILED with the
-   * cloud, or a local seed it is serving ahead of that reconcile.
-   *
-   * `false` is the normal, expected state on a warm open and is not an error:
-   * the host serves from its own replica immediately by design. It is a
-   * FRESHNESS label - the client renders either way, marks the staleness where
-   * a user could act on it, and gates privileged mutations and secret
-   * hydration on an authority check rather than on this boolean.
-   *
-   * A cloud denial arriving after a seed-served open terminates the lane with
-   * the adjudicated verdict; it does not flip this field, because by then the
-   * question is authorization, not freshness.
-   */
-  reconciledWithCloud: z.boolean(),
-  epicMeta: epicStateMetaProjectionSchema,
-  artifactRecords: z.array(epicArtifactRecordSchema),
-  /**
-   * Tombstones ride the SNAPSHOT, unlike removed comment threads below, and
-   * the asymmetry is not an oversight.
-   *
-   * A deleted artifact is still RENDERED - the tree shows deleted-artifact
-   * affordances, and a link to one must resolve to "deleted" rather than to
-   * nothing - so its tombstone is live state a snapshot has to carry. A removed
-   * comment thread renders as nothing at all, so a snapshot that simply omits
-   * it has already said everything there is to say. Carrying thread tombstones
-   * here would grow the snapshot without end for a fact no consumer reads.
-   */
-  deletedArtifacts: z.array(epicDeletedArtifactRecordSchemaV10),
-  roleClaims: epicStateRoleClaimsProjectionSchema,
-  /** Every LIVE thread on this epic. Removed threads are simply absent. */
-  commentThreads: z.array(epicCommentThreadRecordSchema),
-  ...epicLaneTextFrameFields,
-});
+const epicStateSubscribeSnapshotFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("snapshot"),
+    ...epicLaneEpochFrameFields,
+    /**
+     * This snapshot's HIGH-WATER MARK: the lane position the row set below
+     * reflects. Deltas at or below it are already contained in this frame and
+     * must be dropped; the buffered deltas the resolver flushes after this frame
+     * begin above it.
+     *
+     * Carried on the snapshot rather than inferred from the first delta because
+     * a quiet epic may never send one, and a client that had to wait for a delta
+     * to learn its own cursor could not persist a resume point at all.
+     */
+    position: epicLanePositionSchema,
+    basis: epicStateSnapshotBasisSchema,
+    /**
+     * Whether this snapshot reflects a replica the host has RECONCILED with the
+     * cloud, or a local seed it is serving ahead of that reconcile.
+     *
+     * `false` is the normal, expected state on a warm open and is not an error:
+     * the host serves from its own replica immediately by design. It is a
+     * FRESHNESS label - the client renders either way, marks the staleness where
+     * a user could act on it, and gates privileged mutations and secret
+     * hydration on an authority check rather than on this boolean.
+     *
+     * A cloud denial arriving after a seed-served open terminates the lane with
+     * the adjudicated verdict; it does not flip this field, because by then the
+     * question is authorization, not freshness.
+     */
+    reconciledWithCloud: z.boolean(),
+    epicMeta: epicStateMetaProjectionSchema,
+    artifactRecords: z.array(epicArtifactRecordSchema),
+    /**
+     * Tombstones ride the SNAPSHOT, unlike removed comment threads below, and
+     * the asymmetry is not an oversight.
+     *
+     * A deleted artifact is still RENDERED - the tree shows deleted-artifact
+     * affordances, and a link to one must resolve to "deleted" rather than to
+     * nothing - so its tombstone is live state a snapshot has to carry. A removed
+     * comment thread renders as nothing at all, so a snapshot that simply omits
+     * it has already said everything there is to say. Carrying thread tombstones
+     * here would grow the snapshot without end for a fact no consumer reads.
+     */
+    deletedArtifacts: z.array(epicDeletedArtifactRecordSchemaV10),
+    roleClaims: epicStateRoleClaimsProjectionSchema,
+    /** Every LIVE thread on this epic. Removed threads are simply absent. */
+    commentThreads: z.array(epicCommentThreadRecordSchema),
+    ...epicLaneTextFrameFields,
+  }),
+);
 
 /**
  * The other possible LEAD frame: the host accepted the offered cursor and is
@@ -613,15 +634,17 @@ const epicStateSubscribeSnapshotFrameSchemaV10 = z.object({
  * reconciled against a host that is not, which is the more dangerous direction
  * of the same bug `trustChanged` exists to fix.
  */
-const epicStateSubscribeResumedFrameSchemaV10 = z.object({
-  kind: z.literal("resumed"),
-  ...epicLaneEpochFrameFields,
-  position: epicLanePositionSchema,
-  /** Current trust, restated - see the frame doc above for why it cannot be
-   * inherited from the client's previous session. */
-  reconciledWithCloud: z.boolean(),
-  ...epicLaneTextFrameFields,
-});
+const epicStateSubscribeResumedFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("resumed"),
+    ...epicLaneEpochFrameFields,
+    position: epicLanePositionSchema,
+    /** Current trust, restated - see the frame doc above for why it cannot be
+     * inherited from the client's previous session. */
+    reconciledWithCloud: z.boolean(),
+    ...epicLaneTextFrameFields,
+  }),
+);
 
 /**
  * The seed-trust marker FLIPPED. No rows changed, and that is precisely why
@@ -667,12 +690,14 @@ const epicStateSubscribeResumedFrameSchemaV10 = z.object({
  * full, applied here: a client that attaches after the flip reads trust off its
  * lead frame and needs no replay.
  */
-const epicStateSubscribeTrustChangedFrameSchemaV10 = z.object({
-  kind: z.literal("trustChanged"),
-  ...epicLaneEpochFrameFields,
-  reconciledWithCloud: z.boolean(),
-  ...epicLaneTextFrameFields,
-});
+const epicStateSubscribeTrustChangedFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("trustChanged"),
+    ...epicLaneEpochFrameFields,
+    reconciledWithCloud: z.boolean(),
+    ...epicLaneTextFrameFields,
+  }),
+);
 
 /**
  * ONE COMMIT. Every row and tombstone the commit touched, atomically.
@@ -691,42 +716,44 @@ const epicStateSubscribeTrustChangedFrameSchemaV10 = z.object({
  * client applying one envelope in full must never be able to observe a tree
  * that could not exist.
  */
-const epicStateSubscribeDeltaFrameSchemaV10 = z.object({
-  kind: z.literal("delta"),
-  ...epicLaneEpochFrameFields,
-  /**
-   * This commit's position in the lane's order. Strictly increasing within an
-   * epoch, and the value a client persists as its resume cursor once the
-   * envelope is fully applied - never before, or a crash mid-apply resumes past
-   * work it did not finish.
-   */
-  seq: epicLanePositionSchema,
-  artifactUpserts: z.array(epicArtifactRecordSchema),
-  /**
-   * Artifacts deleted by this commit. ABSORBING: a client that applies one of
-   * these must not resurrect the artifact from a later upsert in the same
-   * envelope or from a stale row it holds elsewhere.
-   */
-  artifactTombstones: z.array(epicDeletedArtifactRecordSchemaV10),
-  commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
-  commentThreadRemovals: z.array(epicCommentThreadRemovalSchema),
-  /**
-   * The epic metadata this commit changed, at the revision the record reached,
-   * or `null` when the commit changed no metadata. See
-   * {@link epicStateMetaPatchSchema} - the revision sits OUTSIDE the partial so
-   * it cannot be mistaken for a patched field, and so `.partial()` cannot make
-   * it optional.
-   */
-  epicMeta: epicStateMetaPatchSchema.nullable(),
-  /**
-   * The complete visible role-claim set after this commit, or `null` when the
-   * commit did not touch claims. Whole-set replacement, carrying the set's own
-   * revision - see {@link epicStateRoleClaimsProjectionSchema} for why claims
-   * are revisioned as a set rather than per row.
-   */
-  roleClaims: epicStateRoleClaimsProjectionSchema.nullable(),
-  ...epicLaneTextFrameFields,
-});
+const epicStateSubscribeDeltaFrameSchemaV10 = lazySchema(() =>
+  z.object({
+    kind: z.literal("delta"),
+    ...epicLaneEpochFrameFields,
+    /**
+     * This commit's position in the lane's order. Strictly increasing within an
+     * epoch, and the value a client persists as its resume cursor once the
+     * envelope is fully applied - never before, or a crash mid-apply resumes past
+     * work it did not finish.
+     */
+    seq: epicLanePositionSchema,
+    artifactUpserts: z.array(epicArtifactRecordSchema),
+    /**
+     * Artifacts deleted by this commit. ABSORBING: a client that applies one of
+     * these must not resurrect the artifact from a later upsert in the same
+     * envelope or from a stale row it holds elsewhere.
+     */
+    artifactTombstones: z.array(epicDeletedArtifactRecordSchemaV10),
+    commentThreadUpserts: z.array(epicCommentThreadRecordSchema),
+    commentThreadRemovals: z.array(epicCommentThreadRemovalSchema),
+    /**
+     * The epic metadata this commit changed, at the revision the record reached,
+     * or `null` when the commit changed no metadata. See
+     * {@link epicStateMetaPatchSchema} - the revision sits OUTSIDE the partial so
+     * it cannot be mistaken for a patched field, and so `.partial()` cannot make
+     * it optional.
+     */
+    epicMeta: epicStateMetaPatchSchema.nullable(),
+    /**
+     * The complete visible role-claim set after this commit, or `null` when the
+     * commit did not touch claims. Whole-set replacement, carrying the set's own
+     * revision - see {@link epicStateRoleClaimsProjectionSchema} for why claims
+     * are revisioned as a set rather than per row.
+     */
+    roleClaims: epicStateRoleClaimsProjectionSchema.nullable(),
+    ...epicLaneTextFrameFields,
+  }),
+);
 
 /**
  * The minimal SUPERTYPE the envelope invariant reads, declared by hand so the
@@ -780,21 +807,23 @@ function refineDeltaCarriesChange(
   });
 }
 
-export const epicStateSubscribeServerFrameSchemaV10 = z
-  .discriminatedUnion("kind", [
-    epicStateSubscribeSnapshotFrameSchemaV10,
-    epicStateSubscribeResumedFrameSchemaV10,
-    epicStateSubscribeDeltaFrameSchemaV10,
-    epicStateSubscribeTrustChangedFrameSchemaV10,
-    z.object({
-      kind: z.literal("pong"),
-      // No epoch stamp: heartbeats are intercepted by the shared connection
-      // handler before a resolver is selected, so there is no resolver to mint
-      // one. Same transport-level shape as every other lane's `pong`.
-      ...epicLaneTextFrameFields,
-    }),
-  ])
-  .superRefine(refineDeltaCarriesChange);
+export const epicStateSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV10,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV10,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({
+        kind: z.literal("pong"),
+        // No epoch stamp: heartbeats are intercepted by the shared connection
+        // handler before a resolver is selected, so there is no resolver to mint
+        // one. Same transport-level shape as every other lane's `pong`.
+        ...epicLaneTextFrameFields,
+      }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
 export type EpicStateSubscribeServerFrameV10 = z.infer<
   typeof epicStateSubscribeServerFrameSchemaV10
 >;
@@ -808,14 +837,13 @@ export type EpicStateSubscribeServerFrameV10 = z.infer<
  * frame here would be a second write path with no command identity and no
  * lifecycle - exactly the "silent rollback" the north-star forbids.
  */
-export const epicStateSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const epicStateSubscribeClientFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       ...epicLaneTextFrameFields,
     }),
-  ],
+  ]),
 );
 export type EpicStateSubscribeClientFrameV10 = z.infer<
   typeof epicStateSubscribeClientFrameSchemaV10
@@ -839,26 +867,30 @@ export const epicStateSubscribeV10 = defineStreamRpcContract({
  * `1.1`-capable host lands here and an older peer settles on `@1.0`, whose
  * frozen copy above the host reparses outgoing frames through.
  */
-const epicStateSubscribeSnapshotFrameSchemaV11 =
+const epicStateSubscribeSnapshotFrameSchemaV11 = lazySchema(() =>
   epicStateSubscribeSnapshotFrameSchemaV10.extend({
     deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
-  });
-const epicStateSubscribeDeltaFrameSchemaV11 =
+  }),
+);
+const epicStateSubscribeDeltaFrameSchemaV11 = lazySchema(() =>
   epicStateSubscribeDeltaFrameSchemaV10.extend({
     artifactTombstones: z.array(epicDeletedArtifactRecordSchema),
-  });
-export const epicStateSubscribeServerFrameSchemaV11 = z
-  .discriminatedUnion("kind", [
-    epicStateSubscribeSnapshotFrameSchemaV11,
-    epicStateSubscribeResumedFrameSchemaV10,
-    epicStateSubscribeDeltaFrameSchemaV11,
-    epicStateSubscribeTrustChangedFrameSchemaV10,
-    z.object({
-      kind: z.literal("pong"),
-      ...epicLaneTextFrameFields,
-    }),
-  ])
-  .superRefine(refineDeltaCarriesChange);
+  }),
+);
+export const epicStateSubscribeServerFrameSchemaV11 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      epicStateSubscribeSnapshotFrameSchemaV11,
+      epicStateSubscribeResumedFrameSchemaV10,
+      epicStateSubscribeDeltaFrameSchemaV11,
+      epicStateSubscribeTrustChangedFrameSchemaV10,
+      z.object({
+        kind: z.literal("pong"),
+        ...epicLaneTextFrameFields,
+      }),
+    ])
+    .superRefine(refineDeltaCarriesChange),
+);
 export type EpicStateSubscribeServerFrameV11 = z.infer<
   typeof epicStateSubscribeServerFrameSchemaV11
 >;

@@ -5,6 +5,7 @@ import {
   TRAYCER_MERMAID_TAG,
   TRAYCER_SPEC_TAG,
   TRAYCER_TICKET_TAG,
+  TRAYCER_WIREFRAME_TAG,
 } from "./const";
 import type { Schema } from "hast-util-sanitize";
 import { defaultSchema } from "rehype-sanitize";
@@ -28,6 +29,7 @@ const TRAYCER_TAG_NAMES = [
   TRAYCER_SPEC_TAG,
   TRAYCER_TICKET_TAG,
   TRAYCER_MERMAID_TAG,
+  TRAYCER_WIREFRAME_TAG,
 ] as const;
 
 const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
@@ -37,6 +39,7 @@ const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {
   [TRAYCER_SPEC_TAG]: ["data-epic-id", "data-spec-id", "data-title"],
   [TRAYCER_TICKET_TAG]: ["data-epic-id", "data-ticket-id", "data-title"],
   [TRAYCER_MERMAID_TAG]: ["data-code"],
+  [TRAYCER_WIREFRAME_TAG]: ["data-code"],
 };
 
 /**

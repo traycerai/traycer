@@ -21,10 +21,7 @@ import {
   hasLandingImageBytes,
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
-import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { useDraftFirstImageFetcher } from "@/lib/attachments/use-draft-image-fetcher";
-import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
-import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { markLandingEditorMounted } from "@/lib/composer/landing-image-gc";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -38,7 +35,7 @@ import { useProfileEligibilityGate } from "@/components/chat/composer/use-profil
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
-import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
+import { LANDING_COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -88,18 +85,13 @@ import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-s
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import { ComposerUploadProgressNotice } from "@/components/home/composer/composer-upload-progress-notice";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
-import { PromptStashControl } from "@/components/chat/composer/prompt-stash-control";
+import { ComposerDraftsControl } from "@/components/composer/drafts/composer-drafts-control";
 import { forkLandingDraftInPlace } from "@/lib/drafts/landing-draft-fork";
 import { useDraftAuthorityControl } from "@/hooks/drafts/use-draft-authority";
-import {
-  landingStashIdentity,
-  useLandingPromptStashDestination,
-  useLandingPromptStashSource,
-} from "./use-landing-prompt-stash-adapters";
 
 interface LandingComposerProps {
   readonly draftId: string | null;
@@ -122,13 +114,6 @@ function useLandingDraftComposerMode(
       state.drafts.find((draft) => draft.id === draftId)?.composerMode ?? null
     );
   });
-}
-
-function promptStashIsDisabled(
-  isSubmitting: boolean,
-  attachmentPending: boolean,
-): boolean {
-  return isSubmitting || attachmentPending;
 }
 
 function landingComposerCanSubmit(args: {
@@ -199,6 +184,16 @@ export function LandingComposer(props: LandingComposerProps) {
   // Only the toolbar slot swaps, so the editor keeps its position in the tree
   // and never remounts when the viewport crosses the breakpoint.
   const isMobile = useIsMobileViewport();
+  // The phone sheet (`ComposerShell`'s `expansion`); a sent draft drops it
+  // back to the compact card.
+  const [composerExpanded, setComposerExpanded] = useState(false);
+  const composerExpansion = useMemo(
+    () => ({
+      expanded: composerExpanded,
+      onExpandedChange: setComposerExpanded,
+    }),
+    [composerExpanded, setComposerExpanded],
+  );
 
   useEffect(() => {
     return () => {
@@ -448,44 +443,6 @@ export function LandingComposer(props: LandingComposerProps) {
       draftId,
     });
   const attachmentPending = isAttachmentIngestPending(paste);
-  // Through the draft resolver rather than the partition alone, so this reader
-  // matches the chat composer's and the modal's. Leg 1 IS `getImageBytes`, so
-  // a landing draft whose bytes were pasted here answers exactly as before;
-  // what is added is the two legs behind it, which is what a landing draft
-  // ADOPTED from another host has - its bytes are on that host, or in the
-  // published blob, and never in this window's partition.
-  const readPromptStashImage = useCallback(
-    (hash: string): Promise<ImageBytes | null> =>
-      resolveDraftImageBytes(hash, draftImageByteTargetForHost(resolvedHostId)),
-    [resolvedHostId],
-  );
-  // The unbound phase is intentionally namespaced away from the eventual
-  // persisted draft id. Its runtime owns an independent revision counter, so
-  // treating both phases as one identity could let equal counter values clear
-  // content written after promotion.
-  const stashIdentity = landingStashIdentity(draftId, props.pendingCreateId);
-  const promptStashSource = useLandingPromptStashSource({
-    stashIdentity,
-    runtimeStore,
-    draftId,
-    unboundRuntime,
-    editorRef,
-  });
-  const promptStashDestination = useLandingPromptStashDestination({
-    stashIdentity,
-    draftId,
-    runtimeStore,
-    editorRef,
-  });
-  const promptStash = usePromptStash({
-    active: chatComposerActive,
-    disabled: promptStashIsDisabled(isSubmitting, attachmentPending),
-    editorRef,
-    readHashImage: readPromptStashImage,
-    source: promptStashSource,
-    destination: promptStashDestination,
-    hostId: resolvedHostId,
-  });
   // Send-time gate for the selected provider's managed binary pack. Folded
   // into `canSubmit` rather than checked separately at submit, so the button
   // and its hint can never disagree - the user is told why BEFORE pressing,
@@ -693,8 +650,17 @@ export function LandingComposer(props: LandingComposerProps) {
     raiseHostNotice(
       refusal === null ? null : { kind: "refused", message: refusal.message },
     );
+    if (refusal === null) setComposerExpanded(false);
     return refusal === null;
-  }, [actions, canSubmit, draftId, pickerStore, raiseHostNotice, toolbarStore]);
+  }, [
+    actions,
+    canSubmit,
+    draftId,
+    pickerStore,
+    raiseHostNotice,
+    setComposerExpanded,
+    toolbarStore,
+  ]);
 
   const dispatchStartTerminal = useCallback(
     (launch: TerminalAgentLaunch): boolean => {
@@ -757,7 +723,7 @@ export function LandingComposer(props: LandingComposerProps) {
       toolbarStore={toolbarStore}
       composerMode={composerMode}
       chatEditorIsActive={chatComposerActive}
-      editorClassName={COMPOSER_EDITOR_CLASSNAME}
+      editorClassName={LANDING_COMPOSER_EDITOR_CLASSNAME}
       initialContent={initialContent}
       initialSelection={initialSelection}
       canSubmit={canSubmit}
@@ -767,12 +733,14 @@ export function LandingComposer(props: LandingComposerProps) {
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
       toolbarLayout={isMobile ? "collapsed" : "full"}
+      expansion={composerExpansion}
       topBanner={
         <>
           <ComposerHostNotice
             notice={hostNotice}
             onDismiss={dismissHostNotice}
           />
+          <ComposerUploadProgressNotice progress={actions.attachmentUpload} />
           {profileEligibility.disabled ? (
             <ProfileDisabledBanner
               profileLabel={profileEligibility.profileLabel}
@@ -809,10 +777,15 @@ export function LandingComposer(props: LandingComposerProps) {
           ) : null}
         </>
       }
-      stashControl={
-        <PromptStashControl
-          controller={promptStash}
+      draftsControl={
+        <ComposerDraftsControl
+          scope={{ surface: "landing", activeDraftId: draftId }}
+          hostId={resolvedHostId}
           pickerStore={pickerStore}
+          editorRef={editorRef}
+          // The rail is no longer chat-mode-only (D11), so the Cmd+S owner is
+          // the surface being edited, whichever composer mode it is in.
+          active={activityEnabled}
         />
       }
       attachmentsStrip={

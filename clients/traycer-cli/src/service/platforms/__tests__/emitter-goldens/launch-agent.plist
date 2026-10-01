@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.traycer.host</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>ai.traycer.desktop</string>
+  </array>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/home/golden-user/.traycer/service/ai.traycer.host/traycer-host-start</string>
+    <string>/home/golden-user/.traycer/cli/bin/traycer</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/home/golden-user</string>
+    <key>PATH</key>
+    <string>/home/golden-user/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin</string>
+    <key>NODE_OPTIONS</key>
+    <string>--max-semi-space-size=64</string>
+  </dict>
+</dict>
+</plist>

@@ -156,6 +156,12 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       autoPermissionModeProtocolSupported: null,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
+      // Unused by this suite - it covers background-section spacing, not Stop.
+      getStopConfirmationTarget: () => ({
+        turnId: null,
+        revision: 0,
+        connectionEpoch: 0,
+      }),
       stopDisabled: true,
       onStopTurn: () => null,
     },
@@ -175,6 +181,8 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       onFileEditDecision: () => undefined,
       onApprovalDecision: () => undefined,
       highlightedApprovalId: null,
+      ruleDraftWorkspace: { remote: null, branch: null },
+      onOpenSettings: () => undefined,
     },
     queue: {
       editingItem: null,
@@ -207,6 +215,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       onSettingsChange: null,
       workspaceControls: null,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      suggestedPrompt: undefined,
     },
     todo: null,
     restoreContext: RESTORE_CONTEXT,

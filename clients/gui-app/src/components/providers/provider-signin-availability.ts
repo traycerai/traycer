@@ -3,12 +3,118 @@ import type {
   ProviderLoginFailure,
 } from "@traycer/protocol/host/provider-schemas";
 import {
-  providerPackBlocksExecution,
   providerPackPreparingForProvider,
   providerPackPreparingLabel,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 import { providerDisplayName } from "@/lib/provider-ordering";
+
+/**
+ * Why the host could not act on a sign-in for this provider right now.
+ *
+ * - `disabled`: the provider is turned off. The host fetches a managed pack
+ *   only for a provider that is on, so for most providers this is also why
+ *   there is nothing to run.
+ * - `pack`: the managed pack is on its way or its install failed, and nothing
+ *   else on the machine can stand in for it.
+ * - `cli-checking`: the host has not finished looking for a CLI.
+ * - `cli-selection-unavailable`: the host can run a CLI for this provider, but
+ *   only one the user has not selected. The host resolves a sign-in's CLI as
+ *   selected -> bundled -> PATH and never falls back to an unselected custom
+ *   path, so it resolves nothing until the selection changes.
+ * - `cli-missing`: the host looked and found nothing it can run.
+ */
+export type ProviderHostBlock =
+  | { readonly kind: "disabled" }
+  | { readonly kind: "pack"; readonly preparing: ProviderPackPreparing }
+  | { readonly kind: "cli-checking" }
+  | { readonly kind: "cli-selection-unavailable" }
+  | { readonly kind: "cli-missing" };
+
+/**
+ * What the user is about to do. `sign-in` acts on a provider as it stands, so
+ * a provider that is off refuses it. `sign-in-and-enable` is onboarding's one
+ * gesture that turns the provider on as its last step; being off is its
+ * starting point, not a reason to refuse.
+ */
+export type ProviderSignInGesture = "sign-in" | "sign-in-and-enable";
+
+/**
+ * The one answer to "would the host act on this click". Every control that
+ * starts a sign-in or manages a profile asks it, so none of them can offer a
+ * click whose only possible outcome is the host's refusal.
+ *
+ * This is stricter than the composer's pack gate
+ * (`providerPackBlocksExecution`), on purpose. That gate fails OPEN while the
+ * host is still probing, because a turn that bounces costs one retry and the
+ * composer explains it. A sign-in has no composer in front of it: a click
+ * that cannot work opens a dialog, mints a profile and ends in "Sign-in did
+ * not start". So this one reads only what the host has CONFIRMED it can run,
+ * the CLI it resolved (`hostResolvedCli`), and says "checking" while it has
+ * not answered.
+ */
+export function providerHostBlock(
+  state: ProviderCliState,
+  gesture: ProviderSignInGesture,
+): ProviderHostBlock | null {
+  if (gesture === "sign-in" && !state.enabled) return { kind: "disabled" };
+  if (hostResolvedCli(state)) return null;
+  const preparing = providerPackPreparingForProvider(state);
+  if (preparing !== null) {
+    // The host resolved nothing, so nothing stands in for the pack whatever
+    // the unsettled probe goes on to find; the label has to say "preparing",
+    // not "updating in the background".
+    return {
+      kind: "pack",
+      preparing: { ...preparing, fallbackRunnable: false },
+    };
+  }
+  const checking =
+    state.availabilityPending ||
+    state.candidates.some((candidate) => candidate.versionPending);
+  if (checking) return { kind: "cli-checking" };
+  return state.candidates.some((candidate) => candidate.available)
+    ? { kind: "cli-selection-unavailable" }
+    : { kind: "cli-missing" };
+}
+
+/**
+ * Whether the host resolved a CLI it would run for this provider.
+ *
+ * `cliBinaryResolved` is the host's own answer, computed by the same
+ * selected -> bundled -> PATH order `providers.startLogin` spawns with. It is
+ * read in preference to `candidates` because the two are different questions:
+ * an available but unselected custom path makes "is any candidate available"
+ * true while the host resolves nothing, and a click there ends in "Sign-in did
+ * not start". A host older than the field omits it (the schema keeps it
+ * optional for exactly that), and then "any candidate available" is the best
+ * reading left.
+ */
+function hostResolvedCli(state: ProviderCliState): boolean {
+  return (
+    state.cliBinaryResolved ??
+    state.candidates.some((candidate) => candidate.available)
+  );
+}
+
+/** The sentence a blocked control shows in place of doing anything. */
+export function providerHostBlockLabel(
+  block: ProviderHostBlock,
+  providerLabel: string,
+): string {
+  switch (block.kind) {
+    case "disabled":
+      return `${providerLabel} is turned off. Turn it on to sign in or manage its profiles.`;
+    case "pack":
+      return providerPackPreparingLabel(block.preparing, providerLabel);
+    case "cli-checking":
+      return `Checking for the ${providerLabel} CLI…`;
+    case "cli-selection-unavailable":
+      return `The selected ${providerLabel} CLI is not available on this host. Choose another under CLI & Args.`;
+    case "cli-missing":
+      return `The ${providerLabel} CLI is not installed on this host.`;
+  }
+}
 
 /**
  * Whether this provider can actually be signed in from a real terminal, rather
@@ -51,32 +157,27 @@ export function providerSupportsTerminalLogin(
 }
 
 /**
- * The pack state that BLOCKS a terminal sign-in right now, or `null` when the
- * host would spawn the provider's CLI.
+ * What BLOCKS a terminal sign-in right now, or `null` when the host would
+ * spawn the provider's CLI.
  *
- * A terminal login spawns that CLI exactly as a chat turn does, so it is gated
- * by the same question (`providerPackBlocksExecution`, which reads
- * `fallbackRunnable`). The headless path already folds this into
- * `providerSignInUnavailableHint` below - but that helper answers the terminal
- * case FIRST, with a permanent "signed in from a terminal" sentence, so the
- * pack check there is never reached for a terminal-login provider. Every
- * terminal action (the picker's setup CTA on both of its surfaces, the composer
- * banner's row) asks this instead, so none of them can offer a button whose
- * only possible answer is the host's `preparing` error.
+ * A terminal login spawns that CLI, so it is gated by the same question as
+ * every other sign-in (`providerHostBlock`). The headless path already folds
+ * this into `providerSignInUnavailableHint` below - but that helper answers
+ * the terminal case FIRST, with a permanent "signed in from a terminal"
+ * sentence, so the check there is never reached for a terminal-login
+ * provider. Every terminal action (the picker's setup CTA on both of its
+ * surfaces, the composer banner's row) asks this instead, so none of them can
+ * offer a button whose only possible answer is the host's refusal.
  *
- * `null` state (the `providers.list` row has not arrived) reads as not blocked:
- * the same fail-open every pack gate takes, with the host resolver's typed
- * outcome as the backstop.
+ * `null` state (the `providers.list` row has not arrived) reads as not
+ * blocked: nothing is known yet, and a control with no row behind it is not
+ * drawn in the first place.
  */
-export function providerTerminalLoginPackBlock(
+export function providerTerminalLoginHostBlock(
   state: ProviderCliState | null,
-): ProviderPackPreparing | null {
+): ProviderHostBlock | null {
   if (state === null) return null;
-  const preparing = providerPackPreparingForProvider(state);
-  if (preparing === null || !providerPackBlocksExecution(preparing)) {
-    return null;
-  }
-  return preparing;
+  return providerHostBlock(state, "sign-in");
 }
 
 /**
@@ -92,36 +193,90 @@ export function providerCanStartProfileOauth(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
 ): boolean {
-  return providerSignInUnavailableHint(state, isSelectedHostLocal) === null;
+  return (
+    providerSignInUnavailableHint(state, isSelectedHostLocal, "sign-in") ===
+    null
+  );
 }
 
 /**
  * Headless `providers.startLogin` that does not need a localhost callback on
- * the host: Claude's paste-code page, or a CLI spawned with `--device-auth`.
+ * the host: Claude's paste-code page, or a flow the host marks remote-safe.
  * Terminal login is a different button (composer), so it is not this.
+ *
+ * The declared type is the real one, and that is a fact about the WIRE rather
+ * than a convenience here. The markers ride `providers.list@9.2`, so every
+ * pairing supplies them: a 9.2 host sends them, and any older host's payload is
+ * parsed through its own frozen schema and then filled by the 9.1 -> 9.2
+ * bridge. The key cannot arrive absent.
+ *
+ * It was reachable, briefly, when these markers were added to the already
+ * released 9.1 IN PLACE. A 9.1 client and a 9.1 host agree on the version, and
+ * the response decoders skip the parse entirely on that agreement
+ * (`rpc-codec.ts` / `ws-rpc-client.ts`, `clientCanonical.minor <=
+ * hostCanonical.minor`), returning the payload by cast - so no schema and no
+ * bridge ran, and a reader that trusted this type was trusting a promise the
+ * wire did not keep. The fix was the version, not a defensive type: giving the
+ * markers their own minor is what puts that host's payload back through a
+ * schema. If you are ever tempted to widen a released line in place again, this
+ * is what it costs.
  */
 export function providerLoginIsRemoteSafe(
   loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): boolean {
   if (loginCapability === null || loginCapability === undefined) return false;
   if (loginCapability.codePaste !== null) return true;
-  const oauthArgs = loginCapability.oauthArgs ?? null;
-  return oauthArgs !== null && oauthArgs.includes("--device-auth");
+  // Reads the marker and nothing else. The `--device-auth` inference this
+  // replaced now lives on the 9.1 -> 9.2 upgrade bridge (`registry.ts`), which
+  // is where a fact about OLD hosts belongs; a host that models the key answers
+  // for itself.
+  // `Boolean(...)`, not `!== null`. Under the declared type the two are
+  // identical; they differ only on an ABSENT key, where `!== null` is `true`
+  // and this is `false`. Absence is unreachable today - that is what the 9.2
+  // line bought - but the fast path that made it reachable still exists, and
+  // the two spellings fail in opposite directions. Refusing a sign-in that
+  // would have worked costs a click; offering one that cannot complete strands
+  // the user, so the safe reading is kept even where it is currently
+  // indistinguishable.
+  return Boolean(loginCapability.remoteSafe);
 }
 
 /**
  * Whether the GUI should open `startLogin`'s URL itself.
  *
- * On a local host the login child may already open a browser (Claude, Antigravity).
- * Opening the same URL again double-opens a consent page on one `state`.
- * Device-auth children (`userCode` present) do not open a browser, so the GUI
- * must. Remote hosts never show the host's browser to the user.
+ * Two independent questions, in this order:
+ *
+ *  1. Is the host remote? Then the host's browser is on a machine the user
+ *     cannot see, so the GUI always opens the URL - whatever the child does
+ *     there is invisible and irrelevant. This branch does NOT read the
+ *     capability, which is why a provider's marker is only ever observable on
+ *     a LOCAL host.
+ *  2. On a local host, open only if the child does not already open one.
+ *     Opening the same URL twice double-opens a consent page on one `state`.
+ *
+ * `selfOpensBrowser` replaced `userCode !== null` as the answer to (2), and
+ * the swap was forced by a measured counterexample rather than by tidiness.
+ * The old premise - "device-auth children do not open a browser, so the GUI
+ * must" - held for Codex and Grok and was FALSE for Kimi, which runs a
+ * device-code flow and opens the browser itself. The moment the host keyed
+ * Kimi device-auth, every local Kimi sign-in opened a second consent tab.
+ *
+ * The same docblock used to name Claude and Antigravity together as children
+ * that "may already open a browser". Claude does. Antigravity's server would
+ * as well, and the host switches that off, so the consent link it prints is
+ * one the GUI has to open. One proxy, wrong in both directions; the fact now
+ * travels per provider, and the host is the one that knows it.
+ *
+ * An absent or null marker means "not known to open its own browser", so this
+ * returns true and the user gets a tab. That is the fail-safe direction: a
+ * duplicate tab is a nuisance, a missing one is a dead end.
  */
 export function shouldAutoOpenLoginUrl(
   isLocalHost: boolean,
-  userCode: string | null,
+  loginCapability: ProviderCliState["loginCapability"] | undefined,
 ): boolean {
-  return !isLocalHost || userCode !== null;
+  if (!isLocalHost) return true;
+  return (loginCapability?.selfOpensBrowser ?? null) === null;
 }
 
 /**
@@ -171,14 +326,43 @@ export function providerStartLoginFailureMessage(
  * exists to kill: a user reads a precondition they already satisfy and has
  * nowhere to go.
  *
- * Derived from the same three facts the boolean is, and the boolean is now
- * derived from THIS - so the affordance and its explanation cannot disagree
- * about whether sign-in is possible, which is how the stale sentence survived.
+ * Derived from the same facts the boolean is, and the boolean is now derived
+ * from THIS - so the affordance and its explanation cannot disagree about
+ * whether sign-in is possible, which is how the stale sentence survived.
  */
 export function providerSignInUnavailableHint(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
+  gesture: ProviderSignInGesture,
 ): string | null {
+  const reason = providerSignInUnavailableReason(
+    state,
+    isSelectedHostLocal,
+    gesture,
+  );
+  if (reason?.kind === "host") {
+    return providerHostBlockLabel(
+      reason.block,
+      providerDisplayName(state.providerId),
+    );
+  }
+  return reason?.hint ?? null;
+}
+
+type ProviderSignInUnavailableReason =
+  | { readonly kind: "other"; readonly hint: string }
+  | { readonly kind: "host"; readonly block: ProviderHostBlock };
+
+/**
+ * The reason itself rather than its sentence, for a surface that does
+ * something with the KIND: Profiles links a missing or preparing CLI to the
+ * tab that sets it up.
+ */
+export function providerSignInUnavailableReason(
+  state: ProviderCliState,
+  isSelectedHostLocal: boolean,
+  gesture: ProviderSignInGesture,
+): ProviderSignInUnavailableReason | null {
   if (providerSupportsTerminalLogin(state.loginCapability)) {
     // A permanent provider property, so it outranks every situational reason
     // below - and it has to precede the "no browser sign-in" branch too: a
@@ -187,7 +371,13 @@ export function providerSignInUnavailableHint(
     // send its user to "its own CLI" when Traycer can open that CLI for them.
     // It is also FALSE for the host check: a device flow needs no loopback,
     // so terminal login works on a remote host.
-    return `${providerDisplayName(state.providerId)} is signed in from a terminal. Use the sign-in option in the chat composer.`;
+    const hint = `${providerDisplayName(state.providerId)} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
+    return {
+      kind: "other",
+      hint: state.apiKey.supported
+        ? `${hint} Or set an API key on the Account tab.`
+        : hint,
+    };
   }
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
   // `null` alone, NOT `null || length === 0`. An EMPTY argv is a real headless
@@ -212,26 +402,29 @@ export function providerSignInUnavailableHint(
     // tab after the providers tab split, not above this hint.
     const name = providerDisplayName(state.providerId);
     if (state.providerId === "traycer") {
-      return `${name} does not support browser sign-in.`;
+      return {
+        kind: "other",
+        hint: `${name} does not support browser sign-in.`,
+      };
     }
-    return `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`;
+    return {
+      kind: "other",
+      hint: `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`,
+    };
   }
   if (
     !isSelectedHostLocal &&
     !providerLoginIsRemoteSafe(state.loginCapability)
   ) {
-    return "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.";
+    return {
+      kind: "other",
+      hint: "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.",
+    };
   }
-  const packPreparing = providerPackPreparingForProvider(state);
-  // Blocking, not merely preparing: a login spawns whatever the resolver
-  // spawns, so a managed pack downloading behind a runnable bundled/PATH/custom
-  // binary takes nothing away. Withholding Sign in there would strand a user
-  // whose CLI works, on a screen that shows them it works.
-  if (packPreparing !== null && providerPackBlocksExecution(packPreparing)) {
-    return providerPackPreparingLabel(
-      packPreparing,
-      providerDisplayName(state.providerId),
-    );
-  }
-  return null;
+  // After the permanent reasons, so a provider that can never sign in here is
+  // not told to turn itself on first. A managed pack downloading behind a
+  // binary the host can already run takes nothing away: `providerHostBlock`
+  // answers null as soon as the host resolved a CLI it would run.
+  const block = providerHostBlock(state, gesture);
+  return block === null ? null : { kind: "host", block };
 }

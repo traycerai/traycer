@@ -293,7 +293,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
       expect(row().getAttribute("data-state")).toBe("unchecked");
     });
     expect(fixture.gets().length).toBeGreaterThan(1);
-    expect(tracked).toHaveBeenCalledWith("general", "agentBrowserAccess");
+    expect(tracked).toHaveBeenCalledWith("browser", "agentBrowserAccess");
   });
 
   it("re-queries when the active host changes", async () => {

@@ -46,6 +46,7 @@ function queuedItem(queueItemId: string, messageId: string): ChatQueuedItem {
       profileId: null,
     },
     accountContext: { type: "PERSONAL" },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

@@ -28,20 +28,16 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 const testState = vi.hoisted(() => ({
   rows: [] as ReadonlyArray<unknown>,
   supported: true as boolean | null,
-  // The HOOK is counted, not only its result: the point of the structure is
-  // that a router-less dialog never reaches `useNavigate` at all.
-  useNavigateCalls: 0,
   navigations: [] as Array<unknown>,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => {
-    testState.useNavigateCalls += 1;
-    return (options: unknown): void => {
+  useNavigate:
+    () =>
+    (options: unknown): void => {
       testState.navigations.push(options);
-    };
-  },
+    },
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -201,7 +197,6 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
   beforeEach(async () => {
     testState.rows = [sweepRow(true)];
     testState.supported = true;
-    testState.useNavigateCalls = 0;
     testState.navigations = [];
     __resetTabNavigationControllerForTesting();
     __resetTabSyncCoordinatorForTesting();
@@ -254,7 +249,7 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
       expect(screen.queryByTestId(DISCOVERY)).toBeNull();
     });
     expect(screen.queryByTestId(DISCOVERY)).toBeNull();
-    expect(testState.useNavigateCalls).toBe(0);
+    expect(testState.navigations).toEqual([]);
   });
 
   it("says nothing on a host that never advertised the capability", async () => {
@@ -314,6 +309,7 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
     });
 
     await screen.findByTestId(DISCOVERY);
+    expect(testState.navigations).toEqual([]);
     fireEvent.click(
       screen.getByRole("button", { name: "Set up automatic cleanup" }),
     );
@@ -335,11 +331,9 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
     });
   });
 
-  it("never touches the router unless the line itself renders", async () => {
-    // A Sweep dialog rendered without a `RouterProvider` is the normal case in
-    // these suites. `useNavigate` only warns outside one, so the guarantee has
-    // to be structural: the hook lives in the line, and the line only exists
-    // once the capability is proven and the policy came back off.
+  it("does not navigate when the discovery offer is unavailable", async () => {
+    // The dialog also prepares navigation for its parked-sweep toast. Reading
+    // the router is harmless; only an explicit user action may navigate.
     testState.supported = false;
 
     renderDialog({
@@ -349,6 +343,6 @@ describe("SweepWorktreesDialog automatic-cleanup discovery", () => {
 
     await censusRendered();
     expect(screen.queryByTestId(DISCOVERY)).toBeNull();
-    expect(testState.useNavigateCalls).toBe(0);
+    expect(testState.navigations).toEqual([]);
   });
 });

@@ -10,6 +10,11 @@ import {
   historySearchParamsSchema,
   parseHistorySearch,
 } from "@/lib/history-search";
+import {
+  historyScopeParamsSchema,
+  historyScopeToParams,
+  parseHistoryScope,
+} from "@/lib/history-scope";
 import { requireSignedIn } from "@/lib/router-auth";
 import {
   admitsLocalPlane,
@@ -18,8 +23,12 @@ import {
 import { EpicsIndexRoute } from "../epics-index-route-components";
 
 export const Route = createFileRoute("/epics/")({
-  validateSearch: (search: Record<string, unknown>) =>
-    historySearchParamsSchema.parse(search),
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...historySearchParamsSchema.parse(search),
+    ...historyScopeParamsSchema.parse(
+      historyScopeToParams(parseHistoryScope(search)),
+    ),
+  }),
   loaderDeps: ({ search }) => ({
     historySearch: parseHistorySearch(search),
   }),

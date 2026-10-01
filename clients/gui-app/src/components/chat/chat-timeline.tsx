@@ -1,3 +1,4 @@
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import {
   createContext,
   memo,
@@ -459,10 +460,11 @@ export const ChatTimeline = memo(function ChatTimeline({
           //
           // The rows themselves distinguish the two: a streaming token changes a
           // row's CONTENT in place, while an insert, a removal, or a move
-          // changes the sequence of row KEYS. Only the latter can shift what a
-          // detached reader is looking at, and only the latter needs the anchor,
-          // so the channel is on for exactly those commits. Off, positions are
-          // recalculated inline and stay coherent before the browser paints.
+          // changes the sequence of row KEYS. Only structural changes need the
+          // data anchor lock, so that channel is on for exactly those commits.
+          // Content-only passes can still refresh unmeasured height estimates;
+          // patches/@legendapp%2Flist@3.3.4.patch compensates via the SIZE channel,
+          // without the lock, while recalculating positions inline before paint.
           //
           // Deliberately NOT `itemsAreEqual`: the library reuses that same
           // comparator to decide whether a mounted container refreshes its item
@@ -482,6 +484,7 @@ export const ChatTimeline = memo(function ChatTimeline({
             "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
             className,
           )}
+          {...TRANSCRIPT_LAYOUT_PASSIVE}
           ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
           ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
           {...rest}
@@ -490,6 +493,17 @@ export const ChatTimeline = memo(function ChatTimeline({
     </NavigationHighlightStoreContext>
   );
 });
+
+/**
+ * The transcript body is non-editable chrome, so the layout editor dims it
+ * while a session is live (4.2). It is marked HERE rather than on the tile's
+ * transcript container, which is an ancestor of the minimap's region - a
+ * `filter` above a region would dim the region too.
+ *
+ * Spread rather than written as an attribute because the list's props are
+ * typed, and a lone `data-*` JSX attribute on them is an excess property.
+ */
+const TRANSCRIPT_LAYOUT_PASSIVE = { "data-layout-passive": "opacity-only" };
 
 function chatTimelineKeyExtractor(item: TranscriptListRow): string {
   return item.key;
@@ -650,6 +664,7 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   message: ChatMessageModel;
 }) {
   const ctx = use(ChatTimelineRowCtx);
+  const readingWidth = useReadingWidthStyle();
   const highlightStore = use(NavigationHighlightStoreContext);
   const navigationHighlight = useRowNavigationHighlight(
     highlightStore,
@@ -673,10 +688,12 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
       data-message-id={message.id}
       data-navigation-highlighted={highlightRow ? "true" : undefined}
       className={cn(
-        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
+        "mx-auto w-full rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
+        readingWidth.className,
         highlightRow && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
         chatTimelineRowSizeHintClassName(message.role),
       )}
+      style={{ maxWidth: readingWidth.maxWidth }}
     >
       <ChatMessage
         message={message}

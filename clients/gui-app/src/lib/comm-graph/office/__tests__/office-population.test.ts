@@ -2313,6 +2313,7 @@ describe("officeArchivedByHost", () => {
       originKind: null,
       originChatId: null,
       originRefId: null,
+      peerEpicId: null,
       ...overrides,
     };
   }

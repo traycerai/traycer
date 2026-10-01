@@ -55,7 +55,7 @@ beforeAll(() => {
   const result = spawnSync("bun", ["--version"]);
   if (result.error || result.status !== 0) {
     throw new Error(
-      "these tests spawn worker fixtures with Bun; install Bun 1.3.12 (repo toolchain)",
+      "these tests spawn worker fixtures with Bun; install Bun 1.3.14 (repo toolchain)",
     );
   }
 });

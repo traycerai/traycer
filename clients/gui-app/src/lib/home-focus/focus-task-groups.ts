@@ -75,7 +75,7 @@ export interface FocusTaskGroup {
  * Prompts with no `epicId` group nowhere: they are real work that belongs to no
  * task this client can name. The Needs you section lists them beside the groups
  * rather than under one, because filing them under a guessed task would be a
- * guess and dropping them would lose a row the tab badge is still counting.
+ * guess and dropping them would lose a row the bell is still counting.
  */
 export function selectTaskGroups(
   model: FocusModel,

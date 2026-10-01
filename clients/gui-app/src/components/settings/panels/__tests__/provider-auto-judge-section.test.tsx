@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -83,6 +84,23 @@ vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => setAutoJudgeMock,
 }));
 
+// The card's "All permission settings" link opens Settings; the call is the
+// contract, so the opener is a typed stand-in.
+const openSettingsMock = vi.hoisted(() =>
+  vi.fn<
+    (opts: {
+      readonly section: string | null;
+      readonly resetToGeneral: boolean;
+      readonly tab: string | null;
+      readonly draft: null;
+      readonly hostId: string | null;
+    }) => void
+  >(),
+);
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: openSettingsMock }),
+}));
+
 // The supported case, which is every case that is not explicitly about the
 // gate. Seeded per test rather than once, so a case that wants the OTHER
 // answer records its own manifest over this one.
@@ -153,15 +171,52 @@ function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
   };
 }
 
+/** Select the card's heading independently of its status badge. */
+function headingParagraph(): HTMLElement {
+  return screen.getByText("Who reviews Claude Code's commands", {
+    selector: "p",
+    exact: false,
+  });
+}
+
 describe("<ProviderAutoJudgeSection />", () => {
-  it("renders nothing when the catalog has not loaded", () => {
+  it("draws the card's heading and link, but no switch or line, while the catalog has not loaded", () => {
     guiHarnessesQueryMock.data = undefined;
 
-    const { container } = render(
-      <ProviderAutoJudgeSection state={providerState({})} />,
-    );
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
 
-    expect(container.firstChild).toBeNull();
+    expect(headingParagraph()).toBeTruthy();
+    expect(screen.getByTestId("provider-auto-judge-all-settings")).toBeTruthy();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByTestId("provider-auto-judge-readonly")).toBeNull();
+  });
+
+  it("badges the heading as Experimental", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+
+    expect(within(headingParagraph()).getByText("Experimental")).toBeTruthy();
+  });
+
+  it("opens Permissions on its Judge tab from 'All permission settings'", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+    fireEvent.click(screen.getByTestId("provider-auto-judge-all-settings"));
+
+    expect(openSettingsMock).toHaveBeenCalledTimes(1);
+    expect(openSettingsMock).toHaveBeenCalledWith({
+      section: "permissions",
+      tab: "judge",
+      draft: null,
+      resetToGeneral: false,
+      hostId: null,
+    });
   });
 
   it("renders a read-only Traycer's judge line, and no select, when the harness row reports nativeAutoJudge: false", () => {
@@ -172,14 +227,13 @@ describe("<ProviderAutoJudgeSection />", () => {
     render(<ProviderAutoJudgeSection state={providerState({})} />);
 
     // The tab is drawn for every provider, so "nothing to choose" is still
-    // an answer: the question the tab is named for, and where the judge that
-    // answers it is chosen. No switch with one option.
+    // an answer: the question the card is headed with, and where the judge
+    // that answers it is chosen. No switch with one option.
+    expect(headingParagraph()).toBeTruthy();
     const readonly = screen.getByTestId("provider-auto-judge-readonly");
-    expect(readonly.textContent).toContain(
-      "Who reviews Claude Code's commands",
+    expect(readonly.textContent).toBe(
+      "Reviewed by Traycer's judge. Change it under Permissions.",
     );
-    expect(readonly.textContent).toContain("Traycer's judge");
-    expect(readonly.textContent).toContain("Settings ▸ Permissions");
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
@@ -195,7 +249,7 @@ describe("<ProviderAutoJudgeSection />", () => {
     // judge" any more - the row under Settings ▸ Permissions carries that name and
     // THIS is the one that wins. An assertion derived from the same constant
     // the component interpolates would follow a rename instead of catching it.
-    expect(screen.getByText("Who reviews Claude Code's commands")).toBeTruthy();
+    expect(headingParagraph()).toBeTruthy();
   });
 
   it("renders Traycer's judge selected when the stored state has no autoJudge key", () => {
@@ -439,12 +493,11 @@ describe("<ProviderAutoJudgeSection />", () => {
       />,
     );
 
+    expect(headingParagraph()).toBeTruthy();
     const unsupported = screen.getByTestId("provider-auto-judge-unsupported");
-    expect(unsupported.textContent).toContain(
-      "Who reviews Claude Code's commands",
+    expect(unsupported.textContent).toBe(
+      "Traycer's judge. This machine's host can't change it; update it to choose.",
     );
-    expect(unsupported.textContent).toContain("Traycer's judge");
-    expect(unsupported.textContent).toContain("can't change who reviews");
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
@@ -468,6 +521,7 @@ describe("<ProviderAutoJudgeSection />", () => {
 
     const unsupported = screen.getByTestId("provider-auto-judge-unsupported");
     expect(unsupported.textContent).toContain("Claude Code's classifier");
+    expect(unsupported.textContent).toContain("can't change it");
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
@@ -494,10 +548,9 @@ describe("<ProviderAutoJudgeSection />", () => {
     );
 
     const unreadable = screen.getByTestId("provider-auto-judge-unreadable");
-    expect(unreadable.textContent).toContain(
-      "Who reviews Claude Code's commands",
+    expect(unreadable.textContent).toBe(
+      "This machine's host can't report who reviews Claude Code's commands. Update it to see and change this.",
     );
-    expect(unreadable.textContent).toContain("can't report which classifier");
     expect(screen.queryByRole("combobox")).toBeNull();
     // The important part: no fabricated echo of either possible value,
     // anywhere in the document - not just absent from this panel's own text.
@@ -538,24 +591,25 @@ describe("<ProviderAutoJudgeSection />", () => {
   // has no evidence for; rendering nothing is the honest "not yet known" the
   // hook itself distinguishes (`useHostMethodSupport` returns `null`, not
   // `false`, while `false` is what the case above exercises).
-  it("renders nothing when there is no handshake at all for this host yet", () => {
+  it("says nothing about the switch when there is no handshake at all for this host yet", () => {
     resetNegotiatedManifests();
     guiHarnessesQueryMock.data = {
       harnesses: [harnessRow({ nativeAutoJudge: true })],
     };
 
-    const { container } = render(
-      <ProviderAutoJudgeSection state={providerState({})} />,
-    );
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
 
-    expect(container.firstChild).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByTestId("provider-auto-judge-readonly")).toBeNull();
+    expect(screen.queryByTestId("provider-auto-judge-unsupported")).toBeNull();
+    expect(screen.queryByTestId("provider-auto-judge-unreadable")).toBeNull();
   });
 
   // JOB 4: the two read-only branches must not be confused with each other.
   // `nativeAutoJudge: false` takes the ORIGINAL "has no classifier of its
   // own" line even when the write is also unsupported - the missing write is
   // irrelevant when there is nothing native to switch to in the first place.
-  it("keeps the ORIGINAL 'has no classifier of its own' line for nativeAutoJudge: false, even when the write is also unsupported", () => {
+  it("keeps the read-only 'Reviewed by Traycer's judge' line for nativeAutoJudge: false, even when the write is also unsupported", () => {
     recordNegotiatedHostManifest(HOST_ID, {
       "agent.gui.listHarnesses": { major: 9, minor: 1 },
     });
@@ -566,9 +620,74 @@ describe("<ProviderAutoJudgeSection />", () => {
     render(<ProviderAutoJudgeSection state={providerState({})} />);
 
     const readonly = screen.getByTestId("provider-auto-judge-readonly");
-    expect(readonly.textContent).toContain("has no classifier of its own");
+    expect(readonly.textContent).toContain("Reviewed by Traycer's judge");
     expect(screen.queryByTestId("provider-auto-judge-unsupported")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  const CLASSIFIER_WARNING =
+    "Faster and free, but your rules don't apply to it, and it replaces Traycer's judge for this provider's conversations.";
+
+  it("shows the classifier-cost warning under the Select for a native provider", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+
+    expect(screen.getByRole("combobox")).toBeTruthy();
+    const warning = screen.getByTestId("provider-auto-judge-warning");
+    expect(warning.textContent).toBe(CLASSIFIER_WARNING);
+  });
+
+  it("omits the classifier-cost warning on the read-only line for a non-native provider", () => {
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: false })],
+    };
+
+    render(<ProviderAutoJudgeSection state={providerState({})} />);
+
+    expect(screen.getByTestId("provider-auto-judge-readonly")).toBeTruthy();
+    expect(screen.queryByTestId("provider-auto-judge-warning")).toBeNull();
+  });
+
+  it("omits the classifier-cost warning on the unreadable panel", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.setAutoJudge": { major: 1, minor: 0 },
+      "providers.list": { major: 9, minor: 0 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: "provider" })}
+      />,
+    );
+
+    expect(screen.getByTestId("provider-auto-judge-unreadable")).toBeTruthy();
+    expect(screen.queryByTestId("provider-auto-judge-warning")).toBeNull();
+  });
+
+  it("omits the classifier-cost warning on the unsupported panel", () => {
+    recordNegotiatedHostManifest(HOST_ID, {
+      "agent.gui.listHarnesses": { major: 9, minor: 1 },
+      "providers.list": { major: 9, minor: 1 },
+    });
+    guiHarnessesQueryMock.data = {
+      harnesses: [harnessRow({ nativeAutoJudge: true })],
+    };
+
+    render(
+      <ProviderAutoJudgeSection
+        state={providerState({ autoJudge: undefined })}
+      />,
+    );
+
+    expect(screen.getByTestId("provider-auto-judge-unsupported")).toBeTruthy();
+    expect(screen.queryByTestId("provider-auto-judge-warning")).toBeNull();
   });
 
   it("control: keeps showing the echo across a rerender when providers.list has not refetched", () => {

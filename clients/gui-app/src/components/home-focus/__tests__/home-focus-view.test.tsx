@@ -22,6 +22,11 @@ import type { MergedNotificationRow } from "@/stores/notifications/merged-notifi
 import { ROW_CLASS } from "@/components/home-focus/home-focus-row-style";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  useAuthStore,
+  type AuthStatus,
+  type CloudVerdictLoss,
+} from "@/stores/auth/auth-store";
 
 const modelMock = vi.hoisted(() => ({ value: null as FocusModel | null }));
 vi.mock("@/hooks/home-focus/use-focus-model", () => ({
@@ -208,12 +213,11 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     browsers: [],
     coverage: {
       activity: "live",
-      degradedHostIds: [],
+      degradedHosts: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
       browsersAreMountedOnly: true,
     },
-    badgeCount: 0,
     ...overrides,
   };
 }
@@ -239,7 +243,12 @@ function hostEntry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
   };
 }
 
+/** Snapshot taken before any test mutates the store, so `beforeEach` can put it
+ * back to its untouched default rather than guessing at one. */
+const AUTH_INITIAL_STATE = useAuthStore.getState();
+
 beforeEach(() => {
+  useAuthStore.setState(AUTH_INITIAL_STATE);
   actionsMock.openPrompt.mockReset();
   actionsMock.openAgent.mockReset();
   actionsMock.openTask.mockReset();
@@ -340,7 +349,6 @@ describe("<HomeFocusView /> section presence", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-1" })],
       prompts: [promptRow({ epicId: "epic-1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -372,7 +380,6 @@ describe("<HomeFocusView /> section presence", () => {
   it("is not empty when a prompt names no task at all", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -418,7 +425,7 @@ describe("<HomeFocusView /> section headings", () => {
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       coverage: {
         activity: "live",
-        degradedHostIds: [],
+        degradedHosts: [],
         notifications: "local",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -499,7 +506,6 @@ describe("<HomeFocusView /> summary line", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -671,7 +677,6 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
       prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();
@@ -710,7 +715,6 @@ describe("<HomeFocusView /> nesting inside a task", () => {
           browserTabTitle: "Checkout",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();
@@ -737,7 +741,6 @@ describe("<HomeFocusView /> nesting inside a task", () => {
         }),
       ],
       prompts: [row],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();
@@ -763,10 +766,37 @@ describe("<HomeFocusView /> nesting inside a task", () => {
     expect(actionsMock.openTask).toHaveBeenCalledWith("epic-1");
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-agent-body"));
-    expect(actionsMock.openAgent).toHaveBeenCalledWith("epic-1", "chat-1");
+    // `agentRow`'s default `hostId: null` - the row carries no host here.
+    expect(actionsMock.openAgent).toHaveBeenCalledWith(
+      "epic-1",
+      "chat-1",
+      null,
+    );
 
     fireEvent.click(screen.getByTestId("home-focus-task-group-job-body"));
     expect(actionsMock.openBackground).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the agent's row with its OWN host when the row names one", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "impl", hostId: "host-a" }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    fireEvent.click(screen.getByTestId("home-focus-task-group-agent-body"));
+    expect(actionsMock.openAgent).toHaveBeenCalledWith(
+      "epic-1",
+      "chat-1",
+      "host-a",
+    );
   });
 
   it("names the agent that started a chat instead of indenting it again", () => {
@@ -1056,7 +1086,6 @@ describe("<HomeFocusView /> task row badges", () => {
         backgroundRow({ key: "j2", epicId: "epic-1", chatId: "chat-unknown" }),
       ],
       browsers: [browserRow({ epicId: "epic-1", tabId: "t1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -1409,13 +1438,12 @@ describe("<HomeFocusView /> a cold task", () => {
 });
 
 describe("<HomeFocusView /> unplaced prompts", () => {
-  // The tab badge counts prompts, so a prompt no group can carry would leave a
-  // badge over a page showing nothing.
+  // The header bell counts prompts, so a prompt no group can carry would leave
+  // a bell reading `1` over a page showing nothing.
   it("lists a prompt that names no task under Needs you, after the tasks", () => {
     modelMock.value = model({
       tasks: [taskRow({ epicId: "epic-a", needsYou: true })],
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -1434,7 +1462,6 @@ describe("<HomeFocusView /> unplaced prompts", () => {
     modelMock.value = model({
       tasks: [],
       prompts: [promptRow({ epicId: "epic-gone", taskTitle: "Payments" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -1818,8 +1845,8 @@ describe("<HomeFocusView /> status column", () => {
     expect(
       within(
         within(group).getAllByTestId("home-focus-task-group-job")[0],
-      ).getByTestId("home-focus-row-status-duration").textContent,
-    ).toBe("· 5m");
+      ).getByTestId("home-focus-row-status-elapsed").textContent,
+    ).toBe("· 5m 0s");
   });
 
   // The `turn` STATE keeps its name - it is the wire tier, and the dot colour
@@ -1923,6 +1950,128 @@ describe("<HomeFocusView /> status column", () => {
     expect(
       within(chat).queryByTestId("home-focus-row-status-duration"),
     ).toBeNull();
+    expect(
+      within(chat).queryByTestId("home-focus-row-status-elapsed"),
+    ).toBeNull();
+  });
+});
+
+describe("<HomeFocusView /> job row elapsed", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The chat's Background panel prints the same shell as `42h 47m 13s`, so
+  // Home's row prints that reading rather than the compact age's `1d`.
+  it("prints a running shell's elapsed as the panel's clock and ticks it once a second in place", () => {
+    vi.useFakeTimers();
+    const base = Date.now();
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "host", tier: "background" }),
+          ],
+        }),
+      ],
+      background: [
+        backgroundRow({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          label: "PR gate watcher",
+          startedAtMs: base - ((42 * 60 + 47) * 60 + 13) * 1000,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const job = within(taskGroup("epic-1")).getByTestId(
+      "home-focus-task-group-job",
+    );
+    const clock = within(job).getByTestId("home-focus-row-status-elapsed");
+    expect(clock.textContent).toBe("· 42h 47m 13s");
+    expect(
+      within(job).queryByTestId("home-focus-row-status-duration"),
+    ).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    const clockAfter = within(job).getByTestId("home-focus-row-status-elapsed");
+    expect(clockAfter).toBe(clock);
+    expect(clockAfter.textContent).toBe("· 42h 47m 14s");
+
+    // The rest of the row is what it was: the clock is the only thing ticking.
+    expect(within(job).getByTestId("home-focus-row-name").textContent).toBe(
+      "PR gate watcher",
+    );
+    expect(within(job).getByTestId("home-focus-background-glyph")).toBeTruthy();
+    expect(
+      within(job).getByRole("button", { name: "Stop PR gate watcher" }),
+    ).toBeTruthy();
+    expect(
+      within(job)
+        .getByTestId("home-focus-row-status")
+        .getAttribute("data-state"),
+    ).toBe("running");
+  });
+
+  it("prints no elapsed for a job with no start time", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "host", tier: "background" }),
+          ],
+        }),
+      ],
+      background: [
+        backgroundRow({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          kind: "background-item",
+          itemKind: "subagent",
+          startedAtMs: null,
+          stoppable: false,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const job = within(taskGroup("epic-1")).getByTestId(
+      "home-focus-task-group-job",
+    );
+    expect(
+      within(job).queryByTestId("home-focus-row-status-elapsed"),
+    ).toBeNull();
+    expect(
+      within(job).queryByTestId("home-focus-row-status-duration"),
+    ).toBeNull();
+  });
+
+  // A prompt's part is an age, not a running clock, and stays on the coarse
+  // reading beside a job that ticks every second.
+  it("keeps the prompt row on the compact age", () => {
+    modelMock.value = model({
+      prompts: [
+        promptRow({
+          epicId: null,
+          taskTitle: null,
+          createdAt: Date.now() - 5 * 60 * 1000,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-row-status-duration").textContent,
+    ).toBe("· 5m");
+    expect(screen.queryByTestId("home-focus-row-status-elapsed")).toBeNull();
   });
 });
 
@@ -2132,7 +2281,9 @@ describe("<HomeFocusView /> host grouping", () => {
       ],
       coverage: {
         activity: "reconnecting",
-        degradedHostIds: ["host-remote"],
+        degradedHosts: [
+          { hostId: "host-remote", reason: "cloud-disconnected" },
+        ],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2153,7 +2304,7 @@ describe("<HomeFocusView /> host grouping", () => {
       tasks: [taskRow({ epicId: "epic-1" })],
       coverage: {
         activity: "disconnected",
-        degradedHostIds: [],
+        degradedHosts: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2169,7 +2320,7 @@ describe("<HomeFocusView /> host grouping", () => {
       tasks: [taskRow({ epicId: "epic-1" })],
       coverage: {
         activity: "unknown",
-        degradedHostIds: [],
+        degradedHosts: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2245,6 +2396,139 @@ describe("<HomeFocusView /> host grouping", () => {
   });
 });
 
+describe("<HomeFocusView /> degraded-host reason lines", () => {
+  it("prints one reason line per degraded host, worst first, with the exact copy", () => {
+    // Grouping stays OFF here (the model names no host of its own), so the
+    // page-wide banner carries every line itself rather than a per-group
+    // notice - matching how the existing banner tests are set up.
+    fleetMock.entries = [
+      { hostId: "host-a", label: "Alpha" },
+      { hostId: "host-b", label: "Beta" },
+      { hostId: "host-c", label: "Gamma" },
+      { hostId: "host-d", label: "Delta" },
+    ];
+    modelMock.value = model({
+      tasks: [taskRow({ epicId: "epic-1" })],
+      coverage: {
+        activity: "disconnected",
+        degradedHosts: [
+          { hostId: "host-c", reason: "host-reconnecting" },
+          { hostId: "host-b", reason: "cloud-disconnected" },
+          { hostId: "host-d", reason: "cloud-reconnecting" },
+          { hostId: "host-a", reason: "host-lost" },
+        ],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+
+    const notice = screen.getByTestId("home-focus-activity-notice");
+    expect(
+      within(notice).getByText("Some activity may be missing"),
+    ).toBeDefined();
+    const reasons = screen
+      .getAllByTestId("home-focus-activity-reason")
+      .map((element) => element.textContent);
+    // Exactly one line per degraded host, and none of the auth-derived
+    // unattributed line: that line is reserved for an EMPTY degradedHosts.
+    expect(reasons).toEqual([
+      "Lost connection to Alpha. Its tasks aren't shown.",
+      "Beta isn't connected to Traycer, so tasks from your other machines may be missing.",
+      "Reconnecting to Gamma…",
+      "Delta is reconnecting to Traycer, so tasks from your other machines may be missing.",
+    ]);
+  });
+
+  interface AuthReasonCase {
+    readonly name: string;
+    readonly status: AuthStatus;
+    readonly cloudVerdictLoss: CloudVerdictLoss;
+    readonly expected: string;
+  }
+
+  // What the banner says when NO host can be named for the gap at all - the
+  // activity plane has not reported from anywhere yet, so the one thing this
+  // session can explain is its own sign-in.
+  const AUTH_REASON_CASES: ReadonlyArray<AuthReasonCase> = [
+    {
+      name: "signed-out",
+      status: "signed-out",
+      cloudVerdictLoss: "unreachable",
+      expected: "You're signed out, so running tasks can't be loaded.",
+    },
+    {
+      name: "signing-in",
+      status: "signing-in",
+      cloudVerdictLoss: "unreachable",
+      expected: "Signing in…",
+    },
+    {
+      name: "unverified + unreachable",
+      status: "unverified",
+      cloudVerdictLoss: "unreachable",
+      expected:
+        "Can't reach Traycer to confirm your sign-in, so running tasks may not load until it can.",
+    },
+    {
+      name: "unverified + session-rejected",
+      status: "unverified",
+      cloudVerdictLoss: "session-rejected",
+      expected: "Your session has expired. Sign in again to see running tasks.",
+    },
+    {
+      name: "unverified + account-unavailable",
+      status: "unverified",
+      cloudVerdictLoss: "account-unavailable",
+      expected:
+        "This account is no longer available, so running tasks can't be loaded.",
+    },
+    {
+      name: "unverified + ended-elsewhere",
+      status: "unverified",
+      cloudVerdictLoss: "ended-elsewhere",
+      expected:
+        "This window's session was ended from another window, so running tasks can't be loaded here.",
+    },
+    {
+      name: "signed-in",
+      status: "signed-in",
+      cloudVerdictLoss: "unreachable",
+      expected: "Connecting to your machines…",
+    },
+  ];
+
+  it.each(AUTH_REASON_CASES)(
+    "shows the $name line as the sole reason when degradedHosts is empty",
+    (testCase) => {
+      useAuthStore.setState({
+        status: testCase.status,
+        cloudVerdictLoss: testCase.cloudVerdictLoss,
+      });
+      modelMock.value = model({
+        tasks: [taskRow({ epicId: "epic-1" })],
+        coverage: {
+          activity: "reconnecting",
+          degradedHosts: [],
+          notifications: "cloud",
+          backgroundIsMountedOnly: true,
+          browsersAreMountedOnly: true,
+        },
+      });
+      render(<HomeFocusView />);
+
+      const notice = screen.getByTestId("home-focus-activity-notice");
+      expect(
+        within(notice).getByText("Some activity may be missing"),
+      ).toBeDefined();
+      const reasons = screen.getAllByTestId("home-focus-activity-reason");
+      expect(reasons).toHaveLength(1);
+      expect(reasons[0].textContent).toBe(testCase.expected);
+    },
+  );
+});
+
 describe("<HomeFocusView /> origin host chip", () => {
   it("names the machine an unplaced prompt came from when it is not this one", () => {
     localHostMock.value = hostEntry({ hostId: "host-local" });
@@ -2260,7 +2544,6 @@ describe("<HomeFocusView /> origin host chip", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2279,7 +2562,6 @@ describe("<HomeFocusView /> origin host chip", () => {
           originHostId: "host-local",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2374,7 +2656,6 @@ describe("<HomeFocusView /> relative time ticking", () => {
       prompts: [
         promptRow({ epicId: null, taskTitle: null, createdAt: base - 30_000 }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2406,7 +2687,6 @@ describe("<HomeFocusView /> has no trailing Open button", () => {
       prompts: [promptRow({ epicId: "epic-1", chatId: "chat-1" })],
       background: [backgroundRow({ epicId: "epic-1", chatId: "chat-1" })],
       browsers: [browserRow({ epicId: "epic-1", drivenByChatId: "chat-1" })],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2429,11 +2709,7 @@ describe("<HomeFocusView /> has no trailing Open button", () => {
     render(<HomeFocusView />);
 
     const row = screen.getByTestId("home-focus-task-group-row");
-    await user.tab();
-    await user.tab();
-    expect(within(row).getByTestId("home-focus-task-group-disclosure")).toBe(
-      document.activeElement,
-    );
+    within(row).getByTestId("home-focus-task-group-disclosure").focus();
     await user.tab();
     expect(within(row).getByTestId("home-focus-task-group-open-body")).toBe(
       document.activeElement,
@@ -2474,10 +2750,11 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
       coverage: {
         activity: "disconnected",
-        degradedHostIds: ["host-remote"],
+        degradedHosts: [
+          { hostId: "host-remote", reason: "cloud-disconnected" },
+        ],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2511,10 +2788,11 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
       coverage: {
         activity: "disconnected",
-        degradedHostIds: ["host-remote"],
+        degradedHosts: [
+          { hostId: "host-remote", reason: "cloud-disconnected" },
+        ],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
         browsersAreMountedOnly: true,
@@ -2556,7 +2834,6 @@ describe("<HomeFocusView /> coverage attribution for unplaced prompts", () => {
           originHostId: "host-remote",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
 
@@ -2602,7 +2879,6 @@ describe("<HomeFocusView /> no auto-expand", () => {
   it("opens nothing when tasks arrive after an orphan-prompt-only first frame", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
-      badgeCount: 1,
     });
     const view = render(<HomeFocusView />);
     expect(screen.queryAllByTestId("home-focus-task-group")).toHaveLength(0);
@@ -2610,7 +2886,6 @@ describe("<HomeFocusView /> no auto-expand", () => {
     modelMock.value = model({
       prompts: [promptRow({ epicId: null, taskTitle: null })],
       tasks: someTasks(2),
-      badgeCount: 1,
     });
     view.rerender(<HomeFocusView />);
 
@@ -2696,7 +2971,6 @@ describe("<HomeFocusView /> disclosure across a section move", () => {
       prompts: withPrompt
         ? [promptRow({ epicId: "epic-moving", chatId: "chat-1" })]
         : [],
-      badgeCount: withPrompt ? 1 : 0,
     });
   }
 
@@ -2846,7 +3120,6 @@ describe("<HomeFocusView /> a split task with a prompt on one host", () => {
           originHostId: "host-b",
         }),
       ],
-      badgeCount: 1,
     });
     render(<HomeFocusView />);
     openEveryTask();

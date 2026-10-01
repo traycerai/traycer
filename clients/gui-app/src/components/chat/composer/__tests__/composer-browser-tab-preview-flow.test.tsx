@@ -59,6 +59,7 @@ const IMAGE: ImageAttachmentAttrs = {
   mimeType: "image/jpeg",
   size: null,
   b64content: "aGk=",
+  byHashEligible: false,
 };
 
 describe("cross-host browser tab preview insertion", () => {

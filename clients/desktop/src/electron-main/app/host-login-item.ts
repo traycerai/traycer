@@ -327,6 +327,51 @@ async function probeLaunchdJobProcess(
   return "none";
 }
 
+/**
+ * Whether launchd has a job under either host label: the agent this app
+ * registers, or the CLI's own.
+ *
+ * The login item's status cannot answer this. It reads the BTM record, and a
+ * `launchctl bootout` of the agent unloads the job while the record still
+ * reads `enabled` - which is the state that sent the app's Restart to the CLI,
+ * where the relaunch had no loaded label to start (in-app report
+ * rpt_d761e0b00e2c400482ece24821a20920).
+ *
+ * `neither-loaded` only when launchd answered not-found for BOTH labels;
+ * `indeterminate` when either could not be asked and the other was not
+ * loaded. Callers act only on `neither-loaded`.
+ */
+export type HostLaunchdJobs = "neither-loaded" | "loaded" | "indeterminate";
+
+export async function readHostLaunchdJobs(): Promise<HostLaunchdJobs> {
+  let indeterminate = false;
+  for (const labelId of [HOST_AGENT_LABEL, CLI_HOST_LABEL]) {
+    const job = await probeLaunchdJobLoaded(labelId);
+    if (job === "loaded") return "loaded";
+    if (job === "indeterminate") indeterminate = true;
+  }
+  return indeterminate ? "indeterminate" : "neither-loaded";
+}
+
+/**
+ * Whether launchd has a job under `labelId` at all, running or not. `absent`
+ * only on launchctl's own not-found answer; an exit-0 print of any shape is a
+ * job launchd found.
+ */
+async function probeLaunchdJobLoaded(
+  labelId: string,
+): Promise<"absent" | "loaded" | "indeterminate"> {
+  if (typeof process.getuid !== "function") return "indeterminate";
+  let result: ProbeCommandResult;
+  try {
+    result = await runAgentPrint(`gui/${process.getuid()}/${labelId}`);
+  } catch {
+    return "indeterminate";
+  }
+  const probe = classifyLaunchctlPrintResult(result, null, labelId);
+  return probe.kind === "observed" ? "loaded" : probe.kind;
+}
+
 function readLoginItemStatus(serviceName: string): HostLoginItemStatus {
   const evidence = readLoginItemStatusEvidence(serviceName);
   if (evidence.kind === "read") return evidence.status;
@@ -533,7 +578,12 @@ async function registerHostLoginItemUnserialized(
   // Runs only here - after both guards - so a deferred cycle leaves the
   // legacy registration fully intact (see the docstring's coupling
   // invariant).
-  if (!(await retireLegacyLabelRegistrations(revalidateBeforeBootout))) {
+  if (
+    !(await retireLegacyLabelRegistrations(
+      priorRegistration.legacy,
+      revalidateBeforeBootout,
+    ))
+  ) {
     parkRegistrationAfterAuthorityLoss("legacy registration retirement");
     return "deferred-busy";
   }
@@ -558,24 +608,28 @@ async function registerHostLoginItemUnserialized(
     // behavior for this one call, and the register below re-derives state.
   }
 
-  const clearedOk = await setLoginItemSettingsWithGuard(
-    false,
-    HOST_SERVICE_NAME,
-    revalidateBeforeBootout,
-  );
-  if (clearedOk === null) {
-    parkRegistrationAfterAuthorityLoss("primary SMAppService clear");
-    return "deferred-busy";
+  // Missing/unsupported legs have nothing SMAppService can clear. Keep the
+  // bootout above, but do not let a meaningless clear prevent registration.
+  if (statusHasClearableRegistration(priorRegistration.primary)) {
+    const clearedOk = await setLoginItemSettingsWithGuard(
+      false,
+      HOST_SERVICE_NAME,
+      revalidateBeforeBootout,
+    );
+    if (clearedOk === null) {
+      parkRegistrationAfterAuthorityLoss("primary SMAppService clear");
+      return "deferred-busy";
+    }
+    if (!clearedOk) {
+      return "not-registered";
+    }
+    const cleared = readHostLoginItemStatus();
+    log.info("[host-login-item] SMAppService cleared prior registration", {
+      serviceName: HOST_SERVICE_NAME,
+      plistPath,
+      status: cleared,
+    });
   }
-  if (!clearedOk) {
-    return "not-registered";
-  }
-  const cleared = readHostLoginItemStatus();
-  log.info("[host-login-item] SMAppService cleared prior registration", {
-    serviceName: HOST_SERVICE_NAME,
-    plistPath,
-    status: cleared,
-  });
 
   const registeredOk = await setLoginItemSettingsWithGuard(
     true,
@@ -683,6 +737,7 @@ async function removeCliLabelManifestProvably(
 }
 
 async function retireLegacyLabelRegistrations(
+  priorStatus: HostLoginItemStatus | null,
   revalidateBeforeMutation: (() => Promise<boolean>) | undefined,
 ): Promise<boolean> {
   if (!(await removeCliLabelManifestProvably(revalidateBeforeMutation))) {
@@ -699,6 +754,9 @@ async function retireLegacyLabelRegistrations(
     // A bootout failure leaves only the RUNNING legacy instance, which
     // cannot return once both durable anchors are gone.
   }
+  // Manifest retirement and bootout still apply when SMAppService has no
+  // record for this label; only its clear becomes a no-op.
+  if (!statusHasClearableRegistration(priorStatus)) return true;
   const unregistered = await setLoginItemSettingsWithGuard(
     false,
     LEGACY_HOST_SERVICE_NAME,
@@ -1314,13 +1372,21 @@ async function snapshotLoginItemRegistration(): Promise<LoginItemRegistrationSna
  * states whose authoritative status cannot be read before the first
  * destructive edge; once authority is lost later, the caller parks rather
  * than attempting a stale restore against mutable bundle bytes.
+ * `not-found` and `not-supported` are readable states with no registration
+ * to restore for that leg. A Mac that has only registered one label normally
+ * reports `not-found` for the other; refusing it strands Restart after bootout.
  */
 async function canBeginDestructiveRegistration(
   snapshot: LoginItemRegistrationSnapshot,
 ): Promise<boolean> {
+  const canBegin = (status: HostLoginItemStatus | null): boolean =>
+    status === "not-registered" ||
+    status === "enabled" ||
+    status === "not-found" ||
+    status === "not-supported";
   return (
-    (snapshot.primary === "not-registered" || snapshot.primary === "enabled") &&
-    (snapshot.legacy === "not-registered" || snapshot.legacy === "enabled") &&
+    canBegin(snapshot.primary) &&
+    canBegin(snapshot.legacy) &&
     // A readable manifest - present OR absent - may enter. `present` is the
     // work; `unreadable` is the only disqualifier, because we cannot retire
     // what we cannot see and must not register a second label beside it.

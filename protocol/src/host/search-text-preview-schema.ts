@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Maximum UTF-8 byte length of a text-search preview. Hosts truncate previews
@@ -7,16 +8,18 @@ import { z } from "zod";
 export const SEARCH_TEXT_PREVIEW_MAX_BYTES = 512;
 
 /** Byte offsets into a UTF-8 text-search preview. */
-export const searchTextPreviewRangeSchema = z
-  .object({
-    startByte: z.number().int().nonnegative(),
-    endByte: z.number().int().nonnegative(),
-  })
-  .refine(
-    (range) =>
-      range.endByte >= range.startByte &&
-      range.endByte <= SEARCH_TEXT_PREVIEW_MAX_BYTES,
-    {
-      message: `endByte must not precede startByte or exceed ${SEARCH_TEXT_PREVIEW_MAX_BYTES}`,
-    },
-  );
+export const searchTextPreviewRangeSchema = lazySchema(() =>
+  z
+    .object({
+      startByte: z.number().int().nonnegative(),
+      endByte: z.number().int().nonnegative(),
+    })
+    .refine(
+      (range) =>
+        range.endByte >= range.startByte &&
+        range.endByte <= SEARCH_TEXT_PREVIEW_MAX_BYTES,
+      {
+        message: `endByte must not precede startByte or exceed ${SEARCH_TEXT_PREVIEW_MAX_BYTES}`,
+      },
+    ),
+);

@@ -94,6 +94,7 @@ function windowOf(
     indexRevision: 1,
     indexRevisionRebuilding: false,
     skeleton,
+    skeletonRevision: 0,
     skeletonComplete: true,
     skeletonStreamCoveredThrough: rowCount,
     records: { messages: new Map(), events: new Map(), revision: 0 },

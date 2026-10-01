@@ -28,6 +28,7 @@ import type {
 import type {
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
+  DesktopLocalAuthSessionRestoreResult,
 } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -251,6 +252,10 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
 
 export interface AuthSessionBridgeSurface {
   get(): Promise<DesktopAuthSessionSnapshot>;
+  restoreLocal(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<DesktopLocalAuthSessionRestoreResult>;
   /**
    * Main verifies the bearer before adopting it, so a set can be REFUSED -
    * the renderer is told why rather than silently believing it landed.
@@ -278,6 +283,11 @@ export interface AuthSessionBridgeSurface {
 
 export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
   return {
+    restoreLocal: (expected) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authSessionRestoreLocal,
+        expected,
+      ) as Promise<DesktopLocalAuthSessionRestoreResult>,
     get: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.authSessionGet,

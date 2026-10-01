@@ -38,7 +38,7 @@ import {
   filterGitChangedFiles,
 } from "@/lib/git/git-changed-file-search";
 import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
-import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { HoverCard, HoverCardGroup } from "@/components/ui/hover-card";
 import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { cn } from "@/lib/utils";
@@ -761,35 +761,38 @@ function GitModuleGroupsView(props: {
           className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-1"
           data-testid="git-module-groups"
         >
-          {visibleModules.map((module) => {
-            const matchedByQuery =
-              queryActive && queryMatchByKey.get(module.key) === true;
-            const expanded = matchedByQuery
-              ? true
-              : (expandedByKey[module.key] ?? module.defaultExpanded);
-            const moduleMatchesHeader =
-              queryActive && module.searchText.includes(normalizedQuery);
-            return (
-              <GitModuleGroupView
-                key={module.key}
-                epicId={props.epicId}
-                viewTabId={props.viewTabId}
-                hostId={props.hostId}
-                workspaceLabel={props.workspaceLabel}
-                module={module}
-                expanded={expanded}
-                query={moduleMatchesHeader ? "" : appliedQuery}
-                lastUpdatedAtMs={props.lastUpdatedAtMs}
-                onToggle={toggleModule}
-                onHeaderRef={registerModuleHeader}
-                sectionCollapsedByKey={sectionCollapsedByKey}
-                onToggleModuleSection={toggleModuleSection}
-                onClearQuery={handleClearSearch}
-                onRefresh={props.onRefresh}
-                isRefreshing={props.isRefreshing}
-              />
-            );
-          })}
+          {/* One list: moving header to header hands the card over. */}
+          <HoverCardGroup>
+            {visibleModules.map((module) => {
+              const matchedByQuery =
+                queryActive && queryMatchByKey.get(module.key) === true;
+              const expanded = matchedByQuery
+                ? true
+                : (expandedByKey[module.key] ?? module.defaultExpanded);
+              const moduleMatchesHeader =
+                queryActive && module.searchText.includes(normalizedQuery);
+              return (
+                <GitModuleGroupView
+                  key={module.key}
+                  epicId={props.epicId}
+                  viewTabId={props.viewTabId}
+                  hostId={props.hostId}
+                  workspaceLabel={props.workspaceLabel}
+                  module={module}
+                  expanded={expanded}
+                  query={moduleMatchesHeader ? "" : appliedQuery}
+                  lastUpdatedAtMs={props.lastUpdatedAtMs}
+                  onToggle={toggleModule}
+                  onHeaderRef={registerModuleHeader}
+                  sectionCollapsedByKey={sectionCollapsedByKey}
+                  onToggleModuleSection={toggleModuleSection}
+                  onClearQuery={handleClearSearch}
+                  onRefresh={props.onRefresh}
+                  isRefreshing={props.isRefreshing}
+                />
+              );
+            })}
+          </HoverCardGroup>
           {!queryActive && props.hiddenCleanModuleCount > 0 ? (
             <div className="px-2 pt-1">
               <button
@@ -797,6 +800,7 @@ function GitModuleGroupsView(props: {
                 onClick={handleToggleCleanModules}
                 className={cn(
                   "flex w-full items-center justify-between rounded-md px-2 py-1.5",
+                  // muted-fill-ok: on the git panel's own bg-background, not a raised surface - the file is in scope only for the module-header HoverCard it renders
                   "text-left text-ui-xs text-muted-foreground transition-colors hover:bg-muted/30",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 )}
@@ -977,6 +981,7 @@ function GitModuleGroupView(props: {
     <section
       className={cn(
         "flex flex-none flex-col border-b border-border/50 last:border-b-0",
+        // muted-fill-ok: on the git panel's own bg-background, not a raised surface - the file is in scope only for the module-header HoverCard it renders
         module.kind === "submodule" && "bg-muted/[0.03]",
         module.clean && "opacity-70",
       )}
@@ -1046,7 +1051,7 @@ function GitModuleHeader(props: {
     [moduleKey, onHeaderRef],
   );
   return (
-    <HoverPreviewCard
+    <HoverCard
       content={
         <ModuleHeaderPreviewContent
           module={module}
@@ -1054,105 +1059,113 @@ function GitModuleHeader(props: {
           parentLabel={parentLabel}
         />
       }
+      appearance="preview"
+      semantics={{ role: "tooltip" }}
       side="right"
       sideOffset={8}
       align="start"
-      open={undefined}
-      onOpenChange={undefined}
-    >
-      <button
-        ref={setHeaderRef}
-        type="button"
-        onClick={() => onToggle(module)}
-        className={cn(
-          "@container group sticky top-0 z-40 flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-2 py-1.5 text-left transition-colors hover:bg-muted",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          module.clean && "text-muted-foreground",
-        )}
-        aria-expanded={props.expanded}
-        aria-label={moduleHeaderAccessibleName({
-          module,
-          countLabel,
-          parentLabel,
-        })}
-        data-testid={`git-module-header-${moduleIdentifier(module)}`}
-      >
-        <ChevronDown
+      enabled
+      open={null}
+      onOpenChange={null}
+      testId={null}
+      className={null}
+      trigger={
+        <button
+          ref={setHeaderRef}
+          type="button"
+          onClick={() => onToggle(module)}
           className={cn(
-            "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
-            !props.expanded && "-rotate-90",
+            // muted-fill-ok: on the git panel's own bg-background, not a raised surface - the file is in scope only for the module-header HoverCard it renders
+            "@container group sticky top-0 z-40 flex w-full min-w-0 items-start gap-2 border-b border-border/40 bg-background px-2 py-1.5 text-left transition-colors hover:bg-muted",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            module.clean && "text-muted-foreground",
           )}
-          aria-hidden
-        />
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-ui-sm font-semibold text-foreground/90">
-              {module.label}
-            </span>
-            {module.kind === "submodule" ? (
-              <span
-                className="shrink-0 rounded-sm bg-foreground/6 px-1.5 py-0.5 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground"
-                data-testid={`git-module-kind-${moduleIdentifier(module)}`}
-              >
-                Submodule
-              </span>
-            ) : null}
-            {showCount ? (
-              <span
-                className="ml-auto shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
-                data-testid={`git-module-count-${moduleIdentifier(module)}`}
-              >
-                {countLabel}
-              </span>
-            ) : (
-              <span
-                className="sr-only"
-                data-testid={`git-module-count-${moduleIdentifier(module)}`}
-              >
-                {countLabel}
-              </span>
+          aria-expanded={props.expanded}
+          aria-label={moduleHeaderAccessibleName({
+            module,
+            countLabel,
+            parentLabel,
+          })}
+          data-testid={`git-module-header-${moduleIdentifier(module)}`}
+        >
+          <ChevronDown
+            className={cn(
+              "mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform",
+              !props.expanded && "-rotate-90",
             )}
-          </span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-            <Badge
-              variant="muted"
-              className="min-w-0 max-w-full shrink rounded-full"
-            >
-              {module.headKind === "branch" ? (
-                <GitBranch data-icon="inline-start" aria-hidden />
-              ) : (
-                <GitCommitHorizontal data-icon="inline-start" aria-hidden />
-              )}
-              <span className="truncate">{module.headLabel}</span>
-            </Badge>
-            {showStatusIcon ? (
-              <span
-                className={parentReferenceStatusClassName(
-                  parentReferenceStatus,
-                  module.unavailable,
-                )}
-                data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
-              >
-                {parentReferenceStatus === "differs" ? (
-                  <>
-                    <GitCommitHorizontal
-                      className="size-3 shrink-0"
-                      aria-hidden
-                    />
-                    <span className="truncate">Differs from parent</span>
-                  </>
-                ) : (
-                  <>
-                    <TriangleAlert className="size-3 shrink-0" aria-hidden />
-                    <span className="truncate">{parentLabel}</span>
-                  </>
-                )}
+            aria-hidden
+          />
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-ui-sm font-semibold text-foreground/90">
+                {module.label}
               </span>
-            ) : null}
+              {module.kind === "submodule" ? (
+                <span
+                  className="shrink-0 rounded-sm bg-foreground/6 px-1.5 py-0.5 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground"
+                  data-testid={`git-module-kind-${moduleIdentifier(module)}`}
+                >
+                  Submodule
+                </span>
+              ) : null}
+              {showCount ? (
+                <span
+                  // muted-fill-ok: on the git panel's own bg-background, not a raised surface - the file is in scope only for the module-header HoverCard it renders
+                  className="ml-auto shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
+                  data-testid={`git-module-count-${moduleIdentifier(module)}`}
+                >
+                  {countLabel}
+                </span>
+              ) : (
+                <span
+                  className="sr-only"
+                  data-testid={`git-module-count-${moduleIdentifier(module)}`}
+                >
+                  {countLabel}
+                </span>
+              )}
+            </span>
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
+              <Badge
+                variant="muted"
+                className="min-w-0 max-w-full shrink rounded-full"
+              >
+                {module.headKind === "branch" ? (
+                  <GitBranch data-icon="inline-start" aria-hidden />
+                ) : (
+                  <GitCommitHorizontal data-icon="inline-start" aria-hidden />
+                )}
+                <span className="truncate">{module.headLabel}</span>
+              </Badge>
+              {showStatusIcon ? (
+                <span
+                  className={parentReferenceStatusClassName(
+                    parentReferenceStatus,
+                    module.unavailable,
+                  )}
+                  data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
+                >
+                  {parentReferenceStatus === "differs" ? (
+                    <>
+                      <GitCommitHorizontal
+                        className="size-3 shrink-0"
+                        aria-hidden
+                      />
+                      <span className="truncate">Differs from parent</span>
+                    </>
+                  ) : (
+                    <>
+                      <TriangleAlert className="size-3 shrink-0" aria-hidden />
+                      <span className="truncate">{parentLabel}</span>
+                    </>
+                  )}
+                </span>
+              ) : null}
+            </span>
           </span>
-        </span>
-      </button>
-    </HoverPreviewCard>
+        </button>
+      }
+    />
   );
 }
 

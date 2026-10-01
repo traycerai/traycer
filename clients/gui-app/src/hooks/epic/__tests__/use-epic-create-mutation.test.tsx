@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ListTasksResponse,
   TaskLight,
@@ -14,6 +14,33 @@ import {
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { useHostClient } from "@/lib/host";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { toast } from "sonner";
+import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  EPIC_CREATE_SEED_HOLD_TIMEOUT_MS,
+  clearEpicCreateSeedPending,
+  markEpicCreateSeedPending,
+  readEpicCreateSeed,
+} from "@/lib/worktree/pending-epic-create-seeds";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { EpicExistenceVerdict } from "@/lib/epics/epic-existence-poll";
+
+const pollMocks = vi.hoisted(() => ({
+  pollEpicExistence: vi.fn<(input: unknown) => Promise<EpicExistenceVerdict>>(),
+}));
+
+vi.mock("@/lib/epics/epic-existence-poll", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/epics/epic-existence-poll")>();
+  return {
+    ...actual,
+    pollEpicExistence: pollMocks.pollEpicExistence,
+  };
+});
 
 interface TaskWorkspaceInput {
   readonly hostId: string;
@@ -34,18 +61,35 @@ interface CreateEpicMutationContext {
   readonly userId: string | null;
 }
 
+/**
+ * The slice of `epic.create`'s variables this suite's captured callbacks
+ * actually read.
+ *
+ * `epic` is NOT optional here even though nothing below asserts on it: the
+ * success path arms the create's binding-seed hold timer from `epic.id`, and a
+ * hand-rolled variables shape that omits a field the source reads turns a real
+ * call into a `TypeError` at run time while compiling clean. Name every field
+ * the callbacks touch.
+ */
+interface CapturedCreateVariables {
+  readonly epic: { readonly id: string };
+  readonly chat: { readonly chatId: string } | null;
+  readonly workspaces: readonly unknown[];
+}
+
 interface CapturedCreateOptions {
-  readonly onMutate: (variables: {
-    readonly chat: null;
-    readonly workspaces: readonly unknown[];
-  }) => CreateEpicMutationContext;
+  readonly onMutate: (
+    variables: CapturedCreateVariables,
+  ) => CreateEpicMutationContext;
   readonly onSuccess: (
     response: { readonly task: TaskLight | null | undefined },
-    variables: {
-      readonly chat: null;
-      readonly workspaces: readonly unknown[];
-    },
+    variables: CapturedCreateVariables,
     ctx: CreateEpicMutationContext,
+  ) => void;
+  readonly onError: (
+    error: HostRpcError,
+    variables: CapturedCreateVariables,
+    ctx: CreateEpicMutationContext | undefined,
   ) => void;
 }
 
@@ -69,9 +113,15 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
-vi.mock("@/lib/host-error-toast", () => ({
-  toastFromHostError: vi.fn(),
-}));
+vi.mock("sonner", () => {
+  const base = vi.fn();
+  return {
+    toast: Object.assign(base, {
+      error: vi.fn(),
+      success: vi.fn(),
+    }),
+  };
+});
 
 function makeWrapper(
   queryClient: QueryClient,
@@ -202,7 +252,11 @@ describe("useEpicCreateForClient", () => {
 
     const track = vi.spyOn(Analytics.getInstance(), "track");
     track.mockClear();
-    const stagedVariables = { chat: null, workspaces: [] };
+    const stagedVariables = {
+      epic: { id: "epic-1" },
+      chat: null,
+      workspaces: [],
+    };
     options.onSuccess(
       { task: createdTask },
       stagedVariables,
@@ -287,7 +341,11 @@ describe("useEpicCreateForClient", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
-    const stagedVariables = { chat: null, workspaces: [] };
+    const stagedVariables = {
+      epic: { id: "epic-1" },
+      chat: null,
+      workspaces: [],
+    };
     options.onSuccess(
       { task: createdTask },
       stagedVariables,
@@ -360,7 +418,11 @@ describe("useEpicCreateForClient", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
-    const stagedVariables = { chat: null, workspaces: [] };
+    const stagedVariables = {
+      epic: { id: "epic-1" },
+      chat: null,
+      workspaces: [],
+    };
     options.onSuccess(
       { task: createdTask },
       stagedVariables,
@@ -440,7 +502,11 @@ describe("useEpicCreateForClient", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
-    const stagedVariables = { chat: null, workspaces: [] };
+    const stagedVariables = {
+      epic: { id: "epic-1" },
+      chat: null,
+      workspaces: [],
+    };
     options.onSuccess(
       { task: staleCreateResponseTask },
       stagedVariables,
@@ -451,5 +517,289 @@ describe("useEpicCreateForClient", () => {
       queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.epic
         ?.light?.title,
     ).toBe("Generated history title");
+  });
+});
+
+describe("useEpicCreateForClient seed hold", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    clearEpicCreateSeedPending("epic-held", "chat-held");
+    clearEpicCreateSeedPending("epic-other", "chat-other");
+    vi.mocked(toast).mockClear();
+    vi.mocked(toast.error).mockClear();
+  });
+
+  it("onSuccess arms the pair's timer even when ctx.hostId is null, and the timer still fires a release", () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const released: number[] = [];
+    markEpicCreateSeedPending("epic-held", "chat-held", {
+      hostId: "host-1",
+      seededMessageId: "msg-1",
+      seedRows: true,
+      heldForDeferredCreate: true,
+      release: () => {
+        released.push(1);
+      },
+    });
+    renderHook(() => useEpicCreateForClient(useHostClient()), {
+      wrapper: makeWrapper(queryClient),
+    });
+    const options = testState.capturedOptions;
+    if (options === null) throw new Error("expected mutation options");
+
+    options.onSuccess(
+      { task: null },
+      {
+        epic: { id: "epic-held" },
+        chat: { chatId: "chat-held" },
+        workspaces: [],
+      },
+      { hostId: null, userId: null },
+    );
+    expect(released).toEqual([]);
+    expect(readEpicCreateSeed("epic-held", "chat-held")).not.toBeNull();
+
+    vi.advanceTimersByTime(EPIC_CREATE_SEED_HOLD_TIMEOUT_MS);
+    expect(released).toEqual([1]);
+    expect(readEpicCreateSeed("epic-held", "chat-held")).toBeNull();
+  });
+
+  it("onSuccess invalidation skips a held epic and still invalidates every other epic on the host", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const heldKey = hostQueryKeys.method(
+      "host-1",
+      "worktree.listBindingsForEpic",
+      { epicId: "epic-held" },
+    );
+    const otherKey = hostQueryKeys.method(
+      "host-1",
+      "worktree.listBindingsForEpic",
+      { epicId: "epic-other" },
+    );
+    queryClient.setQueryData(heldKey, { rows: [{ runningDir: "/seed" }] });
+    queryClient.setQueryData(otherKey, { rows: [] });
+    markEpicCreateSeedPending("epic-held", "chat-held", {
+      hostId: "host-1",
+      seededMessageId: "msg-1",
+      seedRows: true,
+      heldForDeferredCreate: true,
+      release: () => undefined,
+    });
+
+    renderHook(() => useEpicCreateForClient(useHostClient()), {
+      wrapper: makeWrapper(queryClient),
+    });
+    const options = testState.capturedOptions;
+    if (options === null) throw new Error("expected mutation options");
+
+    options.onSuccess(
+      { task: null },
+      {
+        epic: { id: "epic-held" },
+        chat: { chatId: "chat-held" },
+        workspaces: [],
+      },
+      { hostId: "host-1", userId: "user-1" },
+    );
+
+    expect(queryClient.getQueryState(heldKey)?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(otherKey)?.isInvalidated).toBe(true);
+  });
+
+  describe("onError - the new poll-first contract for a decidable outcome", () => {
+    afterEach(() => {
+      pollMocks.pollEpicExistence.mockReset();
+    });
+
+    function renderOptions(): CapturedCreateOptions {
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      renderHook(() => useEpicCreateForClient(useHostClient()), {
+        wrapper: makeWrapper(queryClient),
+      });
+      const options = testState.capturedOptions;
+      if (options === null) throw new Error("expected mutation options");
+      return options;
+    }
+
+    const chatVariables: CapturedCreateVariables = {
+      epic: { id: "epic-held" },
+      chat: { chatId: "chat-held" },
+      workspaces: [],
+    };
+
+    const terminalAgentVariables: CapturedCreateVariables = {
+      epic: { id: "epic-held" },
+      chat: null,
+      workspaces: [],
+    };
+
+    const ambiguousDrop = new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "WebSocket closed before next frame",
+      requestId: "req-drop",
+      method: "epic.create",
+      fatalDetails: null,
+    });
+
+    it("raises NO immediate notice for an ambiguous drop on a chat create, and stays silent when the poll finds the epic", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("exists");
+      const options = renderOptions();
+
+      options.onError(ambiguousDrop, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      // No toast at the moment of the error - the whole point of ticket 6.
+      expect(toast).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(pollMocks.pollEpicExistence).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "host-1", epicId: "epic-held" }),
+      );
+
+      await vi.waitFor(() => {
+        expect(pollMocks.pollEpicExistence).toHaveBeenCalledTimes(1);
+      });
+      // A found epic settles the ambiguity silently: no notice ever appears.
+      expect(toast).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("toasts the neutral notice once the poll answers 'absent'", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("absent");
+      const options = renderOptions();
+
+      options.onError(ambiguousDrop, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+      expect(toast).not.toHaveBeenCalled();
+
+      await vi.waitFor(() => {
+        expect(toast).toHaveBeenCalled();
+      });
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("toasts the neutral notice once the poll answers 'unknown'", async () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("unknown");
+      const options = renderOptions();
+
+      options.onError(ambiguousDrop, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+      expect(toast).not.toHaveBeenCalled();
+
+      await vi.waitFor(() => {
+        expect(toast).toHaveBeenCalled();
+      });
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("still toasts the neutral notice when the poll itself rejects", async () => {
+      pollMocks.pollEpicExistence.mockRejectedValue(new Error("poll failed"));
+      const options = renderOptions();
+
+      options.onError(ambiguousDrop, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      await vi.waitFor(() => {
+        expect(toast).toHaveBeenCalled();
+      });
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("a terminal-agent create (chat: null) keeps the immediate notice even for an ambiguous drop - a found epic does not mean the launch succeeded", () => {
+      const options = renderOptions();
+
+      options.onError(ambiguousDrop, terminalAgentVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      expect(toast).toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(pollMocks.pollEpicExistence).not.toHaveBeenCalled();
+    });
+
+    it("a keyReuseConflict on a chat create takes the poll rather than the immediate toast", () => {
+      pollMocks.pollEpicExistence.mockResolvedValue("exists");
+      const options = renderOptions();
+      const keyReuseConflict = new HostRpcError({
+        code: "RPC_ERROR",
+        message: "The idempotency key was already used with different params",
+        requestId: "req-reuse",
+        method: "epic.create",
+        fatalDetails: null,
+      });
+
+      options.onError(keyReuseConflict, chatVariables, {
+        hostId: "host-1",
+        userId: "user-1",
+      });
+
+      expect(toast).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(pollMocks.pollEpicExistence).toHaveBeenCalledTimes(1);
+    });
+
+    it("a plain HostRpcError toasts the red refusal immediately, without polling", () => {
+      const options = renderOptions();
+
+      options.onError(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "host refused",
+          requestId: "req-refuse",
+          method: "epic.create",
+          fatalDetails: null,
+        }),
+        chatVariables,
+        { hostId: "host-1", userId: "user-1" },
+      );
+
+      expect(toast.error).toHaveBeenCalled();
+      expect(pollMocks.pollEpicExistence).not.toHaveBeenCalled();
+    });
+
+    it("a RetryableTransportError keeps the pre-send notice immediately, without polling", () => {
+      const options = renderOptions();
+
+      options.onError(
+        new RetryableTransportError({
+          replaySafetyFromKey: false,
+          code: "RPC_ERROR",
+          message: "Dial failed before the request was sent",
+          requestId: "req-retryable",
+          method: "epic.create",
+          fatalDetails: null,
+        }),
+        chatVariables,
+        { hostId: "host-1", userId: "user-1" },
+      );
+
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(toast).toHaveBeenCalled();
+      expect(pollMocks.pollEpicExistence).not.toHaveBeenCalled();
+    });
   });
 });

@@ -21,6 +21,7 @@ import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 
 export interface DraftSelection {
   readonly from: number;
@@ -47,16 +48,15 @@ export interface DraftState {
   /**
    * Bumped on every real content change - typed/pasted edits via
    * `setSnapshot` AND external replacements via `replaceDraft` (queue-edit
-   * restore, failed-send handoff, `clearDraft`). The prompt-stash source
-   * adapter captures this alongside the chatId as a compare-and-swap token:
-   * a stash only clears this draft when the revision it captured still
-   * matches, so an edit made while the stash was durably saving is kept.
+   * restore, failed-send handoff, `clearDraft`). A compare-and-swap token for
+   * an asynchronous reader that captures it alongside the chatId and only
+   * acts on this draft while the revision it captured still matches, so an
+   * edit made while that read was in flight is kept.
    *
-   * The sidecar mutation bumps it too, unlike `resetEpoch`: the stash carries
-   * only the DOCUMENT, while the `clearDraft` it performs on a matching token
-   * wipes `browserAnnotations` as well. An annotation attached while that
-   * IndexedDB save was in flight would otherwise be destroyed with nothing
-   * holding it.
+   * The sidecar mutation bumps it too, unlike `resetEpoch`: such a token
+   * covers only the DOCUMENT, while a `clearDraft` performed on a match wipes
+   * `browserAnnotations` as well. An annotation attached while the read was
+   * in flight would otherwise be destroyed with nothing holding it.
    */
   readonly revision: number;
   /** Client-minted host row id; null until the first local edit. */
@@ -82,6 +82,16 @@ export interface DraftState {
    */
   readonly supersedes: string | null;
   readonly publication: DraftPublication | null;
+  /**
+   * Display snapshots for the drafts list, recorded by the mounted composer
+   * (`setComposerDraftTitles`) and persisted with the row. They are NOT on
+   * the wire: the chat/epic titles come from the open-epic projector, which
+   * exists only for open epics, and the list must name a draft whose chat is
+   * closed. `null` until some composer for this chat has mounted - a row a
+   * host published before that reads as `Chat` / `Epic`.
+   */
+  readonly chatTitle: string | null;
+  readonly epicTitle: string | null;
 }
 
 export interface PendingSubmittedDraftDelete {
@@ -203,6 +213,26 @@ interface ComposerDraftStore {
   ) => void;
   readonly completeSubmittedDraftDelete: (draftId: string) => void;
   readonly bindTarget: (chatId: string, epicId: string) => void;
+  /**
+   * Record the drafts-list display snapshots for an EXISTING row. Non-
+   * dirtying by construction: it compares first, writes only those two
+   * fields, and touches neither `generation`, `revision`, `lastTouchedAt`
+   * nor `draftId` - a title write through `touchLocalComposerDraft` would
+   * re-order the list and publish an untouched row on every tile mount.
+   * No-op when this chat has no row yet; there is nothing to label.
+   *
+   * A `null` means "the projector has not answered", never "this draft has no
+   * title", so it PRESERVES whatever is recorded instead of blanking it. Both
+   * producers emit null while unresolved, and one of them emits null forever:
+   * the chat composer also mounts outside an `<EpicSessionProvider>` (the
+   * mobile standalone chat view), where the tolerant read has no store to ask.
+   * A recorded label is only ever replaced by a better one.
+   */
+  readonly setComposerDraftTitles: (
+    chatId: string,
+    chatTitle: string | null,
+    epicTitle: string | null,
+  ) => void;
 }
 const EMPTY_COMPOSER_CONTENT: JsonContent = {
   type: "doc",
@@ -226,6 +256,8 @@ export const EMPTY_COMPOSER_DRAFT: DraftState = {
   origin: null,
   supersedes: null,
   publication: null,
+  chatTitle: null,
+  epicTitle: null,
 };
 
 function ensureDraft(
@@ -504,9 +536,72 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           notifyDraftLocalEdit(notifyId);
         }
       },
+      setComposerDraftTitles: (chatId, chatTitle, epicTitle) => {
+        set((state) => {
+          const current = state.drafts[chatId];
+          if (current === undefined) return state;
+          // An unanswered projector must not blank a label the list already
+          // has - see the interface doc. Each title is kept independently:
+          // the epic title resolves through a different read than the chat's
+          // and routinely arrives first.
+          const nextChatTitle = chatTitle ?? current.chatTitle;
+          const nextEpicTitle = epicTitle ?? current.epicTitle;
+          if (
+            current.chatTitle === nextChatTitle &&
+            current.epicTitle === nextEpicTitle
+          ) {
+            return state;
+          }
+          return {
+            drafts: {
+              ...state.drafts,
+              [chatId]: {
+                ...current,
+                chatTitle: nextChatTitle,
+                epicTitle: nextEpicTitle,
+              },
+            },
+          };
+        });
+      },
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.composerDraft)),
+      // Serialization boundary: a persisted chat draft NEVER carries base64.
+      // The in-memory `drafts` map is canonical and DOES hold a paste's
+      // still-pending b64 node - that node is the work token its background
+      // prepare+hash+store job is keyed on, and the composer re-enters ingest
+      // for it on every document change - so the strip lives only here, at the
+      // localStorage seam. A hash-only node, whose bytes are durable in the
+      // composer image store, always survives, and `blobHashes` on the draft
+      // mirror's write is derived from those same hashes, which is what shrank
+      // the debounced `drafts.upsert` bodies from megabytes to a few KB.
+      //
+      // `selection` travels WITH the strip, and is dropped when the strip
+      // actually removes a node. The previous note here reasoned that the image
+      // node "is still there in memory", which is true and answers the wrong
+      // question: what the caret is applied to on the next launch is the
+      // REHYDRATED document, and that is the stripped copy - one node shorter,
+      // with every position after the removed image shifted. See
+      // `stripBase64ImageNodesWithSelection` for why it is dropped rather than
+      // rebased.
+      partialize: (state) => ({
+        pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
+        drafts: Object.fromEntries(
+          Object.entries(state.drafts).map(([chatId, draft]) => [
+            chatId,
+            draft === undefined
+              ? draft
+              : {
+                  ...draft,
+                  ...stripBase64ImageNodesWithSelection(
+                    draft.content,
+                    draft.selection,
+                  ),
+                },
+          ]),
+        ),
+      }),
       // Synchronous localStorage hydration can finish during `create(...)`,
       // before an `onFinishHydration` subscriber can be registered. Normalize
       // at the merge boundary so legacy revisions are safe on initial import.
@@ -553,6 +648,8 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
               normalizedNullableId(value.supersedes),
             ),
             publication: null,
+            chatTitle: normalizedTitle(value.chatTitle),
+            epicTitle: normalizedTitle(value.epicTitle),
           };
         }
         const pendingSubmittedDraftDeletes: Partial<
@@ -593,8 +690,8 @@ function normalizedLegacyResetEpoch(rawDraft: Record<string, unknown>): number {
  * static `DraftState` type - JSON crossing the localStorage boundary is not
  * guaranteed to match it. `current.revision + 1` on an `undefined` value
  * produces `NaN`, which then never compares equal to itself
- * (`NaN !== NaN` is always `true`), permanently blocking the prompt-stash CAS
- * from ever clearing that draft again. Normalize once, here, at the one
+ * (`NaN !== NaN` is always `true`), permanently blocking any compare-and-swap
+ * on this field from ever matching that draft again. Normalize once, here, at the one
  * place untrusted persisted data enters the store - everywhere else
  * (`ensureDraft`, `setSnapshot`, `replaceDraft`) only ever reads a value this
  * function already produced or `EMPTY_COMPOSER_DRAFT.revision`, both real
@@ -919,10 +1016,10 @@ export function collectComposerDirtyWrites(): ReadonlyArray<{
  * preserves it, so a fresh id minted after a send starts at `revision > 0` and
  * an empty row for it is still published. Closing that needs per-draft
  * bookkeeping (a "revision when this id was minted" stamp), NOT resetting
- * `revision` on detach: the prompt stash captures `{chatId, revision}` as a
- * compare-and-swap token and `clearIfUnchanged` compares nothing else, so
- * making revisions repeat across sends lets an in-flight stash save match a
- * LATER draft and erase it. Monotonic is what makes that token safe.
+ * `revision` on detach: a compare-and-swap on `{chatId, revision}` compares
+ * nothing else, so making revisions repeat across sends would let an
+ * in-flight write match a LATER draft and erase it. Monotonic is what makes
+ * that token safe.
  */
 function isNeverTypedEmptyComposerDraft(draft: DraftState): boolean {
   return draft.revision === 0 && isEmptyLandingDraftContent(draft.content);
@@ -995,6 +1092,15 @@ function normalizedNullableId(value: unknown): string | null {
 
 function migratedNullableId(value: string | null): string | null {
   return value === null ? null : migratedLegacyComposerDraftId(value);
+}
+
+/**
+ * A display snapshot written before the field existed (or by a build that
+ * stored something else there) is simply unknown - the list falls back to
+ * `Chat` / `Epic` rather than rendering whatever the JSON held.
+ */
+function normalizedTitle(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 function normalizedOrigin(value: unknown): "own" | "replica" | null {

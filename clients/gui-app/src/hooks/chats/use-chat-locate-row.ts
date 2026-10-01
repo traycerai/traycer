@@ -45,7 +45,12 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
  * same behavior the jump already has for a target that never arrives, which is
  * to time out quietly.
  */
-export function useChatLocateRow(args: {
+export function useChatLocateRow(args: ChatLocateRowArgs): number | null {
+  const answer = useChatLocateRowAnswer(args);
+  return answer.status === "found" ? answer.ordinal : null;
+}
+
+export interface ChatLocateRowArgs {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatId: string;
@@ -55,7 +60,34 @@ export function useChatLocateRow(args: {
    * other one is discarded.
    */
   readonly epoch: number;
-}): number | null {
+}
+
+/**
+ * What the host has said about the row so far.
+ *
+ * - `waiting`: nothing usable yet - disabled, in flight, or answered in an
+ *   epoch this window has left (the key change re-asks).
+ * - `found`: the ordinal, in this window's epoch.
+ * - `missing`: settled without a row - `found: false`, or the RPC rejected
+ *   (`E_HOST_UNSUPPORTED` included). Final for this target and epoch.
+ */
+export type ChatLocateRowAnswer =
+  | { readonly status: "waiting" }
+  | { readonly status: "found"; readonly ordinal: number }
+  | { readonly status: "missing" };
+
+const WAITING: ChatLocateRowAnswer = { status: "waiting" };
+const MISSING: ChatLocateRowAnswer = { status: "missing" };
+
+/**
+ * {@link useChatLocateRow}, keeping the difference between "not answered yet"
+ * and "answered: no row". A jump does not need it - both time out quietly - but
+ * a caller that must give up on a target the moment the host does (chat find's
+ * index read) does.
+ */
+export function useChatLocateRowAnswer(
+  args: ChatLocateRowArgs,
+): ChatLocateRowAnswer {
   const { chatId, client, epicId, epoch, target } = args;
   const query = useHostQuery<HostRpcRegistry, "chat.locateRow">({
     client,
@@ -84,14 +116,15 @@ export function useChatLocateRow(args: {
       retry: false,
     },
   });
-  if (target === null) return null;
+  if (target === null) return WAITING;
   const data = query.data;
-  if (data === undefined || !data.found) return null;
+  if (data === undefined) return query.isError ? MISSING : WAITING;
+  if (!data.found) return MISSING;
   // The epoch check, and it is load-bearing rather than belt-and-braces: the
   // cache key above stops a SUPERSEDED answer being re-served, and this stops an
   // in-flight one landing after the re-base that voided it. Falling back to
-  // `null` puts the jump exactly where an unanswered one already is - waiting,
-  // and re-asked under the new epoch by the key change.
-  if (data.epoch !== epoch) return null;
-  return data.ordinal;
+  // `waiting` puts the jump exactly where an unanswered one already is -
+  // waiting, and re-asked under the new epoch by the key change.
+  if (data.epoch !== epoch) return WAITING;
+  return { status: "found", ordinal: data.ordinal };
 }

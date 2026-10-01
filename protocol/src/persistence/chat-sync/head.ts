@@ -11,7 +11,10 @@ import {
   preservedChatEventSchema,
   type PreservedChatEvent,
 } from "@traycer/protocol/persistence/chat-sync/entries";
-import { autoJudgeUnattendedDenialRowSource } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import {
+  autoJudgeNoticeRowSource,
+  autoJudgeUnattendedDenialRowSource,
+} from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   chatSyncHostPrivateSchema,
@@ -40,6 +43,7 @@ import {
   type ChatSyncPayloadVersion,
 } from "@traycer/protocol/persistence/chat-sync/version";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The `chat-head` record: the small, mutable pointer that IS a published chat.
@@ -97,11 +101,13 @@ import { z } from "zod";
  * This is the only shape the sync server reads. Domain fields (seq ranges,
  * CDC params) stay on the payload.
  */
-export const chatHeadAddressPartSchema = z.object({
-  /** Lowercase hex SHA-256 of the part's canonical bytes. Its whole address. */
-  sha256: sha256HexSchema,
-  byteLength: z.number().int().nonnegative(),
-});
+export const chatHeadAddressPartSchema = lazySchema(() =>
+  z.object({
+    /** Lowercase hex SHA-256 of the part's canonical bytes. Its whole address. */
+    sha256: sha256HexSchema,
+    byteLength: z.number().int().nonnegative(),
+  }),
+);
 export type ChatHeadAddressPart = z.infer<typeof chatHeadAddressPartSchema>;
 
 /**
@@ -118,33 +124,37 @@ export type ChatHeadAddressPart = z.infer<typeof chatHeadAddressPartSchema>;
  * interval. Tail membership is the `recordCount` records from
  * `firstRecordId` through `lastRecordId` in section order.
  */
-export const chatHeadPartSchema = chatHeadAddressPartSchema.extend({
-  firstSeq: z.number().int().nonnegative().optional(),
-  lastSeq: z.number().int().nonnegative().optional(),
-  recordCount: z.number().int().positive().optional(),
-  firstRecordId: z.string().min(1).optional(),
-  lastRecordId: z.string().min(1).optional(),
-});
+export const chatHeadPartSchema = lazySchema(() =>
+  chatHeadAddressPartSchema.extend({
+    firstSeq: z.number().int().nonnegative().optional(),
+    lastSeq: z.number().int().nonnegative().optional(),
+    recordCount: z.number().int().positive().optional(),
+    firstRecordId: z.string().min(1).optional(),
+    lastRecordId: z.string().min(1).optional(),
+  }),
+);
 export type ChatHeadPart = z.infer<typeof chatHeadPartSchema>;
 
 /** Writer-side cohort: the 1.1 cut plan is required. */
-export const chatHeadCohortPartSchema = chatHeadAddressPartSchema
-  .extend({
-    firstSeq: z.number().int().nonnegative(),
-    lastSeq: z.number().int().nonnegative(),
-    recordCount: z.number().int().positive(),
-    firstRecordId: z.string().min(1),
-    lastRecordId: z.string().min(1),
-  })
-  .superRefine((part, ctx) => {
-    if (part.firstSeq > part.lastSeq) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["firstSeq"],
-        message: `firstSeq ${part.firstSeq} cannot exceed lastSeq ${part.lastSeq}`,
-      });
-    }
-  });
+export const chatHeadCohortPartSchema = lazySchema(() =>
+  chatHeadAddressPartSchema
+    .extend({
+      firstSeq: z.number().int().nonnegative(),
+      lastSeq: z.number().int().nonnegative(),
+      recordCount: z.number().int().positive(),
+      firstRecordId: z.string().min(1),
+      lastRecordId: z.string().min(1),
+    })
+    .superRefine((part, ctx) => {
+      if (part.firstSeq > part.lastSeq) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["firstSeq"],
+          message: `firstSeq ${part.firstSeq} cannot exceed lastSeq ${part.lastSeq}`,
+        });
+      }
+    }),
+);
 export type ChatHeadCohortPart = z.infer<typeof chatHeadCohortPartSchema>;
 
 /** Algorithm id recorded in the head so a cut is reproducible forever. */
@@ -158,30 +168,32 @@ export const CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1 =
  * boundary is a cut candidate when `(hash & mask) === 0`. `min` / `target`
  * / `max` are cohort sizes in bytes; `min <= target <= max`.
  */
-export const chatHeadCdcParamsSchema = z
-  .object({
-    algorithm: z.literal(CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1),
-    mask: z.number().int().nonnegative(),
-    target: z.number().int().positive(),
-    min: z.number().int().positive(),
-    max: z.number().int().positive(),
-  })
-  .superRefine((cdc, ctx) => {
-    if (cdc.min > cdc.target) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["min"],
-        message: `cdc.min ${cdc.min} cannot exceed cdc.target ${cdc.target}`,
-      });
-    }
-    if (cdc.target > cdc.max) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["target"],
-        message: `cdc.target ${cdc.target} cannot exceed cdc.max ${cdc.max}`,
-      });
-    }
-  });
+export const chatHeadCdcParamsSchema = lazySchema(() =>
+  z
+    .object({
+      algorithm: z.literal(CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1),
+      mask: z.number().int().nonnegative(),
+      target: z.number().int().positive(),
+      min: z.number().int().positive(),
+      max: z.number().int().positive(),
+    })
+    .superRefine((cdc, ctx) => {
+      if (cdc.min > cdc.target) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["min"],
+          message: `cdc.min ${cdc.min} cannot exceed cdc.target ${cdc.target}`,
+        });
+      }
+      if (cdc.target > cdc.max) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["target"],
+          message: `cdc.target ${cdc.target} cannot exceed cdc.max ${cdc.max}`,
+        });
+      }
+    }),
+);
 export type ChatHeadCdcParams = z.infer<typeof chatHeadCdcParamsSchema>;
 
 /** Address projection used when deriving the tenant envelope. */
@@ -209,16 +221,16 @@ export const chatHeadRecordShape = {
    * number their turns, and seq ordering cannot tell "I am ahead" from "I am a
    * fork". Consumed by the continuity verdict that arbitrates a fork.
    */
-  parentHeadSha256: sha256HexSchema.nullable(),
+  parentHeadSha256: lazySchema(() => sha256HexSchema.nullable()),
   /**
    * Record sequence this publication was pinned at. The publisher must have
    * captured state exactly through this seq - never a projection already past
    * it, relabelled. A watermark, not an ordering authority: see
    * `parentHeadSha256`.
    */
-  throughRecordSeq: z.number().int().nonnegative(),
+  throughRecordSeq: lazySchema(() => z.number().int().nonnegative()),
   /** Wall-clock ms the head was serialized. */
-  capturedAt: z.number(),
+  capturedAt: lazySchema(() => z.number()),
   /**
    * Lowest record version a reader must support to interpret this publication
    * SAFELY, or `null` when every same-major reader can.
@@ -245,24 +257,24 @@ export const chatHeadRecordShape = {
    * Optional on the shared / reader shape so a 1.0 head still parses. The
    * 1.1 writer requires it (`chatHeadWriterRecordShape`).
    */
-  cdc: chatHeadCdcParamsSchema.optional(),
+  cdc: lazySchema(() => chatHeadCdcParamsSchema.optional()),
   core: chatHeadCoreSchema,
   /**
    * Message-cohort shards, in transcript order. Assembly concatenates them in
    * THIS order regardless of the order they arrive in.
    */
-  messageShards: z.array(chatHeadPartSchema),
+  messageShards: lazySchema(() => z.array(chatHeadPartSchema)),
   /**
    * The event log, inline. `null` once it has graduated into `eventShards`.
    * An empty array is an ordinary chat with no events, not a graduated one.
    */
-  events: z.array(preservedChatEventSchema).nullable(),
+  events: lazySchema(() => z.array(preservedChatEventSchema).nullable()),
   /** Event-cohort shards, in order. Empty while `events` is inline. */
-  eventShards: z.array(chatHeadPartSchema),
+  eventShards: lazySchema(() => z.array(chatHeadPartSchema)),
   /** Opaque host state, inline. `null` once it has graduated. */
-  hostPrivate: chatSyncHostPrivateSchema.nullable(),
+  hostPrivate: lazySchema(() => chatSyncHostPrivateSchema.nullable()),
   /** The graduated host-private part, or `null` while it is inline. */
-  hostPrivateShard: chatHeadAddressPartSchema.nullable(),
+  hostPrivateShard: lazySchema(() => chatHeadAddressPartSchema.nullable()),
 } as const;
 
 /**
@@ -331,6 +343,47 @@ export const CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR = {
 } as const;
 
 /**
+ * The reader floor a publication carrying an auto-mode judge notice row must
+ * stamp.
+ *
+ * `1.6` is the minor whose `row-order.ts` gained
+ * {@link autoJudgeNoticeRowSource}, riding that still-unreleased minor on the
+ * rule `version.ts` records (`host-v1.3.0` shipped chat-sync 1.3). Same case
+ * as {@link CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR}: the notice is an
+ * ordinary `permission.blocked` every reader parses, and a reader whose own
+ * projection predates the row draws the chat with the notice silently missing
+ * - the line that tells the user their judge moved to another account's
+ * billing, or stopped judging at all. Pinned literally for the same reason.
+ */
+export const CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR = {
+  major: 1,
+  minor: 6,
+} as const;
+
+// ## No floor for `providerHistory: "excluded"`, and it is not an omission
+//
+// A user message carrying that marker used to stamp a `1.6` floor, on the
+// reading that an older reader would show a row it did not understand. It was
+// withdrawn with the lifecycle the marker belongs to, because both halves of
+// that reading turned out to be wrong.
+//
+// An older reader does not ACT on the marker - it renders an ordinary user
+// message, which is exactly what the row is and exactly what a newer reader
+// draws. The marker's only consumer is the host, which uses it to keep the row
+// out of the provider's history. Nothing a reader can do with it is wrong, so
+// `minReaderVersion`'s documented trigger - "a change that would make an old
+// reader act on a chat WRONGLY" - is simply not met. Contrast
+// `CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR` above, where the old reader
+// projects NO row and a refusal silently disappears.
+//
+// And the cost was not confined to the row. A floor gates the whole
+// publication, so an opening message - the FIRST row of a chat - would have
+// walled every older app out of that chat for as long as the marker was there,
+// which was the entire time a chat was being set up. The strictly better answer
+// is what ships: the row is projected honestly to every client version, and the
+// versions that cannot draw its delivery state are simply not told about it.
+
+/**
  * The floor a publication of `events` must stamp as `minReaderVersion`, or
  * `null` when every supported reader can render it.
  *
@@ -339,9 +392,11 @@ export const CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR = {
  * floor here would refuse readers for additive changes the format was designed
  * to survive.
  *
- * Derives its answer from the row predicate rather than restating its
- * condition, so the two cannot drift - the same arrangement
- * `minimumChatSubscribeMinorForTranscriptEvent` has with the same predicate.
+ * Derives its answer from the row predicates rather than restating their
+ * conditions, so the two cannot drift - the same arrangement
+ * `minimumChatSubscribeMinorForTranscriptEvent` has with the same predicates.
+ * With two rows floored it answers the HIGHER floor any event demands, since a
+ * reader must be able to draw every row the publication holds.
  *
  * The PUBLISHER calls this; the protocol only states the rule. Same split as
  * `supportsAutoPermissionMode` / `chatSubscribeSupportsPermissionMode` and
@@ -350,12 +405,19 @@ export const CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR = {
 export function chatSyncReaderFloorForTranscriptEvents(
   events: Iterable<ChatEvent>,
 ): SchemaVersion | null {
+  let floor: SchemaVersion | null = null;
   for (const event of events) {
+    // The notice floor is the higher of the two, so the first notice settles
+    // the answer; a denial only raises it from nothing, and the walk goes on
+    // in case a notice follows.
+    if (autoJudgeNoticeRowSource(event) !== null) {
+      return CHAT_SYNC_AUTO_JUDGE_NOTICE_READER_FLOOR;
+    }
     if (autoJudgeUnattendedDenialRowSource(event) !== null) {
-      return CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR;
+      floor = CHAT_SYNC_UNATTENDED_DENIAL_READER_FLOOR;
     }
   }
-  return null;
+  return floor;
 }
 
 /**
@@ -374,8 +436,8 @@ export function chatSyncReaderFloorForTranscriptEvents(
 export const chatHeadWriterRecordShape = {
   ...chatHeadRecordShape,
   cdc: chatHeadCdcParamsSchema,
-  messageShards: z.array(chatHeadCohortPartSchema),
-  eventShards: z.array(chatHeadCohortPartSchema),
+  messageShards: lazySchema(() => z.array(chatHeadCohortPartSchema)),
+  eventShards: lazySchema(() => z.array(chatHeadCohortPartSchema)),
 } as const;
 
 /**
@@ -676,11 +738,13 @@ export const chatHeadReaderSchema = reprojectResidualCapture({
 }).superRefine(refineChatHead);
 
 /** The persisted shape: declared fields, no `residual`, unmodeled keys open. */
-export const chatHeadStorageSchema = storageProjection({
-  ...chatHeadWriterRecordShape,
-  core: chatHeadCoreStorageSchema,
-  hostPrivate: chatSyncHostPrivateStorageSchema.nullable(),
-});
+export const chatHeadStorageSchema = lazySchema(() =>
+  storageProjection({
+    ...chatHeadWriterRecordShape,
+    core: chatHeadCoreStorageSchema,
+    hostPrivate: chatSyncHostPrivateStorageSchema.nullable(),
+  }),
+);
 
 /**
  * Public structural mirror of the registered record - see the note on
@@ -1035,7 +1099,9 @@ export function decodeChatHeadDocument(
   return { status: "ok", record: record.data };
 }
 
-const chatHeadPartsEnvelopeSchema = z.array(chatHeadAddressPartSchema);
+const chatHeadPartsEnvelopeSchema = lazySchema(() =>
+  z.array(chatHeadAddressPartSchema),
+);
 
 /**
  * Every own key of the document except the envelope, rebuilt with

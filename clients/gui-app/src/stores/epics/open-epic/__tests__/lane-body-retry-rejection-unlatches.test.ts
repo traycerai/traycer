@@ -184,7 +184,7 @@ describe("startAwaitingRetry - the rejection arm unlatches retrying", () => {
     expect(worker.materializeCalls).toHaveLength(1);
 
     // The room reads ready: the projection's ordinary re-drive trigger.
-    leases.retryAwaitingBodies(() => true);
+    leases.retryAwaitingBodies((_docKey, preferred) => preferred);
     expect(worker.materializeCalls).toHaveLength(2);
 
     // Let the rejection's `.then` handler run.
@@ -194,7 +194,7 @@ describe("startAwaitingRetry - the rejection arm unlatches retrying", () => {
     // old fulfillment-only `.then` never unlatched `retrying`, so this call
     // was swallowed into `retryRequested` for an in-flight call that no
     // longer existed, and no fresh `body/materialize` was ever issued again.
-    leases.retryAwaitingBodies(() => true);
+    leases.retryAwaitingBodies((_docKey, preferred) => preferred);
     expect(worker.materializeCalls).toHaveLength(3);
   });
 
@@ -206,7 +206,7 @@ describe("startAwaitingRetry - the rejection arm unlatches retrying", () => {
       throw new Error(`expected an awaiting-seed grant, got ${grant.kind}`);
     }
 
-    leases.retryAwaitingBodies(() => true);
+    leases.retryAwaitingBodies((_docKey, preferred) => preferred);
     await flushMicrotasks();
 
     expect(worker.materializeCalls).toHaveLength(2);

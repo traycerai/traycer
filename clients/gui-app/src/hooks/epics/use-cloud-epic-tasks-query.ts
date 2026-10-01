@@ -10,7 +10,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type {
   ListTasksCompleteness,
   ListTasksResponse,
-  ListTaskLightPre15,
+  ListTaskLight,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -85,14 +85,14 @@ type PendingLocalFirstResponse = ListTasksResponse & {
   };
 };
 
-const EMPTY_TASKS: readonly ListTaskLightPre15[] = [];
+const EMPTY_TASKS: readonly ListTaskLight[] = [];
 const EMPTY_PAGES: readonly ListTasksResponse[] = [];
 const EMPTY_FIRST_PAGE: ListTasksResponse = { tasks: [], hasMore: false };
 
 export interface CloudEpicTasksQueryResult {
   readonly hostId: string | null;
   readonly currentUserId: string | null;
-  readonly tasks: readonly ListTaskLightPre15[];
+  readonly tasks: readonly ListTaskLight[];
   readonly query: CloudEpicTasksFirstPageQuery;
   readonly fetchNextPage: () => void;
   readonly hasNextPage: boolean;
@@ -364,6 +364,7 @@ export function useCloudEpicTasksQuery(
         {
           request: variables.request,
           cursor: variables.cursor,
+          abortSignal: undefined,
         },
       ),
     onSuccess: (page, variables) => {
@@ -537,7 +538,7 @@ export function useCloudEpicTasksQuery(
     );
   }, [authorizesCloudLeg, queryClient, userId]);
 
-  const tasks = useMemo<readonly ListTaskLightPre15[]>(() => {
+  const tasks = useMemo<readonly ListTaskLight[]>(() => {
     if (queryData === undefined) return EMPTY_TASKS;
     // Dedupe by task id, first occurrence wins (the first page outranks the
     // tails): a personal pin moves a row across server page boundaries, so

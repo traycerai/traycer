@@ -1,7 +1,10 @@
 import { createContext, use } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostEnsureFailure,
+  MutationProgress,
+} from "@traycer-clients/shared/platform/runner-host";
 import type { HostStatusSnapshot } from "@/lib/host/compatibility-state";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import { admitsLocalPlane, type AuthStatus } from "@/stores/auth/auth-store";
@@ -99,6 +102,16 @@ export interface DefaultHostReadinessPresentation {
    */
   readonly lastProgress: MutationProgress | null;
   readonly provisioningError: Error | null;
+  /**
+   * The last failed ensure while it is settled - main's
+   * `HostControllerStatus.lastEnsureFailure`, withheld while an ensure is in
+   * flight (`settledEnsureFailure`). Unlike `provisioningError` it covers the
+   * ensures this renderer did not start (the launch ensure and its retry
+   * ladder), and main clears it, so it never outlives the failure. Its
+   * message is rendered verbatim in the settled failure bodies only; its code
+   * picks the one repair a body offers beside it.
+   */
+  readonly ensureFailure: HostEnsureFailure | null;
   readonly provisioning: boolean;
   readonly removed: boolean;
   readonly hostBusy: boolean;
@@ -296,6 +309,7 @@ const EMPTY_DEFAULT_HOST_PRESENTATION: DefaultHostReadinessPresentation = {
   progress: null,
   lastProgress: null,
   provisioningError: null,
+  ensureFailure: null,
   provisioning: false,
   removed: false,
   hostBusy: false,

@@ -13,32 +13,32 @@ import {
   DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
   DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET,
 } from "./git-constants";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The file status per `git status --porcelain=v2`: modified, added, deleted,
  * renamed, copied, untracked, conflicted. Orthogonal to `stage`.
  */
-export const gitFileStatusSchema = z.enum([
-  "modified",
-  "added",
-  "deleted",
-  "renamed",
-  "copied",
-  "untracked",
-  "conflicted",
-]);
+export const gitFileStatusSchema = lazySchema(() =>
+  z.enum([
+    "modified",
+    "added",
+    "deleted",
+    "renamed",
+    "copied",
+    "untracked",
+    "conflicted",
+  ]),
+);
 export type GitFileStatus = z.infer<typeof gitFileStatusSchema>;
 
 /**
  * The stage axis: staged, unstaged, untracked, conflicted.
  * Per Q5 lock: four values, not {staged, unstaged}.
  */
-export const gitStageSchema = z.enum([
-  "staged",
-  "unstaged",
-  "untracked",
-  "conflicted",
-]);
+export const gitStageSchema = lazySchema(() =>
+  z.enum(["staged", "unstaged", "untracked", "conflicted"]),
+);
 export type GitStage = z.infer<typeof gitStageSchema>;
 
 /**
@@ -55,18 +55,20 @@ export type GitStage = z.infer<typeof gitStageSchema>;
  * silently break old peers on the live path. Submodule-aware (v1.1) additions
  * live on the DISTINCT `gitChangedFileV11Schema` below, never here.
  */
-export const gitChangedFileV10Schema = z.object({
-  path: z.string(),
-  previousPath: z.string().nullable(),
-  status: gitFileStatusSchema,
-  stage: gitStageSchema,
-  isBinary: z.boolean(),
-  insertions: z.number().int().nonnegative(),
-  deletions: z.number().int().nonnegative(),
-  sizeBytes: z.number().int().nonnegative(),
-  stagedOid: z.string().nullable(),
-  worktreeOid: z.string().nullable(),
-});
+export const gitChangedFileV10Schema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    previousPath: z.string().nullable(),
+    status: gitFileStatusSchema,
+    stage: gitStageSchema,
+    isBinary: z.boolean(),
+    insertions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+    sizeBytes: z.number().int().nonnegative(),
+    stagedOid: z.string().nullable(),
+    worktreeOid: z.string().nullable(),
+  }),
+);
 export type GitChangedFileV10 = z.infer<typeof gitChangedFileV10Schema>;
 
 /**
@@ -82,38 +84,40 @@ export type GitChangedFile = GitChangedFileV10;
  * Discriminated union of seven repo state kinds per Q17 lock.
  * Covers: clean, merge (in progress), rebase, cherry-pick, revert, am, bisect.
  */
-export const repoStateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("clean") }),
-  z.object({
-    kind: z.literal("merge"),
-    headRef: z.string(),
-    mergeHeads: z.array(z.string()),
-  }),
-  z.object({
-    kind: z.literal("rebase"),
-    ontoSha: z.string(),
-    originalBranch: z.string().nullable(),
-    step: z.number().int().nullable(),
-    totalSteps: z.number().int().nullable(),
-  }),
-  z.object({
-    kind: z.literal("cherry-pick"),
-    pickingSha: z.string(),
-  }),
-  z.object({
-    kind: z.literal("revert"),
-    revertingSha: z.string(),
-  }),
-  z.object({
-    kind: z.literal("am"),
-    patchName: z.string().nullable(),
-  }),
-  z.object({
-    kind: z.literal("bisect"),
-    goodSha: z.string().nullable(),
-    badSha: z.string().nullable(),
-  }),
-]);
+export const repoStateSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("clean") }),
+    z.object({
+      kind: z.literal("merge"),
+      headRef: z.string(),
+      mergeHeads: z.array(z.string()),
+    }),
+    z.object({
+      kind: z.literal("rebase"),
+      ontoSha: z.string(),
+      originalBranch: z.string().nullable(),
+      step: z.number().int().nullable(),
+      totalSteps: z.number().int().nullable(),
+    }),
+    z.object({
+      kind: z.literal("cherry-pick"),
+      pickingSha: z.string(),
+    }),
+    z.object({
+      kind: z.literal("revert"),
+      revertingSha: z.string(),
+    }),
+    z.object({
+      kind: z.literal("am"),
+      patchName: z.string().nullable(),
+    }),
+    z.object({
+      kind: z.literal("bisect"),
+      goodSha: z.string().nullable(),
+      badSha: z.string().nullable(),
+    }),
+  ]),
+);
 export type RepoState = z.infer<typeof repoStateSchema>;
 
 /**
@@ -122,7 +126,9 @@ export type RepoState = z.infer<typeof repoStateSchema>;
  * `degraded`: large repo, skipping OID computation, polling slower.
  * `refused`: repo exceeds hard cap (5M files), unsupported.
  */
-export const repoModeSchema = z.enum(["normal", "degraded", "refused"]);
+export const repoModeSchema = lazySchema(() =>
+  z.enum(["normal", "degraded", "refused"]),
+);
 export type RepoMode = z.infer<typeof repoModeSchema>;
 
 /**
@@ -130,11 +136,13 @@ export type RepoMode = z.infer<typeof repoModeSchema>;
  * `ignoreWhitespace` is accepted for compatibility but status/list output is
  * whitespace-independent; only diff-content RPCs apply whitespace filtering.
  */
-export const gitListChangedFilesRequestSchema = z.object({
-  hostId: z.string(),
-  runningDir: z.string(),
-  ignoreWhitespace: z.boolean(),
-});
+export const gitListChangedFilesRequestSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    runningDir: z.string(),
+    ignoreWhitespace: z.boolean(),
+  }),
+);
 export type GitListChangedFilesRequest = z.infer<
   typeof gitListChangedFilesRequestSchema
 >;
@@ -144,15 +152,17 @@ export type GitListChangedFilesRequest = z.infer<
  * Returns the current file list, fingerprint, and repo state.
  * `runningDir` is canonical absolute. File paths are repo-relative Git paths.
  */
-export const gitListChangedFilesResponseSchema = z.object({
-  runningDir: z.string(),
-  headSha: z.string(),
-  branch: z.string().nullable(),
-  files: z.array(gitChangedFileV10Schema),
-  fingerprint: z.string(),
-  repoMode: repoModeSchema,
-  repoState: repoStateSchema,
-});
+export const gitListChangedFilesResponseSchema = lazySchema(() =>
+  z.object({
+    runningDir: z.string(),
+    headSha: z.string(),
+    branch: z.string().nullable(),
+    files: z.array(gitChangedFileV10Schema),
+    fingerprint: z.string(),
+    repoMode: repoModeSchema,
+    repoState: repoStateSchema,
+  }),
+);
 export type GitListChangedFilesResponse = z.infer<
   typeof gitListChangedFilesResponseSchema
 >;
@@ -164,20 +174,22 @@ export type GitListChangedFilesResponse = z.infer<
  * rename-aware patches instead of a pure add for the new path.
  * `byteBudget: null` requests the full diff without server-side truncation.
  */
-export const gitGetFileDiffRequestSchema = z.object({
-  hostId: z.string(),
-  runningDir: z.string(),
-  filePath: z.string(),
-  previousPath: z.string().nullable(),
-  stage: gitStageSchema,
-  ignoreWhitespace: z.boolean(),
-  byteBudget: z
-    .number()
-    .int()
-    .positive()
-    .nullable()
-    .default(DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET),
-});
+export const gitGetFileDiffRequestSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    runningDir: z.string(),
+    filePath: z.string(),
+    previousPath: z.string().nullable(),
+    stage: gitStageSchema,
+    ignoreWhitespace: z.boolean(),
+    byteBudget: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .default(DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET),
+  }),
+);
 export type GitGetFileDiffRequest = z.infer<typeof gitGetFileDiffRequestSchema>;
 
 /**
@@ -187,16 +199,18 @@ export type GitGetFileDiffRequest = z.infer<typeof gitGetFileDiffRequestSchema>;
  * Response-side `(stagedOid, worktreeOid)` enable ADR-0004 OID mismatch
  * detection in the renderer.
  */
-export const gitGetFileDiffResponseSchema = z.object({
-  filePath: z.string(),
-  headSha: z.string(),
-  stagedOid: z.string().nullable(),
-  worktreeOid: z.string().nullable(),
-  patch: z.string(),
-  isTruncated: z.boolean(),
-  truncatedAfterBytes: z.number().int().nonnegative().nullable(),
-  isBinary: z.boolean(),
-});
+export const gitGetFileDiffResponseSchema = lazySchema(() =>
+  z.object({
+    filePath: z.string(),
+    headSha: z.string(),
+    stagedOid: z.string().nullable(),
+    worktreeOid: z.string().nullable(),
+    patch: z.string(),
+    isTruncated: z.boolean(),
+    truncatedAfterBytes: z.number().int().nonnegative().nullable(),
+    isBinary: z.boolean(),
+  }),
+);
 export type GitGetFileDiffResponse = z.infer<
   typeof gitGetFileDiffResponseSchema
 >;
@@ -207,26 +221,28 @@ export type GitGetFileDiffResponse = z.infer<
  * `files[].previousPath` follows `git.getFileDiff.previousPath`.
  * `files` is 1-10 items per spec; `byteBudget` defaults to 1MiB.
  */
-export const gitGetFileDiffsRequestSchema = z.object({
-  hostId: z.string(),
-  runningDir: z.string(),
-  files: z
-    .array(
-      z.object({
-        filePath: z.string(),
-        previousPath: z.string().nullable(),
-        stage: gitStageSchema,
-      }),
-    )
-    .min(1)
-    .max(10),
-  ignoreWhitespace: z.boolean(),
-  byteBudget: z
-    .number()
-    .int()
-    .positive()
-    .default(DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET),
-});
+export const gitGetFileDiffsRequestSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    runningDir: z.string(),
+    files: z
+      .array(
+        z.object({
+          filePath: z.string(),
+          previousPath: z.string().nullable(),
+          stage: gitStageSchema,
+        }),
+      )
+      .min(1)
+      .max(10),
+    ignoreWhitespace: z.boolean(),
+    byteBudget: z
+      .number()
+      .int()
+      .positive()
+      .default(DEFAULT_GIT_FILE_DIFFS_BYTE_BUDGET),
+  }),
+);
 export type GitGetFileDiffsRequest = z.infer<
   typeof gitGetFileDiffsRequestSchema
 >;
@@ -236,11 +252,13 @@ export type GitGetFileDiffsRequest = z.infer<
  * `runningDir` is canonical absolute. Diff `filePath` values are repo-relative
  * Git paths.
  */
-export const gitGetFileDiffsResponseSchema = z.object({
-  runningDir: z.string(),
-  headSha: z.string(),
-  diffs: z.array(gitGetFileDiffResponseSchema),
-});
+export const gitGetFileDiffsResponseSchema = lazySchema(() =>
+  z.object({
+    runningDir: z.string(),
+    headSha: z.string(),
+    diffs: z.array(gitGetFileDiffResponseSchema),
+  }),
+);
 export type GitGetFileDiffsResponse = z.infer<
   typeof gitGetFileDiffsResponseSchema
 >;
@@ -250,33 +268,39 @@ export type GitGetFileDiffsResponse = z.infer<
  * of the ordinary diff response so opening a read-only diff never transfers
  * both complete file versions.
  */
-export const gitGetFileContentsRequestSchema = z.object({
-  hostId: z.string(),
-  runningDir: z.string(),
-  filePath: z.string(),
-  previousPath: z.string().nullable(),
-  stage: gitStageSchema,
-});
+export const gitGetFileContentsRequestSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    runningDir: z.string(),
+    filePath: z.string(),
+    previousPath: z.string().nullable(),
+    stage: gitStageSchema,
+  }),
+);
 export type GitGetFileContentsRequest = z.infer<
   typeof gitGetFileContentsRequestSchema
 >;
 
-export const gitEditableFileContentsSchema = z.object({
-  name: z.string(),
-  contents: z.string(),
-});
+export const gitEditableFileContentsSchema = lazySchema(() =>
+  z.object({
+    name: z.string(),
+    contents: z.string(),
+  }),
+);
 export type GitEditableFileContents = z.infer<
   typeof gitEditableFileContentsSchema
 >;
 
-export const gitGetFileContentsResponseSchema = z.object({
-  runningDir: z.string(),
-  filePath: z.string(),
-  oldFile: gitEditableFileContentsSchema.nullable(),
-  newFile: gitEditableFileContentsSchema.nullable(),
-  worktreeFile: gitEditableFileContentsSchema.nullable(),
-  error: z.string().nullable(),
-});
+export const gitGetFileContentsResponseSchema = lazySchema(() =>
+  z.object({
+    runningDir: z.string(),
+    filePath: z.string(),
+    oldFile: gitEditableFileContentsSchema.nullable(),
+    newFile: gitEditableFileContentsSchema.nullable(),
+    worktreeFile: gitEditableFileContentsSchema.nullable(),
+    error: z.string().nullable(),
+  }),
+);
 export type GitGetFileContentsResponse = z.infer<
   typeof gitGetFileContentsResponseSchema
 >;
@@ -288,9 +312,8 @@ export type GitGetFileContentsResponse = z.infer<
  * `repoMode` is optional, populated only on capability check failure due
  * to repo size (refused mode).
  */
-export const gitGetCapabilitiesResponseSchema = z.discriminatedUnion(
-  "available",
-  [
+export const gitGetCapabilitiesResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("available", [
     z
       .object({
         available: z.literal(true),
@@ -307,7 +330,7 @@ export const gitGetCapabilitiesResponseSchema = z.discriminatedUnion(
         repoMode: repoModeSchema.optional(),
       })
       .strict(),
-  ],
+  ]),
 );
 export type GitGetCapabilitiesResponse = z.infer<
   typeof gitGetCapabilitiesResponseSchema
@@ -327,36 +350,38 @@ export type GitGetCapabilitiesResponse = z.infer<
  * `fingerprint`, no submodule fields). The nested-snapshot frame lives on the
  * DISTINCT `gitSubscribeStatusEventSchemaV11` below.
  */
-export const gitSubscribeStatusEventSchema = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("snapshot"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV10Schema),
-    fingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    pollStartedAtMs: z.number().int(),
-  }),
-  z.object({
-    type: z.literal("updated"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV10Schema),
-    fingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    changedPaths: z.array(z.string()),
-    pollStartedAtMs: z.number().int(),
-  }),
-  z.object({
-    type: z.literal("error"),
-    message: z.string(),
-    isFatal: z.boolean(),
-  }),
-]);
+export const gitSubscribeStatusEventSchema = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("snapshot"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV10Schema),
+      fingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      pollStartedAtMs: z.number().int(),
+    }),
+    z.object({
+      type: z.literal("updated"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV10Schema),
+      fingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      changedPaths: z.array(z.string()),
+      pollStartedAtMs: z.number().int(),
+    }),
+    z.object({
+      type: z.literal("error"),
+      message: z.string(),
+      isFatal: z.boolean(),
+    }),
+  ]),
+);
 export type GitSubscribeStatusEvent = z.infer<
   typeof gitSubscribeStatusEventSchema
 >;
@@ -371,11 +396,13 @@ export type GitSubscribeStatusEvent = z.infer<
  * `ignoreWhitespace` is accepted for compatibility but status events are
  * whitespace-independent.
  */
-export const gitSubscribeStatusRequestSchema = z.object({
-  hostId: z.string(),
-  runningDir: z.string(),
-  ignoreWhitespace: z.boolean(),
-});
+export const gitSubscribeStatusRequestSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string(),
+    runningDir: z.string(),
+    ignoreWhitespace: z.boolean(),
+  }),
+);
 export type GitSubscribeStatusRequest = z.infer<
   typeof gitSubscribeStatusRequestSchema
 >;
@@ -388,10 +415,11 @@ export type GitSubscribeStatusRequest = z.infer<
  * This deliberately lives on a distinct schema. The v1.0/v1.1 request shape is
  * released and must stay byte-for-byte stable for negotiated older peers.
  */
-export const gitSubscribeStatusRequestSchemaV12 =
+export const gitSubscribeStatusRequestSchemaV12 = lazySchema(() =>
   gitSubscribeStatusRequestSchema.extend({
     freshNonce: z.string().nullable(),
-  });
+  }),
+);
 export type GitSubscribeStatusRequestV12 = z.infer<
   typeof gitSubscribeStatusRequestSchemaV12
 >;
@@ -415,9 +443,9 @@ export type GitSubscribeStatusRequestV12 = z.infer<
  * nullable because a stage may be absent (e.g. an add/add conflict has no base).
  */
 const submoduleConflictShas = {
-  baseSha: z.string().nullable(),
-  oursSha: z.string().nullable(),
-  theirsSha: z.string().nullable(),
+  baseSha: lazySchema(() => z.string().nullable()),
+  oursSha: lazySchema(() => z.string().nullable()),
+  theirsSha: lazySchema(() => z.string().nullable()),
 };
 
 /**
@@ -448,18 +476,20 @@ const submoduleConflictShas = {
  * side must explicitly project it onto one of the variants below before the
  * payload reaches a peer negotiated at 1.1.
  */
-export const submodulePointerSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("normal"),
-    recordedPinSha: z.string().nullable(),
-    submoduleHeadSha: z.string().nullable(),
-    diverged: z.boolean(),
-    commitChanged: z.boolean(),
-    modifiedContent: z.boolean(),
-    untrackedContent: z.boolean(),
-  }),
-  z.object({ kind: z.literal("conflicted"), ...submoduleConflictShas }),
-]);
+export const submodulePointerSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("normal"),
+      recordedPinSha: z.string().nullable(),
+      submoduleHeadSha: z.string().nullable(),
+      diverged: z.boolean(),
+      commitChanged: z.boolean(),
+      modifiedContent: z.boolean(),
+      untrackedContent: z.boolean(),
+    }),
+    z.object({ kind: z.literal("conflicted"), ...submoduleConflictShas }),
+  ]),
+);
 export type SubmodulePointer = z.infer<typeof submodulePointerSchema>;
 
 /**
@@ -470,9 +500,11 @@ export type SubmodulePointer = z.infer<typeof submodulePointerSchema>;
  * v1.1 response AND `git.subscribeStatus@1.1` frames; minor-0 stream
  * connections receive resolver-projected frames on `gitChangedFileV10Schema`.
  */
-export const gitChangedFileV11Schema = gitChangedFileV10Schema.extend({
-  gitlink: submodulePointerSchema.nullable().default(null),
-});
+export const gitChangedFileV11Schema = lazySchema(() =>
+  gitChangedFileV10Schema.extend({
+    gitlink: submodulePointerSchema.nullable().default(null),
+  }),
+);
 export type GitChangedFileV11 = z.infer<typeof gitChangedFileV11Schema>;
 
 /**
@@ -501,13 +533,15 @@ export type GitChangedFileV11 = z.infer<typeof gitChangedFileV11Schema>;
  * the newer side must explicitly project it onto `ok`/`unavailable` before the
  * payload reaches a peer negotiated at 1.1.
  */
-export const submoduleAvailabilitySchema = z.discriminatedUnion("state", [
-  z.object({ state: z.literal("ok") }),
-  z.object({
-    state: z.literal("unavailable"),
-    reason: z.enum(["git-error"]).catch("git-error"),
-  }),
-]);
+export const submoduleAvailabilitySchema = lazySchema(() =>
+  z.discriminatedUnion("state", [
+    z.object({ state: z.literal("ok") }),
+    z.object({
+      state: z.literal("unavailable"),
+      reason: z.enum(["git-error"]).catch("git-error"),
+    }),
+  ]),
+);
 export type SubmoduleAvailability = z.infer<typeof submoduleAvailabilitySchema>;
 
 /**
@@ -527,15 +561,17 @@ export type SubmoduleAvailability = z.infer<typeof submoduleAvailabilitySchema>;
  * shape carried on the parent gitlink row. `availability` flags a submodule the
  * host could not inspect; it defaults to `ok` so the field is additive.
  */
-export const submoduleChangesetSchema = z.object({
-  repoRoot: z.string(),
-  parentPath: z.string(),
-  branch: z.string().nullable(),
-  repoState: repoStateSchema,
-  files: z.array(gitChangedFileV11Schema),
-  pointer: submodulePointerSchema,
-  availability: submoduleAvailabilitySchema.default({ state: "ok" }),
-});
+export const submoduleChangesetSchema = lazySchema(() =>
+  z.object({
+    repoRoot: z.string(),
+    parentPath: z.string(),
+    branch: z.string().nullable(),
+    repoState: repoStateSchema,
+    files: z.array(gitChangedFileV11Schema),
+    pointer: submodulePointerSchema,
+    availability: submoduleAvailabilitySchema.default({ state: "ok" }),
+  }),
+);
 export type SubmoduleChangeset = z.infer<typeof submoduleChangesetSchema>;
 
 /**
@@ -545,10 +581,11 @@ export type SubmoduleChangeset = z.infer<typeof submoduleChangesetSchema>;
  * asked. Defaults to false so lightweight callers (and v1.0 requests upgraded
  * to canonical) get the cheap parent-only snapshot with `submodules: []`.
  */
-export const gitListChangedFilesRequestSchemaV11 =
+export const gitListChangedFilesRequestSchemaV11 = lazySchema(() =>
   gitListChangedFilesRequestSchema.extend({
     includeSubmodules: z.boolean().default(false),
-  });
+  }),
+);
 export type GitListChangedFilesRequestV11 = z.infer<
   typeof gitListChangedFilesRequestSchemaV11
 >;
@@ -559,11 +596,12 @@ export type GitListChangedFilesRequestV11 = z.infer<
  * and `submodules` is the host-composed nested snapshot. `submodules` is
  * `.default([])` so a v1.0 host's response upgrades to a parent-only view.
  */
-export const gitListChangedFilesResponseSchemaV11 =
+export const gitListChangedFilesResponseSchemaV11 = lazySchema(() =>
   gitListChangedFilesResponseSchema.extend({
     files: z.array(gitChangedFileV11Schema),
     submodules: z.array(submoduleChangesetSchema).default([]),
-  });
+  }),
+);
 export type GitListChangedFilesResponseV11 = z.infer<
   typeof gitListChangedFilesResponseSchemaV11
 >;
@@ -595,10 +633,11 @@ export type GitListChangedFilesResponseV11 = z.infer<
  * `changedPaths`). Snapshot frames carry plain `submoduleChangesetSchema`
  * sections (full state, no delta).
  */
-export const submoduleChangesetUpdatedSchemaV11 =
+export const submoduleChangesetUpdatedSchemaV11 = lazySchema(() =>
   submoduleChangesetSchema.extend({
     changedPaths: z.array(z.string()),
-  });
+  }),
+);
 export type SubmoduleChangesetUpdatedV11 = z.infer<
   typeof submoduleChangesetUpdatedSchemaV11
 >;
@@ -620,40 +659,42 @@ export type SubmoduleChangesetUpdatedV11 = z.infer<
  * non-strict zod, which strips unknown fields. See the matching comment on the
  * `gitSubscribeStatusV11` contract.
  */
-export const gitSubscribeStatusEventSchemaV11 = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("snapshot"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV11Schema),
-    fingerprint: z.string(),
-    nestedFingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    submodules: z.array(submoduleChangesetSchema),
-    pollStartedAtMs: z.number().int(),
-  }),
-  z.object({
-    type: z.literal("updated"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV11Schema),
-    fingerprint: z.string(),
-    nestedFingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    changedPaths: z.array(z.string()),
-    submodules: z.array(submoduleChangesetUpdatedSchemaV11),
-    pollStartedAtMs: z.number().int(),
-  }),
-  z.object({
-    type: z.literal("error"),
-    message: z.string(),
-    isFatal: z.boolean(),
-  }),
-]);
+export const gitSubscribeStatusEventSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("snapshot"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV11Schema),
+      fingerprint: z.string(),
+      nestedFingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      submodules: z.array(submoduleChangesetSchema),
+      pollStartedAtMs: z.number().int(),
+    }),
+    z.object({
+      type: z.literal("updated"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV11Schema),
+      fingerprint: z.string(),
+      nestedFingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      changedPaths: z.array(z.string()),
+      submodules: z.array(submoduleChangesetUpdatedSchemaV11),
+      pollStartedAtMs: z.number().int(),
+    }),
+    z.object({
+      type: z.literal("error"),
+      message: z.string(),
+      isFatal: z.boolean(),
+    }),
+  ]),
+);
 export type GitSubscribeStatusEventV11 = z.infer<
   typeof gitSubscribeStatusEventSchemaV11
 >;
@@ -666,42 +707,44 @@ export type GitSubscribeStatusEventV11 = z.infer<
 // minors. Resolver projection explicitly strips this additive field for
 // negotiated minors 0 and 1.
 
-export const gitSubscribeStatusEventSchemaV12 = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("snapshot"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV11Schema),
-    fingerprint: z.string(),
-    nestedFingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    submodules: z.array(submoduleChangesetSchema),
-    pollStartedAtMs: z.number().int(),
-    freshNonce: z.string().nullable(),
-  }),
-  z.object({
-    type: z.literal("updated"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV11Schema),
-    fingerprint: z.string(),
-    nestedFingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    changedPaths: z.array(z.string()),
-    submodules: z.array(submoduleChangesetUpdatedSchemaV11),
-    pollStartedAtMs: z.number().int(),
-    freshNonce: z.string().nullable(),
-  }),
-  z.object({
-    type: z.literal("error"),
-    message: z.string(),
-    isFatal: z.boolean(),
-  }),
-]);
+export const gitSubscribeStatusEventSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("snapshot"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV11Schema),
+      fingerprint: z.string(),
+      nestedFingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      submodules: z.array(submoduleChangesetSchema),
+      pollStartedAtMs: z.number().int(),
+      freshNonce: z.string().nullable(),
+    }),
+    z.object({
+      type: z.literal("updated"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV11Schema),
+      fingerprint: z.string(),
+      nestedFingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      changedPaths: z.array(z.string()),
+      submodules: z.array(submoduleChangesetUpdatedSchemaV11),
+      pollStartedAtMs: z.number().int(),
+      freshNonce: z.string().nullable(),
+    }),
+    z.object({
+      type: z.literal("error"),
+      message: z.string(),
+      isFatal: z.boolean(),
+    }),
+  ]),
+);
 export type GitSubscribeStatusEventV12 = z.infer<
   typeof gitSubscribeStatusEventSchemaV12
 >;
@@ -744,15 +787,17 @@ export type GitSubscribeStatusEventV12 = z.infer<
  * why they are not schema. `null` whenever there is nothing to add, which
  * includes every non-degraded state.
  */
-export const gitWatcherStatusSchema = z.object({
-  state: z.enum([
-    "starting",
-    "watching",
-    "degraded-capacity",
-    "degraded-error",
-  ]),
-  detail: z.string().nullable(),
-});
+export const gitWatcherStatusSchema = lazySchema(() =>
+  z.object({
+    state: z.enum([
+      "starting",
+      "watching",
+      "degraded-capacity",
+      "degraded-error",
+    ]),
+    detail: z.string().nullable(),
+  }),
+);
 export type GitWatcherStatus = z.infer<typeof gitWatcherStatusSchema>;
 
 /**
@@ -771,44 +816,46 @@ export type GitWatcherStatus = z.infer<typeof gitWatcherStatusSchema>;
  * still produces one - without that, an idle repo would sit on a stale value
  * until its next real change, which is unbounded.
  */
-export const gitSubscribeStatusEventSchemaV13 = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("snapshot"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV11Schema),
-    fingerprint: z.string(),
-    nestedFingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    submodules: z.array(submoduleChangesetSchema),
-    pollStartedAtMs: z.number().int(),
-    freshNonce: z.string().nullable(),
-    watcher: gitWatcherStatusSchema,
-  }),
-  z.object({
-    type: z.literal("updated"),
-    runningDir: z.string(),
-    headSha: z.string(),
-    branch: z.string().nullable(),
-    files: z.array(gitChangedFileV11Schema),
-    fingerprint: z.string(),
-    nestedFingerprint: z.string(),
-    repoMode: repoModeSchema,
-    repoState: repoStateSchema,
-    changedPaths: z.array(z.string()),
-    submodules: z.array(submoduleChangesetUpdatedSchemaV11),
-    pollStartedAtMs: z.number().int(),
-    freshNonce: z.string().nullable(),
-    watcher: gitWatcherStatusSchema,
-  }),
-  z.object({
-    type: z.literal("error"),
-    message: z.string(),
-    isFatal: z.boolean(),
-  }),
-]);
+export const gitSubscribeStatusEventSchemaV13 = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("snapshot"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV11Schema),
+      fingerprint: z.string(),
+      nestedFingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      submodules: z.array(submoduleChangesetSchema),
+      pollStartedAtMs: z.number().int(),
+      freshNonce: z.string().nullable(),
+      watcher: gitWatcherStatusSchema,
+    }),
+    z.object({
+      type: z.literal("updated"),
+      runningDir: z.string(),
+      headSha: z.string(),
+      branch: z.string().nullable(),
+      files: z.array(gitChangedFileV11Schema),
+      fingerprint: z.string(),
+      nestedFingerprint: z.string(),
+      repoMode: repoModeSchema,
+      repoState: repoStateSchema,
+      changedPaths: z.array(z.string()),
+      submodules: z.array(submoduleChangesetUpdatedSchemaV11),
+      pollStartedAtMs: z.number().int(),
+      freshNonce: z.string().nullable(),
+      watcher: gitWatcherStatusSchema,
+    }),
+    z.object({
+      type: z.literal("error"),
+      message: z.string(),
+      isFatal: z.boolean(),
+    }),
+  ]),
+);
 export type GitSubscribeStatusEventV13 = z.infer<
   typeof gitSubscribeStatusEventSchemaV13
 >;

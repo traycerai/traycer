@@ -145,6 +145,15 @@ export function laneBodyTranslationOf(
           availability: "ready",
         },
       };
+    case "doc-body-sync":
+      return {
+        kind: "room-event",
+        event: {
+          kind: "room-body-sync",
+          artifactRoomId: event.docId,
+          state: event.state,
+        },
+      };
     case "doc-unavailable":
       if (event.code === "stale-authority-epoch") {
         return { kind: "replace-replica" };

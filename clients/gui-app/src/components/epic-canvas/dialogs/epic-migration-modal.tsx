@@ -111,7 +111,7 @@ export function EpicMigrationModal(props: EpicMigrationModalProps): ReactNode {
         <div
           data-slot="dialog-overlay"
           data-testid="epic-migration-overlay"
-          className="absolute inset-0 bg-black/40 duration-100 data-open:animate-in data-open:fade-in-0"
+          className="absolute inset-0 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"

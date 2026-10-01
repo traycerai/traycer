@@ -79,7 +79,7 @@ import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 
 const USAGE_PROBE_75: TokenUsage = {
@@ -150,6 +150,12 @@ const ACCESS: ChatLowerAccessState = {
   canAct: true,
   readOnlyNotice: null,
 };
+// Unused by this suite - it covers composer re-render identity, not Stop.
+const STOP_CONFIRMATION_TARGET_STUB = () => ({
+  turnId: null,
+  revision: 0,
+  connectionEpoch: 0,
+});
 const TURN_IDLE: ChatLowerTurnState = {
   activeTurnStatus: null,
   stopDisabled: true,
@@ -159,6 +165,7 @@ const TURN_IDLE: ChatLowerTurnState = {
   autoPermissionModeProtocolSupported: null,
   getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
+  getStopConfirmationTarget: STOP_CONFIRMATION_TARGET_STUB,
 };
 const TURN_RUNNING: ChatLowerTurnState = {
   activeTurnStatus: "running",
@@ -169,6 +176,7 @@ const TURN_RUNNING: ChatLowerTurnState = {
   autoPermissionModeProtocolSupported: null,
   getDraftBlobBridgeSupported: () => false,
   getActiveTurnForSteer: () => null,
+  getStopConfirmationTarget: STOP_CONFIRMATION_TARGET_STUB,
 };
 const INTERVIEW: ChatLowerInterviewState = {
   pending: null,
@@ -186,6 +194,8 @@ const APPROVALS: ChatLowerApprovalsState = {
   onFileEditDecision: () => undefined,
   onApprovalDecision: () => undefined,
   highlightedApprovalId: null,
+  ruleDraftWorkspace: { remote: null, branch: null },
+  onOpenSettings: () => undefined,
 };
 const QUEUE: ChatLowerQueueState = {
   editingItem: null,
@@ -223,6 +233,7 @@ const COMPOSER: ChatLowerComposerState = {
     </>
   ),
   workspaceAvailability: WORKSPACE_COMPOSER_READY,
+  suggestedPrompt: undefined,
 };
 
 // ── Per-token (dock-only) inputs: fresh identity each token, like the real app ─
@@ -280,7 +291,9 @@ describe("composer isolation from per-token dock churn", () => {
   beforeEach(() => {
     composerRenderCount = 0;
     useUsageProbeStore.setState({ usage: USAGE_PROBE_75 });
-    useSettingsStore.setState({ pinContextUsageBreakdown: false });
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: false });
   });
 
   afterEach(cleanup);
@@ -365,7 +378,9 @@ describe("composer isolation from per-token dock churn", () => {
   });
 
   it("does not re-render the composer when the context usage leaf updates", async () => {
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: true });
     render(<ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />);
     expect(composerRenderCount).toBe(1);
     expect(queryCompactContextTrigger()).toBeNull();

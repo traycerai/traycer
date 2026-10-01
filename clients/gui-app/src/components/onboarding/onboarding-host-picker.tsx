@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from "react";
+import { Monitor } from "lucide-react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
 import {
@@ -7,22 +8,11 @@ import {
 } from "@/components/onboarding/onboarding-host-picker-model";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { cn } from "@/lib/utils";
+import "./onboarding-host-picker.css";
 
-/**
- * The title bar of the tour's mini-app window, with the host picker where the
- * static title used to be - centred, the way the login-import window centres
- * its title, so the three live acts read as one window with a different
- * title. No words before the name: the card or wizard beneath already says
- * what the act is about, and "Agent guide for ⟨host⟩" over a card headed
- * "Agent selection guide" said it twice.
- *
- * A single-host account gets plain text: there is nothing to choose, and a
- * chevron that opens a list of one is a control that lies about what it does.
- */
+/** A device picker for live panels; a single device needs only its name. */
 export function OnboardingHostPickerBar(props: {
   readonly picker: OnboardingHostPicker;
-  /** The window dots. Off where this bar heads a card inside a window. */
-  readonly trafficLights: boolean;
   readonly className: string;
 }): ReactNode {
   const { scope } = props.picker;
@@ -47,36 +37,30 @@ export function OnboardingHostPickerBar(props: {
     <header
       data-testid="onboarding-host-picker-bar"
       className={cn(
-        "relative flex h-10 shrink-0 items-center justify-center bg-canvas px-3 text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']",
+        "onboarding-host-control flex min-w-0 shrink-0 items-center text-foreground",
         props.className,
       )}
     >
-      {props.trafficLights ? (
-        <div
-          aria-hidden="true"
-          className="absolute left-3 flex items-center gap-1.5"
-        >
-          <span className="size-2 rounded-full bg-[#ff5f57]" />
-          <span className="size-2 rounded-full bg-[#ffbd2e]" />
-          <span className="size-2 rounded-full bg-[#28c840]" />
-        </div>
-      ) : null}
+      <Monitor
+        aria-hidden="true"
+        className="pointer-events-none absolute left-2.5 size-3.5 shrink-0 text-muted-foreground"
+      />
       {scope.hosts.length === 1 && scope.hosts[0]?.hostId === scope.hostId ? (
         <span
           data-testid="onboarding-host-name"
-          className="min-w-0 truncate px-3 py-2 text-ui-xs text-muted-foreground"
+          className="min-w-0 break-words py-1.5 pl-8 pr-2.5 text-[0.8125rem]"
         >
           {scope.hostLabel}
         </span>
       ) : (
-        <div className="flex min-w-0 max-w-[70%]">
+        <div className="flex min-w-0 flex-1">
           <HostSwitcher
             hosts={scope.hosts}
             selected={scope.host}
             activeHostId={scope.activeHostId}
             onSelect={props.picker.onSelectHost}
             // The tour WRITES to the picked host - it imports sessions onto
-            // it and stores the guide on it - so a host with no route is
+            // it and configures its providers - so a host with no route is
             // refused here rather than offered as a click that lands on a
             // dead stage. A refusal rather than the `pin` intent, which
             // would gate the same rows: `pin` also drops the ACTIVE tag and
@@ -90,7 +74,7 @@ export function OnboardingHostPickerBar(props: {
             // surface to appear on until the tour is over. Managing hosts is
             // Settings' job; the tour only picks among the ones that exist.
             action={null}
-            surface="panel-header"
+            surface="inline"
             intent="view"
             disabled={false}
             isLoading={scope.isLoading}
@@ -104,18 +88,11 @@ export function OnboardingHostPickerBar(props: {
   );
 }
 
-/**
- * Why a stage is showing nothing rather than showing another machine's work
- * under the name in the bar above it.
- *
- * No "back to the active host" button on purpose: returning to following is a
- * host switch like any other, and the one path that saves the guide draft
- * before switching goes through the picker directly above this notice.
- */
+/** Keep another device's data hidden while the selected one connects. */
 export function OnboardingHostUnavailableNotice(props: {
   readonly picker: OnboardingHostPicker;
   /**
-   * A refusal only the STAGE can state - the session-import act's "this host
+   * A refusal only the STAGE can state - the session-import step's "this host
    * is too old to scan" - or `null` for the scope's own three states. A caller
    * sets it only once the host is otherwise usable, since a host with no
    * client has negotiated nothing to refuse with.
@@ -141,8 +118,8 @@ export function OnboardingHostUnavailableNotice(props: {
           </p>
           <p className="text-ui-sm text-muted-foreground">
             {props.refusal === null
-              ? "Pick another machine above to carry on."
-              : "Update it, or pick another machine above."}
+              ? "Reconnect this device to continue."
+              : `Update Traycer on ${scope.hostLabel}.`}
           </p>
         </div>
       )}

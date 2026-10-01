@@ -17,8 +17,8 @@ import "@/index.css";
  * release, Chromium emits no `click` at all, so `onClick` never runs. Testing
  * Library dispatches `click` directly, so the broken build passes every jsdom
  * test ever written for this button. The only instrument that can see it is a
- * real browser driven through `Input.dispatchMouseEvent` - see
- * `scripts/boot-escape-hatch-press-browser.mjs`.
+ * real browser's input pipeline - see
+ * `browser-tests/boot-escape-hatch-press.spec.ts`.
  *
  * The shape reproduced here is the measured one, from a CDP capture of a real
  * user press on the production card:
@@ -119,6 +119,7 @@ export function Fixture() {
       key={`runtime-${String(generation)}`}
       onConfigureShell={() => undefined}
       onOpenSettings={onOpenSettings}
+      onMenuOpenSettings={() => undefined}
     />
   ) : (
     <GatePhase

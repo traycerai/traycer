@@ -357,6 +357,7 @@ function createBaseRunnerHost(): IRunnerHost {
       onClick: () => ({ dispose: () => undefined }),
     },
     tray: {
+      showsEpics: true,
       setEpics: () => Promise.resolve(),
       setIndicator: () => Promise.resolve(),
       onEpicSelected: () => ({ dispose: () => undefined }),
@@ -396,6 +397,7 @@ function createBaseRunnerHost(): IRunnerHost {
     migration: null,
     hostManagement: null,
     hostTray: null,
+    hostLifecycle: null,
     zoom: null,
     pushPermission: null,
     systemBack: null,
@@ -484,7 +486,7 @@ function createDirtyEpicHandle(
     commentThreads: EMPTY_COMMENT_THREADS_SLICE,
     // Keyed by ARTIFACT id since the cutover - a room hosts many bodies, and
     // `artifact.subscribe` has no rooms at all.
-    artifactRooms: { stateByArtifactId: {} },
+    artifactRooms: { stateByArtifactId: {}, bodySyncingByArtifactId: {} },
     artifactRoomDirtyByArtifactRoomId: {},
     rootDirty: false,
     hasDirtySnapshotForOpenCycle: true,

@@ -61,6 +61,7 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
+import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
@@ -279,7 +280,11 @@ describe("a chat row's tree-node subscription", () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
         <EpicSessionContext.Provider value={session.handle}>
-          <ChatTreePanelBody epicId={EPIC_ID} tabId={TAB_ID} />
+          <ChatTreePanelBody
+            epicId={EPIC_ID}
+            tabId={TAB_ID}
+            messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+          />
         </EpicSessionContext.Provider>
       </QueryClientProvider>,
     );

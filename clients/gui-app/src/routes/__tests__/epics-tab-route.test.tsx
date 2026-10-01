@@ -29,6 +29,14 @@ vi.mock("@/components/layout/app-shell", () => ({
   ),
 }));
 
+// This suite verifies route adaptation and onboarding. The root route's real
+// organization projection is host-backed, while this harness deliberately
+// supplies no HostRuntimeProvider; keep that unrelated shell layer transparent.
+vi.mock("@/hooks/organization/organization-provider", () => ({
+  OrganizationProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
+
 // The standalone sign-in / onboarding surfaces render the Windows menu strip
 // in a title-bar band, and the strip routes its popup through a TanStack
 // mutation. This routing test wraps RootComponent in only a router queryClient
@@ -66,6 +74,13 @@ vi.mock("@/components/layout/dialogs/system-tab-modal-host", () => ({
 
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
+}));
+
+// Always mounted by RootComponent, and it reads the QueryClient to report a
+// lifecycle mode change. This harness supplies only a router queryClient (no
+// QueryClientProvider), so stub it like the other shell bridges above.
+vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
+  HostLifecycleAnalyticsBridge: () => null,
 }));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
@@ -218,10 +233,12 @@ describe("/epics/$epicId/$tabId route", () => {
         `/epics/${EPIC_ID}/${TAB_ID}`,
       );
     });
-    expect(router.state.location.search).toEqual({
-      focusedAt: 123,
-      focusArtifactId: "artifact-1",
-      focusThreadId: "thread-1",
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual({
+        focusedAt: 123,
+        focusArtifactId: "artifact-1",
+        focusThreadId: "thread-1",
+      });
     });
   });
 

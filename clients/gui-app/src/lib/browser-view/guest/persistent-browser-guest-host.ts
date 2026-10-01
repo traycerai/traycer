@@ -48,6 +48,10 @@ export interface BrowserGuestTilePlacement {
   } | null;
 }
 
+export function browserGuestCssSheetAnchorName(viewTabId: string): string {
+  return `--traycer-sheet-${viewTabId}`;
+}
+
 export function browserGuestCssAnchorName(registrationId: string): string {
   return `--traycer-bv-${registrationId}`;
 }
@@ -88,6 +92,7 @@ export interface BrowserGuestViewportPresentation extends BrowserViewGuestViewpo
 
 interface GuestRecord {
   readonly registrationId: string;
+  readonly sheetClipper: HTMLElement;
   readonly clipper: HTMLElement;
   readonly wrapper: HTMLElement;
   readonly webview: HTMLElement;
@@ -264,9 +269,12 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
   wrapper.appendChild(webview);
   const clipper = createGuestClipper(request.registrationId);
   clipper.appendChild(wrapper);
-  running.hostElement.appendChild(clipper);
+  const sheetClipper = document.createElement("div");
+  sheetClipper.appendChild(clipper);
+  running.hostElement.appendChild(sheetClipper);
   const guest: GuestRecord = {
     registrationId: request.registrationId,
+    sheetClipper,
     clipper,
     wrapper,
     webview,
@@ -354,7 +362,7 @@ function removeGuest(registrationId: string): void {
   finishViewportLayout(guest, false);
   notifyViewportListeners();
   relinquishGuestFocus(guest);
-  guest.clipper.remove();
+  guest.sheetClipper.remove();
 }
 
 function handleGuestPointerDown(guest: GuestRecord, event: Event): void {
@@ -429,6 +437,23 @@ function applyGuestPresentation(
   placement: BrowserGuestTilePlacement | null,
 ): void {
   const nextPresented = placement !== null && placement.presented;
+  // The sheet and stage clips intersect. Both follow CSS anchors, including
+  // moves without a resize, while the fixed guest keeps its containing block.
+  if (nextPresented) {
+    const anchorName = browserGuestCssSheetAnchorName(placement.viewTabId);
+    guest.sheetClipper.dataset.browserGuestSheet = placement.viewTabId;
+    guest.sheetClipper.style.cssText = [
+      "position: fixed",
+      `position-anchor: ${anchorName}`,
+      `top: anchor(${anchorName} top, 0px)`,
+      `left: anchor(${anchorName} left, 0px)`,
+      `width: anchor-size(${anchorName} width, 100%)`,
+      `height: anchor-size(${anchorName} height, 100%)`,
+      "pointer-events: none",
+    ].join(";");
+  } else {
+    delete guest.sheetClipper.dataset.browserGuestSheet;
+  }
   // Retained guests remain paintable for capture even outside the stage.
   guest.clipper.style.clipPath = nextPresented ? "inset(0)" : "none";
   if (

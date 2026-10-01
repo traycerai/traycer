@@ -51,7 +51,9 @@ make dev-desktop
 make dev-desktop VERSION=1.2.3
 ```
 
-Details: [`docs/DEVELOPMENT.md`](../../docs/DEVELOPMENT.md).
+`compile`, `build` and `test` above are whole-project runs. The commit hook
+compiles, and CI builds and tests; run one yourself only to diagnose its
+failure (see the root `AGENTS.md`).
 
 **Commits:** don't manually run `compile` / `build` / `lint` / `format` before
 committing — repo-root `pre-commit` already runs the affected checks (see root
@@ -102,15 +104,23 @@ failures.
   dispositions: browser-scoped (main names a tile command back to the focused
   tile - Cmd+W/T/L) and app-forwarded (main replays the keystroke into the host
   renderer - Cmd+K, ⇧⌘W, ⌘/⇧⌘ brackets). Adding a chord means adding a row
-  there; do not add a focus check to a menu item instead. Electron ROLE items
-  (reload, cut/copy/paste, select-all) already act on the focused web contents
-  and are correct as they are - leave them alone.
+  there; do not add a focus check to a menu item instead. Reload and Force
+  Reload are native menu commands with explicit targeting through the owning
+  window's `focusedFrame` (`menu/reload-focused-page.ts`). Do not restore their
+  Electron roles: `getFocusedWebContents()` can select an unrelated retained
+  webview because guest `isFocused()` reflects the root view's focus. Editing
+  roles (cut/copy/paste, select-all) remain native.
+  Help → Toggle Developer Tools is app-scoped and resolves a registered
+  Traycer window in `MenuController`; never use the guest-focused Electron
+  `toggleDevTools` role. Browser tiles have a separate, explicitly targeted
+  DevTools action. Both app menu visibility and dispatch retain the
+  non-production DevTools gate.
 - **Local browser tiles are renderer-owned `<webview>` guests.** Main admits
   the guest through the one-use attach grant, seeds cookies, and runs
   capabilities on the registered `webContents`. Placement is CSS
   `position-anchor` on a persistent DOM host. DOM overlays stack with ordinary
   z-index; there is no native-view occlusion coordinator, bounds IPC, or
-  snapshot stand-in. See `docs/adr/0001-browser-tile-rendering.md`.
+  snapshot stand-in.
 - **Login import** (`electron-main/browser-view/storage/login-import/`)
   reads other browsers' cookie jars on this machine into the durable
   `persist:traycer-browser` partition. Every reader is a pure function over

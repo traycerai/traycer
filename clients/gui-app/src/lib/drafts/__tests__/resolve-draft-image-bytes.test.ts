@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { getImageBytes, putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -14,12 +15,29 @@ import {
 
 const HOST = "host-resolver";
 
+// A rooted hash is one a live draft actually names: only those may spend the
+// resident budget. See the sibling recovery-module test file for the same
+// pattern; the host leg's write-back (`storeRecoveredHostBlob`) consults this
+// exact registry.
+const liveLandingImageRoots = new Set<string>();
+registerExtraImageRootSource({
+  hashes: () => [...liveLandingImageRoots],
+});
+
+function rootLandingImages(...hashes: string[]): void {
+  for (const hash of hashes) liveLandingImageRoots.add(hash);
+}
+
 function pngBytes(): Uint8Array<ArrayBuffer> {
   return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 }
 
 function otherBytes(): Uint8Array<ArrayBuffer> {
   return new Uint8Array([1, 2, 3, 4]);
+}
+
+function unrootedBytes(): Uint8Array<ArrayBuffer> {
+  return new Uint8Array([9, 8, 7, 6, 5]);
 }
 
 /**
@@ -37,7 +55,7 @@ async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
 type FakeRequest = HostRequester<HostRpcRegistry>["request"];
 
 function targetWithClient(request: FakeRequest): DraftImageByteTarget {
-  return { hostId: HOST, client: { request } };
+  return { hostId: HOST, client: { request, requestWithOptions: request } };
 }
 
 beforeEach(() => {
@@ -54,6 +72,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetDraftBlobTransportForTests();
+  liveLandingImageRoots.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -77,9 +96,10 @@ describe("resolveDraftImageBytes", () => {
     expect(calls).toBe(0);
   });
 
-  it("falls back to drafts.readBlob on a local miss, and writes back locally", async () => {
+  it("falls back to drafts.readBlob on a local miss, and writes back locally for a rooted hash", async () => {
     const bytes = otherBytes();
     const hash = await sha256HexOf(bytes);
+    rootLandingImages(hash);
     let calls = 0;
     const request: FakeRequest = ((method, _params) => {
       calls += 1;
@@ -101,6 +121,34 @@ describe("resolveDraftImageBytes", () => {
     expect(second).toEqual(bytes);
     expect(calls).toBe(1);
     expect(await getImageBytes(hash)).toEqual(bytes);
+  });
+
+  it("falls back to drafts.readBlob on a local miss, but leaves an unrooted hash non-resident", async () => {
+    // Not a live root: the write-back reserves against the resident budget
+    // only for a hash a live draft actually names, so this response must come
+    // back to the caller without ever becoming a local write.
+    const bytes = unrootedBytes();
+    const hash = await sha256HexOf(bytes);
+    let calls = 0;
+    const request: FakeRequest = ((method, _params) => {
+      calls += 1;
+      expect(method).toBe("drafts.readBlob");
+      return Promise.resolve({
+        ok: true as const,
+        bytesBase64: btoa(String.fromCharCode(...bytes)),
+      });
+    }) as FakeRequest;
+    const target = targetWithClient(request);
+
+    const resolved = await resolveDraftImageBytes(hash, target);
+    expect(resolved).toEqual(bytes);
+    expect(calls).toBe(1);
+    expect(await getImageBytes(hash)).toBeUndefined();
+
+    // Not written back, so a second resolution has to ask the host again.
+    const second = await resolveDraftImageBytes(hash, target);
+    expect(second).toEqual(bytes);
+    expect(calls).toBe(2);
   });
 
   it("answers null when both legs miss", async () => {
@@ -128,7 +176,7 @@ describe("resolveDraftImageBytes", () => {
     }) as FakeRequest;
     const clientOnly: DraftImageByteTarget = {
       hostId: null,
-      client: { request },
+      client: { request, requestWithOptions: request },
     };
     const hostOnly: DraftImageByteTarget = { hostId: HOST, client: null };
 

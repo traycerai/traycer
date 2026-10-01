@@ -5,6 +5,8 @@
 import {
   useCallback,
   useEffect,
+  useId,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -13,6 +15,8 @@ import {
 import {
   tierGroupsNameDestinationFor,
   type FallbackPolicy,
+  type TierConflict,
+  type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
 import {
   HostRpcError,
@@ -35,7 +39,11 @@ import {
   useHostScope,
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
-import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
+import {
+  HostRuntimeContext,
+  useHostBinding,
+  useOptionalHostClient,
+} from "@/lib/host/runtime";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -49,21 +57,46 @@ import { useFallbackPolicyResetMutation } from "@/hooks/providers/use-fallback-p
 import { useFallbackPolicyRestoreTierGroupsMutation } from "@/hooks/providers/use-fallback-policy-restore-tier-groups-mutation";
 import { useFallbackPolicyPreviewTierGroupsQuery } from "@/hooks/providers/use-fallback-policy-preview-tier-groups-query";
 import { useFallbackSettingsProfileLabels } from "@/components/settings/panels/fallback/fallback-profile-labels";
-import { useFallbackCatalogOptions } from "@/components/settings/panels/fallback/fallback-catalog-options";
+import {
+  useFallbackCatalogOptions,
+  type FallbackCatalogOptions,
+} from "@/components/settings/panels/fallback/fallback-catalog-options";
+import { useFallbackPolicyPatternLines } from "@/hooks/providers/use-fallback-policy-pattern-lines";
+import { legacyFamilyTiersNameDestinationFor } from "@/components/settings/panels/fallback/fallback-legacy-family-routing";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
+  globalLastRunSettingsAreHostOwned,
   selectGlobalLastRunSettings,
   useComposerRunSettingsStore,
 } from "@/stores/composer/composer-run-settings-store";
-import { fallbackProviderModelLabel } from "@/components/chat/fallback/fallback-identity";
+import {
+  fallbackProviderModelLabel,
+  useFallbackModelLabels,
+} from "@/components/chat/fallback/fallback-identity";
 import { noSwitchDestinationText } from "@/components/chat/fallback/fallback-copy";
 import { providerSupportsManagedProfiles } from "@/components/settings/panels/provider-settings-tabs";
 import { FallbackLadderEditor } from "@/components/settings/panels/fallback/fallback-ladder-editor";
 import { FallbackBehaviorGroup } from "@/components/settings/panels/fallback/fallback-behavior-group";
 import { FallbackOverridesMatrix } from "@/components/settings/panels/fallback/fallback-overrides-matrix";
+import type { HostNotificationStoppedReason } from "@traycer/protocol/host/notifications/payloads";
+import {
+  clearPolicyOverride,
+  clearPolicyOverrides,
+  restorePolicyOverrides,
+} from "@/components/settings/panels/fallback/fallback-overrides-model";
+import {
+  overrideChangesSaved,
+  overrideResetUndoState,
+  type OverrideReset,
+} from "@/components/settings/panels/fallback/fallback-overrides-reset";
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
+import { FallbackConflictAnnouncementsProvider } from "@/components/settings/panels/fallback/fallback-conflict-announcements-provider";
+import {
+  FallbackTestModelButton,
+  FallbackTestModelPanel,
+} from "@/components/settings/panels/fallback/fallback-test-model-panel";
 import {
   applyGroupsInverse,
   keyedGroupsMatch,
@@ -75,6 +108,7 @@ import {
 import {
   createFallbackPolicyDraftState,
   createFallbackSaveRequestId,
+  fallbackTierConflicts,
   fallbackDisplayOrderEnabling,
   fallbackLadderFrom,
   fallbackPolicyDraftReducer,
@@ -124,7 +158,7 @@ export function FallbackSettingsPanel(): ReactNode {
   const body = <FallbackSettingsPanelBody scope={scope} />;
   return (
     <SettingsPanelShell
-      title="Fallback"
+      title="Model routing"
       description={fallbackPanelDescription(scope)}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
@@ -160,9 +194,50 @@ export function FallbackSettingsPanel(): ReactNode {
  * "No host": the gate below is already saying there is nothing to configure.
  */
 function fallbackPanelDescription(scope: HostScope): string {
-  const base = "When a turn fails on a provider error, try these in order.";
+  // "blocks" is the page's own word for this - the section description in
+  // `fallback-settings.definitions.ts` already says "when a provider blocks
+  // it" - and the panel heading saying "fails on a provider error" instead
+  // made one event sound like two things. The engine's word is the failure
+  // REASON; the user's word is what the provider did to their turn.
+  const base = "When a provider blocks a turn, try these in order.";
   if (scope.host === null) return base;
   return `${base} Applies to your chat agents on ${scope.hostLabel}.`;
+}
+
+/** A host that does not read patterns has no pattern conflicts to draw. */
+const NO_TIER_CONFLICTS: readonly TierConflict[] = [];
+
+/**
+ * The tier list the editor's preview may ask about, or `null` for "ask
+ * nothing" - the panel's gate, documented where it is called.
+ *
+ * On a 1.0 line: the draft only while it is exactly what the host holds, which
+ * is today's gate. On 1.1 the same comparison is made with the draft's BLANK
+ * rows set aside, and the whole draft is sent, blank rows included. The host
+ * answers a blank row as a skipped row in its place, so every `candidateIndex`
+ * still pairs to the row on screen - and a freshly added row no longer blanks
+ * every other row's verdict while it waits for its pattern. A blank row is
+ * never saved (the draft's own validation still refuses it), which is why it
+ * is set aside before comparing with the persisted list rather than required
+ * to be in it.
+ */
+function previewableTierGroups(input: {
+  readonly keyed: readonly KeyedGroup[];
+  readonly persisted: readonly TierGroup[];
+  readonly draft: readonly TierGroup[];
+  readonly blankRowsTravel: boolean;
+}): readonly TierGroup[] | null {
+  const { keyed, persisted, draft, blankRowsTravel } = input;
+  if (!blankRowsTravel) {
+    return keyedGroupsMatch(keyed, persisted) ? draft : null;
+  }
+  const withoutBlankRows = keyed.map((group) => ({
+    ...group,
+    candidates: group.candidates.filter(
+      (candidate) => candidate.value.modelFamily.trim() !== "",
+    ),
+  }));
+  return keyedGroupsMatch(withoutBlankRows, persisted) ? draft : null;
 }
 
 function FallbackSettingsPanelBody(props: {
@@ -238,7 +313,7 @@ function FallbackSettingsPanelBody(props: {
   // by any failed fetch on this query, including the read-back the editor runs
   // itself after a save whose reply was lost - and that is the one moment the
   // editor must survive. Replacing it wholesale there takes the draft, the
-  // uncertainty notice and the "Check again" button off screen together,
+  // uncertainty notice and the "Check saved settings" button off screen together,
   // leaving no way to find out what the host stored and no record that a save
   // was ever in doubt. So the load-error view is for a load that produced
   // nothing to edit; once there is a policy, a later fetch failure is the
@@ -250,13 +325,13 @@ function FallbackSettingsPanelBody(props: {
           role="alert"
           className="rounded-lg border border-border/60 bg-card/40 px-5 py-6 text-ui-sm text-muted-foreground"
         >
-          Couldn&apos;t load fallback settings for this host.
+          Couldn&apos;t load model routing for this host.
           <ReportIssueAction
             context={createReportIssueContext({
-              title: "Couldn't load fallback settings",
+              title: "Couldn't load model routing",
               message: null,
               code: null,
-              source: "Fallback settings",
+              source: "Model routing",
             })}
             presentation="link"
             className="ml-1"
@@ -267,32 +342,38 @@ function FallbackSettingsPanelBody(props: {
     return <FallbackPanelSkeleton />;
   }
 
+  // Remount on a host switch so one machine's draft can never be saved to
+  // another's policy, and on a reset so the editor re-seeds from the
+  // refetched policy. This is also what seeds the reducer, which is why there
+  // is no hydration effect anywhere in this file.
+  const editorKey = `${scope.hostId ?? ""}:${resetGeneration}`;
   return (
-    <FallbackPolicyEditor
-      // Remount on a host switch so one machine's draft can never be saved to
-      // another's policy, and on a reset so the editor re-seeds from the
-      // refetched policy. This is also what seeds the reducer, which is why
-      // there is no hydration effect anywhere in this file.
-      key={`${scope.hostId ?? ""}:${resetGeneration}`}
-      initialPolicy={query.data.policy}
-      // The polled count once it has answered, else the one this read carried.
-      inFlightCount={
-        inFlightCountQuery.data?.inFlightCount ?? query.data.inFlightCount
-      }
-      storedPolicyUnreadable={query.data.storedPolicyUnreadable}
-      hostLabel={scope.host === null ? null : scope.hostLabel}
-      refetchPolicy={refetchPolicy}
-      returnFocusToReset={returnFocusToReset}
-      onFocusReturned={clearResetFocusIntent}
-      onPolicyReplaced={() => {
-        // The remount below unmounts the Reset button the confirmation dialog
-        // captured as its opener, so the shared dialog's own restoration has
-        // nowhere to go. Focus follows the control across the replacement
-        // instead of falling to the document body.
-        setReturnFocusToReset(true);
-        setResetGeneration((generation) => generation + 1);
-      }}
-    />
+    // Which tier conflicts have been announced, for exactly the editor's
+    // lifetime - the same key - so leaving the Equivalent models tab and
+    // coming back does not read every conflict out again (review R2).
+    <FallbackConflictAnnouncementsProvider key={editorKey}>
+      <FallbackPolicyEditor
+        key={editorKey}
+        initialPolicy={query.data.policy}
+        // The polled count once it has answered, else the one this read carried.
+        inFlightCount={
+          inFlightCountQuery.data?.inFlightCount ?? query.data.inFlightCount
+        }
+        storedPolicyUnreadable={query.data.storedPolicyUnreadable}
+        hostLabel={scope.host === null ? null : scope.hostLabel}
+        refetchPolicy={refetchPolicy}
+        returnFocusToReset={returnFocusToReset}
+        onFocusReturned={clearResetFocusIntent}
+        onPolicyReplaced={() => {
+          // The remount below unmounts the Reset button the confirmation dialog
+          // captured as its opener, so the shared dialog's own restoration has
+          // nowhere to go. Focus follows the control across the replacement
+          // instead of falling to the document body.
+          setReturnFocusToReset(true);
+          setResetGeneration((generation) => generation + 1);
+        }}
+      />
+    </FallbackConflictAnnouncementsProvider>
   );
 }
 
@@ -336,10 +417,18 @@ function FallbackPolicyEditor(props: {
    * A read-back of the host's policy is running.
    *
    * Covers BOTH read-backs - the unknown-outcome one and the post-reset one -
-   * because they share the one "Check again" affordance, and a flag named for
+   * because they share the one "Check saved settings" affordance, and a flag named for
    * only one of them would have to be read as covering the other.
    */
   const [readBackInFlight, setReadBackInFlight] = useState(false);
+  const [overrideSavePolicy, setOverrideSavePolicy] =
+    useState<FallbackPolicy | null>(null);
+  const [overrideReset, setOverrideReset] = useState<OverrideReset | null>(
+    null,
+  );
+  const [overrideOrigins, setOverrideOrigins] = useState<
+    ReadonlyMap<number, HostNotificationStoppedReason>
+  >(() => new Map());
   /**
    * The latest reducer state, for the handlers that run LONG after the render
    * that created them.
@@ -362,10 +451,12 @@ function FallbackPolicyEditor(props: {
    * The gate is one condition doing three jobs, which is why it is this one and
    * not a validity check:
    *
-   *  - **it is askable.** The request schema requires a non-empty `modelFamily`,
-   *    so the empty row "Add a model" creates cannot be encoded at all. An
-   *    uncommitted list holding one would be a malformed request produced by
-   *    ordinary editing.
+   *  - **it is askable.** The 1.0 request schema requires a non-empty
+   *    `modelFamily`, so the empty row "Add model" creates cannot be encoded at
+   *    all there. An uncommitted list holding one would be a malformed request
+   *    produced by ordinary editing. A 1.1 line takes blank rows and answers
+   *    each as a skipped row, so there the gate looks past them - see
+   *    `previewableTierGroups`.
    *  - **the answer is attributable.** Verdicts pair to rows by `candidateIndex`,
    *    which is sound only while the list they were computed for is the list
    *    being rendered. Previewing a list the editor is not showing would put one
@@ -385,12 +476,81 @@ function FallbackPolicyEditor(props: {
   // Same shape, same reason: one model-catalog read per distinct harness in the
   // draft serves every row's Model and Effort cells.
   const catalog = useFallbackCatalogOptions(state.draft.tierGroups);
+  // What this host does with a tier row, off the NEGOTIATED lines (never off a
+  // response): the pattern combobox and the conflict rendering need `get`@1.1,
+  // and a blank draft row may ride the preview only on `previewTierGroups`@1.1.
+  const patternLines = useFallbackPolicyPatternLines();
+  /**
+   * Every model two tiers of the DRAFT both claim, over the catalogs the editor
+   * already holds - rendered on the rows involved and never a gate: nothing
+   * here stops a save, the master switch or the timings (spec decision 2). A
+   * host that does not read patterns gets none, because "one model, one tier"
+   * is a pattern-era rule and a 1.0 host routes by its own word matcher.
+   */
+  const conflicts = useMemo<readonly TierConflict[]>(
+    () =>
+      patternLines.patterns
+        ? fallbackTierConflicts(
+            state.draft.tierGroups,
+            catalog.catalogsByHarness,
+          )
+        : NO_TIER_CONFLICTS,
+    [patternLines.patterns, state.draft.tierGroups, catalog.catalogsByHarness],
+  );
 
   const previewQuery = useFallbackPolicyPreviewTierGroupsQuery(
-    keyedGroupsMatch(state.keyedTierGroups, state.persisted.tierGroups)
-      ? state.draft.tierGroups
-      : null,
+    previewableTierGroups({
+      keyed: state.keyedTierGroups,
+      persisted: state.persisted.tierGroups,
+      draft: state.draft.tierGroups,
+      blankRowsTravel: patternLines.blankPreviewRows,
+    }),
   );
+
+  /**
+   * The Test a model panel (spec §Wireframe 4): whether it is open, and the
+   * header button the keyboard goes back to when Escape or ✕ closes it - the
+   * panel's own controls are about to unmount, so the browser would otherwise
+   * drop focus on the body.
+   *
+   * Offered only where the host reads rows as patterns (`get`@1.1). Its tier
+   * verdict is the protocol's pattern router, and on a 1.0 host - whose rows
+   * are family WORDS on its own word matcher - that router would confidently
+   * name the wrong tier; the editor draws no conflicts there for the same
+   * reason. The older-host fallback inside the panel is for a `previewTierGroups`
+   * line below 1.1, which cannot run the walk for a blocked tuple.
+   */
+  const [testOpen, setTestOpen] = useState(false);
+  const testButtonRef = useRef<HTMLButtonElement | null>(null);
+  const testPanelId = useId();
+  const closeTest = useCallback((): void => {
+    setTestOpen(false);
+    testButtonRef.current?.focus();
+  }, []);
+  const renderTestPanel = (
+    goToRow: (tierIndex: number, candidateIndex: number) => void,
+  ): ReactNode =>
+    // The gate again, not only on the button: a host whose lines are
+    // renegotiated while the panel is open must not keep a pattern verdict up.
+    patternLines.patterns ? (
+      <FallbackTestModelPanel
+        id={testPanelId}
+        // The DRAFT, as the editor shows it - blank rows, an unsaved default
+        // tier and all - never the stored policy. Routing and the header read
+        // it live; the dry run is asked about the tiers as last committed.
+        policy={state.draft}
+        committedTiers={state.committedTiers}
+        catalog={catalog}
+        conflicts={conflicts}
+        labelFor={profileLabelFor}
+        // The negotiated `previewTierGroups` line, which is the same bit that
+        // lets a blank row travel (execution-run deviation 1).
+        simulates={patternLines.blankPreviewRows}
+        unsimulatedPreview={previewQuery.data?.candidates ?? null}
+        onClose={closeTest}
+        onGoToRow={goToRow}
+      />
+    ) : null;
 
   /**
    * A keystroke in a TEXT field: the draft moves and the inline validation
@@ -414,7 +574,11 @@ function FallbackPolicyEditor(props: {
       field: FallbackPolicyField,
       keyedTierGroups: readonly KeyedGroup[] | null,
     ): void => {
-      dispatch({ type: "edited", policy: next, field, keyedTierGroups });
+      setOverrideReset(null);
+      setOverrideSavePolicy(null);
+      // `typed`, not `edited`: the draft moves but nothing has committed, so
+      // the Test panel's dry run stays on the tiers as last committed.
+      dispatch({ type: "typed", policy: next, field, keyedTierGroups });
     },
     [],
   );
@@ -425,7 +589,7 @@ function FallbackPolicyEditor(props: {
    * Driven from the failure itself rather than from an effect: the request that
    * went unanswered is right here, and an effect watching for the state to
    * contain one would be a second trigger for the same episode. A read-back
-   * that fails leaves the notice standing with its own "Check again", which is
+   * that fails leaves the notice standing with its own "Check saved settings", which is
    * the honest state - we still do not know.
    */
   const reconcileUnknownSave = useCallback(
@@ -461,9 +625,11 @@ function FallbackPolicyEditor(props: {
       // defaulted: the groups editor is the only thing that can say which row
       // an insert, a removal or a move produced.
       keyedTierGroups: readonly KeyedGroup[] | null,
-    ): void => {
+    ): number | null => {
+      setOverrideReset(null);
+      setOverrideSavePolicy(null);
       dispatch({ type: "edited", policy: next, field, keyedTierGroups });
-      if (validateFallbackPolicyDraft(next).kind === "invalid") return;
+      if (validateFallbackPolicyDraft(next).kind === "invalid") return null;
       // Minted here rather than read back off the reducer: the `edited` above
       // has not been applied yet, so the revision this request carries is not
       // observable from this side. The id is the handle the reducer pairs with
@@ -473,6 +639,9 @@ function FallbackPolicyEditor(props: {
       void setMutation
         .mutateAsync({ policy: next })
         .then((response) => {
+          setOverrideOrigins(
+            (origins) => new Map([...origins].filter(([id]) => id > requestId)),
+          );
           dispatch({
             type: "save-succeeded",
             requestId,
@@ -488,10 +657,17 @@ function FallbackPolicyEditor(props: {
             field,
             outcome: failure.outcome,
           });
+          if (failure.outcome !== "unknown") {
+            setOverrideOrigins((origins) => {
+              const nextOrigins = new Map(origins);
+              nextOrigins.delete(requestId);
+              return nextOrigins;
+            });
+          }
           if (failure.outcome === "unknown") {
             void reconcileUnknownSave(requestId).catch(() => {
               // Deliberately nothing. A read-back that fails leaves the notice
-              // standing with its own "Check again" - we still do not know -
+              // standing with its own "Check saved settings" - we still do not know -
               // which is reached by NOT dispatching `reconciled`, and that has
               // already happened by the time this runs.
               //
@@ -506,9 +682,55 @@ function FallbackPolicyEditor(props: {
             });
           }
         });
+      return requestId;
     },
     [setMutation, reconcileUnknownSave],
   );
+
+  const changeOverrides = useCallback(
+    (
+      next: FallbackPolicy,
+      reason: HostNotificationStoppedReason | null,
+    ): number | null => {
+      const requestId = commit(next, "overrides", null);
+      setOverrideSavePolicy(requestId === null ? null : next);
+      if (requestId !== null && reason !== null) {
+        setOverrideOrigins((origins) =>
+          new Map(origins).set(requestId, reason),
+        );
+      }
+      return requestId;
+    },
+    [commit],
+  );
+
+  const resetOverrides = useCallback(
+    (reason: HostNotificationStoppedReason | null): void => {
+      const previous = stateRef.current.draft;
+      const next =
+        reason === null
+          ? clearPolicyOverrides(previous)
+          : clearPolicyOverride(previous, reason);
+      const requestId = changeOverrides(next, reason);
+      if (requestId !== null)
+        setOverrideReset({ requestId, reason, previous, next });
+    },
+    [changeOverrides],
+  );
+
+  const undoOverrides = useCallback((): void => {
+    const current = stateRef.current;
+    const undo = overrideResetUndoState(current, overrideReset);
+    if (overrideReset === null || undo === null || undo.disabled) return;
+    changeOverrides(
+      restorePolicyOverrides(
+        current.draft,
+        overrideReset.previous,
+        overrideReset.reason,
+      ),
+      overrideReset.reason,
+    );
+  }, [changeOverrides, overrideReset]);
 
   /**
    * "Undo" on a removal toast: the inverse of that one removal, applied to the
@@ -550,7 +772,7 @@ function FallbackPolicyEditor(props: {
   /**
    * The read that turns a CONFIRMED reset into a rendered one.
    *
-   * Shared by the reset itself and by the banner's "Try again", because they
+   * Shared by the reset itself and by the banner's "Reload settings", because they
    * are the same act: the host has already replaced the row, and the only thing
    * missing is a read of what it now holds. On success the panel remounts the
    * editor onto that read (`onPolicyReplaced`); on failure the editor stays
@@ -597,6 +819,8 @@ function FallbackPolicyEditor(props: {
    * subsequent read would produce and the editor can take it directly.
    */
   const restoreDefaultGroups = useCallback((): void => {
+    setOverrideReset(null);
+    setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // A restore sends nothing from the screen - the host picks the default
     // groups - so it must not make the displayed values count as dispatched
@@ -633,7 +857,7 @@ function FallbackPolicyEditor(props: {
           void reconcileUnknownSave(requestId).catch(() => {
             // Nothing, for the reason spelled out at the `commit()` call site:
             // a read-back that fails leaves the notice standing with its own
-            // "Check again", and an unowned rejection would replace that
+            // "Check saved settings", and an unowned rejection would replace that
             // honest state with a renderer error nobody handles.
           });
         }
@@ -659,6 +883,8 @@ function FallbackPolicyEditor(props: {
    * cleared.
    */
   const resetAll = useCallback((): void => {
+    setOverrideReset(null);
+    setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // As the restore above: a reset sends DEFAULTS, not the values on screen,
     // so "what's on screen was sent" must stay unsupported by it (D339), and a
@@ -703,7 +929,7 @@ function FallbackPolicyEditor(props: {
           void reconcileUnknownSave(requestId).catch(() => {
             // Nothing, for the reason spelled out at the `commit()` call site:
             // a read-back that fails leaves the notice standing with its own
-            // "Check again", and an unowned rejection would replace that
+            // "Check saved settings", and an unowned rejection would replace that
             // honest state with a renderer error nobody handles.
           });
         }
@@ -714,17 +940,17 @@ function FallbackPolicyEditor(props: {
   const checkSaveOutcomeAgain = useCallback((): void => {
     const unknown = stateRef.current.unknownSave;
     if (unknown === null) return;
-    // The "Check again" button, so this is the call a person reaches
+    // The "Check saved settings" button, so this is the call a person reaches
     // DELIBERATELY - and the one whose failure the standing notice already
     // describes. Same guard and same reason as the `commit()` call site.
     void reconcileUnknownSave(unknown.requestId).catch(() => {
-      // Nothing: the notice and its "Check again" stay exactly as they are,
+      // Nothing: the notice and its "Check saved settings" stay exactly as they are,
       // which is the honest state when the read-back could not answer either.
     });
   }, [reconcileUnknownSave]);
 
   /**
-   * The banner's "Try again" - the second half of the reset, retried on its
+   * The banner's "Reload settings" - the second half of the reset, retried on its
    * own.
    *
    * Distinct from `checkSaveOutcomeAgain`, which asks the host what it stored
@@ -835,8 +1061,8 @@ function FallbackPolicyEditor(props: {
           tier groups never saw it. */}
         {state.draft.enabled ? null : (
           <p className="px-5 pb-4 text-ui-sm text-muted-foreground">
-            Off - these settings take effect when you turn on automatic
-            fallback.
+            Off - these settings take effect when you turn on Route
+            automatically.
           </p>
         )}
       </SettingsGroup>
@@ -965,7 +1191,13 @@ function FallbackPolicyEditor(props: {
                 // screen, so an edit on the Equivalent models tab clears it the
                 // moment the user adds a destination for their own model. A host
                 // call could only answer for what is saved.
-                tierStepHint={<TierStepHint policy={state.draft} />}
+                tierStepHint={
+                  <TierStepHint
+                    policy={state.draft}
+                    catalog={catalog}
+                    patternsSupported={patternLines.patterns}
+                  />
+                }
               />
               {saveStatusFor("ladder", "mt-3")}
             </div>
@@ -998,6 +1230,8 @@ function FallbackPolicyEditor(props: {
             preview={previewQuery.data?.candidates ?? null}
             labelFor={profileLabelFor}
             catalog={catalog}
+            patternsSupported={patternLines.patterns}
+            conflicts={conflicts}
             previewPending={previewQuery.isFetching}
             // The distinction `preview` cannot make (FC9). `preview` is
             // data-or-null and a null renders no line, so a FAILED check was
@@ -1026,6 +1260,18 @@ function FallbackPolicyEditor(props: {
             // answers about the same rows racing each other into the draft.
             restorePending={restoreMutation.isPending || saveInFlight}
             status={saveStatusFor("tierGroups", "mt-3")}
+            headerAction={
+              <FallbackTestModelButton
+                offered={patternLines.patterns}
+                open={testOpen}
+                panelId={testPanelId}
+                buttonRef={testButtonRef}
+                onToggle={() => {
+                  setTestOpen((open) => !open);
+                }}
+              />
+            }
+            testPanel={testOpen ? renderTestPanel : null}
           />
         </TabsContent>
         <TabsContent value="overrides" className="pt-5">
@@ -1035,14 +1281,55 @@ function FallbackPolicyEditor(props: {
             // does not contain can still be turned ON for one failure, and it has
             // to land where the user put it rather than at the end.
             rungOrder={state.displayOrder}
-            onChange={(next) => {
-              commit(next, "overrides", null);
-            }}
-            status={saveStatusFor("overrides", "mt-3")}
+            onChange={changeOverrides}
+            onReset={resetOverrides}
+            onUndo={undoOverrides}
+            undo={overrideResetUndoState(state, overrideReset)}
+            attentionReason={
+              state.unknownSave === null
+                ? null
+                : (overrideOrigins.get(state.unknownSave.requestId) ?? null)
+            }
+            previewUnconfirmed={
+              state.unknownSave !== null ||
+              state.unrefreshedReset !== null ||
+              state.unverifiedHostRow !== null
+            }
+            status={
+              <OverrideSaveConfirmation
+                state={state}
+                submittedPolicy={overrideSavePolicy}
+                reset={overrideReset}
+                fallback={saveStatusFor("overrides", "text-ui-xs")}
+              />
+            }
           />
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/** Confirm the submitted choices, not a different policy restored by read-back. */
+function OverrideSaveConfirmation(props: {
+  readonly state: FallbackPolicyDraftState;
+  readonly submittedPolicy: FallbackPolicy | null;
+  readonly reset: OverrideReset | null;
+  readonly fallback: ReactNode;
+}): ReactNode {
+  const { state, submittedPolicy, reset, fallback } = props;
+  if (
+    submittedPolicy === null ||
+    reset !== null ||
+    !fallbackPolicyValuesEqual(state.draft, submittedPolicy) ||
+    !overrideChangesSaved(state)
+  ) {
+    return fallback;
+  }
+  return (
+    <p role="status" className="text-ui-xs text-muted-foreground">
+      Changes saved
+    </p>
   );
 }
 
@@ -1063,6 +1350,7 @@ function FallbackPolicyEditor(props: {
  * elsewhere: it is the fact the toggle DECISION turns on, and a keyboard user
  * landing on the switch had no way to hear it.
  */
+
 function MasterFallbackToggle(props: {
   readonly checked: boolean;
   readonly onCheckedChange: (next: boolean) => void;
@@ -1072,7 +1360,7 @@ function MasterFallbackToggle(props: {
     <Switch
       checked={props.checked}
       onCheckedChange={props.onCheckedChange}
-      aria-label="Automatic fallback"
+      aria-label="Route automatically"
       aria-describedby={describedById}
     />
   );
@@ -1116,9 +1404,16 @@ function masterToggleDescription(inFlightCount: number): string {
  * where the whole editor is, next to the other notice that says the same kind
  * of thing.
  *
- * "Try again", not "Check again": there is nothing to check. The question the
- * unknown-outcome notice asks - what did the host store? - is already answered
- * here, and only the read is outstanding.
+ * "Reload settings", not "Check saved settings": there is nothing to check. The
+ * question the unknown-outcome notice asks - what did the host store? - is
+ * already answered here, and only the read is outstanding.
+ *
+ * It was "Try again" until a user-lens review pointed out that the nearest
+ * antecedent for "again" is the RESET - so on a banner that appears precisely
+ * because a reset just succeeded, the button read as an offer to re-run the
+ * destructive thing. The distinction this comment draws, between checking an
+ * unknown outcome and reloading a known one, was right; only the label was
+ * wrong, and it was wrong in the most expensive direction available here.
  */
 /**
  * What the controls are currently showing, which decides how much the staleness
@@ -1152,9 +1447,9 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
     // that is exactly the request that failed - so the old "not what this host
     // is using now" asserted an inequality the client cannot know.
     case "pre-reset-values":
-      return "The settings below are the ones you had before the reset - they may not be what this host is using now; the settings on this host haven't been re-read since the reset.";
+      return "This page still shows the settings from before the reset. Select Reload settings to show what's now saved on this host.";
     case "own-edit":
-      return "You have changed things since, so what's below is your own edit. Either way, what the reset left on this host has not been read yet.";
+      return "These are your edits. Select Reload settings to show what's now saved on this host.";
     // D327: the notice under the control already says where these values came
     // from ("your last saved settings are back on screen", or that they still
     // predate the reset). The banner's subject is the RESET, so here it says
@@ -1204,7 +1499,7 @@ function UnrefreshedResetNotice(props: {
           onClick={props.onTryAgain}
           data-testid="fallback-reset-retry"
         >
-          Try again
+          Reload settings
           {props.readBackInFlight ? (
             <AgentSpinningDots
               className="ml-1"
@@ -1226,12 +1521,16 @@ function UnreadablePolicyNotice(): ReactNode {
       data-testid="fallback-policy-unreadable"
     >
       <div className="font-medium text-ui-sm text-warning-foreground">
-        Your saved fallback settings couldn&apos;t be read
+        Your saved routing couldn&apos;t be read
       </div>
       <p className="mt-1 max-w-[68ch] text-ui-sm text-muted-foreground">
-        These are the defaults, not your settings. Automatic fallback is not
-        running for you until you save - changing anything here replaces the
-        unreadable copy.
+        {/* "until you save" implied a Save button. There isn't one - this
+            page commits on change (ten `commit()` call sites, no Save
+            control) - so the sentence promised the reader a deliberate moment
+            of consent that does not exist, in front of the one action that
+            destroys their unreadable configuration. */}
+        We&apos;re showing default settings, with automatic routing off. Changes
+        save automatically and replace the settings we couldn&apos;t read.
       </p>
     </div>
   );
@@ -1255,7 +1554,7 @@ function UnreadablePolicyNotice(): ReactNode {
  * rather than the condition written out twice.
  *
  * Deliberately NOT `unknownSave`: that field renders no line of its own, it
- * only adds "Check again" INSIDE the host-error block, so a dot keyed on it
+ * only adds "Check saved settings" INSIDE the host-error block, so a dot keyed on it
  * would point at a tab with nothing on it. Deliberately not `saveInFlight`
  * either - a spinner is not something to act on.
  */
@@ -1272,7 +1571,7 @@ function FallbackSaveStatus(props: {
   /** Alignment for the group this is rendered inside; groups differ. */
   readonly className: string;
   readonly saveInFlight: boolean;
-  /** A read-back is running, so "Check again" is already answered. */
+  /** A read-back is running, so "Check saved settings" is already answered. */
   readonly readBackInFlight: boolean;
   readonly onCheckAgain: () => void;
 }): ReactNode {
@@ -1317,7 +1616,7 @@ function FallbackSaveStatus(props: {
   // reachable now that a failure preserves a validation error it did not judge:
   // the failure also claims `activeField`, so its own notice landed in a group
   // whose status line was already spoken for, and an early return took the
-  // notice AND the only "Check again" off the page while its ticket stayed
+  // notice AND the only "Check saved settings" off the page while its ticket stayed
   // open. That is the R9 defect from the other side - an affordance dropped
   // because a rendered claim was keyed on something other than the fact it
   // describes - and it predates the preservation on the `refused-kept` arm,
@@ -1363,7 +1662,7 @@ function FallbackSaveStatus(props: {
                 onClick={onCheckAgain}
                 data-testid="fallback-check-again"
               >
-                Check again
+                Check saved settings
                 {readBackInFlight ? (
                   <AgentSpinningDots
                     className="ml-1"
@@ -1401,7 +1700,7 @@ function FallbackSaveStatus(props: {
 /**
  * Why the "another profile" step may be inert, said on the step itself.
  *
- * Only three providers have managed profiles at all, and the step can only
+ * Only four providers have managed profiles at all, and the step can only
  * move a chat to an account that exists. A user with none has a step they can
  * turn on that will never once fire, which is the worst of the three states -
  * so it says so, and links to where the account is added.
@@ -1477,36 +1776,131 @@ function ProfileStepHint(): ReactNode {
  * while the engine would have found them a destination. It moved into the
  * protocol FOR this call site: the question is asked about a draft that has
  * never been saved, which no RPC can answer.
+ *
+ * That holds only on a host that routes by patterns. A host whose `get` line
+ * is 1.0 reads the same row as a family WORD, and the pattern predicate then
+ * contradicts it: the old seed's `gpt` row routes `gpt-6-sol` to a tier with a
+ * Claude model on that host, while the exact matcher finds no tier and this
+ * sentence would say nothing is set up. So below 1.1 the question goes to the
+ * released rule (`legacyFamilyTiersNameDestinationFor`), the same line the
+ * editor and the Test panel already gate on.
+ *
+ * ## Which catalog the predicate is given
+ *
+ * The editor's cached one for the last-run harness (`catalogFor`), or `null`
+ * while it has not loaded - never a read of its own. It is enough by
+ * construction: the catalog matters only to a row ON the last-run harness (a
+ * pattern is matched against that harness's labels, and only a same-harness row
+ * can be "the blocked model and nothing else"), and a draft with such a row is
+ * exactly a draft whose harness set - the editor's read - includes it. With no
+ * such row the answer comes from the default tier and the catalog changes
+ * nothing. `null` is the protocol's ID-only answer, the safe direction it
+ * documents. The released rule takes no catalog at all: a 1.0 host matched
+ * the model's ID and never its name.
+ *
+ * ## Why the model label is its own read
+ *
+ * The sentence names a MODEL, and it must name it the way every other surface
+ * does - "Claude Fable", never `claude-fable-5-1[1m]`. The editor above already
+ * holds a catalog read (`useFallbackCatalogOptions`), and resolving from that
+ * one was the first shape here, but its harness set is *the harnesses the DRAFT
+ * names* and this component's subject is the LAST-RUN tuple. Those coincide
+ * often and not always - a user whose groups are all Codex and whose last chat
+ * ran Claude would have been shown the raw slug - and "your groups happen not
+ * to name your last-run harness" is not a condition a reader can see or act on.
+ *
+ * So this takes `useFallbackModelLabels` for its own subject, the same hook the
+ * chat surfaces use. It costs nothing where the two sets overlap: the hook
+ * rides the shared `agent.gui.listModels` cache slot with the same cache-only
+ * contract (`staleTime`/`gcTime: Infinity`) the editor's read fills, so a
+ * harness already in the draft is a cache hit and only a harness outside it is
+ * a request - one, gated on availability, for the one sentence that needs it.
  */
 function TierStepHint({
   policy,
+  catalog,
+  patternsSupported,
 }: {
   readonly policy: FallbackPolicy;
+  readonly catalog: FallbackCatalogOptions;
+  /**
+   * The negotiated `providers.fallbackPolicy.get` line reaches 1.1, so the
+   * host reads a row as a PATTERN. Below it the row is a family word, and the
+   * question is asked of the released rule instead - see
+   * `legacyFamilyTiersNameDestinationFor` for why the pattern answer is wrong
+   * there, not merely different.
+   */
+  readonly patternsSupported: boolean;
 }): ReactNode {
   const hostId = useAddressableHostId();
+  // `useOptionalHostClient()`, not `useHostClient()`, and the reason is this
+  // panel's own shape rather than a test convenience. The body renders
+  // UNWRAPPED whenever the scope has not resolved a client (see
+  // `FallbackSettingsPanel`'s governed narrow), and `useHostClient()` throws
+  // with no runtime above it - so one sentence's catalogue read would decide
+  // whether the whole editor may mount. `null` degrades this line to the slug,
+  // which is the resolver's documented answer when nothing can say otherwise.
+  // Under the re-provided binding this IS the scoped client, the same host
+  // `useAddressableHostId()` names above, so the tuple and the catalog it is
+  // resolved against come from one machine.
+  const client = useOptionalHostClient();
   const lastRun = useComposerRunSettingsStore((state) =>
     selectGlobalLastRunSettings(state, hostId),
   );
+  // The selector falls back to the UNATTRIBUTED legacy record when this host has
+  // no entry of its own, and that tuple may have been written on a different
+  // machine. Resolving it against THIS host's `listModels` would answer with
+  // another host's model under the same slug - a wrong name, which is worse
+  // than the slug, because nothing about it looks unresolved. So a legacy tuple
+  // subscribes to nothing and keeps its raw model, the resolver's documented
+  // answer when nothing can say otherwise.
+  const hostOwnsLastRun = useComposerRunSettingsStore((state) =>
+    globalLastRunSettingsAreHostOwned(state, hostId),
+  );
+  const resolvable = lastRun !== null && hostOwnsLastRun;
+  // Hooks run before the state gate, as they must - and the read is enabled
+  // only while there IS a subject, so a fresh install or a host nothing has run
+  // on issues no query at all.
+  const modelLabelFor = useFallbackModelLabels(
+    client,
+    [resolvable ? lastRun.harnessId : null],
+    resolvable,
+  );
   if (lastRun === null) return null;
-  if (
-    tierGroupsNameDestinationFor({
-      groups: policy.tierGroups,
-      defaultTierGroupId: policy.defaultTierGroupId,
-      harnessId: lastRun.harnessId,
-      model: lastRun.model,
-    })
-  ) {
-    return null;
-  }
+  const namesDestination = patternsSupported
+    ? tierGroupsNameDestinationFor({
+        groups: policy.tierGroups,
+        defaultTierGroupId: policy.defaultTierGroupId,
+        harnessId: lastRun.harnessId,
+        model: lastRun.model,
+        catalog: catalog.catalogFor(lastRun.harnessId),
+      })
+    : legacyFamilyTiersNameDestinationFor({
+        groups: policy.tierGroups,
+        defaultTierGroupId: policy.defaultTierGroupId,
+        harnessId: lastRun.harnessId,
+        model: lastRun.model,
+      });
+  if (namesDestination) return null;
   return (
     <p className="text-ui-sm text-muted-foreground">
-      {/* The SAME sentence the error card prints when it withholds "Switch…",
-          from the same function, so a user who meets both is told one thing
-          once. What is added here is only the subject clause - Settings is
-          speaking about a model the user is not currently looking at, and a
-          bare claim would read as a claim about all of them. */}
-      {noSwitchDestinationText(fallbackProviderModelLabel(lastRun))} — the model
-      you last started a chat with on this host.
+      {/* The sentence from the shared copy module, plus a subject clause -
+          Settings is speaking about a model the user is not currently looking
+          at, and a bare claim would read as a claim about all of them. */}
+      {noSwitchDestinationText(
+        fallbackProviderModelLabel(lastRun, modelLabelFor),
+      )}{" "}
+      {/* Two arms, because the subject has two provenances and only one of
+          them is about this machine. `hostOwnsLastRun` false means the
+          selector fell back to the unattributed legacy record, which may have
+          been written anywhere - the same fact that stops us resolving its
+          label above. Claiming "on this host" for it would be a statement we
+          have already reasoned is not known to be true, in a sentence whose
+          entire job is to say WHICH model this is. Dropping the clause stays
+          accurate either way: the user did start a chat with it. */}
+      {hostOwnsLastRun
+        ? "— the model you last started a chat with on this host."
+        : "— the model you last started a chat with."}
     </p>
   );
 }
@@ -1796,7 +2190,7 @@ function saveNoticeStatus(
  * hedges rather than asserting an inequality no client can know.
  */
 const PRE_RESET_ROLLBACK_ACCOUNT =
-  "What's back on screen is still the settings from before the reset, which may no longer be what this host is using.";
+  "These are still the settings from before the reset, which may no longer be what this host is using.";
 
 /**
  * The tail every host-claiming sentence ends in while an operation's outcome is
@@ -1809,7 +2203,7 @@ const PRE_RESET_ROLLBACK_ACCOUNT =
  * not drift - that lives here.
  */
 const OUTSTANDING_OPERATION_TAIL =
-  "is also outstanding whose result is unknown, so what the host has now hasn't been re-read.";
+  "is also outstanding and unconfirmed, so these may not be the settings now in use.";
 
 /**
  * The account of the host's row when an operation that did NOT carry the
@@ -1862,7 +2256,7 @@ function saveNoticeConsequence(
       if (status.authorityInvalidated !== null) {
         return `Your last saved settings are back on screen; ${outstandingOperationAccount(status.authorityInvalidated)}`;
       }
-      return "Your last saved settings are back on screen and still in force.";
+      return "Your last saved settings are back, and still in force.";
     case "refused-kept":
       // The refusal is about a request that judged some other draft, so the
       // question is what is on screen NOW - and "haven't been saved yet" is a
@@ -1881,11 +2275,11 @@ function saveNoticeConsequence(
         if (status.authorityInvalidated !== null) {
           return `This change wasn't saved. What's on screen is a different change the host has confirmed; ${outstandingOperationAccount(status.authorityInvalidated)}`;
         }
-        return "This change wasn't saved. What's on screen is a different change the host has confirmed, and it is in force.";
+        return "That save failed. The settings now shown on this page are saved and in use.";
       }
-      return "The changes you have made since are still on screen and haven't been saved yet.";
+      return "The changes you made since are still here, and still unsaved.";
     case "refused-unverified":
-      return "This change wasn't saved. Another change is still unconfirmed, so what's stored may not be what you last saw.";
+      return "One save failed, and another hasn't been confirmed. We can't yet tell which settings are saved.";
     case "unknown":
       // "What's on screen" is only the unanswered draft while the user has not
       // moved on. Where they have, the second sentence must describe what the
@@ -1893,7 +2287,7 @@ function saveNoticeConsequence(
       // that is in flight, or one the host has already stored, is a dispatch
       // claim read off a revision comparison.
       if (status.displayDispatch === "unanswered") {
-        return "What's on screen is your change, not a confirmed setting - it may or may not have been saved.";
+        return "These are your edits. We haven't confirmed whether they were saved.";
       }
       // The REQUEST account and the DISPLAY account are two different sentences
       // about two different things, and a no-draft request is where they come
@@ -1929,9 +2323,9 @@ function unknownRequestAccount(carries: FallbackSaveCarries): string {
     case "draft":
       return "That change may or may not have been saved.";
     case "reset":
-      return "We don't know whether the reset went through - it hasn't been re-read.";
+      return "We couldn't confirm whether model routing was reset.";
     case "restore":
-      return "We don't know whether restoring the default groups went through - it hasn't been re-read.";
+      return "We couldn't confirm whether the default tiers were restored.";
   }
 }
 
@@ -1980,26 +2374,26 @@ function displayAccount(status: {
       // is then recorded over values nobody changed, where "a change you made
       // since has been saved" is false twice over: no change of theirs was
       // saved, and the controls are showing what was there all along.
-      return "What's on screen is what this host has saved.";
+      return "These are the settings this host has saved.";
     case "rollback":
       // Deferring to the rollback account rather than inventing a third
       // description of the same values.
       return status.persistedUnverified
         ? PRE_RESET_ROLLBACK_ACCOUNT
-        : "What's back on screen is your last saved settings, put back.";
+        : "Showing your last saved settings.";
     case "sent-unknown":
       // Deliberately neutral, and deliberately NOT a dispatch verdict either
       // way. These values reached the host; what it did with them is the one
       // thing nobody here knows, and the two sentences that would resolve it -
       // "hasn't been sent" and "has been saved" - are both false (D339).
-      return "What's on screen was sent, but we don't know what the host did with it.";
+      return "These settings were sent, but we couldn't confirm they were saved.";
     case "loaded-unchanged":
       // No host claim at all, which is why this arm has no authority branch:
       // "what was loaded" is a fact about this page, and an unanswered reset
       // cannot make it false (D353).
-      return "What's on screen is what was loaded; nothing has been changed since.";
+      return "This page still shows the settings it loaded.";
     case "uncommitted":
-      return "What's on screen is a newer edit that hasn't been sent.";
+      return "You have changes that haven't been sent.";
     case "refused-on-screen":
       // NOT the rollback's sentence, which is what N1 found this wearing. The
       // host turned this value down and the reducer deliberately did not put
@@ -2009,10 +2403,10 @@ function displayAccount(status: {
       // restored, and the two words the rollback account turns on - "saved",
       // "put back" - are both false here. No host claim is made either, so
       // this arm needs no authority branch.
-      return "What's on screen is a change the host turned down; it's kept here so you can fix it.";
+      return "These edits were rejected and haven't been saved. They are still shown here.";
     // Handled by the caller, which returns before reaching here.
     case "unanswered":
-      return "What's on screen is your change, not a confirmed setting.";
+      return "These are your edits. We haven't confirmed whether they were saved.";
   }
 }
 
@@ -2103,7 +2497,7 @@ function refusalPrefix(carries: FallbackSaveCarries): string {
     case "reset":
       return "Couldn't reset these settings";
     case "restore":
-      return "Couldn't restore the default groups";
+      return "Couldn't restore the default tiers";
   }
 }
 
@@ -2115,7 +2509,7 @@ function refusedWithoutReason(carries: FallbackSaveCarries): string {
     case "reset":
       return "Couldn't reset these settings.";
     case "restore":
-      return "Couldn't restore the default groups.";
+      return "Couldn't restore the default tiers.";
   }
 }
 
@@ -2146,7 +2540,7 @@ function FallbackPanelSkeleton(): ReactNode {
         testId={undefined}
         variant="orbit"
       />
-      Loading fallback settings…
+      Loading model routing…
     </div>
   );
 }

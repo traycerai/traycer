@@ -13,6 +13,7 @@ import { BrowserSettingsSection } from "@/components/settings/browser-settings-s
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import type { BrowserSaveLoginsController } from "@/lib/browser-view/use-browser-save-logins";
 import type {
   BrowserSavedLoginSite,
@@ -34,7 +35,11 @@ type SavedLoginSitesAnswer =
     };
 
 const saveLogins = vi.hoisted((): { current: BrowserSaveLoginsController } => ({
-  current: { enabled: true, pending: false, setEnabled: () => undefined },
+  current: {
+    enabled: true,
+    pending: false,
+    setEnabled: () => Promise.resolve(null),
+  },
 }));
 const sites = vi.hoisted((): { current: SavedLoginSitesAnswer | null } => ({
   current: null,
@@ -102,7 +107,7 @@ function controller(
   return {
     enabled: true,
     pending: false,
-    setEnabled: vi.fn(),
+    setEnabled: vi.fn(() => Promise.resolve(null)),
     ...overrides,
   };
 }
@@ -184,6 +189,35 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     fireEvent.click(toggle());
 
     expect(current.setEnabled).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("moves the sign-ins guide on only when the machine settles on saving", async () => {
+    useOnboardingStore.setState({
+      setupProgress: { agents: -1, appearance: -1, cookies: 0 },
+      activeSetup: { id: "cookies", step: 0 },
+    });
+    const refused = controller({
+      enabled: false,
+      setEnabled: vi.fn(() => Promise.resolve(null)),
+    });
+    const first = renderSection(refused, null);
+    fireEvent.click(toggle());
+    await waitFor(() => {
+      expect(refused.setEnabled).toHaveBeenCalledExactlyOnceWith(true);
+    });
+    expect(useOnboardingStore.getState().activeSetup?.step).toBe(0);
+    first.unmount();
+
+    const settled = controller({
+      enabled: false,
+      setEnabled: vi.fn(() => Promise.resolve(true)),
+    });
+    renderSection(settled, null);
+    fireEvent.click(toggle());
+    await waitFor(() => {
+      expect(useOnboardingStore.getState().activeSetup?.step).toBe(1);
+    });
+    useOnboardingStore.setState({ activeSetup: null });
   });
 
   it("turns saving off only after confirmation", () => {

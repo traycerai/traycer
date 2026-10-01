@@ -9,6 +9,7 @@ import {
   type DraftDialectKind,
   type DraftSurfaceKind,
 } from "@traycer/protocol/persistence/draft/schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Host <-> client wire shapes for the live draft store.
@@ -29,16 +30,12 @@ import {
  * beside these schemas so host and client cannot drift.
  */
 
-export const draftKindSchema = z.enum([
-  "landing",
-  "new-chat",
-  "chat-composer",
-  "interview",
-  "stash-entry",
-]);
+export const draftKindSchema = lazySchema(() =>
+  z.enum(["landing", "new-chat", "chat-composer", "interview", "stash-entry"]),
+);
 export type DraftKind = z.infer<typeof draftKindSchema>;
 
-export const draftOriginSchema = z.enum(["own", "replica"]);
+export const draftOriginSchema = lazySchema(() => z.enum(["own", "replica"]));
 export type DraftOrigin = z.infer<typeof draftOriginSchema>;
 
 /**
@@ -46,10 +43,12 @@ export type DraftOrigin = z.infer<typeof draftOriginSchema>;
  * (upsert of an unknown id creates); unadopted landing drafts never
  * leave the client.
  */
-export const draftAdoptionSchema = z.object({
-  state: z.literal("adopted"),
-  hostId: z.string().min(1),
-});
+export const draftAdoptionSchema = lazySchema(() =>
+  z.object({
+    state: z.literal("adopted"),
+    hostId: z.string().min(1),
+  }),
+);
 export type DraftAdoption = z.infer<typeof draftAdoptionSchema>;
 
 /**
@@ -57,41 +56,42 @@ export type DraftAdoption = z.infer<typeof draftAdoptionSchema>;
  * backup's set plus `stale-authority` — the self-resolving cause a publish
  * lands on when the cloud row's authority epoch has moved past this host.
  */
-export const draftPublicationHaltCauseSchema = z.enum([
-  "conflict",
-  "quarantined",
-  "repair-pending",
-  "forked-lineage",
-  "too-large",
-  "escalation",
-  "plan-ineligible",
-  "stale-authority",
-]);
+export const draftPublicationHaltCauseSchema = lazySchema(() =>
+  z.enum([
+    "conflict",
+    "quarantined",
+    "repair-pending",
+    "forked-lineage",
+    "too-large",
+    "escalation",
+    "plan-ineligible",
+    "stale-authority",
+  ]),
+);
 export type DraftPublicationHaltCause = z.infer<
   typeof draftPublicationHaltCauseSchema
 >;
 
-export const draftPublicationStatusSchema = z.enum([
-  "unpublished",
-  "current",
-  "behind",
-  "unknown",
-]);
+export const draftPublicationStatusSchema = lazySchema(() =>
+  z.enum(["unpublished", "current", "behind", "unknown"]),
+);
 export type DraftPublicationStatus = z.infer<
   typeof draftPublicationStatusSchema
 >;
 
-export const draftPublicationSchema = z.object({
-  status: draftPublicationStatusSchema,
-  lastPublishedAt: z.number().int().nonnegative().nullable(),
-  publishedRevision: z.number().int().nonnegative().nullable(),
-  halted: z
-    .object({
-      cause: draftPublicationHaltCauseSchema,
-      since: z.number().int().nonnegative(),
-    })
-    .nullable(),
-});
+export const draftPublicationSchema = lazySchema(() =>
+  z.object({
+    status: draftPublicationStatusSchema,
+    lastPublishedAt: z.number().int().nonnegative().nullable(),
+    publishedRevision: z.number().int().nonnegative().nullable(),
+    halted: z
+      .object({
+        cause: draftPublicationHaltCauseSchema,
+        since: z.number().int().nonnegative(),
+      })
+      .nullable(),
+  }),
+);
 export type DraftPublication = z.infer<typeof draftPublicationSchema>;
 
 /**
@@ -104,12 +104,12 @@ export type DraftPublication = z.infer<typeof draftPublicationSchema>;
  * and otherwise re-mints it under a fresh id (again with `supersedes`).
  */
 const draftDocumentCommonFields = {
-  draftId: z.string().min(1),
+  draftId: lazySchema(() => z.string().min(1)),
   target: draftTargetSchema,
-  revision: z.number().int().nonnegative(),
-  lastTouchedAt: z.number().int().nonnegative(),
-  workspace: draftWorkspaceSnapshotSchema.nullable(),
-  ownerHostId: z.string().min(1),
+  revision: lazySchema(() => z.number().int().nonnegative()),
+  lastTouchedAt: lazySchema(() => z.number().int().nonnegative()),
+  workspace: lazySchema(() => draftWorkspaceSnapshotSchema.nullable()),
+  ownerHostId: lazySchema(() => z.string().min(1)),
   origin: draftOriginSchema,
   adoption: draftAdoptionSchema,
   publication: draftPublicationSchema,
@@ -122,19 +122,19 @@ const draftDocumentCommonFields = {
    * re-keys on a stale pointer. Defaulted on the wire, not required: a host
    * that predates supersession still lists and echoes its rows.
    */
-  supersedes: z.string().min(1).nullable().default(null),
+  supersedes: lazySchema(() => z.string().min(1).nullable().default(null)),
 } as const;
 
 const draftWriteCommonFields = {
-  draftId: z.string().min(1),
+  draftId: lazySchema(() => z.string().min(1)),
   target: draftTargetSchema,
   /**
    * Base revision the client last saw. `0` on first create. The host
    * accepts unconditionally (whole-document LWW) and bumps.
    */
-  revision: z.number().int().nonnegative(),
-  lastTouchedAt: z.number().int().nonnegative(),
-  workspace: draftWorkspaceSnapshotSchema.nullable(),
+  revision: lazySchema(() => z.number().int().nonnegative()),
+  lastTouchedAt: lazySchema(() => z.number().int().nonnegative()),
+  workspace: lazySchema(() => draftWorkspaceSnapshotSchema.nullable()),
   /**
    * Write-plane only. An ancestor draft id whose cloud row this host
    * retracts once the written draft is first published or deleted. Sent on
@@ -143,89 +143,101 @@ const draftWriteCommonFields = {
    * Defaulted on the wire, like the document's echo: a write that omits it
    * owes nothing.
    */
-  supersedes: z.string().min(1).nullable().default(null),
+  supersedes: lazySchema(() => z.string().min(1).nullable().default(null)),
 } as const;
 
-export const draftDocumentSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ...draftDocumentCommonFields,
-    kind: z.literal("landing"),
-    portable: draftComposerPortableSchema,
-  }),
-  z.object({
-    ...draftDocumentCommonFields,
-    kind: z.literal("new-chat"),
-    portable: draftComposerPortableSchema,
-  }),
-  z.object({
-    ...draftDocumentCommonFields,
-    kind: z.literal("chat-composer"),
-    portable: draftComposerPortableSchema,
-  }),
-  z.object({
-    ...draftDocumentCommonFields,
-    kind: z.literal("interview"),
-    portable: draftInterviewPortableSchema,
-  }),
-  z.object({
-    ...draftDocumentCommonFields,
-    kind: z.literal("stash-entry"),
-    portable: draftStashPortableSchema,
-  }),
-]);
+export const draftDocumentSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("landing"),
+      portable: draftComposerPortableSchema,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("new-chat"),
+      portable: draftComposerPortableSchema,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("chat-composer"),
+      portable: draftComposerPortableSchema,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("interview"),
+      portable: draftInterviewPortableSchema,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("stash-entry"),
+      portable: draftStashPortableSchema,
+    }),
+  ]),
+);
 export type DraftDocument = z.infer<typeof draftDocumentSchema>;
 
-export const draftWriteSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ...draftWriteCommonFields,
-    kind: z.literal("landing"),
-    portable: draftComposerPortableWriteSchema,
-  }),
-  z.object({
-    ...draftWriteCommonFields,
-    kind: z.literal("new-chat"),
-    portable: draftComposerPortableWriteSchema,
-  }),
-  z.object({
-    ...draftWriteCommonFields,
-    kind: z.literal("chat-composer"),
-    portable: draftComposerPortableWriteSchema,
-  }),
-  z.object({
-    ...draftWriteCommonFields,
-    kind: z.literal("interview"),
-    portable: draftInterviewPortableSchema,
-  }),
-  z.object({
-    ...draftWriteCommonFields,
-    kind: z.literal("stash-entry"),
-    portable: draftStashPortableSchema,
-  }),
-]);
+export const draftWriteSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...draftWriteCommonFields,
+      kind: z.literal("landing"),
+      portable: draftComposerPortableWriteSchema,
+    }),
+    z.object({
+      ...draftWriteCommonFields,
+      kind: z.literal("new-chat"),
+      portable: draftComposerPortableWriteSchema,
+    }),
+    z.object({
+      ...draftWriteCommonFields,
+      kind: z.literal("chat-composer"),
+      portable: draftComposerPortableWriteSchema,
+    }),
+    z.object({
+      ...draftWriteCommonFields,
+      kind: z.literal("interview"),
+      portable: draftInterviewPortableSchema,
+    }),
+    z.object({
+      ...draftWriteCommonFields,
+      kind: z.literal("stash-entry"),
+      portable: draftStashPortableSchema,
+    }),
+  ]),
+);
 export type DraftWrite = z.infer<typeof draftWriteSchema>;
 
-export const draftsUpsertRequestSchema = z.object({
-  draft: draftWriteSchema,
-});
+export const draftsUpsertRequestSchema = lazySchema(() =>
+  z.object({
+    draft: draftWriteSchema,
+  }),
+);
 export type DraftsUpsertRequest = z.infer<typeof draftsUpsertRequestSchema>;
 
-export const draftsUpsertResponseSchema = z.object({
-  draft: draftDocumentSchema,
-});
+export const draftsUpsertResponseSchema = lazySchema(() =>
+  z.object({
+    draft: draftDocumentSchema,
+  }),
+);
 export type DraftsUpsertResponse = z.infer<typeof draftsUpsertResponseSchema>;
 
-export const draftsDeleteRequestSchema = z.object({
-  draftId: z.string().min(1),
-});
+export const draftsDeleteRequestSchema = lazySchema(() =>
+  z.object({
+    draftId: z.string().min(1),
+  }),
+);
 export type DraftsDeleteRequest = z.infer<typeof draftsDeleteRequestSchema>;
 
 /** Idempotent: `deleted` is false when the row was already gone. */
-export const draftsDeleteResponseSchema = z.object({
-  deleted: z.boolean(),
-});
+export const draftsDeleteResponseSchema = lazySchema(() =>
+  z.object({
+    deleted: z.boolean(),
+  }),
+);
 export type DraftsDeleteResponse = z.infer<typeof draftsDeleteResponseSchema>;
 
-export const draftsListRequestSchema = z.object({});
+export const draftsListRequestSchema = lazySchema(() => z.object({}));
 export type DraftsListRequest = z.infer<typeof draftsListRequestSchema>;
 
 /**
@@ -242,45 +254,49 @@ export type DraftsListRequest = z.infer<typeof draftsListRequestSchema>;
  * `drafts.list` could not represent, and the reconnecting client would then
  * order that id by `storeSeq` instead of by revision.
  */
-export const draftListTombstoneSchema = z.object({
-  draftId: z.string().min(1),
-  revision: z.number().int().positive(),
-});
+export const draftListTombstoneSchema = lazySchema(() =>
+  z.object({
+    draftId: z.string().min(1),
+    revision: z.number().int().positive(),
+  }),
+);
 export type DraftListTombstone = z.infer<typeof draftListTombstoneSchema>;
 
-export const draftsListResponseSchema = z.object({
-  /**
-   * Personal `drafts` scope id (`scp_…`) this host resolved for the
-   * caller, or `null` when cloud publication is gated or not yet
-   * ready. The client lists published drafts through the byte-pipe
-   * (`epic.listCloudChats` + `epic.resolveCloudChatHead`) against this
-   * task id. Optional on the wire so fixtures that predate T8 still
-   * parse; a live host that implements T6 always sends it.
-   */
-  scopeId: z.string().min(1).nullable().optional(),
-  drafts: z.array(draftDocumentSchema),
-  /**
-   * Every retained tombstone at this snapshot. Always present (empty
-   * when none). Live `drafts` never include these ids; a reconnecting
-   * client must treat each as an authoritative delete rather than
-   * inferring deletion from absence.
-   */
-  tombstones: z.array(draftListTombstoneSchema),
-  /**
-   * Store-wide sequence the listing reflects. Host bumps `storeSeq` on
-   * every draft-store mutation (upsert and delete). A subscribe frame
-   * against `absent` applies only when `frame.storeSeq > snapshotSeq`.
-   *
-   * MUST (frontier atomicity): sequence allocation commits atomically
-   * with its mutation, and `snapshotSeq` is captured under the same
-   * serialized frontier as BOTH the live rows and `tombstones`. The
-   * response reflects EVERY mutation with `storeSeq <= snapshotSeq`
-   * and NONE with `storeSeq > snapshotSeq`. Forbidden: read rows, then
-   * let a create commit at 21, then stamp `snapshotSeq = 21` — the
-   * buffered create frame is equal-seq and dropped forever.
-   */
-  snapshotSeq: z.number().int().nonnegative(),
-});
+export const draftsListResponseSchema = lazySchema(() =>
+  z.object({
+    /**
+     * Personal `drafts` scope id (`scp_…`) this host resolved for the
+     * caller, or `null` when cloud publication is gated or not yet
+     * ready. The client lists published drafts through the byte-pipe
+     * (`epic.listCloudChats` + `epic.resolveCloudChatHead`) against this
+     * task id. Optional on the wire so fixtures that predate T8 still
+     * parse; a live host that implements T6 always sends it.
+     */
+    scopeId: z.string().min(1).nullable().optional(),
+    drafts: z.array(draftDocumentSchema),
+    /**
+     * Every retained tombstone at this snapshot. Always present (empty
+     * when none). Live `drafts` never include these ids; a reconnecting
+     * client must treat each as an authoritative delete rather than
+     * inferring deletion from absence.
+     */
+    tombstones: z.array(draftListTombstoneSchema),
+    /**
+     * Store-wide sequence the listing reflects. Host bumps `storeSeq` on
+     * every draft-store mutation (upsert and delete). A subscribe frame
+     * against `absent` applies only when `frame.storeSeq > snapshotSeq`.
+     *
+     * MUST (frontier atomicity): sequence allocation commits atomically
+     * with its mutation, and `snapshotSeq` is captured under the same
+     * serialized frontier as BOTH the live rows and `tombstones`. The
+     * response reflects EVERY mutation with `storeSeq <= snapshotSeq`
+     * and NONE with `storeSeq > snapshotSeq`. Forbidden: read rows, then
+     * let a create commit at 21, then stamp `snapshotSeq = 21` — the
+     * buffered create frame is equal-seq and dropped forever.
+     */
+    snapshotSeq: z.number().int().nonnegative(),
+  }),
+);
 export type DraftsListResponse = z.infer<typeof draftsListResponseSchema>;
 
 /**
@@ -293,21 +309,25 @@ export type DraftsListResponse = z.infer<typeof draftsListResponseSchema>;
  * Kept separate from `drafts.delete` so an absent local row stays an
  * honest `{ deleted: false }` there.
  */
-export const draftsRetractRequestSchema = z.object({
-  draftId: z.string().min(1),
-});
+export const draftsRetractRequestSchema = lazySchema(() =>
+  z.object({
+    draftId: z.string().min(1),
+  }),
+);
 export type DraftsRetractRequest = z.infer<typeof draftsRetractRequestSchema>;
 
 /** Idempotent: `retracted` is false when the cloud row was already gone. */
-export const draftsRetractResponseSchema = z.object({
-  retracted: z.boolean(),
-});
+export const draftsRetractResponseSchema = lazySchema(() =>
+  z.object({
+    retracted: z.boolean(),
+  }),
+);
 export type DraftsRetractResponse = z.infer<typeof draftsRetractResponseSchema>;
 
 /** Lowercase hex sha256 — the only form a draft blob address is written in. */
-export const draftBlobSha256Schema = z
-  .string()
-  .regex(/^[0-9a-f]{64}$/, "Expected a lowercase hex sha256 digest");
+export const draftBlobSha256Schema = lazySchema(() =>
+  z.string().regex(/^[0-9a-f]{64}$/, "Expected a lowercase hex sha256 digest"),
+);
 export type DraftBlobSha256 = z.infer<typeof draftBlobSha256Schema>;
 
 /**
@@ -316,20 +336,65 @@ export type DraftBlobSha256 = z.infer<typeof draftBlobSha256Schema>;
  * The host hashes the decoded bytes and refuses a digest mismatch before
  * storing. Unary base64, same posture as `epic.readChatAttachment`.
  */
-export const draftsPutBlobRequestSchema = z.object({
-  sha256: draftBlobSha256Schema,
-  /** Base64 of the RAW bytes — what `sha256` is over. */
-  bytesBase64: z.string(),
-});
+export const draftsPutBlobRequestSchema = lazySchema(() =>
+  z.object({
+    sha256: draftBlobSha256Schema,
+    /** Base64 of the RAW bytes — what `sha256` is over. */
+    bytesBase64: z.string(),
+  }),
+);
 export type DraftsPutBlobRequest = z.infer<typeof draftsPutBlobRequestSchema>;
 
-export const draftsPutBlobResponseSchema = z.discriminatedUnion("ok", [
-  z.object({ ok: z.literal(true) }),
+/**
+ * The `@1.1` wire ceiling for one draft blob, in base64 CHARACTERS: the
+ * 5 MiB decoded ceiling the client's image preparation targets, expanded by
+ * base64's 4-chars-per-3-bytes ratio.
+ *
+ * Decoded rather than encoded because the ceiling is a statement about the
+ * IMAGE - every provider budget, the preparation ladder and the host store's
+ * own guard are all in decoded bytes - and a cap written in encoded characters
+ * would drift from all of them.
+ */
+export const DRAFT_BLOB_MAX_BYTES = 5 * 1024 * 1024;
+export const DRAFT_BLOB_MAX_BASE64_LENGTH =
+  Math.ceil(DRAFT_BLOB_MAX_BYTES / 3) * 4;
+
+/**
+ * `drafts.putBlob@1.1` - the `@1.0` request with `bytesBase64` capped.
+ *
+ * A NEW INSTANCE, and `draftsPutBlobRequestSchema` stays pinned to
+ * `draftsPutBlobV10`: narrowing a released request schema in place would refuse
+ * a payload a released client is entitled to send, which is the one direction
+ * a same-version edit can break a peer that is already in the field.
+ *
+ * A DECLARATION, NOT THE ENFORCEMENT. It bites only when both peers negotiate
+ * `>= 1.1`, so it can never be the thing standing between an oversized image
+ * and the disk. The enforcement is the host store's version-independent decoded
+ * cap in `FileDraftBlobStore.put`, plus the client's own pre-send guard; what
+ * this buys is that an over-cap body is refused at the PARSE, before a
+ * multi-megabyte string is chunked onto the wire and re-materialized on the
+ * host's event loop.
+ */
+export const draftsPutBlobRequestSchemaV11 = lazySchema(() =>
   z.object({
-    ok: z.literal(false),
-    reason: z.literal("digest-mismatch"),
+    sha256: draftBlobSha256Schema,
+    /** Base64 of the RAW bytes — what `sha256` is over. */
+    bytesBase64: z.string().max(DRAFT_BLOB_MAX_BASE64_LENGTH),
   }),
-]);
+);
+export type DraftsPutBlobRequestV11 = z.infer<
+  typeof draftsPutBlobRequestSchemaV11
+>;
+
+export const draftsPutBlobResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    z.object({ ok: z.literal(true) }),
+    z.object({
+      ok: z.literal(false),
+      reason: z.literal("digest-mismatch"),
+    }),
+  ]),
+);
 export type DraftsPutBlobResponse = z.infer<typeof draftsPutBlobResponseSchema>;
 
 /**
@@ -341,30 +406,68 @@ export type DraftsPutBlobResponse = z.infer<typeof draftsPutBlobResponseSchema>;
  * Named `readBlob` to match `epic.readChatAttachment` (unary base64
  * byte fetch).
  */
-export const draftsReadBlobRequestSchema = z.object({
-  sha256: draftBlobSha256Schema,
-});
+export const draftsReadBlobRequestSchema = lazySchema(() =>
+  z.object({
+    sha256: draftBlobSha256Schema,
+  }),
+);
 export type DraftsReadBlobRequest = z.infer<typeof draftsReadBlobRequestSchema>;
 
-export const draftsReadBlobResponseSchema = z.discriminatedUnion("ok", [
-  z.object({
-    ok: z.literal(true),
-    bytesBase64: z.string(),
-  }),
-  z.object({
-    ok: z.literal(false),
-    reason: z.literal("missing"),
-  }),
-]);
+export const draftsReadBlobResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    z.object({
+      ok: z.literal(true),
+      bytesBase64: z.string(),
+    }),
+    z.object({
+      ok: z.literal(false),
+      reason: z.literal("missing"),
+    }),
+  ]),
+);
 export type DraftsReadBlobResponse = z.infer<
   typeof draftsReadBlobResponseSchema
 >;
 
+/**
+ * `drafts.readBlob@1.1` - the same two arms with the SAME cap on the returned
+ * body, so the ceiling is one fact about a draft blob rather than a rule that
+ * only applies on the way in.
+ *
+ * The cap lands on the response because that is where this method's bytes are;
+ * its request carries only a digest, and `draftsReadBlobRequestSchema` is
+ * therefore shared by both minors unchanged.
+ *
+ * A `@1.1` reader that meets an over-cap body fails that one hash's parse,
+ * which the transport already treats exactly as `missing`: the per-image skip
+ * that renders the attachment unavailable. Such a body can only come from a
+ * blob written before the store's own decoded cap existed, so the alternative -
+ * no ceiling on the read line at all - would keep an unbounded string
+ * reachable on a path the write side has already closed.
+ */
+export const draftsReadBlobResponseSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("ok", [
+    z.object({
+      ok: z.literal(true),
+      bytesBase64: z.string().max(DRAFT_BLOB_MAX_BASE64_LENGTH),
+    }),
+    z.object({
+      ok: z.literal(false),
+      reason: z.literal("missing"),
+    }),
+  ]),
+);
+export type DraftsReadBlobResponseV11 = z.infer<
+  typeof draftsReadBlobResponseSchemaV11
+>;
+
 const textFrameFields = {
-  hasBinaryPayload: z.literal(false),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
 } as const;
 
-export const draftsSubscribeOpenRequestSchemaV10 = z.object({});
+export const draftsSubscribeOpenRequestSchemaV10 = lazySchema(() =>
+  z.object({}),
+);
 export type DraftsSubscribeOpenRequestV10 = z.infer<
   typeof draftsSubscribeOpenRequestSchemaV10
 >;
@@ -388,7 +491,7 @@ const storeSeqField = {
    * outlives a rolled-back write (or a write that outlives its seq)
    * breaks the list/subscribe merge.
    */
-  storeSeq: z.number().int().nonnegative(),
+  storeSeq: lazySchema(() => z.number().int().nonnegative()),
 } as const;
 
 /**
@@ -425,59 +528,61 @@ const storeSeqField = {
  * MUST (restart): `storeSeq` is durably persisted and strictly
  * monotonic across host restarts. Do not add an epoch field.
  */
-export const draftsSubscribeServerFrameSchemaV10 = z
-  .discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("upsert"),
-      ...textFrameFields,
-      ...storeSeqField,
-      draftId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      draft: draftDocumentSchema,
+export const draftsSubscribeServerFrameSchemaV10 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        draft: draftDocumentSchema,
+      }),
+      z.object({
+        kind: z.literal("delete"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        // Same domain as `draftListTombstoneSchema.revision` - see there.
+        revision: z.number().int().positive(),
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      /**
+       * Advisory: the host's personal drafts-scope id resolved after
+       * `drafts.list` returned `scopeId: null`. No `storeSeq` — this is
+       * not a store mutation. A client that never sees it keeps the
+       * cloud-drafts section absent (hide-not-fail), never errors.
+       */
+      z.object({
+        kind: z.literal("scope"),
+        ...textFrameFields,
+        scopeId: z.string().min(1),
+      }),
+    ])
+    .superRefine((frame, ctx) => {
+      if (frame.kind !== "upsert") return;
+      if (frame.draftId !== frame.draft.draftId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["draftId"],
+          message:
+            "An upsert's envelope must address the row it carries - `draftId` must equal `draft.draftId`.",
+        });
+      }
+      if (frame.revision !== frame.draft.revision) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["revision"],
+          message:
+            "An upsert's envelope must order by the row it carries - `revision` must equal `draft.revision`.",
+        });
+      }
     }),
-    z.object({
-      kind: z.literal("delete"),
-      ...textFrameFields,
-      ...storeSeqField,
-      draftId: z.string().min(1),
-      // Same domain as `draftListTombstoneSchema.revision` - see there.
-      revision: z.number().int().positive(),
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-    /**
-     * Advisory: the host's personal drafts-scope id resolved after
-     * `drafts.list` returned `scopeId: null`. No `storeSeq` — this is
-     * not a store mutation. A client that never sees it keeps the
-     * cloud-drafts section absent (hide-not-fail), never errors.
-     */
-    z.object({
-      kind: z.literal("scope"),
-      ...textFrameFields,
-      scopeId: z.string().min(1),
-    }),
-  ])
-  .superRefine((frame, ctx) => {
-    if (frame.kind !== "upsert") return;
-    if (frame.draftId !== frame.draft.draftId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["draftId"],
-        message:
-          "An upsert's envelope must address the row it carries - `draftId` must equal `draft.draftId`.",
-      });
-    }
-    if (frame.revision !== frame.draft.revision) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["revision"],
-        message:
-          "An upsert's envelope must order by the row it carries - `revision` must equal `draft.revision`.",
-      });
-    }
-  });
+);
 export type DraftsSubscribeServerFrameV10 = z.infer<
   typeof draftsSubscribeServerFrameSchemaV10
 >;
@@ -531,9 +636,8 @@ export function draftSubscribeFrameApplies(
  * Empty is a no-op on both sides — a client with nothing pending must
  * not be read as "every dirty draft this host knows about".
  */
-export const draftsSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
-  "kind",
-  [
+export const draftsSubscribeClientFrameSchemaV10 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("ping"),
       ...textFrameFields,
@@ -543,7 +647,7 @@ export const draftsSubscribeClientFrameSchemaV10 = z.discriminatedUnion(
       ...textFrameFields,
       draftIds: z.array(z.string().min(1)),
     }),
-  ],
+  ]),
 );
 export type DraftsSubscribeClientFrameV10 = z.infer<
   typeof draftsSubscribeClientFrameSchemaV10

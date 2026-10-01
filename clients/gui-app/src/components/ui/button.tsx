@@ -68,6 +68,11 @@ const buttonVariants = cva(
         // to a visible 1.087. The `dark:*-input/*` fills stay: `--input`
         // never collapses.
         outline: `border-border bg-background hover:bg-foreground/5 hover:text-foreground active:press-scrim dark:border-input dark:bg-input/30 dark:hover:bg-input/50 ${ON_STATE}`,
+        // `outline`'s border with a translucent fill: a clickable ROW sitting
+        // over other rows scrolling underneath it (session import's
+        // already-imported task), where `outline`'s opaque `bg-background`
+        // would occlude them.
+        "card-row": `border-border bg-background/60 hover:bg-foreground/5 hover:text-foreground active:press-scrim dark:border-input dark:bg-input/30 dark:hover:bg-input/50 ${ON_STATE}`,
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80 active:press-scrim aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         // Same two weights as `outline` above, and for the same reason: the
@@ -110,6 +115,23 @@ const buttonVariants = cva(
           "text-info-foreground hover:bg-info/15 active:press-scrim",
         destructive:
           "bg-destructive/10 text-destructive hover:bg-destructive/20 active:press-scrim focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+        // A control ON a solid status fill (the layout editor's Customizing
+        // tab): the fill's own label colour, quieter at rest.
+        "on-fill":
+          "text-current opacity-70 hover:bg-current/15 hover:opacity-100 active:press-scrim",
+        // A place on a routing card's route line that is ALSO the control
+        // that changes it: the destination a countdown is heading for, or the
+        // "Choose another model…" chip beside a wait. Outlined like the static
+        // `RouteChip` it sits next to (`ui/route-chip.tsx`), so the route
+        // reads as two places, and tinted with the primary so the one that
+        // opens a picker is told apart from the one that does not. Its icon
+        // slot takes the harness glyph and its trailing slot a chevron
+        // (`data-icon="inline-end"`); the `route-chip` size carries both.
+        "route-chip":
+          "border-primary/40 bg-primary/10 text-foreground hover:bg-primary/15 active:press-scrim aria-expanded:bg-primary/20",
+        // Clickable overline heading; the focus/hover affordance stays a button.
+        "section-label":
+          "text-overline font-semibold tracking-wide text-muted-foreground uppercase hover:bg-foreground/5 hover:text-foreground active:press-scrim",
         // The one variant with no scrim: a link has no box to tint, so a
         // rectangle blooming behind the text reads as a rendering fault rather
         // than a press. The underline it already uses for hover is the feedback.
@@ -119,6 +141,10 @@ const buttonVariants = cva(
         default:
           "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-sm px-2 text-ui-xs in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        // One option of a segmented control: `xs` with the side padding
+        // trimmed, so a three-option control and its row's label share one
+        // line in the layout inspector.
+        segment: "h-6 gap-1 rounded-sm px-1.5 text-ui-xs",
         sm: "h-7 gap-1 rounded-sm px-2.5 text-ui-sm in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         // No box at all: a control that sits INSIDE a line of text (a `link`
@@ -130,11 +156,54 @@ const buttonVariants = cva(
         inline: "h-auto gap-1 p-0",
         "inline-xs":
           "h-auto gap-1 p-0 text-ui-xs [&_svg:not([class*='size-'])]:size-3",
+        // `inline-xs` for a label that is a SENTENCE: a transcript notice's
+        // title-and-message toggle, which must wrap on a narrow tile rather
+        // than run off it. Body weight and start-aligned, because it reads as
+        // the line of text it is, with no box of its own. `whitespace-normal`
+        // alone does not wrap it: the base keeps every button `shrink-0` at
+        // its intrinsic width, so this size gives that back (`min-w-0
+        // max-w-full shrink`, as `section-label` does) and the sentence wraps
+        // at the tile's edge instead of running past it.
+        "inline-xs-wrap":
+          "h-auto min-w-0 max-w-full shrink gap-1 p-0 text-left text-ui-xs font-normal whitespace-normal [&_svg:not([class*='size-'])]:size-3",
         icon: "size-8",
         "icon-xs":
           "size-6 rounded-sm in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "size-7 rounded-sm in-data-[slot=button-group]:rounded-md",
         "icon-lg": "size-9",
+        // The vertical strip's nav controls (Notifications, All tasks, Home), as a
+        // Button: `nav-tile` is the collapsed rail's 32px tile, `nav-row` the
+        // expanded strip's 32px row. The row's padding is 1px short of the
+        // nav row's 8px because the base's transparent border sits inside the
+        // box, so the icon and label land where a nav row's do.
+        "nav-tile": "size-8 rounded-lg",
+        "nav-row": "h-8 justify-start gap-2 rounded-lg px-1.75",
+        "section-label":
+          "h-8 min-w-0 max-w-full shrink justify-start gap-1.5 px-1",
+        // A full-width clickable ROW instead of a centered control: content
+        // left-aligns and the box grows to fit it rather than clipping to a
+        // fixed height. Session import's already-imported task row is the
+        // one call site.
+        "card-row":
+          "h-auto min-w-0 justify-start gap-3 rounded-xl px-4 py-3 text-left",
+        // The route chip's box: `RouteChip`'s geometry (`ui/route-chip.tsx`),
+        // so a trigger chip and a static one line up on the same route line.
+        // It WRAPS rather than truncating - the part of a destination that
+        // would be cut off is the part that changes - so it drops the fixed
+        // height and `whitespace-nowrap` every other size keeps, and body
+        // weight, because the chip's segments set their own emphasis. The
+        // segments are separate flex items, so wrapping takes `flex-wrap`
+        // (text wrapping cannot move an item to a new line) and `shrink`
+        // (the base's `shrink-0` would hold the chip at its one-line width),
+        // exactly as the static chip wraps.
+        "route-chip":
+          "h-auto min-h-7 min-w-0 max-w-full shrink flex-wrap justify-start gap-1.5 rounded-lg px-2.5 py-1 text-left text-ui-sm font-normal whitespace-normal has-data-[icon=inline-end]:pr-2 [&_svg:not([class*='size-'])]:size-3.5",
+        // A multiline disclosure spanning one row of a divided settings list.
+        "disclosure-row":
+          "h-auto min-h-11 min-w-0 items-start justify-start gap-3 rounded-none px-4 py-4 text-left whitespace-normal",
+        // Text actions that must remain comfortable to tap on a phone.
+        touch:
+          "h-auto min-h-11 min-w-0 max-w-full gap-1.5 px-2 py-2 text-ui-xs whitespace-normal",
       },
     },
     defaultVariants: {

@@ -4,7 +4,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
   type RefObject,
@@ -14,10 +13,11 @@ import {
   TransformWrapper,
   type ReactZoomPanPinchRef,
 } from "react-zoom-pan-pinch";
-import { Check, Copy, Maximize2, Minus, Plus } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ZoomControls } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
 import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
@@ -430,29 +430,6 @@ export function ImagePreview(props: ImagePreviewProps) {
     handleFit();
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
-    if (event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.key === "+" || event.key === "=") {
-      event.preventDefault();
-      handleZoomIn();
-      return;
-    }
-    if (event.key === "-" || event.key === "_") {
-      event.preventDefault();
-      handleZoomOut();
-      return;
-    }
-    if (event.key === "0") {
-      event.preventDefault();
-      handleActualSize();
-      return;
-    }
-    if (event.key === "f" || event.key === "F") {
-      event.preventDefault();
-      handleFit();
-    }
-  }
-
   // Cursor styling only (review finding #2) - mousedown is not a completed
   // transform, so this never touches the fit/actual-size derivation above.
   const handlePanningStart = useCallback((): void => {
@@ -682,82 +659,25 @@ export function ImagePreview(props: ImagePreviewProps) {
             {caption}
           </span>
           <div className="flex shrink-0 items-center gap-1">
-            <TooltipWrapper
-              label="Zoom out (-)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={zoomOutDisabled}
-                onClick={handleZoomOut}
-                onKeyDown={handleKeyDown}
-                aria-label="Zoom out"
-              >
-                <Minus className="size-4" />
-              </Button>
-            </TooltipWrapper>
-            <TooltipWrapper
-              label="Zoom in (+)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={zoomInDisabled}
-                onClick={handleZoomIn}
-                onKeyDown={handleKeyDown}
-                aria-label="Zoom in"
-              >
-                <Plus className="size-4" />
-              </Button>
-            </TooltipWrapper>
-            <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-            <TooltipWrapper
-              label="Fit to screen (F)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-pressed={isFitted}
-                disabled={zoomDisabled}
-                onClick={handleFit}
-                onKeyDown={handleKeyDown}
-                aria-label="Fit to screen"
-              >
-                <Maximize2 className="size-4" />
-              </Button>
-            </TooltipWrapper>
-            <TooltipWrapper
-              label="Actual size (100%)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-pressed={isActualSize}
-                disabled={zoomDisabled}
-                onClick={handleActualSize}
-                onKeyDown={handleKeyDown}
-                aria-label="Actual size"
-                className="min-w-12 tabular-nums"
-              >
-                100%
-              </Button>
-            </TooltipWrapper>
+            <ZoomControls
+              ready={!zoomDisabled}
+              scalePercent={readoutScalePercent(
+                zoomDisabled,
+                liveFit,
+                transform.scale,
+              )}
+              canZoomIn={!zoomInDisabled}
+              canZoomOut={!zoomOutDisabled}
+              onZoomIn={handleZoomIn}
+              onZoomOut={handleZoomOut}
+              fitKind="screen"
+              fitActive={isFitted}
+              onFit={handleFit}
+              actualSizeActive={isActualSize}
+              onActualSize={handleActualSize}
+              stepGroupClassName={undefined}
+              anchorGroupClassName={undefined}
+            />
             <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
             <TooltipWrapper
               label={copyButtonLabel(copyFeedback)}
@@ -792,6 +712,21 @@ export function ImagePreview(props: ImagePreviewProps) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * Nothing to read until the image is on the stage under a real transform:
+ * before the asset is ready, and while the stage is still measuring or has
+ * no dimensions to fit against (`liveFit === null`), `transform` still holds
+ * its `{scale: 1}` default and would show a false 100%.
+ */
+function readoutScalePercent(
+  zoomDisabled: boolean,
+  liveFit: ImagePreviewTransformState | null,
+  scale: number,
+): number | null {
+  if (zoomDisabled || liveFit === null) return null;
+  return Math.round(scale * 100);
 }
 
 function imagePreviewAspectRatio(meta: FileAssetMeta | null): number | null {

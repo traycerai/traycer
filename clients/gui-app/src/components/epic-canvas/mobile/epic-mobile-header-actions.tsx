@@ -28,7 +28,7 @@ import {
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
+import { reconcileAuthoritativeEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 import {
   settleDetachedEpicTitleCommit,
   settleEpicTitleWrite,
@@ -172,7 +172,7 @@ export function MobileEpicHeaderTitle(props: {
             });
             toast.success("Epic renamed");
             if (userId === null) return;
-            updateEpicTitleInCloudTaskCaches(
+            reconcileAuthoritativeEpicTitleInCloudTaskCaches(
               queryClient,
               { hostId, userId },
               epicId,

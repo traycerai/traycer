@@ -346,7 +346,55 @@ export function installLegendListViewportMetrics(): void {
       }
     });
 
+  // jsdom does not define HTMLElement.scrollBy either. LegendList's
+  // `ScrollAdjust` compensation path (`requestAdjust` -> `state.scroll +=
+  // positionDiff`) is library-internal bookkeeping; the actual element only
+  // moves when its listener later calls `el.scrollBy(...)`. Without this
+  // shim that call is a silent no-op in jsdom, so `state.scroll` and the
+  // real DOM `scrollTop` can read as "compensated" and "never moved"
+  // respectively for the same event - a test asserting only `state.scroll`
+  // cannot tell a real compensating scroll from one that only updated the
+  // library's own accounting. Routing through the same tracked `scrollTop`
+  // setter above keeps both readings honest and reuses its scroll-event
+  // dispatch for free.
+  const seededScrollBy = !Object.hasOwn(HTMLElement.prototype, "scrollBy");
+  if (seededScrollBy) {
+    Object.defineProperty(HTMLElement.prototype, "scrollBy", {
+      configurable: true,
+      writable: true,
+      value: () => undefined,
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollBy");
+    });
+  }
+
+  const scrollBySpy = vi
+    .spyOn(HTMLElement.prototype, "scrollBy")
+    .mockImplementation(function scrollByShim(
+      this: HTMLElement,
+      ...args: Array<number | ScrollToOptions | undefined>
+    ): void {
+      const first = args[0];
+      if (typeof first === "number") {
+        const second = args[1];
+        this.scrollLeft = this.scrollLeft + first;
+        this.scrollTop =
+          this.scrollTop + (typeof second === "number" ? second : 0);
+        return;
+      }
+      if (typeof first === "object") {
+        if (typeof first.left === "number") {
+          this.scrollLeft = this.scrollLeft + first.left;
+        }
+        if (typeof first.top === "number") {
+          this.scrollTop = this.scrollTop + first.top;
+        }
+      }
+    });
+
   onTestFinished(() => {
+    scrollBySpy.mockRestore();
     scrollToSpy.mockRestore();
     scrollLeftSetSpy.mockRestore();
     scrollLeftGetSpy.mockRestore();

@@ -10,10 +10,9 @@ import type {
   ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
-
+} from "@/stores/layout/layout-store";
 // Harness-reported reasoning levels are unbounded (some harnesses advertise
 // many more than a footer row can lay out side by side), so the fixture
 // intentionally carries more options than a narrow strip could show at once.
@@ -69,14 +68,15 @@ function serviceTierConfig(
 // riding the default, which is `slider`.
 describe("<HarnessModelPickerModelSettingsFooter /> reasoning overflow", () => {
   beforeEach(() => {
-    useLayoutStore.setState({
-      composer: { ...DEFAULT_COMPOSER_LAYOUT, reasoningFooterControl: "list" },
-    });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useLayoutStore
+      .getState()
+      .setRegionValues("model", { reasoningControl: "list" });
   });
 
   afterEach(() => {
     cleanup();
-    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("renders and lets you select every harness-reported level even when more levels exist than fit in a narrow row", () => {

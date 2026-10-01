@@ -1,14 +1,21 @@
-import { Fragment, type ComponentPropsWithoutRef, type Ref } from "react";
+import {
+  Fragment,
+  useCallback,
+  type ComponentPropsWithoutRef,
+  type Ref,
+} from "react";
 import { Cpu } from "lucide-react";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
-import type { StatusBarResourceMetricView } from "@/lib/resources/status-bar-resource-reading";
+import {
+  statusBarResourceSegmentLabel,
+  type StatusBarResourceMetricView,
+} from "@/lib/resources/status-bar-resource-reading";
 import { cn } from "@/lib/utils";
-import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar-density";
 import { useStatusBarResourceMetricViews } from "@/components/layout/status-bar/use-status-bar-resource-views";
 
 interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button"> {
-  readonly density: StatusBarDensity;
   /** The watched host, for the "too old to stream" verdict and its copy. */
   readonly hostId: string | null;
   readonly hostLabel: string;
@@ -24,10 +31,18 @@ interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button
    * and handlers to this component, and they have to reach the real `<button>`.
    */
   readonly ref?: Ref<HTMLButtonElement>;
+  /** `false` for every passive mount: the Settings preview, an option picture. */
+  readonly interactive: boolean;
 }
 
 /**
  * The strip's right-hand readout, and the resource monitor's trigger.
+ *
+ * Pinned to the strip's right edge at its natural width (`shrink-0`) and
+ * printing every selected metric with its label at every window width: the
+ * usage cluster to its left is the box that gives way, scrolling its readings
+ * rather than pushing this readout off the strip, so nothing here has to
+ * shorten itself for a narrow window.
  *
  * It renders no popover of its own: `ResourceMonitorPopover` owns the single
  * always-mounted `resources.subscribe` stream, and mounting that popover CLOSED
@@ -36,24 +51,40 @@ interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button
  */
 export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
   const {
-    density,
     hostId,
     hostLabel,
     hasExplicitPick,
+    interactive,
     className,
+    ref,
     ...buttonProps
   } = props;
   const views = useStatusBarResourceMetricViews({
-    density,
     hostId,
     hostLabel,
     hasExplicitPick,
   });
-  const icon = <Cpu className="size-3 shrink-0" aria-hidden />;
   const noMetrics = views.length === 0;
+  const { ref: regionRef } = useLayoutRegion({
+    regionId: "resourceMonitor",
+    instanceId: null,
+  });
+  const icon = <Cpu className="size-3 shrink-0" aria-hidden />;
+  const setMergedRef = useCallback(
+    (node: HTMLButtonElement | null) => {
+      regionRef(node);
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref, regionRef],
+  );
 
   return (
     <button
+      ref={interactive ? setMergedRef : ref}
       type="button"
       // An `aria-label` REPLACES the flattened contents in the accessible-name
       // computation, so a hidden sentence inside the button would never be
@@ -64,11 +95,9 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
       // For the same reason the readings have to be IN the name rather than
       // beside it: the numbers are the segment's whole content, and a bare
       // "Resources" replaced every one of them — including `StatusBarMetric`'s
-      // own `sr-only` unavailable sentence, which was unreachable at every
-      // density, not only the ones that drop the visible label.
+      // own `sr-only` unavailable sentence.
       aria-label={statusBarResourceSegmentLabel(views)}
       data-testid="status-bar-resource-segment"
-      data-density={density}
       {...buttonProps}
       className={cn(
         "inline-flex h-6 max-w-full shrink-0 items-center gap-1.5 px-2 text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground",
@@ -107,32 +136,13 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
                   ·
                 </span>
               )}
-              <StatusBarMetric view={view} showLabel={density === "full"} />
+              <StatusBarMetric view={view} />
             </Fragment>
           ))}
         </>
       )}
     </button>
   );
-}
-
-/**
- * The button's whole accessible name: what it is, then each metric the strip is
- * showing and what it currently reads.
- *
- * `label: value` per metric, in the order they are drawn, so the name matches
- * the readout left to right. An unavailable metric says so rather than being
- * dropped — a name that silently omitted it would leave a reader who turned
- * the metric on with no way to tell it from one this build never draws.
- */
-function statusBarResourceSegmentLabel(
-  views: ReadonlyArray<StatusBarResourceMetricView>,
-): string {
-  if (views.length === 0) return "Resources, no metrics selected";
-  const readings = views
-    .map((view) => `${view.label} ${view.value ?? "unavailable"}`)
-    .join(", ");
-  return `Resources: ${readings}`;
 }
 
 /**
@@ -145,9 +155,8 @@ function statusBarResourceSegmentLabel(
  * repo's idiom (`MetricBlock`): an em dash is decoration, and a screen reader
  * left with it hears punctuation where a value should be.
  */
-function StatusBarMetric(props: {
+export function StatusBarMetric(props: {
   readonly view: StatusBarResourceMetricView;
-  readonly showLabel: boolean;
 }) {
   const { view } = props;
   return (
@@ -161,9 +170,7 @@ function StatusBarMetric(props: {
         className="inline-flex min-w-0 items-center gap-1"
         data-testid={`status-bar-resource-metric-${view.metric}`}
       >
-        {props.showLabel ? (
-          <span className="text-muted-foreground/80">{view.label}</span>
-        ) : null}
+        <span className="text-muted-foreground/80">{view.label}</span>
         {view.value === null ? (
           <>
             <span aria-hidden="true">{UNAVAILABLE_DASH}</span>

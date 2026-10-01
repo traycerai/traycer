@@ -30,9 +30,15 @@ export function FallbackCrossLinkRow(): ReactNode {
   return (
     <div className="rounded-lg border border-border/60 bg-card/40 px-5 py-4">
       <p className="max-w-[68ch] text-ui-sm text-muted-foreground">
-        When a turn stops on a provider error - a limit, an outage, a billing
-        problem, a signed-out account - Traycer can carry the chat on to another
-        account or an equivalent model instead of ending it.
+        {/* The causes came BACK after a user-lens review. Cutting them was
+            the one change that made this row worse: "when a provider stops a
+            turn" is the team's abstraction and reads like a refused request,
+            while "rate limit" is the words on the error the reader just saw.
+            Being on Profiles & Limits does not mean they already know which
+            problems this setting covers. */}
+        When a rate limit, outage, billing problem or signed-out account
+        interrupts your chat, Traycer can carry it on to another account or an
+        equivalent model instead of ending it.
       </p>
       <Button
         size="inline"
@@ -43,7 +49,7 @@ export function FallbackCrossLinkRow(): ReactNode {
           navigateToSettingsSection(FALLBACK_SETTINGS_SECTION_ID);
         }}
       >
-        Automatic fallback
+        Route automatically
         <ArrowRight className="size-3.5" aria-hidden />
       </Button>
     </div>

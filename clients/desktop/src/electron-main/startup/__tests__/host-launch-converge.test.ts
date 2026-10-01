@@ -1,4 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../../app/logger";
+import {
+  AUTOMATIC_INTENTS_HELD_MESSAGE,
+  AUTOMATIC_INTENTS_QUIESCED_MESSAGE,
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+} from "../../host/host-controller-types";
 import type { IpcHostController } from "../../ipc/runner-ipc-bridge";
 import type {
   ActivateInstalledOk,
@@ -121,6 +128,8 @@ function fakeStatus(
     activation,
     reachable: true,
     removedByUser,
+    lastEnsureFailure: null,
+    updateDeferral: null,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -254,6 +263,11 @@ function fakeHostController(
     deregisterService: () => {
       throw new Error(
         "fakeHostController.deregisterService: not used by these tests",
+      );
+    },
+    refreshServiceDefinition: () => {
+      throw new Error(
+        "fakeHostController.refreshServiceDefinition: not used by these tests",
       );
     },
     respawn: () => {
@@ -580,7 +594,10 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
   // had nobody left to re-register it and the machine stayed unreachable until
   // the next launch.
   it.each([
-    ["a failed apply", { kind: "failed" as const, message: "apply failed" }],
+    [
+      "a failed apply",
+      { kind: "failed" as const, message: "apply failed", errorCode: null },
+    ],
     [
       "a stage that no longer matches",
       { kind: "stage-fingerprint-mismatch" as const, message: "mismatch" },
@@ -613,6 +630,41 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
     expect(controller.applyStagedCalls).toEqual([["launch", false]]);
     expect(controller.convergeReadyCalls).toEqual([false]);
+  });
+
+  // The launch apply that WAITS on a disabled service registration is not a
+  // failed apply: the same switch is why the host is down, and the ensure a
+  // recovery would run is refused by it, so recovery is not chased (the
+  // update-ready row carries the notice and the enable action).
+  it("does not chase an apply deferred over a disabled service registration with a recovery", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      { kind: "deferred", message: HOST_UPDATE_SERVICE_DISABLED_MESSAGE },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+  });
+
+  it("does not chase an apply deferred over a task whose owner could not be confirmed", async () => {
+    const controller = fakeHostController(
+      fakeStatus(true, "unavailable", false),
+      {
+        kind: "deferred",
+        message:
+          "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.",
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.convergeReadyCalls).toEqual([]);
+    expect(controller.activateInstalledCalls).toEqual([]);
   });
 
   // `busy` is the one pass-through: the controller's own gate says the host
@@ -704,6 +756,7 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
         hostController,
         menu: fakeMenu(),
         signedIn: fakeSignedInGate(false),
+        localHostCapability: "managed",
       }),
       runDeferredBackground: background,
     });
@@ -916,6 +969,7 @@ describe("armLocalHostBootOnSignIn", () => {
             : {
                 kind: "failed" as const,
                 message: "installer could not write to the prefix",
+                errorCode: null,
               },
         );
       },
@@ -959,6 +1013,165 @@ describe("armLocalHostBootOnSignIn", () => {
     // Settled arms never re-arm, no matter how long the process keeps running.
     await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
     expect(convergeCalls).toEqual([false, false, false]);
+  });
+
+  describe("host lifecycle suspension deferrals", () => {
+    const BOOT_WARN = "[host-controller] local host boot did not complete";
+
+    function bootWarnCount(): number {
+      return vi
+        .mocked(log.warn)
+        .mock.calls.filter(([message]) => message === BOOT_WARN).length;
+    }
+
+    function controllerReturning(
+      results: readonly MutationOutcome<ConvergeReadyOk>[],
+      calls: boolean[],
+    ): IpcHostController {
+      const base = fakeHostController(
+        neverInstalled(false),
+        {
+          kind: "ok",
+          value: {
+            appliedVersion: "1.4.1",
+            runningActivated: true,
+            applied: true,
+          },
+        },
+        { kind: "ok", value: { activated: true } },
+      );
+      return {
+        ...base,
+        convergeReady: (force: boolean) => {
+          const index = Math.min(calls.length, results.length - 1);
+          calls.push(force);
+          return Promise.resolve(results[index]);
+        },
+      };
+    }
+
+    it("QUIESCED deferral retires the ladder: one call, no retry, no WARN", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [{ kind: "deferred", message: AUTOMATIC_INTENTS_QUIESCED_MESSAGE }],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(
+        LOCAL_HOST_BOOT_RETRY_LADDER_MS.reduce((sum, ms) => sum + ms, 0) * 2,
+      );
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    it("HELD deferral retries on the ladder without a WARN, and settles once ok", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [
+            { kind: "deferred", message: AUTOMATIC_INTENTS_HELD_MESSAGE },
+            { kind: "ok", value: { running: true, version: "1.4.0" } },
+          ],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0] - 1);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[3] * 2);
+      expect(calls).toHaveLength(2);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    it("another Windows user's task retires the ladder: one call, no retry, no WARN, and the sign-in subscription is released", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [{ kind: "deferred", message: SERVICE_TASK_NOT_OWNED_MESSAGE }],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(
+        LOCAL_HOST_BOOT_RETRY_LADDER_MS.reduce((sum, ms) => sum + ms, 0) * 2,
+      );
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    // T08 ruling 13: the unconfirmed-owner copy retires the ladder the same way.
+    it("a task whose owner could not be confirmed retires the ladder the same way", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      const gate = fakeSignedInGate(true);
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [
+            {
+              kind: "deferred",
+              message:
+                "Traycer couldn't confirm that the Traycer Host task on this PC belongs to your Windows account, so it left the task alone. Try again, or run `traycer host doctor`.",
+            },
+          ],
+          calls,
+        ),
+        gate,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(
+        LOCAL_HOST_BOOT_RETRY_LADDER_MS.reduce((sum, ms) => sum + ms, 0) * 2,
+      );
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(0);
+      expect(gate.listenerCount()).toBe(0);
+    });
+
+    it("control: a deferral with any other message still WARNs and retries", async () => {
+      vi.useFakeTimers();
+      vi.mocked(log.warn).mockClear();
+      const calls: boolean[] = [];
+      armLocalHostBootOnSignIn(
+        controllerReturning(
+          [
+            {
+              kind: "deferred",
+              message: "Another Traycer process is managing the host.",
+            },
+          ],
+          calls,
+        ),
+        fakeSignedInGate(true),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toHaveLength(1);
+      expect(bootWarnCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(LOCAL_HOST_BOOT_RETRY_LADDER_MS[0]);
+      expect(calls).toHaveLength(2);
+    });
   });
 
   it("installs once for a signed-in user on a machine that has never had a host", async () => {
@@ -1243,6 +1456,7 @@ describe("armLocalHostBootOnSignIn", () => {
     let convergeOutcome: MutationOutcome<ConvergeReadyOk> = {
       kind: "failed",
       message: "installer could not write to the prefix",
+      errorCode: null,
     };
     const convergeReadyCalls: boolean[] = [];
     const controller: IpcHostController = {
@@ -1407,6 +1621,7 @@ describe("armLocalHostBootOnSignIn", () => {
         return Promise.resolve({
           kind: "failed" as const,
           message: "installer could not write to the prefix",
+          errorCode: null,
         });
       },
     };
@@ -1458,6 +1673,7 @@ describe("armLocalHostBootOnSignIn", () => {
         return Promise.resolve({
           kind: "failed" as const,
           message: "installer could not write to the prefix",
+          errorCode: null,
         });
       },
     };
@@ -1596,6 +1812,7 @@ describe("armLocalHostBootOnSignIn", () => {
     resolveConverge({
       kind: "failed",
       message: "installer could not write to the prefix",
+      errorCode: null,
     });
     // WITHOUT the fix (`settled` left false by `dispose()`), this advance
     // would let the resolved continuation's `scheduleRetry()` arm rung 0 and

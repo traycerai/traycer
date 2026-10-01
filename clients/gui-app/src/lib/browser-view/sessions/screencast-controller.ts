@@ -18,6 +18,7 @@ import { VIEWER_CONTROL_PLANE_DEADLINES } from "@/lib/browser-view/sessions/cont
 import {
   buildScreencastPointerFrame,
   inputModifiers,
+  screencastHistoryKey,
   isScreencastModChord,
   isScreencastPasteChord,
   nextPointerClickCount,
@@ -32,6 +33,8 @@ import {
 } from "@/lib/browser-view/sessions/screencast-input-encoding";
 import type { BrowserInputChannelLabel } from "@/lib/browser-view/tiles/webrtc-media-registry";
 import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
+import { isTextHistoryShortcut } from "@traycer-clients/shared/keybindings/text-history-shortcut";
+import { isMac } from "@/lib/keybindings/platform";
 
 const WHEEL_LINE_HEIGHT_PX = 16;
 
@@ -254,6 +257,7 @@ type PendingTouchGesture =
  * displays.
  */
 export function createScreencastController(options: {
+  readonly readHostIsMac: () => boolean | null;
   readonly refs: ScreencastSessionRefs;
   readonly sendFrame: (frame: BrowserScreencastClientFrame) => void;
   readonly listeners: ScreencastControllerListeners;
@@ -355,7 +359,13 @@ export function createScreencastController(options: {
     ScreencastPointerInput["button"],
     ScreencastPointerInput
   >();
-  const forwardedKeyDowns = new Map<string, ScreencastKeyboardInput>();
+  const forwardedKeyDowns = new Map<
+    string,
+    {
+      readonly frame: ScreencastKeyboardInput;
+      readonly hostIsMac: boolean | null;
+    }
+  >();
   const claimedLocalCodes = new Set<string>();
 
   /**
@@ -395,8 +405,14 @@ export function createScreencastController(options: {
   const sendInput = (frame: ScreencastInputFrame): void => {
     if (activeArmEpoch === null) return;
     if (frame.kind === "keyboard") {
-      if (frame.type === "rawKeyDown") forwardedKeyDowns.set(frame.code, frame);
-      else if (frame.type === "keyUp") forwardedKeyDowns.delete(frame.code);
+      if (frame.type === "rawKeyDown") {
+        const held = forwardedKeyDowns.get(frame.code);
+        forwardedKeyDowns.set(frame.code, {
+          frame,
+          hostIsMac:
+            held === undefined ? options.readHostIsMac() : held.hostIsMac,
+        });
+      } else if (frame.type === "keyUp") forwardedKeyDowns.delete(frame.code);
     }
     // One encoder, two sinks: the DataChannels carry the SAME wire frame the
     // mux would have carried, so the host has a single parse path.
@@ -665,7 +681,7 @@ export function createScreencastController(options: {
   };
 
   const releaseForwardedPageKeys = (): void => {
-    for (const frame of Array.from(forwardedKeyDowns.values())) {
+    for (const { frame } of Array.from(forwardedKeyDowns.values())) {
       sendInput({ ...frame, type: "keyUp", autoRepeat: false });
     }
   };
@@ -1074,12 +1090,16 @@ export function createScreencastController(options: {
       return;
     }
     event.preventDefault();
+    const held = forwardedKeyDowns.get(event.code);
     sendInput({
       kind: "keyboard",
       type: "rawKeyDown",
       code: event.code,
-      key: event.key,
-      modifiers: inputModifiers(event),
+      ...screencastHistoryKey(
+        event,
+        isMac(),
+        held === undefined ? options.readHostIsMac() : held.hostIsMac,
+      ),
       autoRepeat: event.repeat,
     });
     if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
@@ -1102,14 +1122,16 @@ export function createScreencastController(options: {
       return;
     }
     if (activeArmEpoch === null) return;
-    if (!forwardedKeyDowns.has(event.code)) return;
+    const held = forwardedKeyDowns.get(event.code);
+    if (held === undefined) return;
     event.preventDefault();
     sendInput({
       kind: "keyboard",
       type: "keyUp",
       code: event.code,
-      key: event.key,
-      modifiers: inputModifiers(event),
+      // Metadata can arrive mid-press. Keep that press's platform while still
+      // reflecting modifiers released before this key.
+      ...screencastHistoryKey(event, isMac(), held.hostIsMac),
       autoRepeat: event.repeat,
     });
   };
@@ -1212,6 +1234,9 @@ export function createScreencastController(options: {
     handleTileKeyDown: (event) => {
       const tile = refs.tileRef.current;
       if (tile === null) return;
+      // Editing conventions win over physical browser chords. The IME input
+      // forwards the event to the page; an address field keeps its own undo.
+      if (isTextHistoryShortcut(event, isMac())) return;
       if (isScreencastModChord(event, "l")) {
         event.preventDefault();
         event.stopPropagation();

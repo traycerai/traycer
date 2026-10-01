@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatApprovalStateSchema } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ComposerSlotApprovalQueue } from "@/components/chat/segments/composer-slot-approval-queue";
+import type { AutoModeRuleDraftWorkspace } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { JUDGE_CAP_NOTICE } from "@/components/chat/segments/approval-card-disclosure";
 
 function approval(overrides: Partial<ChatApprovalState>): ChatApprovalState {
@@ -20,6 +21,11 @@ function approval(overrides: Partial<ChatApprovalState>): ChatApprovalState {
     ...overrides,
   });
 }
+
+const UNKNOWN_WORKSPACE: AutoModeRuleDraftWorkspace = {
+  remote: null,
+  branch: null,
+};
 
 describe("<ComposerSlotApprovalQueue /> disclosure ladder", () => {
   afterEach(() => {
@@ -40,6 +46,8 @@ describe("<ComposerSlotApprovalQueue /> disclosure ladder", () => {
         canAct
         onDecision={vi.fn()}
         highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -87,6 +95,8 @@ describe("<ComposerSlotApprovalQueue /> disclosure ladder", () => {
         canAct
         onDecision={vi.fn()}
         highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -128,6 +138,8 @@ describe("<ComposerSlotApprovalQueue /> disclosure ladder", () => {
         canAct
         onDecision={vi.fn()}
         highlightedApprovalId={null}
+        ruleDraftWorkspace={UNKNOWN_WORKSPACE}
+        onOpenSettings={vi.fn()}
       />,
     );
 

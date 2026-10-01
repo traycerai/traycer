@@ -352,20 +352,36 @@ const MEMORY_SAMPLE_INTERVAL_MS = 5 * 60_000;
 // Renderer working-set (KB) past which we surface a breadcrumb. The renderer
 // old-space ceiling is 4 GB (see `configureV8HeapSize`), raised
 // "conservatively; bump if telemetry shows usage approaching this" - 3 GB
-// working-set is that "approaching the cap" signal made observable.
+// working-set is that "approaching the cap" signal made observable. The two
+// are not the same number: a working set is the whole renderer process's
+// resident memory, not V8 old-space usage, so this is a proxy for nearing the
+// cap and not a heap reading.
 const RENDERER_MEMORY_WARN_KB = 3 * 1024 * 1024;
 // A renderer that legitimately sits above the cap would otherwise fire a
-// breadcrumb every sample tick; throttle the warn + Sentry event to at most
+// breadcrumb every sample tick; throttle the warn + breadcrumb to at most
 // once per renderer per hour so a sustained high-memory tab stays a signal,
 // not a flood.
 const MEMORY_WARN_THROTTLE_MS = 60 * 60_000;
-const lastMemoryWarnAtByPid = new Map<number, number>();
+
+interface RendererMemoryWarnState {
+  readonly lastWarnAt: number;
+  readonly captured: boolean;
+}
+
+const memoryWarnStateByPid = new Map<number, RendererMemoryWarnState>();
 
 /**
  * Low-frequency renderer-memory sampler. Logs per-renderer working-set and
  * breadcrumbs to Sentry when a renderer approaches the old-space cap, so the
  * "bump 4 GB if telemetry shows" loop the heap-size comment asks for actually
  * exists. `.unref()` so it never holds the process open.
+ *
+ * Every throttled crossing leaves a breadcrumb, which costs no quota and
+ * still rides along with any later crash report from the process; only the
+ * FIRST crossing for a pid also captures a message. That keeps the
+ * threshold-transition signal a warning-level event carries while capping the
+ * cost at one event per renderer - the per-hour event this used to send was
+ * 19k events in a single period, throttle included.
  */
 export function startRendererMemorySampler(): void {
   const timer = setInterval(() => {
@@ -375,9 +391,14 @@ export function startRendererMemorySampler(): void {
     const now = Date.now();
     for (const renderer of renderers) {
       if (renderer.memory.workingSetSize < RENDERER_MEMORY_WARN_KB) continue;
-      const lastWarnAt = lastMemoryWarnAtByPid.get(renderer.pid) ?? 0;
+      const state = memoryWarnStateByPid.get(renderer.pid);
+      const lastWarnAt = state?.lastWarnAt ?? 0;
       if (now - lastWarnAt < MEMORY_WARN_THROTTLE_MS) continue;
-      lastMemoryWarnAtByPid.set(renderer.pid, now);
+      const firstCrossing = state === undefined || !state.captured;
+      memoryWarnStateByPid.set(renderer.pid, {
+        lastWarnAt: now,
+        captured: true,
+      });
       const fields = {
         pid: renderer.pid,
         workingSetKb: renderer.memory.workingSetSize,
@@ -385,20 +406,28 @@ export function startRendererMemorySampler(): void {
       };
       log.warn("[diagnostics] renderer memory approaching cap", fields);
       if (isSentryEnabled()) {
-        SentryElectron.captureMessage(
-          "renderer memory approaching old-space cap",
-          {
-            level: "warning",
-            tags: { workingSetKb: String(renderer.memory.workingSetSize) },
-          },
-        );
+        SentryElectron.addBreadcrumb({
+          category: "renderer.memory",
+          level: "warning",
+          message: "renderer memory approaching old-space cap",
+          data: fields,
+        });
+        if (firstCrossing) {
+          SentryElectron.captureMessage(
+            "renderer memory approaching old-space cap",
+            {
+              level: "warning",
+              tags: { workingSetKb: String(renderer.memory.workingSetSize) },
+            },
+          );
+        }
       }
     }
     // Drop throttle state for renderers that no longer exist so the map
     // can't grow unbounded across renderer churn.
     const livePids = new Set(renderers.map((renderer) => renderer.pid));
-    for (const pid of lastMemoryWarnAtByPid.keys()) {
-      if (!livePids.has(pid)) lastMemoryWarnAtByPid.delete(pid);
+    for (const pid of memoryWarnStateByPid.keys()) {
+      if (!livePids.has(pid)) memoryWarnStateByPid.delete(pid);
     }
   }, MEMORY_SAMPLE_INTERVAL_MS);
   timer.unref();

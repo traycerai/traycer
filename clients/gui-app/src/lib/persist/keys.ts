@@ -163,6 +163,13 @@ export const interviewDraftKey = (chatId: string, blockId: string): string =>
     encodeURIComponent(blockId),
   );
 
+// A withdrawn opening prompt this device already put back in the chat's
+// composer, while the host has not yet confirmed the acknowledgement. One key
+// per chat, for the same cross-window isolation as the interview drafts above,
+// and on the same device-local tier as the composer draft the prompt went into.
+export const deliveryRestoreAckKey = (chatId: string): string =>
+  scopedPersistKey("delivery-restore-ack", encodeURIComponent(chatId));
+
 export const readingPositionKeyPrefix = (accountId: string): string =>
   `${scopedPersistKey(
     "reading-position",
@@ -262,6 +269,14 @@ export const PERSIST_STORES = [
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
+  // The new-agent modal's per-epic draft patch. Persisted (D21) so a modal
+  // draft survives a reload and lists before host sync, exactly as a chat
+  // draft does — same tier and same reasoning as `composerDraft`.
+  {
+    camelName: "newConversationDraft",
+    leaf: "new-conversation-drafts",
+    kind: "static",
+  },
   // Enumerated under the `interview-drafts` leaf, but persisted as one key per
   // (chatId, blockId) — `interview-drafts:{encChatId}:{encBlockId}` — for
   // cross-window isolation (see `interviewDraftKey`). The `traycer-gui-app:`
@@ -269,6 +284,14 @@ export const PERSIST_STORES = [
   {
     camelName: "interviewDraft",
     leaf: "interview-drafts",
+    kind: "static",
+  },
+  // Enumerated under the `delivery-restore-ack` leaf, but persisted as one key
+  // per chat (`delivery-restore-ack:{encChatId}`, see `deliveryRestoreAckKey`).
+  // The `traycer-gui-app:` prefix sweep in `wipe.ts` clears every one of them.
+  {
+    camelName: "deliveryRestoreAck",
+    leaf: "delivery-restore-ack",
     kind: "static",
   },
   {
@@ -327,6 +350,25 @@ export const PERSIST_STORES = [
   // display preferences, same tier as theme and font size, so machine-local
   // rather than identity-scoped.
   { camelName: "layout", leaf: "layout", kind: "static" },
+  // The layout editor's single-window lease: which window currently holds the
+  // editor open. Registered here, unlike the lease it replaces, so the
+  // module-load uniqueness assertion below can see it.
+  {
+    camelName: "layoutEditorLease",
+    leaf: "layout-editor-lease",
+    kind: "static",
+  },
+  // Where the layout inspector is docked (right, left or floating) and where
+  // a floating panel was last dragged to. Per device, like the layout itself.
+  { camelName: "layoutEditorDock", leaf: "layout-editor-dock", kind: "static" },
+  // The vertical tab strip's width and whether it is collapsed to a rail.
+  // Global across windows and kept outside the layout arrangement, so a drag
+  // of the handle is not a layout change.
+  { camelName: "sideTabStrip", leaf: "side-tab-strip", kind: "static" },
+  // When this device last sent the `layout_snapshot` analytics event. Read and
+  // written as one synchronous compare-and-set, so two windows launching
+  // together cannot both count the same device (L-54).
+  { camelName: "layoutSnapshot", leaf: "layout-snapshot", kind: "static" },
   // The one host every usage/resource surface READS
   // (`watch-host-store.ts`). Machine-local for the same reason the two picks
   // it replaces were: it names a machine to watch, not an account.

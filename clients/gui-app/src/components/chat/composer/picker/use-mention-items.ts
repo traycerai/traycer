@@ -71,6 +71,11 @@ import type {
   EpicTerminalMentionEntry,
   WorkspaceEntry,
 } from "@/lib/composer/types";
+import {
+  recentMentionPicks,
+  selectMentionPickBucket,
+  useMentionPickMemoryStore,
+} from "@/stores/composer/mention-pick-memory-store";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
@@ -94,6 +99,7 @@ const EMPTY_STEP_ENTRIES: MentionStepEntries = {
   entries: [],
   matchedCount: null,
 };
+const EMPTY_RECENT_PICKS: ReadonlyMap<string, number> = new Map();
 
 export interface UseMentionItemsParams {
   readonly pickerStore: ComposerPickerStore;
@@ -103,6 +109,7 @@ export interface UseMentionItemsParams {
 }
 
 interface MentionPickerSlice {
+  readonly hasPublishedItems: boolean;
   readonly active: boolean;
   readonly sessionId: number | null;
   readonly query: string;
@@ -110,6 +117,7 @@ interface MentionPickerSlice {
 }
 
 function selectMentionSlice(state: {
+  itemsForStepId: string | null;
   open: boolean;
   sessionId: number | null;
   kind: "mention" | "slash" | null;
@@ -118,6 +126,7 @@ function selectMentionSlice(state: {
 }): MentionPickerSlice {
   return {
     active: state.open && state.kind === "mention",
+    hasPublishedItems: state.itemsForStepId !== null,
     // Watched so a swap to a session with an identical query and step still
     // republishes the rows `openPicker` just dropped. See the slash picker's
     // slice for the swap this guards.
@@ -131,7 +140,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const { pickerStore, hostClient, mentionRoots, currentEpicId } = params;
 
   const slice = useStore(pickerStore, useShallow(selectMentionSlice));
-  const { active, sessionId, query, step } = slice;
+  const { active, sessionId, query, step, hasPublishedItems } = slice;
   const debouncedQuery = useDebouncedValue(query, MENTION_QUERY_DEBOUNCE_MS);
 
   // The @-mention Agent list is the ONLY consumer of the open-epic chat and
@@ -255,6 +264,31 @@ export function useMentionItems(params: UseMentionItemsParams): void {
     active,
   });
 
+  // Which rows this host's user picked this session, for the root search's
+  // recency nudge. The bucket identity only changes on a pick, so the map is
+  // rebuilt once per pick, never per keystroke.
+  const pickBucket = useMentionPickMemoryStore((state) =>
+    selectMentionPickBucket(state, readiness.hostId),
+  );
+  const recentPicks = useMemo<ReadonlyMap<string, number>>(
+    () => (active ? recentMentionPicks(pickBucket) : EMPTY_RECENT_PICKS),
+    [active, pickBucket],
+  );
+  // Every commit that inserts a mention lands here (keyboard and click both
+  // go through `commitActiveItem`), attributed to the composer's target host.
+  const pickHostId = readiness.hostId;
+  useEffect(() => {
+    const store = pickerStore.getState();
+    store.setMentionPickObserver((entry) => {
+      useMentionPickMemoryStore
+        .getState()
+        .recordPick(pickHostId, entry.id, Date.now());
+    });
+    return () => {
+      pickerStore.getState().setMentionPickObserver(null);
+    };
+  }, [pickHostId, pickerStore]);
+
   // The current epic's COMPLETE local artifact set, read the same churn-free way
   // (via `getState`) as the chats above. Cloud `epic.mention*` returns at most
   // 25 artifacts per kind across all epics, so on a large epic some of the
@@ -342,6 +376,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
+      recentPicks: EMPTY_RECENT_PICKS,
     }),
     [currentEpicId, emptyGithubContext, epicAttachedRoots, mentionRoots, query],
   );
@@ -359,6 +394,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       browserTabEntries: EMPTY_BROWSER_TAB_ENTRIES,
       epicAttachedRoots,
       github: emptyGithubContext,
+      recentPicks: EMPTY_RECENT_PICKS,
     }),
     [
       currentEpicId,
@@ -478,6 +514,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       browserTabEntries,
       epicAttachedRoots,
       github: github.context,
+      recentPicks,
     }),
     [
       currentEpicId,
@@ -490,18 +527,29 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       github.context,
       mentionRoots,
       query,
+      recentPicks,
       workspaceEntries,
       workspaceRequests.length,
     ],
   );
 
-  const stepEntries = useMemo<MentionStepEntries>(
+  const liveStepEntries = useMemo<MentionStepEntries>(
     () =>
       active
         ? mentionProviderRegistry.entriesWithMatches(step, resolvedContext)
         : EMPTY_STEP_ENTRIES,
     [active, resolvedContext, step],
   );
+
+  const stepEntries = liveStepEntries;
+  // Only an accepted setItems publication earns a hold. openPicker and
+  // setStep clear the store's stamp; a render attempt publishes nothing.
+  const holdPublishedItems =
+    hasPublishedItems &&
+    step.kind === "root" &&
+    workspaceRequests.length > 0 &&
+    workspaceFetching &&
+    !workspaceLoading;
   const entries = stepEntries.entries;
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
@@ -569,7 +617,11 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   }, [active, pickerStore, sessionId, step, stepChrome]);
 
   useEffect(() => {
-    if (!active || sessionId === null) return;
+    // While the workspace lane refetches, the store keeps the list it already
+    // has - built for the previous query, and stamped as such, so the store
+    // refuses to commit from it (see `commitActiveItem`) - rather than taking
+    // that list re-ranked under the live query and then the host's answer.
+    if (!active || sessionId === null || holdPublishedItems) return;
     pickerStore.getState().setItems({
       sessionId,
       kind: "mention",
@@ -585,7 +637,16 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       loadFailed: false,
       retryLoad: null,
     });
-  }, [active, items, loading, pickerStore, query, sessionId, step]);
+  }, [
+    active,
+    holdPublishedItems,
+    items,
+    loading,
+    pickerStore,
+    query,
+    sessionId,
+    step,
+  ]);
 
   useEffect(() => {
     if (!active) return;

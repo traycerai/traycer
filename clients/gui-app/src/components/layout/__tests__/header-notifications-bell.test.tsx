@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { HeaderNotificationsBell } from "@/components/layout/header/app-header";
+import { HeaderNotificationsBell } from "@/components/layout/header/header-actions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";

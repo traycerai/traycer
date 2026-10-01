@@ -1,3 +1,5 @@
+import { cssEscape } from "@/lib/dom/css-escape";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { requestPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
 import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -10,12 +12,13 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { duplicateEpicTab, openNewEpic } from "@/lib/commands/actions";
 import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
-import { stashActivePrompt } from "@/lib/commands/active-prompt-stash-registry";
+import { openActiveDraftsControl } from "@/lib/commands/active-drafts-control-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import { closeLayoutEditorForCloseTabChord } from "@/lib/layout/editor-session";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
-import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
 import type {
   NavigateNestedFocus,
@@ -437,13 +440,24 @@ const STATIC_HANDLERS: Readonly<Partial<Record<ActionId, StaticHandler>>> = {
   // No-op (false) when no composer is active, matching the "hidden/disabled"
   // surfaces.
   "composer.model-picker.toggle": () => toggleActiveModelPicker(),
-  "composer.stash": () => stashActivePrompt(),
+  "composer.drafts": () => openActiveDraftsControl("shortcut"),
 };
+
+export function openDrafts(entryPoint: "palette"): boolean {
+  if (openActiveDraftsControl(entryPoint)) return true;
+  useDesktopDialogStore.getState().openDrafts(entryPoint);
+  return true;
+}
 
 export function dispatchAction(
   id: ActionId,
   router: KeybindingRouter,
 ): boolean {
+  if (
+    (id === "tab.close" || id === "epic.close") &&
+    closeLayoutEditorForCloseTabChord()
+  )
+    return true;
   const dynamic = dynamicHandlerRegistry.get(id);
   if (dynamic !== undefined) {
     dynamic();
@@ -476,7 +490,7 @@ export function isExternallyHandled(id: ActionId): boolean {
 // canvas (the store reuses an active blank tab), but on the landing page it
 // shares the new-terminal handler, so it needs the same protection.
 const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
-  "composer.stash",
+  "composer.drafts",
   "composer.model-picker.toggle",
   "app.terminal.toggle",
   "app.terminal.new",
@@ -486,6 +500,11 @@ const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   // Unbound by default, so only a user-chosen chord can be held - and holding
   // it would walk the status bar between header and footer once per repeat.
   "app.status-bar.toggle",
+  // Unbound by default too; a held chord would flip the tabs between the top
+  // and the side once per repeat.
+  "app.tabs.vertical.toggle",
+  // A held chord would walk the strip between the rail and expanded.
+  "app.tabs.vertical.collapse",
 ]);
 
 export function isRepeatSensitiveAction(id: ActionId): boolean {
@@ -858,12 +877,5 @@ function focusActiveGroupEditor(router: KeybindingRouter): boolean {
 }
 
 function groupIdSelector(groupId: string): string {
-  return `[data-group-id="${escapeAttributeSelectorValue(groupId)}"]`;
-}
-
-function escapeAttributeSelectorValue(value: string): string {
-  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
-    return CSS.escape(value);
-  }
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `[data-group-id="${cssEscape(groupId)}"]`;
 }

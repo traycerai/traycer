@@ -209,9 +209,18 @@ describe("composer image attachment flow", () => {
     const posBefore = imagePositions(editor);
     expect(posBefore).toEqual([{ id: "pending-1", pos: 2 }]);
 
+    // Preparation can re-encode on the way to the store, so the rewrite carries
+    // the prepared metadata with the hash: the node must describe the bytes the
+    // hash addresses, not the ones that were pasted.
     const rewritten = editor.commands.rewriteImageAttachmentHashById(
       "pending-1",
-      "deadbeef".repeat(8),
+      {
+        hash: "deadbeef".repeat(8),
+        fileName: "shot.webp",
+        mimeType: "image/webp",
+        size: 4096,
+        byHashEligible: true,
+      },
     );
     expect(rewritten).toBe(true);
 
@@ -226,6 +235,9 @@ describe("composer image attachment flow", () => {
     if (node === null) return;
     expect(node.attrs.hash).toBe("deadbeef".repeat(8));
     expect(node.attrs.b64content).toBeNull();
+    expect(node.attrs.fileName).toBe("shot.webp");
+    expect(node.attrs.mimeType).toBe("image/webp");
+    expect(node.attrs.size).toBe(4096);
   });
 
   it("rewriteImageAttachmentHashById is a no-op for an unknown id", () => {
@@ -235,7 +247,13 @@ describe("composer image attachment flow", () => {
 
     const rewritten = editor.commands.rewriteImageAttachmentHashById(
       "missing-id",
-      "cafebabe".repeat(8),
+      {
+        hash: "cafebabe".repeat(8),
+        fileName: "missing.png",
+        mimeType: "image/png",
+        size: 12,
+        byHashEligible: true,
+      },
     );
 
     expect(rewritten).toBe(false);
@@ -286,6 +304,7 @@ function imageAttrs(id: string): ImageAttachmentAttrs {
     b64content: id,
     mimeType: "image/png",
     size: id.length,
+    byHashEligible: true,
   };
 }
 

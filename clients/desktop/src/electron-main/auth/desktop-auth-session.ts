@@ -77,19 +77,23 @@ export class DesktopAuthSession {
    * newer set that authn refused, or that is still verifying, installed
    * nothing, and dropping the older valid one behind it would leave main on
    * the previous (or empty) session while telling the older set's sender it
-   * was accepted - a sender that then never retries.
+   * was accepted - a sender that then never retries. Restoring a local pair
+   * does not supersede verification of that same pair (`setVerified`).
    */
   private nextGeneration = 0;
   private latestCommittedGeneration = 0;
+  // Local restoration must not cancel verification already in flight for the
+  // same stored pair. Explicit session transitions still fence that promotion.
+  private latestTransitionGeneration = 0;
 
   get(): VerifiedDesktopAuthSessionSnapshot {
     return this.snapshotValue;
   }
 
   /**
-   * Marks the start of a set whose commit is deferred (a verified set
-   * awaiting JWKS). The returned generation is handed back to `setVerified`,
-   * which drops the commit if a set begun after it has committed meanwhile.
+   * Marks the start of a deferred set (JWKS verification or a local store
+   * read). The returned generation fences its eventual commit against newer
+   * committed transitions.
    * Taken BEFORE the verification, not after: the fence is about which
    * intent is newest, and the intent is formed when the renderer sends it.
    */
@@ -108,7 +112,31 @@ export class DesktopAuthSession {
    * the sign-in it followed).
    */
   set(snapshot: DesktopAuthSessionSnapshot): void {
-    this.commit(snapshot, false, this.beginSet());
+    const generation = this.beginSet();
+    this.latestTransitionGeneration = generation;
+    this.commit(snapshot, false, generation);
+  }
+
+  /**
+   * Restores main's file-backed identity for local host selection. A sibling's
+   * verified session or an interactive transition wins over this offline read.
+   * The caller reads the stored pair after beginSet; no renderer profile or
+   * cloud verification is accepted through this path.
+   */
+  setLocal(snapshot: DesktopAuthSessionSnapshot, generation: number): boolean {
+    if (
+      snapshot.status !== "unverified" ||
+      snapshot.token === null ||
+      snapshot.profile === null ||
+      generation < this.latestCommittedGeneration ||
+      this.snapshotValue.status === "signing-in" ||
+      (this.snapshotValue.status === "signed-in" &&
+        this.snapshotValue.profile?.userId === snapshot.profile?.userId)
+    ) {
+      return false;
+    }
+    this.commit(snapshot, false, generation);
+    return true;
   }
 
   /**
@@ -116,21 +144,29 @@ export class DesktopAuthSession {
    * (`auth/bearer-verifier.ts`): the signature, the issuer and audience, the
    * expiry, and the subject against `profile.userId`.
    *
-   * `generation` is what `beginSet` returned when this set began. Returns
-   * `false` - and installs nothing, not even an unverified session, which
-   * would still replace the newer session's status and profile with the
-   * older one's - when a set begun after this one has already committed.
+   * `generation` is what `beginSet` returned when this set began. A newer
+   * explicit transition supersedes it. A local restore only supersedes a
+   * different pair: verification already in flight for the restored pair may
+   * still promote it, without replacing a newer sign-in or undoing sign-out.
    */
   setVerified(
     snapshot: DesktopAuthSessionSnapshot,
     generation: number,
   ): boolean {
-    if (generation < this.latestCommittedGeneration) return false;
+    if (generation < this.latestTransitionGeneration) return false;
+    if (
+      generation < this.latestCommittedGeneration &&
+      (snapshot.token !== this.snapshotValue.token ||
+        snapshot.profile?.userId !== this.snapshotValue.profile?.userId)
+    ) {
+      return false;
+    }
     // A bearer revoked while its verification was in flight (see
     // `revokedBearers`) lands as the session it is, minus the verification
     // the renderer has already withdrawn for it.
     const revoked =
       snapshot.token !== null && this.isRevoked(snapshot.token, Date.now());
+    this.latestTransitionGeneration = generation;
     this.commit(snapshot, !revoked, generation);
     return true;
   }
@@ -140,8 +176,8 @@ export class DesktopAuthSession {
    * session itself in place. The renderer calls this on a TERMINAL verdict
    * loss (authn rejected the refresh credential): the bearer it verified may
    * still be inside its expiry, so nothing about the token tells main, and
-   * the renderer's own `unverified` is deliberately never projected here -
-   * the status it would flatten to signs sibling windows out.
+   * local restoration deliberately preserves an existing signed-in session,
+   * so it cannot convey this loss of verification.
    *
    * Everything that speaks for the account reads `verified`, so this is the
    * whole of the teardown: the jar plane's principal reads `null` from the
@@ -231,7 +267,7 @@ export function normalizeDesktopAuthSession(
   snapshot: DesktopAuthSessionSnapshot,
 ): DesktopAuthSessionSnapshot {
   if (
-    snapshot.status === "signed-in" &&
+    (snapshot.status === "signed-in" || snapshot.status === "unverified") &&
     snapshot.token !== null &&
     snapshot.profile !== null
   ) {

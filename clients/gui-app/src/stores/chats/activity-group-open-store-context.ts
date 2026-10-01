@@ -2,8 +2,19 @@ import { createContext, use } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand/vanilla";
 
-export interface ActivityGroupOpenState {
+/**
+ * The groups a reader has opened or closed by hand in this chat. Kept as two
+ * sets because either one can be the choice that differs from the default:
+ * Layout > Chat > Tool activity (and Thinking, for a group that is only
+ * reasoning) decides how an UNTOUCHED group opens, and a hand choice always
+ * wins over it - including after the default changes (audit R1).
+ */
+export interface ActivityGroupOpenChoices {
   readonly openIds: ReadonlySet<string>;
+  readonly closedIds: ReadonlySet<string>;
+}
+
+export interface ActivityGroupOpenState extends ActivityGroupOpenChoices {
   readonly setOpen: (groupId: string, open: boolean) => void;
   /**
    * Groups that have RENDERED a nested reasoning header at least once.
@@ -41,8 +52,8 @@ export interface ActivityGroupOpenState {
    * spend the budget a real latch needed).
    *
    * Keyed by SEGMENT id, not by group id, and that is not cosmetic. A group's id
-   * is `deriveActivityGroupRenderId(segments[0].id)` - derived from its FIRST
-   * member - so a `[command, reasoning]` group whose command is later promoted
+   * is `deriveActivityGroupRenderId` of its run's FIRST member (hidden
+   * reasoning included) - so a `[command, reasoning]` group whose command is later promoted
    * out becomes `[reasoning]` under a DIFFERENT id. A group-keyed latch is
    * orphaned by exactly that move, and the surviving sole reasoning block goes
    * headerless and unfolds its trace: the discontinuity this set exists to
@@ -53,12 +64,11 @@ export interface ActivityGroupOpenState {
 }
 
 /**
- * Cap on remembered "expanded" activity group ids per chat-messages mount.
- * Default state is collapsed, so we only store explicit opens and drop the
- * entry when the user collapses again - this keeps the working set
- * proportional to "currently expanded", not "ever toggled". The FIFO cap
- * is belt-and-braces protection against a session that opens thousands of
- * groups without ever collapsing.
+ * Cap on remembered hand choices per chat-messages mount, per set. A choice
+ * moves between the two sets rather than accumulating in both, so each set is
+ * proportional to the groups currently held against the default. The FIFO cap
+ * is belt-and-braces protection against a session that toggles thousands of
+ * groups; an evicted group falls back to the default.
  */
 export const MAX_ACTIVITY_GROUP_OPEN_IDS = 256;
 
@@ -75,9 +85,16 @@ function useActivityGroupStoreFromContext(): StoreApi<ActivityGroupOpenState> {
   return store;
 }
 
-export function useActivityGroupOpen(groupId: string): boolean {
+/** The reader's own choice for this group, else `defaultOpen`. */
+export function useActivityGroupOpen(
+  groupId: string,
+  defaultOpen: boolean,
+): boolean {
   const store = useActivityGroupStoreFromContext();
-  return useStore(store, (state) => state.openIds.has(groupId));
+  return useStore(store, (state) => {
+    if (state.openIds.has(groupId)) return true;
+    return state.closedIds.has(groupId) ? false : defaultOpen;
+  });
 }
 
 export function useSetActivityGroupOpen(): (

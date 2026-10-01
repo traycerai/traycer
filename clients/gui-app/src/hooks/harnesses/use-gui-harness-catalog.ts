@@ -1,4 +1,9 @@
-import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -23,6 +28,8 @@ import {
 } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { automaticJudgeInputs } from "@/lib/auto-mode/auto-judge-billing";
+import { COMMAND_CATALOG_COMPOSER_STALE_MS } from "@traycer/protocol/host/agent/gui/command-catalog-policy";
 
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
@@ -48,31 +55,24 @@ import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-e
 //
 // `staleTime: Infinity` still leaves one hole: TanStack's NO-DATA path ignores
 // it, so a fan-out whose observers are enabled fetches every harness with no
-// cached entry. On the app-wide default host the prefetcher fills those slots
-// at app load and the hole never shows - but a composer pinned to another host
-// reads that HOST's cache slots, which nothing prefetched, so a picker or
-// palette subpage mounting there cold-started `listModels` for every available
-// harness at once: one spawned provider server per rail entry, on a host the
-// user had merely opened a picker on. `modelsFetch` (below) closes that hole:
-// only `"all-harnesses"` (the prefetcher's app-load fill) may fan out; every
-// other surface is `"cached-only"` and warms exactly the harness it is about
-// via its own targeted query on the shared cache slot.
+// cached entry. A picker or palette subpage mounting on a cold host used to
+// cold-start `listModels` for every available harness at once: one spawned
+// provider server per rail entry. `modelsFetch` (below) closes that hole:
+// `"all-harnesses"` is the explicit fan-out and no user-facing surface mounts
+// it; every other surface is `"cached-only"` and warms exactly the harness it
+// is about via its own targeted query on the shared cache slot.
 //
-// Models therefore refresh in exactly four places:
-//   - the app-load fill (`HarnessCatalogPrefetcher`), the ONLY fan-out
-//     (`modelsFetch: "all-harnesses"`), which populates the default host's
-//     cache once per app session; every surface renders from that cache,
-//     including while a refresh is in flight (a background refetch keeps the
-//     previous data, so `isPending` stays false and no surface blanks);
+// Models therefore refresh in exactly three places:
 //   - the picker's intent edges - popover open, harness selection - which
 //     refresh ONLY the selected harness, and only once its cached entry is
 //     older than `HARNESS_CATALOG_REFRESH_AFTER_MS`
 //     (`harnessCatalogEntryNeedsRefresh`);
 //   - targeted per-harness fetches on their surface's own gate: the picker's
 //     selected-harness and browsed-provider queries
-//     (`useGuiHarnessModelsQueryForClient`), and label surfaces warming their
-//     one subject harness (`useGuiHarnessModelsWarmup`) - each fetching a
-//     single harness's slot on the composer's / owner's host, never the rail;
+//     (`useGuiHarnessModelsQueryForClient`), the composer toolbar's selected
+//     harness, and label surfaces warming their one subject harness
+//     (`useGuiHarnessModelsWarmup`) - each fetching a single harness's slot
+//     on the composer's / owner's host, never the rail;
 //   - the picker's manual refresh button (`useRefreshHarnessCatalog`), whose
 //     `invalidateQueries` beats `staleTime: Infinity` and re-fetches every
 //     ACTIVE query (on a non-default host that is the picker's own targeted
@@ -149,9 +149,10 @@ export interface QueryActivityOptions {
  * cache for - it never affects what the catalog SURFACES (cached entries render
  * either way, and keep tracking cache updates):
  *   - `"all-harnesses"`: the model fan-out fetches every available harness with
- *     no cached entry. Reserved for the app-load fill; on a cold host this is
- *     one spawned provider server per rail entry, so no user-facing surface
- *     gets to be the trigger.
+ *     no cached entry. Boot no longer uses this: a cold `listModels` can spawn
+ *     a provider server, and the launch fill was one RPC per available
+ *     harness. Kept for tests and an explicit all-rail refresh. No user-facing
+ *     surface mounts it.
  *   - `"cached-only"`: the fan-out never fetches - entries surface whatever the
  *     shared cache slots hold. A surface that needs a specific harness resolved
  *     on a cold host owns a targeted query for it
@@ -257,6 +258,73 @@ interface CachedGuiHarnessesResponse extends ListGuiHarnessesResponse {
   >;
 }
 
+const LIST_HARNESSES = "agent.gui.listHarnesses";
+
+/**
+ * Refreshes this host's `autoJudge.get` when a harness response moves the
+ * facts Automatic's judge is decided on ({@link automaticJudgeInputs}).
+ *
+ * `autoJudge.get` is a FUNCTION of this catalog's Traycer row - the host reads
+ * the same settled row to choose between Traycer's default judge and the
+ * conversation's own provider - so it is invalidated from here, the one place
+ * every response for that row passes through, the way every provider mutation
+ * invalidates it (`PROVIDER_INVALIDATIONS`). A poll on `autoJudge.get` would
+ * duplicate this catalog's own cadence and still leave its answer stale
+ * between the two ticks; this reacts to the tick that saw the change.
+ *
+ * `previous === undefined` counts as a change: an `autoJudge.get` answered
+ * before this catalog's first response may predate the probe that response
+ * reports as settled, and nothing else would re-ask it. A host where nothing
+ * has read `autoJudge.get` is left alone.
+ *
+ * CANCEL, then invalidate - the same order `useAutoJudgeSetMutation` uses
+ * before it publishes a newer answer. A read already in flight was asked
+ * before this transition, and the host decided its verdict when the request
+ * arrived (`readAutomaticJudge` reads the Traycer row, then awaits its model
+ * read), so that answer is stale however late it lands. Invalidation alone
+ * does not replace it: for a query with no data yet, TanStack's `fetch`
+ * returns the pending promise rather than starting a new one, and that old
+ * read's success then clears the invalidated flag, so the composer would
+ * publish it as current. Cancelling reverts the query to idle (a first read
+ * back to "no answer") and the invalidation's refetch is then a NEW request,
+ * asked after the change.
+ */
+function invalidateAutoJudgeOnAutomaticInputs(
+  queryClient: QueryClient,
+  harnessesQueryKey: QueryKey,
+  previous: ListGuiHarnessesResponse | undefined,
+  next: ListGuiHarnessesResponse,
+): void {
+  const hostId = harnessesQueryKey[1];
+  // `["host", hostId, "agent.gui.listHarnesses", params]`; a query built with
+  // no host has no host-scoped verdict to refresh.
+  if (typeof hostId !== "string" || harnessesQueryKey[2] !== LIST_HARNESSES) {
+    return;
+  }
+  if (
+    previous !== undefined &&
+    automaticJudgeInputs(previous.harnesses) ===
+      automaticJudgeInputs(next.harnesses)
+  ) {
+    return;
+  }
+  const autoJudgeScope = hostQueryKeys.methodScope(hostId, "autoJudge.get");
+  // Nothing on this host has read the verdict, so there is nothing to refresh
+  // - and no invalidation to leave behind on a catalog refresh that has no
+  // business touching any other method.
+  // `findAll`, not `find`: `find` matches the key EXACTLY by default, and this
+  // is a method scope.
+  if (
+    queryClient.getQueryCache().findAll({ queryKey: autoJudgeScope }).length ===
+    0
+  ) {
+    return;
+  }
+  void queryClient
+    .cancelQueries({ queryKey: autoJudgeScope })
+    .then(() => queryClient.invalidateQueries({ queryKey: autoJudgeScope }));
+}
+
 export function useGuiHarnessesQueryForClient(
   client: HostClient<HostRpcRegistry> | null,
   activity: QueryActivityOptions,
@@ -273,6 +341,12 @@ export function useGuiHarnessesQueryForClient(
     mapResponse: ({ response, queryClient, queryKey }) => {
       const previous =
         queryClient.getQueryData<CachedGuiHarnessesResponse>(queryKey);
+      invalidateAutoJudgeOnAutomaticInputs(
+        queryClient,
+        queryKey,
+        previous,
+        response,
+      );
       return {
         ...response,
         harnesses: response.harnesses.map((harness) => {
@@ -423,7 +497,7 @@ export function useGuiHarnessCommandsQuery(
       // when the user types "/" - an intent edge in its own right, and the one
       // that already prewarms an OpenCode-backed server. Refreshing it at most
       // once per window on that edge is the behavior we want.
-      staleTime: HARNESS_CATALOG_REFRESH_AFTER_MS,
+      staleTime: COMMAND_CATALOG_COMPOSER_STALE_MS,
     },
   } satisfies UseHostQueryOptions<HostRpcRegistry, "agent.gui.listCommands">);
 }
@@ -480,20 +554,17 @@ export function useGuiHarnessCatalogForClient(
     cacheKeyIdentity: undefined,
     requests,
     options: {
-      // Only the app-load fill may fan out (see `CatalogQueryActivityOptions`):
-      // TanStack's no-data path ignores `staleTime`, so an enabled observer on
-      // a cold host's cache slot IS a fetch - and on a non-default host every
-      // slot is cold, which made a picker/palette mount there spawn every
-      // provider's server at once. A `"cached-only"` observer never fetches;
-      // it still surfaces and tracks the shared slots, which the surface's own
-      // targeted per-harness queries fill.
+      // `"all-harnesses"` is the explicit fan-out (see
+      // `CatalogQueryActivityOptions`). Boot no longer mounts it. A `"cached-only"`
+      // observer never fetches; it still surfaces and tracks the shared slots,
+      // which the surface's own targeted per-harness queries fill.
       enabled: activity.enabled && activity.modelsFetch === "all-harnesses",
       // Cache-only (see the module header). These observers are created and
       // destroyed as each surface activates, so a finite staleTime turned every
       // picker open / chat-tile reveal / palette subpage mount past the window
       // into a fan-out across EVERY harness. A harness with no cached entry yet
-      // (newly available, or the app-load fill still in flight) still fetches -
-      // TanStack's no-data path ignores staleTime - so this only suppresses
+      // (newly available, or a targeted first-use still in flight) still fetches
+      // - TanStack's no-data path ignores staleTime - so this only suppresses
       // re-pulling harnesses we already hold.
       staleTime: Infinity,
       // Match the standalone model-query contract above: inactivity may mark
@@ -549,6 +620,9 @@ export function useGuiHarnessCatalogForClient(
       attached && harnessesQuery.data !== undefined
         ? harnessesQuery.data.harnesses.map((harness) => {
             const modelQuery = queryByHarnessId.get(harness.id);
+            // TanStack structural-shares `query.data`; reuse that array so a
+            // label index keyed on models identity does not rebuild on a
+            // same-data refetch.
             const models = modelQuery?.data?.models ?? EMPTY_GUI_MODEL_OPTIONS;
             const retainPendingModels =
               harness.enabled &&

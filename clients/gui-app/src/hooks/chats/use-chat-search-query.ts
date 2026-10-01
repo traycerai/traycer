@@ -51,7 +51,8 @@ export interface ChatSearchLoadMoreError {
   readonly retry: () => void;
 }
 
-const SEARCH_QUERY_OPTIONS = {
+/** Shared by every `chat.search` read, the chat tile's find included. */
+export const CHAT_SEARCH_QUERY_OPTIONS = {
   // Neither refusal is transient: `E_HOST_UNSUPPORTED` is a host without the
   // index, `E_INVALID_ARGUMENT` a request the host will refuse again.
   retry: (failureCount: number, error: HostRpcError) =>
@@ -134,7 +135,7 @@ export function useChatSearchResults(args: {
     client,
     requests,
     cacheKeyIdentity: undefined,
-    options: SEARCH_QUERY_OPTIONS,
+    options: CHAT_SEARCH_QUERY_OPTIONS,
     combine: (results) => {
       if (base === null) return { kind: "idle" };
       const [first, ...rest] = results;
@@ -179,6 +180,8 @@ export type ChatSearchExpansionStatus =
   | {
       readonly kind: "ready";
       readonly messages: ReadonlyArray<ChatSearchMessageHit>;
+      /** Total from the expansion snapshot, when its chat group is present. */
+      readonly matchCount: number | null;
       readonly nextCursor: string | null;
       readonly loadingMore: boolean;
       /** A later page that failed; the rows before it stay. */
@@ -223,7 +226,7 @@ export function useChatSearchMessageRows(args: {
       },
     })),
     cacheKeyIdentity: undefined,
-    options: SEARCH_QUERY_OPTIONS,
+    options: CHAT_SEARCH_QUERY_OPTIONS,
     combine: (results) => {
       // `pageCursors` always holds the first page, so there is a result 0;
       // only it decides the whole expansion. A later page that failed keeps
@@ -244,6 +247,10 @@ export function useChatSearchMessageRows(args: {
       return {
         kind: "ready",
         messages: merged.messages,
+        matchCount:
+          first.data.messageMatches.find(
+            (match) => match.chatId === chatId && match.epicId === epicId,
+          )?.matchCount ?? null,
         nextCursor: merged.nextCursor,
         loadingMore: rest.some(
           (result) => result.data === undefined && !result.isError,

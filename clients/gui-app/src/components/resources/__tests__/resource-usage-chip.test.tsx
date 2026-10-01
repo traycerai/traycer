@@ -12,6 +12,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import {
   EpicResourceChip,
+  NavigatorResourceHotspotChip,
   OwnerResourceChip,
   ResourceUsageChip,
 } from "@/components/resources/resource-usage-chip";
@@ -428,5 +429,51 @@ describe("EpicResourceChip", () => {
     expect(
       screen.getByLabelText(/Epic resource usage: 40% CPU/),
     ).not.toBeNull();
+  });
+});
+
+// The overlay/ghost technique (`registersHotspot`, the Customize session, the
+// hotspot proxy) is gone (ticket 05): the component is now a plain gate over
+// `OwnerResourceChip`, so its own coverage is just the null-owner short
+// circuit plus the delegation - `OwnerResourceChip`'s own suite above owns
+// everything about the reading itself.
+describe("NavigatorResourceHotspotChip", () => {
+  it("renders nothing when there is no owner", () => {
+    const { container } = render(
+      <NavigatorResourceHotspotChip
+        owner={null}
+        metrics={["cpu"]}
+        className={undefined}
+      />,
+    );
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("delegates to OwnerResourceChip once given an owner: nothing until a snapshot arrives, then the reading", () => {
+    const stub = installStubFactory();
+    render(
+      <>
+        <ResourcesStreamMount epicId="epic-1" />
+        <NavigatorResourceHotspotChip
+          owner={{
+            epicId: "epic-1",
+            kind: "terminal",
+            ownerId: "s1",
+            hostId: "host-1",
+          }}
+          metrics={["cpu"]}
+          className={undefined}
+        />
+      </>,
+    );
+    expect(screen.queryByLabelText(/Resource usage/)).toBeNull();
+    act(() => {
+      stub
+        .emit()
+        .onSnapshot(
+          projection({ owners: [owner("terminal", "s1", { cpuPercent: 12 })] }),
+        );
+    });
+    expect(screen.getByLabelText(/Resource usage: 12% CPU/)).not.toBeNull();
   });
 });

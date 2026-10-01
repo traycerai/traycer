@@ -220,6 +220,22 @@
     {
       "family": "stream",
       "method": "chat.subscribe",
+      "version": "1.7",
+      "payload": "serverFrame",
+      "path": "**.grokPromptIndex",
+      "reason": "Grok session-anchor prompt-index field, first shipped on the unreleased @1.9. Every frozen anchor union (1.0-1.6 messages, 1.0-1.6 anchor_resolved, 1.7/1.8 rowContext) carries the pre-prompt-index grok arm, so this is scoped to the two paths 1.7 still reaches through LIVE schemas by reference: the message `sessionAnchor` (userMessageSchemaV18 is aliased to the live user message) and the blockDelta `user_message.anchor_resolved` event (runtimeEventSchema). Tolerated on the same grounds as turnTailUuid: nullable/.default(null), a released peer's strip-mode object drops the key, and no shipped client reads it - only the host's own rewind-fork resolution does."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "1.8",
+      "payload": "serverFrame",
+      "path": "**.grokPromptIndex",
+      "reason": "Same as the 1.7 entry: the 1.8 line reaches the field only through the live message schema (snapshot tail / range / messageAccepted) and the live runtime-event schema (blockDelta anchor_resolved); its frozen rowContext anchor union is already pre-prompt-index."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
       "path": "**.claudePendingWakes",

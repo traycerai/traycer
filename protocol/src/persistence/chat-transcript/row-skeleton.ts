@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * # The row skeleton
@@ -80,7 +81,7 @@ import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation"
  * whose body arrives longer or shorter than advertised is ordinary, not an
  * error, and the list re-measures on hydration either way.
  */
-const byteLengthSchema = z.number().int().nonnegative();
+const byteLengthSchema = lazySchema(() => z.number().int().nonnegative());
 
 /**
  * A fingerprint of everything about the row a client must DROP what it holds
@@ -154,7 +155,7 @@ const byteLengthSchema = z.number().int().nonnegative();
  * reader compares a digest across two sources - a digest is only ever compared
  * against the previous value for the same ordinal on the same connection.
  */
-const bodyDigestSchema = z.string().min(1).max(32);
+const bodyDigestSchema = lazySchema(() => z.string().min(1).max(32));
 
 /**
  * Preview length cap. Enforced here so a host bug cannot inflate every row.
@@ -176,65 +177,67 @@ const bodyDigestSchema = z.string().min(1).max(32);
  */
 export const ROW_SKELETON_PREVIEW_MAX_CHARS = 201;
 
-export const rowSkeletonEntrySchema = z.object({
-  /**
-   * The row's identity, built by `row-projection.ts`. Opaque here on purpose -
-   * a client matches it, it does not parse it.
-   */
-  rowId: z.string(),
-  /**
-   * The projection's placement key. Present so a client can verify the ordering
-   * it was handed rather than trust it - a host and client that disagree about
-   * order put bodies under the wrong rows, and this is the field that makes
-   * that detectable rather than silent.
-   *
-   * For an assistant row this is `rowAnchorAt`, NOT the record timestamp: every
-   * row of one turn shares the same value and their relative order comes from
-   * sort stability. So equal `createdAt` across neighbouring rows is ordinary
-   * here, not a tie to break.
-   */
-  createdAt: z.number(),
-  /**
-   * The role the row RENDERS as, which is not the same as a record's role.
-   * `system` is the setup card and the forked-chat link; a notification anchor
-   * and a synthesized stopped-turn boundary render as `assistant`; a steer
-   * bubble renders as `user`.
-   *
-   * An earlier draft narrowed this to the two persisted roles on the grounds
-   * that `system` had no persisted counterpart. That was right about records
-   * and wrong about rows - which is the whole distinction this schema now
-   * carries.
-   */
-  role: z.enum(["user", "assistant", "system"]),
-  byteLength: byteLengthSchema,
-  bodyDigest: bodyDigestSchema,
-  /**
-   * Minimap text for HUMAN user rows only. Assistant rows get their minimap
-   * label from role and status, and an A2A row from its sender - so previewing
-   * them would be bytes nothing reads.
-   *
-   * Whitespace-collapsed by the producer, because that is the form the consumer
-   * measures its budget in - see `ROW_SKELETON_PREVIEW_MAX_CHARS`.
-   */
-  preview: z.string().max(ROW_SKELETON_PREVIEW_MAX_CHARS).optional(),
-  /**
-   * Present (and always `true`) when the row was sent by another AGENT rather
-   * than a person - `sender.type === "agent"`, an `agent.sendMessage` delivery.
-   *
-   * A flag rather than the sender record, because the only consumer that reads
-   * an UNHYDRATED row is the minimap, and what it asks is a yes/no: it lists
-   * human turns and skips A2A ones (`isHumanUserMessage`). Everything that
-   * renders the agent's identity - the id, title, and reply affordance - runs
-   * against a hydrated row, which carries the whole sender.
-   */
-  sentByAgent: z.boolean().optional(),
-  /**
-   * Present on assistant rows that reported usage. The context chip scans
-   * backwards for the most recent one, so it must be answerable from the
-   * skeleton alone.
-   *
-   * Carried by the turn's LAST row, so a split turn reports its usage once.
-   */
-  usage: tokenUsageSchema.optional(),
-});
+export const rowSkeletonEntrySchema = lazySchema(() =>
+  z.object({
+    /**
+     * The row's identity, built by `row-projection.ts`. Opaque here on purpose -
+     * a client matches it, it does not parse it.
+     */
+    rowId: z.string(),
+    /**
+     * The projection's placement key. Present so a client can verify the ordering
+     * it was handed rather than trust it - a host and client that disagree about
+     * order put bodies under the wrong rows, and this is the field that makes
+     * that detectable rather than silent.
+     *
+     * For an assistant row this is `rowAnchorAt`, NOT the record timestamp: every
+     * row of one turn shares the same value and their relative order comes from
+     * sort stability. So equal `createdAt` across neighbouring rows is ordinary
+     * here, not a tie to break.
+     */
+    createdAt: z.number(),
+    /**
+     * The role the row RENDERS as, which is not the same as a record's role.
+     * `system` is the setup card and the forked-chat link; a notification anchor
+     * and a synthesized stopped-turn boundary render as `assistant`; a steer
+     * bubble renders as `user`.
+     *
+     * An earlier draft narrowed this to the two persisted roles on the grounds
+     * that `system` had no persisted counterpart. That was right about records
+     * and wrong about rows - which is the whole distinction this schema now
+     * carries.
+     */
+    role: z.enum(["user", "assistant", "system"]),
+    byteLength: byteLengthSchema,
+    bodyDigest: bodyDigestSchema,
+    /**
+     * Minimap text for HUMAN user rows only. Assistant rows get their minimap
+     * label from role and status, and an A2A row from its sender - so previewing
+     * them would be bytes nothing reads.
+     *
+     * Whitespace-collapsed by the producer, because that is the form the consumer
+     * measures its budget in - see `ROW_SKELETON_PREVIEW_MAX_CHARS`.
+     */
+    preview: z.string().max(ROW_SKELETON_PREVIEW_MAX_CHARS).optional(),
+    /**
+     * Present (and always `true`) when the row was sent by another AGENT rather
+     * than a person - `sender.type === "agent"`, an `agent.sendMessage` delivery.
+     *
+     * A flag rather than the sender record, because the only consumer that reads
+     * an UNHYDRATED row is the minimap, and what it asks is a yes/no: it lists
+     * human turns and skips A2A ones (`isHumanUserMessage`). Everything that
+     * renders the agent's identity - the id, title, and reply affordance - runs
+     * against a hydrated row, which carries the whole sender.
+     */
+    sentByAgent: z.boolean().optional(),
+    /**
+     * Present on assistant rows that reported usage. The context chip scans
+     * backwards for the most recent one, so it must be answerable from the
+     * skeleton alone.
+     *
+     * Carried by the turn's LAST row, so a split turn reports its usage once.
+     */
+    usage: tokenUsageSchema.optional(),
+  }),
+);
 export type RowSkeletonEntry = z.infer<typeof rowSkeletonEntrySchema>;

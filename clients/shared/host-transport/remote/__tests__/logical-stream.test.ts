@@ -32,6 +32,9 @@ function createStream(
     requestSessionReconnect(reason: string): void {
       reconnectReasons.push(reason);
     },
+    streamOutboundDebtBytes(): number {
+      return 0;
+    },
   };
   return new LogicalStream({
     streamId: 17,

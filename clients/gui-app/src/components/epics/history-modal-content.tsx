@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
+import type { HistoryScope } from "@/lib/history-scope";
+import { registerHistoryModalScope } from "@/lib/history-scope-handoff";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 
@@ -15,6 +17,8 @@ export interface HistoryModalContentProps {
 export function HistoryModalContent(
   props: HistoryModalContentProps,
 ): ReactNode {
+  const [scope, onScopeChange] = useState<HistoryScope>("all");
+  useLayoutEffect(() => registerHistoryModalScope(scope), [scope]);
   // No autofocus on a touch pointer: focusing the search input raises the
   // on-screen keyboard over half the just-opened sheet. The pointer is what
   // decides, not the width - a desktop window snapped narrow still types with
@@ -28,9 +32,13 @@ export function HistoryModalContent(
   // so without it `min-width: auto` sizes it to the list's content
   // min-width - wider than the frame once titles outgrow the viewport,
   // clipping the toolbar and row metadata past the right edge.
+  // The dialog surface bridge paints --popover over the frame's bg-background.
+  // Sticky headers must match that opaque rendered surface.
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="[--history-surface:var(--popover)] flex min-h-0 min-w-0 flex-1 flex-col">
       <EpicsListPanel
+        scope={scope}
+        onScopeChange={onScopeChange}
         variant="page"
         className={undefined}
         onSelectEpic={props.onSelectEpic}

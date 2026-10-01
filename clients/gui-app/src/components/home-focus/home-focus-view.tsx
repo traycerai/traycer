@@ -18,9 +18,10 @@
  *
  * Live updates arrive as new model values on the same mounted tree: rows carry
  * stable keys (a prompt's feed id, a task's epic id, a background job's key),
- * so a store change repaints rows instead of remounting them, and the relative
- * timestamps subscribe to the app's shared 60s clock inside their own leaves
- * rather than holding a timer here.
+ * so a store change repaints rows instead of remounting them, and every ticking
+ * label - a prompt's age on the app's shared 60s clock, a running job's
+ * elapsed on its own 1s tick - subscribes inside its own leaf rather than
+ * holding a timer here.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -54,9 +55,20 @@ import {
   type HomeHostGrouping,
 } from "@/hooks/home-focus/use-home-host-groups";
 import { HomeHostGroupedContext } from "@/components/home-focus/home-host-grouped-context";
+import { HomeGettingStartedSection } from "@/components/home-focus/home-getting-started-section";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import {
+  useAuthStore,
+  type AuthStatus,
+  type CloudVerdictLoss,
+} from "@/stores/auth/auth-store";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
-import type { FocusModel, FocusPromptRow } from "@/lib/home-focus/focus-model";
+import type {
+  FocusDegradedHost,
+  FocusDegradedReason,
+  FocusModel,
+  FocusPromptRow,
+} from "@/lib/home-focus/focus-model";
 
 /**
  * The same window-local limit both sections carry, said the way a task list
@@ -339,9 +351,9 @@ function liveSliceKeys(sections: HomeSections): ReadonlySet<string> {
  * epic id (they are optional on the wire), an epic with a pending prompt and no
  * running agent, warm chat or open page to make a group out of, and the host
  * split, which files a prompt under the machine it was RAISED on and drops it
- * from the slices of machines that did not raise it. Home's tab badge counts
- * prompts, so a prompt the page cannot show is a badge reading `1` over a page
- * showing nothing. Listing what no slice took - computed FROM the slices rather
+ * from the slices of machines that did not raise it. The header bell counts
+ * these same prompts, so a prompt the page cannot show is a bell reading `1`
+ * over a page showing nothing. Listing what no slice took - computed FROM the slices rather
  * than from a second guess at the same rule - is what makes that impossible
  * instead of merely unlikely.
  */
@@ -402,16 +414,19 @@ export function HomeFocusView(): ReactNode {
       {/* `pb-safe-bottom-gutter`, not `pb-6`: the page scrolls to its own end,
           so the last row has to clear the home indicator on a phone and still
           keep a real gutter on a desktop where every inset is zero. */}
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
         <HomeSummaryLine sections={sections} grouping={hostGrouping} />
         <ActivityCoverageNotice
           activity={model.coverage.activity}
+          degradedHosts={model.coverage.degradedHosts}
+          labelOf={hostGrouping.labelOf}
           attributedPerHost={degradedHostsAreVisible(
             model,
             hostGrouping,
             sections,
           )}
         />
+        <HomeGettingStartedSection />
         {empty ? (
           <HomeFocusEmptyState />
         ) : (
@@ -460,7 +475,7 @@ function HomeFocusSections(props: {
         }
         actions={actions}
         grouping={grouping}
-        degradedHostIds={model.coverage.degradedHostIds}
+        degradedHosts={model.coverage.degradedHosts}
         disclosure={disclosure}
       />
       <HomeTaskSection
@@ -471,7 +486,7 @@ function HomeFocusSections(props: {
         captions={RUNNING_CAPTIONS}
         actions={actions}
         grouping={grouping}
-        degradedHostIds={model.coverage.degradedHostIds}
+        degradedHosts={model.coverage.degradedHosts}
         disclosure={disclosure}
       />
     </>
@@ -518,10 +533,10 @@ function degradedHostsAreVisible(
   sections: HomeSections,
 ): boolean {
   if (!grouping.enabled) return false;
-  const degraded = model.coverage.degradedHostIds;
+  const degraded = model.coverage.degradedHosts;
   if (degraded.length === 0) return false;
   const visible = noticeBearingHostIds(sections);
-  return degraded.every((hostId) => visible.has(hostId));
+  return degraded.every((host) => visible.has(host.hostId));
 }
 
 /**
@@ -543,7 +558,12 @@ function ActivityCoverageNotice(props: {
    * degraded slice to pin it on, or a page with one host and no headings.
    */
   readonly attributedPerHost: boolean;
+  /** Why, per host - one line each under the headline, worst first. */
+  readonly degradedHosts: ReadonlyArray<FocusDegradedHost>;
+  readonly labelOf: (hostId: string) => string;
 }): ReactNode {
+  const authStatus = useAuthStore((state) => state.status);
+  const cloudVerdictLoss = useAuthStore((state) => state.cloudVerdictLoss);
   const degraded =
     !props.attributedPerHost &&
     (props.activity === "reconnecting" || props.activity === "disconnected");
@@ -555,16 +575,112 @@ function ActivityCoverageNotice(props: {
   return (
     <div role="status" aria-live="polite" className="contents">
       {degraded ? (
-        <p
+        <div
           data-testid="home-focus-activity-notice"
           data-activity={props.activity}
-          className="rounded-md bg-foreground/5 px-3 py-2 text-ui-xs break-words text-muted-foreground"
+          className="flex flex-col gap-1 rounded-md bg-foreground/5 px-3 py-2 text-ui-xs break-words text-muted-foreground"
         >
-          {ACTIVITY_NOTICE}
-        </p>
+          <p>{ACTIVITY_NOTICE}</p>
+          {props.degradedHosts.length === 0 ? (
+            <p data-testid="home-focus-activity-reason">
+              {unattributedReasonLine(authStatus, cloudVerdictLoss)}
+            </p>
+          ) : null}
+          {orderByReasonSeverity(props.degradedHosts).map((host) => (
+            <p key={host.hostId} data-testid="home-focus-activity-reason">
+              {degradedReasonLine(
+                host.reason,
+                <span className="font-medium text-foreground">
+                  {props.labelOf(host.hostId)}
+                </span>,
+              )}
+            </p>
+          ))}
+        </div>
       ) : null}
     </div>
   );
+}
+
+/** Worst first: a lost link before a reconnecting one, this client's own
+ * stream before the host's cloud link. Host id order within a reason. */
+const REASON_SEVERITY: Readonly<Record<FocusDegradedReason, number>> = {
+  "host-lost": 0,
+  "cloud-disconnected": 1,
+  "host-reconnecting": 2,
+  "cloud-reconnecting": 3,
+};
+
+function orderByReasonSeverity(
+  hosts: ReadonlyArray<FocusDegradedHost>,
+): ReadonlyArray<FocusDegradedHost> {
+  // A copy and `sort`, not `toSorted`: the installed mobile app still runs on
+  // iOS 15.5 WebViews, which predate it, and its bundle carries no polyfill.
+  return [...hosts].sort(
+    (a, b) => REASON_SEVERITY[a.reason] - REASON_SEVERITY[b.reason],
+  );
+}
+
+/**
+ * The line for a degraded verdict no host can be named for: no host's
+ * activity stream has reported yet. What the session knows about its own
+ * sign-in is the explanation when there is one - a signed-out app opens no
+ * stream at all, and an `unverified` one is holding credentials the host may
+ * refuse until authn answers - so it is said here rather than a generic
+ * "connecting" that would never resolve on its own.
+ */
+function unattributedReasonLine(
+  status: AuthStatus,
+  loss: CloudVerdictLoss,
+): string {
+  if (status === "signed-out")
+    return "You're signed out, so running tasks can't be loaded.";
+  if (status === "signing-in") return "Signing in…";
+  if (status === "unverified") {
+    switch (loss) {
+      case "unreachable":
+        return "Can't reach Traycer to confirm your sign-in, so running tasks may not load until it can.";
+      case "session-rejected":
+        return "Your session has expired. Sign in again to see running tasks.";
+      case "account-unavailable":
+        return "This account is no longer available, so running tasks can't be loaded.";
+      case "ended-elsewhere":
+        return "This window's session was ended from another window, so running tasks can't be loaded here.";
+    }
+  }
+  return "Connecting to your machines…";
+}
+
+/**
+ * The sentence for one degraded host. The two cloud reasons say what is at
+ * stake rather than only what is down: that host still serves its own tasks,
+ * and what goes missing is every OTHER machine's activity, which reaches this
+ * page through its cloud link.
+ */
+function degradedReasonLine(
+  reason: FocusDegradedReason,
+  host: ReactNode,
+): ReactNode {
+  switch (reason) {
+    case "host-lost":
+      return <>Lost connection to {host}. Its tasks aren't shown.</>;
+    case "host-reconnecting":
+      return <>Reconnecting to {host}…</>;
+    case "cloud-disconnected":
+      return (
+        <>
+          {host} isn't connected to Traycer, so tasks from your other machines
+          may be missing.
+        </>
+      );
+    case "cloud-reconnecting":
+      return (
+        <>
+          {host} is reconnecting to Traycer, so tasks from your other machines
+          may be missing.
+        </>
+      );
+  }
 }
 
 /**
@@ -744,7 +860,7 @@ function hostRowGroups<Row>(
   hostIdOf: (row: Row) => string | null,
   context: {
     readonly grouping: HomeHostGrouping;
-    readonly degradedHostIds: ReadonlyArray<string>;
+    readonly degradedHosts: ReadonlyArray<FocusDegradedHost>;
   },
 ): ReadonlyArray<HomeHostRowGroup<Row>> {
   const { grouping } = context;
@@ -760,7 +876,7 @@ function hostRowGroups<Row>(
       },
     ];
   }
-  const degraded = new Set(context.degradedHostIds);
+  const degraded = new Set(context.degradedHosts.map((host) => host.hostId));
   return groupRowsByHost(rows, hostIdOf, {
     activeHostId: grouping.activeHostId,
     registryOrder: grouping.registryOrder,
@@ -797,7 +913,7 @@ function HomeTaskSection(props: {
   readonly captions: ReadonlyArray<string>;
   readonly actions: HomeFocusRowActions;
   readonly grouping: HomeHostGrouping;
-  readonly degradedHostIds: ReadonlyArray<string>;
+  readonly degradedHosts: ReadonlyArray<FocusDegradedHost>;
   readonly disclosure: HomeFocusTaskDisclosure;
 }): ReactNode {
   const { section, actions, disclosure } = props;
@@ -805,7 +921,7 @@ function HomeTaskSection(props: {
   if (count === 0) return null;
   const taskGroups = hostRowGroups(section.slices, (slice) => slice.hostId, {
     grouping: props.grouping,
-    degradedHostIds: props.degradedHostIds,
+    degradedHosts: props.degradedHosts,
   }).map(({ items, ...group }) => ({
     ...group,
     rows: (

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LEGACY_COMPOSER_DRAFT_NAMESPACE,
+  interviewDraftBindingKey,
   legacyComposerDraftId,
   migratedLegacyComposerDraftId,
   mintDraftId,
@@ -54,5 +55,33 @@ describe("migratedLegacyComposerDraftId", () => {
     expect(migratedLegacyComposerDraftId("legacy-composer-")).toBe(
       "legacy-composer-",
     );
+  });
+});
+
+/**
+ * These pin the RUNTIME value produced by `interviewDraftBindingKey`, not how
+ * the source spells its separator. The separator is U+0000: the source now
+ * writes it as a Unicode escape, but it was once a literal NUL byte in the
+ * template literal, which made grep/ripgrep classify the whole file as binary
+ * and skip it in a directory walk. Either spelling compiles to the same
+ * runtime string, so this describe block cannot tell them apart - it can only
+ * confirm the persisted-key contract (chatId + NUL + blockId) still holds.
+ * `no-raw-nul-byte-in-source.test.ts` is the guard that reads the source
+ * bytes and catches a literal NUL if one is reintroduced.
+ */
+describe("interviewDraftBindingKey", () => {
+  it("joins chatId and blockId with a literal U+0000 separator", () => {
+    const key = interviewDraftBindingKey("chat-1", "block-1");
+
+    expect(key).toBe("chat-1" + String.fromCharCode(0) + "block-1");
+    expect(key).toHaveLength(14);
+    expect(key.charCodeAt(6)).toBe(0);
+  });
+
+  it("does not collide across chatId/blockId boundaries the way plain concatenation would", () => {
+    const keyA = interviewDraftBindingKey("a", "bc");
+    const keyB = interviewDraftBindingKey("ab", "c");
+
+    expect(keyA).not.toBe(keyB);
   });
 });

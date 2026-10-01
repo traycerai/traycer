@@ -1,3 +1,4 @@
+export * from "./organization";
 export * from "./agent";
 export * from "./agent-session-state";
 export * from "./asset-stream-schemas";
@@ -13,6 +14,8 @@ export * from "./editor";
 export * from "./epic";
 export * from "./fallback-policy";
 export * from "./git-asset-stream";
+export * from "./tunnel-stream";
+export * from "./port-forward";
 export * from "./host-agent-capabilities";
 export * from "./git-contracts";
 export * from "./git-constants";

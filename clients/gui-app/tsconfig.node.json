@@ -2,7 +2,7 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": ["ES2024"],
     "module": "ESNext",
     "types": ["node"],
     "skipLibCheck": true,
@@ -23,6 +23,8 @@
   "include": [
     "vitest.config.ts",
     "vitest.react-compiler.config.ts",
+    "vite.browser-tests.config.ts",
+    "playwright.config.ts",
     "scripts",
     "types",
     "vite"

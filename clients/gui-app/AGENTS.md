@@ -11,18 +11,22 @@ Tailwind v4, shadcn/ui, Vitest + Testing Library.
 ```bash
 # from clients/gui-app/
 bun run dev
-bun run build
-bun run test
-bun run lint
-bun run compile
-bun run react-doctor   # manual after .ts/.tsx changes; not in pre-commit
+bun run lint:files <paths>   # the files you changed; CI runs the whole-project lint
+bunx vitest run <path>       # one test file; CI runs the suite
 ```
 
-Changed-files-only: `npx -y react-doctor@latest . --verbose --diff <base> --offline --no-score`.
+After .ts/.tsx changes, run react-doctor on the changed files only (manual; not
+in pre-commit): `npx -y react-doctor@latest . --verbose --diff <base> --offline
+--no-score`. `bun run react-doctor` scans the whole project.
 
-After making changes, run `bun run lint` and fix all errors. `@shadcn/lint`
-runs there and reads `components.json` and `src/index.css`, so its errors name
-this app's real variants, sizes and tokens — the fix is in the message.
+After making changes, lint the files you changed with `bun run lint:files
+<paths>` and fix all errors. `@shadcn/lint` runs there and reads
+`components.json` and `src/index.css`, so its errors name this app's real
+variants, sizes and tokens — the fix is in the message. Don't run `bun run
+lint`, `test` or `build` here, and run `compile` only to diagnose its failure:
+each is a whole-project run (the lint needs about 9 GB whichever files you
+touched). The commit hook lints and compiles, and CI runs all four (see the
+root `AGENTS.md`).
 
 **A `shadcn/no-restyle` error is answered in `src/components/ui/`, not in
 `eslint.config.mjs`.** Every design-system component has a CONTRACT in that
@@ -37,10 +41,10 @@ variant. A treatment that is genuinely one file's own goes in
 `restyleExemptions`, one entry per file, `allow` keyed by the contract it opens
 and the reason written above it.
 
-**Commits:** don't manually run `compile` / `build` / `lint` / `format` before
-committing — repo-root `pre-commit` already runs the affected checks (see root
-`AGENTS.md`). Tests are CI, not the hook. Re-run checks only when diagnosing
-failures. `react-doctor` stays manual (not hooked).
+**Commits:** nothing needs running by hand before a commit — repo-root
+`pre-commit` already runs the affected checks (see root `AGENTS.md`), and
+`lint:files` above is feedback while you work, not a gate. Tests are CI, not
+the hook. `react-doctor` stays manual (not hooked).
 
 ## Map
 
@@ -62,13 +66,18 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
 - **`cn(...)`** from `@/lib/utils` for all composed `className`s. No template
   literals / `+` / `.join(" ")`. Static single strings OK.
 - **Fluid layout sizing** — `w-full`, `max-w-*`, viewport caps. No fixed px/rem
-  for layout surfaces (icons / touch targets OK). One recorded exception:
-  Settings ▸ Layout's status-bar preview frame
-  (`panels/layout/status-bar-preview.tsx`) is a SIMULATED viewport whose width
-  control names a pixel width, so it draws `w-[480px]` / `w-[880px]` /
-  `w-[920px]` — always under `max-w-full`, since a frame wider than the
-  ~944px Settings pane silently pushes the strip's right-hand cluster
-  off-screen. A new fixed-px layout width needs the same kind of argument.
+  for layout surfaces (icons / touch targets OK). One recorded exception, a
+  SIMULATED viewport, where the pixel size is the thing being simulated
+  rather than a layout choice:
+  - The layout inspector is 380px wide (`layout-editor.css`), always under
+    `max-width: 100%`. It is an instrument panel like DevTools: a fluid width
+    would change the measured width of the specimen stage, which is the thing
+    the user is judging.
+
+  A new fixed-px layout width needs the same kind of argument.
+  (The previous entry named `panels/layout/status-bar-preview.tsx`, deleted
+  with the legacy Layout page.)
+
 - **Safe area** — never write `env(safe-area-inset-*)`; `index.css` owns the
   only reads. `#root` reserves the top and both horizontal insets app-wide
   (landscape is supported, so the sensor housing can be on either side), which
@@ -176,7 +185,8 @@ Host scope: tab tiles use `useTabHostId()` / `useTabHostClient()`; app-wide
 surfaces use `useEffectiveHostId()` / `useHostClient()`. Don't mix.
 `useEffectiveHostId()` is the selection authority's DERIVED host (selection
 model §1) — one decider per app, delivered to every window. Settings ▸ Activate
-is the only UI gesture that changes it; no picker anywhere writes it, and
+and the account menu's Host section are the only UI gestures that change it,
+both through the one seam (`useMakeActiveHost`); no other picker writes it, and
 `HostDirectoryService.selectById` is lint-restricted to the one authority
 bridge. Surface pickers write a per-surface pin (`useSurfaceHostPin`), and a
 surface with no usable pin resolves its default before `useEffectiveHostId()`.
@@ -343,6 +353,12 @@ nested-focus dimension still bans the raw store actions underneath.
 Prefer integrated tests (real stores/docs/watchers) over isolated units. Fake
 only external/nondeterministic boundaries. Reset stores between tests; use
 Testing Library role queries.
+
+A claim jsdom cannot decide - real layout, painted pixels, real input
+dispatch - is a Playwright spec in `browser-tests/` against a fixture page in
+`src/__tests__/browser/`; read `browser-tests/README.md` first. Run one file
+with `bun run test:browser browser-tests/<file>.spec.ts`; CI runs them all in
+`browser-regressions.yml`. Everything else stays in Vitest.
 
 ## Skills (use when matched)
 

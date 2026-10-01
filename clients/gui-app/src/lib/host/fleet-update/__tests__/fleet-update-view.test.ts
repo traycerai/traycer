@@ -496,6 +496,38 @@ describe("projectFleetUpdateView — retained last-known phase (lastKnownKind)",
   });
 });
 
+describe("projectFleetUpdateView — error code", () => {
+  it("a failed attempt carries error.code beside errorMessage", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: attemptOperation({
+          phase: "failed",
+          execution: "terminal",
+          error: {
+            code: "E_HOST_STORE_FORMAT_FLOOR",
+            message: "refused by the floor",
+            phase: "applying",
+          },
+        }),
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("failed");
+    expect(view.errorMessage).toBe("refused by the floor");
+    expect(view.errorCode).toBe("E_HOST_STORE_FORMAT_FLOOR");
+  });
+
+  it("errorCode is null when the attempt has no error", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({ operation: attemptOperation({}) }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.errorCode).toBeNull();
+  });
+});
+
 describe("projectFleetUpdateView — liveness", () => {
   it("liveness: interrupted overrides the phase and projects failed", () => {
     const view = projectFleetUpdateView({
@@ -741,6 +773,40 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     expect(warrantsFastPoll(view)).toBe(false);
     // Visible, though: this is a card, not a quiet state.
     expect(isQuietUpdateView(view)).toBe(false);
+  });
+
+  // PR2069 (CodeRabbit): the `stale` branch used to read only the raw phase,
+  // so a wire that had concluded finalizing-record lost that conclusion the
+  // instant it expired and fell back to the bare `verifying` phase.
+  it("a stale wire read that concluded finalizing-record keeps that as its retained kind, not bare verifying", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.1.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("finalizing-record");
+    expect(view.lastKnownKind).not.toBe("verifying");
+    expect(view.qualified).toBe(true);
+  });
+
+  it("a stale wire read at the old running version still decays to bare verifying — staleness alone does not manufacture a success", () => {
+    const view = projectFleetUpdateView({
+      observation: observation({
+        operation: abandonedVerify({}),
+        runningVersion: "2.0.0",
+        freshUntilMs: NOW_MS - 1,
+      }),
+      nowMs: NOW_MS,
+      connected: true,
+    });
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("verifying");
+    expect(view.lastKnownKind).not.toBe("finalizing-record");
   });
 });
 
@@ -1258,6 +1324,7 @@ function recordObservation(
     targetVersion: "2.0.0",
     phase: "preparing",
     errorMessage: null,
+    errorCode: null,
     // Un-probed by default, which is what a parked or terminal record carries
     // and what every case here that is not ABOUT liveness should assert
     // against — `live` is the exceptional verdict, so it has to be asked for.
@@ -2178,15 +2245,9 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
   });
 
   it("(3) complete with installed == running keeps its COMPLETE kind - the acknowledgement is not spent to reach the rule", () => {
-    // The FALL-BACK half, and the reason the rule is not a replacement. With
-    // no park the attempt arm still answers, so the landing banner's
-    // completion acknowledgement (`useLandingCompletionCollapse`, keyed on
-    // `kind === "complete"` and the attempt id) survives. Its own leg passes
-    // `legacyFacts: null` — the fixture default here — so a substitution that
-    // returned `{kind:"none"}`'s answer outright would project `idle` and
-    // delete that surface. Falsification: make the fall-through return the
-    // `none` arm's result instead of falling back, and this reddens along
-    // with `host-update-banner-bound.test.tsx:437` and `:1001`.
+    // With no record-derived park, the attempt still projects `complete` for
+    // Settings to acknowledge. Landing suppresses only its presentation;
+    // replacing this result with `idle` would also remove the Settings notice.
     const view = projectFleetUpdateView({
       observation: observation({
         operation: attemptOperation({

@@ -93,3 +93,67 @@ describe("RangeHighlighter", () => {
     expect(document.head.querySelectorAll("style")).toHaveLength(0);
   });
 });
+
+describe("paintRanges", () => {
+  it("paints the given active range as active and the rest as match", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const rangeA = rangeIn(root, "alpha");
+    const rangeB = rangeIn(root, "bravo");
+    const rangeC = rangeIn(root, "charlie");
+    const highlighter = new RangeHighlighter();
+
+    highlighter.paintRanges(root, [rangeA, rangeB, rangeC], rangeB);
+
+    const active = [...registry.entries()].find(([name]) =>
+      name.startsWith("traycer-find-active-"),
+    );
+    const match = [...registry.entries()].find(([name]) =>
+      name.startsWith("traycer-find-match-"),
+    );
+    expect(active?.[1].ranges).toEqual([rangeB]);
+    expect(match?.[1].ranges).toEqual([rangeA, rangeC]);
+    highlighter.dispose();
+  });
+
+  it("deletes the active highlight when active is null", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const rangeA = rangeIn(root, "alpha");
+    const rangeB = rangeIn(root, "bravo");
+    const highlighter = new RangeHighlighter();
+    highlighter.paintRanges(root, [rangeA, rangeB], rangeA);
+    expect(
+      [...registry.keys()].some((name) =>
+        name.startsWith("traycer-find-active-"),
+      ),
+    ).toBe(true);
+
+    highlighter.paintRanges(root, [rangeA, rangeB], null);
+
+    expect(
+      [...registry.keys()].some((name) =>
+        name.startsWith("traycer-find-active-"),
+      ),
+    ).toBe(false);
+    const match = [...registry.entries()].find(([name]) =>
+      name.startsWith("traycer-find-match-"),
+    );
+    expect(match?.[1].ranges).toEqual([rangeA, rangeB]);
+    highlighter.dispose();
+  });
+
+  it("clears both highlights when there are no ranges and active is null", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const rangeA = rangeIn(root, "alpha");
+    const highlighter = new RangeHighlighter();
+    highlighter.paintRanges(root, [rangeA], rangeA);
+    expect(registry.size).toBeGreaterThan(0);
+
+    highlighter.paintRanges(root, [], null);
+
+    expect(registry.size).toBe(0);
+    highlighter.dispose();
+  });
+});

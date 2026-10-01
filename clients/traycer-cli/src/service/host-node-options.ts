@@ -64,18 +64,28 @@ export const HOST_DIAGNOSTIC_REPORT_FLAGS =
 
 const HOST_APPENDED_FLAGS = `${HOST_V8_FLAGS} ${HOST_DIAGNOSTIC_REPORT_FLAGS}`;
 
-// Value-taking flags this helper canonically owns. Each is stripped from the
-// inherited value before the canonical set is appended.
+// Value-taking flags this helper strips before appending the canonical set.
+// Node's NODE_OPTIONS allowlist admits the four heap-limit families below.
+// An inherited old-generation flag would override a Worker's
+// resourceLimits.maxOldGenerationSizeMb, so none may reach the spawned host.
+// The one deliberate exception is our own semi-space cap, re-appended below:
+// it overrides workers' young-generation limit, not their old-generation cap.
 //
 // The strip MUST be quote-aware and MUST cover the space-separated form:
-// NODE_OPTIONS accepts `--flag value` as well as `--flag=value`, and values
+// some NODE_OPTIONS flags accept `--flag value` as well as `--flag=value`, and values
 // may be double-quoted (`--report-directory="/path with spaces"`). Removing
 // only the flag leaves the VALUE behind as a bare token, and Node rejects the
 // whole of NODE_OPTIONS on an unrecognized token - so the host never starts
-// at all. That is the worst failure a diagnostics change can ship, which is
-// why every arm goes through one shared pattern instead of hand-rolled
-// variants that drift (the `--max-semi-space-size` arm had exactly that gap).
+// at all. That is the worst failure a diagnostics change can ship.
+//
+// So the strip works on Node's own TOKENS, never on the raw text: a text match
+// also fires inside another option's quoted value, and
+// `--require="./my --max-old-space-size=4096 module.js"` then loads a module
+// that does not exist. See `tokenizeNodeOptions`.
 const VALUE_FLAGS_OWNED = [
+  "--max-old-space-size",
+  "--max-old-space-size-percentage",
+  "--max-heap-size",
   "--max-semi-space-size",
   "--report-directory",
   // Not appended by us, but stripped: an inherited constant report filename
@@ -91,38 +101,107 @@ const BOOLEAN_FLAGS_OWNED = [
   "--report-compact",
 ] as const;
 
-// `--flag`, optionally followed by `=value` or ` value`, where value may be
-// quoted. The space-separated arm refuses to swallow a following `--flag`, so
-// a malformed value-less token cannot eat its neighbor.
-function valueFlagPattern(flag: string): RegExp {
-  return new RegExp(
-    `(^|\\s)${flag}(?:=(?:"[^"]*"|\\S+)|\\s+(?:"[^"]*"|(?!--)\\S+))?(?=\\s|$)`,
-    "g",
-  );
+const OWNED_VALUE_FLAGS: ReadonlySet<string> = new Set(VALUE_FLAGS_OWNED);
+const OWNED_BOOLEAN_FLAGS: ReadonlySet<string> = new Set(BOOLEAN_FLAGS_OWNED);
+
+/** One NODE_OPTIONS token: as written, and as Node reads it. */
+interface NodeOptionsToken {
+  /** The token's text exactly as written, quotes and escapes included. */
+  readonly raw: string;
+  /** The argument Node passes on: quotes removed, escapes applied. */
+  readonly value: string;
+}
+
+// Splits NODE_OPTIONS exactly as Node does (`ParseNodeOptionsEnvVar` in
+// `src/node_options.cc`), measured on Node 24.20:
+//   - only a SPACE outside double quotes separates tokens; a tab is part of
+//     the token (`--title=a<TAB>--trace-warnings` sets that whole title);
+//   - a double quote opens or closes a quoted run and is not itself part of
+//     the argument, so `"--title=q r"` and `--title="q r"` both read `q r`;
+//   - inside a quoted run a backslash escapes the next character;
+//   - single quotes are ordinary characters (`--title='a b'` reads `'a`);
+//   - quotes alone start no argument (`""` between spaces is nothing).
+// Each token keeps its raw text so a token that survives the strip is passed
+// on byte for byte.
+function tokenizeNodeOptions(options: string): NodeOptionsToken[] {
+  const tokens: NodeOptionsToken[] = [];
+  let raw = "";
+  let value = "";
+  let started = false;
+  let quoted = false;
+  const flush = (): void => {
+    if (started) tokens.push({ raw, value });
+    raw = "";
+    value = "";
+    started = false;
+  };
+  for (let index = 0; index < options.length; index += 1) {
+    const char = options[index];
+    if (quoted && char === "\\" && index + 1 < options.length) {
+      raw += char + options[index + 1];
+      value += options[index + 1];
+      started = true;
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      raw += char;
+      continue;
+    }
+    if (char === " " && !quoted) {
+      flush();
+      continue;
+    }
+    raw += char;
+    value += char;
+    started = true;
+  }
+  flush();
+  return tokens;
+}
+
+// The option a token names: the part before `=`, with `_` read as `-` the way
+// Node reads option names (the value keeps its underscores).
+function optionName(value: string): string {
+  const equals = value.indexOf("=");
+  const name = equals === -1 ? value : value.slice(0, equals);
+  return name.replaceAll("_", "-");
 }
 
 // Appends the host's required creation-time flags to an inherited
-// NODE_OPTIONS value, after stripping every token this helper owns - so the
-// host always lands on the canonical set whether the inherited value is the
-// macOS plist's identical copy (a true no-op) or something an operator set in
-// their shell that would silently defeat or duplicate it. Unrelated operator
-// tokens are preserved.
+// NODE_OPTIONS value, after stripping heap-limit overrides and every token
+// this helper owns. The host always lands on the canonical set whether the
+// inherited value is the macOS plist's identical copy (a true no-op) or
+// something an operator set in their shell. Unrelated operator tokens survive
+// verbatim, including every character inside their quoted values.
 export function withHostNodeOptions(existing: string | undefined): string {
   if (existing === undefined || existing.length === 0) {
     return HOST_APPENDED_FLAGS;
   }
-  let stripped = existing;
-  for (const flag of VALUE_FLAGS_OWNED) {
-    stripped = stripped.replace(valueFlagPattern(flag), " ");
+  const tokens = tokenizeNodeOptions(existing);
+  const kept: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const name = optionName(token.value);
+    if (OWNED_BOOLEAN_FLAGS.has(name)) continue;
+    if (!OWNED_VALUE_FLAGS.has(name)) {
+      kept.push(token.raw);
+      continue;
+    }
+    // `--flag=value` carries its value. `--flag value` takes the next token
+    // with it - unless that token is itself an option, so a value-less flag
+    // cannot eat its neighbor.
+    const next = tokens[index + 1];
+    if (
+      !token.value.includes("=") &&
+      next !== undefined &&
+      !next.value.startsWith("--")
+    ) {
+      index += 1;
+    }
   }
-  for (const flag of BOOLEAN_FLAGS_OWNED) {
-    stripped = stripped.replace(
-      new RegExp(`(^|\\s)${flag}(?=\\s|$)`, "g"),
-      " ",
-    );
-  }
-  stripped = stripped.trim().replace(/\s+/g, " ");
-  return stripped.length > 0
-    ? `${stripped} ${HOST_APPENDED_FLAGS}`
+  return kept.length > 0
+    ? `${kept.join(" ")} ${HOST_APPENDED_FLAGS}`
     : HOST_APPENDED_FLAGS;
 }

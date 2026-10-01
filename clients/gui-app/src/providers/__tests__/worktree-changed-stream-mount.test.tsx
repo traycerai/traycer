@@ -14,7 +14,9 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { WorktreeHostEntryV16 } from "@traycer/protocol/host";
 import type { WorktreeChangedScope } from "@traycer/protocol/host/worktree-changed-stream";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { WorktreeChangedCursorStore } from "@traycer-clients/shared/host-transport/worktree-changed-stream-client";
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
@@ -24,6 +26,7 @@ import {
   resetHostConnectionRegistryForTest,
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { perPathEnrichmentQueryKey } from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useWorktreeListing } from "@/components/settings/panels/worktrees-listing-query";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -35,11 +38,26 @@ import {
   markEpicCreateSeedPending,
 } from "@/lib/worktree/pending-epic-create-seeds";
 import { WorktreeChangedStreamMount } from "@/providers/worktree-changed-stream-mount";
+import {
+  isWorktreeChangedStreamOpen,
+  isWorktreeChangedStreamCovered,
+  resetWorktreeChangedCoverageForTests,
+  useWorktreeChangedStreamOpen,
+  useWorktreeChangedStreamCovered,
+} from "@/lib/worktree/worktree-changed-coverage";
+
+/**
+ * The marker is keyed per `(epicId, chatId)` pair, so this suite has to name
+ * one. `null` is the terminal-agent landing create's shape and is the simplest
+ * pair to hold here: the burst guard reads the EPIC-level `seedRows` predicate,
+ * which does not look at the chat id.
+ */
+const SEED_CHAT_ID = null;
 
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
-  clearEpicCreateSeedPending("epic-1");
+  clearEpicCreateSeedPending("epic-1", SEED_CHAT_ID);
 });
 
 function entry(branch: string): WorktreeHostEntryV16 {
@@ -134,17 +152,7 @@ function seedOverlay(
   queryClient: QueryClient,
   path: string,
 ): readonly unknown[] {
-  const key = hostQueryKeys.method(
-    mockLocalHostEntry.hostId,
-    "worktree.listAllForHost",
-    {
-      includeActivity: true,
-      activityPaths: [path],
-      cursor: null,
-      limit: null,
-      forceRefresh: false,
-    },
-  );
+  const key = perPathEnrichmentQueryKey(mockLocalHostEntry.hostId, path);
   queryClient.setQueryData(key, { worktrees: [], nextCursor: null });
   return key;
 }
@@ -263,7 +271,16 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
     { epicId: "epic-1" },
   );
 
-  markEpicCreateSeedPending("epic-1");
+  // `seedRows` on the burst's OWN host is what the three assertions below mean
+  // by "marked, not refetched": the guard is host-aware, and an entry on
+  // another host would not (and must not) suppress this listing.
+  markEpicCreateSeedPending("epic-1", SEED_CHAT_ID, {
+    hostId: mockLocalHostEntry.hostId,
+    seededMessageId: null,
+    seedRows: true,
+    heldForDeferredCreate: false,
+    release: () => {},
+  });
   act(() => {
     invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
       root: true,
@@ -275,7 +292,7 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
   expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle");
   expect(requests).toBe(1);
 
-  clearEpicCreateSeedPending("epic-1");
+  clearEpicCreateSeedPending("epic-1", SEED_CHAT_ID);
   act(() => {
     invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
       root: true,
@@ -285,6 +302,67 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
   await waitFor(() => {
     expect(requests).toBe(2);
   });
+});
+
+it("does not suppress a host's binding listing for an epic seeded on a different host", async () => {
+  let requests = 0;
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "worktree.listBindingsForEpic": () => {
+          requests += 1;
+          return { rows: [], folderlessCwd: "/tmp/epic-1" };
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  const queryClient = createAppQueryClient();
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  const { result } = renderHook(
+    () =>
+      useWorktreeListBindingsForEpicForClient({
+        client,
+        epicId: "epic-1",
+        enabled: true,
+      }),
+    { wrapper: Wrapper },
+  );
+  await waitFor(() => {
+    expect(result.current.isSuccess).toBe(true);
+  });
+  expect(requests).toBe(1);
+
+  markEpicCreateSeedPending("epic-1", SEED_CHAT_ID, {
+    hostId: "host-other",
+    seededMessageId: null,
+    seedRows: true,
+    heldForDeferredCreate: true,
+    release: () => {},
+  });
+  act(() => {
+    invalidateWorktreeChangedCaches(queryClient, mockLocalHostEntry.hostId, {
+      root: true,
+      worktreePaths: new Set(),
+    });
+  });
+  await waitFor(() => {
+    expect(requests).toBe(2);
+  });
+  clearEpicCreateSeedPending("epic-1", SEED_CHAT_ID);
 });
 
 /**
@@ -303,11 +381,12 @@ it("marks but does not refetch a mid-create epic's binding listing until the cre
  * opens a reopen lane on the host's shared reconnect engine instead.
  */
 interface OpenedWorktreeStream {
-  readonly emitChanged: (scope: WorktreeChangedScope) => void;
+  readonly emitChanged: (scope: WorktreeChangedScope) => boolean;
   readonly emitStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ) => void;
+  readonly cursor: WorktreeChangedCursorStore;
 }
 
 interface WorktreeMountStreamState {
@@ -316,6 +395,8 @@ interface WorktreeMountStreamState {
   support: StreamMethodSupport | null;
   hostId: string | null;
   hasClient: boolean;
+  schemaVersion: { readonly major: number; readonly minor: number } | null;
+  negotiatedVersion: SchemaVersion | null;
 }
 
 const worktreeMountStreamState = vi.hoisted((): WorktreeMountStreamState => ({
@@ -324,6 +405,8 @@ const worktreeMountStreamState = vi.hoisted((): WorktreeMountStreamState => ({
   support: "supported",
   hostId: "host-A",
   hasClient: true,
+  schemaVersion: { major: 1, minor: 1 },
+  negotiatedVersion: { major: 1, minor: 1 },
 }));
 
 /**
@@ -335,23 +418,31 @@ const worktreeMountStreamState = vi.hoisted((): WorktreeMountStreamState => ({
 const stubWorktreeWsStreamClient = vi.hoisted((): { readonly stub: true } => ({
   stub: true,
 }));
-
 vi.mock(
   "@traycer-clients/shared/host-transport/worktree-changed-stream-client",
   () => ({
     WorktreeChangedStreamClient: class {
       constructor(options: {
+        readonly cursor: WorktreeChangedCursorStore;
         readonly callbacks: {
-          readonly onChanged: (scope: WorktreeChangedScope) => void;
+          readonly onChanged: (scope: WorktreeChangedScope) => boolean;
           readonly onConnectionStatus: (
             status: StreamConnectionStatus,
             reason: StreamCloseReason | null,
+            negotiatedVersion: SchemaVersion | null,
           ) => void;
         };
       }) {
+        const negotiatedVersion = worktreeMountStreamState.negotiatedVersion;
         worktreeMountStreamState.opened.push({
           emitChanged: options.callbacks.onChanged,
-          emitStatus: options.callbacks.onConnectionStatus,
+          emitStatus: (status, reason) =>
+            options.callbacks.onConnectionStatus(
+              status,
+              reason,
+              negotiatedVersion,
+            ),
+          cursor: options.cursor,
         });
       }
       close(): void {
@@ -365,6 +456,7 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () =>
     worktreeMountStreamState.hasClient ? stubWorktreeWsStreamClient : null,
   useStreamMethodSupport: () => worktreeMountStreamState.support,
+  useStreamMethodSchemaVersion: () => worktreeMountStreamState.schemaVersion,
   // The mount now reads its host id off the SAME `StreamRuntimeBinding` as
   // the client (`useStreamHostId`), not the separately-updating
   // `useAddressableHostId` - so the stub lives on this mock, not a second one.
@@ -406,11 +498,99 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
   afterEach(() => {
     cleanup();
     resetHostConnectionRegistryForTest();
+    resetWorktreeChangedCoverageForTests();
     worktreeMountStreamState.opened.length = 0;
     worktreeMountStreamState.closes = 0;
     worktreeMountStreamState.support = "supported";
     worktreeMountStreamState.hostId = "host-A";
     worktreeMountStreamState.hasClient = true;
+    worktreeMountStreamState.schemaVersion = { major: 1, minor: 1 };
+    worktreeMountStreamState.negotiatedVersion = { major: 1, minor: 1 };
+  });
+
+  it("counts its host as covered while the stream is open, and not after a terminal close or unmount", () => {
+    resetWorktreeChangedCoverageForTests();
+    const queryClient = createAppQueryClient();
+    const { unmount } = renderWorktreeChangedStreamMount(queryClient);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+
+    emitWorktreeMountStatus("closed", worktreeMountFatalClose("UNAUTHORIZED"));
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+    unmount();
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+  });
+
+  it("uses the opened session's negotiated version for replay coverage, not the method manifest", () => {
+    const queryClient = createAppQueryClient();
+    worktreeMountStreamState.negotiatedVersion = { major: 1, minor: 0 };
+    const first = renderWorktreeChangedStreamMount(queryClient);
+    emitWorktreeMountStatus("open", null);
+    expect(worktreeMountStreamState.schemaVersion).toEqual({
+      major: 1,
+      minor: 1,
+    });
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+    expect(isWorktreeChangedStreamCovered("host-A")).toBe(false);
+    first.unmount();
+
+    worktreeMountStreamState.negotiatedVersion = { major: 1, minor: 1 };
+    const second = renderWorktreeChangedStreamMount(queryClient);
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+    second.unmount();
+  });
+
+  it("reactively downgrades coverage when the mounted stream closes", async () => {
+    resetWorktreeChangedCoverageForTests();
+    const queryClient = createAppQueryClient();
+    const { result } = renderHook(
+      () => useWorktreeChangedStreamOpen("host-A"),
+      {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={queryClient}>
+            {children}
+          </QueryClientProvider>
+        ),
+      },
+    );
+    renderWorktreeChangedStreamMount(queryClient);
+    emitWorktreeMountStatus("open", null);
+    await waitFor(() => expect(result.current).toBe(true));
+    emitWorktreeMountStatus("closed", worktreeMountFatalClose("UNAUTHORIZED"));
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  it("drops open status on a logical reconnect while retaining cursor and bounded coverage grace", () => {
+    const queryClient = createAppQueryClient();
+    renderHook(() => useWorktreeChangedStreamCovered("host-A"), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      ),
+    });
+    const view = renderWorktreeChangedStreamMount(queryClient);
+    const first = worktreeMountStreamState.opened[0];
+    first.cursor.current = { epoch: "e2", generation: 12 };
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+    expect(isWorktreeChangedStreamCovered("host-A")).toBe(true);
+
+    emitWorktreeMountStatus("reconnecting", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(false);
+    expect(isWorktreeChangedStreamCovered("host-A")).toBe(true);
+    expect(first.cursor.current).toEqual({ epoch: "e2", generation: 12 });
+
+    emitWorktreeMountStatus("open", null);
+    expect(isWorktreeChangedStreamOpen("host-A")).toBe(true);
+    expect(isWorktreeChangedStreamCovered("host-A")).toBe(true);
+    view.unmount();
   });
 
   it("opens exactly one host-scoped subscription and closes it on unmount", () => {
@@ -419,6 +599,56 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
     expect(worktreeMountStreamState.opened).toHaveLength(1);
     unmount();
     expect(worktreeMountStreamState.closes).toBe(1);
+  });
+
+  it("keeps one accepted subscription across negotiated and predicted version publications", () => {
+    const queryClient = createAppQueryClient();
+    const view = renderWorktreeChangedStreamMount(queryClient);
+    expect(worktreeMountStreamState.opened).toHaveLength(1);
+
+    // WsStreamClient publishes a live negotiated version after open, then
+    // falls back to its predicted version when the owning session closes.
+    // Both snapshots describe 1.1 but are distinct objects. Model those
+    // publications without advancing timers or changing the host/client.
+    worktreeMountStreamState.schemaVersion = { major: 1, minor: 1 };
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.closes).toBe(0);
+    expect(worktreeMountStreamState.opened).toHaveLength(1);
+
+    worktreeMountStreamState.schemaVersion = { major: 1, minor: 1 };
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.closes).toBe(0);
+    expect(worktreeMountStreamState.opened).toHaveLength(1);
+  });
+
+  it("accepts frames from the active open and rejects a retired client's buffered frame", () => {
+    const queryClient = createAppQueryClient();
+    const view = renderWorktreeChangedStreamMount(queryClient);
+    const first = worktreeMountStreamState.opened[0];
+    expect(first.emitChanged({ kind: "root", root: "worktrees" })).toBe(true);
+
+    worktreeMountStreamState.hostId = "host-B";
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.opened).toHaveLength(2);
+    expect(first.emitChanged({ kind: "root", root: "worktrees" })).toBe(false);
+    expect(
+      worktreeMountStreamState.opened[1].emitChanged({
+        kind: "root",
+        root: "worktrees",
+      }),
+    ).toBe(true);
   });
 
   it("rebuilds the client after a reopenable terminal close, once the backoff elapses", () => {
@@ -443,6 +673,96 @@ describe("<WorktreeChangedStreamMount /> reopen lane", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("hands the rebuilt client the cursor the closed one received, so its first subscribe can skip the catch-up", () => {
+    vi.useFakeTimers();
+    try {
+      const queryClient = createAppQueryClient();
+      renderWorktreeChangedStreamMount(queryClient);
+      const first = worktreeMountStreamState.opened[0];
+      expect(first.cursor.current).toBeNull();
+      // What the real client records on a received frame.
+      first.cursor.current = { epoch: "e1", generation: 7 };
+
+      emitWorktreeMountStatus(
+        "closed",
+        worktreeMountFatalClose("UNAUTHORIZED"),
+      );
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+
+      const rebuilt = worktreeMountStreamState.opened[1];
+      expect(rebuilt.cursor).toBe(first.cursor);
+      expect(rebuilt.cursor.current).toEqual({ epoch: "e1", generation: 7 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts a different host with no cursor", () => {
+    const queryClient = createAppQueryClient();
+    const view = renderWorktreeChangedStreamMount(queryClient);
+    worktreeMountStreamState.opened[0].cursor.current = {
+      epoch: "e1",
+      generation: 7,
+    };
+
+    worktreeMountStreamState.hostId = "host-B";
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+
+    const hostB = worktreeMountStreamState.opened.at(-1);
+    expect(worktreeMountStreamState.opened).toHaveLength(2);
+    expect(hostB?.cursor.current).toBeNull();
+  });
+
+  it("retains host-A's accepted cursor across support resets, then gives host-B a fresh cursor", () => {
+    const queryClient = createAppQueryClient();
+    const view = renderWorktreeChangedStreamMount(queryClient);
+    const first = worktreeMountStreamState.opened[0];
+    expect(first.emitChanged({ kind: "root", root: "worktrees" })).toBe(true);
+    first.cursor.current = { epoch: "e1", generation: 7 };
+
+    worktreeMountStreamState.schemaVersion = null;
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.opened).toHaveLength(2);
+    expect(worktreeMountStreamState.opened[1].cursor).toBe(first.cursor);
+    expect(worktreeMountStreamState.opened[1].cursor.current).toEqual({
+      epoch: "e1",
+      generation: 7,
+    });
+
+    worktreeMountStreamState.schemaVersion = { major: 1, minor: 1 };
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.opened).toHaveLength(3);
+    expect(worktreeMountStreamState.opened[2].cursor).toBe(first.cursor);
+    expect(worktreeMountStreamState.opened[2].cursor.current).toEqual({
+      epoch: "e1",
+      generation: 7,
+    });
+
+    worktreeMountStreamState.hostId = "host-B";
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <WorktreeChangedStreamMount />
+      </QueryClientProvider>,
+    );
+    expect(worktreeMountStreamState.opened).toHaveLength(4);
+    expect(worktreeMountStreamState.opened[3].cursor).not.toBe(first.cursor);
+    expect(worktreeMountStreamState.opened[3].cursor.current).toBeNull();
   });
 
   it("does not reopen after a non-reopenable close (CLIENT_CLOSED)", () => {

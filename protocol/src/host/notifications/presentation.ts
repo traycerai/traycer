@@ -178,8 +178,9 @@ export function hostOperationKnownCopy(
         body: `${payload.title} • ${payload.message}`,
       };
     }
-    // Automatic cleanup retains the host-composed copy used by delivery hooks.
+    // These arms retain the host-composed copy used by delivery hooks.
     case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
       return null;
   }
 }
@@ -245,6 +246,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "worktree_deletion":
       return payload.taskTitle ?? null;
     case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
     case "browser_human_needed":
       return null;
   }
@@ -261,6 +263,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
     case "browser_human_needed":
       return null;
   }
@@ -277,6 +280,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "agent_stalled":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
     case "browser_human_needed":
       return null;
   }
@@ -298,6 +302,7 @@ function knownStoppedReason(
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
     case "browser_human_needed":
       return null;
   }
@@ -318,6 +323,7 @@ function knownProviderId(
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
     case "browser_human_needed":
       return null;
   }
@@ -350,6 +356,7 @@ function knownBackgroundWorkRunning(
     case "workspace_operation_failed":
     case "worktree_deletion":
     case "worktree_auto_cleanup":
+    case "managed_command_delivery_parked":
     case "browser_human_needed":
       return false;
   }

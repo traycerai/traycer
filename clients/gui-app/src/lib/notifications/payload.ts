@@ -17,9 +17,11 @@ import {
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
 import { ensureSettingsTab } from "@/lib/commands/actions/open-system-tab";
+import { preservedTileRecordIsLive } from "@/lib/commands/actions/history-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import {
   findOpenArtifactInTab,
+  findOpenTileInTab,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
@@ -878,11 +880,14 @@ function routeOpenChatNotification(
     ...state.openTabOrder,
     ...Object.keys(state.tabsById),
   ].filter((tabId, index, tabIds) => tabIds.indexOf(tabId) === index);
-  const match = candidateTabIds
+  let match = candidateTabIds
     .flatMap((tabId) => {
       const tab = state.tabsById[tabId];
       if (tab?.epicId !== payload.epicId) return [];
-      const found = findOpenArtifactInTab(tabId, chatId);
+      const found =
+        targetHostId === null
+          ? findOpenArtifactInTab(tabId, chatId)
+          : findOpenTileInTab(tabId, { id: chatId, hostId: targetHostId });
       if (found === null) return [];
       const tile =
         state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
@@ -895,38 +900,43 @@ function routeOpenChatNotification(
     })
     .at(0);
   if (match === undefined) {
-    const closedMatchTabId = candidateTabIds.find((tabId) => {
-      const tab = state.tabsById[tabId];
-      if (tab?.epicId !== payload.epicId) return false;
-      return Object.values(state.closedTilePayloadsByTabId[tabId] ?? {}).some(
-        (closed) => {
-          const node = closed?.node;
+    const closedMatch = candidateTabIds
+      .flatMap((tabId) => {
+        const tab = state.tabsById[tabId];
+        if (tab?.epicId !== payload.epicId) return [];
+        const closed = Object.values(
+          state.closedTilePayloadsByTabId[tabId] ?? {},
+        ).find((entry) => {
+          const node = entry?.node;
           if (node === undefined) return false;
           return (
             node.id === chatId &&
             isChatArtifactTileType(node.type) &&
             (targetHostId === null || node.hostId === targetHostId)
           );
-        },
-      );
+        });
+        return closed === undefined ? [] : [{ tabId, payload: closed }];
+      })
+      .at(0);
+    if (closedMatch === undefined) return false;
+    const node = closedMatch.payload.node;
+    if (
+      !preservedTileRecordIsLive(
+        closedMatch.payload,
+        payload.epicId,
+        state.pendingCreateArtifactIds,
+      )
+    ) {
+      state.discardClosedTilePayload(closedMatch.tabId, node.instanceId);
+      return false;
+    }
+    state.restoreClosedTilePreview(closedMatch.tabId, null, node);
+    const restored = findOpenTileInTab(closedMatch.tabId, {
+      id: node.id,
+      hostId: node.hostId,
     });
-    if (closedMatchTabId === undefined) return false;
-    navigateToTabIntent(
-      navigate,
-      existingEpicTabIntentWithNestedFocus({
-        epicId: payload.epicId,
-        tabId: closedMatchTabId,
-        focus: {
-          focusedAt: receivedAt,
-          focusArtifactId: chatId,
-          focusThreadId: undefined,
-          migrationSource: undefined,
-        },
-        nestedFocus: null,
-      }),
-      undefined,
-    );
-    return true;
+    if (restored === null) return false;
+    match = { tabId: closedMatch.tabId, ...restored };
   }
 
   const nestedFocus = state.prepareSetActiveTileTabFocusTarget(

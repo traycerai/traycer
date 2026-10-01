@@ -13,6 +13,20 @@ import type {
 import { useScreencastSession } from "@/lib/browser-view/sessions/use-screencast-session";
 import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
+// `use-screencast-session.ts`'s `hostIsMac` derivation reads these two hooks
+// directly; the real `useHostDirectoryEntry` reaches `useHostDirectory()`,
+// which throws outside a `HostRuntimeProvider` this harness never mounts.
+// Mocked to the same "platform unknown" shape `browser-peek-tile-shortcuts`
+// pins for the same reason - `hostId` on the entry only, no `kind`, and no
+// registered hosts - so `hostIsMac` resolves to `null` and none of this
+// suite's viewport-frame assertions are affected.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => ({ hostId: "host-1" }),
+}));
+vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
+  useRegisteredHosts: () => ({ data: null }),
+}));
+
 /**
  * A fake `browser.screencast` client with the REAL transport's send contract:
  * `WsStreamSession.sendClientFrame` silently drops every frame whose phase is

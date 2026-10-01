@@ -27,8 +27,7 @@ import {
 import type { FileEditRecoveryEntry } from "@/lib/workspace/file-edit-runtime";
 
 /**
- * Minimal BroadcastChannel stand-in (mirrors the one in
- * prompt-stash-store.test.ts). Same-name channels share a peer set; the
+ * Minimal BroadcastChannel stand-in. Same-name channels share a peer set; the
  * sender does not receive its own postMessage, matching real browsers.
  */
 class FakeBroadcastChannel {

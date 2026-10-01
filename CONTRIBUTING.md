@@ -4,7 +4,10 @@ Thanks for helping improve Traycer! This repo holds the open-source clients, CLI
 
 ## Prerequisites
 
-- **Bun 1.3.12** — the `packageManager` is pinned; install from <https://bun.sh>
+- **Bun 1.3.14** — the `packageManager` is pinned. Install that exact version with
+  `curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"` (Windows:
+  `iex "& {$(irm https://bun.sh/install.ps1)} -Version 1.3.14"`); the unversioned
+  installers and `bun upgrade` fetch the latest release instead
 - **Node 24**
 
 ## Setup
@@ -40,10 +43,26 @@ bunx nx run @traycer-clients/traycer-cli:build
 | `clients/gui-app/`     | GUI renderer                                    |
 | `clients/desktop/`     | Electron shell                                  |
 
+## Config targets and releases
+
+Each client's `src/config.ts` holds the **dev** values in source. Release
+builds run that client's `scripts/set-deploy-target.cjs` to stamp staging or
+production values into the file, then restore it, so those values are never
+committed. The CLI's source config already trusts Traycer's production
+host-signing key, so a build from source verifies released hosts;
+`~/.traycer/cli/host-trusted-pubkeys` can add keys without a rebuild.
+
+Releases are built and signed in Traycer's internal repository and published
+to this repo's [Releases](https://github.com/traycerai/traycer/releases).
+Signing secrets never enter this repository, so you need no secrets to build
+or test the code here.
+
 ## Pre-commit hooks
 
-We use [pre-commit](https://pre-commit.com) for hygiene and affected workspace
-checks (build, compile, lint, and format). Install once:
+We use [pre-commit](https://pre-commit.com) for hygiene and local workspace
+checks: lint on the files your branch changed, format, and an incremental
+compile of the affected projects. CI additionally lints whole projects and runs
+the `build` targets. Install once:
 
 ```sh
 pipx install pre-commit   # or: brew install pre-commit

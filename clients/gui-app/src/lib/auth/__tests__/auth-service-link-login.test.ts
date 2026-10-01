@@ -20,7 +20,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 const CLAIM_URL = "http://localhost:5005/api/v3/auth/link/claim";
 const TOKEN_URL = "http://localhost:5005/api/v3/auth/link/token";
-const VALIDATION_URL = "http://localhost:5005/api/v3/user";
+// The identity route `validateAuthTokenIdentity*` calls FIRST (see
+// `auth-validation.ts`); every fixture in this file answers this one.
+const VALIDATION_URL = "http://localhost:5005/api/v3/user/negotiated";
 
 const PROFILE_BODY = {
   user: {
@@ -114,7 +116,22 @@ function installLinkFetch(): { script: LinkFetchScript; restore: () => void } {
         return Promise.resolve(script.tokenResponse());
       }
       if (url === VALIDATION_URL) {
-        return Promise.resolve(script.validationResponse());
+        // A 200 needs the served-version header, or it reads as
+        // "unversioned" and recovers onto the (here, unmocked) frozen
+        // route instead of settling directly.
+        const response = script.validationResponse();
+        if (response.status === 200) {
+          return Promise.resolve(
+            new Response(response.body, {
+              status: response.status,
+              headers: {
+                ...Object.fromEntries(response.headers.entries()),
+                "x-traycer-user-record-version": "2.0",
+              },
+            }),
+          );
+        }
+        return Promise.resolve(response);
       }
       // Anything else (refresh, sessions) answering 401 keeps stray calls
       // from accidentally signing anything in.

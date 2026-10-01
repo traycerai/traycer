@@ -44,6 +44,31 @@ export interface LogicalStreamPort {
    * (a post-sleep/wake liveness nudge) wants.
    */
   requestSessionReconnect(reason: string): void;
+  /** Remaining body bytes this stream has queued or mid-transfer on the session's scheduler. */
+  streamOutboundDebtBytes(streamId: number): number;
+}
+
+/**
+ * A stream that can say how much of what it sent is still waiting to reach
+ * the wire, and when that changes. Deliberately NOT part of `IStreamSession`:
+ * only a tunnel needs it, and the narrow shape keeps every other
+ * `IStreamSession` implementation out of it.
+ */
+export interface OutboundDebtStream {
+  outboundDebtBytes(): number;
+  /** Installs the single listener told after each of this stream's frames is written. */
+  onOutboundProgress(handler: () => void): void;
+}
+
+export function streamReportsOutboundDebt<Stream extends object>(
+  stream: Stream,
+): stream is Stream & OutboundDebtStream {
+  return (
+    "outboundDebtBytes" in stream &&
+    typeof stream.outboundDebtBytes === "function" &&
+    "onOutboundProgress" in stream &&
+    typeof stream.onOutboundProgress === "function"
+  );
 }
 
 export interface LogicalStreamInit {
@@ -64,7 +89,7 @@ export interface LogicalStreamInit {
   readonly port: LogicalStreamPort;
 }
 
-export class LogicalStream implements IStreamSession {
+export class LogicalStream implements IStreamSession, OutboundDebtStream {
   /**
    * Mutable via {@link adoptStreamIdForReopen} only: a retryable per-stream
    * FATAL tombstones the current id on BOTH peers (R-2), so the session
@@ -91,6 +116,7 @@ export class LogicalStream implements IStreamSession {
 
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
+  private outboundProgressHandler: (() => void) | null = null;
   private status: StreamConnectionStatus = "connecting";
   private statusReason: StreamCloseReason | null = null;
   private disposed = false;
@@ -166,7 +192,25 @@ export class LogicalStream implements IStreamSession {
     this.transition("closed", { kind: "caller" }, null);
   }
 
+  // ---- OutboundDebtStream ------------------------------------------------ //
+
+  outboundDebtBytes(): number {
+    return this.port.streamOutboundDebtBytes(this.streamId);
+  }
+
+  onOutboundProgress(handler: () => void): void {
+    this.outboundProgressHandler = handler;
+  }
+
   // ---- Session-driven hooks --------------------------------------------- //
+
+  /** One of this stream's frames finished writing. */
+  notifyOutboundProgress(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.outboundProgressHandler?.();
+  }
 
   /**
    * Adopts a fresh wire id for a retryable re-open. The FATAL that made the

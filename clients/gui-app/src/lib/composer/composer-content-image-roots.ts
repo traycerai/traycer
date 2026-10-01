@@ -37,7 +37,11 @@
  */
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  registerExtraImageRootSource,
+  registerExtraImageSizeSource,
+} from "@/lib/composer/landing-image-budget";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { blobHashesFromContent } from "@/lib/drafts/draft-write-codec";
 
@@ -137,4 +141,35 @@ export function __resetComposerContentImageRootsForTests(): void {
   contentByHolder.clear();
 }
 
+/**
+ * What every live holder's nodes DECLARE they weigh.
+ *
+ * The other half of the same registration. Roots are charged by
+ * `rootByteCost`, whose second answer is the content's own `size` - but the
+ * budget can only read content it has been given, and a hashes-only source
+ * gives it none. Without this, every image a holder is protecting falls
+ * through to the per-image CEILING for as long as the hold lasts, even though
+ * the node says exactly how big it is: an inline edit of a 3 MiB attachment is
+ * billed the ceiling instead, and each concurrent hold repeats the error.
+ *
+ * `collectImageAtoms` rather than `blobHashesFromContent` above, because this
+ * needs the atom's `size` and not only its digest. A node with no declared
+ * size contributes 0 and falls back to the ceiling, which is the same answer it
+ * had before - "declares nothing" is not "declares zero", and `rootByteCost`
+ * treats a 0 as absent for exactly that reason.
+ */
+function composerContentImageDeclaredSizes(): ReadonlyMap<string, number> {
+  const sizeByHash = new Map<string, number>();
+  for (const content of contentByHolder.values()) {
+    for (const atom of collectImageAtoms(content)) {
+      if (atom.hash === null) continue;
+      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
+    }
+  }
+  return sizeByHash;
+}
+
 registerExtraImageRootSource({ hashes: composerContentImageRootHashes });
+registerExtraImageSizeSource({
+  declaredSizes: composerContentImageDeclaredSizes,
+});

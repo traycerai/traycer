@@ -9,8 +9,8 @@ import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser
  * Load-bearing invariant: pointer blocking is gated on the guest not yet
  * being interactive, never on the same flag that hides the overlay. A live,
  * presented guest must never be click-blocked by a stale loader, and a
- * terminal surface (dead / stalled) must always keep blocking so its Retry
- * stays clickable.
+ * terminal surface (dead / stalled) blocks WHILE PAINTED, so its Retry stays
+ * clickable whenever the surface is shown.
  */
 describe("resolveTileOverlay", () => {
   it("hides the overlay and never blocks once the tile is ready, regardless of guest interactivity or document commit", () => {
@@ -61,23 +61,31 @@ describe("resolveTileOverlay", () => {
     }
   });
 
-  it("shows a blocking stalled surface while loading and stalled, regardless of guest interactivity or document commit", () => {
+  it("paints and blocks the stalled surface only when nothing is beneath it", () => {
     for (const guestInteractive of [true, false]) {
       for (const documentCommitted of [true, false]) {
-        expect(
-          resolveTileOverlay(
-            "loading",
-            guestInteractive,
-            true,
-            documentCommitted,
-          ),
-        ).toEqual({
-          visible: true,
-          blocking: true,
+        const nothingBeneath = !guestInteractive || !documentCommitted;
+        const result = resolveTileOverlay(
+          "loading",
+          guestInteractive,
+          true,
+          documentCommitted,
+        );
+        expect(result).toEqual({
+          visible: nothingBeneath,
+          blocking: nothingBeneath,
           surface: "stalled",
         });
       }
     }
+  });
+
+  it("never paints the stalled surface over a committed, interactive page", () => {
+    expect(resolveTileOverlay("loading", true, true, true)).toEqual({
+      visible: false,
+      blocking: false,
+      surface: "stalled",
+    });
   });
 
   it("does not block a live, interactive guest behind a stale loader", () => {
@@ -158,7 +166,12 @@ function expectedOverlay(c: {
     return { visible: true, blocking: true, surface: "dead" };
   }
   if (c.navigationStalled) {
-    return { visible: true, blocking: true, surface: "stalled" };
+    const nothingBeneath = !c.guestInteractive || !c.documentCommitted;
+    return {
+      visible: nothingBeneath,
+      blocking: nothingBeneath,
+      surface: "stalled",
+    };
   }
   return {
     visible: !c.guestInteractive || !c.documentCommitted,

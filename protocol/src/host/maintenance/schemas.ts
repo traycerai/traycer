@@ -9,38 +9,43 @@ import {
   // renderer imports, and `./installation` also carries the Node-only readers.
 } from "@traycer/protocol/config/installation-records";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-const emptyRequestSchema = z.object({});
+const emptyRequestSchema = lazySchema(() => z.object({}));
 
 /**
  * The CLI doctor report is intentionally represented structurally here rather
  * than importing CLI-owned issue-code constants into protocol. That keeps the
  * wire contract stable when the CLI adds a new diagnostic code.
  */
-export const hostDoctorIssueSchema = z.object({
-  code: z.string().min(1),
-  severity: z.enum(["info", "warning", "error", "fatal"]),
-  title: z.string(),
-  message: z.string(),
-  fixAction: z.string().nullable(),
-  terminalCommand: z.string().nullable(),
-  details: z.record(z.string(), z.unknown()).nullable(),
-});
+export const hostDoctorIssueSchema = lazySchema(() =>
+  z.object({
+    code: z.string().min(1),
+    severity: z.enum(["info", "warning", "error", "fatal"]),
+    title: z.string(),
+    message: z.string(),
+    fixAction: z.string().nullable(),
+    terminalCommand: z.string().nullable(),
+    details: z.record(z.string(), z.unknown()).nullable(),
+  }),
+);
 export type HostDoctorIssue = z.infer<typeof hostDoctorIssueSchema>;
 
 export const hostDoctorRequestSchema = emptyRequestSchema;
 export type HostDoctorRequest = z.infer<typeof hostDoctorRequestSchema>;
 
-export const hostDoctorResponseSchema = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("ok"),
-    issues: z.array(hostDoctorIssueSchema),
-    triviallyGreenIssueCodes: z.array(z.string()),
-  }),
-  z.object({ status: z.literal("cli-unavailable") }),
-  z.object({ status: z.literal("cli-failed") }),
-  z.object({ status: z.literal("invalid-output") }),
-]);
+export const hostDoctorResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("ok"),
+      issues: z.array(hostDoctorIssueSchema),
+      triviallyGreenIssueCodes: z.array(z.string()),
+    }),
+    z.object({ status: z.literal("cli-unavailable") }),
+    z.object({ status: z.literal("cli-failed") }),
+    z.object({ status: z.literal("invalid-output") }),
+  ]),
+);
 export type HostDoctorResponse = z.infer<typeof hostDoctorResponseSchema>;
 
 export const LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES = [
@@ -77,15 +82,17 @@ export function doctorTriviallyGreenIssueCodesForVantage(
  * string let a manifest name a `file:` or `javascript:` target that no
  * signature check would ever get to weigh in on.
  */
-const httpAssetUrlSchema = z
-  .string()
-  .refine(
-    (value) =>
-      URL.canParse(value) &&
-      (new URL(value).protocol === "https:" ||
-        new URL(value).protocol === "http:"),
-    { message: "must be an http(s) URL" },
-  );
+const httpAssetUrlSchema = lazySchema(() =>
+  z
+    .string()
+    .refine(
+      (value) =>
+        URL.canParse(value) &&
+        (new URL(value).protocol === "https:" ||
+          new URL(value).protocol === "http:"),
+      { message: "must be an http(s) URL" },
+    ),
+);
 
 /**
  * The two arms are genuinely different records, not one record with optional
@@ -103,51 +110,55 @@ const httpAssetUrlSchema = z
  * parser is this strict. Both arms keep `unavailableReason` nullable, since
  * an available asset may still carry a note.
  */
-const hostPlatformAssetSchema = z.discriminatedUnion("available", [
-  z.object({
-    available: z.literal(true),
-    unavailableReason: z.string().nullable(),
-    url: httpAssetUrlSchema,
-    sizeBytes: z.number().int().positive(),
-    sha256: z.string().regex(/^[a-f0-9]{64}$/),
-    signatureUrl: httpAssetUrlSchema,
-    signatureAlgorithm: z.literal("minisign"),
-    publicKeyId: z.string().min(1),
-  }),
-  z.object({
-    available: z.literal(false),
-    unavailableReason: z.string().nullable(),
-    // Left wide on purpose: an unavailable platform is published with empty
-    // strings and `sizeBytes: 0`, and tightening these would reject the very
-    // shape that says "there is no artifact here".
-    url: z.string(),
-    sizeBytes: z.number().finite(),
-    sha256: z.string(),
-    signatureUrl: z.string(),
-    signatureAlgorithm: z.literal("minisign"),
-    publicKeyId: z.string(),
-  }),
-]);
+const hostPlatformAssetSchema = lazySchema(() =>
+  z.discriminatedUnion("available", [
+    z.object({
+      available: z.literal(true),
+      unavailableReason: z.string().nullable(),
+      url: httpAssetUrlSchema,
+      sizeBytes: z.number().int().positive(),
+      sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      signatureUrl: httpAssetUrlSchema,
+      signatureAlgorithm: z.literal("minisign"),
+      publicKeyId: z.string().min(1),
+    }),
+    z.object({
+      available: z.literal(false),
+      unavailableReason: z.string().nullable(),
+      // Left wide on purpose: an unavailable platform is published with empty
+      // strings and `sizeBytes: 0`, and tightening these would reject the very
+      // shape that says "there is no artifact here".
+      url: z.string(),
+      sizeBytes: z.number().finite(),
+      sha256: z.string(),
+      signatureUrl: z.string(),
+      signatureAlgorithm: z.literal("minisign"),
+      publicKeyId: z.string(),
+    }),
+  ]),
+);
 
 // Frozen for host.update.check@1.0/1.1: those peers never reported formats.
-export const hostAvailableManifestSchemaPreStoreFormats = z.object({
-  schemaVersion: z.literal(1),
-  generatedAt: z.string(),
-  latest: z.string(),
-  versions: z.array(
-    z.object({
-      version: z.string(),
-      releasedAt: z.string(),
-      releaseNotesUrl: z.string(),
-      yanked: z.boolean(),
-      deprecationReason: z.string().nullable(),
-      requiredCliVersion: z.string().nullable(),
-      // The CLI projects this map to its platform before emitting it.
-      platforms: z.record(z.string(), hostPlatformAssetSchema),
-    }),
-  ),
-});
-export const hostAvailableManifestSchema =
+export const hostAvailableManifestSchemaPreStoreFormats = lazySchema(() =>
+  z.object({
+    schemaVersion: z.literal(1),
+    generatedAt: z.string(),
+    latest: z.string(),
+    versions: z.array(
+      z.object({
+        version: z.string(),
+        releasedAt: z.string(),
+        releaseNotesUrl: z.string(),
+        yanked: z.boolean(),
+        deprecationReason: z.string().nullable(),
+        requiredCliVersion: z.string().nullable(),
+        // The CLI projects this map to its platform before emitting it.
+        platforms: z.record(z.string(), hostPlatformAssetSchema),
+      }),
+    ),
+  }),
+);
+export const hostAvailableManifestSchema = lazySchema(() =>
   hostAvailableManifestSchemaPreStoreFormats.extend({
     versions: z.array(
       hostAvailableManifestSchemaPreStoreFormats.shape.versions.element.extend({
@@ -159,7 +170,8 @@ export const hostAvailableManifestSchema =
           .optional(),
       }),
     ),
-  });
+  }),
+);
 export type HostAvailableManifest = z.infer<typeof hostAvailableManifestSchema>;
 
 /**
@@ -179,22 +191,26 @@ export type HostAvailableManifest = z.infer<typeof hostAvailableManifestSchema>;
  * checkbox appears to do nothing rather than breaking the page, which is the
  * right failure for a filter.
  */
-export const hostUpdateCheckRequestSchema = z.object({
-  includePreReleases: z.boolean().default(false),
-});
+export const hostUpdateCheckRequestSchema = lazySchema(() =>
+  z.object({
+    includePreReleases: z.boolean().default(false),
+  }),
+);
 export type HostUpdateCheckRequest = z.infer<
   typeof hostUpdateCheckRequestSchema
 >;
 
-export const hostUpdateCheckResponseSchema = z.discriminatedUnion("outcome", [
-  z.object({
-    outcome: z.literal("ok"),
-    manifest: hostAvailableManifestSchemaPreStoreFormats,
-  }),
-  z.object({ outcome: z.literal("cli-unavailable") }),
-  z.object({ outcome: z.literal("cli-failed") }),
-  z.object({ outcome: z.literal("invalid-output") }),
-]);
+export const hostUpdateCheckResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({
+      outcome: z.literal("ok"),
+      manifest: hostAvailableManifestSchemaPreStoreFormats,
+    }),
+    z.object({ outcome: z.literal("cli-unavailable") }),
+    z.object({ outcome: z.literal("cli-failed") }),
+    z.object({ outcome: z.literal("invalid-output") }),
+  ]),
+);
 export type HostUpdateCheckResponse = z.infer<
   typeof hostUpdateCheckResponseSchema
 >;
@@ -215,12 +231,14 @@ export type HostUpdateCheckResponse = z.infer<
  * exist because "unchecked" and "never touched" are genuinely different
  * requests: only an explicit false can filter RC rows off an RC host.
  */
-export const hostIncludePreReleasesSourceSchema = z.enum([
-  "explicit-include",
-  "explicit-exclude",
-  "installed-rc",
-  "stable-default",
-]);
+export const hostIncludePreReleasesSourceSchema = lazySchema(() =>
+  z.enum([
+    "explicit-include",
+    "explicit-exclude",
+    "installed-rc",
+    "stable-default",
+  ]),
+);
 export type HostIncludePreReleasesSource = z.infer<
   typeof hostIncludePreReleasesSourceSchema
 >;
@@ -262,9 +280,11 @@ export type HostIncludePreReleasesSource = z.infer<
  * `toEqual` (which cannot see the difference). An identity check on the VALUE
  * is correct under either representation, so it is the rule that survives.
  */
-export const hostUpdateCheckRequestSchemaV11 = z.object({
-  includePreReleases: z.boolean().optional(),
-});
+export const hostUpdateCheckRequestSchemaV11 = lazySchema(() =>
+  z.object({
+    includePreReleases: z.boolean().optional(),
+  }),
+);
 export type HostUpdateCheckRequestV11 = z.infer<
   typeof hostUpdateCheckRequestSchemaV11
 >;
@@ -279,9 +299,8 @@ export type HostUpdateCheckRequestV11 = z.infer<
  * The other three outcomes are unchanged; a CLI that never ran resolved
  * nothing to report.
  */
-export const hostUpdateCheckResponseSchemaV11 = z.discriminatedUnion(
-  "outcome",
-  [
+export const hostUpdateCheckResponseSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
     z.object({
       outcome: z.literal("ok"),
       manifest: hostAvailableManifestSchemaPreStoreFormats,
@@ -291,32 +310,33 @@ export const hostUpdateCheckResponseSchemaV11 = z.discriminatedUnion(
     z.object({ outcome: z.literal("cli-unavailable") }),
     z.object({ outcome: z.literal("cli-failed") }),
     z.object({ outcome: z.literal("invalid-output") }),
-  ],
+  ]),
 );
 export type HostUpdateCheckResponseV11 = z.infer<
   typeof hostUpdateCheckResponseSchemaV11
 >;
 
 /** Published store formats survive the host's CLI-JSON projection from @1.2. */
-export const hostUpdateCheckResponseSchemaV12 = z.discriminatedUnion(
-  "outcome",
-  [
+export const hostUpdateCheckResponseSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
     hostUpdateCheckResponseSchemaV11.options[0].extend({
       manifest: hostAvailableManifestSchema,
     }),
     hostUpdateCheckResponseSchemaV11.options[1],
     hostUpdateCheckResponseSchemaV11.options[2],
     hostUpdateCheckResponseSchemaV11.options[3],
-  ],
+  ]),
 );
 export type HostUpdateCheckResponseV12 = z.infer<
   typeof hostUpdateCheckResponseSchemaV12
 >;
 
-export const hostUpdateInstallRequestSchema = z.object({
-  version: z.string().min(1),
-  force: z.boolean(),
-});
+export const hostUpdateInstallRequestSchema = lazySchema(() =>
+  z.object({
+    version: z.string().min(1),
+    force: z.boolean(),
+  }),
+);
 export type HostUpdateInstallRequest = z.infer<
   typeof hostUpdateInstallRequestSchema
 >;
@@ -325,10 +345,11 @@ export type HostUpdateInstallRequest = z.infer<
  * @1.3 separates accepting lost chat access from force's busy-work consent.
  * Required here so every current caller states the choice explicitly.
  */
-export const hostUpdateInstallRequestV13Schema =
+export const hostUpdateInstallRequestV13Schema = lazySchema(() =>
   hostUpdateInstallRequestSchema.extend({
     acceptStoreFormatLoss: z.boolean(),
-  });
+  }),
+);
 export type HostUpdateInstallRequestV13 = z.infer<
   typeof hostUpdateInstallRequestV13Schema
 >;
@@ -345,13 +366,15 @@ export type HostUpdateInstallRequestV13 = z.infer<
  * and promote phases, so two runs download in parallel and can swap twice in a
  * row.
  */
-export const hostUpdateInstallResponseSchema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("accepted") }),
-  z.object({ outcome: z.literal("externally-managed") }),
-  z.object({ outcome: z.literal("cli-unavailable") }),
-  z.object({ outcome: z.literal("cli-failed") }),
-  z.object({ outcome: z.literal("already-updating") }),
-]);
+export const hostUpdateInstallResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("accepted") }),
+    z.object({ outcome: z.literal("externally-managed") }),
+    z.object({ outcome: z.literal("cli-unavailable") }),
+    z.object({ outcome: z.literal("cli-failed") }),
+    z.object({ outcome: z.literal("already-updating") }),
+  ]),
+);
 export type HostUpdateInstallResponse = z.infer<
   typeof hostUpdateInstallResponseSchema
 >;
@@ -431,9 +454,8 @@ export type HostUpdateInstallResponse = z.infer<
  * freeze the controls a user needs over an outcome that is not an acceptance.
  * ────────────────────────────────────────────────────────────────────────────
  */
-export const hostUpdateInstallResponseV11Schema = z.discriminatedUnion(
-  "outcome",
-  [
+export const hostUpdateInstallResponseV11Schema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
     z.object({
       outcome: z.literal("accepted"),
       attemptId: z.string().min(1).nullable(),
@@ -450,7 +472,7 @@ export const hostUpdateInstallResponseV11Schema = z.discriminatedUnion(
       outcome: z.literal("dispatch-indeterminate"),
       reason: z.string().min(1).nullable(),
     }),
-  ],
+  ]),
 );
 export type HostUpdateInstallResponseV11 = z.infer<
   typeof hostUpdateInstallResponseV11Schema
@@ -459,29 +481,31 @@ export type HostUpdateInstallResponseV11 = z.infer<
 /** Bounded because the whole device may contain thousands of epic stores. */
 export const HOST_STORE_FLOOR_EPIC_ID_LIMIT = 10;
 
-export const hostUpdateStoreFloorRefusalSchema = z.object({
-  kind: z.enum(["blocked", "indeterminate"]),
-  reason: z.enum([
-    "newer-chat-stores",
-    "target-format-unknown",
-    "unreadable-stores",
-  ]),
-  targetVersion: z.string().min(1),
-  targetChatDb: z.number().int().nonnegative().nullable(),
-  // Null when any stamp was unreadable, just like host.status.onDiskMax.
-  onDiskMax: z.number().int().positive().nullable(),
-  // For a blocked verdict these name only proven-newer stores. Indeterminate
-  // verdicts name the stores whose compatibility could not be established.
-  epicCount: z.number().int().nonnegative(),
-  epicIds: z.array(z.string().min(1)).max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
-  // Keep unreadable stores separate even when another store proves the move
-  // is blocked: the UI must not label an unreadable stamp as proven-newer.
-  // Zero/empty means no per-epic read failed, not that the peer said nothing.
-  unreadableEpicCount: z.number().int().nonnegative(),
-  unreadableEpicIds: z
-    .array(z.string().min(1))
-    .max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
-});
+export const hostUpdateStoreFloorRefusalSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["blocked", "indeterminate"]),
+    reason: z.enum([
+      "newer-chat-stores",
+      "target-format-unknown",
+      "unreadable-stores",
+    ]),
+    targetVersion: z.string().min(1),
+    targetChatDb: z.number().int().nonnegative().nullable(),
+    // Null when any stamp was unreadable, just like host.status.onDiskMax.
+    onDiskMax: z.number().int().positive().nullable(),
+    // For a blocked verdict these name only proven-newer stores. Indeterminate
+    // verdicts name the stores whose compatibility could not be established.
+    epicCount: z.number().int().nonnegative(),
+    epicIds: z.array(z.string().min(1)).max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
+    // Keep unreadable stores separate even when another store proves the move
+    // is blocked: the UI must not label an unreadable stamp as proven-newer.
+    // Zero/empty means no per-epic read failed, not that the peer said nothing.
+    unreadableEpicCount: z.number().int().nonnegative(),
+    unreadableEpicIds: z
+      .array(z.string().min(1))
+      .max(HOST_STORE_FLOOR_EPIC_ID_LIMIT),
+  }),
+);
 export type HostUpdateStoreFloorRefusal = z.infer<
   typeof hostUpdateStoreFloorRefusalSchema
 >;
@@ -492,9 +516,8 @@ export type HostUpdateStoreFloorRefusal = z.infer<
  * no new outcome or emission gate is needed. Null means no reason was given,
  * including when a response is upgraded from an older peer.
  */
-export const hostUpdateInstallResponseV13Schema = z.discriminatedUnion(
-  "outcome",
-  [
+export const hostUpdateInstallResponseV13Schema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
     hostUpdateInstallResponseV11Schema.options[0],
     hostUpdateInstallResponseV11Schema.options[1],
     hostUpdateInstallResponseV11Schema.options[2],
@@ -507,7 +530,7 @@ export const hostUpdateInstallResponseV13Schema = z.discriminatedUnion(
     }),
     hostUpdateInstallResponseV11Schema.options[4],
     hostUpdateInstallResponseV11Schema.options[5],
-  ],
+  ]),
 );
 export type HostUpdateInstallResponseV13 = z.infer<
   typeof hostUpdateInstallResponseV13Schema
@@ -524,12 +547,13 @@ export type HostUpdateInstallResponseV13 = z.infer<
  * schema, so an `expected` sent to a `@1.0` peer is unreachable for it, and
  * that peer's behaviour is exactly what it was before this key existed.
  */
-export const hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity = z.object(
-  {
-    attemptId: z.string().min(1),
-    force: z.boolean(),
-  },
-);
+export const hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity =
+  lazySchema(() =>
+    z.object({
+      attemptId: z.string().min(1),
+      force: z.boolean(),
+    }),
+  );
 
 /**
  * The record position the dispatcher OBSERVED when it built this request.
@@ -541,10 +565,12 @@ export const hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity = z.object(
  * applies to the same two fields, which matters because these values are
  * compared for EQUALITY with the ones that arrived over that route.
  */
-export const hostUpdateBoundDispatchExpectedIdentitySchema = z.object({
-  generation: z.number().int().positive(),
-  sequence: z.number().int().positive(),
-});
+export const hostUpdateBoundDispatchExpectedIdentitySchema = lazySchema(() =>
+  z.object({
+    generation: z.number().int().positive(),
+    sequence: z.number().int().positive(),
+  }),
+);
 export type HostUpdateBoundDispatchExpectedIdentity = z.infer<
   typeof hostUpdateBoundDispatchExpectedIdentitySchema
 >;
@@ -601,11 +627,13 @@ export type HostUpdateBoundDispatchExpectedIdentity = z.infer<
  * them — and `HOST_UPDATE_CLI_FAILED_REASONS`, which is closed, for the other.
  * A consumer narrows through that module; it never parses against it.
  */
-export const hostUpdateBoundDispatchRequestSchema = z.object({
-  attemptId: z.string().min(1),
-  force: z.boolean(),
-  expected: hostUpdateBoundDispatchExpectedIdentitySchema.optional(),
-});
+export const hostUpdateBoundDispatchRequestSchema = lazySchema(() =>
+  z.object({
+    attemptId: z.string().min(1),
+    force: z.boolean(),
+    expected: hostUpdateBoundDispatchExpectedIdentitySchema.optional(),
+  }),
+);
 export type HostUpdateBoundDispatchRequest = z.infer<
   typeof hostUpdateBoundDispatchRequestSchema
 >;
@@ -632,9 +660,8 @@ export type HostUpdateBoundDispatchRequest = z.infer<
  * not have said, and there are no old peers here. A caller may therefore act
  * on `attemptId` and render `reason` without a "did not say" branch.
  */
-export const hostUpdateBoundDispatchResponseSchema = z.discriminatedUnion(
-  "outcome",
-  [
+export const hostUpdateBoundDispatchResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
     z.object({
       outcome: z.literal("accepted"),
       attemptId: z.string().min(1),
@@ -651,7 +678,7 @@ export const hostUpdateBoundDispatchResponseSchema = z.discriminatedUnion(
       outcome: z.literal("cli-failed"),
       reason: z.string().min(1),
     }),
-  ],
+  ]),
 );
 export type HostUpdateBoundDispatchResponse = z.infer<
   typeof hostUpdateBoundDispatchResponseSchema
@@ -676,9 +703,8 @@ export type HostGetInstallationInfoRequest = z.infer<
  * against the CALLER's schema, so declaring the field absent here is what makes
  * it structurally unreachable for that peer.
  */
-export const hostGetInstallationInfoResponseSchema = z.discriminatedUnion(
-  "status",
-  [
+export const hostGetInstallationInfoResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
     z.object({ status: z.literal("unmanaged") }),
     z.object({
       status: z.literal("managed"),
@@ -686,7 +712,7 @@ export const hostGetInstallationInfoResponseSchema = z.discriminatedUnion(
       stagedRecord: hostStagedRecordWireV10Schema.nullable(),
       cliManifest: storedCliInstallManifestSchema.nullable(),
     }),
-  ],
+  ]),
 );
 export type HostGetInstallationInfoResponse = z.infer<
   typeof hostGetInstallationInfoResponseSchema
@@ -702,9 +728,8 @@ export type HostGetInstallationInfoResponse = z.infer<
  * downgrade bridges for a field whose absent case is already the shipped
  * reality.
  */
-export const hostGetInstallationInfoResponseV11Schema = z.discriminatedUnion(
-  "status",
-  [
+export const hostGetInstallationInfoResponseV11Schema = lazySchema(() =>
+  z.discriminatedUnion("status", [
     z.object({ status: z.literal("unmanaged") }),
     z.object({
       status: z.literal("managed"),
@@ -712,7 +737,7 @@ export const hostGetInstallationInfoResponseV11Schema = z.discriminatedUnion(
       stagedRecord: hostStagedRecordSchema.nullable(),
       cliManifest: storedCliInstallManifestSchema.nullable(),
     }),
-  ],
+  ]),
 );
 export type HostGetInstallationInfoResponseV11 = z.infer<
   typeof hostGetInstallationInfoResponseV11Schema
@@ -739,12 +764,9 @@ export type HostGetInstallationInfoResponseV11 = z.infer<
  * exactly the fleet's most common configuration. A caller must render it as
  * "registered, owned elsewhere" and withhold the CLI-backed mutations.
  */
-export const hostServiceStateSchema = z.enum([
-  "running",
-  "stopped",
-  "not-installed",
-  "externally-managed",
-]);
+export const hostServiceStateSchema = lazySchema(() =>
+  z.enum(["running", "stopped", "not-installed", "externally-managed"]),
+);
 export type HostServiceState = z.infer<typeof hostServiceStateSchema>;
 
 export const hostServiceStatusRequestSchema = emptyRequestSchema;
@@ -752,30 +774,32 @@ export type HostServiceStatusRequest = z.infer<
   typeof hostServiceStatusRequestSchema
 >;
 
-export const hostServiceStatusResponseSchema = z.discriminatedUnion("outcome", [
-  z.object({
-    outcome: z.literal("ok"),
-    state: hostServiceStateSchema,
-    /** The service label (`ai.traycer.host`, …) — identity, not decoration. */
-    label: z.string().min(1),
-    /** The plist / unit / scheduled-task path the registration lives at. */
-    manifestPath: z.string().min(1),
-  }),
-  /**
-   * The host refused to consult the CLI at all: an external supervisor owns
-   * its service lifecycle (`TRAYCER_HOST_UPDATES=external`), and the CANONICAL
-   * label the CLI would inspect is not the unit actually running this host —
-   * the read would answer about the wrong service. Distinct from `ok` with
-   * `state: "externally-managed"`, which is the CLI's own answer about a label
-   * it CAN see (Desktop's SMAppService): here there is no label or manifest
-   * path to report, because the supervising unit is outside the CLI's sight.
-   * Same gate `host.service.register` / `.deregister` already answer with.
-   */
-  z.object({ outcome: z.literal("externally-managed") }),
-  z.object({ outcome: z.literal("cli-unavailable") }),
-  z.object({ outcome: z.literal("cli-failed") }),
-  z.object({ outcome: z.literal("invalid-output") }),
-]);
+export const hostServiceStatusResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({
+      outcome: z.literal("ok"),
+      state: hostServiceStateSchema,
+      /** The service label (`ai.traycer.host`, …) — identity, not decoration. */
+      label: z.string().min(1),
+      /** The plist / unit / scheduled-task path the registration lives at. */
+      manifestPath: z.string().min(1),
+    }),
+    /**
+     * The host refused to consult the CLI at all: an external supervisor owns
+     * its service lifecycle (`TRAYCER_HOST_UPDATES=external`), and the CANONICAL
+     * label the CLI would inspect is not the unit actually running this host —
+     * the read would answer about the wrong service. Distinct from `ok` with
+     * `state: "externally-managed"`, which is the CLI's own answer about a label
+     * it CAN see (Desktop's SMAppService): here there is no label or manifest
+     * path to report, because the supervising unit is outside the CLI's sight.
+     * Same gate `host.service.register` / `.deregister` already answer with.
+     */
+    z.object({ outcome: z.literal("externally-managed") }),
+    z.object({ outcome: z.literal("cli-unavailable") }),
+    z.object({ outcome: z.literal("cli-failed") }),
+    z.object({ outcome: z.literal("invalid-output") }),
+  ]),
+);
 export type HostServiceStatusResponse = z.infer<
   typeof hostServiceStatusResponseSchema
 >;
@@ -805,9 +829,8 @@ export type HostServiceRegisterRequest = z.infer<
  * A caller must therefore treat a dropped connection on this method as a
  * probable success — the host restarting — and never as a failed registration.
  */
-export const hostServiceRegisterResponseSchema = z.discriminatedUnion(
-  "outcome",
-  [
+export const hostServiceRegisterResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
     z.object({ outcome: z.literal("ok") }),
     /**
      * The HOST refused before the CLI ran: its updates — and with them its
@@ -825,7 +848,7 @@ export const hostServiceRegisterResponseSchema = z.discriminatedUnion(
       message: z.string().nullable(),
     }),
     z.object({ outcome: z.literal("invalid-output") }),
-  ],
+  ]),
 );
 export type HostServiceRegisterResponse = z.infer<
   typeof hostServiceRegisterResponseSchema
@@ -850,15 +873,14 @@ export type HostServiceDeregisterRequest = z.infer<
  * EXPECTED outcome rather than a failure, and must not promise the user it
  * worked. What it can promise is that the host is going away.
  */
-export const hostServiceDeregisterResponseSchema = z.discriminatedUnion(
-  "outcome",
-  [
+export const hostServiceDeregisterResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
     z.object({ outcome: z.literal("accepted") }),
     /** Same host-side refusal as register's: an external supervisor owns it. */
     z.object({ outcome: z.literal("externally-managed") }),
     z.object({ outcome: z.literal("cli-unavailable") }),
     z.object({ outcome: z.literal("cli-failed") }),
-  ],
+  ]),
 );
 export type HostServiceDeregisterResponse = z.infer<
   typeof hostServiceDeregisterResponseSchema

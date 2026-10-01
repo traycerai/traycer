@@ -27,6 +27,12 @@ import {
   Scan,
   Search,
 } from "lucide-react";
+import {
+  ActualSizeGlyph,
+  ZoomControls,
+  type ZoomControlsModel,
+} from "@/components/epic-canvas/zoom-controls/zoom-controls";
+import { fitLabel } from "@/components/epic-canvas/zoom-controls/fit-label";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -57,10 +63,8 @@ export interface DocumentPreviewToolbarProps {
   /** `0` until the document is ready. */
   readonly pageCount: number;
   readonly onGoToPage: (page: number) => void;
-  readonly scalePercent: number | null;
-  readonly onZoomIn: () => void;
-  readonly onZoomOut: () => void;
-  readonly onFitWidth: () => void;
+  /** The shared zoom cluster's data - `fitKind` is `"width"` on both document viewers. */
+  readonly zoom: ZoomControlsModel;
   /** `null` on a renderer that cannot rotate pages. */
   readonly onRotate: (() => void) | null;
   /** `null` when the document has no outline to show. */
@@ -154,66 +158,11 @@ export function DocumentPreviewToolbar(
           className="mx-0.5 h-4 w-px bg-border @max-sm:hidden"
           aria-hidden="true"
         />
-        <TooltipWrapper
-          label="Zoom out"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={!props.documentReady}
-            onClick={props.onZoomOut}
-            aria-label="Zoom out"
-            className="@max-sm:hidden"
-          >
-            <Minus className="size-4" />
-          </Button>
-        </TooltipWrapper>
-        <span
-          className="min-w-9 whitespace-nowrap text-center text-ui-xs tabular-nums text-muted-foreground @max-sm:hidden"
-          aria-label="Zoom level"
-        >
-          {props.scalePercent === null ? "–" : `${props.scalePercent}%`}
-        </span>
-        <TooltipWrapper
-          label="Zoom in"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={!props.documentReady}
-            onClick={props.onZoomIn}
-            aria-label="Zoom in"
-            className="@max-sm:hidden"
-          >
-            <Plus className="size-4" />
-          </Button>
-        </TooltipWrapper>
-        <TooltipWrapper
-          label="Fit to width"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={!props.documentReady}
-            onClick={props.onFitWidth}
-            aria-label="Fit to width"
-            className="@max-lg:hidden"
-          >
-            <Scan className="size-4" />
-          </Button>
-        </TooltipWrapper>
+        <ZoomControls
+          {...props.zoom}
+          stepGroupClassName="@max-sm:hidden"
+          anchorGroupClassName="@max-lg:hidden"
+        />
         {props.onRotate === null ? null : (
           <TooltipWrapper
             label="Rotate 90°"
@@ -370,20 +319,20 @@ function DocumentPreviewOverflowMenu(
         {/* Zoom is a repeated gesture - keep the menu open across picks so
             three steps in is three clicks, not three menu reopenings. */}
         <DropdownMenuItem
-          disabled={!props.documentReady}
+          disabled={!props.zoom.ready || !props.zoom.canZoomIn}
           onSelect={(event) => {
             event.preventDefault();
-            props.onZoomIn();
+            props.zoom.onZoomIn();
           }}
         >
           <Plus className="size-4" />
           Zoom in
         </DropdownMenuItem>
         <DropdownMenuItem
-          disabled={!props.documentReady}
+          disabled={!props.zoom.ready || !props.zoom.canZoomOut}
           onSelect={(event) => {
             event.preventDefault();
-            props.onZoomOut();
+            props.zoom.onZoomOut();
           }}
         >
           <Minus className="size-4" />
@@ -391,11 +340,18 @@ function DocumentPreviewOverflowMenu(
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          disabled={!props.documentReady}
-          onSelect={props.onFitWidth}
+          disabled={!props.zoom.ready}
+          onSelect={props.zoom.onFit}
         >
           <Scan className="size-4" />
-          Fit to width
+          {fitLabel(props.zoom.fitKind)}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!props.zoom.ready}
+          onSelect={props.zoom.onActualSize}
+        >
+          <ActualSizeGlyph />
+          Actual size
         </DropdownMenuItem>
         {props.onRotate === null ? null : (
           <DropdownMenuItem

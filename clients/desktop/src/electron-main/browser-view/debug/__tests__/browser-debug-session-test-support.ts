@@ -245,6 +245,8 @@ export class FakeWebContents
 
   reload(): void {}
 
+  stop(): void {}
+
   findInPage(_text: string, _options: BrowserViewFindInPageOptions): number {
     return 0;
   }

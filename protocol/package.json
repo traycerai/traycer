@@ -187,11 +187,13 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs",
-    "compile": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs && bun run validate:registries",
+    "validate:registries": "bun scripts/compat/validate-static-registries.ts",
+    "compile": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
     "prepack": "bun run build",
     "test": "vitest run",
-    "lint": "eslint . --cache --fix --max-warnings 0"
+    "lint": "bun run lint:files .",
+    "lint:files": "eslint --cache --fix --max-warnings 0 --no-warn-ignored"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",
@@ -209,5 +211,18 @@
     "eslint": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "nx": {
+    "targets": {
+      "test": {
+        "inputs": [
+          "default",
+          "^production",
+          "sharedGlobals",
+          "{workspaceRoot}/clients/**/*.ts",
+          "{workspaceRoot}/clients/**/*.tsx"
+        ]
+      }
+    }
   }
 }

@@ -16,6 +16,7 @@ import {
   projectTranscriptRows,
   assistantTurnNeedsTrailingRow,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { rowRecordIds } from "@traycer/protocol/persistence/chat-transcript/read-range";
 
 /**
  * These pin the rules a cold review found the previous record-level enumeration
@@ -146,6 +147,24 @@ function setupEvent(fields: {
             workspacePath: fields.workspacePath,
             triggeringMessageId: fields.triggeringMessageId,
           },
+  });
+}
+
+function forkEvent(fields: { eventId: string; timestamp: number }): ChatEvent {
+  return chatEventSchema.parse({
+    eventId: fields.eventId,
+    type: "chat.forked",
+    timestamp: fields.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: { sourceChatId: "c", sourceHostId: "h" },
   });
 }
 
@@ -618,6 +637,67 @@ describe("setup cards", () => {
       "m-2",
     ]);
   });
+
+  it("does not pin a genesis-shaped card once a preceding fork disqualifies it, weaving it by timestamp among the inherited history instead", () => {
+    // A forked chat inherits history, then continues into its OWN worktree.
+    // That continuation window has no `setup.creating` (same shape as a
+    // genesis card) but must NOT pin above the inherited messages - only an
+    // INITIAL worktree, preceding any fork, belongs there.
+    const inheritedUser = userMessage({ messageId: "m-0", timestamp: 10 });
+    const inheritedAssistant = assistantMessage({
+      messageId: "m-a0",
+      timestamp: 15,
+      turnId: "t-0",
+      startedAt: 20,
+      blocks: [textBlock("b-0", 20)],
+    });
+    const fork = forkEvent({ eventId: "e-fork", timestamp: 30 });
+    const continuation = setupEvent({
+      eventId: "e-setup",
+      type: "setup.running",
+      timestamp: 40,
+      workspacePath: "/w",
+    });
+    const newUser = userMessage({ messageId: "m-1", timestamp: 50 });
+
+    expect(
+      project(
+        [inheritedUser, inheritedAssistant, newUser],
+        [fork, continuation],
+        null,
+      ),
+    ).toEqual([
+      "m-0",
+      "assistant:t-0",
+      "forked-chat-link:e-fork",
+      "setup-card:chat-1:0:40",
+      "m-1",
+    ]);
+  });
+
+  it("still pins an ordinary genesis card (no preceding fork) ahead of the same inherited history", () => {
+    // Identical fixture to the previous test, minus the fork event: the
+    // ordinary back-filled genesis card still pins to ordinal 0.
+    const inheritedUser = userMessage({ messageId: "m-0", timestamp: 10 });
+    const inheritedAssistant = assistantMessage({
+      messageId: "m-a0",
+      timestamp: 15,
+      turnId: "t-0",
+      startedAt: 20,
+      blocks: [textBlock("b-0", 20)],
+    });
+    const genesis = setupEvent({
+      eventId: "e-setup",
+      type: "setup.running",
+      timestamp: 40,
+      workspacePath: "/w",
+    });
+    const newUser = userMessage({ messageId: "m-1", timestamp: 50 });
+
+    expect(
+      project([inheritedUser, inheritedAssistant, newUser], [genesis], null),
+    ).toEqual(["setup-card:chat-1:0:40", "m-0", "assistant:t-0", "m-1"]);
+  });
 });
 
 describe("event rows", () => {
@@ -660,6 +740,55 @@ describe("event rows", () => {
       "forked-chat-link:e-fork",
       "chat-event:e-anchor",
     ]);
+  });
+
+  it("orders judge notices after unattended refusals for equal timestamps, and sorts them by their own timestamp even inside a turn", () => {
+    const notice = chatEventSchema.parse({
+      eventId: "e-notice",
+      type: "permission.blocked",
+      timestamp: 50,
+      clientActionId: null,
+      actor: null,
+      message:
+        "Traycer's judge couldn't run on Traycer inference (out of credits), so it is reviewing commands on Claude Code instead, billed to your account there.",
+      turnId: "turn-1",
+      messageId: "m-1",
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: { autoJudge: "fallback" },
+    });
+    const denial = chatEventSchema.parse({
+      eventId: "e-denial",
+      type: "approval.denied",
+      timestamp: 50,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { autoJudge: { attendanceReason: "agent-created" } },
+    });
+    const before = userMessage({ messageId: "m-1", timestamp: 10 });
+    const after = userMessage({ messageId: "m-2", timestamp: 90 });
+
+    // The log has the notice first; the passes put it after the refusal, which
+    // is the renderer's `baseRows` order too.
+    expect(project([before, after], [notice, denial], null)).toEqual([
+      "m-1",
+      "auto-judge-unattended-denial:e-denial",
+      "auto-judge-notice:e-notice",
+      "m-2",
+    ]);
+    // A range that hydrates the row serves the event that IS its body.
+    expect(
+      rowRecordIds({ kind: "auto-judge-notice", eventId: "e-notice" }),
+    ).toEqual({ messageIds: [], eventIds: ["e-notice"] });
   });
 
   it("gives an event that materializes no row no ordinal", () => {

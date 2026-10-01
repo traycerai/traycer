@@ -38,7 +38,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { RootLandingPage } from "@/components/layout/root-landing-page";
-import { HeaderNotificationsBell } from "@/components/layout/header/app-header";
+import { HeaderNotificationsBell } from "@/components/layout/header/header-actions";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { requireSignedIn } from "@/lib/router-auth";
 import { bindAuthInvalidation, type AppRouterContext } from "@/router";
@@ -100,6 +100,14 @@ import type {
  */
 
 const VALIDATION_URL = "http://localhost:5005/api/v3/user";
+/**
+ * The negotiated identity route `validateAuthTokenIdentityAccessOnly` now
+ * calls FIRST (see `auth-validation.ts`). Every handler below answers this
+ * one, not `VALIDATION_URL` - the frozen route is only reached as a 404/
+ * unlabelled-response recovery, which none of this file's scenarios drive.
+ */
+const NEGOTIATED_VALIDATION_URL =
+  "http://localhost:5005/api/v3/user/negotiated";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
 /**
  * The exact URL `fetchRegisteredHostsViaHttp` (`remote-fetcher.ts`) builds
@@ -146,7 +154,7 @@ function freshLedger(): FetchLedger {
 /** Cold-start-unreachable: every `/api/v3/user` and `/refresh` call fails to transport. */
 function networkErrorFetch(ledger: FetchLedger): FetchHandler {
   return (url) => {
-    if (url === VALIDATION_URL) {
+    if (url === VALIDATION_URL || url === NEGOTIATED_VALIDATION_URL) {
       ledger.validationAttempts += 1;
       return Promise.reject(new Error("authn unreachable"));
     }
@@ -169,7 +177,7 @@ function networkErrorFetch(ledger: FetchLedger): FetchHandler {
 /** Reachable-but-dead-credential: both calls answer, both reject with 401. */
 function rejectedFetch(ledger: FetchLedger): FetchHandler {
   return (url) => {
-    if (url === VALIDATION_URL) {
+    if (url === VALIDATION_URL || url === NEGOTIATED_VALIDATION_URL) {
       ledger.validationAttempts += 1;
       return Promise.resolve(new Response(null, { status: 401 }));
     }
@@ -245,13 +253,16 @@ function signedInFetch(
   identity: StoredCredentialsIdentity,
 ): FetchHandler {
   return (url) => {
-    if (url === VALIDATION_URL) {
+    if (url === VALIDATION_URL || url === NEGOTIATED_VALIDATION_URL) {
       ledger.validationAttempts += 1;
       ledger.validationSuccesses += 1;
       return Promise.resolve(
         new Response(JSON.stringify(authenticatedUserResponseBody(identity)), {
           status: 200,
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "x-traycer-user-record-version": "1.0",
+          },
         }),
       );
     }
@@ -525,7 +536,7 @@ function mountHarness(opts: {
       <div data-testid="admission-sentinel">
         <RootLandingPage />
       </div>
-      {/* Admission gate #3 (app-header.tsx#HeaderNotificationsBell): the
+      {/* Admission gate #3 (header-actions.tsx#HeaderNotificationsBell): the
           desktop bell is a LOCAL-plane surface gated on `admitsLocalPlane`,
           through the IDENTICAL `useAuthStore` wiring - it renders for the
           admitted `unverified` session. The cloud control for this file is
@@ -669,7 +680,7 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     // content and a positive control in the identical tree.
     expect(screen.queryByText("Welcome to Traycer")).toBeNull();
 
-    // Admission gate #3 (app-header.tsx#HeaderNotificationsBell), identical
+    // Admission gate #3 (header-actions.tsx#HeaderNotificationsBell), identical
     // wiring: the desktop bell reads `admitsLocalPlane` and RENDERS under
     // `unverified` - it is the only desktop entry point to the local
     // notification lanes the session provider keeps running for this

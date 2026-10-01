@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { computeTabDropIndex } from "@/components/epic-canvas/dnd/tab-strip-drop-preview";
 import { resolveHeaderStripDropIndex } from "@/components/layout/tabs/header-tab-dnd";
+import { HORIZONTAL_STRIP_AXIS } from "@/components/epic-canvas/dnd/strip-axis";
 
 describe("computeTabDropIndex", () => {
   const overRect = { left: 100, top: 0, width: 80, height: 36 };
@@ -43,7 +44,8 @@ describe("resolveHeaderStripDropIndex", () => {
     expect(
       resolveHeaderStripDropIndex({
         slot: { kind: "header-tab-slot", index: 1, isTrailing: false },
-        pointerX: 120,
+        pointer: 120,
+        axis: HORIZONTAL_STRIP_AXIS,
         slotRect,
         sourceIndex: null,
       }),
@@ -51,7 +53,8 @@ describe("resolveHeaderStripDropIndex", () => {
     expect(
       resolveHeaderStripDropIndex({
         slot: { kind: "header-tab-slot", index: 1, isTrailing: false },
-        pointerX: 200,
+        pointer: 200,
+        axis: HORIZONTAL_STRIP_AXIS,
         slotRect,
         sourceIndex: null,
       }),
@@ -62,7 +65,8 @@ describe("resolveHeaderStripDropIndex", () => {
     expect(
       resolveHeaderStripDropIndex({
         slot: { kind: "header-tab-slot", index: 3, isTrailing: true },
-        pointerX: 9999,
+        pointer: 9999,
+        axis: HORIZONTAL_STRIP_AXIS,
         slotRect,
         sourceIndex: null,
       }),
@@ -73,7 +77,8 @@ describe("resolveHeaderStripDropIndex", () => {
     expect(
       resolveHeaderStripDropIndex({
         slot: { kind: "header-tab-slot", index: 1, isTrailing: false },
-        pointerX: 120,
+        pointer: 120,
+        axis: HORIZONTAL_STRIP_AXIS,
         slotRect,
         sourceIndex: 1,
       }),
@@ -81,7 +86,8 @@ describe("resolveHeaderStripDropIndex", () => {
     expect(
       resolveHeaderStripDropIndex({
         slot: { kind: "header-tab-slot", index: 1, isTrailing: false },
-        pointerX: 200,
+        pointer: 200,
+        axis: HORIZONTAL_STRIP_AXIS,
         slotRect,
         sourceIndex: 1,
       }),
@@ -89,7 +95,8 @@ describe("resolveHeaderStripDropIndex", () => {
     expect(
       resolveHeaderStripDropIndex({
         slot: { kind: "header-tab-slot", index: 3, isTrailing: false },
-        pointerX: 320,
+        pointer: 320,
+        axis: HORIZONTAL_STRIP_AXIS,
         slotRect: { left: 300, top: 0, width: 110, height: 42 },
         sourceIndex: 1,
       }),

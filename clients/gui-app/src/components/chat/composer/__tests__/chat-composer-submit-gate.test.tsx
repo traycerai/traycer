@@ -69,6 +69,8 @@ describe("chat-composer submit gate (path resolution)", () => {
     editorRef.current = editorHandle({ content: DIRTY, ready: true });
     const pickerStore = createComposerPickerStore();
     const toolbarStore = createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
       seedKey: "chat-submit-gate-test",
       values: {
         permission: "supervised",
@@ -245,6 +247,8 @@ describe("chat-composer submit gate (editor readiness)", () => {
           hostId: "host-1",
           editorRef,
           editorReadyTick: tick,
+          chatTitle: null,
+          epicTitle: null,
         }),
       { initialProps: 0 },
     );
@@ -320,6 +324,8 @@ describe("chat-composer submit multi-surface clear", () => {
         hostId: "host-1",
         editorRef: editorRefA,
         editorReadyTick: 1,
+        chatTitle: null,
+        epicTitle: null,
       }),
     );
     renderHook(() =>
@@ -329,6 +335,8 @@ describe("chat-composer submit multi-surface clear", () => {
         hostId: "host-1",
         editorRef: editorRefB,
         editorReadyTick: 1,
+        chatTitle: null,
+        epicTitle: null,
       }),
     );
 
@@ -396,6 +404,8 @@ function mountSubmitHook(args: {
 }) {
   const pickerStore = createComposerPickerStore();
   const toolbarStore = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "chat-submit-gate-ready-test",
     values: {
       permission: "supervised",

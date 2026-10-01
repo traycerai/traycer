@@ -56,11 +56,19 @@ function LocalStoreRepairDialog(props: {
   // the schema's own note says adding a kind costs a minor precisely because
   // every `@1.1` client rejects a new value.
   //
-  // So the guard is reinstated by the same change that makes it meaningful:
-  // adding a second kind is a minor bump, and whoever spends it has to decide
-  // per kind whether a rebind is the remedy (the schema suggests an
-  // `isKnownEpicCreateRefusalKind` guard for the degrade-to-text shape). Until
-  // then this must not pretend to discriminate a union of one.
+  // THAT MINOR HAS NOW BEEN SPENT, and the decision it demanded was made one
+  // layer up rather than here. `epic.create@1.2` carries a second kind
+  // (`missing-attachment-bytes`, on its own `epicCreateRefusalKindSchemaV12`
+  // instance - the released enum above is still a union of one), whose remedy
+  // is a re-upload the CLIENT performs; a store rebind would do nothing about
+  // it while telling the user it might. So `reportEpicCreateRefusal` in
+  // `use-epic-create-mutation.ts` discriminates the kind and only
+  // `local-store-unavailable` reaches `openLocalStoreRepair` at all.
+  //
+  // Which is why there is still nothing to compare HERE: this component's
+  // input is the one-kind `EpicCreateRefusal`, so a guard on `refusal.kind`
+  // remains dead by TYPE. A future kind that IS repairable must be admitted at
+  // that call site, which is the one place that has the whole refusal to judge.
   //
   // Unchanged either way: the message and remedy TEXT renders for whatever
   // arrives, since both are strings the host wrote for a person.

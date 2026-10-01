@@ -113,6 +113,26 @@ export function hostScopeFixture(overrides: Partial<HostScope>): HostScope {
 }
 
 /**
+ * What `useScopedHostBinding` returns for `scope`, reduced to the one field a
+ * suite can observe, for suites that mock that hook.
+ *
+ * PRODUCTION'S SHAPE, arm for arm: `ready` names the scope's host, `following`
+ * names NO host (`hostId: null`, so the subtree tracks the effective host),
+ * and every other status is `null`. A mock that gave `following` the scope's
+ * host id hid a defect: the Auto mode gate compared a held binding's `hostId`
+ * with the scope's, which never matches in `following` - the default - and
+ * two suites stayed green because their mock named a host production never
+ * names there.
+ */
+export function scopedHostBindingFixture(
+  scope: HostScope,
+): { readonly hostId: string | null } | null {
+  if (scope.status === "following") return { hostId: null };
+  if (scope.status === "ready") return { hostId: scope.hostId };
+  return null;
+}
+
+/**
  * A resolved `HostOptions` for suites that render a picker but are not about
  * the host LIST.
  *

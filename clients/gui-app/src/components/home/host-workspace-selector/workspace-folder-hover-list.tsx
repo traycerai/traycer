@@ -1,7 +1,7 @@
 import { GitBranch } from "lucide-react";
 import { HOVER_PREVIEW_SCROLL_CLASS } from "@/components/ui/hover-preview-surface";
 import { cn } from "@/lib/utils";
-import { CopyPathButton } from "./copy-path-button";
+import { CopyPathButton } from "@/components/copy-path-button";
 import type { WorkspaceRunItem } from "./workspace-run-item";
 import {
   importedWorktreeSourceBranch,
@@ -15,7 +15,7 @@ import { WorkspaceModeIcon } from "./workspace-mode-icon";
  * The path is where the chat actually runs — the adopted worktree for worktree
  * mode, the folder for local — not the source folder.
  *
- * Renders on the shared hover-preview card surface (`HoverPreviewCard`), so its
+ * Renders on the shared hover-preview card surface (`HoverCard`), so its
  * tones are the card's own foreground/muted pair, matching the composer's
  * @mention preview panel. A HoverCard (not a Tooltip) holds this content, so
  * the per-folder copy-path button is safe here — there is no visually-hidden
@@ -104,7 +104,11 @@ function HoverListDetail(props: {
       >
         {props.runPath}
       </span>
-      <CopyPathButton path={props.runPath} testId="workspace-hover-copy-path" />
+      <CopyPathButton
+        path={props.runPath}
+        ariaLabel="Copy folder path"
+        testId="workspace-hover-copy-path"
+      />
     </span>
   );
 }

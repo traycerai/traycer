@@ -8,11 +8,10 @@ import {
   type RefObject,
 } from "react";
 import type { ReactZoomPanPinchRef } from "react-zoom-pan-pinch";
-import { FileMinus, FilePlus, Maximize2, Minus, Plus } from "lucide-react";
+import { FileMinus, FilePlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
+import { ZoomControls } from "@/components/epic-canvas/zoom-controls/zoom-controls";
 import {
   isImageAssetPath,
   DOCUMENT_ASSET_LABELS,
@@ -26,9 +25,9 @@ import {
   type UseFileAssetResult,
 } from "@/hooks/assets/use-file-asset";
 import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
+import { fitInstance } from "./fit-instance";
 import {
   clampPositionToVisibleBounds,
-  fitScaleFor,
   MAX_SCALE,
   MIN_SCALE,
   SCALE_EPSILON,
@@ -74,6 +73,18 @@ function sideAtMin(active: boolean, bounds: SideBounds): boolean {
 // directly rather than threading an always-identical value through state.
 function sideAtMax(active: boolean, bounds: SideBounds): boolean {
   return active && bounds.scale >= MAX_SCALE - SCALE_EPSILON;
+}
+
+/** The zoom the shared readout shows: the new side's while it is mounted, else the old side's, else nothing. */
+function readoutScalePercent(
+  oldActive: boolean,
+  oldBounds: SideBounds,
+  newActive: boolean,
+  newBounds: SideBounds,
+): number | null {
+  if (newActive) return Math.round(newBounds.scale * 100);
+  if (oldActive) return Math.round(oldBounds.scale * 100);
+  return null;
 }
 
 /**
@@ -422,7 +433,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   );
 
   const handleFit = useCallback(() => {
-    dualDispatch((instance) => fitInstance(instance));
+    dualDispatch((instance) => fitInstance(instance, 0));
   }, [dualDispatch]);
   const handleActualSize = useCallback(() => {
     dualDispatch((instance) => instance.centerView(1, 0));
@@ -471,6 +482,16 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     zoomDisabled ||
     sideAtMax(oldActive, oldBounds) ||
     sideAtMax(newActive, newBounds);
+  // Gestures mirror one scale onto both sides, so either side's scale is
+  // the readout; a toolbar fit computes per side, and then the two can
+  // differ for differently-sized images. The new side wins that tie - it is
+  // the image the diff is about.
+  const scalePercent = readoutScalePercent(
+    oldActive,
+    oldBounds,
+    newActive,
+    newBounds,
+  );
   const rootSizing = compactRootSizing(
     props.compact,
     oldAsset.meta,
@@ -494,78 +515,21 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
             ) : null}
           </div>
           <div className="flex items-center gap-1">
-            <TooltipWrapper
-              label="Zoom out (-)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={zoomOutDisabled}
-                onClick={handleZoomOut}
-                aria-label="Zoom out"
-              >
-                <Minus className="size-4" />
-              </Button>
-            </TooltipWrapper>
-            <TooltipWrapper
-              label="Zoom in (+)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                disabled={zoomInDisabled}
-                onClick={handleZoomIn}
-                aria-label="Zoom in"
-              >
-                <Plus className="size-4" />
-              </Button>
-            </TooltipWrapper>
-            <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-            <TooltipWrapper
-              label="Fit to screen (F)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-pressed={isFitted}
-                disabled={zoomDisabled}
-                onClick={handleFit}
-                aria-label="Fit to screen"
-              >
-                <Maximize2 className="size-4" />
-              </Button>
-            </TooltipWrapper>
-            <TooltipWrapper
-              label="Actual size (100%)"
-              side="top"
-              sideOffset={undefined}
-              align={undefined}
-            >
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-pressed={isActualSize}
-                disabled={zoomDisabled}
-                onClick={handleActualSize}
-                aria-label="Actual size"
-                className="min-w-12 tabular-nums"
-              >
-                100%
-              </Button>
-            </TooltipWrapper>
+            <ZoomControls
+              ready={!zoomDisabled}
+              scalePercent={scalePercent}
+              canZoomIn={!zoomInDisabled}
+              canZoomOut={!zoomOutDisabled}
+              onZoomIn={handleZoomIn}
+              onZoomOut={handleZoomOut}
+              fitKind="screen"
+              fitActive={isFitted}
+              onFit={handleFit}
+              actualSizeActive={isActualSize}
+              onActualSize={handleActualSize}
+              stepGroupClassName={undefined}
+              anchorGroupClassName={undefined}
+            />
           </div>
         </div>
       )}
@@ -620,21 +584,6 @@ function dispatchToSide(
   if (instance === null) return;
   pendingRef.current += 1;
   action(instance);
-}
-
-/** Independently fits `instance`'s own content to its own wrapper - never a shared number forced onto a differently-sized peer (ticket 07). */
-function fitInstance(instance: ReactZoomPanPinchRef): void {
-  const wrapper = instance.instance.wrapperComponent;
-  const content = instance.instance.contentComponent;
-  if (wrapper === null || content === null) return;
-  const wrapperRect = wrapper.getBoundingClientRect();
-  instance.centerView(
-    fitScaleFor(
-      { width: wrapperRect.width, height: wrapperRect.height },
-      { width: content.offsetWidth, height: content.offsetHeight },
-    ),
-    0,
-  );
 }
 
 /**

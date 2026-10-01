@@ -8,9 +8,13 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, type Connect, type Plugin, type UserConfig } from "vite";
+import { asciiOnlyOutput } from "../gui-app/vite/ascii-only-output";
 import { pdfjsAssets } from "../gui-app/vite/pdfjs-assets";
 import { sanitizeDevDesktopSlot } from "../shared/platform/dev-desktop-slot";
-import { devRelayBaseUrlFromEnv } from "../shared/platform/dev-backend-urls";
+import {
+  DEV_ALLOW_LAN_BACKEND_ENV,
+  devRelayBaseUrlFromEnv,
+} from "../shared/platform/dev-backend-urls";
 import {
   BUNDLED_BUILD_META_NAME,
   bundledBuildIdFromHtml,
@@ -46,12 +50,12 @@ const RELAY_BASE_URL = "wss://relay.traycer.ai/attach";
 const SHIPPED_ENVIRONMENTS = {
   staging: {
     authnBaseUrl: "https://authn.dev.traycer.ai",
-    cloudUiBaseUrl: "https://platform.dev.traycer.ai",
+    cloudUiBaseUrl: "https://dev.traycer.ai",
     relayBaseUrl: "wss://relay.dev.traycer.ai/attach",
   },
   production: {
     authnBaseUrl: "https://authn.traycer.ai",
-    cloudUiBaseUrl: "https://platform.traycer.ai",
+    cloudUiBaseUrl: "https://traycer.ai",
     relayBaseUrl: RELAY_BASE_URL,
   },
 } as const;
@@ -242,6 +246,37 @@ function devHostEndpoint(slot: string): Plugin {
   };
 }
 
+// The phone LAN lane serves the app over plain http, which is not a secure
+// context, so WebKit omits `crypto.randomUUID`. Only that lane injects this.
+const LAN_RANDOM_UUID_SHIM = `if (typeof crypto.randomUUID !== "function") {
+  crypto.randomUUID = function () {
+    var b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 15) | 64;
+    b[8] = (b[8] & 63) | 128;
+    var h = Array.prototype.map.call(b, function (x) {
+      return (x + 256).toString(16).slice(1);
+    });
+    return h.slice(0, 4).join("") + "-" + h.slice(4, 6).join("") + "-" +
+      h.slice(6, 8).join("") + "-" + h.slice(8, 10).join("") + "-" +
+      h.slice(10).join("");
+  };
+}`;
+
+function lanRandomUuidShim(): Plugin {
+  return {
+    name: "traycer-lan-random-uuid-shim",
+    transformIndexHtml() {
+      return [
+        {
+          tag: "script",
+          children: LAN_RANDOM_UUID_SHIM,
+          injectTo: "head-prepend",
+        },
+      ];
+    },
+  };
+}
+
 function bundledBuildReload(): readonly Plugin[] {
   const indexPath = resolve(mobileRoot, "dist", "web", "index.html");
   return [
@@ -409,6 +444,9 @@ export default defineConfig(async (): Promise<UserConfig> => {
         ? []
         : [devHostEndpoint(config.devHost.host.label)]),
       ...(bundledDevelopment ? bundledBuildReload() : []),
+      ...(process.env[DEV_ALLOW_LAN_BACKEND_ENV] === "1"
+        ? [lanRandomUuidShim()]
+        : []),
       tanstackRouter({
         enableRouteGeneration: false,
         target: "react",
@@ -422,6 +460,9 @@ export default defineConfig(async (): Promise<UserConfig> => {
       react(),
       tailwindcss(),
       pdfjsAssets(),
+      // Emitted JS as pure ASCII: one character above U+00FF makes the engine
+      // keep a whole chunk's source as UTF-16 (see the plugin).
+      asciiOnlyOutput(),
       babel({ presets: [reactCompilerPreset()] }).then((plugin) => ({
         ...plugin,
         enforce: "post" as const,
@@ -443,6 +484,11 @@ export default defineConfig(async (): Promise<UserConfig> => {
             }),
           ]),
     ],
+    // Worker bundles are separate builds that do not see `plugins`, and each
+    // worker keeps its own copy of its source - the epic runtime runs several.
+    worker: {
+      plugins: () => [asciiOnlyOutput()],
+    },
     resolve: {
       alias: {
         "@traycer/protocol/utils": resolve(protocolRoot, "utils"),

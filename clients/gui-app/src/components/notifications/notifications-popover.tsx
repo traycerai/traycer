@@ -23,6 +23,11 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { NotificationFilterMenu } from "@/components/notifications/notification-filter-menu";
 import { NotificationRow } from "@/components/notifications/notification-row";
+import { NeedsYouItem } from "@/components/notifications/needs-you-item";
+import {
+  useNeedsYouItems,
+  type NeedsYouItem as NeedsYouItemData,
+} from "@/stores/notifications/needs-you-items";
 import { useNotificationResolveHostId } from "@/hooks/notifications/use-notification-host";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationCenterArrivals } from "@/hooks/notifications/use-notification-center-arrivals";
@@ -70,7 +75,36 @@ import { useHostNotificationUnreadCount } from "@/stores/notifications/host-noti
 import { useNotificationUnreadCount } from "@/stores/notifications/notifications-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 
+/** What differs between the bell's center and the strip's Notifications drawer. */
+const VARIANT_CHROME: Readonly<
+  Record<
+    NotificationsPopoverProps["variant"],
+    {
+      readonly title: string;
+      readonly attentionLabel: string;
+      readonly shellClassName: string;
+    }
+  >
+> = {
+  center: {
+    title: "Notifications",
+    attentionLabel: "Needs attention",
+    shellClassName: "w-[min(90vw,34rem)]",
+  },
+  inbox: {
+    title: "Notifications",
+    attentionLabel: "Updates",
+    shellClassName: "h-full w-[min(90vw,24rem)]",
+  },
+};
+
 interface NotificationsPopoverProps {
+  /**
+   * `center` is the bell's notification center. `inbox` is the strip's
+   * Notifications drawer: titled "Notifications", filling the drawer's height, with the Needs you
+   * group on top and its rows left out of the sections below.
+   */
+  readonly variant: "center" | "inbox";
   readonly onNavigate: () => void;
   readonly headingRef: RefObject<HTMLHeadingElement | null>;
   readonly shellRef: RefObject<HTMLDivElement | null>;
@@ -277,14 +311,21 @@ export function NotificationsPopover(
   props: NotificationsPopoverProps,
 ): ReactNode {
   const {
+    variant,
     onNavigate,
     headingRef,
     shellRef,
     shellStyle,
     onFilterMenuOpenChange,
   } = props;
-  const attentionIds = useAttentionNotificationIds();
-  const recentIds = useRecentNotificationIds();
+  const inbox = variant === "inbox";
+  const chrome = VARIANT_CHROME[variant];
+  const allNeedsYouItems = useNeedsYouItems();
+  const needsYouItems = inbox ? allNeedsYouItems : NO_NEEDS_YOU_ITEMS;
+  const allAttentionIds = useAttentionNotificationIds();
+  const allRecentIds = useRecentNotificationIds();
+  const attentionIds = useWithoutNeedsYouRows(allAttentionIds, needsYouItems);
+  const recentIds = useWithoutNeedsYouRows(allRecentIds, needsYouItems);
   const unreadCount = useMergedNotificationUnreadCount();
   const appLocalUnreadCount = useAppLocalNotificationUnreadCount();
   // The cloud-independent planes, read raw for the Mark-all gate: the merged
@@ -331,7 +372,7 @@ export function NotificationsPopover(
   const notificationHostId = useNotificationResolveHostId();
   // Loaded HOST Attention rows (feed ids are `host:<id>`); app-local/global
   // attention is locally actionable and already reflected in `unreadCount`.
-  const loadedHostAttentionCount = attentionIds.filter((feedId) =>
+  const loadedHostAttentionCount = allAttentionIds.filter((feedId) =>
     feedId.startsWith("host:"),
   ).length;
   const { activate } = useNotificationActivation();
@@ -365,11 +406,16 @@ export function NotificationsPopover(
     [setOpen, shellRef],
   );
 
-  // Combined render order (Attention section, then Recent) - must match DOM
-  // order exactly, since scroll anchoring measures rows by this sequence.
+  // Combined render order (Needs you in the Notifications drawer, then Attention, then
+  // Recent) - must match DOM order exactly, since scroll anchoring measures
+  // rows by this sequence and arrivals count the rows it names.
   const orderedFeedIds = useMemo(
-    () => [...attentionIds, ...recentIds],
-    [attentionIds, recentIds],
+    () => [
+      ...needsYouItems.map((item) => item.row.feedId),
+      ...attentionIds,
+      ...recentIds,
+    ],
+    [needsYouItems, attentionIds, recentIds],
   );
   const {
     scrollRef: feedScrollRef,
@@ -520,7 +566,13 @@ export function NotificationsPopover(
 
   const handleOpenSettings = useCallback(() => {
     onNavigate();
-    openSettings({ section: "notifications", resetToGeneral: false });
+    openSettings({
+      section: "notifications",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   }, [onNavigate, openSettings]);
 
   const isFiltered =
@@ -555,11 +607,15 @@ export function NotificationsPopover(
       <div
         ref={shellRef}
         style={shellStyle}
-        className="flex w-[min(90vw,34rem)] min-w-0 flex-col gap-0 overflow-hidden"
+        className={cn(
+          "flex min-w-0 flex-col gap-0 overflow-hidden",
+          chrome.shellClassName,
+        )}
         data-notification-center=""
         data-testid="notifications-popover"
       >
         <NotificationsPopoverHeader
+          title={chrome.title}
           headingRef={headingRef}
           unreadOnly={unreadOnly}
           categories={categories}
@@ -620,6 +676,15 @@ export function NotificationsPopover(
           )}
           <NotificationsFeedContent isEmpty={isEmpty} presentation={feedStatus}>
             <NotificationsFeedSections
+              needsYou={
+                needsYouItems.length === 0 ? null : (
+                  <NeedsYouGroup
+                    items={needsYouItems}
+                    onActivate={handleActivate}
+                  />
+                )
+              }
+              attentionLabel={chrome.attentionLabel}
               attentionIds={attentionIds}
               recentIds={recentIds}
               canLoadMoreAttention={actions.canLoadMoreAttention}
@@ -668,6 +733,9 @@ export function NotificationsPopover(
 }
 
 interface NotificationsFeedSectionsProps {
+  /** The Notifications drawer's Needs you group, above everything else. */
+  readonly needsYou: ReactNode | null;
+  readonly attentionLabel: string;
   readonly attentionIds: ReadonlyArray<string>;
   readonly recentIds: ReadonlyArray<string>;
   readonly canLoadMoreAttention: boolean;
@@ -690,6 +758,7 @@ function NotificationsFeedSections(
   const shouldReduceMotion = useReducedMotion() === true;
   return (
     <LayoutGroup id="notifications-feed">
+      {props.needsYou}
       <AnimatePresence initial={false}>
         {isAttentionSectionVisible({
           loadedAttentionCount: props.attentionIds.length,
@@ -702,7 +771,7 @@ function NotificationsFeedSections(
             transition={{ duration: 0.2, ease: "easeOut" }}
             className="overflow-hidden px-4 pt-3"
           >
-            <SectionLabel>Needs attention</SectionLabel>
+            <SectionLabel>{props.attentionLabel}</SectionLabel>
             {/* -mx-4 breaks the row list out of the section's inset so each
             row's bottom divider reaches the popover's true edges; rows
             restore the same visual inset as their own content padding (see
@@ -753,6 +822,7 @@ function NotificationsFeedSections(
 }
 
 interface NotificationsPopoverHeaderProps {
+  readonly title: string;
   readonly headingRef: RefObject<HTMLHeadingElement | null>;
   readonly unreadOnly: boolean;
   readonly categories: ReadonlySet<NotificationCategory>;
@@ -773,6 +843,7 @@ interface NotificationsPopoverHeaderProps {
 }
 
 function NotificationsPopoverHeader({
+  title,
   headingRef,
   unreadOnly,
   categories,
@@ -796,7 +867,7 @@ function NotificationsPopoverHeader({
           tabIndex={-1}
           className="text-ui-sm font-semibold outline-none"
         >
-          Notifications
+          {title}
         </h2>
         <div className="flex shrink-0 items-center gap-0.5">
           <NotificationFilterMenu
@@ -1179,6 +1250,43 @@ function useRelocatedNotificationIds(
     previousAttentionIds.current = attentionIds;
   }, [attentionIds, recentIds]);
   return relocatedIds;
+}
+
+const NO_NEEDS_YOU_ITEMS: ReadonlyArray<NeedsYouItemData> = [];
+
+/** A section's ids without the rows the Needs you group already shows. */
+function useWithoutNeedsYouRows(
+  feedIds: ReadonlyArray<string>,
+  items: ReadonlyArray<NeedsYouItemData>,
+): ReadonlyArray<string> {
+  return useMemo(() => {
+    if (items.length === 0) return feedIds;
+    const shown = new Set(items.map((item) => item.row.feedId));
+    return feedIds.filter((feedId) => !shown.has(feedId));
+  }, [feedIds, items]);
+}
+
+/** The Notifications drawer's first group: every prompt waiting on the person (D10). */
+function NeedsYouGroup(props: {
+  readonly items: ReadonlyArray<NeedsYouItemData>;
+  readonly onActivate: (row: MergedNotificationRow) => void;
+}): ReactNode {
+  return (
+    <section data-testid="needs-you-group" className="flex flex-col px-4 pt-3">
+      <div className="sticky top-0 z-20 -mx-4 mb-1 bg-popover px-4 py-1 text-overline font-semibold uppercase tracking-wide text-warning-foreground">
+        Needs you · {props.items.length}
+      </div>
+      <div className="-mx-2 flex flex-col">
+        {props.items.map((item) => (
+          <NeedsYouItem
+            key={item.row.feedId}
+            item={item}
+            onActivate={props.onActivate}
+          />
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function SectionLabel(props: { readonly children: ReactNode }): ReactNode {

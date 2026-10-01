@@ -90,4 +90,20 @@ export const IMAGE_ATTACHMENT_ATTRIBUTE_NAMES: ReadonlyArray<string> = [
   "hash",
   "mimeType",
   "size",
+  // Whether these bytes may travel to the host BY HASH rather than inline —
+  // metadata beside the `b64content | hash` payload XOR, never a third payload.
+  //
+  // It is a FACT stamped by the one place that can know it (the preparer, in
+  // `composer-image-preparation.ts`): true only for a raster output the preparer
+  // produced, false for its source-bytes fallback (SVG, AVIF, HEIC, BMP, bytes
+  // that disagree with their declared type). `mimeType` cannot answer the
+  // question, because the fallback keeps the SOURCE's declared type. The host's
+  // staging seam refuses the complement of the same raster list, and the
+  // `missing-attachment-bytes` refusal is the BACKSTOP for a disagreement — not
+  // the rule, which lives here.
+  //
+  // Absent means false: a node of unknown provenance (a draft persisted before
+  // this attr existed, a paste from an older client) is inline-only, which is
+  // exactly today's behaviour and can never fail.
+  "byHashEligible",
 ];

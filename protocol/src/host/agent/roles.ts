@@ -7,6 +7,7 @@ import {
   roleNameSchema,
   roleScopeSchema,
 } from "@traycer/protocol/persistence/epic/role-claims";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 // ─── Agent role claims ────────────────────────────────────────────────────
 //
@@ -30,21 +31,25 @@ import {
 /** What a claim looks like on the wire: the stored record minus `userId`,
  * which never needs to cross the boundary because every read is already
  * filtered to the authenticated account. */
-export const roleClaimWireSchema = z.object({
-  claimId: z.uuid(),
-  agentId: z.string().min(1),
-  role: roleNameSchema,
-  scope: roleScopeSchema,
-  claimedAt: z.number().int().nonnegative(),
-});
+export const roleClaimWireSchema = lazySchema(() =>
+  z.object({
+    claimId: z.uuid(),
+    agentId: z.string().min(1),
+    role: roleNameSchema,
+    scope: roleScopeSchema,
+    claimedAt: z.number().int().nonnegative(),
+  }),
+);
 export type RoleClaimWire = z.infer<typeof roleClaimWireSchema>;
 
-export const claimAgentRoleRequestSchema = z.object({
-  epicId: z.string().min(1),
-  claimantAgentId: z.string().min(1),
-  role: roleNameSchema,
-  scope: roleScopeSchema,
-});
+export const claimAgentRoleRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    claimantAgentId: z.string().min(1),
+    role: roleNameSchema,
+    scope: roleScopeSchema,
+  }),
+);
 export type ClaimAgentRoleRequest = z.infer<typeof claimAgentRoleRequestSchema>;
 
 // ─── Awareness ────────────────────────────────────────────────────────────
@@ -66,12 +71,14 @@ export function isReservedAgentId(id: string): boolean {
   return id === TRAYCER_SYSTEM_SENDER_AGENT_ID;
 }
 
-export const roleAwarenessEventSchema = z.object({
-  kind: z.enum(["role-claimed", "role-relinquished"]),
-  epicId: z.string().min(1),
-  claim: roleClaimWireSchema,
-  at: z.number().int().nonnegative(),
-});
+export const roleAwarenessEventSchema = lazySchema(() =>
+  z.object({
+    kind: z.enum(["role-claimed", "role-relinquished"]),
+    epicId: z.string().min(1),
+    claim: roleClaimWireSchema,
+    at: z.number().int().nonnegative(),
+  }),
+);
 export type RoleAwarenessEvent = z.infer<typeof roleAwarenessEventSchema>;
 
 /**
@@ -97,77 +104,93 @@ export type RoleAwarenessEvent = z.infer<typeof roleAwarenessEventSchema>;
  * responsibility; a broadcast is a courtesy to whoever happened to be
  * listening.
  */
-const roleAwarenessFailureReasonSchema = z.enum([
-  "sink-closed",
-  "timeout",
-  "delivery-error",
-  "reserved-id-collision",
-  "no-active-turn",
-]);
+const roleAwarenessFailureReasonSchema = lazySchema(() =>
+  z.enum([
+    "sink-closed",
+    "timeout",
+    "delivery-error",
+    "reserved-id-collision",
+    "no-active-turn",
+  ]),
+);
 
-const roleAwarenessFailureSchema = z.object({
-  agentId: z.string(),
-  reason: roleAwarenessFailureReasonSchema,
-});
+const roleAwarenessFailureSchema = lazySchema(() =>
+  z.object({
+    agentId: z.string(),
+    reason: roleAwarenessFailureReasonSchema,
+  }),
+);
 
-export const roleAwarenessDeliverySchema = z.object({
-  deliveredTo: z.array(z.string()),
-  unreachable: z.array(z.string()),
-  failed: z.array(roleAwarenessFailureSchema),
-});
+export const roleAwarenessDeliverySchema = lazySchema(() =>
+  z.object({
+    deliveredTo: z.array(z.string()),
+    unreachable: z.array(z.string()),
+    failed: z.array(roleAwarenessFailureSchema),
+  }),
+);
 export type RoleAwarenessDelivery = z.infer<typeof roleAwarenessDeliverySchema>;
 
-export const claimAgentRoleResponseSchema = z.object({
-  claim: roleClaimWireSchema,
-  // False when this agent already held an identical claim: the existing claim
-  // comes back untouched rather than a duplicate being minted, so retries are
-  // safe.
-  created: z.boolean(),
-  // Other agents already holding this role/scope. Overlap is allowed - v1 has
-  // no uniqueness lock - so the claimant is TOLD about duplication instead of
-  // being blocked by it. Account- and liveness-filtered like every other read.
-  overlapping: z.array(roleClaimWireSchema),
-  // Best-effort report about who we managed to tell. Commits to nothing about
-  // the registry, which is already durable by the time this is computed.
-  awareness: roleAwarenessDeliverySchema,
-});
+export const claimAgentRoleResponseSchema = lazySchema(() =>
+  z.object({
+    claim: roleClaimWireSchema,
+    // False when this agent already held an identical claim: the existing claim
+    // comes back untouched rather than a duplicate being minted, so retries are
+    // safe.
+    created: z.boolean(),
+    // Other agents already holding this role/scope. Overlap is allowed - v1 has
+    // no uniqueness lock - so the claimant is TOLD about duplication instead of
+    // being blocked by it. Account- and liveness-filtered like every other read.
+    overlapping: z.array(roleClaimWireSchema),
+    // Best-effort report about who we managed to tell. Commits to nothing about
+    // the registry, which is already durable by the time this is computed.
+    awareness: roleAwarenessDeliverySchema,
+  }),
+);
 export type ClaimAgentRoleResponse = z.infer<
   typeof claimAgentRoleResponseSchema
 >;
 
-export const listAgentRolesRequestSchema = z.object({
-  epicId: z.string().min(1),
-});
+export const listAgentRolesRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+  }),
+);
 export type ListAgentRolesRequest = z.infer<typeof listAgentRolesRequestSchema>;
 
-export const listAgentRolesResponseSchema = z.object({
-  claims: z.array(roleClaimWireSchema),
-});
+export const listAgentRolesResponseSchema = lazySchema(() =>
+  z.object({
+    claims: z.array(roleClaimWireSchema),
+  }),
+);
 export type ListAgentRolesResponse = z.infer<
   typeof listAgentRolesResponseSchema
 >;
 
-export const relinquishAgentRoleRequestSchema = z.object({
-  epicId: z.string().min(1),
-  claimantAgentId: z.string().min(1),
-  // A claim, never a role string: an agent may hold several, so only the id is
-  // unambiguous.
-  claimId: z.uuid(),
-});
+export const relinquishAgentRoleRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    claimantAgentId: z.string().min(1),
+    // A claim, never a role string: an agent may hold several, so only the id is
+    // unambiguous.
+    claimId: z.uuid(),
+  }),
+);
 export type RelinquishAgentRoleRequest = z.infer<
   typeof relinquishAgentRoleRequestSchema
 >;
 
-export const relinquishAgentRoleResponseSchema = z.object({
-  // Same best-effort report as `claim`. Empty when nothing was released - there
-  // is no event to announce.
-  awareness: roleAwarenessDeliverySchema,
-  // False is a no-op, not an error: the claim was already gone (double
-  // relinquish is safe), or it belongs to another account - which is reported
-  // as not-found rather than as an authorization error, so a caller cannot
-  // probe for the existence of another account's claims.
-  released: z.boolean(),
-});
+export const relinquishAgentRoleResponseSchema = lazySchema(() =>
+  z.object({
+    // Same best-effort report as `claim`. Empty when nothing was released - there
+    // is no event to announce.
+    awareness: roleAwarenessDeliverySchema,
+    // False is a no-op, not an error: the claim was already gone (double
+    // relinquish is safe), or it belongs to another account - which is reported
+    // as not-found rather than as an authorization error, so a caller cannot
+    // probe for the existence of another account's claims.
+    released: z.boolean(),
+  }),
+);
 export type RelinquishAgentRoleResponse = z.infer<
   typeof relinquishAgentRoleResponseSchema
 >;
@@ -184,12 +207,14 @@ export type RelinquishAgentRoleResponse = z.infer<
 // authoritative registry if it reaches cutover; otherwise the next fresh
 // query does. It is deliberately NOT folded into `deliveredTo` - no event was
 // queued and no model read anything, so claiming delivery would be false.
-export const roleAwarenessDeliverySchemaV11 = z.object({
-  deliveredTo: z.array(z.string()),
-  deferredToPrompt: z.array(z.string()),
-  unreachable: z.array(z.string()),
-  failed: z.array(roleAwarenessFailureSchema),
-});
+export const roleAwarenessDeliverySchemaV11 = lazySchema(() =>
+  z.object({
+    deliveredTo: z.array(z.string()),
+    deferredToPrompt: z.array(z.string()),
+    unreachable: z.array(z.string()),
+    failed: z.array(roleAwarenessFailureSchema),
+  }),
+);
 export type RoleAwarenessDeliveryV11 = z.infer<
   typeof roleAwarenessDeliverySchemaV11
 >;
@@ -218,12 +243,14 @@ export function downProjectRoleAwarenessDeliveryToV10(
   });
 }
 
-export const claimAgentRoleResponseSchemaV11 = z.object({
-  claim: roleClaimWireSchema,
-  created: z.boolean(),
-  overlapping: z.array(roleClaimWireSchema),
-  awareness: roleAwarenessDeliverySchemaV11,
-});
+export const claimAgentRoleResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    claim: roleClaimWireSchema,
+    created: z.boolean(),
+    overlapping: z.array(roleClaimWireSchema),
+    awareness: roleAwarenessDeliverySchemaV11,
+  }),
+);
 export type ClaimAgentRoleResponseV11 = z.infer<
   typeof claimAgentRoleResponseSchemaV11
 >;
@@ -239,10 +266,12 @@ export function downProjectClaimResponseToV10(
   });
 }
 
-export const relinquishAgentRoleResponseSchemaV11 = z.object({
-  awareness: roleAwarenessDeliverySchemaV11,
-  released: z.boolean(),
-});
+export const relinquishAgentRoleResponseSchemaV11 = lazySchema(() =>
+  z.object({
+    awareness: roleAwarenessDeliverySchemaV11,
+    released: z.boolean(),
+  }),
+);
 export type RelinquishAgentRoleResponseV11 = z.infer<
   typeof relinquishAgentRoleResponseSchemaV11
 >;

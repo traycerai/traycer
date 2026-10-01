@@ -52,7 +52,7 @@ const bakedConfig = {
   // CLI; the CLI subprocess owns host install/update/restart decisions.
   version: "0.0.0-dev",
   authnBaseUrl: "https://authn.traycer.ai",
-  cloudUiBaseUrl: "https://platform.traycer.ai",
+  cloudUiBaseUrl: "https://traycer.ai",
   // Remote Host Support (ticket T14): the relay worker's WebSocket attach
   // endpoint (`workers/relay-do`, ticket T10) — mirrors the host build's own
   // `relayAttachUrl` (`traycer-host/src/config.ts`). The OSS source holds the

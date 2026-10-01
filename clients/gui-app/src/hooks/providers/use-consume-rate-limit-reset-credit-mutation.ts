@@ -7,18 +7,18 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
+import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import {
-  enqueueRateLimitFetchForScope,
-  type RateLimitQueueConfig,
-} from "@/lib/rate-limits/ephemeral-fetch-queue";
+  fetchProviderRateLimits,
+  type ProviderRateLimitFetchScope,
+} from "@/lib/rate-limits/provider-rate-limit-fetch";
 
 interface ConsumeResetCreditContext {
   readonly hostId: string | null;
-  readonly queueScope: RateLimitQueueConfig | null;
+  readonly fetchScope: ProviderRateLimitFetchScope | null;
 }
 
 function toastResetOutcome(
@@ -47,7 +47,7 @@ export function useConsumeRateLimitResetCreditMutation(): UseMutationResult<
 > {
   const client = useHostClient();
   const queryClient = useQueryClient();
-  const queueScope = useRateLimitQueueScope();
+  const fetchScope = useProviderRateLimitFetchScope();
 
   return useHostMutation<
     HostRpcRegistry,
@@ -61,7 +61,7 @@ export function useConsumeRateLimitResetCreditMutation(): UseMutationResult<
       mutationKey: providersMutationKeys.consumeRateLimitResetCredit(),
       onMutate: () => ({
         hostId: client.getActiveHostId() ?? null,
-        queueScope,
+        fetchScope,
       }),
       onSuccess: async (data, variables, context) => {
         toastResetOutcome(data);
@@ -77,14 +77,23 @@ export function useConsumeRateLimitResetCreditMutation(): UseMutationResult<
           }),
           exact: true,
         };
+        // Cancel first: a read already in flight may carry numbers from before
+        // the reset. A cancelled fetch is one `fetchProviderRateLimits` never
+        // joins, so the forced request below is sent after the reset. That
+        // alone would not make its ANSWER post-reset - the host could join
+        // the pre-reset probe still running there - so the host drops that
+        // probe from its join map when it redeems the credit.
         await queryClient.cancelQueries(rateLimitQueryFilters);
         await queryClient.invalidateQueries(rateLimitQueryFilters);
-        if (context.queueScope?.hostId !== context.hostId) return;
-        void enqueueRateLimitFetchForScope(
-          context.queueScope,
-          "codex",
-          DEFAULT_ACCOUNT_CONTEXT,
-          { force: true, profileId: variables.profileId },
+        if (context.fetchScope?.hostId !== context.hostId) return;
+        void fetchProviderRateLimits(
+          context.fetchScope,
+          {
+            providerId: "codex",
+            accountContext: DEFAULT_ACCOUNT_CONTEXT,
+            profileId: variables.profileId,
+          },
+          { force: true },
         );
       },
       onError: (error) =>

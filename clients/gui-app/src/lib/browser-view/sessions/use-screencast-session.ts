@@ -29,6 +29,9 @@ import {
 } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { isMac } from "@/lib/keybindings/platform";
 import {
   createScreencastController,
   type ScreencastController,
@@ -303,6 +306,23 @@ export function useScreencastSession(
   options: ScreencastSessionOptions,
 ): ScreencastSession {
   const { client, hostId, sessionId, tabId, visible } = options;
+  const hostEntry = useHostDirectoryEntry(hostId);
+  const registeredHosts = useRegisteredHosts();
+  const hostPlatform = registeredHosts.data?.hosts
+    .find((host) => host.hostId === hostId)
+    ?.platform?.split("-")[0];
+  // Local sessions share the viewer's OS even offline. For remote sessions,
+  // unknown registry metadata means pass through, never guess the host's OS.
+  let hostIsMac: boolean | null = null;
+  if (hostEntry?.kind === "local") hostIsMac = isMac();
+  else if (hostPlatform === "darwin") hostIsMac = true;
+  else if (hostPlatform === "linux" || hostPlatform === "win32") {
+    hostIsMac = false;
+  }
+  const hostIsMacRef = useRef(hostIsMac);
+  useLayoutEffect(() => {
+    hostIsMacRef.current = hostIsMac;
+  }, [hostIsMac]);
   const scope = useStableScope(options.scope);
   // A module constant chosen by the shell this bundle booted into, so the
   // reference is stable across renders and safe to depend on below.
@@ -456,6 +476,7 @@ export function useScreencastSession(
   // eslint-disable-next-line react-hooks/refs -- the controller only stores the ref bag; it reads `.current` from handlers and effects, never during render.
   const [controller] = useState<ScreencastController>(() =>
     createScreencastController({
+      readHostIsMac: () => hostIsMacRef.current,
       refs,
       sendFrame: (frame) => {
         streamRef.current?.sendClientFrame(frame);

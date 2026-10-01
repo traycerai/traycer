@@ -1,0 +1,811 @@
+import { describe, expect, it } from "vitest";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type {
+  HostListItem,
+  HostListResponse,
+} from "@traycer/protocol/host/host-status";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { AuthorityLog } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type {
+  IStreamSession,
+  ServerFrameHandler,
+  StatusChangeHandler,
+  StreamCloseReason,
+  StreamConnectionStatus,
+  StreamFrameEnvelope,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import {
+  startLocalHostInventorySubscription,
+  type LocalHostEndpoint,
+  type LocalHostInventorySubscriptionDeps,
+} from "../local-host-inventory-subscription";
+
+/**
+ * A drivable double for one `host.hostInventory.subscribe` session.
+ *
+ * `getNegotiatedSchemaVersion()` answers `{ major: 1, minor: 0 }` rather than
+ * `null` - either is legal per `HostInventoryStreamClient`'s own guard (a
+ * `null` negotiated version skips the minor check entirely), but pinning the
+ * real value here is what a healthy handshake actually reports.
+ */
+class FakeInventorySession implements IStreamSession {
+  closed = false;
+  private serverHandler: ServerFrameHandler | null = null;
+  private statusHandler: StatusChangeHandler | null = null;
+
+  sendClientFrame(): void {
+    // Not exercised: `HostInventoryStreamClient` never sends a client frame
+    // itself (the transport's own ping/pong lives below this seam).
+  }
+
+  onServerFrame(handler: ServerFrameHandler): void {
+    this.serverHandler = handler;
+  }
+
+  onStatusChange(handler: StatusChangeHandler): void {
+    this.statusHandler = handler;
+  }
+
+  requestReconnect(): void {}
+
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return { major: 1, minor: 0 };
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    // The real terminal status, not a silent flip: `close()` on a real
+    // session fires its own status handler with `"closed"` before the socket
+    // goes away, and a fake that swallows that transition would let a
+    // consumer's `onConnectionStatus` guard go untested on the exact path
+    // production actually takes when IT calls `session.close()`.
+    this.emitStatus("closed", { kind: "caller" });
+  }
+
+  /** Drives `IStreamSession.onStatusChange`'s handler. */
+  emitStatus(
+    status: StreamConnectionStatus,
+    reason: StreamCloseReason | null,
+  ): void {
+    this.statusHandler?.(status, reason, null);
+  }
+
+  /** Drives `IStreamSession.onServerFrame`'s handler with one snapshot frame. */
+  emitSnapshot(
+    hosts: readonly HostListItem[],
+    stale: boolean,
+    fetchedAtMs: number,
+  ): void {
+    const envelope: StreamFrameEnvelope = {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      hosts,
+      fetchedAtMs,
+      stale,
+    };
+    this.serverHandler?.(envelope, null);
+  }
+}
+
+/**
+ * A drivable double for `IHostStreamClient<HostStreamRpcRegistry>`.
+ *
+ * The shared `FakeStreamClient` (`__testing__/fake-stream-client.ts`) always
+ * answers `getMethodSupport()` with `"unknown"` and discards the listener
+ * `subscribeMethodSupport` is handed, so it cannot drive A1's `"unsupported"`
+ * case or a support-change notification. This double keeps everything that
+ * fixture already gets right (a real `IStreamSession` double parsed against
+ * the wire schema, one session per `subscribe()` call) and adds the two
+ * pieces this suite needs: a settable `getMethodSupport()` answer and a
+ * `subscribeMethodSupport` listener a test can actually fire.
+ */
+class FakeInventoryStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
+  readonly instanceId: string;
+  readonly sessions: FakeInventorySession[] = [];
+  readonly subscribes: Array<{
+    readonly method: string;
+    readonly params: unknown;
+  }> = [];
+  private closed = false;
+  private closedReason: string | null = null;
+  private methodSupport: StreamMethodSupport;
+  private readonly supportListeners = new Set<() => void>();
+
+  constructor(instanceId: string, initialMethodSupport: StreamMethodSupport) {
+    this.instanceId = instanceId;
+    this.methodSupport = initialMethodSupport;
+  }
+
+  subscribe(method: string, params: unknown): FakeInventorySession {
+    const session = new FakeInventorySession();
+    this.sessions.push(session);
+    this.subscribes.push({ method, params });
+    return session;
+  }
+
+  subscribeWithParamsProvider(
+    method: string,
+    paramsProvider: (onWireVersion: SchemaVersion | null) => unknown,
+  ): FakeInventorySession {
+    return this.subscribe(method, paramsProvider(null));
+  }
+
+  getMethodSchemaVersion(): SchemaVersion | null {
+    return null;
+  }
+
+  close(reason: string): void {
+    this.closed = true;
+    this.closedReason = reason;
+  }
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  getClosedReason(): string | null {
+    return this.closedReason;
+  }
+
+  onClosed(): () => void {
+    return () => undefined;
+  }
+
+  notifyBearerRotatedCallCount = 0;
+
+  notifyBearerRotated(): void {
+    this.notifyBearerRotatedCallCount += 1;
+  }
+
+  notifyCloudVerdictChanged(): void {}
+
+  reconnectAll(): void {}
+
+  isReady(): boolean {
+    return true;
+  }
+
+  getMethodSupport(): StreamMethodSupport {
+    return this.methodSupport;
+  }
+
+  /** Lets a test change what `getMethodSupport()` answers without a re-dial. */
+  setMethodSupport(support: StreamMethodSupport): void {
+    this.methodSupport = support;
+  }
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    this.supportListeners.add(listener);
+    return () => {
+      this.supportListeners.delete(listener);
+    };
+  }
+
+  /** Fires every listener registered through `subscribeMethodSupport`. */
+  fireMethodSupportChanged(): void {
+    for (const listener of Array.from(this.supportListeners)) listener();
+  }
+
+  subscribeAvailabilityRecovered(): () => void {
+    return () => undefined;
+  }
+}
+
+const silentLog: AuthorityLog = {
+  debug: () => undefined,
+  warn: () => undefined,
+};
+
+function buildRow(hostId: string): HostListItem {
+  return {
+    hostId,
+    displayName: null,
+    platform: null,
+    kind: "personal",
+    publicKey: "pub-key",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
+    updatePolicy: "manual",
+  };
+}
+
+interface RowsCall {
+  readonly response: HostListResponse;
+  readonly readAtMs: number;
+  readonly openedAtGeneration: number;
+}
+
+interface Harness {
+  readonly deps: LocalHostInventorySubscriptionDeps;
+  /** Every `FakeInventoryStreamClient` this harness has opened, in order. */
+  readonly clients: FakeInventoryStreamClient[];
+  readonly rowsCalls: RowsCall[];
+  readonly pushActiveCalls: boolean[];
+  /**
+   * Sets the machine's published host and fires `onLocalHostChanged`
+   * listeners (a no-op before a subscription has registered one, which is
+   * exactly what lets this same method seed the INITIAL endpoint too).
+   */
+  setLocalHost(endpoint: LocalHostEndpoint | null): void;
+  /** The support the NEXT `openStreamClient()` call hands its new client. */
+  setNextMethodSupport(support: StreamMethodSupport): void;
+  /**
+   * Sets who this process is signed in as and fires `onAuthChanged`
+   * listeners (a no-op before a subscription has registered one, which is
+   * exactly what lets this same method seed the INITIAL identity too).
+   */
+  setIdentity(next: {
+    readonly userId: string | null;
+    readonly generation: number;
+  }): void;
+}
+
+/**
+ * The default identity this harness's subscriptions open under: a signed-in
+ * user at generation 0. Task B's identity-change cases move off this value
+ * explicitly; every other case relies on it implicitly, the same way they
+ * relied on there being no identity concept at all before this deps field
+ * existed.
+ */
+const DEFAULT_IDENTITY = { userId: "user-a", generation: 0 } as const;
+
+function buildHarness(): Harness {
+  let currentHost: LocalHostEndpoint | null = null;
+  let nextMethodSupport: StreamMethodSupport = "unknown";
+  let nextClientIndex = 0;
+  let currentIdentity: { userId: string | null; generation: number } = {
+    ...DEFAULT_IDENTITY,
+  };
+  const localHostChangeListeners = new Set<() => void>();
+  const authChangeListeners = new Set<() => void>();
+  const clients: FakeInventoryStreamClient[] = [];
+  const rowsCalls: RowsCall[] = [];
+  const pushActiveCalls: boolean[] = [];
+
+  const deps: LocalHostInventorySubscriptionDeps = {
+    localHost: () => currentHost,
+    onLocalHostChanged: (listener) => {
+      localHostChangeListeners.add(listener);
+      return () => {
+        localHostChangeListeners.delete(listener);
+      };
+    },
+    identity: () => currentIdentity,
+    onAuthChanged: (listener) => {
+      authChangeListeners.add(listener);
+      return () => {
+        authChangeListeners.delete(listener);
+      };
+    },
+    openStreamClient: () => {
+      const client = new FakeInventoryStreamClient(
+        `client-${nextClientIndex}`,
+        nextMethodSupport,
+      );
+      nextClientIndex += 1;
+      clients.push(client);
+      return client;
+    },
+    onRows: (read) => {
+      rowsCalls.push(read);
+    },
+    onPushActiveChanged: (active) => {
+      pushActiveCalls.push(active);
+    },
+    log: silentLog,
+  };
+
+  return {
+    deps,
+    clients,
+    rowsCalls,
+    pushActiveCalls,
+    setLocalHost: (endpoint) => {
+      currentHost = endpoint;
+      for (const listener of Array.from(localHostChangeListeners)) listener();
+    },
+    setNextMethodSupport: (support) => {
+      nextMethodSupport = support;
+    },
+    setIdentity: (next) => {
+      currentIdentity = next;
+      for (const listener of Array.from(authChangeListeners)) listener();
+    },
+  };
+}
+
+const HOST_1: LocalHostEndpoint = {
+  hostId: "host-1",
+  websocketUrl: "ws://host-1",
+};
+const HOST_2: LocalHostEndpoint = {
+  hostId: "host-2",
+  websocketUrl: "ws://host-2",
+};
+
+describe("startLocalHostInventorySubscription", () => {
+  it("A1: a host answering unsupported opens no session and never arms push", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    harness.setNextMethodSupport("unsupported");
+
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+
+    expect(harness.clients).toHaveLength(1);
+    expect(harness.clients[0]?.sessions).toHaveLength(0);
+    expect(harness.pushActiveCalls).not.toContain(true);
+
+    subscription.dispose();
+  });
+
+  it("A2: unknown support DOES open a session - it is the pre-handshake answer and the subscribe is the probe", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    harness.setNextMethodSupport("unknown");
+
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+
+    expect(harness.clients).toHaveLength(1);
+    const client = harness.clients[0];
+    expect(client?.sessions).toHaveLength(1);
+    expect(client?.subscribes).toEqual([
+      { method: "host.hostInventory.subscribe", params: {} },
+    ]);
+
+    subscription.dispose();
+  });
+
+  it("A3: a healthy snapshot adopts the rows and arms push coverage", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+
+    expect(harness.rowsCalls).toEqual([
+      {
+        response: { hosts: [buildRow("host-1")] },
+        readAtMs: 1_000,
+        openedAtGeneration: 0,
+      },
+    ]);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    subscription.dispose();
+  });
+
+  it("A4: a stale snapshot still adopts the rows, but withdraws (or never arms) push coverage", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    // Arm it first, so the stale frame below is proven to WITHDRAW coverage
+    // rather than merely never granting it.
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    session.emitSnapshot([buildRow("host-1")], true, 2_000);
+
+    // Rows are still adopted - they are the freshest anyone has.
+    expect(harness.rowsCalls).toEqual([
+      {
+        response: { hosts: [buildRow("host-1")] },
+        readAtMs: 1_000,
+        openedAtGeneration: 0,
+      },
+      {
+        response: { hosts: [buildRow("host-1")] },
+        readAtMs: 2_000,
+        openedAtGeneration: 0,
+      },
+    ]);
+    // Coverage is withdrawn.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+
+  it("A5: a status change to anything other than open withdraws push coverage", () => {
+    for (const status of ["reconnecting", "closed", "connecting"] as const) {
+      const harness = buildHarness();
+      harness.setLocalHost(HOST_1);
+      const subscription = startLocalHostInventorySubscription(harness.deps);
+      const session = harness.clients[0]?.sessions[0];
+      if (session === undefined) throw new Error("no session opened");
+
+      session.emitSnapshot([buildRow("host-1")], false, 1_000);
+      expect(harness.pushActiveCalls).toEqual([true]);
+
+      session.emitStatus(status, null);
+
+      expect(harness.pushActiveCalls).toEqual([true, false]);
+      subscription.dispose();
+    }
+  });
+
+  it("A6: onPushActiveChanged fires only on TRANSITIONS, not on every frame", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    session.emitSnapshot([buildRow("host-1")], false, 2_000);
+
+    expect(harness.rowsCalls).toHaveLength(2);
+    expect(harness.rowsCalls.map((call) => call.readAtMs)).toEqual([
+      1_000, 2_000,
+    ]);
+    // One true, not two, even though two healthy snapshots landed.
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    subscription.dispose();
+  });
+
+  it("A7: no published local host at start means no client is opened at all", () => {
+    const harness = buildHarness();
+
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+
+    expect(harness.clients).toHaveLength(0);
+    expect(harness.pushActiveCalls).not.toContain(true);
+
+    subscription.dispose();
+  });
+
+  it("A8: a local-host change to a DIFFERENT hostId tears the old client down and opens a new one; the SAME hostId does not re-open", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    expect(harness.clients).toHaveLength(1);
+    const firstClient = harness.clients[0];
+    if (firstClient === undefined) throw new Error("no client opened");
+
+    // Same host id (a fresh endpoint object, but the identity is unchanged):
+    // no teardown, no new client.
+    harness.setLocalHost({
+      hostId: "host-1",
+      websocketUrl: "ws://host-1-again",
+    });
+    expect(harness.clients).toHaveLength(1);
+    expect(firstClient.isClosed()).toBe(false);
+
+    // A different host id: the old client is torn down and a new one opened.
+    harness.setLocalHost(HOST_2);
+    expect(firstClient.isClosed()).toBe(true);
+    expect(harness.clients).toHaveLength(2);
+
+    subscription.dispose();
+  });
+
+  it("A9: dispose() closes the client and the session and leaves push inactive", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const client = harness.clients[0];
+    const session = client?.sessions[0];
+    if (client === undefined || session === undefined) {
+      throw new Error("no client/session opened");
+    }
+
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    subscription.dispose();
+
+    expect(session.closed).toBe(true);
+    expect(client.isClosed()).toBe(true);
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Task B: identity fencing - a stream opened under one user must never
+  // survive, or be mistaken for, another user's membership.
+  // ---------------------------------------------------------------------
+
+  it("B1: an identity change to a DIFFERENT user tears the stream down - old client and session close, and push coverage is withdrawn", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const firstClient = harness.clients[0];
+    const firstSession = firstClient?.sessions[0];
+    if (firstClient === undefined || firstSession === undefined) {
+      throw new Error("no client/session opened");
+    }
+    firstSession.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    harness.setIdentity({ userId: "user-b", generation: 1 });
+
+    expect(firstClient.isClosed()).toBe(true);
+    expect(firstSession.closed).toBe(true);
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+
+  it("B2: ...and re-subscribes under the NEW identity - a second client is opened, and a snapshot on the new session carries the new generation", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const firstSession = harness.clients[0]?.sessions[0];
+    if (firstSession === undefined) throw new Error("no session opened");
+    firstSession.emitSnapshot([buildRow("host-1")], false, 1_000);
+
+    harness.setIdentity({ userId: "user-b", generation: 1 });
+
+    expect(harness.clients).toHaveLength(2);
+    const secondSession = harness.clients[1]?.sessions[0];
+    if (secondSession === undefined)
+      throw new Error("no second session opened");
+
+    secondSession.emitSnapshot([buildRow("host-1")], false, 5_000);
+
+    const lastCall = harness.rowsCalls[harness.rowsCalls.length - 1];
+    expect(lastCall).toEqual({
+      response: { hosts: [buildRow("host-1")] },
+      readAtMs: 5_000,
+      openedAtGeneration: 1,
+    });
+
+    subscription.dispose();
+  });
+
+  it("B3: a late snapshot on the OLD session stays stamped with the OLD generation, so A's rows can never be adopted as B's", () => {
+    // The race this pins: a frame arrives on the pre-switch session after the
+    // identity has already moved. A real socket would generally not deliver
+    // after `close()`, and this double deliberately does - the point is that
+    // the stamp must be right WITHOUT relying on that, because "the transport
+    // probably cannot" is not a guarantee a membership decision should rest on.
+    //
+    // The generation is captured per OPEN (a `const` threaded into the
+    // stream's callbacks), not read out of module state when the frame lands.
+    // The first version of this read it at delivery time, and this case caught
+    // it: the late frame was stamped with the NEW account's generation, which
+    // the consumer's own fence then compared against that same new
+    // generation - and admitted. The stamp meant to prevent the
+    // mis-attribution was reintroducing it.
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const firstSession = harness.clients[0]?.sessions[0];
+    if (firstSession === undefined) throw new Error("no session opened");
+    firstSession.emitSnapshot([buildRow("host-1")], false, 1_000);
+    harness.rowsCalls.length = 0;
+
+    harness.setIdentity({ userId: "user-b", generation: 1 });
+
+    firstSession.emitSnapshot([buildRow("host-1")], false, 9_000);
+
+    // Stamped 0 - the generation the OLD session was opened under - so the
+    // consumer's fence, which compares against the CURRENT generation (1),
+    // rejects it before anything is published or adopted.
+    expect(harness.rowsCalls).toEqual([
+      {
+        response: { hosts: [buildRow("host-1")] },
+        readAtMs: 9_000,
+        openedAtGeneration: 0,
+      },
+    ]);
+
+    // The late frame must not gain a `true` on top of the teardown's `false`:
+    // arming coverage from a retired stream would leave the new account
+    // believing its registry is covered when no usable snapshot for IT has
+    // ever arrived - the new account's poll must keep running.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+
+  it("B7: a late frame on the OLD session cannot arm coverage before the NEW stream has produced a snapshot of its own - the new account's poll keeps running", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const firstSession = harness.clients[0]?.sessions[0];
+    if (firstSession === undefined) throw new Error("no session opened");
+    firstSession.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    harness.setIdentity({ userId: "user-b", generation: 1 });
+    // The teardown withdrew coverage, and the NEW session (opened by the
+    // same identity change) has not produced a snapshot of its own yet.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    expect(harness.clients).toHaveLength(2);
+    const secondSession = harness.clients[1]?.sessions[0];
+    if (secondSession === undefined) {
+      throw new Error("no second session opened");
+    }
+
+    // A late, healthy (non-stale) frame lands on the OLD, torn-down session
+    // before the new one has said anything at all.
+    firstSession.emitSnapshot([buildRow("host-1")], false, 9_000);
+
+    // Coverage must still read false: the new account has no usable snapshot
+    // of its own, so its poll must still be the one serving the registry -
+    // arming here would strand it with neither a snapshot nor a poll.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    expect(harness.pushActiveCalls.at(-1)).toBe(false);
+
+    subscription.dispose();
+  });
+
+  it("B8: after the identity change, a fresh snapshot on the NEW session DOES arm coverage - the control for B7", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const firstSession = harness.clients[0]?.sessions[0];
+    if (firstSession === undefined) throw new Error("no session opened");
+    firstSession.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    harness.setIdentity({ userId: "user-b", generation: 1 });
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+    const secondSession = harness.clients[1]?.sessions[0];
+    if (secondSession === undefined) {
+      throw new Error("no second session opened");
+    }
+
+    // A fresh (non-stale) snapshot on the NEW session, which speaks for the
+    // NEW identity it was opened under.
+    secondSession.emitSnapshot([buildRow("host-1")], false, 5_000);
+
+    expect(harness.pushActiveCalls).toEqual([true, false, true]);
+
+    subscription.dispose();
+  });
+
+  it("B4: an identity change to the SAME user does NOT tear down - the client stays open, no new client is created, and the bearer rotation is pushed to the live client exactly once", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const client = harness.clients[0];
+    if (client === undefined) throw new Error("no client opened");
+
+    harness.setIdentity({ userId: "user-a", generation: 0 });
+
+    expect(harness.clients).toHaveLength(1);
+    expect(client.isClosed()).toBe(false);
+    expect(client.notifyBearerRotatedCallCount).toBe(1);
+
+    subscription.dispose();
+  });
+
+  it("B5: signed out at start means no client is opened at all", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    harness.setIdentity({ userId: null, generation: 0 });
+
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+
+    expect(harness.clients).toHaveLength(0);
+    expect(harness.pushActiveCalls).not.toContain(true);
+
+    subscription.dispose();
+  });
+
+  it("B6: signing out mid-stream tears down and does NOT open a replacement", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const client = harness.clients[0];
+    const session = client?.sessions[0];
+    if (client === undefined || session === undefined) {
+      throw new Error("no client/session opened");
+    }
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    harness.setIdentity({ userId: null, generation: 1 });
+
+    expect(client.isClosed()).toBe(true);
+    expect(session.closed).toBe(true);
+    expect(harness.clients).toHaveLength(1);
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+
+  // ---------------------------------------------------------------------
+  // Task E: coverage-armed/withdrawn gaps not otherwise pinned above.
+  // ---------------------------------------------------------------------
+
+  it("E1: the FIRST snapshot already being stale adopts the rows, but coverage is never armed", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    session.emitSnapshot([buildRow("host-1")], true, 1_000);
+
+    expect(harness.rowsCalls).toEqual([
+      {
+        response: { hosts: [buildRow("host-1")] },
+        readAtMs: 1_000,
+        openedAtGeneration: 0,
+      },
+    ]);
+    // Never armed - not even a single "true" - because staleness never
+    // transitioned coverage away from its starting `false`.
+    expect(harness.pushActiveCalls).toEqual([]);
+
+    subscription.dispose();
+  });
+
+  it("E2: stale -> fresh -> stale toggles coverage true then false, adopting the rows each time", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    session.emitSnapshot([buildRow("host-1")], true, 1_000);
+    session.emitSnapshot([buildRow("host-1")], false, 2_000);
+    session.emitSnapshot([buildRow("host-1")], true, 3_000);
+
+    expect(harness.rowsCalls.map((call) => call.readAtMs)).toEqual([
+      1_000, 2_000, 3_000,
+    ]);
+    // false-ish (never announced) -> true -> false.
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+
+  it("E3: localHost() returning null on a host-change event tears the client down and clears coverage", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const client = harness.clients[0];
+    const session = client?.sessions[0];
+    if (client === undefined || session === undefined) {
+      throw new Error("no client/session opened");
+    }
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    harness.setLocalHost(null);
+
+    expect(client.isClosed()).toBe(true);
+    expect(session.closed).toBe(true);
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+
+  it("E4: a method-support DOWNGRADE on a live session closes the session and clears coverage", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const client = harness.clients[0];
+    const session = client?.sessions[0];
+    if (client === undefined || session === undefined) {
+      throw new Error("no client/session opened");
+    }
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    expect(harness.pushActiveCalls).toEqual([true]);
+
+    client.setMethodSupport("unsupported");
+    client.fireMethodSupportChanged();
+
+    expect(session.closed).toBe(true);
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    subscription.dispose();
+  });
+});

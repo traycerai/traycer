@@ -1,3 +1,5 @@
+import { useConsumeBrowserAttention } from "@/hooks/notifications/use-browser-attention";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import {
@@ -29,6 +31,7 @@ interface BrowserSessionTileProps {
   readonly viewTabId: string;
   readonly paneId: string;
   readonly epicId: string;
+  readonly isActive: boolean;
 }
 
 /** The canvas node id IS the Electron tile key's pageSessionId, never the host sessionId. */
@@ -74,6 +77,16 @@ function ResolvedBrowserSessionTile(
   },
 ) {
   const visible = useTileBodyVisible();
+  const focused = usePaneFocused();
+  useConsumeBrowserAttention(
+    {
+      epicId: props.epicId,
+      hostId: props.node.hostId,
+      sessionId: props.node.sessionId,
+      tabId: props.node.tabId,
+    },
+    props.isActive && visible && focused,
+  );
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.paneId,

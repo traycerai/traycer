@@ -21,7 +21,10 @@ import type { NavigateOptions } from "@tanstack/react-router";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { emptyTabStripLayout } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
@@ -78,7 +81,10 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
-  useSettingsStore.setState({ homeTabEnabled: true });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  // The Home tab is opt-in in the shipped defaults, and this suite is about
+  // what happens once it is on.
+  useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
   focusModel.calls = 0;
 }
 
@@ -140,10 +146,15 @@ describe("the Home surface's mount", () => {
     // chunk load after the mount appears, not with it.
     expect(await screen.findByTestId("home-focus-view")).toBeDefined();
     expect(focusModel.calls).toBeGreaterThan(0);
+    const home = screen.getByTestId(HOME_SURFACE);
 
     selectItem("tab:epic:working");
     const hidden = screen.getByTestId(HOME_SURFACE);
+    // Retained, not remounted: the same node, now merely hidden.
+    expect(hidden).toBe(home);
     expect(hidden.getAttribute("data-visible")).toBe("false");
+    // Home is a route sheet like every other non-epic surface, retained or not.
+    expect(hidden.dataset.shellSheet).toBe("route");
   });
 
   it("unmounts when the tab is turned off", async () => {
@@ -153,7 +164,7 @@ describe("the Home surface's mount", () => {
     });
 
     act(() => {
-      useSettingsStore.setState({ homeTabEnabled: false });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "hidden" });
     });
     expect(screen.queryByTestId(HOME_SURFACE)).toBeNull();
   });

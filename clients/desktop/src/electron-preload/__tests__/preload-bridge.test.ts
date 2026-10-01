@@ -8,7 +8,10 @@ import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browse
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
-import type { DesktopMenuSnapshot } from "../../ipc-contracts/window-types";
+import type {
+  DesktopLocalAuthSessionRestoreResult,
+  DesktopMenuSnapshot,
+} from "../../ipc-contracts/window-types";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -135,6 +138,10 @@ interface PreloadBridge {
     };
     authSession: {
       get(): Promise<unknown>;
+      restoreLocal(expected: {
+        readonly userId: string;
+        readonly token: string;
+      }): Promise<DesktopLocalAuthSessionRestoreResult>;
       set(snapshot: unknown): Promise<void>;
       onChange(handler: (snapshot: unknown) => void): { dispose: () => void };
     };
@@ -211,6 +218,17 @@ interface PreloadBridge {
     enableLinger(): Promise<void>;
     getLogTail(maxLines: number): Promise<string | null>;
   };
+  hostLifecycle: {
+    get(): Promise<unknown>;
+    set(request: unknown): Promise<unknown>;
+    onChange(handler: (view: unknown) => void): { dispose: () => void };
+    onQuitRequest(handler: (request: unknown) => void): {
+      dispose: () => void;
+    };
+    respondToQuitRequest(response: unknown): Promise<void>;
+    onQuitState(handler: (event: unknown) => void): { dispose: () => void };
+  };
+  readonly localHostCapability: "managed" | "none";
 }
 
 interface LoadPreloadOptions {
@@ -840,6 +858,9 @@ describe("preload new-capability wiring", () => {
       if (channel === RunnerHostInvoke.authSessionGet) {
         return { status: "signed-out", token: null, profile: null };
       }
+      if (channel === RunnerHostInvoke.authSessionRestoreLocal) {
+        return "restored";
+      }
       if (channel === RunnerHostInvoke.windowsRequestOpenEpicInNewWindow) {
         return { result: "moved", windowId: "new-window" };
       }
@@ -883,6 +904,12 @@ describe("preload new-capability wiring", () => {
       token: null,
       profile: null,
     });
+    await expect(
+      bridge.windows.authSession.restoreLocal({
+        userId: "test-user",
+        token: "jwt",
+      }),
+    ).resolves.toBe("restored");
     await bridge.windows.authSession.set({
       status: "signed-in",
       token: "jwt",
@@ -961,6 +988,10 @@ describe("preload new-capability wiring", () => {
         email: "user@example.com",
       },
     });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.authSessionRestoreLocal,
+      { userId: "test-user", token: "jwt" },
+    );
   });
 
   it("round-trips the saved-logins pref through ipcRenderer.invoke", async () => {
@@ -1304,5 +1335,37 @@ describe("preload local-host snapshot convergence", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(seen.at(-1)).toEqual(pushed);
+  });
+});
+
+describe("preload exposes the host-lifecycle surface", () => {
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("exposes both hostLifecycle and localHostCapability on runnerHost - dropping either silently changes a `none` desktop's mode surface", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: (channel: string) =>
+        channel === RunnerHostSync.localHostCapability ? "none" : null,
+    });
+
+    // `readLocalHostCapability` treats anything other than the literal
+    // string `"none"` as `"managed"` - so a DROPPED key reads back as
+    // `undefined !== "none"`, which is indistinguishable from a healthy
+    // `"managed"` desktop unless the key's presence itself is asserted.
+    expect(bridge.localHostCapability).toBe("none");
+
+    // `hostLifecycle` must stay live even in `none` mode - it is the one
+    // surface that can switch the mode back. Presence, not just a truthy
+    // value, is what a dropped key would fail: `typeof` on `undefined`
+    // still passes a bare falsy check but not this.
+    expect(typeof bridge.hostLifecycle).toBe("object");
+    expect(typeof bridge.hostLifecycle.get).toBe("function");
+    expect(typeof bridge.hostLifecycle.set).toBe("function");
   });
 });

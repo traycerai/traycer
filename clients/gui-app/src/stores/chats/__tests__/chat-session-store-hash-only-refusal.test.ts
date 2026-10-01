@@ -14,6 +14,7 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
+import type { ChatMessageDelivery } from "@traycer/protocol/host/agent/gui/message-delivery";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -32,14 +33,16 @@ import {
   type DeadSendAccount,
 } from "@/stores/chats/chat-queue-reconciler";
 import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
-import type { PromptStashSnapshot } from "@/lib/composer/prompt-stash-codec";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import {
+  CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES,
+  CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES,
   chatWholeSetSliceBytes,
   legacyTranscriptResidencyBytes,
 } from "@/stores/replica-memory/chat-window-budget";
+import { createChatOwnedStateAccount } from "@/stores/replica-memory/chat-owned-state-account";
 import {
   getProcessMemoryAccountant,
   resetProcessMemoryRuntimeForTests,
@@ -48,7 +51,7 @@ import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-cont
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { putImage, releaseSession } from "@/lib/composer/landing-image-store";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import {
   isDraftBlobConfirmed,
   isDraftBlobUnbridgeable,
@@ -72,15 +75,15 @@ import {
   MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
   type ChatSessionTarget,
 } from "@/stores/chats/session-registry";
+import {
+  draftPlainText,
+  handedOffDrafts,
+  resetHandedOffDrafts,
+} from "@/stores/chats/__tests__/handoff-draft-observer";
 
 // `chat-session-store.ts` reaches `draft-mirror-coordinator.ts` (via
-// `draft-image-retry-content.ts` -> `draft-image-byte-target.ts`), whose
-// import in turn fires `usePromptStashStore`'s module-load-time `hydrate()`.
-// That module keeps its own PERMANENTLY-poisoned `dbPromise` in
-// `prompt-stash-repository.ts` (memoized with no reset on failure) - once its
-// first attempt runs before `indexedDB` exists, every later attempt for the
-// rest of this file rejects the same way, and depending on timing that stray
-// rejection can land while one of THIS file's tests is active. This file's
+// `draft-image-retry-content.ts` -> `draft-image-byte-target.ts`), which pulls
+// in a whole live subsystem this file never needs. This file's
 // own code path never needs a real draft-mirror session
 // (`draftMirrorClientForHost` only feeds a byte-resolution leg this suite's
 // hash always resolves through the LOCAL landing store first), so the mock
@@ -98,27 +101,6 @@ vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
 // store itself sidesteps it and lets the assertions read the exact snapshot
 // `handOffUnrecordedPromptToStash` built, not a value round-tripped through
 // IndexedDB.
-const promptStashMocks = vi.hoisted(() => ({
-  save: vi.fn<(snapshot: PromptStashSnapshot) => Promise<void>>(),
-}));
-vi.mock("@/stores/composer/prompt-stash-store", () => ({
-  usePromptStashStore: {
-    getState: () => ({
-      save: promptStashMocks.save,
-      // The handoff calls `saveWhile`, not `save`. Routed through the same
-      // mock so these assertions keep observing it - but HONOURING the
-      // predicate, so a stale-generation write is skipped here exactly as the
-      // real store skips it.
-      saveWhile: (
-        snapshot: PromptStashSnapshot,
-        stillCurrent: () => boolean,
-      ) =>
-        stillCurrent()
-          ? promptStashMocks.save(snapshot)
-          : Promise.resolve(undefined),
-    }),
-  },
-}));
 
 // RR7: a controllable stand-in for the LOCAL image-bytes leg
 // (`resolveDraftImageBytes`'s first, cheapest leg - see
@@ -130,6 +112,16 @@ const localImageMocks = vi.hoisted(() => ({
   realGetImageBytes: null as
     | ((hash: string) => Promise<Uint8Array | undefined>)
     | null,
+}));
+
+// F2 (4b): the local host id the store stamps as `sentFromHostId`, made
+// settable so a test can move it BETWEEN a send and its retry - which is what
+// the desktop's directory does when the local host enrolls after the app has
+// already been used (`null` -> id), or re-enrolls under a new id.
+const localHostIdMock = vi.hoisted(() => ({ value: null as string | null }));
+
+vi.mock("@/lib/host/local-host-id-snapshot", () => ({
+  readLocalHostIdSnapshot: (): string | null => localHostIdMock.value,
 }));
 
 vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
@@ -249,6 +241,13 @@ const OK_CLIENT: DraftBlobClient = {
     Promise.resolve({
       ok: true as const,
     })) as HostRequester<HostRpcRegistry>["request"],
+  // `drafts.putBlob` rides THIS member, never `request` above - a fake without
+  // it is a fake no upload can reach. Options ignored: no case here turns on
+  // the idempotency key or the upload budget.
+  requestWithOptions: ((_method, _params) =>
+    Promise.resolve({
+      ok: true as const,
+    })) as HostRequester<HostRpcRegistry>["requestWithOptions"],
 };
 
 interface Harness {
@@ -396,6 +395,7 @@ function emitOwnerSnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   });
 }
@@ -518,14 +518,14 @@ let harness: Harness | null = null;
 
 beforeEach(() => {
   installFreshIndexedDb();
+  localHostIdMock.value = null;
   localImageMocks.getImageBytes.mockReset();
   if (localImageMocks.realGetImageBytes !== null) {
     localImageMocks.getImageBytes.mockImplementation(
       localImageMocks.realGetImageBytes,
     );
   }
-  promptStashMocks.save.mockReset();
-  promptStashMocks.save.mockResolvedValue(undefined);
+  resetHandedOffDrafts();
 });
 
 afterEach(() => {
@@ -571,6 +571,89 @@ describe("chat session store - hash-only refusal (T5)", () => {
     const retriedNode = retryFrame.content.content?.at(0);
     expect(retriedNode?.attrs?.hash).toBeFalsy();
     expect(typeof retriedNode?.attrs?.b64content).toBe("string");
+  });
+
+  it("a rejected hash-only send neither retries nor surfaces while the delivery view names it - the identical rejection WOULD retry silently without the gate (see the case above)", async () => {
+    const controlHash = await seedConfirmedImage();
+    const gatedHash = await seedSecondConfirmedImage();
+
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks(), []);
+
+    // Positive control, inline: an identical `not-on-host` rejection with no
+    // delivery view retries inline exactly once, silently - the same
+    // mechanism the case above already proves, repeated here so this test is
+    // self-contained.
+    const control = sendHashOnlyMessage(harness, controlHash);
+    rejectMissingAttachmentBytes(
+      harness,
+      control.clientActionId,
+      "not-on-host",
+    );
+    // Synchronous, before the async re-inline completes and the record is
+    // retired: an identical rejection with no delivery view creates a
+    // recovery record at once - the baseline the gated case's absence is
+    // measured against.
+    expect(
+      Object.hasOwn(
+        harness.handle.store.getState().hashOnlyRecoveries,
+        control.clientActionId,
+      ),
+    ).toBe(true);
+    await vi.waitFor(() => {
+      expect(harness?.sent).toHaveLength(2);
+    });
+    const controlRetry = harness.sent[1];
+    if (controlRetry.kind !== "send") {
+      throw new Error("expected the control's retry send frame");
+    }
+    expect(controlRetry.messageId).toBe(control.messageId);
+
+    // The gated send: the delivery view already names this exact message
+    // before its rejection arrives.
+    const gated = sendHashOnlyMessage(harness, gatedHash);
+    const delivery: ChatMessageDelivery = {
+      messageId: gated.messageId,
+      revision: 1,
+      state: { phase: "pending" },
+    };
+    harness.callbacks().onMessageDeliveryChanged({
+      kind: "messageDeliveryChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      delivery,
+    });
+    const beforeGatedReject = harness.handle.store.getState();
+
+    rejectMissingAttachmentBytes(harness, gated.clientActionId, "not-on-host");
+
+    // `beginHashOnlyRecovery`'s own gate (`messageDeliveryNames`) declines
+    // BEFORE it ever creates a recovery record - synchronous, unconditional
+    // proof that no retry was even scheduled, not a timing-dependent absence.
+    expect(
+      Object.hasOwn(
+        harness.handle.store.getState().hashOnlyRecoveries,
+        gated.clientActionId,
+      ),
+    ).toBe(false);
+    // The ordinary rejected-arm housekeeping still runs (the host's refusal
+    // IS honoured) - only `rejectionSurfaces`' own notice/restoration are
+    // gated silent.
+    expect(
+      harness.handle.store.getState().pendingActions[gated.clientActionId],
+    ).toBeUndefined();
+    expect(harness.handle.store.getState().errorNotices).toEqual(
+      beforeGatedReject.errorNotices,
+    );
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+
+    // No third send frame ever follows the gated message's own initial one -
+    // asserted after flushing microtasks, on top of (never instead of) the
+    // synchronous mechanism proof above.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.sent).toHaveLength(3);
   });
 
   it("the optimistic user message never flickers across the rejection and retry", async () => {
@@ -991,6 +1074,44 @@ describe("chat session store - hash-only refusal (T5)", () => {
       type: "TEAM",
       teamId: "team-x",
     });
+  });
+
+  it("F2 (4b): the retry carries the ORIGINAL sentFromHostId, not the identity the directory resolved during recovery", async () => {
+    const hash = await seedConfirmedImage();
+    // Sent while this machine's host id was still unknown: the directory
+    // seeds the local identity from `null` once the local host enrolls, so
+    // a send made early in the app's life names no machine.
+    localHostIdMock.value = null;
+
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks(), []);
+    const { clientActionId } = sendHashOnlyMessage(harness, hash);
+    const originalFrame = harness.sent[0];
+    if (originalFrame.kind !== "send") throw new Error("expected a send frame");
+    expect(originalFrame.sentFromHostId).toBeNull();
+
+    rejectMissingAttachmentBytes(harness, clientActionId, "not-on-host");
+    // The local identity resolves WHILE the byte resolution is outstanding.
+    localHostIdMock.value = "host-local-late";
+
+    await vi.waitFor(() => {
+      expect(harness?.sent).toHaveLength(2);
+    });
+    const retryFrame = harness.sent[1];
+    if (retryFrame.kind !== "send") throw new Error("expected a send frame");
+    // Frozen on the pending action at send time and carried by the recovery
+    // record, exactly like the account context above: the retry is the same
+    // logical send, and a re-read here would let the host place a routed
+    // realm born on this turn by a machine the user never sent from.
+    expect(retryFrame.sentFromHostId).toBeNull();
+
+    // The mock is live, not a constant: a NEW send after the identity
+    // resolved names it, so the `null` above is the frozen value and not the
+    // reader's default.
+    sendHashOnlyMessage(harness, hash);
+    const laterFrame = harness.sent[2];
+    if (laterFrame.kind !== "send") throw new Error("expected a send frame");
+    expect(laterFrame.sentFromHostId).toBe("host-local-late");
   });
 
   // ─── F3: retry from the wire document ───────────────────────────────────
@@ -1662,6 +1783,8 @@ describe("chat session store - hash-only refusal (T5)", () => {
   it("R9 (11): both queue mutations re-settle the whole-set budget against the LIVE queue, not a stale figure", async () => {
     resetProcessMemoryRuntimeForTests();
     function expectedChatWindowsPlaneBytes(state: ChatSessionState): number {
+      const ownedStateAccount = createChatOwnedStateAccount();
+      ownedStateAccount.update(state);
       return (
         legacyTranscriptResidencyBytes(state.messages, state.events) +
         chatWholeSetSliceBytes({
@@ -1671,7 +1794,11 @@ describe("chat session store - hash-only refusal (T5)", () => {
           pendingInterviews: state.pendingInterviews,
           backgroundItems: state.backgroundItems,
           managedCommands: state.managedCommands,
-        })
+        }) +
+        CHAT_STORE_FIXED_HEAP_ESTIMATE_BYTES +
+        (state.messages.length + state.events.length) *
+          CHAT_TRANSCRIPT_RECORD_HEAP_OVERHEAD_BYTES +
+        ownedStateAccount.size().estimatedHeapBytes
       );
     }
     function chatWindowsPlaneSettledBytes(): number {
@@ -2937,9 +3064,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // before saving - so a PREVIOUS test's teardown can land its save inside
     // this one, making any exact count a flake.
     const stashedTexts = (): ReadonlyArray<string> =>
-      promptStashMocks.save.mock.calls.map(([snapshot]) =>
-        JSON.stringify(snapshot.entry.content),
-      );
+      handedOffDrafts().map((draft) => draftPlainText(draft.content));
     await vi.waitFor(
       () => {
         expect(stashedTexts().some((text) => text.includes(TEXT_A))).toBe(true);
@@ -3409,12 +3534,11 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // fail for a reason that had nothing to do with what it asserts.
     await vi.waitFor(
       () => {
-        expect(promptStashMocks.save).toHaveBeenCalledTimes(1);
+        expect(handedOffDrafts()).toHaveLength(1);
       },
       { timeout: HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS * 2 + 2_000 },
     );
-    const [snapshot] = promptStashMocks.save.mock.calls[0];
-    const text = JSON.stringify(snapshot.entry.content);
+    const text = draftPlainText(handedOffDrafts()[0].content);
     expect(text).toContain(A_PROMPT_TEXT);
     expect(text).toContain("Unsent");
     expect(text).toContain("/repo-cap");

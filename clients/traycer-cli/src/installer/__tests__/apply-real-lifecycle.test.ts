@@ -165,12 +165,20 @@ vi.mock("../../service/platforms/macos", async (importOriginal) => {
   };
 });
 
-// Shell out to schtasks / powershell / taskkill.
-vi.mock("../../service/platforms/windows", () => ({
-  killLingeringSlotProcesses: async () => undefined,
-  describeSlotLockHolders: async () => [],
-  epochMicrosNow: () => 0,
-}));
+// Shell out to schtasks / powershell / taskkill. `install-lifecycle.ts` and
+// `service/index.ts` import the real module - `createWindowsController` among
+// others - so a wholesale replacement here would drop those exports and work
+// only by luck of what a given test touches. Spread the actual module instead.
+vi.mock("../../service/platforms/windows", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/windows")>();
+  return {
+    ...actual,
+    killLingeringSlotProcesses: async () => undefined,
+    describeSlotLockHolders: async () => [],
+    epochMicrosNow: () => 0,
+  };
+});
 
 vi.mock("../../store/paths", async () => {
   const actual =
@@ -207,6 +215,7 @@ import {
   type InstallPhaseHooks,
 } from "../install";
 import { createBytesOnlyInstallLifecycle } from "../../service/install-lifecycle";
+import { atServiceSpawnEdge } from "../../service/spawn-edge";
 import { ungatedStoreFormatFloorEvidence } from "../../host/store-format-floor";
 import {
   writeHostInstallRecord,
@@ -317,6 +326,11 @@ function makeController(stopGate: Promise<void>): ControllerHarness {
     }),
     install: async () => {
       order.push("controller.install");
+      // The real controller awaits the spawn edge immediately before the
+      // call that launches the supervisor - this fake models that so the
+      // wrapper's adoption publisher (armed at the edge, not before the
+      // call) actually runs.
+      await atServiceSpawnEdge();
       registerEntered.release();
     },
     uninstall: async () => undefined,
@@ -327,12 +341,14 @@ function makeController(stopGate: Promise<void>): ControllerHarness {
     },
     start: async () => {
       order.push("controller.start");
+      await atServiceSpawnEdge();
       registerEntered.release();
     },
     restart: async () => undefined,
     stopForRestart: async () => ({ forcedRecycle: false }),
     relaunchAfterRestart: async () => {
       order.push("controller.relaunchAfterRestart");
+      await atServiceSpawnEdge();
       registerEntered.release();
     },
     hostStartAdoptionLabel: async (serviceLabel) => serviceLabel.id,
@@ -384,6 +400,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     const applyPromise = applyHostWithAttempt(
       fakeCapability,
       fakeContenderOptions,
+      "terminal",
       {
         environment: ENV,
         force: false,
@@ -470,7 +487,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     let beforeSwapCommitCalled = false;
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -520,7 +537,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     let afterSwapCalled = false;
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -575,7 +592,7 @@ describe("applyHostWithAttempt through the REAL service install lifecycle", () =
     );
 
     await expect(
-      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, "terminal", {
         environment: ENV,
         force: false,
         noService: false,
@@ -706,9 +723,10 @@ describe("createBytesOnlyInstallLifecycle forwarding, through the real commit", 
     // immediately off win32, and on win32 stops the service because a running
     // host holds the executable open against the swap rename. Asserting `[]`
     // unconditionally made this suite fail on a Windows developer's machine.
-    // No CI job runs vitest on Windows - `test-windows-cli-exit` builds the
-    // SEA and runs the two smokes - so nothing here was red; the suite simply
-    // could not be trusted where the branch it covers actually executes.
+    // No CI job runs THIS suite on Windows - `test-windows-cli-exit` does
+    // run vitest there now (clients/shared's denied-read test), but no
+    // traycer-cli suite - so nothing here was red; the suite simply could
+    // not be trusted where the branch it covers actually executes.
     expect(harness.order).toEqual(
       process.platform === "win32" ? ["controller.stop"] : [],
     );

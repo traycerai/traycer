@@ -1,4 +1,12 @@
+import { useEffect, useState, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+
+/**
+ * How long a pending chunk load stays invisible before its loading screen
+ * paints. A warm chunk resolves well inside it, so the screen never flashes;
+ * only a genuinely cold fetch shows the spinner.
+ */
+export const ROUTE_PENDING_MS = 200;
 
 /**
  * Generic full-pane loading screen the router shows as its
@@ -29,4 +37,18 @@ export function RoutePendingScreen() {
       />
     </div>
   );
+}
+
+/**
+ * `RoutePendingScreen` as a `Suspense` fallback for a lazily-loaded body,
+ * held back for `ROUTE_PENDING_MS` the same way the router holds its own
+ * pending screen - so a fast load shows nothing rather than a spinner flash.
+ */
+export function DelayedRoutePendingScreen(): ReactNode {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), ROUTE_PENDING_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  return visible ? <RoutePendingScreen /> : null;
 }

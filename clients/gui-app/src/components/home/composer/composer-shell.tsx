@@ -1,11 +1,32 @@
-import { memo, type DragEventHandler, type ReactNode } from "react";
+import {
+  memo,
+  useRef,
+  type DragEventHandler,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { FileText, Files, ImageIcon } from "lucide-react";
 
 import { ComposerMenu } from "@/components/chat/composer/menu/composer-menu";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
+import { useComposerSheetPin } from "@/components/home/composer/use-composer-sheet-pin";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import type { FileTransferDragOverlayVariant } from "@/lib/files/file-transfer-paths";
+import { isMobileApp } from "@/lib/mobile-app";
+import { cn } from "@/lib/utils";
+
+/**
+ * The phone composer's two sizes: in flow under the content, or a sheet over
+ * it. The surface that owns the editor owns this too, so it can drop back to
+ * the compact size the moment a message is sent.
+ */
+export interface ComposerExpansion {
+  readonly expanded: boolean;
+  readonly onExpandedChange: (expanded: boolean) => void;
+}
 
 const FILE_DROP_OVERLAY_CONTENT = {
   images: {
@@ -53,6 +74,119 @@ export function ComposerDropOverlay({
   );
 }
 
+/** Vertical travel that reads as a deliberate pull rather than a wobble. */
+const PULL_THRESHOLD_PX = 24;
+/** How long a released sheet takes to settle: the sheet's `duration-200`. */
+const SETTLE_MS = 200;
+/** Where a pull holds the sheet's top, measured from the card's place in flow. */
+const SHEET_TOP = "--composer-sheet-top";
+
+interface Pull {
+  readonly startY: number;
+  /** How far below the card's top edge the press landed. */
+  readonly grip: number;
+  readonly wasOpen: boolean;
+}
+
+/**
+ * The pull zone along the card's top edge, with nothing drawn in it. The
+ * sheet follows the pull: its top stays under the finger, and on release it
+ * settles open or closed by how far the pull went. A tap or a wobble does
+ * nothing, so a thumb landing on the edge never opens anything. The zone
+ * covers the card's top padding and a little above it, never the first line
+ * of the draft. Pointer capture keeps the pull on this element once it
+ * starts; `preventDefault` on the press keeps the editor focused so the
+ * keyboard does not dip mid-gesture. It is hidden from assistive technology;
+ * `ComposerExpandButton` is its accessible twin.
+ */
+function ComposerGrabber({
+  expanded,
+  onExpandedChange,
+}: ComposerExpansion): ReactNode {
+  const pull = useRef<Pull | null>(null);
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>): void => {
+    const sheet = event.currentTarget.parentElement;
+    // A sheet still holding its top is mid-pull or settling shut: not a
+    // moment to start another pull from.
+    if (sheet === null || sheet.style.getPropertyValue(SHEET_TOP) !== "") {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pull.current = {
+      startY: event.clientY,
+      grip: event.clientY - sheet.getBoundingClientRect().top,
+      wasOpen: expanded,
+    };
+  };
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>): void => {
+    const sheet = event.currentTarget.parentElement;
+    const origin = sheet?.parentElement;
+    if (pull.current === null || sheet === null || !origin) return;
+    const { startY, grip, wasOpen } = pull.current;
+    if (sheet.style.getPropertyValue(SHEET_TOP) === "") {
+      if (!wasOpen && event.clientY - startY > -PULL_THRESHOLD_PX) return;
+      sheet.dataset.composerPulling = "";
+      if (!wasOpen) onExpandedChange(true);
+    }
+    const top = event.clientY - grip - origin.getBoundingClientRect().top;
+    sheet.style.setProperty(SHEET_TOP, `${Math.min(0, top)}px`);
+  };
+  const onPointerEnd = (event: PointerEvent<HTMLDivElement>): void => {
+    const sheet = event.currentTarget.parentElement;
+    if (pull.current === null || sheet === null) return;
+    const { startY, wasOpen } = pull.current;
+    pull.current = null;
+    if (sheet.style.getPropertyValue(SHEET_TOP) === "") return;
+    delete sheet.dataset.composerPulling;
+    const travel = event.clientY - startY;
+    if (wasOpen ? travel < PULL_THRESHOLD_PX : travel <= -PULL_THRESHOLD_PX) {
+      sheet.style.removeProperty(SHEET_TOP);
+      return;
+    }
+    // Closing: the sheet settles onto the card's place, then becomes the card.
+    sheet.style.setProperty(SHEET_TOP, "0px");
+    window.setTimeout(() => {
+      sheet.style.removeProperty(SHEET_TOP);
+      onExpandedChange(false);
+    }, SETTLE_MS);
+  };
+
+  return (
+    <div
+      aria-hidden
+      data-composer-grabber=""
+      className="absolute inset-x-0 -top-2 z-30 h-6 touch-none"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerEnd}
+      onPointerCancel={onPointerEnd}
+    />
+  );
+}
+
+/**
+ * The same toggle for a keyboard, a screen reader or a switch, which cannot
+ * pull. Visually hidden until it takes keyboard focus, then shown in the
+ * card's corner so the focus has a visible owner.
+ */
+function ComposerExpandButton({
+  expanded,
+  onExpandedChange,
+}: ComposerExpansion): ReactNode {
+  return (
+    <button
+      type="button"
+      className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:right-3 focus-visible:top-2 focus-visible:z-30 focus-visible:rounded-md focus-visible:bg-card focus-visible:px-2 focus-visible:py-1 focus-visible:text-ui-xs focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-hidden"
+      aria-expanded={expanded}
+      onClick={() => onExpandedChange(!expanded)}
+    >
+      {expanded ? "Collapse composer" : "Expand composer"}
+    </button>
+  );
+}
+
 export interface ComposerAreaProps {
   readonly pickerStore: ComposerPickerStore;
   readonly overlay: ReactNode;
@@ -60,6 +194,8 @@ export interface ComposerAreaProps {
   readonly attachmentsStrip: ReactNode;
   readonly editor: ReactNode;
   readonly toolbar: ReactNode | null;
+  /** The phone pull gesture and sheet state; `null` renders the card in flow only. */
+  readonly expansion: ComposerExpansion | null;
 }
 
 function ComposerAreaImpl({
@@ -69,22 +205,88 @@ function ComposerAreaImpl({
   attachmentsStrip,
   editor,
   toolbar,
+  expansion,
 }: ComposerAreaProps): ReactNode {
+  const expanded = expansion?.expanded === true;
+  // A BROWSER's keyboard (iOS Safari overlays it and leaves `--keyboard-inset`
+  // at 0, so the surface still runs under it): the sheet's bottom is lifted
+  // by the measured cover. The installed app measures the same cover but its
+  // shell already subtracts it, so there this stays out of the way.
+  const browserKeyboardInset = useVirtualKeyboardInset();
+  const sheetStyle =
+    expanded && !isMobileApp() && browserKeyboardInset > 0
+      ? { bottom: `calc(${browserKeyboardInset}px + 1rem)` }
+      : undefined;
+  const { slotRef, sheetRef } = useComposerSheetPin(expanded);
   return (
     <div className="relative">
       <ComposerMenu pickerStore={pickerStore} />
+      {/* The dim behind the sheet. A sibling rather than the sheet's own
+          pseudo-element: a negative-z child paints above its parent's
+          background. Same layer as the sheet, earlier in the DOM, so the
+          sheet paints over it. */}
+      {expanded ? (
+        <div
+          aria-hidden
+          data-composer-sheet-backdrop=""
+          className="fixed inset-0 z-40 bg-canvas/60"
+        >
+          <div
+            ref={slotRef}
+            data-composer-sheet-slot=""
+            style={sheetStyle}
+            className="absolute inset-x-4 top-2 bottom-[calc(max(0px,var(--safe-area-inset-bottom)-var(--keyboard-inset))+1rem)]"
+          />
+        </div>
+      ) : null}
       <div
+        ref={sheetRef}
         data-composer-shell=""
-        className="relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30"
+        data-composer-expanded={expanded ? "" : undefined}
+        className={cn(
+          "relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30",
+          // The sheet fills the SURFACE the card sits on, by taking the box
+          // of the slot above (`useComposerSheetPin`). The slot is `fixed`, so
+          // it does not depend on the positioned wrappers between it and
+          // that surface, and both surfaces that mount it are layout roots -
+          // the canvas tile host transforms its tile, the landing surface is
+          // `contain-layout` - so "fixed" resolves against them, under the
+          // app header, rather than against the viewport. The bottom clears
+          // the home indicator only while the keyboard is down: with it up,
+          // the surface already ends at the keyboard (the shell's
+          // safe-height tokens subtract it), and the inset dwarfs the
+          // indicator's, so the max is 0. The frame takes the scroll so the
+          // toolbar stays put. The top eases to where a released pull sends
+          // it, and keeps up with the finger while the pull lasts.
+          expanded &&
+            "absolute z-40 flex flex-col bg-card shadow-lg transition-[top] duration-200 data-composer-pulling:transition-none",
+        )}
       >
         {overlay}
+        {expansion === null ? null : (
+          <>
+            <ComposerGrabber {...expansion} />
+            <ComposerExpandButton {...expansion} />
+          </>
+        )}
         <div
           data-composer-utility-overlay=""
-          className="absolute right-3 top-0 z-40 -translate-y-1/2 empty:hidden"
+          className={cn(
+            "absolute right-3 top-0 z-40 -translate-y-1/2 empty:hidden",
+            expanded && "hidden",
+          )}
         >
           {utilityRail}
         </div>
-        <div data-composer-editor-frame="" className="px-4 pt-4">
+        <div
+          data-composer-editor-frame=""
+          data-layout-passive
+          className={cn(
+            "px-4 pt-4",
+            expanded &&
+              "min-h-0 flex-1 overflow-y-auto overscroll-y-contain [&_[data-composer-editor]]:max-h-none",
+          )}
+        >
           <div
             data-composer-attachment-rail=""
             className="flex min-w-0 items-start gap-2 pb-2 empty:hidden"
@@ -116,6 +318,14 @@ interface ComposerShellProps {
   readonly editor: ReactNode;
   /** Slot for the bottom toolbar (model/reasoning/permission/send). */
   readonly toolbar: ReactNode;
+  /**
+   * Lets the phone layout open the composer as a sheet over the surface (a
+   * pull on the card's top edge).
+   * Honoured only in the phone layout;
+   * a desktop window has room for the card to grow in place. `null` for a
+   * composer that already sits in an overlay of its own.
+   */
+  readonly expansion: ComposerExpansion | null;
 }
 
 function ComposerShellImpl(props: ComposerShellProps) {
@@ -130,8 +340,10 @@ function ComposerShellImpl(props: ComposerShellProps) {
     attachmentsStrip,
     editor,
     toolbar,
+    expansion,
   } = props;
 
+  const phoneLayout = useIsMobileViewport();
   const { ref: narrowRef, isNarrow } = useComposerNarrowObserver();
   const overlayContent =
     dragOverlayVariant === null
@@ -158,6 +370,7 @@ function ComposerShellImpl(props: ComposerShellProps) {
           attachmentsStrip={attachmentsStrip}
           editor={editor}
           toolbar={toolbar}
+          expansion={phoneLayout ? expansion : null}
         />
       </div>
     </ComposerNarrowProvider>

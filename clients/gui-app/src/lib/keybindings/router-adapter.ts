@@ -25,7 +25,7 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   navigateNestedFocus,
   navigateNestedFocusToPrimaryEditor,
@@ -66,7 +66,13 @@ export function routerAdapterFor(
     navigateSettings: () => {
       const api = getSystemTabModalApi();
       if (api === null) return;
-      api.openSettings({ section: null, resetToGeneral: true });
+      api.openSettings({
+        section: null,
+        resetToGeneral: true,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
     },
     navigateToEpic: (epicId) => {
       navigateToTabIntent(

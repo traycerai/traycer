@@ -37,6 +37,7 @@ const state = vi.hoisted(() => ({
     url: "blob:image" as string | null,
     meta: null as FileAssetMeta | null,
     reason: null as string | null,
+    missing: false as boolean,
     totalBytes: null as number | null,
     servedFromCache: false,
   } satisfies FileAssetState,
@@ -89,6 +90,7 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
         url: null,
         meta: null,
         reason: "This image could not be decoded.",
+        missing: false,
         totalBytes: null,
         servedFromCache: false,
       };
@@ -281,6 +283,7 @@ function resetState(): void {
     url: "blob:image",
     meta: null,
     reason: null,
+    missing: false,
     totalBytes: null,
     servedFromCache: false,
   };
@@ -352,6 +355,7 @@ describe("<WorkspaceFileTile /> image mode", () => {
         meta: null,
         reason:
           status === "fallback" ? "This image could not be loaded." : null,
+        missing: false,
         totalBytes: status === "fallback" ? 42 : null,
         servedFromCache: false,
       };
@@ -379,6 +383,7 @@ describe("<WorkspaceFileTile /> image mode", () => {
         meta: null,
         reason:
           status === "fallback" ? "This image could not be loaded." : null,
+        missing: false,
         totalBytes: status === "fallback" ? 42 : null,
         servedFromCache: false,
       };
@@ -449,6 +454,7 @@ describe("<WorkspaceFileTile /> image mode", () => {
         url: null,
         meta: null,
         reason,
+        missing: false,
         totalBytes: 42,
         servedFromCache: false,
       };
@@ -474,6 +480,71 @@ describe("<WorkspaceFileTile /> image mode", () => {
     },
   );
 
+  it("shows a not-found state without Open Externally when the file is gone from disk", () => {
+    // The default host is local, so the missing file is the only thing
+    // keeping the action off screen.
+    state.asset = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This file could not be found.",
+      missing: true,
+      totalBytes: null,
+      servedFromCache: false,
+    };
+
+    renderTile(nodeFor("assets/photo.jpg"));
+
+    expect(
+      screen.getByRole("heading", { name: "File not found" }),
+    ).toBeTruthy();
+    expect(screen.getByText("photo.jpg")).toBeTruthy();
+    expect(
+      screen.getByText("It may have been moved, renamed or deleted."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Binary File")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Open Externally" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Open externally" }),
+    ).toBeNull();
+    // The path bar stays, so where the file used to be is still visible.
+    expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
+  });
+
+  it("copies the resolved absolute path from the fallback media toolbar's path disclosure", () => {
+    const node = nodeFor("assets/photo.png");
+    state.asset = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This image could not be loaded.",
+      missing: false,
+      totalBytes: 42,
+      servedFromCache: false,
+    };
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      renderTile(node);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Show full file path" }),
+      );
+      expect(screen.getByText("/work/repo/assets/photo.png")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+      expect(writeText).toHaveBeenCalledWith("/work/repo/assets/photo.png");
+    } finally {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+
   it("reports a decode error through the hook and recovers once a new asset request resolves ready", () => {
     const rendered = renderTile(nodeFor("assets/photo.png"));
 
@@ -487,6 +558,7 @@ describe("<WorkspaceFileTile /> image mode", () => {
       url: "blob:image-new",
       meta: null,
       reason: null,
+      missing: false,
       totalBytes: null,
       servedFromCache: false,
     };

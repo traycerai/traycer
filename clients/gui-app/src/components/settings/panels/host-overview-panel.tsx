@@ -1,3 +1,4 @@
+import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useIsMutating, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -9,37 +10,53 @@ import {
   HOST_CHANGED_DESCRIPTION,
 } from "@/components/host/host-restart-copy";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
-import {
-  InstallationDetailsDisclosure,
-  type InstallationDetailsRecord,
-} from "@/components/settings/panels/host-settings-installation-details";
 import { HostIdentityCard } from "@/components/settings/host-scope/host-identity-card";
+import { HostLifecycleModeLine } from "@/components/settings/host-scope/host-lifecycle-mode-line";
 import { HostUpdateRequiredAction } from "@/components/settings/host-scope/host-update-required-action";
 import { useHostLease } from "@/hooks/host/use-host-lease";
-import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
-import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
+import { useLocalHostForegroundRun } from "@/hooks/host/use-local-host-foreground-run";
+import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
-import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
-import { SettingsGroup } from "@/components/settings/settings-group";
+import type { HostOverviewTab } from "@/components/settings/panels/host-overview.definitions";
 import {
   HostOverviewHeaderActions,
   HostOverviewNameAction,
-  HostOverviewNotice,
 } from "@/components/settings/panels/host-overview-status-card";
-import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
-import { HostOverviewUpdatesRegion } from "@/components/settings/panels/host-overview-updates";
+import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
+import {
+  NO_HOST_OVERVIEW_TAB_BADGES,
+  type HostOverviewSelectTab,
+} from "@/components/settings/panels/host-overview-tab-state";
+import { HostOverviewNotices } from "@/components/settings/panels/host-overview-notices";
+import {
+  describeHostOfflineNotice,
+  deriveHostOverviewVersionTag,
+  inFlightUpdateKind,
+} from "@/components/settings/panels/host-overview-status-model";
+import { useHostUpdateCompletion } from "@/hooks/host/use-host-update-completion";
+import {
+  HostOverviewUpdatesTab,
+  type HostOverviewUpdatesTabProps,
+} from "@/components/settings/panels/host-overview-updates-tab";
+import {
+  HostOverviewPortsCount,
+  HostOverviewPortsTab,
+} from "@/components/settings/panels/host-overview-ports-tab";
+import { useHostPortForwards } from "@/components/settings/panels/host-port-forwards-state";
+import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
+import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
+import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
 import { useHostOverviewUpdates } from "@/components/settings/panels/host-overview-updates-state";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useOverviewOsService } from "@/components/settings/panels/host-overview-os-service";
-import { HostOverviewAdvancedDisclosure } from "@/components/settings/panels/host-overview-advanced";
 import {
   customNameFromIdentityDraft,
-  describeOverviewDegrade,
   overviewMethodDegrade,
   resolveOverviewMethodDegrade,
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
+  formatLastSeen,
   liveBusyBreakdown,
   liveBusySessionCount,
   liveHostBusy,
@@ -48,9 +65,6 @@ import {
   settledHostBusy,
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
-import { HostImportMigrationSection } from "@/components/settings/panels/host-import-migration-section";
-import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
-import { ArtifactVersionSettingsSection } from "@/components/settings/panels/artifact-version-settings-section";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
 import { useRunnerHostRemovalStateQuery } from "@/hooks/runner/use-runner-host-removal-state-query";
 import { useRunnerReinstallTraycer } from "@/hooks/runner/use-runner-reinstall-traycer-mutation";
@@ -107,8 +121,7 @@ import { runnerMutationKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import type { HostRestartRequestResult } from "@traycer-clients/shared/platform/runner-host";
-import { useSettingsDensity } from "@/providers/settings-density-context";
-import { cn } from "@/lib/utils";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
@@ -160,13 +173,17 @@ const LOCAL_RECORD_TICK_MS = 1_000;
  * machine, so no surface built on it can be part of a page that promises to
  * describe any host.
  *
- * TWO regions, not three. The identity card carries what this host IS, and that
- * includes the update ANSWER — is there a newer version, install it — because
- * that is a fact about the host in the same register as its version and its
- * session count. Everything that is a decision rather than an answer sits in
- * Installation, behind Advanced: the auto-update policy, the OS service, the
- * full version list. Updates used to own a titled section between the two, which
- * put a section header on a single sentence and read as a second subject.
+ * A PINNED HEADER OVER FOUR TABS. The header is who this host is and the verbs
+ * that act on it - name, tag, Activate, the `⋯` menu, the health line, what is
+ * working now - and it never moves, so switching tabs never hides Restart or
+ * Activate. Under it, the notices strip - the update in flight, the account's
+ * wait on open work, the offline notice, each only while it applies
+ * (`host-overview-notices.tsx`) - and then Installation · Updates · Data ·
+ * Ports, one body at a time (`host-overview-tabs.tsx`). Each tab body is its
+ * own component (`host-overview-*-tab.tsx`) and draws what it is handed: the
+ * queries, the mutations and every dialog stay HERE, so the update card in the
+ * strip, the version card and the version list on Updates are still one hook
+ * instance, and a dialog opens over whichever tab is showing.
  *
  * Every button degrades on its OWN capability. An old host can support
  * `host.status` and not `host.restart`; a current host on a box with no Traycer
@@ -174,21 +191,30 @@ const LOCAL_RECORD_TICK_MS = 1_000;
  * one page-level gate is how a capability downgrade during a fleet update turns
  * into "this page is broken".
  */
-// The identity card, the Installation group and the two dialogs are each their
-// own component; what is left here is the page's own state and the handful of
-// conditions that decide which of its regions apply. That residue is
-// irreducible branching over surfaced concerns rather than nesting, and the same
-// disable sat on the page this replaced, for the same reason.
+// The identity card, each tab body and the dialogs are their own components;
+// what is left here is the page's own state and the handful of conditions that
+// decide which of its regions apply. That residue is irreducible branching over
+// surfaced concerns rather than nesting, and the same disable sat on the page
+// this replaced, for the same reason.
 // eslint-disable-next-line complexity
 export function HostOverviewPanel(props: {
   readonly scope: HostScope;
   /** True when this shell has a CLI bridge for the local-only doctor repairs. */
   readonly hasLocalBridge: boolean;
-  readonly onLocalDoctorFix: (issue: HostDoctorIssue) => void;
+  readonly onLocalDoctorFix: (
+    issue: HostDoctorIssue,
+    onApplied: () => void,
+  ) => void;
   readonly localDoctorFixPendingCode: string | null;
+  /**
+   * The selected tab, held by `HostSettingsPanel` ABOVE this page's per-host
+   * remount so a switch of host keeps it.
+   */
+  readonly tab: HostOverviewTab;
+  readonly onSelectTab: HostOverviewSelectTab;
 }): ReactNode {
   const { scope } = props;
-  const compact = useSettingsDensity() === "compact";
+  const isMobile = useIsMobileViewport();
   const host = scope.host;
 
   // THE SCOPE'S OWN CLIENT, read directly rather than through the ambient
@@ -301,7 +327,7 @@ export function HostOverviewPanel(props: {
   const {
     identity: identityDegrade,
     identitySet: identitySetDegrade,
-    restart: restartDegrade,
+    restart: capabilityRestartDegrade,
     restartViaForceFallback,
     restartSupported,
     logsSupported,
@@ -316,6 +342,24 @@ export function HostOverviewPanel(props: {
     maintenanceFallback: scope.localMaintenanceFallback,
     restartForceRoute: forceRestartLocalHostId !== null,
   });
+  // THIS machine's host started in a terminal: the app never restarts a run it
+  // did not start. One gate, read wherever the capability's is - the header's
+  // Restart shows the reason, and every open restart dialog closes (the
+  // render-time rules on `restartDegrade`, the bridge route's and the offers'
+  // included) - so a run that starts under an open page stands those restarts
+  // down at once. The card's controls take it at their props
+  // (`foregroundHeldFinish`).
+  const localForegroundRun =
+    useLocalHostForegroundRun() && (host?.isLocalMachine ?? false);
+  // What this page's update surfaces say in place of their controls during
+  // that run - one picker, so the version card, the update card and the
+  // version rows name the same step (`hostForegroundUpdateLine`).
+  const foregroundUpdateLine = useLocalHostForegroundUpdateLine();
+  const localForegroundUpdateLine =
+    (host?.isLocalMachine ?? false) ? foregroundUpdateLine : null;
+  const restartDegrade: OverviewDegradeReason | null = localForegroundRun
+    ? "terminal-run"
+    : capabilityRestartDegrade;
   // Every surface that opens the restart confirm - the header's Restart, the
   // card's Restart and its attempt-park Force, the Doctor sheet's bridge
   // restart - arms it for the route the page routes Restart to at that
@@ -344,6 +388,17 @@ export function HostOverviewPanel(props: {
     // `usable` half - see the note there.
     enabled: usable && installInfoDegrade === null,
     runningVersion: statusQuery.data?.hostVersion ?? null,
+  });
+  // Overview ▸ Ports' lists, read ONCE here for the tab body and the count on
+  // its trigger - so the read starts with the page, not at the tab's first
+  // visit, and re-reads every 15 seconds while the page is open. A host
+  // restarting waits in the connecting shape, as the rest of the page does.
+  const portForwards = useHostPortForwards({
+    client,
+    hostId: scope.hostId,
+    usable,
+    connecting:
+      scope.status === "connecting" || host?.health.state === "restarting",
   });
 
   const identitySet = useHostIdentitySet(client);
@@ -753,6 +808,12 @@ export function HostOverviewPanel(props: {
     hostId: scope.hostId,
     view: operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
   });
+  // The success acknowledgement, held HERE rather than in the update card: the
+  // card unmounts whenever the view goes quiet or the host goes offline, and a
+  // timer living in it would restart from zero each time it came back.
+  const completion = useHostUpdateCompletion(
+    operationView ?? UNKNOWN_FLEET_UPDATE_VIEW,
+  );
   // ATTEMPT-AWARE, with the coarse field as the fallback — and the difference
   // is a lockout bug, not a refinement.
   //
@@ -820,6 +881,7 @@ export function HostOverviewPanel(props: {
     registerDegrade: serviceRegisterDegrade,
     deregisterDegrade: serviceDeregisterDegrade,
     busy: corePending,
+    foregroundRun: localForegroundRun,
     hostId: scope.hostId,
     scopeUsable: usable,
     settledBusy: view.settledBusy,
@@ -936,11 +998,11 @@ export function HostOverviewPanel(props: {
     return () => clearTimeout(timer);
   }, [scope.hostId, dispatchedAt, dispatchSeen]);
 
-  // The update story lives at PAGE level because its two halves now render in
-  // two different containers: the answer — is there an update, install it — as a
-  // band on the identity card, and the decisions behind Advanced down in
-  // Installation. One instance of each hook, so the two halves cannot disagree
-  // about what the last check returned or which write is in flight.
+  // The update story lives at PAGE level because it renders in two places: the
+  // update in flight in the notices strip above the tab bar, on every tab, and
+  // the answer and the decisions behind it on Updates. One instance of each
+  // hook, so the two cannot disagree about what the last check returned or
+  // which write is in flight.
   //
   // This is also the single `useHostRegistryUpdateMutation`, which BOTH the
   // drain gate and the auto-update switch write through. Two instances would
@@ -993,6 +1055,7 @@ export function HostOverviewPanel(props: {
     checkDegrade: updateCheckDegrade,
     installDegrade: updateInstallDegrade,
     busy: updateGatePending,
+    foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,
   });
   const anyPending = updateGatePending || updates.summary.installing;
@@ -1182,7 +1245,14 @@ export function HostOverviewPanel(props: {
     // mid-flight, the attempt parks, the first `seen` frame arrives, and
     // without this the one shot is spent on a dialog closed in the same pass
     // for a retirement that ends a few seconds later.
-    gateArmed: anyPending || updates.degrade !== null,
+    //
+    // A foreground run on this machine too: the rule after the restart
+    // confirm's closes any offer opened under one, so firing now would spend
+    // the one shot on a dialog nobody sees.
+    gateArmed:
+      anyPending ||
+      updates.degrade !== null ||
+      restartDegrade === "terminal-run",
     supported: updates.activate !== null,
     dispatch: updateDispatch,
     incarnation,
@@ -1212,9 +1282,9 @@ export function HostOverviewPanel(props: {
       ? forceRestart.isPending
       : restart.isPending;
   // The restart confirmation has the same stale-open window the OS-service
-  // confirms do (`host-overview-advanced.tsx`): opened while idle, it stays
-  // answerable while an automatic install or another lifecycle write arms the
-  // page-wide gate under it. Close it for every arming EXCEPT its own
+  // confirms do (`host-overview-os-service-section.tsx`): opened while idle,
+  // it stays answerable while an automatic install or another lifecycle write
+  // arms the page-wide gate under it. Close it for every arming EXCEPT its own
   // dispatch — this dialog deliberately stays open through its own dispatch
   // to show its spinner (and, on the cooperative leg, route the busy
   // verdict). Adjust-during-render so the close lands in the arming commit.
@@ -1223,13 +1293,36 @@ export function HostOverviewPanel(props: {
   }
   // A COOPERATIVE confirm answers a `host.restart` the handshake can withdraw
   // while it is open (`restartDegrade`, the header's own gate); the bridge
-  // route needs no method and is unaffected.
+  // route needs no method, so only a foreground run reaches it (below).
   if (
     restartConfirm === "cooperative" &&
     restartDegrade !== null &&
     !restartDialogOwnDispatch
   ) {
     closeRestartConfirm();
+  }
+  // A host started in a terminal on this machine, begun under an open
+  // dialog, withdraws every dialog here that would restart it - whichever
+  // route or offer armed it. The cooperative confirm closed above
+  // (`terminal-run` is a `restartDegrade`); these are the bridge respawn's two
+  // dialogs, which no method degrade reaches, and the two update-finish
+  // offers whose openers the card withholds under the same fact
+  // (`foregroundHeldFinish`). Each keeps a dispatch of its OWN already in
+  // flight, as the page-wide rules do: that click was answered before the run
+  // began, and the CLI's refusal is its backstop.
+  if (restartDegrade === "terminal-run") {
+    if (restartConfirm === "bridge" && !restartDialogOwnDispatch) {
+      closeRestartConfirm();
+    }
+    if (forceRestartOffer !== null && !forceRestartInFlight) {
+      setForceRestartOffer(null);
+    }
+    if (forceUpdateOffer !== null && !updates.summary.installing) {
+      setForceUpdateOffer(null);
+    }
+    if (boundOffer !== null && !updates.summary.installing) {
+      setBoundOffer(null);
+    }
   }
   // The force offer has the same window and a sharper reason to close in it: no
   // lifecycle write on this page may dispatch beside a bridge respawn, and an
@@ -1341,11 +1434,13 @@ export function HostOverviewPanel(props: {
   // attempt-first choice and the legacy fallback each read as one decision,
   // and so the gates the card documents are stated once. All three carry the
   // page-wide gates the header's Restart and the region's Update now carry
-  // (`restartDegrade` / `updates.degrade`, `anyPending`) on top of a LIVE
-  // status read.
+  // (the restart capability / `updates.degrade`, `anyPending`) on top of a
+  // LIVE status read. A foreground run is applied once, where the card's
+  // props are built (`foregroundHeldFinish`), so the card can say what it
+  // withheld rather than simply lose its controls.
   const legacyDebtRestart =
     !statusLive ||
-    restartDegrade !== null ||
+    capabilityRestartDegrade !== null ||
     anyPending ||
     (legacyFacts?.activationDebt ?? null) === null
       ? null
@@ -1392,18 +1487,47 @@ export function HostOverviewPanel(props: {
   // expression inline; naming it is what keeps the two from disagreeing.
   const parkForceControl =
     attemptControl?.intent === "continue" ? openBoundOffer : legacyStagedForce;
+  // Restart cannot activate a stage, so the attempt-park Force restart is
+  // offered only when no stage waits; see the card's `onForceRestart`.
+  const parkForceRestart =
+    statusLive &&
+    capabilityRestartDegrade === null &&
+    !anyPending &&
+    legacyFacts !== null &&
+    legacyFacts.stagedWait === null
+      ? () => {
+          // Attempt parks keep the existing cooperative restart
+          // confirmation and its fresh live-work check.
+          openRestartConfirm();
+        }
+      : null;
+  const cardRestart =
+    attemptControl?.intent === "activate" ? openBoundOffer : legacyDebtRestart;
+  // A host started in a terminal on this machine: every control that would
+  // finish the update (restart, force restart, force update) reaches the CLI
+  // and is refused, so the card withholds them and says what finishes it.
+  const foregroundHeldFinish =
+    cardRestart !== null ||
+    parkForceRestart !== null ||
+    parkForceControl !== null
+      ? localForegroundUpdateLine
+      : null;
 
   // THE REMEDY ROW'S OWN RENDER DECISION, named once and read twice.
   //
   // The card's CLI-floor sentence ends in "see installation help", and that
-  // button belongs to the updates region — which does NOT render it merely
-  // because a floor exists. The region short-circuits to the degraded notice
-  // on `degrade` and the whole region sits behind `usable`, and the card is
+  // button belongs to the Updates tab's version card — which does NOT render it
+  // merely because a floor exists. The card shows the degraded sentence on
+  // `degrade` and its answer only under `usable`, and the update card is
   // behind neither, so a floor read while healthy could leave the sentence
   // pointing at a button that had since gone: a scope that went unreachable
   // rendered "Last seen: … — see installation help" with no help anywhere on
   // the page. Deriving the sentence's precondition from the row's own
   // condition is what makes that unrepresentable rather than merely fixed.
+  //
+  // The version card hides Update now and Check now while an update is in
+  // flight, and a work park IS in flight - but it keeps the fix whenever the
+  // summary names one, so this precondition holds through the park too.
   const remedyRowRendered =
     usable && updates.degrade === null && updates.summary.remedy !== null;
 
@@ -1490,12 +1614,276 @@ export function HostOverviewPanel(props: {
         onMakeActive={() => scope.makeActive(host.hostId)}
         activateBusy={scope.isActivating}
         onCopyHostId={() => hostIdCopy.copy(host.hostId)}
+        // A phone's name row never wraps: Activate becomes the menu's first
+        // item there.
+        activateInMenu={isMobile}
       />
     );
   }
 
+  // THE NOTICES STRIP, top to bottom: the offline notice, the update card, the
+  // account's wait. Then the Updates tab's version card. The decisions behind
+  // each are stated here once.
+  //
+  // Offline is "can't be reached, for a reason other than a restart". A
+  // restart is the update card's to narrate ("Restarting host to v1.5.1") and
+  // the health word already reads "Restarting…"; a host still connecting has
+  // an answer coming, and waits in its loading shape.
+  const restarting = host.health.state === "restarting";
+  const offline = !usable && scope.status !== "connecting" && !restarting;
+  // The update in flight, retained phase included: the version card's
+  // in-flight rule and the one-wait rule both read it.
+  const inFlightKind = inFlightUpdateKind(operationView);
+  const operationShown =
+    !offline && operationView !== null && !isQuietUpdateView(operationView);
+
+  // Drawn between the header and the tab bar, so it is on every tab: nothing
+  // else on the page reports an update in flight, and its controls are the
+  // page's only ones with deadlines.
+  const notices = (
+    <HostOverviewNotices
+      // One notice carrying what the page last knew, in place of every other
+      // unreachable wording in the strip - including the update card's
+      // retained "Last seen: …", whose phase the notice carries instead.
+      offlineNotice={
+        offline
+          ? describeHostOfflineNotice({
+              hostName: displayName,
+              lastSeen: formatLastSeen(
+                registryItem?.status.lastSeenAt ?? null,
+                nowMs,
+              ),
+              view: operationView,
+              accountKnowsHost: registryItem !== null,
+            })
+          : null
+      }
+      // The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
+      // rather than sitting beside it — two update lines describing one
+      // operation in different vocabularies is the drift the shared
+      // projection exists to prevent. A pre-@1.3 peer has no attempt to show
+      // and keeps the coarse notice unchanged.
+      //
+      // A QUIET view renders nothing. `idle` used to render as "Host is up to
+      // date" — a sentence about the catalog from a projection that knows only
+      // the attempt record — directly above the updates region saying
+      // "v1.3.0-rc.2 is available." about the same host. The card is for an
+      // operation; when there is none, the version card below is the whole
+      // answer. Same predicate the landing banner hides on.
+      operation={
+        !operationShown
+          ? null
+          : {
+              view: operationView,
+              hostName: displayName,
+              // Resolved above, where the three conditions behind it are
+              // stated.
+              cliFloorBlocked,
+              // Panel-level: see `completion`.
+              completion,
+              // Restart cannot activate a stage. A floor gate must not turn a
+              // staged wait's Force update into a different, ineffective
+              // force - and a record leg that is not live does not vouch that
+              // no stage waits, so it offers nothing either. Gated on a LIVE
+              // status read like its two siblings (`statusLive`, which
+              // subsumes `usable`): an offer made off a failed or aged read
+              // would act on a park the host may have left. (The projection
+              // withholds the whole force control under a demoted view
+              // already, but the dispatch gate belongs with the handler,
+              // `parkForceRestart`, not in the card's layout.) The confirm it
+              // opens is armed for whichever route the page routes Restart
+              // to, like the header's.
+              onForceRestart: localForegroundRun ? null : parkForceRestart,
+              // The card's three controls sit behind the SAME capability and
+              // page-wide gates as the header's Restart and the region's
+              // Update now (`restartDegrade`, `updates.degrade`,
+              // `anyPending`): a method the handshake declined is not offered
+              // from the card either, and a control whose confirm the
+              // render-time rules would close in the same commit is not a
+              // control. That last case was the card's state under
+              // `anyPending` before this gate: the button rendered and its
+              // confirm closed as it opened - including for a pre-@1.3 peer
+              // whose stuck `updating` marker holds the gate while its read
+              // is healthy (see `updateInFlight`), where the header's Restart
+              // is disabled by the same gate. The gate makes that inertness
+              // visible; it withdraws nothing that could dispatch.
+              //
+              // The two handlers below are resolved above
+              // (`legacyDebtRestart`, `legacyStagedForce`, `openBoundOffer`),
+              // where those gates are stated once; here each control reads as
+              // the one decision it is - the attempt's own continuation
+              // first, today's fact-based control otherwise.
+              //
+              // ATTEMPT FIRST, then the fact. A `waiting-to-activate` attempt
+              // on a host with `host.update.activate` restarts through the
+              // bound dispatch: the CLI owns that restart, so it can finish
+              // the attempt's own record rather than leaving a park nobody
+              // closed. The activation dialog it opens is the same one the
+              // auto-open uses, locally and remotely — a remote debt host used
+              // to get a "declined" toast and no way forward at all.
+              //
+              // Otherwise keyed on the FACT, not the view kind: a retained
+              // `failed` marker beside real legacy debt keeps its failure text
+              // and still gets the way forward. Same confirm the header's
+              // Restart opens, so the transition id, the busy verdict and the
+              // force/defer dialog are all the existing ones.
+              onRestart: localForegroundRun ? null : cardRestart,
+              // ATTEMPT FIRST here too. A `waiting-for-work` attempt resumes
+              // through `host.update.continue`, which needs no catalog gate at
+              // all: the bytes were authorized when the attempt was created,
+              // and a downgrade park re-downloads the same version it was
+              // created for — so this works for a park with NO stage, which
+              // is exactly the case `installForce` cannot express.
+              //
+              // Otherwise today's staged-wait force.
+              onForceUpdate: localForegroundRun ? null : parkForceControl,
+              foregroundHeldFinish,
+            }
+      }
+      // ONE WAIT ON SCREEN. The account's wait shows only while the host has
+      // not reported one of its own: once the view is `waiting-for-work`
+      // (retained phase included), the update card above says it, with Force
+      // update… as its control. Withheld too while the host can't be reached:
+      // it names live work, so it needs the host's own count. Its Apply now
+      // finishes the update on the host, so a foreground run on this machine
+      // withholds it for the line Update now shows.
+      drainGate={
+        registryItem === null || !usable || inFlightKind === "waiting-for-work"
+          ? null
+          : {
+              item: registryItem,
+              mutation: policyMutation,
+              liveBusySessionCount: view.busySessionCount,
+              liveBusyBreakdown: view.busyBreakdown,
+              settledBusySessionCount: view.settledBusySessionCount,
+              settledBusyBreakdown: view.settledBusyBreakdown,
+              foregroundUpdateLine: localForegroundUpdateLine,
+            }
+      }
+    />
+  );
+
+  // The four tab bodies, each handed what it draws. Built on every render
+  // and cheap to build - a body MOUNTS only once its tab is first visited.
+  const versionConnecting =
+    scope.status === "connecting" ||
+    restarting ||
+    (usable &&
+      (operationView?.kind === "restarting" ||
+        operationView?.kind === "reconnecting" ||
+        operationView?.kind === "verifying"));
+  let versionFallback: HostOverviewUpdatesTabProps["versionFallback"] = null;
+  if (versionConnecting) {
+    versionFallback = { kind: "connecting", hostName: displayName };
+  } else if (!usable) {
+    versionFallback = { kind: "unreachable", hostName: displayName };
+  }
+  const updatesTab = (
+    <HostOverviewUpdatesTab
+      // The version card, always - except while the scope is still connecting
+      // with no update to show, when the version list's loading shape below
+      // stands in for it.
+      versionCard={
+        scope.status === "connecting" && !operationShown
+          ? null
+          : {
+              // Same two-layer rule as the header's version.
+              version: view.hostVersion ?? host.version,
+              tag: deriveHostOverviewVersionTag({
+                offline,
+                unmanaged: updates.degrade !== null,
+                view: operationView,
+                answerKind: usable ? updates.summary.answerKind : null,
+              }),
+              // The update ANSWER — "is there an update, and install it". It
+              // needs the host, so an unreachable or restarting host's card is
+              // its version and tag.
+              answer: !usable
+                ? null
+                : {
+                    summary: updates.summary,
+                    degrade: updates.degrade,
+                    desktopBridge: desktopUpdates.bridge,
+                    onInstallationHelp: () => setDoctorOpen(true),
+                    foregroundUpdateLine: localForegroundUpdateLine,
+                  },
+              inFlight: inFlightKind !== null,
+            }
+      }
+      // An account write: no route needed, so it survives an outage.
+      autoUpdate={
+        registryItem === null
+          ? null
+          : { item: registryItem, mutation: policyMutation }
+      }
+      // Gated on the ROUTE as well as the capability. Picking a version means
+      // asking the host which ones exist, so an unreachable host gets no
+      // picker at all rather than a checkbox and an invitation to press a
+      // Check now that is not on screen. Withheld too when updates are not
+      // manageable here: the version card above already says why, in the one
+      // sentence the list would otherwise repeat under it.
+      versions={
+        versionFallback === null && updates.degrade === null
+          ? updates.picker
+          : null
+      }
+      versionFallback={versionFallback}
+    />
+  );
+  const portsTab = (
+    <HostOverviewPortsTab
+      ports={portForwards}
+      client={client}
+      hostId={host.hostId}
+      hostName={displayName}
+      hosts={scope.hosts}
+    />
+  );
+  const dataTab = (
+    <HostOverviewDataTab
+      client={client}
+      hostId={scope.hostId}
+      hostName={displayName}
+      connecting={
+        scope.status === "connecting" || host.health.state === "restarting"
+      }
+      usable={usable}
+    />
+  );
+  const installationTab = (
+    <HostOverviewInstallationTab
+      usable={usable}
+      hostName={displayName}
+      // The account's record, so it reads with or without a route. "Online
+      // now" follows the header's own live evidence, on the scope's clock.
+      about={
+        registryItem === null
+          ? null
+          : { item: registryItem, live: host.health.live, nowMs: scope.nowMs }
+      }
+      installInfoDegrade={installInfoDegrade}
+      record={
+        managedInstallation(installationQuery.data)?.installRecord ?? null
+      }
+      recordLoading={installationQuery.isPending}
+      recordReadFailed={installationQuery.isError}
+      // A host restarting to finish an update waits in the connecting shape,
+      // as Ports does - not the unreachable line, and not stale host groups.
+      connecting={
+        scope.status === "connecting" || host.health.state === "restarting"
+      }
+      // The FULL gate at render time, not the hook-time `corePending`: the
+      // service verbs must also lock during the install-request window, and
+      // `anyPending` only exists after the updates hook the service adapter
+      // feeds - so the override happens here, where both are in hand.
+      service={usable ? { ...service, busy: anyPending } : null}
+      showPackageManagerHint={props.hasLocalBridge}
+      scope={scope}
+    />
+  );
+
   return (
-    <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+    <>
       <HostIdentityCard
         host={host}
         displayName={displayName}
@@ -1553,205 +1941,49 @@ export function HostOverviewPanel(props: {
             />
           )
         }
+        // A phone's name row stays one line, the name truncating.
+        nameRowWraps={!isMobile}
         actions={headerActions}
         healthAction={
           <HostUpdateRequiredSlot host={host} canManageHost={canManageHost} />
         }
+        lifecycleLine={host.isLocalMachine ? <HostLifecycleModeLine /> : null}
       >
-        {/* The ATTEMPT, when this peer speaks it. Supersedes the coarse notice
-            below rather than sitting beside it — two update lines describing one
-            operation in different vocabularies is the drift the shared
-            projection exists to prevent. A pre-@1.3 peer has no attempt to
-            show and keeps the coarse notice unchanged.
-
-            A QUIET view renders nothing. `idle` used to render as "Host is up
-            to date" — a sentence about the catalog from a projection that
-            knows only the attempt record — directly above the updates region
-            saying "v1.3.0-rc.2 is available." about the same host. The card is
-            for an operation; when there is none, the updates region below is
-            the whole answer. Same predicate the landing banner hides on. */}
-        {operationView === null || isQuietUpdateView(operationView) ? null : (
-          <HostOverviewOperationCard
-            view={operationView}
-            hostName={displayName}
-            // Resolved above, where the three conditions behind it are stated.
-            cliFloorBlocked={cliFloorBlocked}
-            // Restart cannot activate a stage. A floor gate must not turn a
-            // staged wait's Force update into a different, ineffective force
-            // - and a record leg that is not live does not vouch that no
-            // stage waits, so it offers nothing either. Gated on a LIVE
-            // status read like its two siblings (`statusLive`, which
-            // subsumes `usable`): an offer made off a failed or aged read
-            // would act on a park the host may have left. (The projection
-            // withholds the whole force control under a demoted view
-            // already, but the dispatch gate belongs here, not in the
-            // card's layout.) The confirm it opens is armed for whichever
-            // route the page routes Restart to, like the header's.
-            onForceRestart={
-              statusLive &&
-              restartDegrade === null &&
-              !anyPending &&
-              legacyFacts !== null &&
-              legacyFacts.stagedWait === null
-                ? () => {
-                    // Attempt parks keep the existing cooperative restart
-                    // confirmation and its fresh live-work check.
-                    openRestartConfirm();
-                  }
-                : null
-            }
-            // The card's three controls sit behind the SAME capability and
-            // page-wide gates as the header's Restart and the region's
-            // Update now (`restartDegrade`, `updates.degrade`, `anyPending`):
-            // a method the handshake declined is not offered from the card
-            // either, and a control whose confirm the render-time rules
-            // would close in the same commit is not a control. That last
-            // case was the card's state under `anyPending` before this
-            // gate: the button rendered and its confirm closed as it
-            // opened - including for a pre-@1.3 peer whose stuck `updating`
-            // marker holds the gate while its read is healthy (see
-            // `updateInFlight`), where the header's Restart is disabled by
-            // the same gate. The gate makes that inertness visible; it
-            // withdraws nothing that could dispatch.
-            //
-            // The two handlers below are resolved above
-            // (`legacyDebtRestart`, `legacyStagedForce`, `openBoundOffer`),
-            // where those gates are stated once; here each control reads as
-            // the one decision it is - the attempt's own continuation
-            // first, today's fact-based control otherwise.
-            //
-            // ATTEMPT FIRST, then the fact. A `waiting-to-activate` attempt on
-            // a host with `host.update.activate` restarts through the bound
-            // dispatch: the CLI owns that restart, so it can finish the
-            // attempt's own record rather than leaving a park nobody closed.
-            // The activation dialog it opens is the same one the auto-open
-            // uses, locally and remotely — a remote debt host used to get a
-            // "declined" toast and no way forward at all.
-            //
-            // Otherwise keyed on the FACT, not the view kind: a retained
-            // `failed` marker beside real legacy debt keeps its failure text
-            // and still gets the way forward. Same confirm the header's
-            // Restart opens, so the transition id, the busy verdict and the
-            // force/defer dialog are all the existing ones.
-            onRestart={
-              attemptControl?.intent === "activate"
-                ? openBoundOffer
-                : legacyDebtRestart
-            }
-            // ATTEMPT FIRST here too. A `waiting-for-work` attempt resumes
-            // through `host.update.continue`, which needs no catalog gate at
-            // all: the bytes were authorized when the attempt was created, and
-            // a downgrade park re-downloads the same version it was created
-            // for — so this works for a park with NO stage, which is exactly
-            // the case `installForce` cannot express.
-            //
-            // Otherwise today's staged-wait force.
-            onForceUpdate={parkForceControl}
-          />
-        )}
-        {/* The update ANSWER, on the card that describes the host — not under a
-            section header of its own. "Is there an update, and install it" is a
-            fact about this host in the same register as its version and its
-            session count, and giving it a titled section of its own implied a
-            second subject where there is only one. Everything that is a decision
-            rather than an answer is down in Advanced. */}
-        {!usable ? null : (
-          <HostOverviewUpdatesRegion
-            summary={updates.summary}
-            degrade={updates.degrade}
-            desktopBridge={desktopUpdates.bridge}
-            onInstallationHelp={() => setDoctorOpen(true)}
-          />
-        )}
-        {/* Stays OUT of Advanced, deliberately. This is the only control on the
-            page with a deadline — it renders solely while an update is blocked
-            on open sessions — and a collapsed disclosure is where a deadline
-            goes to be missed. */}
-        {registryItem === null ? null : (
-          <HostUpdateDrainGateRow
-            item={registryItem}
-            mutation={policyMutation}
-            liveBusySessionCount={view.busySessionCount}
-            liveBusyBreakdown={view.busyBreakdown}
-            settledBusySessionCount={view.settledBusySessionCount}
-            settledBusyBreakdown={view.settledBusyBreakdown}
-          />
-        )}
+        {notices}
+        {/* The tab bar and the one body showing, pinned under the header.
+            The Ports count and the Installation dot hang on `badges`. */}
+        <HostOverviewTabs
+          tab={props.tab}
+          onSelectTab={props.onSelectTab}
+          isMobile={isMobile}
+          badges={{
+            ...NO_HOST_OVERVIEW_TAB_BADGES,
+            ports:
+              portForwards.count === null ? null : (
+                <HostOverviewPortsCount count={portForwards.count} />
+              ),
+            // Same gate and same query as the Command-line tools hint on
+            // the tab, so the dot and the hint come and go together.
+            installation: props.hasLocalBridge ? (
+              <LocalPackageManagerUpgradeDot />
+            ) : null,
+          }}
+          bodies={{
+            installation: installationTab,
+            updates: updatesTab,
+            data: dataTab,
+            ports: portsTab,
+          }}
+        />
       </HostIdentityCard>
 
-      <HostOverviewInstallationCard
-        usable={usable}
-        hostName={displayName}
-        degrade={installInfoDegrade}
-        record={
-          managedInstallation(installationQuery.data)?.installRecord ?? null
-        }
-        loading={installationQuery.isPending}
-        readFailed={installationQuery.isError}
-        advanced={
-          // Withheld entirely when every section inside would be: no registry
-          // row kills the policy switch, and no route kills the service and
-          // version sections. An "Advanced" that opens onto nothing reads as
-          // a broken page, not an empty one.
-          registryItem === null && !usable ? null : (
-            <HostOverviewAdvancedDisclosure
-              hostName={displayName}
-              registryItem={registryItem}
-              policyMutation={policyMutation}
-              // The FULL gate at render time, not the hook-time `corePending`:
-              // the service verbs must also lock during the install-request
-              // window, and `anyPending` only exists after the updates hook
-              // the service adapter feeds - so the override happens here,
-              // where both are in hand.
-              service={usable ? { ...service, busy: anyPending } : null}
-              // Gated on the ROUTE as well as the capability. Picking a version
-              // means asking the host which ones exist, so an unreachable host
-              // gets no picker at all rather than a checkbox and an invitation
-              // to press a Check now that is not on screen.
-              versions={
-                usable && updates.degrade === null ? updates.picker : null
-              }
-            />
-          )
-        }
-      />
-
-      <ArtifactVersionSettingsSection
-        client={client}
-        hostId={scope.hostId}
-        enabled={usable}
-      />
-
-      {/* Everything about this host's OWN local data: the sessions on its disk
-          waiting to be imported, and the SQLite tasks and epics still to reach
-          cloud. Both moved off General, which is app-wide and so could only
-          ever speak for whichever host the window pointed at.
-
-          Gated on `usable` for the reason every host read on this page is - a
-          hook mounted under a non-ready scope fires against the ambient host
-          regardless of what the gate hides. The section applies a second,
-          narrower check of its own: the stream beneath it must already name
-          this host. */}
-      {!usable ? null : <HostImportMigrationSection hostId={scope.hostId} />}
-
-      {/* Local machine only, by the nature of the fact rather than a scope
-          rule: the hint is Desktop's launch-time comparison of ITS bundled CLI
-          against THIS machine's package-manager CLI, recorded in Desktop-local
-          reconcile state the bridge alone can read. There is no remote
-          equivalent to render. */}
-      {props.hasLocalBridge ? <LocalPackageManagerUpgradeHint /> : null}
-
-      {/* No list of the OTHER hosts, and no "Add host": a page about one host
-          is the wrong place to manage the collection it belongs to. The
-          sidebar switcher owns both.
-
-          Not gated from out here: the zone's rows sit on three different
-          capability planes (host RPC, the local CLI bridge, an account write)
-          and it gates each of them itself. A gate around all three took the
-          recovery actions away in the states that need them. */}
-      <HostDangerZone scope={scope} />
-
+      {/* The dialogs stay at page level and open over whichever tab is
+          showing: each is armed by a control on one tab (or the header) and
+          must outlive a switch to another. */}
       <RestartHostConfirmDialog
+        hostId={
+          restartConfirm === "bridge" ? forceRestartLocalHostId : scope.hostId
+        }
         open={restartConfirm !== null}
         onOpenChange={(open) => {
           if (!open) closeRestartConfirm();
@@ -1856,6 +2088,7 @@ export function HostOverviewPanel(props: {
         // deliberately, so a second respawn cannot be stacked on the first.
         isForcing={forceRestartInFlight}
         forceLabel="Force restart"
+        forceDestructive
         onForce={() => {
           if (forceRestartOffer === null) return;
           // Refuse on a POSITIVE mismatch only. `null` here is "cannot tell"
@@ -1874,7 +2107,15 @@ export function HostOverviewPanel(props: {
           forceRestart.mutate();
         }}
         onDefer={() => setForceRestartOffer(null)}
-      />
+      >
+        {forceRestartOffer !== null ? (
+          <HostRestartSessions
+            hostId={forceRestartOffer.hostId}
+            disabled={forceRestartInFlight}
+            onNavigate={() => setForceRestartOffer(null)}
+          />
+        ) : null}
+      </HostBusyForceDeferDialog>
       {/* The staged-wait force's confirmation - the same busy/force/defer
           dialog, because the decision is the same shape: live work stands
           between the person and the update, and they choose whether to end
@@ -1897,6 +2138,7 @@ export function HostOverviewPanel(props: {
         }
         isForcing={updates.summary.installing}
         forceLabel="Force update"
+        forceDestructive
         onForce={() => {
           if (forceUpdateOffer === null) return;
           // Closed on the ANSWER, whatever it is: an accepted force is now
@@ -1945,6 +2187,10 @@ export function HostOverviewPanel(props: {
             ? "Force update"
             : boundDispatchForceLabel(boundOffer)
         }
+        // Force update ends the work it names; the activation offer's
+        // "Restart host" stays an ordinary button, as Restart does everywhere
+        // on this page.
+        forceDestructive={boundOffer?.intent !== "activate"}
         onForce={() => {
           if (boundOffer === null) return;
           const dispatch =
@@ -2044,7 +2290,7 @@ export function HostOverviewPanel(props: {
               }
         }
       />
-    </div>
+    </>
   );
 }
 
@@ -2702,100 +2948,4 @@ function overviewBusySnapshot(
       reportedBreakdown: status?.busyBreakdown ?? null,
     }),
   };
-}
-
-/**
- * How this host is installed and everything about it a person opens a
- * disclosure to find: the install record, and Advanced.
- *
- * The two are one section because they answer one question — how this host is
- * set up — and neither is urgent enough to sit on the card above. Updates used
- * to own a titled section of its own next to this one, which read as two
- * subjects on a page that has exactly one.
- *
- * The install record is pure host RPC, so with no route that row renders
- * NOTHING rather than a gate notice. That is deliberate and was a bug once:
- * this page already states an unreachable host exactly once — the identity
- * card's health line says so, and the danger zone's gate explains which rows it
- * costs. A second gate here printed the same "can't reach this host" notice
- * twice on one page. An absent row under a card that already says why is
- * quieter and truer than repeating the reason.
- *
- * Advanced is NOT gated the same way, which is why `usable` reaches the row
- * rather than this whole component: the auto-update policy inside it is an
- * account write that needs no route, and an unreachable host is a common moment
- * to want exactly that. Returning `null` for the section as a unit is how that
- * control would go missing in the state it is most wanted.
- *
- * `unmanaged` IS a real state rather than an error: a host run from a checkout
- * has no install record, and reporting that as "nothing is installed" put a
- * false alarm on every developer's machine.
- */
-function HostOverviewInstallationCard(props: {
-  readonly usable: boolean;
-  readonly hostName: string;
-  readonly degrade: OverviewDegradeReason | null;
-  readonly record: InstallationDetailsRecord | null;
-  readonly loading: boolean;
-  /** The read itself failed - which is NOT the same as "no record". */
-  readonly readFailed: boolean;
-  /** Advanced, built by the page so its state is shared with the card above. */
-  readonly advanced: ReactNode;
-}): ReactNode {
-  return (
-    <SettingsGroup
-      group={HOST_OVERVIEW.definitions.installation}
-      showTitle
-      tone="default"
-      dataTestId="host-installation"
-      fill={false}
-    >
-      {!props.usable ? null : (
-        <HostOverviewInstallationBody
-          hostName={props.hostName}
-          degrade={props.degrade}
-          record={props.record}
-          loading={props.loading}
-          readFailed={props.readFailed}
-        />
-      )}
-      {props.advanced}
-    </SettingsGroup>
-  );
-}
-
-/**
- * Three outcomes, and the middle one is the finding: a FAILED read is not an
- * unmanaged host. Collapsing both to `record: null` made the card assert that
- * this host runs from a checkout or an unpacked tree - a fact the RPC never
- * established, stated to the user as if it had.
- */
-function HostOverviewInstallationBody(props: {
-  readonly hostName: string;
-  readonly degrade: OverviewDegradeReason | null;
-  readonly record: InstallationDetailsRecord | null;
-  readonly loading: boolean;
-  readonly readFailed: boolean;
-}): ReactNode {
-  if (props.degrade !== null) {
-    return (
-      <HostOverviewNotice testId="host-overview-installation-degraded">
-        {describeOverviewDegrade(props.degrade, props.hostName)}
-      </HostOverviewNotice>
-    );
-  }
-  if (props.readFailed && props.record === null) {
-    return (
-      <HostOverviewNotice testId="host-overview-installation-unreadable">
-        {`Couldn't read ${props.hostName}'s installation record.`}
-      </HostOverviewNotice>
-    );
-  }
-  return (
-    <InstallationDetailsDisclosure
-      record={props.record}
-      loading={props.loading}
-      emptyMessage={`${props.hostName} is running from a checkout or an unpacked tree, so it has no installation record.`}
-    />
-  );
 }

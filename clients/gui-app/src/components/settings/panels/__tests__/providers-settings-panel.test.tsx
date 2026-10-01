@@ -24,6 +24,10 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  PROVIDER_SETTINGS_UNREADABLE_COPY,
+  PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX,
+} from "@/lib/providers/provider-settings-unreadable-error";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -144,6 +148,11 @@ type SetEnabledVariables = RequestOfMethod<
 >;
 type SetEnabledMutate = (variables: SetEnabledVariables) => void;
 
+type CancelLoginVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.cancelLogin"
+>;
+
 const providerMocks = vi.hoisted(() => ({
   listResult: {
     data: { providers: [] as ProviderCliState[] },
@@ -154,6 +163,7 @@ const providerMocks = vi.hoisted(() => ({
       | HostRpcError
       | { message: string; code: string }
       | undefined,
+    refetch: vi.fn(() => Promise.resolve({})),
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
@@ -296,9 +306,19 @@ vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
 // The candidates table's failed-pack arm reaches `providers.ensurePack`, which
 // goes through TanStack Query. Mocked here alongside the other provider
 // mutations so this panel test keeps rendering without a QueryClientProvider.
-vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
-  useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
-}));
+// `AddProviderProfileDialog` also reaches this through the login flow, which
+// calls `mutateAsync` before a retried start - see the `*ForClient` variant.
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => {
+  const useProvidersEnsurePack = () => ({
+    mutate: () => {},
+    mutateAsync: () => Promise.resolve({}),
+    isPending: false,
+  });
+  return {
+    useProvidersEnsurePack,
+    useProvidersEnsurePackForClient: useProvidersEnsurePack,
+  };
+});
 
 // Same reason: the MCP tab's scope picker reads the host's worktree listing,
 // which is a real TanStack query. This panel suite is about the tab shell, not
@@ -405,8 +425,17 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
 // this tree - see the `@/lib/host` mock below). Both resolve to the same
 // recorded mock so assertions don't care which path fired.
 vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => {
+  // The login flow starts through `mutateAsync` (its promise settles even
+  // where StrictMode detached the observer); this adapts it onto the
+  // recorded `(variables, { onSuccess, onError })` fake every test drives.
   const useProvidersStartLogin = () => ({
-    mutate: providerMocks.startLoginMutate,
+    mutateAsync: (variables: StartLoginVariables) =>
+      new Promise<StartLoginData>((resolve, reject) => {
+        providerMocks.startLoginMutate(variables, {
+          onSuccess: resolve,
+          onError: reject,
+        });
+      }),
     isPending: false,
     error: null,
   });
@@ -431,6 +460,10 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
   const useProvidersCancelLogin = () => ({
     mutate: providerMocks.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      providerMocks.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: providerMocks.cancelLoginPending,
   });
   return {
@@ -728,14 +761,6 @@ vi.mock("@/hooks/rate-limits/use-provider-rate-limit-refresh", () => ({
     isRefreshing: false,
   }),
 }));
-// The section also asks whether a read we stopped waiting for still has its
-// delayed follow-up coming. That reads the queue registry through
-// `useRateLimitQueueScope`, which needs the QueryClient this harness has none
-// of; no target is ever enqueued here, so an idle answer is the truthful one.
-vi.mock("@/hooks/rate-limits/use-rate-limit-queue-target-phase", () => ({
-  useIsRateLimitReadFollowUpExhausted: () => false,
-}));
-
 // Host picker plumbing: a single active host and no transient client means
 // the panel renders inline (no runtime-context re-provide), and `useHostBinding`
 // returns null without a `<HostRuntimeProvider>`.
@@ -1185,7 +1210,15 @@ function codexWithManaged(managed: ProviderProfile): ProviderCliState {
     ...providerState({
       providerId: "codex",
       selected: { kind: "bundled" },
-      candidates: [],
+      candidates: [
+        {
+          kind: "bundled",
+          path: "/opt/traycer/bin/codex",
+          version: "1.0.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
       envOverrides: [],
       profiles: [
         profile({
@@ -1206,6 +1239,8 @@ function codexWithManaged(managed: ProviderProfile): ProviderCliState {
       token: null,
       codePaste: null,
       terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
     },
   };
 }
@@ -1232,7 +1267,15 @@ function codePasteReauthProviderState(): ProviderCliState {
     ...providerState({
       providerId: "codex",
       selected: { kind: "bundled" },
-      candidates: [],
+      candidates: [
+        {
+          kind: "bundled",
+          path: "/opt/traycer/bin/codex",
+          version: "1.0.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
       envOverrides: [],
       profiles: [
         profile({
@@ -1262,6 +1305,8 @@ function codePasteReauthProviderState(): ProviderCliState {
       token: null,
       codePaste: {},
       terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
     },
   };
 }
@@ -1306,7 +1351,15 @@ function codePasteCreateProviderState(): ProviderCliState {
     ...providerState({
       providerId: "codex",
       selected: { kind: "bundled" },
-      candidates: [],
+      candidates: [
+        {
+          kind: "bundled",
+          path: "/opt/traycer/bin/codex",
+          version: "1.0.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
       envOverrides: [],
       profiles: [
         profile({
@@ -1326,6 +1379,8 @@ function codePasteCreateProviderState(): ProviderCliState {
       token: null,
       codePaste: {},
       terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
     },
   };
 }
@@ -1508,6 +1563,7 @@ describe("<ProvidersSettingsPanel />", () => {
     };
     providerMocks.listResult.isError = false;
     providerMocks.listResult.error = undefined;
+    providerMocks.listResult.refetch.mockClear();
     providerMocks.setSelectionMutate.mockClear();
     providerMocks.setEnabledMutate.mockClear();
     providerMocks.setEnvOverrideMutate.mockClear();
@@ -1868,6 +1924,46 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByText("Reconnecting to the host…")).toBeNull();
     expect(screen.queryByText("Connecting to the remote host…")).toBeNull();
     expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+  });
+
+  it("shows the read-fault copy and a Retry action instead of the generic card on a provider-settings-unreadable rejection (H9)", () => {
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = {
+      message: `${PROVIDER_SETTINGS_UNREADABLE_MESSAGE_PREFIX}: EIO reading config/provider-overrides.json`,
+      code: "RPC_ERROR",
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeDefined();
+    expect(screen.queryByText(/may need to be updated/)).toBeNull();
+    const retryButton = screen.getByRole("button", { name: "Retry" });
+    expect(retryButton).toBeDefined();
+
+    fireEvent.click(retryButton);
+    expect(providerMocks.listResult.refetch).toHaveBeenCalled();
+  });
+
+  it("still shows the generic 'host may need to be updated' card for an unrelated providers.list rejection", () => {
+    providerMocks.listResult.isError = true;
+    providerMocks.listResult.error = {
+      message: "secret-token-should-never-render",
+      code: "RPC_ERROR",
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(/Couldn't load provider state/)).toBeDefined();
+    expect(screen.queryByText(PROVIDER_SETTINGS_UNREADABLE_COPY)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("lists OpenCode CLI candidates for Traycer and mutates Traycer selection", () => {
@@ -2977,6 +3073,77 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeNull();
   });
 
+  it("links blocked profile sign-in to CLI setup without repeating its progress", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        {
+          ...providerState({
+            providerId: "codex",
+            selected: { kind: "bundled" },
+            candidates: [
+              {
+                kind: "bundled",
+                path: "",
+                version: null,
+                available: false,
+                versionPending: false,
+              },
+            ],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+            profiles: [
+              profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: null,
+                tier: null,
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+          availabilityPending: false,
+          managedInstallState: { status: "downloading", percent: 100 },
+        },
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    expect(
+      screen.getByText("Sign-in is unavailable until CLI setup is complete."),
+    ).toBeDefined();
+    expect(screen.queryByText("Preparing Codex… 100%")).toBeNull();
+    expect(screen.queryByText("Installing · 100%")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "CLI & Args" }));
+
+    expect(
+      screen
+        .getByRole("tab", { name: "CLI & Args" })
+        .getAttribute("data-state"),
+    ).toBe("active");
+    expect(
+      screen.getByRole("progressbar", { name: "Installing · 100%" }),
+    ).toBeDefined();
+  });
+
   it("uses the shared profile switcher and combined refresh when only the terminal profile exists", async () => {
     providerMocks.listResult.data = {
       providers: [
@@ -3004,6 +3171,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3119,7 +3288,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -3139,6 +3316,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3191,6 +3370,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
   });
 
@@ -3306,6 +3486,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3395,6 +3577,8 @@ describe("<ProvidersSettingsPanel />", () => {
         token: null,
         codePaste: null,
         terminalLogin: null,
+        remoteSafe: null,
+        selfOpensBrowser: null,
       },
     };
     const renderSection = (hostId: string): ReactNode => (
@@ -3404,7 +3588,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
-          signInUnavailableHint={null}
+          onOpenCliSettings={() => undefined}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}
@@ -3450,7 +3634,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profileWithAccent(
@@ -3473,6 +3665,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3743,14 +3937,22 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByText("alice@domain.com")).toBeNull();
   });
 
-  it("starts a managed-profile login then awaits the returned profile id", () => {
+  it("starts a managed-profile login then awaits the returned profile id", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -3770,6 +3972,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3791,13 +3995,17 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
-    startOptions.onSuccess({
-      url: "https://login.example.test",
-      started: true,
-      profileId: "managed-1",
+    await act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+      return Promise.resolve();
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
@@ -3808,14 +4016,22 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
-  it("does not render the paste field until the flow reaches waiting (fixup review finding 2)", () => {
+  it("does not render the paste field until the flow reaches waiting (fixup review finding 2)", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -3835,6 +4051,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: {},
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3857,26 +4075,35 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByLabelText("Paste the code")).toBeNull();
 
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     // Now `waiting` - the field appears.
     expect(screen.getByLabelText("Paste the code")).toBeDefined();
   });
 
-  it("does not resubmit when Enter is pressed after an auto-submitted paste locks the field (fixup review finding 4)", () => {
+  it("does not resubmit when Enter is pressed after an auto-submitted paste locks the field (fixup review finding 4)", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -3896,6 +4123,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: {},
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3912,12 +4141,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const input = screen.getByLabelText("Paste the code");
@@ -3955,7 +4185,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -3975,6 +4213,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: {},
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -3991,12 +4231,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -4017,14 +4258,22 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.touchLoginReset).toHaveBeenCalledTimes(2);
   });
 
-  it("locks the field while submitting, then shows a verifying header once the relay is accepted and the exchange is still pending (statefulness fixup)", () => {
+  it("locks the field while submitting, then shows a verifying header once the relay is accepted and the exchange is still pending (statefulness fixup)", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -4044,6 +4293,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: {},
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -4060,12 +4311,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const input = screen.getByLabelText("Paste the code");
@@ -4115,7 +4367,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).not.toHaveBeenCalled();
   });
 
-  it("keeps cancellation and dismissal available when no login child accepted the code", () => {
+  it("keeps cancellation and dismissal available when no login child accepted the code", async () => {
     providerMocks.listResult.data = {
       providers: [codePasteCreateProviderState()],
     };
@@ -4130,12 +4382,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     fireEvent.paste(screen.getByLabelText("Paste the code"), {
@@ -4184,12 +4437,13 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const input = screen.getByLabelText("Paste the code");
@@ -4257,12 +4511,13 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const input = screen.getByLabelText("Paste the code");
@@ -4328,16 +4583,18 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
     // From here on the re-poll's timer is the only thing being waited on -
     // drive it deterministically instead of sleeping out the real delay.
     vi.useFakeTimers();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "ambient",
       });
+      return Promise.resolve();
     });
 
     // The sign-in landed, but the host assembled the response right after
@@ -4420,12 +4677,13 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     const [, startOptions] = firstStartLoginCall();
     vi.useFakeTimers();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "ambient",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -4452,6 +4710,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "ambient",
+      holderId: null,
     });
 
     act(() => {
@@ -4490,12 +4749,13 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     const [, startOptions] = firstStartLoginCall();
     vi.useFakeTimers();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "ambient",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -4551,12 +4811,13 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     const [, startOptions] = firstStartLoginCall();
     vi.useFakeTimers();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "ambient",
       });
+      return Promise.resolve();
     });
 
     // The initial await plus every budgeted re-poll keeps reporting the
@@ -4609,12 +4870,13 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const input = screen.getByLabelText("Paste the code");
@@ -4640,26 +4902,35 @@ describe("<ProvidersSettingsPanel />", () => {
     if (retryCall === undefined) {
       throw new Error("Expected retry start login call.");
     }
-    act(() => {
+    await act(() => {
       retryCall[1].onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     expect(
       screen.getByText("That sign-in link expired - a new one was generated."),
     ).toBeDefined();
   });
-  it("does not resolve to identity when the resolved reauth profile row exists but is not authenticated (fixup settlement join, finding 2)", () => {
+  it("does not resolve to identity when the resolved reauth profile row exists but is not authenticated (fixup settlement join, finding 2)", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -4689,6 +4960,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -4706,12 +4979,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -4743,14 +5017,22 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
   });
 
-  it("gates the add-profile failure report action on capability and reports only fixed generic context", () => {
+  it("gates the add-profile failure report action on capability and reports only fixed generic context", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -4770,6 +5052,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -4787,7 +5071,10 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
-    act(() => startOptions.onError());
+    await act(() => {
+      startOptions.onError();
+      return Promise.resolve();
+    });
 
     screen.getByText(
       "Sign-in did not start. You can retry when the provider is available.",
@@ -4816,7 +5103,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -4836,6 +5131,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -4853,12 +5150,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
     const [, awaitOptions] = firstAwaitLoginCall();
     act(() => awaitOptions.onError());
@@ -4883,12 +5181,13 @@ describe("<ProvidersSettingsPanel />", () => {
     if (retryStart === undefined) {
       throw new Error("Expected a second start login call.");
     }
-    act(() => {
+    await act(() => {
       retryStart[1].onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-2",
       });
+      return Promise.resolve();
     });
     const retryAwait = providerMocks.awaitLoginMutate.mock.calls.at(1);
     if (retryAwait === undefined) {
@@ -4913,7 +5212,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [createdProfile],
           }),
@@ -4922,6 +5229,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -4946,14 +5255,22 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
   });
 
-  it("keeps a cancelled profile creation mounted until its minted id is cleaned up", () => {
+  it("keeps a cancelled profile creation mounted until its minted id is cleaned up", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -4973,6 +5290,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -4996,18 +5315,20 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByRole("dialog")).toBeDefined();
     expect(screen.getByText("Cancelling sign-in")).toBeDefined();
 
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-pending",
       });
+      return Promise.resolve();
     });
 
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-pending",
+      holderId: null,
     });
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -5019,7 +5340,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5049,6 +5378,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5076,15 +5407,17 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
     expect(screen.queryByText("Switching account")).toBeNull();
 
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
@@ -5097,14 +5430,30 @@ describe("<ProvidersSettingsPanel />", () => {
         providerState({
           providerId: "codex",
           selected: { kind: "bundled" },
-          candidates: [],
+          candidates: [
+            {
+              kind: "bundled",
+              path: "/opt/traycer/bin/codex",
+              version: "1.0.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
           envOverrides: [],
         }),
         {
           ...providerState({
             providerId: "claude-code",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5134,6 +5483,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5179,6 +5530,7 @@ describe("<ProvidersSettingsPanel />", () => {
           providerId: "claude-code",
           profileId: "work-profile",
           createProfile: null,
+          holderId: null,
         },
         expect.anything(),
       );
@@ -5257,7 +5609,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5287,6 +5647,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5323,14 +5685,16 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
@@ -5390,6 +5754,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -5397,14 +5762,16 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
 
-    act(() => {
+    await act(() => {
       retryCall[1].onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.awaitLoginMutate).toHaveBeenCalledTimes(1);
@@ -5417,7 +5784,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5447,6 +5822,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5473,12 +5850,13 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeDefined();
 
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -5538,12 +5916,13 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -5620,12 +5999,13 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -5659,7 +6039,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5689,6 +6077,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5712,12 +6102,13 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -5761,7 +6152,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5791,6 +6190,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5812,12 +6213,13 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -5888,6 +6290,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5914,7 +6318,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "claude-code",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5934,6 +6346,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -5966,6 +6380,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
@@ -5976,7 +6391,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "claude-code",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -5996,6 +6419,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6019,6 +6444,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+      holderId: null,
     });
   });
 
@@ -6029,7 +6455,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -6049,6 +6483,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6068,10 +6504,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
-    startOptions.onSuccess({
-      url: "https://login.example.test",
-      started: true,
-      profileId: "managed-1",
+    await act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -6118,10 +6557,11 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
-  it("holds on a post-auth naming step when the new profile shares an email with an existing one", () => {
+  it("holds on a post-auth naming step when the new profile shares an email with an existing one", async () => {
     const ambient = profile({
       profileId: "ambient",
       kind: "ambient",
@@ -6148,7 +6588,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [ambient],
           }),
@@ -6157,6 +6605,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6176,12 +6626,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
     const [, awaitOptions] = firstAwaitLoginCall();
     act(() => {
@@ -6244,7 +6695,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [ambient],
           }),
@@ -6253,6 +6712,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6272,12 +6733,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
     const [, awaitOptions] = firstAwaitLoginCall();
     act(() => {
@@ -6331,7 +6793,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [ambient],
           }),
@@ -6340,6 +6810,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6358,12 +6830,13 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
     const [, awaitOptions] = firstAwaitLoginCall();
     act(() => {
@@ -6444,7 +6917,15 @@ describe("<ProvidersSettingsPanel />", () => {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [ambient],
           }),
@@ -6453,6 +6934,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6609,14 +7092,22 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(typeof removeOptions.onSuccess).toBe("function");
   });
 
-  it("automatically finalizes the chosen color after account linking", () => {
+  it("automatically finalizes the chosen color after account linking", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -6636,6 +7127,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6666,15 +7159,17 @@ describe("<ProvidersSettingsPanel />", () => {
         label: "Work",
         shareSkillsAndPlugins: false,
       },
+      holderId: null,
     });
 
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
 
     const [, awaitOptions] = firstAwaitLoginCall();
@@ -6718,14 +7213,22 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
   });
 
-  it("closes immediately when the host already assigned the chosen color", () => {
+  it("closes immediately when the host already assigned the chosen color", async () => {
     providerMocks.listResult.data = {
       providers: [
         {
           ...providerState({
             providerId: "codex",
             selected: { kind: "bundled" },
-            candidates: [],
+            candidates: [
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/codex",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
             envOverrides: [],
             profiles: [
               profile({
@@ -6745,6 +7248,8 @@ describe("<ProvidersSettingsPanel />", () => {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           },
         },
       ],
@@ -6762,12 +7267,13 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
     const [, startOptions] = firstStartLoginCall();
-    act(() => {
+    await act(() => {
       startOptions.onSuccess({
         url: "https://login.example.test",
         started: true,
         profileId: "managed-1",
       });
+      return Promise.resolve();
     });
     const [, awaitOptions] = firstAwaitLoginCall();
     act(() => {

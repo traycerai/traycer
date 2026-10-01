@@ -81,10 +81,15 @@ const HOST_STAGING_SUBDIR = "install-staging";
 export const HOST_DOWNLOAD_CACHE_SUBDIR = "download-cache";
 const CLI_LOG_FILENAME = "cli.log";
 const HOST_LOG_FILENAME = "host.log";
-// Single retained generation of the host log. One is enough: it exists so the
-// PREVIOUS session's trail survives a restart or a runtime purge, not to build
-// an archive (see `host-log-rotation.ts`).
+// The two retained generations of the host log. They are the same two files
+// the host's own in-process rotator writes (`traycer-host/src/bootstrap/
+// host-logger.ts`: `host.log` -> `host.log.1` -> `host.log.2`, oldest
+// deleted), so the CLI's start-time and purge rotations shift the same set
+// instead of overwriting the host's `.1` and leaving its `.2` stale (see
+// `host-log-rotation.ts`). Two is the whole design - a trail across the
+// previous sessions, not an archive.
 const HOST_LOG_BACKUP_FILENAME = "host.log.1";
+const HOST_LOG_OLDEST_BACKUP_FILENAME = "host.log.2";
 const HOST_PID_FILENAME = "pid.json";
 // The host's delegated-credential store, under the host runtime root. Spelled
 // out here rather than imported: the host owns these names, and this repo has
@@ -233,6 +238,11 @@ export function hostLogBackupPath(
   environment: Environment | undefined,
 ): string {
   return join(hostHomeDir(environment), HOST_LOG_BACKUP_FILENAME);
+}
+export function hostLogOldestBackupPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_LOG_OLDEST_BACKUP_FILENAME);
 }
 /**
  * The host's OWN delegated credential - the one a connected owner client mints

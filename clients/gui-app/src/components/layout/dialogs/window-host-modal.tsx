@@ -127,7 +127,7 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
           data-testid="window-host-modal-overlay"
-          className="fixed inset-0 isolate z-60 bg-black/40 duration-100 data-open:animate-in data-open:fade-in-0"
+          className="fixed inset-0 isolate z-60 bg-black/40 transition-opacity duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"

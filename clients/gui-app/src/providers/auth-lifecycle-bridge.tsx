@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useRef, type ReactNode } from "react";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { disposingForIdentityTeardown } from "@/stores/chats/chat-session-store";
@@ -14,6 +14,7 @@ import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-sto
 import { clearProfileCopyObservations } from "@/hooks/providers/profile-copy/profile-copy-observations";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
+import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -40,10 +41,18 @@ export function EpicSessionLifecycleBridge(
 ): ReactNode {
   const status = useAuthStore((state) => state.status);
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const lastSignedInUserId = useRef<string | null>(null);
 
   const onTransition = useCallback((transition: AuthIdentityTransition) => {
-    if (transition.kind !== "signedOut" && transition.kind !== "userSwitched") {
+    if (transition.kind === "signedIn") {
+      lastSignedInUserId.current = transition.userId;
       return;
+    }
+    const outgoingIdentity = lastSignedInUserId.current;
+    if (transition.kind === "userSwitched") {
+      lastSignedInUserId.current = transition.userId;
+    } else {
+      lastSignedInUserId.current = null;
     }
     // The whole teardown runs with the cross-account prompt handoff
     // suppressed. A disposing chat session otherwise writes its unrecorded
@@ -121,6 +130,10 @@ export function EpicSessionLifecycleBridge(
       // to this boundary only: a chat or epic closing must NOT take it down,
       // because the text it holds is still the user's only copy.
       dismissRetainedDraftToasts();
+      // Chat/artifact blob-cache keys omit the account. Drop in-memory
+      // maps so remount grace cannot join the outgoing fetch, then drop
+      // the outgoing IndexedDB partition.
+      void clearImagePathForIdentityTeardown(outgoingIdentity);
     });
   }, []);
 

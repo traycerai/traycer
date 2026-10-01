@@ -45,7 +45,7 @@ interface TuiHeaderFields {
  * live GUI harness catalog, with a raw-slug fallback whenever the catalog
  * lacks the entry (or the owner's host cannot be resolved at all).
  *
- * It renders only while the hover card is open (mounted by `HoverCardContent`,
+ * It renders only while the hover card is open (mounted by `HoverCard`,
  * which has no `forceMount`), so nothing here can fire before open: the catalog
  * observer attaches on open and detaches on close.
  *
@@ -54,15 +54,12 @@ interface TuiHeaderFields {
  * live provider list their launch/fork surfaces use. The catalog is NOT free,
  * though: the harnesses query carries a finite 15-min staleTime, so opening
  * the card on a stale availability query can refetch it - on the OWNER's host.
- * Models are narrower still: the catalog read is `"cached-only"` (the
- * all-harness `listModels` fan-out belongs to the app-load fill alone - per
- * that module's header, a cold fan-out is one spawned provider server per rail
+ * Models are narrower still: the catalog read is `"cached-only"` (a cold
+ * all-harness `listModels` fan-out is one spawned provider server per rail
  * entry), and the ONE harness this card actually labels - the subject tuple's -
- * is warmed by a targeted `useGuiHarnessModelsWarmup`. For an owner on the
- * default host that is the steady state as before: the app-load prefetcher
- * filled the same host-id-keyed cache slot and models are
- * `staleTime: Infinity`, so an open renders straight from cache. For an owner
- * on another host the first open fetches that host's harness list and the
+ * is warmed by a targeted `useGuiHarnessModelsWarmup`. When that slot is
+ * already warm, models are `staleTime: Infinity` and an open renders from
+ * cache. Otherwise the first open fetches that host's harness list and the
  * subject harness's models cold - the same self-sufficiency trade the
  * provider-list read below already makes, at the cost of one provider rather
  * than the fleet.
@@ -124,7 +121,7 @@ export function WorktreeOwnerSettingsHeader(props: {
   // being labeled is what THAT host runs, so a model only that host offers
   // must not fall back to a raw slug just because the default host's catalog
   // lacks it. On the common path (owner on the default host) this is the same
-  // cache slot the app-load prefetcher warmed - host-id-keyed, so nothing
+  // host-id-keyed cache slot the composer's targeted query fills, so nothing
   // refetches. A `null` client (owner's host missing from the directory,
   // signed out) disables the read and labels fall back to raw slugs - honest,
   // rather than borrowing another host's catalog under this host's name.
@@ -413,7 +410,7 @@ function OwnerSettingsHarnessMark(props: {
 /** Terminal-agent mode in the same icon + label grammar as chat permission. */
 /**
  * Permission mode with the icon the rest of the app already uses for it -
- * `ShieldCheck` / `FileCheck2` / `Gavel` / `UnlockKeyhole`, resolved through
+ * `Eye` / `FilePen` / `ShieldCheck` / `ShieldOff`, resolved through
  * the shared `findPermissionOption` table rather than chosen here.
  *
  * This row previously hardcoded a closed padlock for every mode, so the least

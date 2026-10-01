@@ -1,3 +1,7 @@
+import {
+  browserSearchUrl,
+  type BrowserSearchEngine,
+} from "@/lib/browser-view/browser-search";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
 
 export const BROWSER_TAB_AGENT_ACTIVITY_MS = 400;
@@ -195,21 +199,48 @@ export function parseHttpUrl(url: string): URL | null {
 
 /**
  * What the address bar does with what the user typed: a bare local address
- * gets `http://`, anything else with no scheme gets `https://`, an explicit
- * scheme is left alone, and an empty box means the blank page.
+ * gets `http://`, a recognizable host gets `https://`, and other text searches.
+ * Explicit schemes are left to the navigation policy; empty input stays blank.
  */
-export function normalizeBrowserAddressInput(input: string): string {
+export function normalizeBrowserAddressInput(
+  input: string,
+  searchEngine: BrowserSearchEngine,
+): string {
   const trimmed = input.trim();
   if (trimmed.length === 0) return "about:blank";
+  // Search operators resemble URI schemes but belong to the search engine.
+  if (
+    /^(?:site|filetype|ext|intitle|allintitle|inurl|allinurl|intext|allintext|before|after):/i.test(
+      trimmed,
+    )
+  ) {
+    return browserSearchUrl(trimmed, searchEngine);
+  }
   // Scheme FIRST: `https://app.localhost:3000` already says what it is, and
   // the local-address heuristic below would otherwise prefix a second scheme
   // onto it (C7). The negative lookahead is what keeps `localhost:3000` out of
   // this branch - a colon followed by digits is a port, not a scheme.
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d)/.test(trimmed)) return trimmed;
-  if (looksLikeLocalHttpAddressWithoutScheme(trimmed)) {
+  if (!/\s/.test(trimmed) && looksLikeLocalHttpAddressWithoutScheme(trimmed)) {
     return `http://${trimmed}`;
   }
-  return `https://${trimmed}`;
+  const candidate = /\s/.test(trimmed)
+    ? null
+    : parseHttpUrl(`https://${trimmed}`);
+  const authority = trimmed.split(/[/?#]/, 1)[0] ?? "";
+  // Dotted hosts, IP literals, and explicit host:port addresses navigate.
+  // Single words and phrases search; do not probe the network to guess.
+  if (
+    candidate !== null &&
+    candidate.username === "" &&
+    candidate.password === "" &&
+    (authority.includes(".") ||
+      authority.startsWith("[") ||
+      /:\d+$/.test(authority))
+  ) {
+    return `https://${trimmed}`;
+  }
+  return browserSearchUrl(trimmed, searchEngine);
 }
 
 function looksLikeLocalHttpAddressWithoutScheme(value: string): boolean {
@@ -220,7 +251,7 @@ function looksLikeLocalHttpAddressWithoutScheme(value: string): boolean {
   const authority = lower.split(/[/?#]/, 1)[0] ?? "";
   const hostname = authority.replace(/:\d+$/, "");
   return (
-    lower === "localhost" ||
+    hostname === "localhost" ||
     lower.startsWith("localhost:") ||
     lower.startsWith("localhost/") ||
     hostname.endsWith(".localhost") ||

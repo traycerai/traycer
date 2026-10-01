@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { HoverCard } from "@/components/ui/hover-card";
 import {
   Tooltip,
   TooltipContent,
@@ -18,14 +14,20 @@ afterEach(cleanup);
 describe("hover-preview surface", () => {
   it("renders the HoverCard preview as a popover card, not the inverted label chip", () => {
     render(
-      <HoverCard open>
-        <HoverCardTrigger asChild>
-          <button type="button">Trigger</button>
-        </HoverCardTrigger>
-        <HoverCardContent side="bottom">
-          <span data-testid="hover-body">Body</span>
-        </HoverCardContent>
-      </HoverCard>,
+      <HoverCard
+        trigger={<button type="button">Trigger</button>}
+        content={<span data-testid="hover-body">Body</span>}
+        appearance="preview"
+        semantics={{ role: "tooltip" }}
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
     );
     const content = document.querySelector<HTMLElement>(
       '[data-slot="hover-card-content"]',
@@ -45,20 +47,69 @@ describe("hover-preview surface", () => {
 
   it("renders HoverCard content without a visually-hidden accessible clone, so a focusable action is not duplicated", () => {
     render(
-      <HoverCard open>
-        <HoverCardTrigger asChild>
-          <button type="button">Trigger</button>
-        </HoverCardTrigger>
-        <HoverCardContent side="bottom">
+      <HoverCard
+        trigger={<button type="button">Trigger</button>}
+        content={
           <button type="button" data-testid="hover-action">
             Copy
           </button>
-        </HoverCardContent>
-      </HoverCard>,
+        }
+        appearance="preview"
+        semantics={{ role: "dialog", label: "Copy" }}
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
     );
     // A Radix Tooltip mounts a hidden a11y clone of its children (two copies);
     // HoverCard does not - the single copy is why a copy-path button lives
     // safely on this surface but not on a Tooltip.
+    expect(screen.getAllByTestId("hover-action")).toHaveLength(1);
+  });
+
+  it("renders the appearance='tooltip' HoverCard variant on the inverted chip surface, tagged for CSS opt-out, still without a duplicate accessible clone", () => {
+    render(
+      <HoverCard
+        trigger={<button type="button">Trigger</button>}
+        content={
+          <button type="button" data-testid="hover-action">
+            Copy
+          </button>
+        }
+        appearance="tooltip"
+        semantics={{ role: "dialog", label: "Copy" }}
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        enabled
+        open
+        onOpenChange={null}
+        testId={null}
+        className={null}
+      />,
+    );
+    const content = document.querySelector<HTMLElement>(
+      '[data-slot="hover-card-content"]',
+    );
+    if (content === null) throw new Error("Hover card content did not render");
+    // `data-appearance` is what lets a path disclosure's content opt out of
+    // `theme-surfaces.css`'s generic popover fill - classes alone are
+    // overridden by it, so the attribute itself is the contract, not just a
+    // debugging label.
+    expect(content.getAttribute("data-appearance")).toBe("tooltip");
+    expect(content.getAttribute("data-state")).toBe("open");
+    const tokens = content.className.split(/\s+/);
+    expect(tokens).toContain("bg-foreground");
+    expect(tokens).toContain("text-background");
+    expect(tokens).not.toContain("bg-popover");
+    // A path disclosure still needs its copy-path action reachable exactly
+    // once, the same guarantee the default (`appearance="preview"`) surface
+    // gives above - only the theme changed here, not the mount count.
     expect(screen.getAllByTestId("hover-action")).toHaveLength(1);
   });
 

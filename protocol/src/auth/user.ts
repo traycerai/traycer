@@ -38,7 +38,20 @@ import type {
   User,
 } from "./registry";
 
-export type ProviderType = "GITHUB" | "GOOGLE" | "GITLAB" | "EMAIL";
+/**
+ * Derived from the registered record, not restated.
+ *
+ * This union used to be hand-written, which meant the schema could gain a
+ * provider (`APPLE`, record major 2) while the type every consumer reads
+ * silently stayed at four values. Deriving it makes the record the single
+ * authority, and a future major's new value arrives here for free.
+ *
+ * `User` is the LATEST installed major, so this is the widest set a caller
+ * may have to handle. Code that must speak the frozen major-1 shape reads
+ * `ValueOf<typeof userRecordV100>["providerType"]` instead, and gets there
+ * through the registry's downgrade bridge rather than by narrowing.
+ */
+export type ProviderType = User["providerType"];
 
 export type SeatAllocation = "MANUAL" | "AUTO_ALLOCATION";
 

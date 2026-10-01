@@ -1,4 +1,14 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  type FileHandle,
+} from "node:fs/promises";
+import { join } from "node:path";
 import { log } from "../app/logger";
 import {
   CLI_INVOCATION_PROBE_TIMEOUT_MS,
@@ -571,6 +581,210 @@ export async function streamBundledTraycerCliJson<T>(
 ): Promise<StreamTraycerCliResult<T>> {
   const inv = await resolveBundledTraycerCliInvocation();
   return streamTraycerCliJsonWithInvocation(inv, opts);
+}
+
+/**
+ * How many detached runs' output files are kept per stem. Enough to diagnose
+ * the last few quits from a support bundle; the directory never grows past
+ * it, because every spawn prunes before it writes.
+ */
+const DETACHED_OUTPUT_RETENTION = 10;
+
+export interface DetachedTraycerCliOptions {
+  readonly args: readonly string[];
+  /** Directory the child's stdout/stderr files go to; created if missing. */
+  readonly outputDir: string;
+  /** File-name stem for this command's runs (e.g. `stop`). */
+  readonly outputStem: string;
+}
+
+export interface DetachedTraycerCliRun<T> {
+  readonly pid: number | null;
+  readonly stdoutPath: string;
+  readonly stderrPath: string;
+  /**
+   * Settles when the child exits, with the unwrapped `result.data` - or
+   * rejects with a `TraycerCliError` exactly where `runBundledTraycerCliJson`
+   * would, including the CLI's own error `code`. It never settles if this
+   * process exits first, which is the point: the child does not need it to.
+   */
+  readonly completion: Promise<T>;
+}
+
+/**
+ * Spawn a bundled-CLI command that must be able to OUTLIVE this process: its
+ * own process group (`detached`), not held open by this process (`unref`),
+ * and stdout/stderr written to files rather than pipes. A piped child dies on
+ * EPIPE, or blocks on a full pipe, the moment the app that spawned it exits;
+ * a file-backed one completes and leaves its NDJSON result on disk.
+ *
+ * For quit-time work only (the lifecycle stop the quit transaction admits
+ * before its deadline). Everything the app waits on uses the piped wrappers
+ * above, which also stream progress.
+ */
+export async function spawnDetachedBundledTraycerCliJson<T>(
+  opts: DetachedTraycerCliOptions,
+): Promise<DetachedTraycerCliRun<T>> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  const augmentedArgs = ensureJsonFlag(opts.args);
+  await mkdir(opts.outputDir, { recursive: true });
+  await pruneDetachedOutput(opts.outputDir, opts.outputStem);
+  const runId = `${opts.outputStem}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const stdoutPath = join(opts.outputDir, `${runId}.ndjson`);
+  const stderrPath = join(opts.outputDir, `${runId}.log`);
+  const { child, exited } = await spawnWithFileStdio(
+    inv.command,
+    [...inv.args, ...augmentedArgs],
+    stdoutPath,
+    stderrPath,
+  );
+  child.unref();
+  const completion = exited.then((exit): Promise<T> => {
+    if (exit.kind === "error") {
+      return Promise.reject(
+        new TraycerCliError(
+          {
+            message: exit.message,
+            code: null,
+            details: null,
+            exitCode: null,
+            stderrTail: "",
+          },
+          null,
+        ),
+      );
+    }
+    return readDetachedOutcome<T>({
+      stdoutPath,
+      stderrPath,
+      exitCode: exit.exitCode,
+      signal: exit.signal,
+      augmentedArgs,
+    });
+  });
+  return { pid: child.pid ?? null, stdoutPath, stderrPath, completion };
+}
+
+type DetachedChildExit =
+  | {
+      readonly kind: "exit";
+      readonly exitCode: number | null;
+      readonly signal: NodeJS.Signals | null;
+    }
+  | { readonly kind: "error"; readonly message: string };
+
+/**
+ * Spawn with stdout/stderr on freshly opened files. The exit listeners are
+ * attached in the same synchronous stretch as `spawn`, before any `await`:
+ * a spawn failure (`ENOENT`) is emitted as an `error` event on the next tick,
+ * and an `error` with no listener throws out of the emitter.
+ */
+async function spawnWithFileStdio(
+  command: string,
+  args: readonly string[],
+  stdoutPath: string,
+  stderrPath: string,
+): Promise<{
+  readonly child: ChildProcess;
+  readonly exited: Promise<DetachedChildExit>;
+}> {
+  const stdoutFile: FileHandle = await open(stdoutPath, "w", 0o600);
+  try {
+    const stderrFile: FileHandle = await open(stderrPath, "w", 0o600);
+    try {
+      const child = spawn(command, args, {
+        env: process.env,
+        detached: true,
+        stdio: ["ignore", stdoutFile.fd, stderrFile.fd],
+        windowsHide: true,
+      });
+      const exited = new Promise<DetachedChildExit>((resolve) => {
+        child.on("error", (err) => {
+          resolve({ kind: "error", message: err.message });
+        });
+        child.once("exit", (exitCode, signal) => {
+          resolve({ kind: "exit", exitCode, signal });
+        });
+      });
+      return { child, exited };
+    } finally {
+      // The child holds its own duplicates of both descriptors; ours are
+      // only the means of handing them over.
+      await stderrFile.close().catch(() => undefined);
+    }
+  } finally {
+    await stdoutFile.close().catch(() => undefined);
+  }
+}
+
+async function readDetachedOutcome<T>(input: {
+  readonly stdoutPath: string;
+  readonly stderrPath: string;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly augmentedArgs: readonly string[];
+}): Promise<T> {
+  const stdout = await readFile(input.stdoutPath, "utf8").catch(() => "");
+  const stderrTail = (
+    await readFile(input.stderrPath, "utf8").catch(() => "")
+  ).slice(-2048);
+  const envelope = extractTerminalEnvelope(stdout, stderrTail);
+  if (envelope instanceof TraycerCliError) {
+    throw new TraycerCliError(
+      {
+        message: envelope.message,
+        code: envelope.code,
+        details: envelope.details,
+        exitCode: input.exitCode,
+        stderrTail,
+      },
+      null,
+    );
+  }
+  if (envelope !== null) {
+    return envelope as T;
+  }
+  const command = input.augmentedArgs.join(" ");
+  const base =
+    input.signal !== null
+      ? `traycer-cli was killed by ${input.signal}: ${command}`
+      : typeof input.exitCode === "number" && input.exitCode !== 0
+        ? `traycer-cli exited with code ${input.exitCode}: ${command}`
+        : `traycer-cli emitted no terminal result for: ${command}`;
+  throw new TraycerCliError(
+    {
+      message: appendStderrSummary(base, stderrTail),
+      code: null,
+      details: null,
+      exitCode: input.exitCode,
+      stderrTail,
+    },
+    null,
+  );
+}
+
+/** Keep only the newest runs for `stem` (minus the one about to be written). */
+async function pruneDetachedOutput(dir: string, stem: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  const runIds = new Set<string>();
+  for (const name of names) {
+    if (!name.startsWith(`${stem}-`)) continue;
+    if (name.endsWith(".ndjson")) runIds.add(name.slice(0, -".ndjson".length));
+    else if (name.endsWith(".log")) runIds.add(name.slice(0, -".log".length));
+  }
+  const ordered = [...runIds].sort();
+  const excess = ordered.length - (DETACHED_OUTPUT_RETENTION - 1);
+  for (const runId of ordered.slice(0, Math.max(0, excess))) {
+    await rm(join(dir, `${runId}.ndjson`), { force: true }).catch(
+      () => undefined,
+    );
+    await rm(join(dir, `${runId}.log`), { force: true }).catch(() => undefined);
+  }
 }
 
 async function streamTraycerCliJsonWithInvocation<T>(

@@ -1,7 +1,6 @@
 import { useCallback, type ReactNode } from "react";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useOpenLink } from "@/lib/links/open-link";
 import type { ProfileCopyLoginChallenge } from "@/lib/profile-copy/profile-copy-model";
 import type { ProfileCopyNames } from "@/lib/profile-copy/profile-copy-presentation";
@@ -10,10 +9,7 @@ import {
   WaitingStepUrlActions,
 } from "../add-provider-profile-dialog";
 import { CodePasteField } from "../code-paste-field";
-import { handleSignInLinkCopyError } from "../provider-sign-in-link";
 import type { ProfileImportLoginFlow } from "./use-profile-import-login-flow";
-
-const COPY_CONFIRMATION_RESET_MS = 1600;
 
 function challengeGuidance(
   challenge: ProfileCopyLoginChallenge | null,
@@ -56,12 +52,6 @@ export function ProfileCopyImportLoginStep(props: {
     },
     [openLink],
   );
-  const { copied, copy } = useClipboardCopy({
-    resetMs: COPY_CONFIRMATION_RESET_MS,
-    onSuccess: null,
-    onError: handleSignInLinkCopyError,
-  });
-
   if (login.phase.kind === "idle") return null;
   if (login.phase.kind === "starting") {
     return (
@@ -108,15 +98,11 @@ export function ProfileCopyImportLoginStep(props: {
       <WaitingStepDeviceCode
         processingCode={processingCode}
         userCode={userCode}
-        copied={copied}
-        copy={copy}
       />
       <WaitingStepUrlActions
         processingCode={processingCode}
         loginUrl={pageUrl}
         autoOpen={false}
-        copied={copied}
-        copy={copy}
         onOpenExternalLink={onOpenExternalLink}
       />
       {login.codePaste.enabled ? (

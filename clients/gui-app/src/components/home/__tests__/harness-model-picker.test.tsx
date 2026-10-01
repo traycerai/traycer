@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import { userEvent } from "@testing-library/user-event";
 import { resetPaneActivationFocusIntentsForTests } from "@/components/epic-canvas/pane-activation";
 
 // The picker's provider-settings gear opens the settings modal through router
@@ -99,6 +108,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { matchDigitAction } from "@/lib/keybindings/dispatch";
 import type {
@@ -114,7 +124,13 @@ import {
   type ProviderCliState,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import { useState, type Key, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useState,
+  type Key,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 interface CatalogHarness extends HarnessOption {
   readonly models: ReadonlyArray<ModelOption>;
@@ -657,7 +673,10 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   },
 }));
 
-import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import {
+  HarnessModelPicker,
+  type HarnessModelPickerEmbedding,
+} from "@/components/home/pickers/harness-model-picker";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import {
   PaneActivationFocusIntentContext,
@@ -674,14 +693,16 @@ import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store"
 import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
+import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
@@ -842,7 +863,18 @@ function providerCliStateWithProfiles(input: {
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
-    candidates: [],
+    // Capable by default: a runnable candidate, so `providerHostBlock`
+    // reports null unless a test explicitly narrows `candidates` to exercise
+    // the CLI-missing/checking gate.
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/resources/providers/claude/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
     auth: {
       status: "authenticated",
       badgeText: null,
@@ -864,6 +896,8 @@ function providerCliStateWithProfiles(input: {
             token: null,
             codePaste: null,
             terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
           }
         : input.loginCapability,
     availabilityPending: false,
@@ -880,6 +914,10 @@ function providerCliStateWithProfiles(input: {
     profiles: input.profiles,
   };
 }
+
+const PICKER_BODY_HEIGHT =
+  "h-[min(var(--radix-popover-content-available-height),23rem)]";
+const WIDTH_CLASS = /w-\[min\(86vw,30rem\)\]/;
 
 function codexModels(): ReadonlyArray<ModelOption> {
   return [
@@ -996,6 +1034,8 @@ interface RenderPickerInput {
     string | null,
     ProfileRowAdmission
   > | null;
+  readonly embedding?: HarnessModelPickerEmbedding | null;
+  readonly hostId?: string | null;
 }
 
 interface PickerHarness {
@@ -1012,7 +1052,12 @@ interface PickerHarness {
 function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
   const resolvedInput = input ?? {};
   const selection = resolvedInput.selection ?? defaultSelection();
+  const hostId =
+    resolvedInput.hostId === undefined ? TEST_HOST_ID : resolvedInput.hostId;
+  const embedding = resolvedInput.embedding ?? null;
   const store = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
     seedKey: "picker-test",
     values: {
       permission: "supervised",
@@ -1023,11 +1068,11 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
     chatLineCarriesAutoMode: null,
-    hostId: TEST_HOST_ID,
+    hostId,
   });
   if (resolvedInput.storeModels !== undefined) {
     store.getState().setCatalog({
-      hostId: TEST_HOST_ID,
+      hostId,
       harnesses: undefined,
       modelsHarnessId: selection.harnessId,
       models: resolvedInput.storeModels,
@@ -1071,6 +1116,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           runTargetHostId={resolvedInput.createProfileHostId ?? null}
           profileAdmission={resolvedInput.profileAdmission ?? null}
           terminalLoginSurface={null}
+          embedding={embedding}
         />
       </TooltipProvider>
     </SurfaceActivityProvider>
@@ -1158,7 +1204,7 @@ describe("<HarnessModelPicker />", () => {
     // seeded record can't leak between tests.
     useComposerHarnessMemoryStore.getState().resetForTests();
     useProviderProfileAddFlowStore.getState().close();
-    useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   afterEach(() => {
@@ -1272,7 +1318,7 @@ describe("<HarnessModelPicker />", () => {
   // that mount this picker follow, so the setting is proven where it is read
   // rather than only on the trigger in isolation.
   it("draws the effort as bars, and spells the position out in the tooltip, when the layout setting asks for bars", async () => {
-    useLayoutStore.getState().setComposerReasoningIndicator("bars");
+    useLayoutStore.getState().setRegionValues("model", { style: "bars" });
     renderPicker({
       selection: {
         harnessId: "codex",
@@ -3599,6 +3645,8 @@ describe("<HarnessModelPicker />", () => {
           token: null,
           codePaste: null,
           terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
         },
         profiles: claudeProfilesForDropdown(),
       }),
@@ -3626,6 +3674,8 @@ describe("<HarnessModelPicker />", () => {
           token: null,
           codePaste: null,
           terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
         },
         profiles: claudeProfilesForDropdown(),
       }),
@@ -4018,6 +4068,59 @@ describe("<HarnessModelPicker />", () => {
     expect(openSettingsMock).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
+  });
+
+  // The end-to-end half of the Set up CLI destination, through the REAL
+  // `openProviderSettings`. The seam is asserted in
+  // `pickers/__tests__/harness-model-picker-empty-setup-cta.test.tsx`, but with
+  // a stand-in callback that honours the argument by construction - so a
+  // regression INSIDE this callback (the unconditional `setFocusTab("usage")`
+  // this replaced) would leave that file green, and the sibling test below,
+  // which asserts the "usage" destination, would stay green by definition.
+  // Only a click through the real picker can tell the two apart.
+  it("sends Set up CLI to General through the picker's own settings callback", async () => {
+    // Built on OpenRouter rather than OpenCode because an unavailable provider
+    // is only kept in the rail when it takes an API key - which is what the
+    // sibling test above is named for. An unavailable provider without
+    // `requiresApiKey` is filtered out, so its CTA is unreachable from here and
+    // the row can only be tested at the component level.
+    //
+    // `unavailableReason` still decides WHICH cta renders: "missing-binary"
+    // is checked before the API-key branch, so this row offers Set up CLI
+    // rather than Add API key even though it takes a key.
+    const missingBinary: HarnessOption = {
+      ...OPENROUTER_HARNESS,
+      error: "The resolver exhausted its candidates.",
+    };
+    queryMock.harnesses = [CODEX_HARNESS, missingBinary];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CODEX_HARNESS, codexModels()),
+      {
+        ...catalogHarness(missingBinary, []),
+        unavailableReason: "missing-binary",
+      },
+    ];
+
+    renderPicker(undefined);
+
+    await openPicker();
+    fireEvent.click(screen.getByRole("tab", { name: "OpenRouter" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set up CLI" }));
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "openrouter",
+      focusTab: "general",
+    });
+    expect(openSettingsMock).toHaveBeenCalledWith({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
   });
 
@@ -4053,6 +4156,9 @@ describe("<HarnessModelPicker />", () => {
     expect(openSettingsMock).toHaveBeenCalledWith({
       section: "providers",
       resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
     });
   });
 
@@ -4134,7 +4240,9 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("renders thinking effort buttons in the picker footer under the list setting", async () => {
-    useLayoutStore.getState().setComposerReasoningFooterControl("list");
+    useLayoutStore
+      .getState()
+      .setRegionValues("model", { reasoningControl: "list" });
     const { reasoningChanges } = renderPicker({
       reasoning: "high",
       storeModels: [
@@ -4161,6 +4269,68 @@ describe("<HarnessModelPicker />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Low" }));
 
     expect(reasoningChanges).toEqual(["low"]);
+  });
+
+  it("lights the slider's max treatment when the sub-leader digit lands on the last stop", async () => {
+    // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
+    // never touching the slider - so this is the route that proves the max
+    // treatment is a reading of the VALUE inside a presented picker, not of
+    // a gesture some handler in the strip happened to see. The sparkle field
+    // is gated on the picker's own `visibleOpen`, which only the real picker
+    // threads through.
+    renderPicker({
+      reasoning: "low",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
+
+    act(() => {
+      fireLeaderDigit(2, "alt", false);
+    });
+
+    const slider = screen.getByTestId("model-reasoning-slider");
+    expect(slider.getAttribute("data-max")).toBe("true");
+    expect(screen.getByTestId("model-reasoning-max-sparkles")).not.toBeNull();
+    expect(screen.getByTestId("model-reasoning-range").className).toContain(
+      "reasoning-effort-max-range",
+    );
+  });
+
+  it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
+    renderPicker({
+      reasoning: "high",
+      storeModels: [
+        model({
+          slug: "gpt-5.5",
+          label: "GPT-5.5",
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low", description: null },
+            { id: "high", label: "High", description: null },
+          ],
+        }),
+      ],
+    });
+
+    await openPicker();
+    act(() => {
+      fireLeaderDigit(1, "alt", false);
+    });
+
+    expect(
+      screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
+    ).toBeNull();
+    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
   });
 
   it("renders fast mode controls in the picker footer", async () => {
@@ -4316,68 +4486,6 @@ describe("<HarnessModelPicker />", () => {
     });
 
     expect(reasoningChanges).toEqual(["high"]);
-  });
-
-  it("lights the slider's max treatment when the sub-leader digit lands on the last stop", async () => {
-    // The ⌥-digit chord reaches the level through `usePickerLeaderScope`,
-    // never touching the slider - so this is the route that proves the max
-    // treatment is a reading of the VALUE inside a presented picker, not of
-    // a gesture some handler in the strip happened to see. The sparkle field
-    // is gated on the picker's own `visibleOpen`, which only the real picker
-    // threads through.
-    renderPicker({
-      reasoning: "low",
-      storeModels: [
-        model({
-          slug: "gpt-5.5",
-          label: "GPT-5.5",
-          supportedReasoningEfforts: [
-            { id: "low", label: "Low", description: null },
-            { id: "high", label: "High", description: null },
-          ],
-        }),
-      ],
-    });
-
-    await openPicker();
-    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
-
-    act(() => {
-      fireLeaderDigit(2, "alt", false);
-    });
-
-    const slider = screen.getByTestId("model-reasoning-slider");
-    expect(slider.getAttribute("data-max")).toBe("true");
-    expect(screen.getByTestId("model-reasoning-max-sparkles")).not.toBeNull();
-    expect(screen.getByTestId("model-reasoning-range").className).toContain(
-      "reasoning-effort-max-range",
-    );
-  });
-
-  it("leaves the slider static when the sub-leader digit lands short of the last stop", async () => {
-    renderPicker({
-      reasoning: "high",
-      storeModels: [
-        model({
-          slug: "gpt-5.5",
-          label: "GPT-5.5",
-          supportedReasoningEfforts: [
-            { id: "low", label: "Low", description: null },
-            { id: "high", label: "High", description: null },
-          ],
-        }),
-      ],
-    });
-
-    await openPicker();
-    act(() => {
-      fireLeaderDigit(1, "alt", false);
-    });
-
-    expect(
-      screen.getByTestId("model-reasoning-slider").getAttribute("data-max"),
-    ).toBeNull();
-    expect(screen.queryByTestId("model-reasoning-max-sparkles")).toBeNull();
   });
 
   it("sets the thinking level on the now-committed model after a rail switch", async () => {
@@ -4788,6 +4896,515 @@ describe("<HarnessModelPicker />", () => {
       expect(document.activeElement).toBe(
         screen.getByRole("button", { name: /^GPT-5\.5/ }),
       );
+    });
+  });
+
+  describe("HarnessModelPicker with an embedding", () => {
+    const CLAUDE_MEMORY_SLUG = "claude-opus-4-7";
+    const CLAUDE_EMBEDDING_SLUG = "claude-sonnet-4-6";
+    const CODEX_MEMORY_SLUG = "gpt-4.1";
+    const CODEX_EMBEDDING_SLUG = "gpt-5.5";
+
+    function embeddingSwitchModel(harnessId: ProviderId): string {
+      if (harnessId === "claude") return CLAUDE_EMBEDDING_SLUG;
+      if (harnessId === "codex") return CODEX_EMBEDDING_SLUG;
+      return "";
+    }
+
+    // Built once per test, so the object stays stable across the memoized
+    // picker's re-renders, as `HarnessModelPickerEmbedding` asks.
+    function judgeEmbedding(input: {
+      readonly selectionMarked: boolean;
+      readonly openRef: RefObject<(() => void) | null>;
+    }): HarnessModelPickerEmbedding {
+      return {
+        trigger: <button type="button">Judge face</button>,
+        providerSwitchModel: embeddingSwitchModel,
+        selectionMarked: input.selectionMarked,
+        openRef: input.openRef,
+        closeRef: null,
+        followSelectionRef: null,
+        onOpenChange: null,
+        footer: null,
+      };
+    }
+
+    function markedEmbedding(): HarnessModelPickerEmbedding {
+      return judgeEmbedding({
+        selectionMarked: true,
+        openRef: { current: null },
+      });
+    }
+
+    function seedProviderMemory(): void {
+      useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+        harnessId: "claude",
+        model: CLAUDE_MEMORY_SLUG,
+        permissionMode: "supervised",
+        reasoningEffort: "high",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      });
+      useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+        harnessId: "codex",
+        model: CODEX_MEMORY_SLUG,
+        permissionMode: "supervised",
+        reasoningEffort: "low",
+        serviceTier: null,
+        agentMode: "regular",
+        profileId: null,
+      });
+    }
+
+    async function openJudgePicker(): Promise<HTMLInputElement> {
+      return openPickerByTriggerName("Judge face");
+    }
+
+    it("commits a rail click onto the embedding's provider-switch slug, not composer memory", async () => {
+      seedProviderMemory();
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding });
+
+      await openJudgePicker();
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+
+      expect(store.getState().selection).toEqual({
+        harnessId: "claude",
+        modelSlug: CLAUDE_EMBEDDING_SLUG,
+        profileId: null,
+      });
+    });
+
+    it("commits a ⌘-digit rail switch onto the embedding's provider-switch slug", async () => {
+      seedProviderMemory();
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding });
+
+      await openJudgePicker();
+      act(() => {
+        fireLeaderDigit(2, "mod", false);
+      });
+
+      expect(store.getState().selection).toEqual({
+        harnessId: "claude",
+        modelSlug: CLAUDE_EMBEDDING_SLUG,
+        profileId: null,
+      });
+    });
+
+    it("writes no composer memory when the store's host is unresolved", async () => {
+      queryMock.providerStates = [
+        providerCliStateWithProfiles({
+          providerId: "claude-code",
+          profiles: claudeProfilesForDropdown(),
+        }),
+      ];
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding, hostId: null });
+      const listener = vi.fn();
+      const unsubscribe = useComposerHarnessMemoryStore.subscribe(listener);
+
+      await openJudgePicker();
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+      act(() => {
+        fireLeaderDigit(1, "mod", false);
+      });
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+
+      expect(store.getState().selection.harnessId).toBe("claude");
+      expect(store.getState().selection.profileId).toBe("work-profile");
+      expect(listener).not.toHaveBeenCalled();
+      expect(useComposerHarnessMemoryStore.getState().byHost).toEqual({});
+      unsubscribe();
+    });
+
+    it("commits a cross-provider profile pick onto the embedding's provider-switch slug", async () => {
+      const codex = codexModels();
+      const signedOutClaude: HarnessOption = {
+        ...CLAUDE_HARNESS,
+        available: false,
+        error: "Claude is signed out",
+      };
+      queryMock.harnesses = [CODEX_HARNESS, signedOutClaude];
+      queryMock.catalogHarnesses = [
+        catalogHarness(CODEX_HARNESS, codex),
+        catalogHarness(signedOutClaude, []),
+      ];
+      queryMock.selectedModelsByHarness = new Map([
+        ["codex", codex],
+        ["claude", []],
+      ]);
+      const degradedClaude = providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      });
+      queryMock.providerStates = [
+        {
+          ...degradedClaude,
+          auth: { ...degradedClaude.auth, status: "unauthenticated" },
+        },
+      ];
+      seedProviderMemory();
+      const embedding = markedEmbedding();
+      const { store } = renderPicker({ embedding });
+
+      await openJudgePicker();
+      fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+      expect(store.getState().selection.harnessId).toBe("codex");
+
+      fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+
+      expect(store.getState().selection).toEqual({
+        harnessId: "claude",
+        modelSlug: CLAUDE_EMBEDDING_SLUG,
+        profileId: "work-profile",
+      });
+    });
+
+    it("fills openRef with an opener and clears it on unmount", async () => {
+      const openRef: RefObject<(() => void) | null> = { current: null };
+      const embedding = judgeEmbedding({ selectionMarked: true, openRef });
+      const harness = pickerHarness({ embedding });
+      const { unmount } = render(harness.element(false, undefined));
+
+      expect(openRef.current).not.toBeNull();
+      act(() => {
+        openRef.current?.();
+      });
+      expect(
+        await screen.findByRole("dialog", { name: "Select model" }),
+      ).not.toBeNull();
+
+      unmount();
+      expect(openRef.current).toBeNull();
+    });
+
+    it("uses the caller's face as the trigger, returns focus to it on Esc, and skips the composer close hand-off", async () => {
+      const composerFocus = vi.fn();
+      const composer = document.createElement("textarea");
+      composer.setAttribute("data-testid", "registered-composer");
+      document.body.append(composer);
+      const unregister = registerComposerFocus(
+        "embedding-picker-composer",
+        {
+          focus: (isCurrent) => {
+            composerFocus();
+            if (isCurrent()) composer.focus();
+          },
+          containsActiveElement: (activeElement) => activeElement === composer,
+          isEligible: () => true,
+        },
+        true,
+        () => true,
+      );
+
+      try {
+        const embedding = markedEmbedding();
+        renderPicker({ embedding });
+
+        const face = screen.getByRole("button", { name: "Judge face" });
+        expect(screen.queryByRole("button", { name: /^GPT-5\.5/ })).toBeNull();
+        fireEvent.focus(face);
+        expect(screen.queryByRole("tooltip")).toBeNull();
+
+        const input = await openJudgePicker();
+        expect(
+          screen.getByRole("dialog", { name: "Select model" }),
+        ).not.toBeNull();
+
+        fireEvent.keyDown(input, { key: "Escape" });
+        await waitFor(() => {
+          expect(
+            screen.queryByRole("dialog", { name: "Select model" }),
+          ).toBeNull();
+        });
+        expect(document.activeElement).toBe(face);
+        expect(composerFocus).not.toHaveBeenCalled();
+
+        cleanup();
+        composerFocus.mockClear();
+        renderPicker(undefined);
+        const composerInput = await openPicker();
+        fireEvent.keyDown(composerInput, { key: "Escape" });
+        await waitFor(() => {
+          expect(
+            screen.queryByRole("dialog", { name: "Select model" }),
+          ).toBeNull();
+        });
+        expect(composerFocus).toHaveBeenCalled();
+        expect(document.activeElement).toBe(composer);
+      } finally {
+        unregister();
+        composer.remove();
+        resetPrimaryFocusCoordinatorForTests();
+      }
+    });
+
+    it("marks no model row when selectionMarked is false, and marks the selection when true", async () => {
+      const unmarked = judgeEmbedding({
+        selectionMarked: false,
+        openRef: { current: null },
+      });
+      renderPicker({
+        embedding: unmarked,
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+      });
+
+      await openJudgePicker();
+      expect(
+        screen
+          .getAllByRole("option")
+          .filter((option) => option.getAttribute("aria-selected") === "true"),
+      ).toEqual([]);
+
+      cleanup();
+      const marked = judgeEmbedding({
+        selectionMarked: true,
+        openRef: { current: null },
+      });
+      renderPicker({
+        embedding: marked,
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+      });
+      await openJudgePicker();
+      expect(
+        screen
+          .getByRole("option", { name: /GPT-5\.5/ })
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+    });
+
+    describe("with a footer and open/close hooks", () => {
+      interface FooterSpies {
+        readonly onOpenChange: Mock<(open: boolean) => void>;
+      }
+
+      function footerEmbedding(input: {
+        readonly spies: FooterSpies;
+        readonly closeRef: RefObject<(() => void) | null> | null;
+        readonly footer: ReactNode | null;
+      }): HarnessModelPickerEmbedding {
+        return {
+          trigger: <button type="button">Routing face</button>,
+          providerSwitchModel: embeddingSwitchModel,
+          selectionMarked: true,
+          openRef: { current: null },
+          closeRef: input.closeRef,
+          followSelectionRef: null,
+          onOpenChange: input.spies.onOpenChange,
+          footer: input.footer,
+        };
+      }
+
+      function renderFooter(input: {
+        readonly closeRef: RefObject<(() => void) | null> | null;
+        readonly footer: ReactNode | null;
+      }): PickerHarness & { readonly spies: FooterSpies } {
+        const spies: FooterSpies = { onOpenChange: vi.fn() };
+        const harness = renderPicker({
+          embedding: footerEmbedding({ ...input, spies }),
+          storeModels: codexModels(),
+          selection: {
+            harnessId: "codex",
+            modelSlug: "gpt-5.5",
+            profileId: null,
+          },
+        });
+        return { ...harness, spies };
+      }
+
+      function activeOptionText(input: HTMLInputElement): string {
+        const id = input.getAttribute("aria-activedescendant");
+        if (id === null) throw new Error("no active descendant");
+        const element = document.getElementById(id);
+        if (element === null) throw new Error("active descendant not found");
+        return element.textContent;
+      }
+
+      it("renders the footer inside the popover, under the list, and outside the body that carries the list's height", async () => {
+        renderFooter({ closeRef: null, footer: <div>Routing footer</div> });
+        expect(screen.queryByText("Routing footer")).toBeNull();
+        await openPickerByTriggerName("Routing face");
+
+        const dialog = screen.getByRole("dialog", { name: "Select model" });
+        const footer = within(dialog).getByText("Routing footer");
+        const slot = footer.closest("[data-picker-embedding-footer]");
+        expect(slot).not.toBeNull();
+        const body = dialog.querySelector(`[class*="${PICKER_BODY_HEIGHT}"]`);
+        expect(body).not.toBeNull();
+        expect(body?.contains(footer)).toBe(false);
+        expect(body?.contains(screen.getByRole("listbox"))).toBe(true);
+      });
+
+      it("reports every visible open and close - trigger, Escape, an outside press and closeRef - and nothing on mount", async () => {
+        const closeRef: RefObject<(() => void) | null> = { current: null };
+        const { spies } = renderFooter({ closeRef, footer: null });
+        expect(spies.onOpenChange).not.toHaveBeenCalled();
+        expect(closeRef.current).not.toBeNull();
+
+        const input = await openPickerByTriggerName("Routing face");
+        expect(spies.onOpenChange.mock.calls).toEqual([[true]]);
+
+        fireEvent.keyDown(input, { key: "Escape" });
+        await waitFor(() => {
+          expect(spies.onOpenChange.mock.calls).toEqual([[true], [false]]);
+        });
+
+        await openPickerByTriggerName("Routing face");
+        expect(spies.onOpenChange).toHaveBeenLastCalledWith(true);
+        act(() => {
+          closeRef.current?.();
+        });
+        await waitFor(() => {
+          expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
+        });
+        expect(spies.onOpenChange).toHaveBeenCalledTimes(4);
+
+        await openPickerByTriggerName("Routing face");
+        expect(spies.onOpenChange).toHaveBeenCalledTimes(5);
+        // Radix arms its outside-press listener a tick after mounting.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        const outside = document.createElement("div");
+        document.body.append(outside);
+        fireEvent.pointerDown(outside, { button: 0, pointerType: "mouse" });
+        fireEvent.mouseDown(outside);
+        fireEvent.click(outside);
+        await waitFor(() => {
+          expect(spies.onOpenChange).toHaveBeenCalledTimes(6);
+        });
+        expect(spies.onOpenChange).toHaveBeenLastCalledWith(false);
+        outside.remove();
+      });
+
+      it("reports a close once when it unmounts while open, and nothing when it unmounts closed", async () => {
+        const opened = renderFooter({ closeRef: null, footer: null });
+        await openPickerByTriggerName("Routing face");
+        expect(opened.spies.onOpenChange.mock.calls).toEqual([[true]]);
+        opened.spies.onOpenChange.mockClear();
+
+        cleanup();
+
+        expect(opened.spies.onOpenChange.mock.calls).toEqual([[false]]);
+
+        const closed = renderFooter({ closeRef: null, footer: null });
+        cleanup();
+
+        expect(closed.spies.onOpenChange).not.toHaveBeenCalled();
+      });
+
+      it("clears closeRef on unmount", () => {
+        const closeRef: RefObject<(() => void) | null> = { current: null };
+        const spies: FooterSpies = { onOpenChange: vi.fn() };
+        const harness = pickerHarness({
+          embedding: footerEmbedding({ spies, closeRef, footer: null }),
+        });
+        const { unmount } = render(harness.element(false, undefined));
+        expect(closeRef.current).not.toBeNull();
+        unmount();
+        expect(closeRef.current).toBeNull();
+      });
+
+      it("Enter on a focused footer button is the button's own activation: the spy fires once, and the list's active row is not picked", async () => {
+        const onFooterAction = vi.fn();
+        const { store, selections } = renderFooter({
+          closeRef: null,
+          footer: (
+            <button type="button" onClick={onFooterAction}>
+              Footer action
+            </button>
+          ),
+        });
+        const input = await openPickerByTriggerName("Routing face");
+        const before = store.getState().selection;
+        // Walk the active row off the marked one, so a list handler that saw
+        // this Enter would pick something visible.
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(activeOptionText(input)).toContain("GPT-4.1");
+
+        act(() => {
+          screen.getByRole("button", { name: "Footer action" }).focus();
+        });
+        await userEvent.keyboard("{Enter}");
+
+        expect(onFooterAction).toHaveBeenCalledTimes(1);
+        expect(selections).toEqual([]);
+        expect(store.getState().selection).toEqual(before);
+      });
+
+      // jsdom does no layout and Virtuoso is mocked, so the height tests below
+      // are STRUCTURAL proofs: which element carries the height class, and what
+      // sits inside it. Whether the box then measures 23rem is the browser's.
+      describe("the popover's height", () => {
+        /** The element that carries the list's height: the popover itself in the composer, the body wrapper in an embedding. */
+        function heightBox(dialog: HTMLElement): HTMLElement {
+          if (dialog.className.includes(PICKER_BODY_HEIGHT)) return dialog;
+          const box = dialog.querySelector(`[class*="${PICKER_BODY_HEIGHT}"]`);
+          if (!(box instanceof HTMLElement)) {
+            throw new Error("no element carries the picker's height class");
+          }
+          return box;
+        }
+
+        it("the composer's popover carries the height class itself and has no embedding footer", async () => {
+          renderPicker({});
+          await openPicker();
+
+          const dialog = screen.getByRole("dialog", { name: "Select model" });
+          expect(dialog.className).toContain(PICKER_BODY_HEIGHT);
+          expect(
+            dialog.querySelector("[data-picker-embedding-footer]"),
+          ).toBeNull();
+        });
+
+        it("an embedding with a footer keeps the composer's list box: same option count, same height class on the list's ancestor, same width, and the popover itself only capped", async () => {
+          renderPicker({});
+          await openPicker();
+          const composer = screen.getByRole("dialog", { name: "Select model" });
+          const composerOptions = screen.getAllByRole("option").length;
+          const composerBox = heightBox(composer);
+          expect(composerBox.contains(screen.getByRole("listbox"))).toBe(true);
+          const composerWidth = WIDTH_CLASS.exec(composer.className)?.[0];
+          const composerHeightClass = composerBox.className
+            .split(" ")
+            .find((token) => token.startsWith("h-[min("));
+          cleanup();
+
+          renderFooter({ closeRef: null, footer: <div>Routing footer</div> });
+          await openPickerByTriggerName("Routing face");
+          const embedded = screen.getByRole("dialog", { name: "Select model" });
+          const embeddedBox = heightBox(embedded);
+
+          expect(screen.getAllByRole("option")).toHaveLength(composerOptions);
+          expect(embeddedBox.contains(screen.getByRole("listbox"))).toBe(true);
+          expect(
+            embeddedBox.className
+              .split(" ")
+              .find((t) => t.startsWith("h-[min(")),
+          ).toBe(composerHeightClass);
+          expect(WIDTH_CLASS.exec(embedded.className)?.[0]).toBe(composerWidth);
+          // The popover carries only the cap, never the body's fixed height.
+          expect(embedded.className).not.toContain(PICKER_BODY_HEIGHT);
+          expect(embedded.className).toContain(
+            "max-h-[var(--radix-popover-content-available-height)]",
+          );
+          expect(
+            embeddedBox.contains(within(embedded).getByText("Routing footer")),
+          ).toBe(false);
+        });
+      });
     });
   });
 });

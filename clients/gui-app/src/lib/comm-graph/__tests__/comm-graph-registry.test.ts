@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DETACHED_MANAGER_LIMIT,
   __commGraphSubscriptionRefCountForTests,
@@ -15,6 +15,7 @@ import {
   observeCommGraphCloudSubscription,
   releaseCommGraphCloudObserver,
 } from "@/lib/comm-graph/comm-graph-cloud-registry";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
 import type {
   CommGraphSubscriptionManager,
   CommGraphSubscriptionRequest,
@@ -67,6 +68,7 @@ function row(id: number, timestamp: number): EpicCommunicationGraphEvent {
     originKind: null,
     originChatId: null,
     originRefId: null,
+    peerEpicId: null,
   };
 }
 
@@ -78,11 +80,18 @@ function hostStatus(
     ?.status;
 }
 
+beforeEach(() => {
+  // Frames publish as they are applied: these cases read the snapshot in the
+  // tick they push in.
+  __setCommGraphDataCommitWindowMsForTests(0);
+});
+
 afterEach(() => {
   // Always restore real timers so a fake-timer test cannot leak into neighbors.
   vi.useRealTimers();
   __resetCommGraphRegistryForTests();
   __resetCommGraphCloudRegistryForTests();
+  __setCommGraphDataCommitWindowMsForTests(null);
 });
 
 describe("comm-graph subscription registry", () => {

@@ -30,6 +30,19 @@ import {
   DEFAULT_HISTORY_SEARCH,
   historySearchParamsSchema,
 } from "@/lib/history-search";
+import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
+import { historyScopeToParams, parseHistoryScope } from "@/lib/history-scope";
+import {
+  consumeHistoryScopeForPromotion,
+  prepareHistoryScopeForPromotion,
+  registerHistoryModalScope,
+} from "@/lib/history-scope-handoff";
+import {
+  acknowledgeSettingsOpenIntent,
+  resetSettingsOpenIntentForTests,
+  useSettingsOpenIntent,
+  type SettingsOpenIntent,
+} from "@/stores/tabs/settings-open-intent-store";
 
 function GuardedRoot() {
   useSystemTabModalRefreshGuard();
@@ -178,6 +191,9 @@ describe("settings section is store-backed, not URL-backed", () => {
       modalProbe.current?.openSettings({
         section: "host",
         resetToGeneral: false,
+        tab: null,
+        draft: null,
+        hostId: null,
       });
     });
 
@@ -247,7 +263,7 @@ describe("settings section is store-backed, not URL-backed", () => {
         sort: "oldest",
         sortExplicit: true,
       });
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
 
     await waitFor(() => {
@@ -285,7 +301,7 @@ describe("settings section is store-backed, not URL-backed", () => {
         repos: ["traycerai/traycer"],
         ownershipScopes: ["mine"],
       });
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
     await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
     expect(useTabsStore.getState().systemTabs.history).not.toBeNull();
@@ -309,7 +325,7 @@ describe("settings section is store-backed, not URL-backed", () => {
         sort: "oldest",
         sortExplicit: true,
       });
-      modalProbe.current?.promoteToTab();
+      modalProbe.current?.promoteToTab(() => undefined);
     });
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
@@ -326,6 +342,185 @@ describe("settings section is store-backed, not URL-backed", () => {
       historyOwnership: ["mine"],
     });
     expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
+});
+
+// Same shape as the real `/epics/` route: history params plus the scope param.
+function buildScopedModalRouter() {
+  const rootRoute = createRootRoute({
+    validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
+    component: () => (
+      <>
+        <TabNavigationRouteBridge />
+        <ModalProbe />
+        <Outlet />
+      </>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => <div data-testid="home" />,
+  });
+  const historyRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics",
+    validateSearch: (raw: Record<string, unknown>) => ({
+      ...historySearchParamsSchema.parse(raw),
+      ...historyScopeToParams(parseHistoryScope(raw)),
+    }),
+    component: () => <div data-testid="history" />,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, historyRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+}
+
+describe("history scope survives promotion", () => {
+  beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
+    resetSystemTabModalColdLoadForTests();
+    modalProbe.current = null;
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+  afterEach(() => {
+    cleanup();
+    prepareHistoryScopeForPromotion();
+    consumeHistoryScopeForPromotion();
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+  });
+
+  // Mounts the real route observer beside the modal controller, so the tab
+  // navigation controller sees committed routes exactly as it does in the app.
+  async function mountWithHistoryModalOpen() {
+    const router = buildScopedModalRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        historyOverlay: true,
+      }),
+    );
+    return router;
+  }
+
+  // The modal body is not mounted in this harness, so the handoff registration
+  // stands in for the selection a mounted modal would make.
+  function promoteWithScope(scope: "all" | "tasks" | "messages") {
+    const unregister = registerHistoryModalScope(scope);
+    act(() => {
+      // What `SystemTabModalHost` does right before it promotes.
+      prepareHistoryScopeForPromotion();
+      modalProbe.current?.promoteToTab(() => undefined);
+    });
+    return unregister;
+  }
+
+  it("carries a non-default scope into the History tab URL", async () => {
+    const router = await mountWithHistoryModalOpen();
+
+    const unregister = promoteWithScope("messages");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "messages",
+    });
+    expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
+
+  it("omits the param when the modal was on the default scope", async () => {
+    const router = await mountWithHistoryModalOpen();
+
+    const unregister = promoteWithScope("all");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+
+    expect(router.state.location.search).not.toHaveProperty("historyScope");
+  });
+
+  it("clears the handoff so the next promotion does not reuse it", async () => {
+    const router = await mountWithHistoryModalOpen();
+
+    const unregister = promoteWithScope("tasks");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "tasks",
+    });
+
+    // Reopen the modal (no tab yet) and promote WITHOUT a new capture: the
+    // consumed scope must not come back.
+    useTabsStore.setState({ systemTabs: { history: null, settings: null } });
+    await act(async () => {
+      await router.navigate({ to: "/" });
+    });
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        historyOverlay: true,
+      }),
+    );
+    act(() => {
+      modalProbe.current?.promoteToTab(() => undefined);
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    expect(router.state.location.search).not.toHaveProperty("historyScope");
+  });
+
+  it("focusing the existing History tab from another route restores its scope", async () => {
+    const router = await mountWithHistoryModalOpen();
+    const unregister = promoteWithScope("messages");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+    expect(useTabsStore.getState().systemTabs.history).not.toBeNull();
+
+    // Leave History for an unrelated route, then reopen it.
+    await act(async () => {
+      await router.navigate({ to: "/" });
+    });
+    expect(router.state.location.pathname).toBe("/");
+
+    // A stale capture must not be applied by the focus path either.
+    const stale = registerHistoryModalScope("tasks");
+    prepareHistoryScopeForPromotion();
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    stale();
+
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "messages",
+    });
+    expect(router.state.location.search).not.toHaveProperty("historyOverlay");
+  });
+
+  it("focusing the History tab while it is already active leaves its scope alone", async () => {
+    const router = await mountWithHistoryModalOpen();
+    const unregister = promoteWithScope("messages");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    unregister();
+
+    const stale = registerHistoryModalScope("tasks");
+    prepareHistoryScopeForPromotion();
+    act(() => {
+      modalProbe.current?.openHistory();
+    });
+    stale();
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/epics"));
+    expect(router.state.location.search).toMatchObject({
+      historyScope: "messages",
+    });
   });
 });
 
@@ -616,5 +811,206 @@ describe("openHistory viewport gate", () => {
       });
     });
     expect(router.state.location.pathname).toBe("/");
+  });
+});
+
+describe("openSettings carries tab and draft into the settings-open-intent store", () => {
+  const originalInnerWidth = window.innerWidth;
+
+  function setInnerWidth(value: number) {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value,
+    });
+  }
+
+  const intentProbe: { current: SettingsOpenIntent | null } = { current: null };
+  function IntentProbe() {
+    const intent = useSettingsOpenIntent("permissions");
+    useEffect(() => {
+      intentProbe.current = intent;
+    });
+    return null;
+  }
+
+  const DRAFT = {
+    section: "allow",
+    text: "Force push for `git push --force`",
+  } as const;
+
+  function buildIntentRouter() {
+    const rootRoute = createRootRoute({
+      validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
+      component: () => (
+        <>
+          <ModalProbe />
+          <IntentProbe />
+          <Outlet />
+        </>
+      ),
+    });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => <div data-testid="home" />,
+    });
+    const settingsPermissionsRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings/permissions",
+      component: () => <div data-testid="settings-permissions-route" />,
+    });
+    return createRouter({
+      routeTree: rootRoute.addChildren([indexRoute, settingsPermissionsRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+  }
+
+  beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
+    modalProbe.current = null;
+    intentProbe.current = null;
+    resetSettingsOpenIntentForTests();
+    useSettingsSectionStore.setState({ section: null });
+    useTabsStore.setState({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    setInnerWidth(originalInnerWidth);
+    __resetTabNavigationControllerForTesting();
+    resetSettingsOpenIntentForTests();
+    useSettingsSectionStore.setState({ section: null });
+  });
+
+  it("desktop: delivers the tab and draft to a probe reading useSettingsOpenIntent, plus the modal/section state", async () => {
+    setInnerWidth(1024);
+    const router = buildIntentRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openSettings({
+        section: "permissions",
+        tab: "rules",
+        draft: DRAFT,
+        resetToGeneral: false,
+        hostId: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(intentProbe.current).toMatchObject({
+        section: "permissions",
+        tab: "rules",
+        draft: DRAFT,
+      });
+    });
+    expect(modalProbe.current?.active).toMatchObject({
+      kind: "settings",
+      section: "permissions",
+    });
+    expect(router.state.location.search).toMatchObject({
+      settingsOverlay: true,
+    });
+  });
+
+  it("mobile: navigates to /settings/permissions and delivers the same intent to the probe", async () => {
+    setInnerWidth(375);
+    const router = buildIntentRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openSettings({
+        section: "permissions",
+        tab: "judge",
+        draft: null,
+        resetToGeneral: false,
+        hostId: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/permissions");
+    });
+    await waitFor(() => {
+      expect(intentProbe.current).toMatchObject({
+        section: "permissions",
+        tab: "judge",
+        draft: null,
+      });
+    });
+  });
+
+  it("a later openSettings with tab/draft both null clears a pending intent", async () => {
+    setInnerWidth(1024);
+    const router = buildIntentRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openSettings({
+        section: "permissions",
+        tab: "rules",
+        draft: DRAFT,
+        resetToGeneral: false,
+        hostId: null,
+      });
+    });
+    await waitFor(() => expect(intentProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openSettings({
+        section: "permissions",
+        tab: null,
+        draft: null,
+        resetToGeneral: false,
+        hostId: null,
+      });
+    });
+
+    await waitFor(() => expect(intentProbe.current).toBeNull());
+  });
+
+  it("acknowledgeSettingsOpenIntent with a stale id does not clear a newer intent", async () => {
+    setInnerWidth(1024);
+    const router = buildIntentRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(modalProbe.current).not.toBeNull());
+
+    act(() => {
+      modalProbe.current?.openSettings({
+        section: "permissions",
+        tab: "judge",
+        draft: null,
+        resetToGeneral: false,
+        hostId: null,
+      });
+    });
+    await waitFor(() => expect(intentProbe.current?.tab).toBe("judge"));
+    const staleId = intentProbe.current?.id;
+    if (staleId === undefined) throw new Error("expected a pending intent");
+
+    act(() => {
+      modalProbe.current?.openSettings({
+        section: "permissions",
+        tab: "rules",
+        draft: DRAFT,
+        resetToGeneral: false,
+        hostId: null,
+      });
+    });
+    await waitFor(() => expect(intentProbe.current?.tab).toBe("rules"));
+
+    act(() => {
+      acknowledgeSettingsOpenIntent(staleId);
+    });
+
+    expect(intentProbe.current).toMatchObject({ tab: "rules", draft: DRAFT });
   });
 });

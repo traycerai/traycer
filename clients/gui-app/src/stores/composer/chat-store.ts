@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { create } from "zustand";
+import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type {
   ChatQueueSteerMode,
   ChatRunSettings,
@@ -24,6 +25,7 @@ import type {
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
+  BrowserSessionReference,
   ContentBlock,
   DiffSource,
   FileEditReason,
@@ -37,6 +39,7 @@ import type {
   AgentFailure,
   ProviderNoticeDetail,
   ProviderNoticeKind,
+  ProviderNoticeReceipt,
   ProviderNoticeTone,
   ToolCallManagedCommand,
   ToolInputDetail,
@@ -181,17 +184,21 @@ export interface ToolSegment {
 }
 
 // Recursive: a subagent's own children can themselves be nested subagent
-// cards (any spawn depth), not just their tool/file_change/command activity.
-// Unlike tool/file_change/command (which only ride along for spawn-tool-call
-// suppression bookkeeping), a nested `ProviderNoticeSegment` DOES render as a
-// visible row inside the owning card - see `SubagentChildProviderNotices` in
-// `subagent-segment.tsx`.
+// cards (any spawn depth). Every entry renders, in order, inside the owning
+// card through the ordinary segment renderers (`SubagentConversation` in
+// `subagent-conversation.tsx`): the subagent's prose and reasoning, its tool /
+// command / file-change activity, notices, errors and nested agents. The same
+// list also feeds spawn-row suppression, the turn-level "Changes" group and
+// jump-to-block.
 export type SubagentChildSegment =
   | ToolSegment
   | FileChangeSegment
   | CommandSegment
   | SubagentSegment
-  | ProviderNoticeSegment;
+  | ProviderNoticeSegment
+  | TextSegment
+  | ReasoningSegment
+  | ErrorSegment;
 
 // A durable provider-generated notice (Codex model reroute / safety
 // verification / buffering, and future harness equivalents), projected from a
@@ -203,10 +210,11 @@ export interface ProviderNoticeSegment {
   kind: "provider_notice";
   status: "streaming" | "completed" | "errored";
   // WHICH notice this is, carried straight off the block's `providerNotice`.
-  // Dropped here until the provider-fallback surfaces needed it: the three
-  // fallback arms render differently from the harness ones - a settings link in
-  // their details, and the resumed-turn marker for `fallback_wait_resumed` -
-  // and none of that can be inferred from a tone and a title.
+  // Dropped here until the provider-fallback surfaces needed it: the fallback
+  // arms render differently from the harness ones - `fallback_applied` prints
+  // its title without its message, a receipt-carrying `fallback_settled` is
+  // absorbed into the settled card, and the live announcer speaks only the
+  // fallback kinds - and none of that can be inferred from a tone and a title.
   noticeKind: ProviderNoticeKind;
   /** Local display choice for a transient Codex retry; never persisted. */
   presentation?: "retry";
@@ -214,6 +222,22 @@ export interface ProviderNoticeSegment {
   title: string;
   message: string | null;
   details: ReadonlyArray<ProviderNoticeDetail>;
+  /**
+   * The settled routing account (`chat.subscribe@1.18`), or `null`.
+   *
+   * Non-null on exactly one notice per ended traversal - the `fallback_settled`
+   * notice the host writes onto the latest attempt's row - and that is what
+   * composes the settled card (`routingSettledNoticeId`). `null` covers both
+   * "recorded, no receipt" (every superseded settlement notice) and "never
+   * recorded" (an older host, whose key is absent): both stay dividers, so the
+   * projection folds the wire's absent key with `?? null` rather than carrying
+   * the distinction.
+   *
+   * Required rather than optional so every builder of this segment states it:
+   * the wire key is optional, and a copy that picks fields instead of spreading
+   * them drops it without the compiler noticing.
+   */
+  receipt: ProviderNoticeReceipt | null;
   // Owning subagent block id when this notice arrived on a subagent's thread
   // (nests under that subagent block). Null for a top-level notice.
   parentId: string | null;
@@ -227,7 +251,18 @@ export interface ReasoningSegment {
   // Thinking duration once completed (`null` while streaming or for blocks
   // persisted before `startedAt` existed). Drives the "Thought for Xs" label.
   durationMs: number | null;
+  // Owning block id when a subagent did the thinking (nests under that card).
+  // Present only on a parented block, like `browserSession` on text.
+  parentId?: string;
 }
+
+// A subagent's prose nests under its card through `parentId`, exactly like its
+// reasoning; a top-level (main-agent) text segment carries none.
+export type TextSegment = Extract<MessageSegment, { kind: "text" }>;
+
+// An error on a subagent's own thread (an OpenCode import parents the child's
+// abort) nests under that card through `parentId`.
+export type ErrorSegment = Extract<MessageSegment, { kind: "error" }>;
 
 export interface CommandSegment {
   id: string;
@@ -295,11 +330,10 @@ export interface SubagentSegment {
   // fleet data (intent, activity timeline, fleet counts, tokens) an old reader
   // can't render. Null for an ordinary agent card.
   workflowMeta: WorkflowMeta | null;
-  // The subagent's own activity nested under this block, keyed off each child
-  // segment's `parentId === this.id` - tool calls, file changes, commands, AND
-  // nested agent cards (any depth). Only the `subagent`-kind entries render
-  // (the "Sub-agents" section); the rest ride along for spawn-tool-call
-  // suppression.
+  // The subagent's own conversation nested under this block, keyed off each
+  // child segment's `parentId === this.id` - prose, reasoning, tool calls,
+  // file changes, commands, notices, errors AND nested agent cards (any
+  // depth), in block order. All of it renders inside the card.
   children: ReadonlyArray<SubagentChildSegment>;
 }
 
@@ -383,8 +417,12 @@ export type MessageSegment =
       id: string;
       kind: "text";
       markdown: string;
+      browserSession?: BrowserSessionReference;
       isStreaming: boolean;
       assistantImageContext?: AssistantMarkdownImageContext;
+      // Owning subagent block id when this is a subagent's prose; absent for
+      // the main agent's own text. See `ReasoningSegment.parentId`.
+      parentId?: string;
     }
   | ReasoningSegment
   | ToolSegment
@@ -428,6 +466,9 @@ export type MessageSegment =
        * one the engine acted on.
        */
       failure: AgentFailure | null;
+      // Owning subagent block id when the error ended a subagent's own thread;
+      // absent for a turn-level error. See `ReasoningSegment.parentId`.
+      parentId?: string;
     }
   | {
       id: string;
@@ -467,6 +508,18 @@ export type MessageSegment =
        */
       rule: string | null;
       reason: string | null;
+    }
+  | {
+      id: string;
+      kind: "auto-judge-notice";
+      /**
+       * Synthesized in `rendered-messages` from the `permission.blocked` event
+       * a host journals for an auto-mode judge notice - the event itself is
+       * the record. `message` is the host's notice, drawn verbatim; `marker`
+       * says which of the three it is.
+       */
+      marker: AutoJudgeNoticeMarker;
+      message: string;
     }
   | {
       id: string;
@@ -740,6 +793,22 @@ export interface ChatMessage {
    */
   manualRungAnchorId?: string;
   /**
+   * The settled routing notice this row's recovery card absorbs, or absent.
+   *
+   * Set only beside {@link manualRungAnchorId}, and only when the SAME row also
+   * carries a top-level provider notice with a non-null `receipt` - the one
+   * notice a failure settlement writes onto the latest attempt's row. The row
+   * then renders ONE settled card where the anchor error was (headline, receipt,
+   * actions) and the notice renders nothing of its own; without it the notice
+   * stays a divider and the error card keeps its actions, which is what an
+   * older host's transcript gets.
+   *
+   * Stamped by the same pass as the anchor (`withManualRungAnchor`) and for the
+   * same reason: a turn split by a steer is several rows, and the pairing is a
+   * fact about the row that holds both halves.
+   */
+  routingSettledNoticeId?: string;
+  /**
    * Whether this completed row should render the elapsed footer. `false` for
    * a background-completion notification that no provider turn adopted; its
    * non-null `completedAt` still records terminal state for transcript
@@ -768,6 +837,15 @@ export interface ChatMessage {
    */
   pausedSinceMs?: number | null;
   persistentMessageId: string | null;
+  /**
+   * Every persisted record this assistant row's turn folds, in fold order,
+   * when there is more than one. A turn split across several records
+   * (subagent flows, legacy and migrated snapshots) renders under ONE
+   * `persistentMessageId` - the last record's - so a reference that starts
+   * from an earlier record (a History hit, a find index hit) resolves here.
+   * Absent on a single-record turn and on every other row.
+   */
+  turnMessageIds?: ReadonlyArray<string>;
   senderLabel: string | null;
   assistantMeta: AssistantTurnMeta | null;
   statusLabel: string | null;

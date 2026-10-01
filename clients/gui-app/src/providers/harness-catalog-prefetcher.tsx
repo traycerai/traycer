@@ -1,26 +1,23 @@
-import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useGuiHarnessesQuery } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useHostCompatibility } from "@/lib/host";
 
 /**
- * Renderer-side warmup for the GUI harness catalog. The host already
- * prewarms availability and provider servers; this keeps TanStack Query's
- * model catalog warm before the user opens a new-chat picker.
+ * Renderer-side warmup for harness AVAILABILITY only. Model lists load on
+ * first use: the landing composer and picker issue `agent.gui.listModels` for
+ * the selected (and, once browsed, that) harness. An all-harnesses fill at
+ * boot was one RPC per available provider - 24 calls / ~133 KB over the
+ * relay on a staging account - and a cold `listModels` can spawn a provider
+ * server.
  *
- * The ONLY `"all-harnesses"` mount in the app: this is the app-load fill the
- * cache-only model contract leans on (see `use-gui-harness-catalog.ts`), and
- * it fans out on the app-wide DEFAULT host - the one whose provider servers
- * the host process prewarms anyway. Every user-facing surface reads
- * `"cached-only"` and warms specific harnesses on its own intent edges, so a
- * composer pinned to a cold remote host never spawns that host's entire
- * provider fleet just by opening a picker.
+ * `listHarnesses` still belongs here: first paint of the composer rail needs
+ * availability, and that unary is one call.
  */
 export function HarnessCatalogPrefetcher() {
   const compatibility = useHostCompatibility();
   const active = compatibility.status === "compatible";
-  useGuiHarnessCatalog(null, {
+  useGuiHarnessesQuery({
     enabled: active,
     subscribed: active,
-    modelsFetch: "all-harnesses",
   });
   return null;
 }

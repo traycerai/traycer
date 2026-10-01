@@ -118,7 +118,8 @@ export interface ProviderRateLimitEnvelope {
 
 /**
  * Whether `response` carries a snapshot for a provider whose `providers.list`
- * profile rows report cached `rateLimitStatus`: claude-code, codex, or grok.
+ * profile rows report cached `rateLimitStatus` for managed profiles:
+ * claude-code, codex, grok, or antigravity.
  * Openrouter/kilocode/traycer-aperture reads gate out here so a convergence
  * invalidation isn't spent on a provider that could never affect the
  * switch-prompt banner. Failed probes (`available: false` - timeout,
@@ -134,20 +135,21 @@ function isManagedProfileCapableRateLimitsResponse(
     provider.available &&
     (provider.provider === "codex" ||
       provider.provider === "claude-code" ||
-      provider.provider === "grok")
+      provider.provider === "grok" ||
+      provider.provider === "antigravity")
   );
 }
 
 /**
  * Converges the composer's rate-limit switch-prompt banner (which reads
  * `providers.list`) with whatever this `host.getRateLimitUsage` fetch just
- * learned: a profile the popover/queue just observed crossing into (or out
- * of) near/hard limit should not wait for `providers.list`'s own unrelated
- * refetch cadence to reflect that.
+ * learned: a profile the popover or the background poll just observed
+ * crossing into (or out of) near/hard limit should not wait for
+ * `providers.list`'s own unrelated refetch cadence to reflect that.
  *
  * Invalidated by a broad key-prefix predicate rather than one exact `hostId`:
- * this fetch's own host (the default host, or whichever host the ephemeral
- * queue is bound to) is not necessarily the tab host the banner's
+ * this fetch's own host (the default host, or whichever host the fetch's scope
+ * names) is not necessarily the tab host the banner's
  * `providers.list` query is scoped to, and `providers.list` is a cheap
  * cache-only host read (no subprocess, no account probe), so invalidating it
  * across every currently-cached host scope is safe.
@@ -225,10 +227,10 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
 /**
  * The shared fetch wrapper both `host.getRateLimitUsage` provider-pull write
  * lanes fold their fresh response through before handing it to TanStack as
- * the cached `data`: the `ephemeralProcess` serial queue
- * (`ephemeral-fetch-queue.ts`, which fetches via its own `queryClient.fetchQuery`
- * call) and the `httpFetch` lane (`use-host-provider-rate-limits-query.ts` /
- * `use-header-rate-limit-bars.ts` / the popover's "Refresh all" button, all via
+ * the cached `data`: the `ephemeralProcess` lane
+ * (`provider-rate-limit-fetch.ts`, which fetches via its own
+ * `queryClient.fetchQuery` call) and the `httpFetch` lane (`use-host-provider-rate-limits-query.ts` /
+ * `use-status-bar-rate-limit-segments.ts` / the popover's "Refresh all" button, all via
  * `useHostQueryWithResponseMap` / `useHostQueriesWithResponseMap`). Both write
  * into the same query-key family, so routing every write through this one
  * function is what keeps the envelope shape consistent no matter which lane's
@@ -242,8 +244,8 @@ export function buildProviderRateLimitEnvelopeFromSnapshot(
  *
  * Also the single point where a resolved codex/claude-code/grok fetch converges
  * `providers.list` (`invalidateProvidersListForConvergence`) - every real
- * `host.getRateLimitUsage` fetch for those two providers folds through this
- * function (the ephemeral queue's own `queryFn`; every other observer of
+ * `host.getRateLimitUsage` fetch for those providers folds through this
+ * function (`fetchProviderRateLimits`'s own `queryFn`; every other observer of
  * these providers' query key stays `enabled: false`), so this is exactly
  * "whenever a rate-limit usage fetch resolves" without duplicating the
  * invalidation at each call site.
@@ -266,8 +268,9 @@ export function mapResponseToProviderRateLimitEnvelope(args: {
  * available, otherwise exactly what the latest attempt reported (a good
  * reading, an authoritative unavailable reason, or `null` if no provider
  * snapshot has ever arrived). Shared by both resolvers in
- * `provider-rate-limit-content.ts` and by the header glyph bars
- * (`use-header-rate-limit-bars.ts`), so all three surfaces retain identically.
+ * `provider-rate-limit-content.ts` and by the usage readings
+ * (`use-status-bar-rate-limit-segments.ts`), so every surface retains
+ * identically.
  */
 export function resolveRetainedProviderRateLimits(
   envelope: ProviderRateLimitEnvelope | null,

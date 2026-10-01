@@ -10,13 +10,35 @@
  * or unit tests without any DI or singleton state.
  *
  * Validation is ACCESS-ONLY (credentials-file token-store tech plan §3): the
- * `validateAuthTokenIdentity*` helpers do a single `/api/v3/user` lookup with NO
+ * `validateAuthTokenIdentity*` helpers do a single identity lookup with NO
  * refresh-on-401, so they can never spend a refresh token. Every *spend* runs
  * inside the credentials file lock via the mutation store's `rotate`, which
  * injects the single-attempt `refreshOnceAbortable` below as its `RefreshFn`.
+ *
+ * ## Which identity route, and why there are two
+ *
+ * The user record is versioned, and `APPLE` widened a closed enum that every
+ * released client validates `GET /api/v3/user` against - so that route is
+ * frozen at record major 1 forever and a NEW route serves the negotiated
+ * shape. This client advertises the majors it can parse, reads the major the
+ * server chose off the response, and upgrades to its own latest through the
+ * registry's bridges.
+ *
+ * The frozen route is still reached, as a recovery and never as a retry - see
+ * {@link fetchIdentityOnce}. Against an authn-v3 that predates the negotiated
+ * route that costs two requests per validation, which is accepted: authn-v3
+ * ships before the clients, and the alternative is a released-server 404
+ * reading as a dead credential.
  */
-import { authRecordRegistry } from "@traycer/protocol/auth/registry";
-import { getRecordSchema } from "@traycer/protocol/framework/index";
+import {
+  authRecordRegistry,
+  type AuthRecordRegistry,
+} from "@traycer/protocol/auth/registry";
+import {
+  getLatestRecordContract,
+  loadRecord,
+  type SchemaVersion,
+} from "@traycer/protocol/framework/index";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   AuthTokenRefreshResult,
@@ -34,15 +56,102 @@ export type {
 } from "./auth-validation-types";
 export type { AuthTokenRefreshResult } from "../platform/runner-host";
 
-const authenticatedUserResponseSchema = getRecordSchema(
-  authRecordRegistry,
-  "authenticated-user-response",
-  "latest",
-);
+/**
+ * The negotiated identity route and the two headers it is negotiated with.
+ *
+ * COPIED, not imported: these are owned by authn-v3
+ * (`src/utils/users/user-record-version.ts`) and an OSS client cannot reach
+ * an internal package. They are a wire contract on both sides - a rename in
+ * either repo breaks negotiation silently, degrading every validation onto
+ * the frozen route.
+ */
+const NEGOTIATED_USER_PATH = "api/v3/user/negotiated";
+const USER_RECORD_MAJORS_REQUEST_HEADER = "x-traycer-user-record-majors";
+const USER_RECORD_VERSION_RESPONSE_HEADER = "x-traycer-user-record-version";
+
+/**
+ * The frozen route. It pins the record to major 1 whatever a caller
+ * advertises, so this client never reads a served-version header off it: the
+ * parse version is {@link FROZEN_RECORD_VERSION} by construction, which also
+ * keeps the recovery request byte-identical to the one this file has always
+ * sent.
+ */
+const FROZEN_USER_PATH = "api/v3/user";
+
+const AUTHENTICATED_USER_RESPONSE_RECORD =
+  authRecordRegistry["authenticated-user-response"];
+
+type AuthenticatedUserResponseMajor =
+  keyof AuthRecordRegistry["authenticated-user-response"] & number;
+
+/**
+ * The record majors this build advertises, and can therefore be served.
+ *
+ * Restated rather than derived from `Object.keys`, the same way authn-v3's
+ * `SUPPORTED_USER_RECORD_MAJORS` is: a runtime list cannot be narrowed back
+ * to the union without a hand-written guard that restates the same thing one
+ * level down. The annotation rejects a major that is not installed, and
+ * `auth-validation.test.ts` pins the list against the registry so a NEW major
+ * fails a test instead of going silently unadvertised.
+ *
+ * The majors are the ENVELOPE's, not the nested `user` the header is named
+ * after. Both move together by construction - an envelope gains a major
+ * precisely because the user inside it did - and advertising what can
+ * actually be PARSED is the safer of the two if they ever drift.
+ */
+export const SUPPORTED_USER_RECORD_MAJORS: readonly AuthenticatedUserResponseMajor[] =
+  [1, 2];
+
+const ADVERTISED_USER_RECORD_MAJORS = SUPPORTED_USER_RECORD_MAJORS.join(",");
+
+const SUPPORTED_MAJOR_BY_NUMBER: ReadonlyMap<
+  number,
+  AuthenticatedUserResponseMajor
+> = new Map(SUPPORTED_USER_RECORD_MAJORS.map((major) => [major, major]));
+
+/** Major 1's installed version - the only shape the frozen route serves. */
+const FROZEN_RECORD_VERSION: SchemaVersion = getLatestRecordContract(
+  AUTHENTICATED_USER_RESPONSE_RECORD,
+  1,
+).schemaVersion;
+
+/**
+ * Resolves `x-traycer-user-record-version` onto an installed version of the
+ * record, or `null` when this build cannot use it.
+ *
+ * `null` is NOT a rejection. Absent, malformed and "a major this build does
+ * not have" all mean one thing here - this response cannot be parsed safely -
+ * and the caller recovers on the frozen route instead. Letting any of them
+ * reach the parse would surface as a credential rejection, and a rejection
+ * can spend a refresh token and demote the session.
+ *
+ * The MINOR is checked for shape and then deliberately ignored: minors are
+ * additive by the framework's rules, so this build's latest installed minor
+ * for that major parses a body from any minor of it - an older server omits
+ * fields a newer minor added (which are optional), a newer one sends fields
+ * this schema drops.
+ */
+function resolveServedRecordVersion(
+  header: string | null,
+): SchemaVersion | null {
+  if (header === null) {
+    return null;
+  }
+  const match = /^(\d{1,4})\.(\d{1,6})$/.exec(header.trim());
+  if (match === null) {
+    return null;
+  }
+  const major = SUPPORTED_MAJOR_BY_NUMBER.get(Number(match[1]));
+  if (major === undefined) {
+    return null;
+  }
+  return getLatestRecordContract(AUTHENTICATED_USER_RESPONSE_RECORD, major)
+    .schemaVersion;
+}
 
 /**
  * Per-attempt ceiling and bounded exponential-backoff retry for the auth
- * boundary's HTTP calls (`/api/v3/user`, `/api/v3/auth/refresh`).
+ * boundary's HTTP calls (the identity routes, `/api/v3/auth/refresh`).
  *
  * Every attempt is time-boxed with `AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)`
  * so a stalled/half-open socket can no longer hang the caller indefinitely -
@@ -112,7 +221,7 @@ function isAbortOrTimeout(error: unknown): boolean {
 
 /**
  * Access-only full-identity validation (credentials-file token-store tech plan
- * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it can
+ * §3): a single identity lookup with NO refresh-on-401 fallback, so it can
  * never spend a refresh token. This is the validator the desktop renderer's
  * `AuthService` uses everywhere it checks a bearer (startup rehydration, reactive
  * 401 revalidation, device-flow finalization, cross-window projection): a stale
@@ -130,12 +239,17 @@ export function validateAuthTokenIdentityAccessOnly(
 /**
  * Single-attempt, ~10s, abort-aware access-only identity probe — the migration
  * counterpart to {@link validateAuthTokenIdentityAccessOnly} (tech plan §6).
- * ONE `/api/v3/user` lookup with NO refresh-on-401 (never spends) and NO internal
+ * ONE identity lookup with NO refresh-on-401 (never spends) and NO internal
  * retry: the migration state machine owns bounded re-entry and threads its
  * deadline `signal` through here, so a slow probe cannot outlive the migration
  * budget or blur its "L unspent" accounting the way the 3×10s stack would. The
  * `signal` is combined with a fresh ~10s timeout (à la {@link refreshOnceAbortable});
  * either firing collapses to `network-error`.
+ *
+ * "ONE lookup" is one ATTEMPT, which may include the frozen-route recovery
+ * {@link fetchIdentityOnce} owns. That recovery rides this same combined
+ * signal, so the pair shares one deadline and one abort - the budget this
+ * entry point exists to bound is unchanged.
  */
 export async function validateAuthTokenIdentityAccessOnceAbortable(args: {
   readonly authnBaseUrl: string;
@@ -145,11 +259,7 @@ export async function validateAuthTokenIdentityAccessOnceAbortable(args: {
   const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
   const signal =
     args.signal === null ? timeout : AbortSignal.any([args.signal, timeout]);
-  const result = await fetchUserResponseOnce(
-    args.authnBaseUrl,
-    args.token,
-    signal,
-  );
+  const result = await fetchIdentityOnce(args.authnBaseUrl, args.token, signal);
   return toIdentityValidationResult(result);
 }
 
@@ -163,10 +273,18 @@ async function validateAuthTokenIdentityFetch(
 }
 
 /**
- * Projects a `/api/v3/user` fetch onto the caller-facing result, re-attaching
- * the response's server-time observation to every outcome that had one. The
+ * Projects an identity fetch onto the caller-facing result, re-attaching the
+ * response's server-time observation to every outcome that had one. The
  * projection is shared by the retrying and single-attempt validators so the
  * clock-skew tracker sees the same sample whichever one ran.
+ *
+ * The body is parsed against the version the SERVER said it served and then
+ * migrated to this build's latest through the registry's upgrade chain, so a
+ * major-1 body from the frozen route and a major-2 body from the negotiated
+ * one reach `applySignedIn` as the same shape. A failure here is still a
+ * terminal `rejected`, exactly as a bad body always was: the version was
+ * resolved to an installed one before the request's body was even read, so
+ * what is left is a 2xx that does not match the contract it claims.
  */
 function toIdentityValidationResult(
   result: UserFetchResult,
@@ -177,11 +295,18 @@ function toIdentityValidationResult(
       ? { kind: "rejected", ...serverTime }
       : { kind: "network-error" };
   }
-  const parsed = authenticatedUserResponseSchema.safeParse(result.body);
-  if (!parsed.success) {
+  let user: AuthenticatedUser;
+  try {
+    user = loadRecord(
+      authRecordRegistry,
+      "authenticated-user-response",
+      result.body,
+      result.recordVersion,
+    );
+  } catch {
     return { kind: "rejected", ...serverTime };
   }
-  return { kind: "valid", user: parsed.data, ...serverTime };
+  return { kind: "valid", user, ...serverTime };
 }
 
 /**
@@ -238,6 +363,8 @@ type UserFetchResult =
   | {
       readonly kind: "ok";
       readonly body: unknown;
+      /** The installed version `body` is to be parsed at. */
+      readonly recordVersion: SchemaVersion;
       readonly serverTime: AuthServerTimeObservation | null;
     }
   | {
@@ -256,7 +383,7 @@ async function fetchUserResponse(
 ): Promise<UserFetchResult> {
   return withAuthNetworkRetry(
     () =>
-      fetchUserResponseOnce(
+      fetchIdentityOnce(
         authnBaseUrl,
         token,
         AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
@@ -269,18 +396,147 @@ function isUserFetchTransient(result: UserFetchResult): boolean {
   return result.kind === "failed" && result.result.kind === "network-error";
 }
 
-async function fetchUserResponseOnce(
+/** One route's answer, before endpoint selection has had its say. */
+type UserRouteAttempt =
+  | {
+      readonly kind: "ok";
+      readonly body: unknown;
+      readonly recordVersion: SchemaVersion;
+      readonly serverTime: AuthServerTimeObservation | null;
+    }
+  // A 2xx this build cannot label: the served-version header was absent,
+  // malformed, or named a major it does not have. Distinct from every failure
+  // below, because nothing about the CREDENTIAL went wrong.
+  | {
+      readonly kind: "unversioned";
+      readonly serverTime: AuthServerTimeObservation | null;
+    }
+  | {
+      readonly kind: "rejected";
+      // Carried so endpoint selection can tell a 404 (which may mean "this
+      // deployment has no such route") from a 401/403 (a verdict about the
+      // credential, identical on either route).
+      readonly status: number;
+      readonly serverTime: AuthServerTimeObservation | null;
+    }
+  | {
+      readonly kind: "network-error";
+      readonly serverTime: AuthServerTimeObservation | null;
+    };
+
+/**
+ * One identity validation attempt: the negotiated route, and at most one
+ * recovery on the frozen route, both under the caller's `signal`.
+ *
+ * The recovery is ENDPOINT SELECTION, not a retry. That is why it lives
+ * inside the unit `withAuthNetworkRetry` re-drives rather than beside it, and
+ * why both requests share one abort and one deadline - a fallback that
+ * multiplied with the retry ceiling would turn a 3-request budget into 6 on
+ * every validation. Exactly two answers reach it:
+ *
+ * - **a 404.** It may mean the negotiated route does not exist on this
+ *   deployment. It may equally mean a deleted user or a missing subscription:
+ *   the same resolver answers 404 for both, and a gateway can invent one. So
+ *   the frozen route's own classification is then applied IN FULL, its own
+ *   404 included, which stays `rejected` exactly as today.
+ * - **a 2xx this build cannot label** (see {@link resolveServedRecordVersion}).
+ *
+ * A 401 or a 403 is never recovered from: it is a verdict about the
+ * credential, and the frozen route would answer the same one request later.
+ * Neither is any other non-2xx - a 5xx on the new route is an outage, which
+ * the transient retry above already owns.
+ */
+async function fetchIdentityOnce(
   authnBaseUrl: string,
   token: string,
   signal: AbortSignal,
 ): Promise<UserFetchResult> {
+  const negotiated = await fetchUserRouteOnce(authnBaseUrl, token, signal, {
+    path: NEGOTIATED_USER_PATH,
+    pinnedRecordVersion: null,
+  });
+  if (negotiated.kind === "ok") {
+    return {
+      kind: "ok",
+      body: negotiated.body,
+      recordVersion: negotiated.recordVersion,
+      serverTime: negotiated.serverTime,
+    };
+  }
+  if (negotiated.kind === "network-error") {
+    return {
+      kind: "failed",
+      result: { kind: "network-error" },
+      serverTime: negotiated.serverTime,
+    };
+  }
+  if (negotiated.kind === "rejected" && negotiated.status !== 404) {
+    return {
+      kind: "failed",
+      result: { kind: "rejected" },
+      serverTime: negotiated.serverTime,
+    };
+  }
+
+  const frozen = await fetchUserRouteOnce(authnBaseUrl, token, signal, {
+    path: FROZEN_USER_PATH,
+    pinnedRecordVersion: FROZEN_RECORD_VERSION,
+  });
+  switch (frozen.kind) {
+    case "ok":
+      return {
+        kind: "ok",
+        body: frozen.body,
+        recordVersion: frozen.recordVersion,
+        serverTime: frozen.serverTime,
+      };
+    case "rejected":
+      return {
+        kind: "failed",
+        result: { kind: "rejected" },
+        serverTime: frozen.serverTime,
+      };
+    case "unversioned":
+    // Unreachable: the frozen route's version is pinned, so its header is
+    // never consulted. Grouped with the transport failure rather than with
+    // the rejection, because "this build could not label the response" must
+    // never be the thing that spends a refresh token.
+    case "network-error":
+      return {
+        kind: "failed",
+        result: { kind: "network-error" },
+        serverTime: frozen.serverTime,
+      };
+  }
+}
+
+async function fetchUserRouteOnce(
+  authnBaseUrl: string,
+  token: string,
+  signal: AbortSignal,
+  route: {
+    readonly path: string;
+    /**
+     * `null` reads the served version off the response - the negotiated
+     * route. A version here pins the parse and the response header is not
+     * consulted at all, which is what keeps the frozen route frozen.
+     */
+    readonly pinnedRecordVersion: SchemaVersion | null;
+  },
+): Promise<UserRouteAttempt> {
   let response: Response;
   try {
-    response = await fetch(authnApiUrl(authnBaseUrl, "api/v3/user"), {
+    response = await fetch(authnApiUrl(authnBaseUrl, route.path), {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
+        ...(route.pinnedRecordVersion === null
+          ? {
+              [USER_RECORD_MAJORS_REQUEST_HEADER]:
+                ADVERTISED_USER_RECORD_MAJORS,
+            }
+          : {}),
       },
       signal,
     });
@@ -288,11 +544,7 @@ async function fetchUserResponseOnce(
     // A thrown `fetch` - a transport failure OR the per-attempt
     // `AbortSignal.timeout` firing (a `TimeoutError`) - is transient and
     // retriable, so both collapse to `network-error`.
-    return {
-      kind: "failed",
-      result: { kind: "network-error" },
-      serverTime: null,
-    };
+    return { kind: "network-error", serverTime: null };
   }
 
   // Read BEFORE any status branching: a 401 response is a server-time sample
@@ -303,7 +555,7 @@ async function fetchUserResponseOnce(
   // 403 joins 401/404 here, closing an asymmetry that predates this ticket and
   // was invisible because the two halves are read separately: the REFRESH path
   // has always treated 403 as a rejection, while this one let it fall through
-  // to `network-error` below - so a forbidden `/api/v3/user` was retried into
+  // to `network-error` below - so a forbidden identity lookup was retried into
   // the recovery backoff FOREVER, never settling and never reaching the rotate
   // that would classify it. A 403 is a verdict, not an outage.
   //
@@ -316,11 +568,22 @@ async function fetchUserResponseOnce(
     response.status === 403 ||
     response.status === 404
   ) {
-    return { kind: "failed", result: { kind: "rejected" }, serverTime };
+    return { kind: "rejected", status: response.status, serverTime };
   }
 
   if (response.status < 200 || response.status >= 300) {
-    return { kind: "failed", result: { kind: "network-error" }, serverTime };
+    return { kind: "network-error", serverTime };
+  }
+
+  // Before the body: an unlabelled response is not read at all, so a body-read
+  // failure can never be confused with a header this build could not use.
+  const recordVersion =
+    route.pinnedRecordVersion ??
+    resolveServedRecordVersion(
+      response.headers.get(USER_RECORD_VERSION_RESPONSE_HEADER),
+    );
+  if (recordVersion === null) {
+    return { kind: "unversioned", serverTime };
   }
 
   let body: unknown;
@@ -329,13 +592,14 @@ async function fetchUserResponseOnce(
   } catch (error) {
     // A timeout/abort firing mid-body-read (after headers) is transient, not a
     // dead credential - classify it like a pre-headers abort. A genuinely
-    // malformed 2xx body stays `rejected`.
+    // malformed 2xx body stays `rejected`, and `status` being a 2xx is what
+    // keeps endpoint selection from reading it as a missing route.
     if (isAbortOrTimeout(error)) {
-      return { kind: "failed", result: { kind: "network-error" }, serverTime };
+      return { kind: "network-error", serverTime };
     }
-    return { kind: "failed", result: { kind: "rejected" }, serverTime };
+    return { kind: "rejected", status: response.status, serverTime };
   }
-  return { kind: "ok", body, serverTime };
+  return { kind: "ok", body, recordVersion, serverTime };
 }
 
 /**

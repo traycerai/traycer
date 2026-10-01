@@ -43,6 +43,19 @@ const badgeVariants = cva(
         warning:
           "border-warning/30 bg-warning/10 text-warning-foreground active:press-scrim",
         info: "border-info/30 bg-info/10 text-info-foreground active:press-scrim",
+        // The accent tag: a name the surface is ABOUT rather than a status -
+        // the tier the Test a model verdict names, in the primary tint the
+        // editor's pattern glyph wears. Not `default`, whose solid fill reads
+        // as a button beside the text it sits in.
+        accent: "bg-primary/15 text-primary active:press-scrim",
+      },
+      // A badge is one line by default (`whitespace-nowrap`), which is right
+      // for a tag and wrong for a sentence-length verdict pill: at phone width
+      // the host's longest skip label is wider than the row it sits in. `wrap`
+      // lets the text wrap inside the pill and caps the pill at its container.
+      wrap: {
+        true: "h-auto max-w-full whitespace-normal text-left",
+        false: "",
       },
       // One height, three type steps - the same shape `Input` takes. `xs` is
       // the dense metadata chip the settings panels and the pickers are full
@@ -57,6 +70,7 @@ const badgeVariants = cva(
     defaultVariants: {
       variant: "default",
       size: "default",
+      wrap: false,
     },
   },
 );
@@ -65,6 +79,7 @@ function Badge({
   className,
   variant = "default",
   size = "default",
+  wrap = false,
   asChild = false,
   ...props
 }: React.ComponentProps<"span"> &
@@ -76,7 +91,8 @@ function Badge({
       data-slot="badge"
       data-variant={variant}
       data-size={size}
-      className={cn(badgeVariants({ variant, size }), className)}
+      data-wrap={wrap === true ? "" : undefined}
+      className={cn(badgeVariants({ variant, size, wrap }), className)}
       {...props}
     />
   );

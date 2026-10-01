@@ -26,6 +26,8 @@ import {
 } from "@/stores/workspace/remote-folder-picker-store";
 import type { NegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
 
 interface FakeQueryState {
   readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
@@ -1890,5 +1892,70 @@ describe("<RemoteFolderPickerDialog />", () => {
       if (trigger === null) throw new Error("group header has no tooltip");
       expect(tooltipTextFor(trigger)).toBe("/Users/tester/code");
     });
+  });
+});
+
+/**
+ * The native-picker footer button (`remote-folder-picker-native`) is gated
+ * on `runnerHost?.workspaceFolders.canPickNatively === true`
+ * (`useRemoteFolderPickerNative`'s `nativePickerAvailable`) - a shell that can
+ * never open a native dialog (the phone, or a desktop launched with no local
+ * host of its own) must show no button at all, never one that is merely
+ * disabled. Every other test in this file renders with no `RunnerHostProvider`
+ * at all (`useRunnerHostOrNull()` answers `null`), which already exercises
+ * the "no host" leg of that same gate; these two pin the two explicit
+ * `canPickNatively` values a real shell can report.
+ */
+describe("<RemoteFolderPickerDialog /> - native picker availability", () => {
+  beforeEach(() => {
+    queryByPath.clear();
+    requestedPaths.length = 0;
+    lastClient = undefined;
+    queryByPath.set(pathKey(null), readyLevel(HOME_RESPONSE));
+    recentEntries = undefined;
+    reportedHomeDir = undefined;
+    negotiatedVersion.current = { major: 1, minor: 4 };
+    useRemoteFolderPickerStore.setState({
+      open: false,
+      client: null,
+      resolvePick: null,
+      showHiddenFolders: false,
+    });
+  });
+  afterEach(cleanup);
+
+  function renderWithCanPickNatively(canPickNatively: boolean) {
+    const runnerHost = createFakeRunnerHost({
+      workspaceFolders: {
+        canPickNatively,
+        pickFolders: () => Promise.resolve([]),
+      },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    return renderBase(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <QueryClientProvider client={queryClient}>
+          <RemoteFolderPickerDialog />
+        </QueryClientProvider>
+      </RunnerHostProvider>,
+    );
+  }
+
+  it("hides the native picker button when canPickNatively is false", async () => {
+    renderWithCanPickNatively(false);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+
+    expect(screen.queryByTestId("remote-folder-picker-native")).toBeNull();
+  });
+
+  it("shows the native picker button when canPickNatively is true", async () => {
+    renderWithCanPickNatively(true);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+
+    expect(screen.getByTestId("remote-folder-picker-native")).toBeTruthy();
   });
 });

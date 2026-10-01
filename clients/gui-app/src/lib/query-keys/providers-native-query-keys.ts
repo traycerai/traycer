@@ -117,6 +117,12 @@ export const providersNativeQueryKeys = {
     // wire params slot is next; use predicate invalidation for "all native"
   ],
 
+  /** Partial match across one provider's native kinds and scopes. */
+  providerScope: (hostId: string, providerId: ProviderId): QueryKey => [
+    ...hostQueryKeys.methodScope(hostId, "providers.list"),
+    { native: { providerId } },
+  ],
+
   mcpList: (hostId: string | null, params: NativeListScopeParams): QueryKey => [
     ...hostQueryKeys.method<HostRpcRegistry, "providers.list">(
       hostId,

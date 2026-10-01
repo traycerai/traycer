@@ -11,13 +11,14 @@ import {
   type AgentServiceTierOption,
 } from "@traycer/protocol/host/index";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { sortReasoningEffortOptions } from "@traycer/protocol/host/agent/gui/reasoning-effort-order";
 import { agentGuiListHarnessesV91 } from "@traycer/protocol/host/agent/gui/contracts";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import {
-  FileCheck2,
-  Gavel,
+  Eye,
+  FilePen,
   ShieldCheck,
-  UnlockKeyhole,
+  ShieldOff,
   type LucideIcon,
 } from "lucide-react";
 
@@ -73,57 +74,117 @@ export interface PermissionOption {
   icon: LucideIcon;
 }
 
+// One sentence per mode, and the four icons are one family read as a dial:
+// an eye (you watch everything), a pen (edits flow), a shield on (something
+// reviews for you), a shield off (nothing does). Exceptions do not go into
+// these sentences; they live where they apply - `PERMISSION_MODE_DETAILS`
+// below, and the picker's availability and mid-turn notices.
 const SUPERVISED_PERMISSION_OPTION: PermissionOption = {
   id: "supervised",
   label: "Supervised",
-  description: "Ask before commands and file changes.",
-  icon: ShieldCheck,
+  description: "Asks before every command and file change.",
+  icon: Eye,
 };
 const AUTO_ACCEPT_EDITS_PERMISSION_OPTION: PermissionOption = {
   id: "auto_accept_edits",
   label: "Auto-accept edits",
-  description: "Auto-approve edits, ask before other actions.",
-  icon: FileCheck2,
+  description: "Edits go through. Commands still ask.",
+  icon: FilePen,
 };
-// Three things the previous string ("…asks you only when unsure") got wrong,
-// all of them verified against the seam: a BLOCK verdict cards, an
-// UNAVAILABLE judge cards (`applyJudgeEscalation` is reached for both), and
-// the mode spends money that only Settings mentioned. The phrasing below is
-// deliberately not a list of three cases dressed as prose - ALLOW is the only
-// silent path, and "asks you whenever it can't clearly approve" states exactly
-// that invariant, so a user who reads only the first clause still holds a true
-// belief. The three words after the dash are its instances.
+// ALLOW is the only silent path: a block, an unsure verdict and a judge that
+// cannot run all come to the user as a card, which is what "asks you about
+// risky ones" has to stay true of.
 const AUTO_PERMISSION_OPTION: PermissionOption = {
   id: "auto",
   label: "Auto",
   description:
-    "Auto-approve edits. A judge reviews each command and asks you whenever it can't clearly approve — risky, unsure, or unavailable.",
-  icon: Gavel,
+    "A judge approves routine commands and asks you about risky ones.",
+  icon: ShieldCheck,
 };
 const FULL_ACCESS_PERMISSION_OPTION: PermissionOption = {
   id: "full_access",
   label: "Full access",
-  description: "Allow commands and edits without prompts.",
-  icon: UnlockKeyhole,
+  description: "Runs everything. Nothing asks.",
+  icon: ShieldOff,
 };
 
-// Order is load-bearing twice over: the picker renders in this order, and
-// `findSafestSupportedPermissionMode` walks it to pick a clamp target. `auto`
-// sits above `auto_accept_edits` because it does everything that mode does and
-// additionally lets a judge approve commands.
-//
-// That POSITION is not what makes `auto` clamp to `auto_accept_edits`, and
-// reading it that way is the trap: the safest-supported walk starts at the top
-// of this list, so on a host serving the pre-auto trio it lands on
-// `supervised`, three rows below where the user was. `PERMISSION_FALLBACK_MODE`
-// is what names the target; the order here only has to keep `auto` ABOVE
-// `auto_accept_edits` so the two agree about which way is down.
+// Safety order, most restrictive first: the fallback walk depends on it.
+// Auto's explicit compatibility fallback is declared in PERMISSION_FALLBACK_MODE.
+// Picker presentation has its own order below and must not change this one.
 export const PERMISSION_OPTIONS: ReadonlyArray<PermissionOption> = [
   SUPERVISED_PERMISSION_OPTION,
   AUTO_ACCEPT_EDITS_PERMISSION_OPTION,
   AUTO_PERMISSION_OPTION,
   FULL_ACCESS_PERMISSION_OPTION,
 ];
+
+// Experimental Auto is last in the pickers, independent of its safety rank.
+export const PERMISSION_PICKER_OPTIONS: ReadonlyArray<PermissionOption> = [
+  SUPERVISED_PERMISSION_OPTION,
+  AUTO_ACCEPT_EDITS_PERMISSION_OPTION,
+  FULL_ACCESS_PERMISSION_OPTION,
+  AUTO_PERMISSION_OPTION,
+];
+
+/**
+ * One thing a mode lets an agent do without asking, and - where one applies -
+ * the exception that still asks, kept apart so a surface can set it off from
+ * the item rather than burying it in the sentence.
+ */
+export interface PermissionModeDetailItem {
+  readonly text: string;
+  readonly exception: string | null;
+}
+
+export interface PermissionModeDetails {
+  /** What runs without asking under this mode, most basic first. */
+  readonly runsWithoutAsking: ReadonlyArray<PermissionModeDetailItem>;
+}
+
+/**
+ * The "runs without asking" lists Settings ▸ Permissions ▸ Modes renders, one
+ * card per mode.
+ *
+ * Beside {@link PERMISSION_OPTIONS} rather than in the Settings panel so the
+ * one-line descriptions and these lists are edited together: the list is what
+ * the description is a summary of.
+ *
+ * The guarded-path exception sits on the Auto-accept edits entry because that
+ * is where it applies: edits to a workspace's configuration, scripts and git
+ * internals still ask even though edits otherwise go through (the host's
+ * `judge-input-edit-paths.ts`). Auto's exception sits on the judge item for
+ * the same reason: the list is what runs WITHOUT asking, so "risky commands
+ * ask you" is not a member of it - it is the exception to the judge's
+ * approvals, set off from that item rather than listed as if it ran unasked.
+ */
+export const PERMISSION_MODE_DETAILS: Readonly<
+  Record<PermissionMode, PermissionModeDetails>
+> = {
+  supervised: {
+    runsWithoutAsking: [{ text: "Reads and searches", exception: null }],
+  },
+  auto_accept_edits: {
+    runsWithoutAsking: [
+      { text: "Reads and searches", exception: null },
+      {
+        text: "File edits in the workspace",
+        exception: "config, scripts and git internals still ask",
+      },
+    ],
+  },
+  auto: {
+    runsWithoutAsking: [
+      { text: "Reads, searches, edits", exception: null },
+      {
+        text: "Commands the judge approves",
+        exception: "risky ones still ask you",
+      },
+    ],
+  },
+  full_access: {
+    runsWithoutAsking: [{ text: "Everything, unreviewed", exception: null }],
+  },
+};
 
 export const DEFAULT_PERMISSION: PermissionMode = "full_access";
 
@@ -462,21 +523,23 @@ export function catalogSupportedPermissionModes(
  * edits are "approved without review until then" - true of the host at that
  * moment, and false of the host today.
  *
- * **The fact it is pinned to is `authorizingPermissionMode` in the host's
- * `chat-session-manager.ts`:** `permissionMode === "auto" && autoJudge === null`
- * returns `"supervised"`, and that is what `FileEditCoordinator` is handed
- * (`getPermissionMode: () => authorizingPermissionMode(execution)`). So a turn
- * that enters `auto` without a judge bound now FAILS CLOSED - every edit is put
- * to the user - rather than passing unreviewed. If that function changes, this
- * sentence moves with it; nothing in this repo can go red to tell you, because
- * the behaviour it describes lives in another one.
+ * **The fact it is pinned to is `handleActivePermissionModeUpdate` in the
+ * host's `chat-session-manager.ts`:** a flip into `auto` mid-turn binds
+ * Traycer's judge together with the mode, so the turn's remaining commands are
+ * reviewed from that moment, and its file edits go through as they do in any
+ * `auto` turn. The one flip the host cannot honour - the run's own provider
+ * would review, and its classifier lives in a session whose mode was fixed at
+ * spawn - is refused by the host and never offered here: the row is disabled
+ * with `autoModeMidTurnLock`'s sentence in place of this one. If either half
+ * changes, this sentence moves with it; nothing in this repo can go red to
+ * tell you, because the behaviour it describes lives in another one.
  *
- * It also no longer says WHEN the judge starts, and that clause was the second
- * error: `autoJudge` is bound once at turn start, so a turn that began in
- * `auto`, left it and came back still has its judge - for that user the judge
- * did not wait for the next message. The claim that survives both cases is the
- * one that matters at the moment of the choice: the switch applies now, and
- * nothing passes unchecked either way.
+ * It does not say WHEN the judge starts, because "now" is true for both users
+ * who can see it: the one switching in for the first time, whose judge is
+ * bound on arrival, and the one who began in `auto`, left it and came back,
+ * whose judge never left. The second sentence is the claim for the approvals
+ * already on screen: a card raised before the switch stays a card, it is not
+ * handed to the judge retroactively.
  *
  * It lives in the PICKER rather than as a chat notice deliberately: the user's
  * attention is in the menu at the moment of the choice, and this is a
@@ -484,7 +547,10 @@ export function catalogSupportedPermissionModes(
  * after the fact.
  */
 export const AUTO_MID_TURN_NOTICE =
-  "This turn switches over now, and nothing is approved without review - whatever the judge isn't reviewing yet, Traycer asks you about.";
+  "Switches now. Anything already waiting still asks you.";
+
+export const AUTO_JUDGE_UNAVAILABLE_DESCRIPTION =
+  "No judge available on this machine · asks you instead";
 
 /**
  * What a disabled option says, and WHO it blames.
@@ -683,14 +749,33 @@ export function findReasoningOptionsForModel(
   return model?.supportedReasoningEfforts ?? NO_REASONING_OPTIONS;
 }
 
+/**
+ * What an effort the selected model does not advertise (the `""` no-carry
+ * lever included) clamps to.
+ *
+ * - `"model-default"`: the model's own `defaultReasoningEffort`, else its first
+ *   advertised level - every composer surface, where a turn should run the way
+ *   the vendor tunes the model.
+ * - `"lowest"`: the lowest level the model advertises by the canonical ladder
+ *   (`sortReasoningEffortOptions`, the protocol's rank) - the Settings judge,
+ *   whose host runs an unset effort at exactly that level
+ *   (`effectiveJudgeReasoningEffort`), so the footer must show what the host
+ *   will run and never the vendor default the host does not apply.
+ */
+export type ReasoningFallback = "model-default" | "lowest";
+
 export function normalizeReasoningForModel(
   value: ReasoningLevel,
   model: ModelOption | null,
+  fallback: ReasoningFallback,
 ): ReasoningLevel {
   if (model === null) return value;
   const options = findReasoningOptionsForModel(model);
   if (options.length === 0) return "";
   if (options.some((option) => option.id === value)) return value;
+  if (fallback === "lowest") {
+    return sortReasoningEffortOptions(options)[0]?.id ?? value;
+  }
   const defaultReasoningEffort = model.defaultReasoningEffort;
   if (
     defaultReasoningEffort !== null &&

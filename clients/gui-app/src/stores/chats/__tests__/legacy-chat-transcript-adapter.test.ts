@@ -112,6 +112,7 @@ function legacyFrame(chatId: string): LegacyChatSnapshotFrame {
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   };
 }

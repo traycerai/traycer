@@ -7,8 +7,8 @@
  * primary-button + pointer-capture bookkeeping with pointerId matching, the
  * global `traycer-panel-resizing` freeze (see
  * `lib/layout/panel-resizing-class.ts`), per-frame axis deltas,
- * commit-on-pointer-up vs restore-on-pointer-cancel, double-click reset,
- * and the axis-aware arrow-key nudge.
+ * commit-on-pointer-up vs restore-on-pointer-cancel (and on Escape),
+ * double-click reset, and the axis-aware arrow-key nudge.
  *
  * Consumers keep ONLY their clamp math and DOM mutation: resolve drag
  * targets in `onDragStart` (stashed in a consumer-owned ref), mutate styles
@@ -76,7 +76,7 @@ export interface UsePointerDragCommitArgs {
   readonly onDragFrame: (deltaPx: number) => void;
   /** Pointer-up: commit the session's latest value to the store (once). */
   readonly onDragCommit: () => void;
-  /** Pointer-cancel: restore the pre-drag DOM state; nothing is committed. */
+  /** Pointer-cancel, blur or Escape: restore the pre-drag DOM state; nothing is committed. */
   readonly onDragCancel: () => void;
   /** Double-click reset (committed immediately - no drag phase). */
   readonly onReset: () => void;
@@ -136,6 +136,16 @@ export function pointerDragHandleAxisClassName(axis: PointerDragAxis): string {
     ? "w-px cursor-col-resize touch-none after:absolute after:inset-y-0 after:left-1/2 after:w-2.5 after:-translate-x-1/2"
     : "h-px cursor-row-resize touch-none after:absolute after:inset-x-0 after:top-1/2 after:h-2.5 after:-translate-y-1/2";
 }
+
+/**
+ * The line a width handle over the window ground (the side strip's, the epic
+ * panel's) paints while hovered or dragged: 2px of the focus-ring colour down
+ * the handle's centre, which reads on the ground in every theme where
+ * `bg-border` does not. Paint only; the axis class's `after:` hit area is
+ * untouched. A drag holds `:active` from press to release.
+ */
+export const GROUND_RESIZE_HANDLE_LINE_CLASS =
+  "before:pointer-events-none before:absolute before:inset-y-0 before:left-1/2 before:w-0.5 before:-translate-x-1/2 before:transition-colors before:content-[''] hover:before:bg-ring active:before:bg-ring";
 
 /**
  * In-flow split divider footprint with the original 1px separator painted in
@@ -225,11 +235,21 @@ export function usePointerDragCommit(
     function handleBlur(): void {
       finish(false);
     }
+    // Escape cancels the drag and nothing else: captured at the window and
+    // stopped there, so no other Escape handler (a layout session, a dialog)
+    // acts on the same key while a handle is held.
+    function handleEscape(keyEvent: globalThis.KeyboardEvent): void {
+      if (keyEvent.key !== "Escape") return;
+      keyEvent.preventDefault();
+      keyEvent.stopPropagation();
+      finish(false);
+    }
     function detach(): void {
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
       window.removeEventListener("pointercancel", handlePointerCancelEvent);
       window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("keydown", handleEscape, true);
     }
     function finish(commit: boolean): void {
       if (dragRef.current === null) return;
@@ -256,6 +276,7 @@ export function usePointerDragCommit(
     window.addEventListener("pointerup", handleUp);
     window.addEventListener("pointercancel", handlePointerCancelEvent);
     window.addEventListener("blur", handleBlur);
+    window.addEventListener("keydown", handleEscape, true);
     const stopPanelResizeInteraction = beginPanelResizeInteraction(
       pointerId,
       () => {

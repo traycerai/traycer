@@ -22,8 +22,10 @@ import {
   advanceActiveTileFind,
   openActiveTileFind,
 } from "@/lib/commands/tile-find";
-import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
-import { activateTabIntent } from "@/lib/tab-navigation";
+import { openShellSettings } from "@/lib/commands/actions/open-shell-settings";
+import { resolveShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { closeLayoutEditorForCloseTabChord } from "@/lib/layout/editor-session";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
@@ -31,6 +33,10 @@ import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defe
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
+import {
+  isHostServiceNotice,
+  toastHostServiceNotice,
+} from "@/lib/host/host-service-notice";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 type MenuUpdateIntent = "apply" | "activate";
@@ -132,10 +138,16 @@ export function MenuCommandListener() {
         });
         return;
       }
+      setBusy(null);
+      // A disabled task or another user's task: a notice, not a failed update.
+      if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+        toastHostServiceNotice(outcome.message);
+        invalidateHostUpdateQueries();
+        return;
+      }
       Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
         blocker: "unknown",
       });
-      setBusy(null);
       toast.error(outcome.message);
     },
     [invalidateHostUpdateQueries],
@@ -158,10 +170,16 @@ export function MenuCommandListener() {
         });
         return;
       }
+      setBusy(null);
+      // A disabled task or another user's task: a notice, not a failed update.
+      if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+        toastHostServiceNotice(outcome.message);
+        invalidateHostUpdateQueries();
+        return;
+      }
       Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
         blocker: "unknown",
       });
-      setBusy(null);
       toast.error(outcome.message);
     },
     [invalidateHostUpdateQueries],
@@ -219,14 +237,25 @@ export function MenuCommandListener() {
       handleMenuCommand(payload, {
         authService,
         navigateSettings: () => {
-          activateTabIntent(
-            navigate,
-            resolveSettingsTabIntent({
-              subSection: "general",
-              resetToGeneral: true,
-            }),
-            undefined,
+          // Signed out there is no tab host to open Settings in:
+          // `TabNavigationRouteBridge` mounts only when admitted, so an
+          // activation would queue and never run. The one setting that applies
+          // is this machine's quit behaviour, and its route answers for itself
+          // - it hands off to Settings ▸ General once admitted, and sends a
+          // surface without the card to `/`.
+          //
+          // Admission is read when the command ARRIVES, not when this handler
+          // subscribed: a tray "Sign out" followed by "Settings…" can land
+          // before React has re-rendered with the new status.
+          const admission = resolveShellLocalPlaneAdmission(
+            useAuthStore.getState().status,
+            runnerHost.hasLocalHost,
           );
+          if (!admission.admitted) {
+            void navigate({ to: "/when-you-quit" });
+            return;
+          }
+          openShellSettings(navigate, undefined);
         },
         openAboutDetails,
         closeActiveTab: closeTabFlow.closeActiveTab,
@@ -280,6 +309,7 @@ export function MenuCommandListener() {
       {closeTabFlow.unsyncedDialog}
       <LocalHostRestartFlow
         requested={pendingHostRestart}
+        firstLeg="cooperative"
         onClose={() => setPendingHostRestart(false)}
       />
       <HostBusyForceDeferDialog
@@ -296,6 +326,7 @@ export function MenuCommandListener() {
         forceLabel={
           busy?.continuation === "activate" ? "Force restart" : "Force update"
         }
+        forceDestructive
         onForce={() => {
           if (busy === null) return;
           if (busy.continuation === "activate") {
@@ -377,6 +408,7 @@ function handleMenuCommand(
     return;
   }
   if (payload.command === "epic.closeTab") {
+    if (closeLayoutEditorForCloseTabChord()) return;
     handlers.closeActiveTab();
     return;
   }

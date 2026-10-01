@@ -11,7 +11,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { v4 as uuidv4 } from "uuid";
 import {
   use,
   useCallback,
@@ -48,7 +47,7 @@ import {
   useTabHostId,
 } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
 import {
   composerClipboardPlainText,
   copyComposerContentToClipboard,
@@ -60,9 +59,10 @@ import {
   inlineHashOnlyImageBytes,
   omitImageAtomsByHash,
 } from "@/lib/composer/image-atoms";
-import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
+import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
 import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
-import { cn, formatSingleLine } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
   chatFindA2AReceivedBodyUnitId,
@@ -86,7 +86,10 @@ import type {
   ChatMessageUserActions,
 } from "./chat-message";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
-import { ChatUserMessageContent } from "./chat-user-message-content";
+import {
+  ChatUserMessageContent,
+  UserMessageBubble,
+} from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { BrowserReferenceChips } from "./browser-reference-chips";
 import { ComposerArea } from "@/components/home/composer/composer-shell";
@@ -116,7 +119,6 @@ import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fe
 import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
 import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const NOOP: () => void = () => undefined;
 
@@ -203,6 +205,7 @@ export function UserMessageBody({
           agentSenderInfo={message.agentSenderInfo}
           sentAt={message.sentAt ?? message.createdAt}
         />
+        <MessageDeliveryFooter actions={actions} />
       </>
     );
   }
@@ -247,31 +250,13 @@ function AgentMessageDisplayView({
     [collapsibleKey, messageId, setFindForcedOpen, setOpen],
   );
 
-  const epicId = useOpenEpicId();
-  const { openTile } = useEpicTileNavigation();
-  const senderNode = useEpicArtifact(agentSenderInfo.agentId);
-  // Resolve the live sender from the epic projection. A chat or
-  // terminal-agent is openable as a tab; an absent node (e.g. a
-  // cross-host sender not in this projection) renders as plain text.
-  const openTarget = useMemo((): {
-    readonly type: "chat" | "terminal-agent";
-    readonly hostId: string;
-  } | null => {
-    if (senderNode === null) return null;
-    if ("harnessId" in senderNode) {
-      return { type: "terminal-agent", hostId: senderNode.hostId };
-    }
-    if ("kind" in senderNode) return null; // artifacts aren't agents
-    if (senderNode.hostId === null) return null;
-    return { type: "chat", hostId: senderNode.hostId };
-  }, [senderNode]);
-
-  const liveTitle =
-    senderNode !== null && "title" in senderNode && senderNode.title.length > 0
-      ? senderNode.title
-      : null;
+  const openPeer = useOpenA2AMessagePeer();
+  const sender = useA2AMessagePeer(agentSenderInfo.agentId, {
+    direction: "received",
+    messageId,
+  });
   const senderName =
-    liveTitle ??
+    sender?.title ??
     agentMessage?.senderTitle ??
     agentSenderInfo.senderTitle ??
     `${agentSenderInfo.agentId.slice(0, 8)}…`;
@@ -280,41 +265,20 @@ function AgentMessageDisplayView({
 
   const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
   const openSenderTab = useCallback(() => {
-    if (openTarget === null) return;
-    openTile(
-      tileIntent(
-        {
-          id: agentSenderInfo.agentId,
-          instanceId: uuidv4(),
-          type: openTarget.type,
-          name: senderName,
-          hostId: openTarget.hostId,
-        },
-        { epicId },
-        "explicit",
-        "direct_ui",
-      ),
-    );
+    if (sender === null) return;
+    openPeer(sender, senderName);
     // Mirror of the sent card's receiver link: park a jump for the sender's
     // tile, which picks it up whether it is already mounted or is being
     // opened by the call above. This row's own id IS the receipt the sender's
     // harness stamped on its send block, so the landing is the exact "Sent
     // message" card. A terminal-agent sender has no transcript, and a send
     // persisted before receipts existed just leaves the tile open at rest.
-    if (openTarget.type !== "chat") return;
-    requestJump(openTarget.hostId, agentSenderInfo.agentId, {
+    if (sender.surface !== "gui") return;
+    requestJump(sender.hostId, sender.agentId, {
       kind: "receipt",
       messageId,
     });
-  }, [
-    agentSenderInfo.agentId,
-    epicId,
-    messageId,
-    openTarget,
-    openTile,
-    requestJump,
-    senderName,
-  ]);
+  }, [messageId, sender, openPeer, requestJump, senderName]);
 
   // Same shape as the sent card's header (`A2ASendToolSegment`): the sender
   // name is the only element allowed to shrink, so the direction words are
@@ -333,17 +297,22 @@ function AgentMessageDisplayView({
         <span className="shrink-0 text-muted-foreground">from</span>
         <AgentHeaderLink
           name={senderName}
-          onOpen={openTarget !== null ? openSenderTab : null}
+          onOpen={sender !== null ? openSenderTab : null}
         />
         {expectReply ? <ReplyExpectedIcon /> : null}
       </span>
-      <ChatMessageTimestamp timestamp={sentAt} />
+      <ChatMessageTimestamp
+        timestamp={sentAt}
+        separated={false}
+        instanceId={messageId}
+      />
     </>
   );
 
   const preview = (
     <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
-      {formatSingleLine(messageText, { maxLength: 180, ellipsis: "…" })}
+      {/* Uncapped: `line-clamp-2` cuts it at two lines of the card's width. */}
+      {collapseToSingleLine(messageText)}
     </p>
   );
 
@@ -359,7 +328,7 @@ function AgentMessageDisplayView({
   ) : null;
 
   return (
-    <div className="w-full max-w-[min(100%,48rem)]">
+    <div className="w-full">
       <SegmentCard
         open={open}
         onOpenChange={handleOpenChange}
@@ -448,7 +417,7 @@ function UserMessageDisplayView({
 
   return (
     <div
-      className="group/user-message flex min-w-0 max-w-[min(100%,48rem)] flex-col items-end"
+      className="group/user-message flex min-w-0 w-full flex-col items-end"
       data-user-message-display=""
     >
       {visibleSteerBadge !== null ? (
@@ -457,7 +426,7 @@ function UserMessageDisplayView({
         </div>
       ) : null}
       <div className="relative min-w-0 max-w-full">
-        <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+        <UserMessageBubble>
           <UserMessageAttachmentGallery
             attachments={message.attachments}
             browserAnnotations={message.browserAnnotations}
@@ -483,7 +452,7 @@ function UserMessageDisplayView({
           {isOverflowing ? (
             <ShowMoreToggle expanded={expanded} onToggle={toggleExpanded} />
           ) : null}
-        </div>
+        </UserMessageBubble>
         {/* The action chip floats over the bubble's bottom-right border instead
             of reserving a row beneath it, so the assistant reply sits close
             under the user message rather than after a tall hover gap. The copy
@@ -503,6 +472,7 @@ function UserMessageDisplayView({
           structuredContent={message.structuredContent}
         />
       </div>
+      <MessageDeliveryFooter actions={actions} />
       {profileProvenance !== null && tombstoneIdentity !== null ? (
         <UserMessageTombstonedProfileFooter
           profileId={tombstoneIdentity.profileId}
@@ -512,6 +482,34 @@ function UserMessageDisplayView({
           removed={profileProvenance.removedOnThisHost}
         />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where the host is with a row it has not started yet - the chat's opening
+ * prompt while its worktree and session are set up. Nothing to act on: once it
+ * starts it is an ordinary message, and a withdrawn row has left the
+ * transcript with its text back in the composer.
+ */
+function MessageDeliveryFooter({
+  actions,
+}: {
+  readonly actions: ChatMessageUserActions | null;
+}): ReactNode {
+  const phase = actions?.deliveryPhase ?? null;
+  if (phase === null) return null;
+  return (
+    <div
+      className="mt-2 flex flex-wrap items-center justify-end gap-2 text-ui-xs text-muted-foreground"
+      role="status"
+    >
+      <span>{phase === "pending" ? "Sending" : "Setting up"}</span>
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
     </div>
   );
 }
@@ -725,12 +723,15 @@ function InlineUserMessageEditor({
     runnerHost.fileDrops,
     resolvedMentionRoots,
   );
-  const { ingestPastedComposerImages, reingestPendingImages } =
-    useComposerPendingImageIngest({
-      editorRef,
-      runPendingImageJob,
-      draftId: null,
-    });
+  const {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  } = useComposerPendingImageIngest({
+    editorRef,
+    runPendingImageJob,
+    draftId: null,
+  });
   const attachmentPending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
@@ -794,9 +795,12 @@ function InlineUserMessageEditor({
   const onDocumentChange = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
       editing.onSnapshot(content, selection);
+      // See `chat-composer.tsx` for why an on-change caller is needed at all:
+      // a b64 node can enter long after mount without going through a paste.
+      noteContentImages(content);
       scheduleVisibilityCheck();
     },
-    [editing, scheduleVisibilityCheck],
+    [editing, noteContentImages, scheduleVisibilityCheck],
   );
 
   // Inline message editing tracks no persisted selection of its own (unlike
@@ -974,6 +978,9 @@ function InlineUserMessageEditor({
         attachmentsStrip={null}
         editor={editorSlot}
         toolbar={toolbar}
+        // An edit in place stays in place: the message it replaces is the
+        // context for it.
+        expansion={null}
       />
     </div>
   );

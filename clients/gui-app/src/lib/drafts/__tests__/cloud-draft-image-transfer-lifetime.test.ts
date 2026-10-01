@@ -15,6 +15,11 @@
  * stalled write-back held a caller open forever. The caller's bound now
  * covers the whole transfer.
  *
+ * Every hash here is rooted by a live landing row (an extra root source), so
+ * a verified reply is admitted to the partition and the write-back runs. An
+ * unrooted reply stays ephemeral and never reaches that write; that contract
+ * is covered in `cloud-draft-image-recovery.test.ts`.
+ *
  * `putImageBytesAtHash` is mocked module-wide so the F4 cases can stall it,
  * but delegates to the REAL implementation by default (captured from
  * `importOriginal`) so the F2 cases still exercise genuine digest
@@ -32,7 +37,11 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@/lib/host";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  registerExtraImageRootSource,
+  resetLandingImageBudgetReservationsForTesting,
+} from "@/lib/composer/landing-image-budget";
 import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -69,6 +78,15 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
   };
 });
 
+const liveLandingImageRoots = new Set<string>();
+registerExtraImageRootSource({
+  hashes: () => [...liveLandingImageRoots],
+});
+
+function rootLandingImages(...hashes: string[]): void {
+  for (const hash of hashes) liveLandingImageRoots.add(hash);
+}
+
 /** The caller's own wait, mirrored from `cloud-draft-image-recovery.ts`. */
 const CALLER_READ_TIMEOUT_MS = 10_000;
 
@@ -102,7 +120,7 @@ function recordingClient(handle: FakeHandler): {
     calls.push({ method, params });
     return handle(method, params);
   }) as FakeRequest;
-  return { client: { request }, calls };
+  return { client: { request, requestWithOptions: request }, calls };
 }
 
 async function sha256HexOf(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
@@ -145,7 +163,7 @@ function deferred<T>(): Deferred<T> {
 /**
  * Drains pending work under fake timers: the fake IndexedDB the store reads
  * and writes through settles its requests on a zero-delay timer, not a bare
- * microtask, so a plain microtask flush never lets `hasLocalImageBytes` or a
+ * microtask, so a plain microtask flush never lets `readLocalImageBytes` or a
  * write-back actually complete while `["setTimeout", "clearTimeout"]` are
  * faked. `advanceTimersByTimeAsync` flushes microtasks between each 0ms
  * tick, which is what lets IndexedDB's own chain of callbacks run.
@@ -167,6 +185,7 @@ async function flushRealTimers(times: number): Promise<void> {
 
 beforeEach(() => {
   installFreshIndexedDb();
+  liveLandingImageRoots.clear();
   useAuthStore.setState({
     status: "signed-in",
     // The store guarantees non-null `contextMetadata` in every signed-in
@@ -181,6 +200,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   resetCloudDraftImageRecoveryForTests();
+  // A stalled write-back never reaches its `finally`, so its reservation
+  // would otherwise outlive the case.
+  resetLandingImageBudgetReservationsForTesting();
+  liveLandingImageRoots.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -193,6 +216,7 @@ describe("cloud-draft-image-recovery - transfer lifetime (F2)", () => {
         return { bytes, hash };
       }),
     );
+    rootLandingImages(...fixtures.map((f) => f.hash));
     const gates = new Map<string, Deferred<void>>();
     for (const { hash } of fixtures) gates.set(hash, deferred<void>());
 
@@ -253,10 +277,11 @@ describe("cloud-draft-image-recovery - transfer lifetime (F2)", () => {
       gates.get(hash)?.resolve();
     }
 
-    await resultPromise;
+    const recovered = await resultPromise;
 
     expect(requestedHashes.sort()).toEqual(fixtures.map((f) => f.hash).sort());
     for (const { hash, bytes } of fixtures) {
+      expect(recovered.get(hash)).toEqual(bytes);
       expect(await getImageBytes(hash)).toEqual(bytes);
     }
   });
@@ -275,6 +300,7 @@ describe("cloud-draft-image-recovery - transfer lifetime (F2)", () => {
       })),
     );
 
+    rootLandingImages(hash);
     recordCloudDraftImageSources({
       identity: IDENTITY,
       hostId: "host-a",
@@ -330,6 +356,7 @@ describe("cloud-draft-image-recovery - stalled write-back (F4)", () => {
       }),
     );
 
+    rootLandingImages(hash);
     recordCloudDraftImageSources({
       identity: IDENTITY,
       hostId: "host-a",
@@ -362,6 +389,7 @@ describe("cloud-draft-image-recovery - stalled write-back (F4)", () => {
       }),
     );
 
+    rootLandingImages(hash);
     recordCloudDraftImageSources({
       identity: IDENTITY,
       hostId: "host-a",

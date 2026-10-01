@@ -157,6 +157,7 @@ function snapshot(input: {
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: 1,
       rowCount: input.rowCount,
       indexRevision: null,
@@ -303,6 +304,7 @@ function legacySnapshot(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
     },
   };
 }

@@ -13,7 +13,9 @@ import { Route as IndexRouteImport } from "./routes/index";
 import { Route as EpicsRouteImport } from "./routes/epics";
 import { Route as HomeRouteImport } from "./routes/home";
 import { Route as OnboardingRouteImport } from "./routes/onboarding";
+import { Route as SampleWorkspaceRouteImport } from "./routes/sample-workspace";
 import { Route as SettingsRouteImport } from "./routes/settings";
+import { Route as WhenYouQuitRouteImport } from "./routes/when-you-quit";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
 import { Route as DraftNewRouteImport } from "./routes/draft.new";
 import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
@@ -22,11 +24,13 @@ import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
 import { Route as SettingsAppDiagnosticsRouteImport } from "./routes/settings.app-diagnostics";
 import { Route as SettingsAppNotificationsRouteImport } from "./routes/settings.app-notifications";
 import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
+import { Route as SettingsBrowserRouteImport } from "./routes/settings.browser";
 import { Route as SettingsDeleteAccountRouteImport } from "./routes/settings.delete-account";
 import { Route as SettingsDevicesRouteImport } from "./routes/settings.devices";
 import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
 import { Route as SettingsFallbackRouteImport } from "./routes/settings.fallback";
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
+import { Route as SettingsGettingStartedRouteImport } from "./routes/settings.getting-started";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
 import { Route as SettingsLayoutRouteImport } from "./routes/settings.layout";
@@ -61,9 +65,19 @@ const OnboardingRoute = OnboardingRouteImport.update({
   path: "/onboarding",
   getParentRoute: () => rootRouteImport,
 } as any);
+const SampleWorkspaceRoute = SampleWorkspaceRouteImport.update({
+  id: "/sample-workspace",
+  path: "/sample-workspace",
+  getParentRoute: () => rootRouteImport,
+} as any);
 const SettingsRoute = SettingsRouteImport.update({
   id: "/settings",
   path: "/settings",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const WhenYouQuitRoute = WhenYouQuitRouteImport.update({
+  id: "/when-you-quit",
+  path: "/when-you-quit",
   getParentRoute: () => rootRouteImport,
 } as any);
 const DraftDraftIdRoute = DraftDraftIdRouteImport.update({
@@ -107,6 +121,11 @@ const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   path: "/appearance",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsBrowserRoute = SettingsBrowserRouteImport.update({
+  id: "/browser",
+  path: "/browser",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsDeleteAccountRoute = SettingsDeleteAccountRouteImport.update({
   id: "/delete-account",
   path: "/delete-account",
@@ -130,6 +149,11 @@ const SettingsFallbackRoute = SettingsFallbackRouteImport.update({
 const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
   id: "/general",
   path: "/general",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsGettingStartedRoute = SettingsGettingStartedRouteImport.update({
+  id: "/getting-started",
+  path: "/getting-started",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsHostRoute = SettingsHostRouteImport.update({
@@ -203,18 +227,22 @@ export interface FileRoutesByFullPath {
   "/epics": typeof EpicsRouteWithChildren;
   "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
+  "/sample-workspace": typeof SampleWorkspaceRoute;
   "/settings": typeof SettingsRouteWithChildren;
+  "/when-you-quit": typeof WhenYouQuitRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
+  "/settings/getting-started": typeof SettingsGettingStartedRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
@@ -235,17 +263,21 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute;
   "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
+  "/sample-workspace": typeof SampleWorkspaceRoute;
+  "/when-you-quit": typeof WhenYouQuitRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
+  "/settings/getting-started": typeof SettingsGettingStartedRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
@@ -268,18 +300,22 @@ export interface FileRoutesById {
   "/epics": typeof EpicsRouteWithChildren;
   "/home": typeof HomeRoute;
   "/onboarding": typeof OnboardingRoute;
+  "/sample-workspace": typeof SampleWorkspaceRoute;
   "/settings": typeof SettingsRouteWithChildren;
+  "/when-you-quit": typeof WhenYouQuitRoute;
   "/draft/$draftId": typeof DraftDraftIdRoute;
   "/draft/new": typeof DraftNewRoute;
   "/settings/agents": typeof SettingsAgentsRoute;
   "/settings/app-diagnostics": typeof SettingsAppDiagnosticsRoute;
   "/settings/app-notifications": typeof SettingsAppNotificationsRoute;
   "/settings/appearance": typeof SettingsAppearanceRoute;
+  "/settings/browser": typeof SettingsBrowserRoute;
   "/settings/delete-account": typeof SettingsDeleteAccountRoute;
   "/settings/devices": typeof SettingsDevicesRoute;
   "/settings/diagnostics": typeof SettingsDiagnosticsRoute;
   "/settings/fallback": typeof SettingsFallbackRoute;
   "/settings/general": typeof SettingsGeneralRoute;
+  "/settings/getting-started": typeof SettingsGettingStartedRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
   "/settings/layout": typeof SettingsLayoutRoute;
@@ -303,18 +339,22 @@ export interface FileRouteTypes {
     | "/epics"
     | "/home"
     | "/onboarding"
+    | "/sample-workspace"
     | "/settings"
+    | "/when-you-quit"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
     | "/settings/general"
+    | "/settings/getting-started"
     | "/settings/host"
     | "/settings/keybindings"
     | "/settings/layout"
@@ -335,17 +375,21 @@ export interface FileRouteTypes {
     | "/"
     | "/home"
     | "/onboarding"
+    | "/sample-workspace"
+    | "/when-you-quit"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
     | "/settings/general"
+    | "/settings/getting-started"
     | "/settings/host"
     | "/settings/keybindings"
     | "/settings/layout"
@@ -367,18 +411,22 @@ export interface FileRouteTypes {
     | "/epics"
     | "/home"
     | "/onboarding"
+    | "/sample-workspace"
     | "/settings"
+    | "/when-you-quit"
     | "/draft/$draftId"
     | "/draft/new"
     | "/settings/agents"
     | "/settings/app-diagnostics"
     | "/settings/app-notifications"
     | "/settings/appearance"
+    | "/settings/browser"
     | "/settings/delete-account"
     | "/settings/devices"
     | "/settings/diagnostics"
     | "/settings/fallback"
     | "/settings/general"
+    | "/settings/getting-started"
     | "/settings/host"
     | "/settings/keybindings"
     | "/settings/layout"
@@ -401,7 +449,9 @@ export interface RootRouteChildren {
   EpicsRoute: typeof EpicsRouteWithChildren;
   HomeRoute: typeof HomeRoute;
   OnboardingRoute: typeof OnboardingRoute;
+  SampleWorkspaceRoute: typeof SampleWorkspaceRoute;
   SettingsRoute: typeof SettingsRouteWithChildren;
+  WhenYouQuitRoute: typeof WhenYouQuitRoute;
   DraftDraftIdRoute: typeof DraftDraftIdRoute;
   DraftNewRoute: typeof DraftNewRoute;
 }
@@ -436,11 +486,25 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof OnboardingRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    "/sample-workspace": {
+      id: "/sample-workspace";
+      path: "/sample-workspace";
+      fullPath: "/sample-workspace";
+      preLoaderRoute: typeof SampleWorkspaceRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
     "/settings": {
       id: "/settings";
       path: "/settings";
       fullPath: "/settings";
       preLoaderRoute: typeof SettingsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/when-you-quit": {
+      id: "/when-you-quit";
+      path: "/when-you-quit";
+      fullPath: "/when-you-quit";
+      preLoaderRoute: typeof WhenYouQuitRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/draft/$draftId": {
@@ -499,6 +563,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsAppearanceRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/browser": {
+      id: "/settings/browser";
+      path: "/browser";
+      fullPath: "/settings/browser";
+      preLoaderRoute: typeof SettingsBrowserRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/delete-account": {
       id: "/settings/delete-account";
       path: "/delete-account";
@@ -532,6 +603,13 @@ declare module "@tanstack/react-router" {
       path: "/general";
       fullPath: "/settings/general";
       preLoaderRoute: typeof SettingsGeneralRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/getting-started": {
+      id: "/settings/getting-started";
+      path: "/getting-started";
+      fullPath: "/settings/getting-started";
+      preLoaderRoute: typeof SettingsGettingStartedRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/host": {
@@ -645,11 +723,13 @@ interface SettingsRouteChildren {
   SettingsAppDiagnosticsRoute: typeof SettingsAppDiagnosticsRoute;
   SettingsAppNotificationsRoute: typeof SettingsAppNotificationsRoute;
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute;
+  SettingsBrowserRoute: typeof SettingsBrowserRoute;
   SettingsDeleteAccountRoute: typeof SettingsDeleteAccountRoute;
   SettingsDevicesRoute: typeof SettingsDevicesRoute;
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute;
   SettingsFallbackRoute: typeof SettingsFallbackRoute;
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
+  SettingsGettingStartedRoute: typeof SettingsGettingStartedRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
   SettingsLayoutRoute: typeof SettingsLayoutRoute;
@@ -670,11 +750,13 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppDiagnosticsRoute: SettingsAppDiagnosticsRoute,
   SettingsAppNotificationsRoute: SettingsAppNotificationsRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
+  SettingsBrowserRoute: SettingsBrowserRoute,
   SettingsDeleteAccountRoute: SettingsDeleteAccountRoute,
   SettingsDevicesRoute: SettingsDevicesRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
   SettingsFallbackRoute: SettingsFallbackRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
+  SettingsGettingStartedRoute: SettingsGettingStartedRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsLayoutRoute: SettingsLayoutRoute,
@@ -699,7 +781,9 @@ const rootRouteChildren: RootRouteChildren = {
   EpicsRoute: EpicsRouteWithChildren,
   HomeRoute: HomeRoute,
   OnboardingRoute: OnboardingRoute,
+  SampleWorkspaceRoute: SampleWorkspaceRoute,
   SettingsRoute: SettingsRouteWithChildren,
+  WhenYouQuitRoute: WhenYouQuitRoute,
   DraftDraftIdRoute: DraftDraftIdRoute,
   DraftNewRoute: DraftNewRoute,
 };

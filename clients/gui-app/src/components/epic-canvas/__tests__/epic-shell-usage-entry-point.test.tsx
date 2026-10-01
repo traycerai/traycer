@@ -19,9 +19,10 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __setEpicRuntimeWorkerFactoryForTests,
@@ -142,6 +143,7 @@ const usageSummaryRequests: UsageSummaryRequest[] = [];
 
 const liveHostClientSpine = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
+  schedulingPolicy: hostRpcSchedulingPolicy,
   invalidator: { invalidateHostScope: () => undefined },
   findHostById: (hostId) =>
     hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
@@ -329,9 +331,9 @@ function renderShell(queryClient: QueryClient) {
   return render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <EpicSessionProvider epicId={EPIC_ID} tabId={TAB_ID}>
+        <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
           <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
-        </EpicSessionProvider>
+        </TestEpicSessionTab>
       </TooltipProvider>
     </QueryClientProvider>,
   );
@@ -429,9 +431,9 @@ describe("<EpicShell /> usage entry point - real host RPC round trip", () => {
     view.rerender(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <EpicSessionProvider epicId={EPIC_ID} tabId={TAB_ID}>
+          <TestEpicSessionTab epicId={EPIC_ID} tabId={TAB_ID}>
             <EpicShell epicId={EPIC_ID} tabId={TAB_ID} active />
-          </EpicSessionProvider>
+          </TestEpicSessionTab>
         </TooltipProvider>
       </QueryClientProvider>,
     );

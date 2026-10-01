@@ -263,6 +263,37 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
   });
 });
 
+describe("epic.communicationGraph.subscribe peerEpicId", () => {
+  // Read off the registry, not the imported symbols: a later edit re-pointing
+  // a minor at a different schema must fail here.
+  const versions = hostStreamRpcRegistry[METHOD][1].versions;
+  const snapshotWith = (event: object) => ({
+    kind: "snapshot",
+    epicId: "epic-1",
+    events: [event],
+    headId: 41,
+    hasBinaryPayload: false,
+  });
+
+  it("carries peerEpicId on 1.1 and defaults it to null when a host omits it", () => {
+    const withPeer = versions[1].contract.serverFrameSchema.parse(
+      snapshotWith({ ...A2A_MESSAGE_EVENT, peerEpicId: "epic-peer" }),
+    );
+    const withoutPeer = versions[1].contract.serverFrameSchema.parse(
+      snapshotWith(A2A_MESSAGE_EVENT),
+    );
+    expect(withPeer).toMatchObject({ events: [{ peerEpicId: "epic-peer" }] });
+    expect(withoutPeer).toMatchObject({ events: [{ peerEpicId: null }] });
+  });
+
+  it("strips peerEpicId for a client that negotiated the released 1.0", () => {
+    const parsed = versions[0].contract.serverFrameSchema.parse(
+      snapshotWith({ ...A2A_MESSAGE_EVENT, peerEpicId: "epic-peer" }),
+    );
+    expect(parsed).toEqual(snapshotWith(A2A_MESSAGE_EVENT));
+  });
+});
+
 describe("epic.communicationGraph.subscribe@1.0 degrades against an older host", () => {
   it("fails only this method's subscribe, leaving every other stream method compatible", () => {
     const currentManifest = buildStreamManifest(

@@ -5,6 +5,7 @@ import {
   readMetadataNumber,
   readMetadataString,
 } from "@traycer/protocol/persistence/chat-transcript/event-metadata";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * # The setup interruption the composer restores a draft from
@@ -43,26 +44,28 @@ import {
  * when both are small and both are correct today.
  */
 
-export const restorableSetupInterruptionSchema = z.object({
-  eventType: z.enum(["setup.failed", "setup.cancelled"]),
-  /**
-   * The event's own id, and the only field here that is not read for display.
-   *
-   * The composer-restore driver dedupes on it: a stale snapshot, or a
-   * `setup.failed` echoed across a reconnect, must not re-restore a draft the
-   * user may have edited since. Without it a windowed client has no stable key
-   * for that guard - the interruption arrives as a value on every snapshot, so
-   * "have I already acted on this one" is otherwise unanswerable.
-   */
-  eventId: z.string(),
-  /** `null` for the generic path-less failure - the case that has no card. */
-  workspacePath: z.string().nullable(),
-  terminalSessionId: z.string().nullable(),
-  setupExitCode: z.number().nullable(),
-  clientActionId: z.string().nullable(),
-  /** Never null: an interruption with no triggering send is not restorable. */
-  messageId: z.string(),
-});
+export const restorableSetupInterruptionSchema = lazySchema(() =>
+  z.object({
+    eventType: z.enum(["setup.failed", "setup.cancelled"]),
+    /**
+     * The event's own id, and the only field here that is not read for display.
+     *
+     * The composer-restore driver dedupes on it: a stale snapshot, or a
+     * `setup.failed` echoed across a reconnect, must not re-restore a draft the
+     * user may have edited since. Without it a windowed client has no stable key
+     * for that guard - the interruption arrives as a value on every snapshot, so
+     * "have I already acted on this one" is otherwise unanswerable.
+     */
+    eventId: z.string(),
+    /** `null` for the generic path-less failure - the case that has no card. */
+    workspacePath: z.string().nullable(),
+    terminalSessionId: z.string().nullable(),
+    setupExitCode: z.number().nullable(),
+    clientActionId: z.string().nullable(),
+    /** Never null: an interruption with no triggering send is not restorable. */
+    messageId: z.string(),
+  }),
+);
 export type RestorableSetupInterruption = z.infer<
   typeof restorableSetupInterruptionSchema
 >;

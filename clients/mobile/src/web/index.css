@@ -2,6 +2,12 @@
  * Mobile renderer Tailwind entrypoint. The shared GUI is consumed as source,
  * so Tailwind must scan both workspaces or its responsive utility classes are
  * absent from the native bundle.
+ *
+ * This is the stylesheet of a BROWSER TAB running this entry (the launcher's
+ * `gui-app` dev stream), so the breakpoints keep their real values and width
+ * decides the layout, as in any other window. The installed app loads
+ * `index.native.css` instead, which imports this and then pushes every
+ * breakpoint out of reach; `main.tsx` picks between the two.
  */
 @import "../../../gui-app/src/index.css";
 @import "./mobile.css";

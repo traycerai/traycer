@@ -11,7 +11,7 @@ const guiAppSrc = path.resolve(import.meta.dirname, "../../..");
 
 const OBSERVER_FREE_FETCH_QUERY_WRITERS = [
   "hooks/git/use-git-submodule-snapshot-refresh.ts",
-  "lib/rate-limits/ephemeral-fetch-queue.ts",
+  "lib/rate-limits/provider-rate-limit-fetch.ts",
 ] as const;
 
 const CONDITION_RETRY_FALSE_PRODUCERS = [
@@ -69,7 +69,7 @@ const NONCONDITION_RETRY_CALLSITES = [
 ] as const;
 
 describe("observer-free host fetchQuery producer inventory", () => {
-  it("covers only git manual refresh and ephemeral rate-limit queue writers", () => {
+  it("covers only git manual refresh and the provider rate-limit fetch writer", () => {
     const productionSources = sourceFiles(guiAppSrc).filter(
       (relativePath) => !relativePath.includes("__tests__"),
     );
@@ -99,11 +99,11 @@ describe("observer-free host fetchQuery producer inventory", () => {
     );
     expect(gitRefresh).toMatch(/retry:\s*false/);
 
-    const ephemeralQueue = readFileSync(
+    const providerRateLimitFetch = readFileSync(
       path.join(guiAppSrc, OBSERVER_FREE_FETCH_QUERY_WRITERS[1]),
       "utf8",
     );
-    expect(ephemeralQueue).toMatch(
+    expect(providerRateLimitFetch).toMatch(
       /\.fetchQuery\s*\([\s\S]*stampHostRpcMethod\(undefined,\s*"host\.getRateLimitUsage"\)/,
     );
   });

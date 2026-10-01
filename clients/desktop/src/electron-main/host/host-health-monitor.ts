@@ -1,5 +1,9 @@
 import { log } from "../app/logger";
-import { HostRecoveryDeferredError } from "../startup/host-health-respawn";
+import {
+  HostRecoveryDeferredError,
+  HostRecoveryNotServiceRunError,
+  HostRecoveryTaskNotOwnedError,
+} from "../startup/host-health-respawn";
 import {
   canReachHostWebsocketUrl,
   readPidMetadata,
@@ -7,6 +11,7 @@ import {
 } from "./host-lifecycle";
 import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
 import { readPublishedHostProcessLiveness } from "./host-process-liveness";
+import { probeProcessExistenceWithoutSpawn } from "./process-identity";
 import type {
   HostProcessLiveness,
   HostRecoveryGovernor,
@@ -61,8 +66,11 @@ import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
  *    over; resurrecting the host would fight the user.
  *
  * While the snapshot is null (host known-down, respawn/provision flows in
- * progress) the monitor idles - recovery ownership stays with those flows
- * and the lifecycle's own reachability retry ladder.
+ * progress) the monitor restarts nothing - recovery ownership stays with those
+ * flows and the lifecycle's own reachability retry ladder. It still re-reads
+ * pid.json every tick, because the pid-file watcher is a lossy edge source
+ * (see `HostLifecycle.installWatcher`) and a missed edge on a null snapshot has
+ * no other way back.
  *
  * ### Unreachable is not dead
  *
@@ -124,10 +132,35 @@ const UNREACHABLE_WARN_MS = 600_000;
  * CAN change on their own, and any reachable observation clears the throttle
  * so a fresh outage is judged on fresh evidence.
  *
- * The cost of the wait is bounded and small - a host that dies while wedged is
- * picked up within this window rather than within one tick.
+ * The wait never outlives the process it is about: both paths first ask,
+ * without a spawn, whether the pid still exists
+ * (`probeProcessExistenceWithoutSpawn`), and a host that has died since is
+ * judged on the next tick rather than at the end of the window - the same
+ * rule, and the same defect, as the lifecycle's cached identity verdict.
+ *
+ * Nor does it outlive a clock that stepped backward: see
+ * `isInsideAliveRecheckWindow`.
  */
 const ALIVE_RECHECK_INTERVAL_MS = 120_000;
+
+/**
+ * Whether `now` still falls inside an `ALIVE_RECHECK_INTERVAL_MS` wait that
+ * ends at `deadline`.
+ *
+ * The deadlines are wall-clock (`Date.now()` plus the interval), so a clock
+ * stepped backward after one was set (an NTP correction, a resumed VM) would
+ * stretch the wait by the size of the step. Existence is not identity, so for
+ * all of that time a pid the OS reissued to another process would keep the
+ * shield coasting `busy` or keep recovery suppressed. A wait with more than a
+ * whole interval left began after `now`, which a forward-running clock cannot
+ * produce, so it reads as expired - the negative-age rule `HostLifecycle`'s
+ * cached identity verdict applies (`readIdentityVerdict`). A smaller step,
+ * one that leaves `now` after the instant the wait began, still stretches it,
+ * but by less than the time already waited, so no wait outlasts two intervals.
+ */
+function isInsideAliveRecheckWindow(deadline: number, now: number): boolean {
+  return now < deadline && deadline - now <= ALIVE_RECHECK_INTERVAL_MS;
+}
 
 export interface HostHealthMonitorDeps {
   readonly host: IpcHostLifecycle;
@@ -146,6 +179,16 @@ export interface HostHealthMonitorDeps {
    */
   readonly respawn: () => Promise<void>;
   /**
+   * Whether the host lifecycle has suspended automatic starts - production
+   * passes `HostController.automaticIntentsSuspended`. Read BEFORE the
+   * governor is asked: a suspended controller answers every respawn with
+   * `suppressed`, the grant is handed back, and the next tick would ask again,
+   * so without this gate a dead `pid.json` left behind a committed `none` (or
+   * a host mid-stop under a hold) logs the "auto-respawning" WARN once per
+   * tick for as long as it lasts.
+   */
+  readonly automaticRecoverySuspended: () => boolean;
+  /**
    * The single authority for automatic respawns: owns the busy gate and the
    * attempt budget. This monitor asks; it does not decide.
    */
@@ -159,6 +202,14 @@ export interface HostHealthMonitorDeps {
   readonly readLiveness:
     | ((pidMetadataFile: string) => Promise<HostProcessLiveness>)
     | undefined;
+  /**
+   * The live supervisor's pid when its record's start identity checks out
+   * (`HostLifecyclePolicyStore.readIdentifiedSupervisorPid`), or `null`.
+   * After a recovery the CLI refused because the host is a person's `traycer
+   * host start` in a terminal, the monitor latches this pid and asks for no
+   * recovery while it still answers the same.
+   */
+  readonly readLiveSupervisorPid: () => Promise<number | null>;
 }
 
 export interface HostHealthMonitor {
@@ -225,8 +276,35 @@ export function startHostHealthMonitor(
   // so without this the shield would spawn a `ps` (or `tasklist` +
   // `powershell`) every other tick for as long as the stall lasts.
   let nextLivenessCheckAt = 0;
+  // The supervisor of a terminal-started run a recovery was refused over
+  // (`HostRecoveryNotServiceRunError`), or `null`. While
+  // `readLiveSupervisorPid` still names it, that run is present and not this
+  // app's: no recovery is asked for - no governor grant, no CLI, no retry
+  // ladder. The first read that names anything else ends the hold and
+  // recovery owns the host again.
+  let terminalRunSupervisorPid: number | null = null;
+  // Set once a recovery was refused because the host's Scheduled Task is not
+  // this account's - another Windows user's, or one whose owner could not be
+  // confirmed (`HostRecoveryTaskNotOwnedError`). Nothing this process can do
+  // makes it this account's, so no recovery is asked for again
+  // - no governor grant, no CLI - until the app is relaunched.
+  let recoveryRetiredTaskNotOwned = false;
 
   const isDisposed = (): boolean => disposed || deps.host.isDisposed;
+
+  /** Whether the terminal run a recovery was refused over still runs. */
+  const terminalRunHolds = async (): Promise<boolean> => {
+    const held = terminalRunSupervisorPid;
+    if (held === null) return false;
+    // A read that throws is not evidence the run ended.
+    const live = await deps.readLiveSupervisorPid().catch(() => held);
+    if (live === held) return true;
+    terminalRunSupervisorPid = null;
+    log.info("[host-health] terminal host run ended - resuming recovery", {
+      supervisorPid: held,
+    });
+    return false;
+  };
 
   const reloadRecoverySnapshot = async (): Promise<boolean> => {
     const surfaced = await deps.host.reloadSnapshotFromDisk();
@@ -246,6 +324,24 @@ export function startHostHealthMonitor(
   const attemptRecovery = async (
     metadata: DesktopLocalHostSnapshot,
   ): Promise<void> => {
+    if (recoveryRetiredTaskNotOwned) {
+      recoveryPending = false;
+      return;
+    }
+    if (deps.automaticRecoverySuspended()) {
+      // Nothing may start a host right now, so there is nothing to ask the
+      // governor for and nothing to log. Keep recovery ownership: a hold that
+      // is released (a refused stop, a cancelled quit) resumes on the next
+      // tick, and a quiesced process just keeps answering here, silently.
+      recoveryPending = true;
+      return;
+    }
+    // Present, and not ours: the terminal run a recovery was refused over.
+    if (await terminalRunHolds()) {
+      recoveryPending = true;
+      return;
+    }
+    if (isDisposed()) return;
     // The governor owns both the liveness gate and the budget; it re-reads
     // pid.json itself so this is a real decision point, not a formality.
     const decision = await governor.requestRespawn("health-monitor");
@@ -309,7 +405,11 @@ export function startHostHealthMonitor(
     // the answer has been the same for ten minutes and each re-ask spawns a
     // child process, so it coasts and picks up a death within one interval.
     const longStall = unreachableForMs >= UNREACHABLE_WARN_MS;
-    if (longStall && now < nextLivenessCheckAt) {
+    if (
+      longStall &&
+      isInsideAliveRecheckWindow(nextLivenessCheckAt, now) &&
+      probeProcessExistenceWithoutSpawn(snapshot.pid) === "exists"
+    ) {
       return true;
     }
     const liveness = await readLiveness(deps.host.pidMetadataFile);
@@ -370,17 +470,32 @@ export function startHostHealthMonitor(
           // recovery OWNERSHIP still belongs to the flows this branch defers
           // to. Bounded at the tick cadence and cheap when there is no host
           // (one ENOENT read).
-          await deps.host.reloadSnapshotFromDisk();
+          const surfaced = await deps.host.reloadSnapshotFromDisk();
+          if (surfaced !== null) {
+            // A discovery, not proof of a lost watcher edge: a superseded
+            // reload, a late watcher event or a respawn's null snapshot also
+            // land here. Debug-only, an upper bound on lost edges in field logs.
+            log.debug(
+              "[host-health] null-snapshot backstop found a host on disk",
+              { pid: surfaced.pid },
+            );
+          }
           return;
         }
-        // Throttled only after an `alive` denial (see
-        // ALIVE_RECHECK_INTERVAL_MS). Lock-deferred and failed respawns leave
-        // this at 0 and so still retry on the next tick.
-        if (Date.now() < nextRecoveryAttemptAt) return;
         const metadata = await readMetadata(deps.host.pidMetadataFile);
         if (isDisposed()) return;
         if (metadata === null) {
           recoveryPending = false;
+          return;
+        }
+        // Throttled only after an `alive` denial (see
+        // ALIVE_RECHECK_INTERVAL_MS), and only while the process that denial
+        // was about still exists. Lock-deferred and failed respawns leave
+        // this at 0 and so still retry on the next tick.
+        if (
+          isInsideAliveRecheckWindow(nextRecoveryAttemptAt, Date.now()) &&
+          probeProcessExistenceWithoutSpawn(metadata.pid) === "exists"
+        ) {
           return;
         }
         await attemptRecovery(metadata);
@@ -497,6 +612,34 @@ export function startHostHealthMonitor(
         // restart that did not happen.
         governor.releaseGrant();
         recoveryPending = true;
+        return;
+      }
+      if (err instanceof HostRecoveryTaskNotOwnedError) {
+        // Refused before anything was touched: the grant goes back, and
+        // recovery retires for this process (see the flag).
+        governor.releaseGrant();
+        recoveryPending = false;
+        recoveryRetiredTaskNotOwned = true;
+        log.info(
+          "[host-health] the host's Scheduled Task is not confirmed as this account's - automatic recovery retired until relaunch",
+        );
+        return;
+      }
+      if (err instanceof HostRecoveryNotServiceRunError) {
+        // Refused before anything was touched, so the grant goes back as for
+        // a lock deferral. The hold is keyed on the supervisor running now;
+        // with none identified (it ended in between, or its record carries
+        // no start identity - which the CLI's refusal also needs) there is
+        // nothing to hold on, and the next recovery asks again.
+        governor.releaseGrant();
+        recoveryPending = true;
+        terminalRunSupervisorPid = await deps
+          .readLiveSupervisorPid()
+          .catch(() => null);
+        log.info(
+          "[host-health] host started in a terminal - leaving it alone until it ends",
+          { supervisorPid: terminalRunSupervisorPid },
+        );
         return;
       }
       // A failed respawn already surfaced through the lifecycle's error

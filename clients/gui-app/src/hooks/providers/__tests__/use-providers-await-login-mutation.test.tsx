@@ -61,9 +61,10 @@ function v21Echo(
     loginCapability: {
       oauthArgs: ["auth", "login"],
       token: null,
-      // Deliberately NO `terminalLogin`: this is the frozen @2.1 echo shape,
-      // which does not model the field. Adding it here would make the fixture
-      // pass whether or not the overlay strips the capability.
+      // Deliberately NO `terminalLogin`, `remoteSafe` or `selfOpensBrowser`:
+      // this is the frozen @2.1 echo shape, which models none of them. Adding
+      // one here would make the fixture pass whether or not the overlay strips
+      // the capability.
       codePaste: null,
     },
     availabilityPending: false,
@@ -124,6 +125,8 @@ function seededProvidersList(): ProvidersListResponse {
           token: null,
           codePaste: null,
           terminalLogin: {},
+          remoteSafe: null,
+          selfOpensBrowser: null,
         },
         availabilityPending: false,
         profiles: [],

@@ -55,6 +55,7 @@ function makeCtx(
     acceptedActions: {},
     messages: [],
     failedSendRestoration: null,
+    deliveryMessageId: null,
     ...overrides,
   };
 }
@@ -90,6 +91,31 @@ describe("nextHandoffTransition", () => {
     expect(nextHandoffTransition(handoff, makeCtx({ canAct: false }))).toEqual({
       kind: "noop",
     });
+  });
+
+  it("consumes with no send when waitingChat and the delivery view names the handoff's message - even when the viewer cannot act", () => {
+    // The host already holds this prompt (it named it before anything was
+    // ever sent from this handoff), so a resend would be a duplicate. This
+    // check runs BEFORE the canAct gate: an unresolved delivery still
+    // consumes the handoff even though nothing here is actionable yet.
+    const handoff = makeHandoff({
+      status: "waitingChat",
+      messageId: "message-1",
+    });
+    const ctx = makeCtx({ canAct: false, deliveryMessageId: "message-1" });
+    expect(nextHandoffTransition(handoff, ctx)).toEqual({
+      kind: "consume",
+      clientActionId: null,
+    });
+  });
+
+  it("still sends when waitingChat and the delivery view names a DIFFERENT message", () => {
+    const handoff = makeHandoff({
+      status: "waitingChat",
+      messageId: "message-1",
+    });
+    const ctx = makeCtx({ deliveryMessageId: "message-2" });
+    expect(nextHandoffTransition(handoff, ctx)).toEqual({ kind: "send" });
   });
 
   it("consume when handoff is sending and the action is accepted", () => {
@@ -153,6 +179,29 @@ describe("nextHandoffTransition", () => {
     });
   });
 
+  it("consume when handoff is sending and the delivery view names the handoff's message, with no matching accepted action or transcript row", () => {
+    const handoff = makeHandoff({
+      status: "sending",
+      clientActionId: "action-1",
+      messageId: "message-1",
+    });
+    const ctx = makeCtx({ deliveryMessageId: "message-1" });
+    expect(nextHandoffTransition(handoff, ctx)).toEqual({
+      kind: "consume",
+      clientActionId: "action-1",
+    });
+  });
+
+  it("noop when handoff is sending and the delivery view names a DIFFERENT message", () => {
+    const handoff = makeHandoff({
+      status: "sending",
+      clientActionId: "action-1",
+      messageId: "message-1",
+    });
+    const ctx = makeCtx({ deliveryMessageId: "message-2" });
+    expect(nextHandoffTransition(handoff, ctx)).toEqual({ kind: "noop" });
+  });
+
   it("markFailedByAction when restoration matches handoff and handoff is not yet failed", () => {
     const handoff = makeHandoff({
       status: "sending",
@@ -161,6 +210,7 @@ describe("nextHandoffTransition", () => {
     const ctx = makeCtx({
       failedSendRestoration: {
         clientActionId: "action-1",
+        messageId: null,
         content: CONTENT,
         browserAnnotations: [],
         reason: "Rejected",
@@ -183,6 +233,7 @@ describe("nextHandoffTransition", () => {
     const ctx = makeCtx({
       failedSendRestoration: {
         clientActionId: "action-1",
+        messageId: null,
         content: CONTENT,
         browserAnnotations: [],
         reason: "Rejected",
@@ -202,6 +253,7 @@ describe("nextHandoffTransition", () => {
     const ctx = makeCtx({
       failedSendRestoration: {
         clientActionId: "action-1",
+        messageId: null,
         content: CONTENT,
         browserAnnotations: [],
         reason: "Rejected",

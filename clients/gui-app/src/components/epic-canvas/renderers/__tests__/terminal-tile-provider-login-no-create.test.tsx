@@ -7,18 +7,26 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { useEffect, useRef } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 
 // Same fixture-and-mock shape as `terminal-tile-close-navigation.test.tsx`
 // (nested-focus boundary, host reachability, open-epic id, recovery, perf,
 // analytics) EXCEPT `use-terminal-tile-bootstrap` is left REAL here - the
-// whole point of this file is proving the bootstrap's `enabled` wiring
-// (`TerminalTile`'s `!isSignInTerminal` derivation), which a canned-object
+// whole point of this file is proving the bootstrap's create/adopt-only wiring
+// (`TerminalTile`'s host-owned `adoptOnly` derivation), which a canned-object
 // mock of that hook cannot observe. Only ITS RPC-boundary dependencies are
 // stubbed, mirroring `use-terminal-tile-bootstrap-no-respawn.test.tsx`.
 
@@ -39,8 +47,16 @@ let mockCreate: {
   mutate: Mock;
 };
 
+const recoveryMock = vi.hoisted(() => ({ recoverNonce: 0 }));
+let mockHandleEnabled: boolean | null;
+const nestedFocusMock = vi.hoisted(() => ({
+  navigate: vi.fn(
+    (_epicId: string, _viewTabId: string, prepare: () => unknown) => prepare(),
+  ),
+}));
+
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation: () => vi.fn(),
+  useEpicNestedFocusNavigation: () => nestedFocusMock.navigate,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({
@@ -57,7 +73,7 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 vi.mock("@/hooks/terminal/use-terminal-session-recovery", () => ({
   useTerminalSessionRecovery: () => ({
-    recoverNonce: 0,
+    recoverNonce: recoveryMock.recoverNonce,
     recoveryExhausted: false,
     onManualReconnect: () => undefined,
     onSessionHealthy: () => undefined,
@@ -142,7 +158,10 @@ vi.mock(
     ...(await importOriginal<
       typeof import("@/lib/registries/terminal-session-registry")
     >()),
-    useTerminalSessionHandle: () => null,
+    useTerminalSessionHandle: (args: { readonly enabled: boolean }) => {
+      mockHandleEnabled = args.enabled;
+      return null;
+    },
   }),
 );
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -168,32 +187,74 @@ function signInNode(id: string, instanceId: string): EpicTerminalRef {
   };
 }
 
-function renderTile(node: EpicTerminalRef) {
-  const store = useEpicCanvasStore.getState();
-  const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
-  store.openTileInTab(viewTabId, node);
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
+function setupNode(id: string, instanceId: string): EpicTerminalRef {
+  return {
+    id,
+    instanceId,
+    type: "terminal",
+    name: "Setup terminal",
+    titleSource: "manual",
+    hostId: HOST_ID,
+    cwd: "~",
+    origin: "setup",
+  };
+}
+
+function shellNode(id: string, instanceId: string): EpicTerminalRef {
+  return {
+    id,
+    instanceId,
+    type: "terminal",
+    name: "shell",
+    titleSource: "manual",
+    hostId: HOST_ID,
+    cwd: "/work/repo",
+  };
+}
+
+function renderTileElement(
+  node: EpicTerminalRef,
+  viewTabId: string,
+  paneId: string,
+) {
+  return (
+    <QueryClientProvider client={new QueryClient()}>
       <TabHostProvider hostId={HOST_ID}>
         <TerminalTile
           viewTabId={viewTabId}
           node={node}
-          tileId="pane-1"
+          tileId={paneId}
           isActive
         />
       </TabHostProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
-describe("<TerminalTile /> provider-login origin never dispatches terminal.create", () => {
+function renderTile(node: EpicTerminalRef) {
+  const store = useEpicCanvasStore.getState();
+  const viewTabId = store.openEpicTab(EPIC_ID, "Epic");
+  store.openTileInTab(viewTabId, node);
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[viewTabId];
+  if (canvas === undefined) {
+    throw new Error("expected view tab canvas");
+  }
+  const pane = collectPanes(canvas.root).at(0);
+  if (pane === undefined) throw new Error("expected tile pane");
+  return {
+    ...render(renderTileElement(node, viewTabId, pane.id)),
+    viewTabId,
+    paneId: pane.id,
+  };
+}
+
+describe("<TerminalTile /> host-owned terminal origins never dispatch terminal.create", () => {
   beforeEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     authorityMock.capability = "legacy";
+    recoveryMock.recoverNonce = 0;
+    mockHandleEnabled = null;
     mockCreate = {
       isError: false,
       isIdle: true,
@@ -263,5 +324,124 @@ describe("<TerminalTile /> provider-login origin never dispatches terminal.creat
     await Promise.resolve();
     await Promise.resolve();
     expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
+
+  it.each(["legacy", "capable"] as const)(
+    "shows setup unavailable and never creates against a %s host",
+    async (capability) => {
+      vi.useFakeTimers();
+      authorityMock.capability = capability;
+      try {
+        const node = setupNode("term-setup", "inst-term-setup");
+        const rendered = renderTile(node);
+        await act(async () => {
+          vi.advanceTimersByTime(2_001);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(
+          screen.getByText("Setup terminal is unavailable."),
+        ).toBeDefined();
+        expect(
+          screen.getByText("Retry setup from the agent’s setup controls."),
+        ).toBeDefined();
+        expect(screen.getByRole("button", { name: "Close" })).toBeDefined();
+        expect(mockCreate.mutate).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("button", { name: "Close" }));
+        expect(
+          useEpicCanvasStore.getState().canvasByTabId[rendered.viewTabId]
+            ?.tilesByInstanceId[node.instanceId],
+        ).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps a live setup session attachable without creating a replacement", async () => {
+    mockList.data = {
+      sessions: [
+        {
+          sessionId: "term-setup-live",
+          sessionKind: "terminal",
+          status: "running",
+        },
+      ],
+    };
+    renderTile(setupNode("term-setup-live", "inst-term-setup-live"));
+
+    await waitFor(() => {
+      expect(mockHandleEnabled).toBe(true);
+    });
+    expect(screen.queryByText("Setup terminal is unavailable.")).toBeNull();
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
+
+  it("waits through an initial load and refetch before declaring setup unavailable", async () => {
+    const node = setupNode("term-setup-pending", "inst-term-setup-pending");
+    mockList = {
+      ...mockList,
+      data: undefined,
+      isFetching: true,
+      isPending: true,
+    };
+    const rendered = renderTile(node);
+
+    await Promise.resolve();
+    expect(screen.queryByText("Setup terminal is unavailable.")).toBeNull();
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
+
+    mockList = {
+      ...mockList,
+      data: { sessions: [] },
+      isFetching: true,
+      isPending: false,
+    };
+    rendered.rerender(
+      renderTileElement(node, rendered.viewTabId, rendered.paneId),
+    );
+    await Promise.resolve();
+    expect(screen.queryByText("Setup terminal is unavailable.")).toBeNull();
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
+
+    mockList = {
+      ...mockList,
+      isFetching: false,
+    };
+    rendered.rerender(
+      renderTileElement(node, rendered.viewTabId, rendered.paneId),
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Setup terminal is unavailable.")).toBeDefined();
+    });
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate a missing setup session after recovery remount", async () => {
+    const node = setupNode("term-setup-recovery", "inst-term-setup-recovery");
+    const rendered = renderTile(node);
+
+    await waitFor(() => {
+      expect(screen.getByText("Setup terminal is unavailable.")).toBeDefined();
+    });
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
+
+    recoveryMock.recoverNonce = 1;
+    rendered.rerender(
+      renderTileElement(node, rendered.viewTabId, rendered.paneId),
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Setup terminal is unavailable.")).toBeDefined();
+    });
+    expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
+
+  it("still creates an ordinary shell when its settled session is absent", async () => {
+    renderTile(shellNode("term-shell", "inst-term-shell"));
+
+    await waitFor(() => {
+      expect(mockCreate.mutate).toHaveBeenCalledTimes(1);
+    });
   });
 });

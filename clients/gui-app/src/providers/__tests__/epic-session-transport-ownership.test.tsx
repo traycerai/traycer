@@ -153,7 +153,7 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
+import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __setEpicRuntimeWorkerFactoryForTests,
@@ -209,9 +209,9 @@ function sessionBody(
   onHandle: (handle: OpenEpicStoreHandle) => void,
 ): React.JSX.Element {
   return (
-    <EpicSessionProvider epicId={epicId} tabId={tabId}>
+    <TestEpicSessionTab epicId={epicId} tabId={tabId}>
       <HandleProbe onHandle={onHandle} />
-    </EpicSessionProvider>
+    </TestEpicSessionTab>
   );
 }
 

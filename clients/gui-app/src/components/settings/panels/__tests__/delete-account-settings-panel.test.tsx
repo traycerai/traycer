@@ -145,8 +145,9 @@ describe("DeleteAccountSettingsPanel", () => {
     expect(event).toBeNull();
     const parsed = new URL(url);
     expect(parsed.origin).toBe("https://docs.google.com");
-    // Both address branches are prefilled; the sign-in method is left for the
-    // user (this account signs in with GitHub, per the fixture).
+    // Both address branches are prefilled; the sign-in method (Email, GitHub
+    // or Apple) is left for the user (this account signs in with GitHub, per
+    // the fixture).
     expect(parsed.searchParams.get("entry.833738174")).toBe("ada@example.com");
     expect(parsed.searchParams.get("entry.671973110")).toBe("ada@example.com");
     expect(parsed.searchParams.has("entry.1825201942")).toBe(false);

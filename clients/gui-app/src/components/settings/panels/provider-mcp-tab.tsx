@@ -31,11 +31,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
+import { HoverCard, HoverCardGroup } from "@/components/ui/hover-card";
 import {
   Tooltip,
   TooltipContent,
@@ -1584,17 +1580,20 @@ function ServerToolsPanel(props: {
           </p>
         ) : (
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {server.tools.map((tool) => (
-              <ToolChip
-                key={tool.name}
-                tool={tool}
-                readOnly={toolsReadOnly || tool.readOnly}
-                disabled={pending}
-                onToggle={(enabled) => {
-                  onToggleTool(tool.name, enabled);
-                }}
-              />
-            ))}
+            {/* One list: moving tool to tool hands the schema card over. */}
+            <HoverCardGroup>
+              {server.tools.map((tool) => (
+                <ToolChip
+                  key={tool.name}
+                  tool={tool}
+                  readOnly={toolsReadOnly || tool.readOnly}
+                  disabled={pending}
+                  onToggle={(enabled) => {
+                    onToggleTool(tool.name, enabled);
+                  }}
+                />
+              ))}
+            </HoverCardGroup>
           </div>
         )}
       </TabsContent>
@@ -1744,40 +1743,47 @@ function ToolChip(props: {
   );
 
   return (
-    <HoverCard openDelay={200} closeDelay={100}>
-      <HoverCardTrigger asChild>
-        <span className="block w-full">{chip}</span>
-      </HoverCardTrigger>
-      <HoverCardContent
-        align="start"
-        className="w-[min(90vw,20rem)] max-h-[min(50vh,18rem)] overflow-auto p-3"
-      >
-        <div className="text-ui-sm font-medium text-foreground">
-          {tool.name}
-        </div>
-        {denySummary !== null ? (
-          <p className="mt-1 text-ui-xs text-muted-foreground">
-            Disabled by {denySummary}
-            {readOnly && denySummary !== "local project settings"
-              ? " (locked — clear the deny in that source to re-enable)"
-              : null}
-          </p>
-        ) : null}
-        {tool.description !== null && tool.description.length > 0 ? (
-          <p className="mt-1 text-ui-xs text-muted-foreground">
-            {tool.description}
-          </p>
-        ) : (
-          <p className="mt-1 text-ui-xs text-muted-foreground">
-            No description.
-          </p>
-        )}
-        <div className="mt-2 text-ui-xs font-medium text-foreground">
-          Input Schema
-        </div>
-        <ToolSchemaBody schema={tool.inputSchema} />
-      </HoverCardContent>
-    </HoverCard>
+    <HoverCard
+      trigger={<span className="block w-full">{chip}</span>}
+      content={
+        <>
+          <div className="text-ui-sm font-medium text-foreground">
+            {tool.name}
+          </div>
+          {denySummary !== null ? (
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              Disabled by {denySummary}
+              {readOnly && denySummary !== "local project settings"
+                ? " (locked - clear the deny in that source to re-enable)"
+                : null}
+            </p>
+          ) : null}
+          {tool.description !== null && tool.description.length > 0 ? (
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              {tool.description}
+            </p>
+          ) : (
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              No description.
+            </p>
+          )}
+          <div className="mt-2 text-ui-xs font-medium text-foreground">
+            Input Schema
+          </div>
+          <ToolSchemaBody schema={tool.inputSchema} />
+        </>
+      }
+      appearance="preview"
+      semantics={{ role: "tooltip" }}
+      side="bottom"
+      align="start"
+      sideOffset={4}
+      enabled
+      open={null}
+      onOpenChange={null}
+      testId={null}
+      className="w-[min(90vw,20rem)] max-h-[min(50vh,18rem)] overflow-auto p-3"
+    />
   );
 }
 

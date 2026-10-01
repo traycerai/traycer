@@ -16,6 +16,7 @@ import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/
 import {
   assistantRowId,
   assistantRowTurnKey,
+  autoJudgeNoticeRowId,
   autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
@@ -178,6 +179,14 @@ export interface TranscriptWindow {
    * than as the end of the transcript.
    */
   readonly skeleton: readonly (RowSkeletonEntry | undefined)[];
+  /**
+   * Moves whenever the skeleton names a row it did not name before - an
+   * ordinal that was a hole, or one that now holds a different row id - and
+   * never otherwise. A chunk beyond a dropped one moves it while
+   * `skeletonStreamCoveredThrough` stands still. Chat find keys what it could
+   * not conclude over a partial skeleton on it.
+   */
+  readonly skeletonRevision: number;
   /** Set by the chunk carrying `isFinal`, once its length agrees with `rowCount`. */
   readonly skeletonComplete: boolean;
   /**
@@ -529,6 +538,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     epoch: 0,
     rowCount: 0,
     skeleton: [],
+    skeletonRevision: 0,
     skeletonComplete: false,
     skeletonStreamCoveredThrough: 0,
     indexRevision: 0,
@@ -801,7 +811,8 @@ function recordsByteLength(
 }
 
 /**
- * The window's full charge: the fresh tier PLUS the live tail.
+ * The active window charge: the fresh tier PLUS the live tail. Stale carry is
+ * measured separately because it is retained but excluded from this cap.
  *
  * A plain sum, and it is the disjointness that makes it one. A record a fresh
  * span references is dropped from the live set by
@@ -825,9 +836,9 @@ function chargedWindowBytes(
 }
 
 /**
- * What the window currently retains, in bytes - the figure
- * {@link evictTranscriptWindowToBudget} reads, and the one a process-wide
- * accountant should settle.
+ * What the window's active tier retains, in bytes - the figure
+ * {@link evictTranscriptWindowToBudget} reads. The process accountant also
+ * includes {@link transcriptWindowStaleTierBytes}.
  */
 export function transcriptWindowChargedBytes(window: TranscriptWindow): number {
   return chargedWindowBytes(
@@ -836,6 +847,13 @@ export function transcriptWindowChargedBytes(window: TranscriptWindow): number {
     window.liveMessages,
     window.liveEvents,
   );
+}
+
+/** Stale carry is retained even though the window's eight-MiB cap excludes it. */
+export function transcriptWindowStaleTierBytes(
+  window: TranscriptWindow,
+): number {
+  return staleTierBytes(window);
 }
 
 /**
@@ -1076,7 +1094,8 @@ export function spanChargeBytes(
  * Fold one record set's BACKABLE identities into `into` - the derived id
  * shapes every tier produces the same way: a message backs the row carrying
  * its id, an event backs its transcript row, its forked-chat-link row, its
- * imported-chat-marker row and its unattended-auto-denial row, and a stopped
+ * imported-chat-marker row, its unattended-auto-denial row and its auto-judge
+ * notice row, and a stopped
  * turn's event backs that turn's assistant row.
  *
  * Every SHAPE is added for every event, unconditionally: this is the set of
@@ -1100,6 +1119,7 @@ export function addRecordBackedRowIds(
     into.add(forkedChatLinkRowId(event.eventId));
     into.add(importedChatMarkerRowId(event.eventId));
     into.add(autoJudgeUnattendedDenialRowId(event.eventId));
+    into.add(autoJudgeNoticeRowId(event.eventId));
     if (event.type === "turn.stopped" && event.turnId !== null) {
       into.add(assistantRowId(event.turnId));
     }
@@ -2968,6 +2988,45 @@ function tailRowIdsFor(
   return rowIds;
 }
 
+/** Whether seating `entry` over `previous` names a row not named there before. */
+function namesDifferentRow(
+  previous: RowSkeletonEntry | undefined,
+  entry: RowSkeletonEntry,
+): boolean {
+  return previous === undefined || previous.rowId !== entry.rowId;
+}
+
+/**
+ * Seats an index delta's entries into `skeleton` (see {@link applyIndexChange}
+ * for why appends begin at `appendBase`): where the appends stopped, and
+ * whether any entry named a row the skeleton did not name there before.
+ */
+function seatIndexChanges(
+  skeleton: (RowSkeletonEntry | undefined)[],
+  changes: readonly ChatIndexChange[],
+  appendBase: number,
+): { readonly appendCursor: number; readonly namesNewRow: boolean } {
+  let appendCursor = appendBase;
+  let namesNewRow = false;
+  for (const change of changes) {
+    if (change.type === "appended") {
+      for (const entry of change.entries) {
+        namesNewRow ||= namesDifferentRow(skeleton[appendCursor], entry);
+        skeleton[appendCursor] = entry;
+        appendCursor += 1;
+      }
+      continue;
+    }
+    if (change.type === "updated") {
+      for (const { ordinal, entry } of change.entries) {
+        namesNewRow ||= namesDifferentRow(skeleton[ordinal], entry);
+        skeleton[ordinal] = entry;
+      }
+    }
+  }
+  return { appendCursor, namesNewRow };
+}
+
 /**
  * Place one chunk of the skeleton.
  *
@@ -2984,8 +3043,11 @@ export function applySkeletonChunk(
 ): TranscriptWindow {
   if (chunk.epoch !== window.epoch) return window;
   const skeleton = [...window.skeleton];
+  let namesNewRow = false;
   for (let index = 0; index < chunk.entries.length; index += 1) {
-    skeleton[chunk.fromOrdinal + index] = chunk.entries[index];
+    const ordinal = chunk.fromOrdinal + index;
+    namesNewRow ||= namesDifferentRow(skeleton[ordinal], chunk.entries[index]);
+    skeleton[ordinal] = chunk.entries[index];
   }
   const complete = chunk.isFinal;
   // How far THIS stream has reached, contiguously from ordinal 0.
@@ -3022,6 +3084,7 @@ export function applySkeletonChunk(
   const next: TranscriptWindow = {
     ...window,
     skeleton,
+    skeletonRevision: window.skeletonRevision + (namesNewRow ? 1 : 0),
     skeletonComplete: complete && !lost,
     skeletonStreamCoveredThrough: coveredThrough,
     invalidated: window.invalidated || lost,
@@ -4208,21 +4271,11 @@ export function applyIndexChange(
   // reason: on the snapshot-ran-ahead interleave above it already counts the
   // rows this delta delivers, and seating from it would shift every entry one
   // past its real ordinal.
-  let appendCursor = appendBase;
-  for (const change of input.changes) {
-    if (change.type === "appended") {
-      for (const entry of change.entries) {
-        skeleton[appendCursor] = entry;
-        appendCursor += 1;
-      }
-      continue;
-    }
-    if (change.type === "updated") {
-      for (const { ordinal, entry } of change.entries) {
-        skeleton[ordinal] = entry;
-      }
-    }
-  }
+  const { appendCursor, namesNewRow } = seatIndexChanges(
+    skeleton,
+    input.changes,
+    appendBase,
+  );
   // How far the skeleton STREAM has contiguously reached once this frame is
   // folded in.
   //
@@ -4244,6 +4297,7 @@ export function applyIndexChange(
   const next: TranscriptWindow = {
     ...window,
     skeleton,
+    skeletonRevision: window.skeletonRevision + (namesNewRow ? 1 : 0),
     rowCount: input.rowCount,
     indexRevision: input.indexRevision,
     // Spent: this delta's revision is now the baseline the next one is
@@ -4905,25 +4959,62 @@ function heldCopyIsBehindServed(held: Message, served: Message): boolean {
 }
 
 /**
- * Seat one `range` response.
+ * Whether one `range` response seats, is dropped, or voids the window.
  *
- * Discarded on a stale epoch or a row-id mismatch - but those are NOT the same
- * judgement, and treating them as one was a defect.
+ * Three ways an answer can fail to seat, and they are three different
+ * judgements - collapsing any two of them was a defect each time.
  *
- * A stale epoch is self-healing: a newer epoch is by definition already on its
- * way, and the frame that carries it re-seats the coordinate space. Dropping
- * the response and waiting is correct.
+ * An epoch BELOW this window's is a straggler from a space the client has
+ * already left. The frame that moved this window on has renumbered every
+ * ordinal the answer names, so nothing in it applies and nothing about it is
+ * news. Dropped, and the planner's next request is framed against the current
+ * space.
  *
- * A row-id mismatch under the CURRENT epoch is not self-healing. Nothing is en
- * route to repair it: the planner sees the same still-missing span, asks for
- * the same ordinals, and the host answers with the same contradicting ids -
- * an unbounded request/response loop that never converges. The disagreement is
- * about the coordinate space itself, which is exactly what `invalidated` means,
- * so it is raised here and only a `resnapshot` clears it.
+ * An epoch ABOVE this window's is a space the client has never reached, which
+ * is only possible if the frame that would have carried it here - the
+ * `reindexed` beside a history mutation - was lost. The pump keeps
+ * drop-and-continue for a flaky socket write, so that is an ordinary outcome.
+ * The host serves every range from its CURRENT index and stamps it with the
+ * current epoch, so once that frame is gone every answer this window asks for
+ * arrives from ahead of it. Dropping those and waiting was the original
+ * design, on the premise that the newer epoch was "already on its way" - and
+ * that premise is exactly what a lost frame falsifies. With the window left
+ * valid, the planner saw the same still-missing span, asked again, and the
+ * host answered from ahead again: a request/response loop at the round-trip
+ * rate, for as long as the turn ran or, on an idle chat, for the life of the
+ * connection. So a newer epoch is handled as {@link applyIndexChange} handles
+ * it: it IS a `reindexed` this client did not see, learned late, and the
+ * window is invalidated so that one `resnapshot` re-seats the space.
+ *
+ * A row-id mismatch under the CURRENT epoch is not self-healing either.
+ * Nothing is en route to repair it: the planner sees the same still-missing
+ * span, asks for the same ordinals, and the host answers with the same
+ * contradicting ids - the same loop by another route. The disagreement is
+ * about the coordinate space itself, which is exactly what `invalidated`
+ * means, so it is raised here and only a `resnapshot` clears it.
  *
  * `truncatedAtOrdinal` is not an error and is not handled here - the response
  * is seated for what it did serve, and asking for the remainder is the
  * caller's job (see {@link planTranscriptHydration}).
+ */
+function admitRangeResponse(
+  window: TranscriptWindow,
+  response: ChatRangeResponse,
+): "seat" | "drop" | "void" {
+  if (response.epoch < window.epoch) return "drop";
+  // Before the body is even looked at: the epoch alone is the evidence, and an
+  // empty answer from ahead is as much a missed reindex as a full one.
+  if (response.epoch > window.epoch) return "void";
+  if (response.rowIds.length === 0) return "drop";
+  return skeletonContradicts(window, response.fromOrdinal, response.rowIds)
+    ? "void"
+    : "seat";
+}
+
+/**
+ * Seat one `range` response {@link admitRangeResponse} let through - the
+ * three ways an answer can fail to seat, and why they differ, are documented
+ * there.
  */
 export function applyRangeResponse(
   window: TranscriptWindow,
@@ -4938,9 +5029,9 @@ export function applyRangeResponse(
    */
   witnesses: ImageWitnessStore | null,
 ): TranscriptWindow {
-  if (response.epoch !== window.epoch) return window;
-  if (response.rowIds.length === 0) return window;
-  if (skeletonContradicts(window, response.fromOrdinal, response.rowIds)) {
+  const admission = admitRangeResponse(window, response);
+  if (admission === "drop") return window;
+  if (admission === "void") {
     return window.invalidated ? window : { ...window, invalidated: true };
   }
   const conflictingRowIds = incompleteRowIdsToWithhold(
@@ -5868,12 +5959,55 @@ export function evictTranscriptWindowToBudget(
   visible: OrdinalRange | null,
   required: readonly number[],
 ): TranscriptWindow {
+  return evictTranscriptWindowWithRecordOverhead(input, maxBytes, {
+    visible,
+    required,
+    recordOverheadBytes: 0,
+    includeStaleBytes: false,
+  });
+}
+
+/** The process budget uses the same span policy with each retained record's heap cost. */
+export function evictTranscriptWindowToEstimatedBudget(
+  input: TranscriptWindow,
+  maxBytes: number,
+  options: {
+    readonly visible: OrdinalRange | null;
+    readonly required: readonly number[];
+    readonly recordOverheadBytes: number;
+  },
+): TranscriptWindow {
+  return evictTranscriptWindowWithRecordOverhead(input, maxBytes, {
+    ...options,
+    includeStaleBytes: true,
+  });
+}
+
+function evictTranscriptWindowWithRecordOverhead(
+  input: TranscriptWindow,
+  maxBytes: number,
+  options: {
+    readonly visible: OrdinalRange | null;
+    readonly required: readonly number[];
+    readonly recordOverheadBytes: number;
+    readonly includeStaleBytes: boolean;
+  },
+): TranscriptWindow {
+  const { visible, required, recordOverheadBytes, includeStaleBytes } = options;
   // The one place the byte figure is READ, and therefore the one place it has
   // to be true. Settling FIRST rather than after the early return is the whole
   // point: a window carrying a turn's worth of deferred growth would otherwise
   // read as under budget and evict nothing.
   const window = settleWindowBytes(input);
-  if (window.hydratedBytes <= maxBytes) {
+  let bytes =
+    window.hydratedBytes +
+    (includeStaleBytes ? staleTierBytes(window) : 0) +
+    recordOverheadBytes *
+      (window.records.messages.size +
+        window.records.events.size +
+        window.liveMessages.length +
+        window.liveEvents.length);
+  if (bytes <= maxBytes) {
     return window.evictionTerminal === "none"
       ? window
       : { ...window, evictionTerminal: "none" };
@@ -5911,15 +6045,24 @@ export function evictTranscriptWindowToBudget(
   // genuinely drops - which is what lets a post-rebase window (whose carry
   // holds every fresh span's records) make progress at all.
   const { messageRefs, eventRefs } = freshRecordRefCounts(window.spans);
+  const staleRefs = referencedRecordIds([window.staleSpans]);
   const marginalSaving = (span: HydratedSpan): number => {
     let saving = span.contextBytes;
     for (const id of span.messageIds) {
       if (messageRefs.get(id) !== 1) continue;
-      saving += window.records.messages.get(id)?.bytes ?? 0;
+      const entry = window.records.messages.get(id);
+      if (entry === undefined) continue;
+      const heldByStale = staleRefs.messageIds.has(id);
+      if (!includeStaleBytes || !heldByStale) saving += entry.bytes;
+      if (!heldByStale) saving += recordOverheadBytes;
     }
     for (const id of span.eventIds) {
       if (eventRefs.get(id) !== 1) continue;
-      saving += window.records.events.get(id)?.bytes ?? 0;
+      const entry = window.records.events.get(id);
+      if (entry === undefined) continue;
+      const heldByStale = staleRefs.eventIds.has(id);
+      if (!includeStaleBytes || !heldByStale) saving += entry.bytes;
+      if (!heldByStale) saving += recordOverheadBytes;
     }
     return saving;
   };
@@ -5954,7 +6097,6 @@ export function evictTranscriptWindowToBudget(
     }
     return members;
   };
-  let bytes = window.hydratedBytes;
   let sawUnbreakableGroup = false;
   for (const span of candidates) {
     if (bytes <= maxBytes) break;
@@ -5977,7 +6119,11 @@ export function evictTranscriptWindowToBudget(
     }
     // Every member unprotected: evict the closure as one unit and charge the
     // union saving.
-    bytes -= evictClosureUnit(closure, window.records, evictSpan);
+    bytes -= evictClosureUnit(closure, window.records, evictSpan, {
+      recordOverheadBytes,
+      staleRefs,
+      includeStaleBytes,
+    });
   }
   let evictionTerminal: TranscriptWindow["evictionTerminal"] = "none";
   if (bytes > maxBytes) {
@@ -6038,7 +6184,16 @@ function evictClosureUnit(
   closure: ReadonlySet<HydratedSpan>,
   records: RecordLedger,
   evictSpan: (span: HydratedSpan) => void,
+  options: {
+    readonly recordOverheadBytes: number;
+    readonly includeStaleBytes: boolean;
+    readonly staleRefs: {
+      readonly messageIds: ReadonlySet<string>;
+      readonly eventIds: ReadonlySet<string>;
+    };
+  },
 ): number {
+  const { recordOverheadBytes, staleRefs, includeStaleBytes } = options;
   let unionSaving = 0;
   const freedMessages = new Set<string>();
   const freedEvents = new Set<string>();
@@ -6046,13 +6201,23 @@ function evictClosureUnit(
     unionSaving += member.contextBytes;
     for (const id of member.messageIds) freedMessages.add(id);
     for (const id of member.eventIds) freedEvents.add(id);
-    evictSpan(member);
   }
   for (const id of freedMessages) {
-    unionSaving += records.messages.get(id)?.bytes ?? 0;
+    const entry = records.messages.get(id);
+    if (entry === undefined) continue;
+    const heldByStale = staleRefs.messageIds.has(id);
+    if (!includeStaleBytes || !heldByStale) unionSaving += entry.bytes;
+    if (!heldByStale) unionSaving += recordOverheadBytes;
   }
   for (const id of freedEvents) {
-    unionSaving += records.events.get(id)?.bytes ?? 0;
+    const entry = records.events.get(id);
+    if (entry === undefined) continue;
+    const heldByStale = staleRefs.eventIds.has(id);
+    if (!includeStaleBytes || !heldByStale) unionSaving += entry.bytes;
+    if (!heldByStale) unionSaving += recordOverheadBytes;
+  }
+  if (unionSaving > 0) {
+    for (const member of closure) evictSpan(member);
   }
   return unionSaving;
 }
@@ -6078,6 +6243,34 @@ export function transcriptWindowProtectedBytes(
   window: TranscriptWindow,
   visible: OrdinalRange | null,
   required: readonly number[],
+): readonly ProtectedBytes[] {
+  return transcriptWindowProtectedBytesWithRecordOverhead(
+    window,
+    visible,
+    required,
+    0,
+  );
+}
+
+export function transcriptWindowProtectedEstimatedBytes(
+  window: TranscriptWindow,
+  visible: OrdinalRange | null,
+  required: readonly number[],
+  recordOverheadBytes: number,
+): readonly ProtectedBytes[] {
+  return transcriptWindowProtectedBytesWithRecordOverhead(
+    window,
+    visible,
+    required,
+    recordOverheadBytes,
+  );
+}
+
+function transcriptWindowProtectedBytesWithRecordOverhead(
+  window: TranscriptWindow,
+  visible: OrdinalRange | null,
+  required: readonly number[],
+  recordOverheadBytes: number,
 ): readonly ProtectedBytes[] {
   const byKind = new Map<ProtectedRegionKind, HydratedSpan[]>();
   const classify = (span: HydratedSpan): ProtectedRegionKind | null => {
@@ -6107,10 +6300,16 @@ export function transcriptWindowProtectedBytes(
   }
   const reported: ProtectedBytes[] = [];
   for (const [kind, spans] of byKind) {
-    const bytes = freshTierBytes(window.records, spans);
+    const ids = referencedRecordIds([spans]);
+    const bytes =
+      freshTierBytes(window.records, spans) +
+      recordOverheadBytes * (ids.messageIds.size + ids.eventIds.size);
     if (bytes > 0) reported.push({ kind, bytes });
   }
-  const liveBytes = recordsByteLength(window.liveMessages, window.liveEvents);
+  const liveBytes =
+    recordsByteLength(window.liveMessages, window.liveEvents) +
+    recordOverheadBytes *
+      (window.liveMessages.length + window.liveEvents.length);
   if (liveBytes > 0) {
     const tail = reported.find((entry) => entry.kind === "tail");
     if (tail === undefined) reported.push({ kind: "tail", bytes: liveBytes });

@@ -12,6 +12,12 @@ export interface TileChromeCapabilities {
   readonly back: boolean;
   readonly forward: boolean;
   readonly reload: boolean;
+  /**
+   * Reload turns into Stop while a navigation is in flight. False where the
+   * runtime cannot cancel one (a screencast tile has no stop on its wire),
+   * in which case the spinner rides inside Reload instead.
+   */
+  readonly stop: boolean;
   readonly zoom: boolean;
   readonly devtools: boolean;
   readonly find: boolean;
@@ -54,6 +60,8 @@ export interface TileController {
   readonly onBack: () => void;
   readonly onForward: () => void;
   readonly onReload: () => void;
+  /** Cancel the in-flight navigation; only rendered under `capabilities.stop`. */
+  readonly onStop: () => void;
   readonly onZoomOut: () => void;
   readonly onZoomIn: () => void;
   readonly onResetZoom: () => void;
@@ -75,6 +83,7 @@ export const PRIMARY_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   back: true,
   forward: true,
   reload: true,
+  stop: true,
   zoom: true,
   devtools: true,
   find: true,

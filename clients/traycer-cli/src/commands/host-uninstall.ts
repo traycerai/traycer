@@ -31,6 +31,13 @@ import {
 } from "@traycer-clients/shared/host-update";
 import { readHostPidMetadata } from "../host/pid-metadata";
 import {
+  readServiceRegistrationOwnership,
+  serviceTaskLeftInPlaceWarning,
+  type ServiceRegistrationWarning,
+} from "../service/registration-owner";
+import { refuseDesktopDisruptionOfForegroundRun } from "../host/foreground-host-run";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
+import {
   getPublishedProcessIdentityVerdict,
   type PublishedProcessIdentityVerdict,
 } from "../store/process-identity";
@@ -55,6 +62,16 @@ import {
 // is never removed - there is no destructive "purge" path.
 export interface HostUninstallArgs {
   readonly all: boolean;
+}
+
+/** The command's own arguments: who asked, beside what to remove. */
+export interface HostUninstallCommandArgs extends HostUninstallArgs {
+  /**
+   * `--lifecycle-origin`. `desktop` refuses `--all` over a host a person
+   * started in a terminal (`refuseDesktopDisruptionOfForegroundRun`); a
+   * terminal's `--all` stops that host as it always has.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
 }
 
 export interface RuntimePurgeStopController {
@@ -156,7 +173,9 @@ export async function stopServiceBeforeRuntimePurge(
   }
 }
 
-export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
+export function buildHostUninstallCommand(
+  args: HostUninstallCommandArgs,
+): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     ctx.runtime.logger.info("Host uninstall command started", {
       environment: ctx.runtime.environment,
@@ -170,8 +189,19 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
         pollIntervalMs: 100,
         admission: "host-uninstall-maintenance",
       },
-      (capability) =>
-        runHostUninstallWithAttempt(
+      async (capability) => {
+        // First under the lock, before the deregister, the stop and its
+        // intent, and the byte removal: the desktop's Remove Traycer leaves a
+        // host a person started in a terminal running and changes nothing.
+        // The bare form never stops a host, so only `--all` asks.
+        if (args.all) {
+          await refuseDesktopDisruptionOfForegroundRun(
+            "host uninstall",
+            ctx.runtime.environment,
+            args.lifecycleOrigin,
+          );
+        }
+        return runHostUninstallWithAttempt(
           args,
           {
             environment: ctx.runtime.environment,
@@ -192,7 +222,8 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
             probeProcessExited: getPublishedProcessIdentityVerdict,
           },
           capability,
-        ),
+        );
+      },
     );
   };
 }
@@ -241,6 +272,7 @@ export async function runHostUninstallWithAttempt(
         controller,
         label,
         options,
+        "unconditional",
       ),
     verifyMutationCapability,
     discardAttemptRecord: async () => {
@@ -314,7 +346,8 @@ async function runHostUninstallWithActuators(
     // failed/crashed exit and launchd respawns the host before we
     // ever reach `uninstall`. Deregistering first removes that
     // supervision so no exit outcome can trigger a respawn.
-    await actuators.uninstall(controller, { label });
+    // `--all` stops the host itself next, whoever started it.
+    await actuators.uninstall(controller, { label, leaveForegroundRun: null });
     serviceUninstalled = true;
     ctx.logger.info("Host uninstall service deregistered", {
       environment: ctx.environment,
@@ -490,6 +523,12 @@ async function runHostUninstallWithActuators(
     : liveness === "unknown"
       ? null
       : liveness === "live";
+  // The service registration under this name is another user's: `--all`
+  // never ended, deleted or emptied it (the ownership gate skipped all three)
+  // and finished everything of this account's; the bare form never touches a
+  // registration at all. Either way the removal SUCCEEDED, and this says what
+  // it left in place and why.
+  const serviceWarning = await readServiceTaskLeftInPlaceWarning(ctx);
   return {
     data: {
       removedRecord: result.removedRecord,
@@ -502,8 +541,13 @@ async function runHostUninstallWithActuators(
       // be published as success. Unknown (`null`) keeps the request answer:
       // no platform can verify absence, and reporting failure for every
       // uninstall would be a different wrong answer. See the tri-state note on
-      // `registrationRetained`.
-      serviceUninstalled: serviceUninstalled && registrationRetained !== true,
+      // `registrationRetained`. Vetoed too when the registration under this
+      // name is another user's: the uninstall left it in place on purpose,
+      // which is KNOWN non-removal, whatever the status probe reads.
+      serviceUninstalled:
+        serviceUninstalled &&
+        registrationRetained !== true &&
+        serviceWarning === null,
       deregisterRequested: serviceUninstalled,
       purgedRuntime: result.purgedRuntime,
       // What the machine is left holding, so an automated caller does not
@@ -513,19 +557,54 @@ async function runHostUninstallWithActuators(
       serviceRegistrationRetained,
       retainedServiceState: observedService?.state ?? null,
       hostStillRunning,
+      // Additive: a reader built before it sees the same success.
+      serviceWarning,
     },
-    human: humanSummary({
-      removedVersion: result.removedRecord?.version ?? null,
-      // The READBACK, not the request. Saying "deregistered OS service" while
-      // the same result reports `serviceRegistrationRetained: true` had the
-      // prose and the payload contradicting each other in one breath, and an
-      // unanswerable probe must not count as agreement either.
-      deregisterRequested: serviceUninstalled,
-      serviceRegistrationRetained,
-      hostStillRunning,
-    }),
+    human:
+      serviceWarning === null
+        ? humanSummary({
+            removedVersion: result.removedRecord?.version ?? null,
+            // The READBACK, not the request. Saying "deregistered OS service"
+            // while the same result reports `serviceRegistrationRetained:
+            // true` had the prose and the payload contradicting each other in
+            // one breath, and an unanswerable probe must not count as
+            // agreement either.
+            deregisterRequested: serviceUninstalled,
+            serviceRegistrationRetained,
+            hostStillRunning,
+          })
+        : `${humanSummary({
+            removedVersion: result.removedRecord?.version ?? null,
+            // No deregistration of this account's happened to report.
+            deregisterRequested: false,
+            serviceRegistrationRetained,
+            hostStillRunning,
+          })}; ${serviceWarning.message}`,
     exitCode: 0,
   };
+}
+
+// Never fails the uninstall, like the other descriptive reads here: an
+// ownership read that cannot answer drops the notice rather than turning a
+// removal that happened into an error.
+async function readServiceTaskLeftInPlaceWarning(
+  ctx: RunHostUninstallContext,
+): Promise<ServiceRegistrationWarning | null> {
+  try {
+    const ownership = await readServiceRegistrationOwnership(
+      serviceLabelFor(ctx.environment),
+      process.platform,
+    );
+    return ownership.kind === "not-owned"
+      ? serviceTaskLeftInPlaceWarning(ownership.reason)
+      : null;
+  } catch (err) {
+    ctx.logger.warn("Host uninstall could not read whose service task it is", {
+      environment: ctx.environment,
+      errorName: err instanceof Error ? err.name : "Error",
+    });
+    return null;
+  }
 }
 
 // Best-effort like the status probe, and for the same reason: this exists to

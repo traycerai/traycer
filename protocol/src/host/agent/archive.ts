@@ -8,21 +8,26 @@
  */
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const agentArchiveRequestSchema = z.object({
-  epicId: z.string().min(1),
-  agentId: z.string().min(1),
-  /** Calling agent. Required so self-archive can waive the turn-busy arm. */
-  senderAgentId: z.string().min(1),
-});
+export const agentArchiveRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1),
+    agentId: z.string().min(1),
+    /** Calling agent. Required so self-archive can waive the turn-busy arm. */
+    senderAgentId: z.string().min(1),
+  }),
+);
 export type AgentArchiveRequest = z.infer<typeof agentArchiveRequestSchema>;
 
-export const agentArchiveResponseSchema = z.object({
-  agentId: z.string().min(1),
-  archived: z.literal(true),
-  /** False when the marker was already set. */
-  updated: z.boolean(),
-});
+export const agentArchiveResponseSchema = lazySchema(() =>
+  z.object({
+    agentId: z.string().min(1),
+    archived: z.literal(true),
+    /** False when the marker was already set. */
+    updated: z.boolean(),
+  }),
+);
 export type AgentArchiveResponse = z.infer<typeof agentArchiveResponseSchema>;
 
 export const agentArchiveV10 = defineRpcContract({

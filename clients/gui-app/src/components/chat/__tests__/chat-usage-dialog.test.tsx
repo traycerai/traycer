@@ -10,6 +10,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { useChatUsageDialogStore } from "@/stores/chats/chat-usage-dialog-store";
 
@@ -22,6 +23,7 @@ const usageSummaryCallCount = { current: 0 };
 
 const liveHostClientSpine = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
+  schedulingPolicy: hostRpcSchedulingPolicy,
   invalidator: { invalidateHostScope: () => undefined },
   findHostById: (hostId) =>
     hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

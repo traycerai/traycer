@@ -58,7 +58,7 @@ describe("MentionStepChromeBar refresh button", () => {
     const onReturnFocus = vi.fn();
     const { rerender } = render(
       <MentionStepChromeBar
-        chrome={chromeWith(pendingRefresh("scope-apull-requests"))}
+        chrome={chromeWith(pendingRefresh("scope-a\x1fpull-requests"))}
         onReturnFocus={onReturnFocus}
       />,
     );
@@ -70,7 +70,7 @@ describe("MentionStepChromeBar refresh button", () => {
     // asked for anything, so its button must be usable immediately.
     rerender(
       <MentionStepChromeBar
-        chrome={chromeWith(pendingRefresh("scope-bpull-requests"))}
+        chrome={chromeWith(pendingRefresh("scope-b\x1fpull-requests"))}
         onReturnFocus={onReturnFocus}
       />,
     );
@@ -83,7 +83,7 @@ describe("MentionStepChromeBar refresh button", () => {
     // notice arriving - must not cancel the spinner on a refresh that is still
     // genuinely running.
     const onReturnFocus = vi.fn();
-    const refresh = pendingRefresh("scope-apull-requests");
+    const refresh = pendingRefresh("scope-a\x1fpull-requests");
     const { rerender } = render(
       <MentionStepChromeBar
         chrome={chromeWith(refresh)}

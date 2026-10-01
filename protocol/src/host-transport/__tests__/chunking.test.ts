@@ -1,4 +1,4 @@
-import { deflateSync, Inflate, inflateSync } from "fflate";
+import { Deflate, deflateSync, Inflate, inflateSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("fflate", async (importOriginal) => {
@@ -11,6 +11,7 @@ vi.mock("fflate", async (importOriginal) => {
 import {
   decodeMuxFrame,
   encodeMuxFrame,
+  MUX_FRAME_HEADER_LEN,
   type MuxFrame,
   MuxFrameDecodeError,
   MuxFrameType,
@@ -26,12 +27,14 @@ import {
   CHUNK_PACE_FRAMES_PER_SEC,
   ChunkPacer,
   ChunkReassembler,
+  MuxFrameOverExpansionError,
   ChunkReassemblyError,
   COMPRESSION_MIN_PAYLOAD_BYTES,
   decodeMuxMessageBody,
   encodeMuxMessageBody,
   type ReassembledMessage,
   OutboundChunkSource,
+  unchunkedStreamFrameViolation,
 } from "../chunking";
 import { runChunkReassemblerConformanceSpec } from "./chunk-reassembler-conformance";
 
@@ -375,6 +378,75 @@ describe("body compression round-trip (T5)", () => {
     expect(bytesEqual(c.binary!, binary)).toBe(true);
   });
 
+  it("inflates each compressed frame in ONE inflateSync call and never through the streaming Inflate (the 63-byte-slice regression)", () => {
+    // Highly compressible, multi-chunk binary content - the same shape as the
+    // round-trip test above, so more than one frame rides compressed.
+    const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 3 + 777).fill(0x41);
+    let seq = 0;
+    const source = new OutboundChunkSource(
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: 9,
+        qos: QosClass.BULK,
+        json: null,
+        binary,
+      },
+      () => seq++,
+      true,
+    );
+    expect(source.chunked).toBe(true);
+
+    const { frames } = drainThroughWire(source);
+    const compressedFrames = frames.filter((frame) => frame.compressed);
+    expect(compressedFrames.length).toBeGreaterThan(0);
+
+    // The declared plaintext length lives in the first 4 bytes (big-endian)
+    // of each compressed frame's still-compressed binary payload - read it
+    // before re-draining, so the expectation is pinned to what the SENDER
+    // declared rather than recomputed from the receiver's behavior.
+    const declaredPlainLengths = compressedFrames.map((frame) => {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const payload = frame.binary!;
+      return new DataView(
+        payload.buffer,
+        payload.byteOffset,
+        payload.byteLength,
+      ).getUint32(0);
+    });
+
+    vi.mocked(inflateSync).mockClear();
+    const push = vi.spyOn(Inflate.prototype, "push");
+    try {
+      const reassembler = new ChunkReassembler(undefined);
+      let message: ReassembledMessage | null = null;
+      for (const frame of frames) {
+        const out = reassembler.accept(frame);
+        if (out !== null) {
+          message = out;
+        }
+      }
+
+      expect(inflateSync).toHaveBeenCalledTimes(compressedFrames.length);
+      const calls = vi.mocked(inflateSync).mock.calls;
+      for (let i = 0; i < calls.length; i += 1) {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const opts = calls[i][1]!;
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        expect(opts.out!.length).toBe(declaredPlainLengths[i] + 1);
+      }
+      expect(push).not.toHaveBeenCalled();
+
+      // Positive control: the ONE-call inflate path still reassembles
+      // byte-identical content.
+      expect(message).not.toBeNull();
+      expect(message?.binary).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      expect(bytesEqual(message!.binary!, binary)).toBe(true);
+    } finally {
+      push.mockRestore();
+    }
+  });
+
   it("emits at least one frame with compressed === true and a payload smaller than the plaintext slice, for compressible content", () => {
     const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 2).fill(0x42);
     let seq = 0;
@@ -478,16 +550,139 @@ describe("body compression round-trip (T5)", () => {
   });
 
   describe("decompression bomb guard", () => {
-    it("rejects an under-declared compressed bomb before entering fflate's full synchronous inflater", () => {
+    it("rejects a compressed payload that is not smaller than its declared plaintext BEFORE inflating a byte", () => {
+      // The input bound: a genuine sender compresses only when the payload
+      // came out smaller than the plaintext, so a declaration at or under
+      // the payload's own length is forged - and it is the declaration that
+      // sizes the work the inflate can be made to do, so it is checked first.
+      const deflated = deflateSync(new Uint8Array(4 * 1024 * 1024), {
+        level: 6,
+      });
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, 1);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 6,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, deflated),
+        }),
+      );
+      const reassembler = new ChunkReassembler(undefined);
+      vi.mocked(inflateSync).mockClear();
+      const push = vi.spyOn(Inflate.prototype, "push");
+      try {
+        let thrown: unknown = null;
+        try {
+          reassembler.accept(frame);
+        } catch (error) {
+          thrown = error;
+        }
+        if (!(thrown instanceof Error)) {
+          throw new Error("expected reassembler.accept to throw an Error");
+        }
+        expect(thrown).toBeInstanceOf(MuxFrameDecodeError);
+        expect(thrown.message).toBe(
+          `compressed frame payload of ${4 + deflated.length} bytes is not smaller than its declared 1 plaintext bytes`,
+        );
+        expect(inflateSync).not.toHaveBeenCalled();
+        expect(push).not.toHaveBeenCalled();
+      } finally {
+        push.mockRestore();
+      }
+    });
+
+    it("classifies a stored block landing past the bounded buffer as over-expansion, not a per-stream decode fault", () => {
+      // fflate's Huffman path drops writes past a caller-supplied buffer, but
+      // a STORED block copies with `buf.set`, which throws `RangeError` once
+      // the output position is already past the end. A sync flush after a
+      // run of zeros is the minimal stream with that shape: a Huffman block
+      // that over-expands, then an empty stored block. Without the
+      // classification this surfaced as "failed to inflate" - a plain
+      // `MuxFrameDecodeError`, routed per-stream and repeatable.
+      const parts: Uint8Array[] = [];
+      const deflater = new Deflate({ level: 6 });
+      deflater.ondata = (chunk) => {
+        parts.push(chunk);
+      };
+      deflater.push(new Uint8Array(60_000), false);
+      deflater.flush(true);
+      deflater.push(new Uint8Array(0), true);
+      const deflated = concatBytes(...parts);
+      const declaredPlainLength = 4 + deflated.length + 1;
+      // Positive control on the fixture itself: fflate DOES throw a
+      // RangeError for it, so the test below is exercising the catch.
+      expect(() =>
+        inflateSync(deflated, { out: new Uint8Array(declaredPlainLength + 1) }),
+      ).toThrow(RangeError);
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, declaredPlainLength);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 6,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, deflated),
+        }),
+      );
+      expect(() => new ChunkReassembler(undefined).accept(frame)).toThrow(
+        MuxFrameOverExpansionError,
+      );
+    });
+
+    it("keeps a garbage compressed payload a per-stream decode fault, not over-expansion", () => {
+      const header = new Uint8Array(4);
+      new DataView(header.buffer).setUint32(0, 64);
+      const frame = decodeMuxFrame(
+        encodeMuxFrame({
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 7,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: concatBytes(header, new Uint8Array([9, 9, 9, 9, 9, 9, 9, 9])),
+        }),
+      );
+      let thrown: unknown = null;
+      try {
+        new ChunkReassembler(undefined).accept(frame);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(MuxFrameDecodeError);
+      expect(thrown).not.toBeInstanceOf(MuxFrameOverExpansionError);
+    });
+
+    it("rejects an under-declared compressed bomb from ONE bounded inflateSync call", () => {
       // The header is peer-controlled, so it must not be the only output
-      // bound. `inflateSync(..., { out })` truncates writes but still walks the
-      // entire DEFLATE stream first; a small fixture proves we reject before
-      // paying that unbounded work without putting a gigabyte-scale bomb in CI.
+      // bound. `inflateSync(compressed, { out })` never grows the
+      // caller-supplied buffer, so a forged declaration that clears the input
+      // bound (larger than the payload, far smaller than the real plaintext)
+      // is caught by the length check on the single call's clamped result -
+      // a small fixture proves that without putting a gigabyte-scale bomb in
+      // CI.
       const actualPlainLength = 4 * 1024 * 1024;
-      const declaredPlainLength = 1;
       const deflated = deflateSync(new Uint8Array(actualPlainLength), {
         level: 6,
       });
+      const declaredPlainLength = 4 + deflated.length + 1;
+      expect(declaredPlainLength).toBeLessThan(actualPlainLength);
       const header = new Uint8Array(4);
       new DataView(header.buffer).setUint32(0, declaredPlainLength);
       const frame = decodeMuxFrame(
@@ -509,20 +704,33 @@ describe("body compression round-trip (T5)", () => {
       vi.mocked(inflateSync).mockClear();
       const push = vi.spyOn(Inflate.prototype, "push");
       try {
-        const acceptBomb = (): void => {
+        // Exactly ONE call into `reassembler.accept` - unlike a pair of
+        // `expect(fn).toThrow(...)` assertions, which would each invoke the
+        // function and double-count the inflateSync call this test pins.
+        let thrown: unknown = null;
+        try {
           reassembler.accept(frame);
-        };
-        expect(acceptBomb).toThrow(MuxFrameDecodeError);
-        expect(acceptBomb).toThrow(
-          "compressed frame inflated to more than 1 bytes, declared 1",
+        } catch (error) {
+          thrown = error;
+        }
+        if (!(thrown instanceof Error)) {
+          throw new Error("expected reassembler.accept to throw an Error");
+        }
+        expect(thrown).toBeInstanceOf(MuxFrameDecodeError);
+        // The over-expansion verdict is its own class: the session routes it
+        // to the connection, every other decode fault to the stream.
+        expect(thrown).toBeInstanceOf(MuxFrameOverExpansionError);
+        expect(thrown.message).toBe(
+          `compressed frame inflated to more than ${declaredPlainLength} bytes, declared ${declaredPlainLength}`,
         );
-        expect(inflateSync).not.toHaveBeenCalled();
-        // An unbounded `Inflate.push(deflated, true)` calls its callback only
-        // after all 4 MiB of output; the forged one-byte declaration permits
-        // only one compressed byte per push before that callback is checked.
-        expect(Math.max(...push.mock.calls.map((args) => args[0].length))).toBe(
-          1,
-        );
+        expect(inflateSync).toHaveBeenCalledTimes(1);
+        const calls = vi.mocked(inflateSync).mock.calls;
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const opts = calls[0][1]!;
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        expect(opts.out!.length).toBe(declaredPlainLength + 1);
+        // The bounded ONE-call inflater never touches the streaming decoder.
+        expect(push).not.toHaveBeenCalled();
       } finally {
         push.mockRestore();
       }
@@ -683,5 +891,116 @@ describe("ChunkReassembler.retainedBytes", () => {
     reassembler.reset();
     expect(reassembler.retainedBytes).toBe(0);
     expect(reassembler.pendingStreamCount).toBe(0);
+  });
+});
+
+describe("unchunkedStreamFrameViolation", () => {
+  const STREAM_ID = 42;
+
+  function streamFrame(input: {
+    readonly chunked: boolean;
+    readonly binaryLength: number;
+  }): { readonly frame: MuxFrame; readonly encodedFrameBytes: number } {
+    const encoded = encodeMuxFrame({
+      type: MuxFrameType.STREAM_FRAME,
+      streamId: STREAM_ID,
+      seq: 0,
+      qos: QosClass.INTERACTIVE,
+      chunked: input.chunked,
+      chunkFirst: input.chunked,
+      chunkLast: input.chunked,
+      compressed: false,
+      json: { kind: "data", hasBinaryPayload: true },
+      binary: new Uint8Array(input.binaryLength),
+    });
+    return {
+      frame: decodeMuxFrame(encoded),
+      encodedFrameBytes: encoded.byteLength,
+    };
+  }
+
+  it("flags a chunked frame on a stream whose method never chunks", () => {
+    const { frame, encodedFrameBytes } = streamFrame({
+      chunked: true,
+      binaryLength: 10,
+    });
+    expect(unchunkedStreamFrameViolation(frame, encodedFrameBytes)).toBe(
+      `chunked frame on stream ${STREAM_ID}, whose method never chunks`,
+    );
+  });
+
+  it("flags an unchunked frame whose whole encoded length exceeds the one-chunk bound", () => {
+    const { frame, encodedFrameBytes } = streamFrame({
+      chunked: false,
+      binaryLength: BULK_CHUNK_SIZE_BYTES,
+    });
+    const maxFrameBytes = MUX_FRAME_HEADER_LEN + BULK_CHUNK_SIZE_BYTES;
+    expect(encodedFrameBytes).toBeGreaterThan(maxFrameBytes);
+    expect(unchunkedStreamFrameViolation(frame, encodedFrameBytes)).toBe(
+      `frame of ${encodedFrameBytes} bytes on stream ${STREAM_ID} exceeds the ${maxFrameBytes}-byte bound for its method`,
+    );
+  });
+
+  // The rule is applied by callers ONLY to a stream already identified as one
+  // whose method never chunks; on such a stream it covers every mux type,
+  // because the reassembler accumulates a chunked CLOSE as readily as chunked
+  // data. (The non-tunnel control lives with the callers, which never ask.)
+  it.each([
+    ["CLOSE", MuxFrameType.CLOSE],
+    ["FATAL", MuxFrameType.FATAL],
+    ["REQUEST", MuxFrameType.REQUEST],
+  ])("refuses a CHUNKED %s as readily as a chunked STREAM_FRAME", (_, type) => {
+    const encoded = encodeMuxFrame({
+      type,
+      streamId: STREAM_ID,
+      seq: 0,
+      qos: QosClass.INTERACTIVE,
+      chunked: true,
+      chunkFirst: true,
+      chunkLast: false,
+      compressed: false,
+      json: null,
+      binary: new Uint8Array(16),
+    });
+    const frame = decodeMuxFrame(encoded);
+    expect(
+      unchunkedStreamFrameViolation(frame, encoded.byteLength),
+    ).not.toBeNull();
+  });
+
+  it("refuses an oversized unchunked CLOSE", () => {
+    const encoded = encodeMuxFrame({
+      type: MuxFrameType.CLOSE,
+      streamId: STREAM_ID,
+      seq: 0,
+      qos: QosClass.INTERACTIVE,
+      chunked: false,
+      chunkFirst: false,
+      chunkLast: false,
+      compressed: false,
+      json: null,
+      binary: new Uint8Array(BULK_CHUNK_SIZE_BYTES + 1),
+    });
+    const frame = decodeMuxFrame(encoded);
+    expect(
+      unchunkedStreamFrameViolation(frame, encoded.byteLength),
+    ).not.toBeNull();
+  });
+
+  it("passes exactly at the bound", () => {
+    const maxFrameBytes = MUX_FRAME_HEADER_LEN + BULK_CHUNK_SIZE_BYTES;
+    // The json section is a fixed size for this fixture, so the encoded
+    // frame's byte length is linear in the binary length - measure the
+    // fixed overhead once and solve for the binary length that lands
+    // exactly on the bound, rather than guessing and iterating.
+    const probe = streamFrame({ chunked: false, binaryLength: 100 });
+    const overhead = probe.encodedFrameBytes - 100;
+    const exactBinaryLength = maxFrameBytes - overhead;
+    const { frame, encodedFrameBytes } = streamFrame({
+      chunked: false,
+      binaryLength: exactBinaryLength,
+    });
+    expect(encodedFrameBytes).toBe(maxFrameBytes);
+    expect(unchunkedStreamFrameViolation(frame, encodedFrameBytes)).toBeNull();
   });
 });

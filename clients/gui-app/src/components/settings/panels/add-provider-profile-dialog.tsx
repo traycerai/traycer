@@ -1,10 +1,9 @@
+import { useProvidersLoginOwnershipForClient } from "@/hooks/providers/use-providers-login-ownership";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
-  Check,
   CheckCircle2,
   ChevronRight,
-  Copy,
   Eye,
   EyeOff,
   ExternalLink,
@@ -15,6 +14,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   PROVIDER_PROFILE_ACCENT_COLORS,
   type ProviderCliState,
+  type ProviderLoginRefusal,
   type ProviderProfile,
   type ProviderProfileAccentColor,
 } from "@traycer/protocol/host/provider-schemas";
@@ -37,15 +37,21 @@ import {
 import { useProvidersStartLoginForClient } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLoginForClient } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersCancelLoginForClient } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSubmitLoginCodeForClient } from "@/hooks/providers/use-providers-submit-login-code-mutation";
 import { useProvidersTouchLoginForClient } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useRecolorProviderProfileForClient } from "@/hooks/providers/use-recolor-provider-profile-mutation";
 import { useRenameProviderProfileForClient } from "@/hooks/providers/use-rename-provider-profile-mutation";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { redactEmail } from "@/lib/providers/redact-email";
+import type { ProviderLoginStartCopy } from "@/components/providers/provider-login-start";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
+import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
-import { handleSignInLinkCopyError } from "./provider-sign-in-link";
+import { SignInCopyIconButton } from "./sign-in-copy-icon-button";
 import {
   openBrowserLabel,
   useAutoOpenLoginUrl,
@@ -56,8 +62,6 @@ import {
   type ProviderProfileLoginFlowCodePaste,
   type ProviderProfileLoginFlowState,
 } from "./use-provider-profile-login-flow";
-
-const COPY_CONFIRMATION_RESET_MS = 1600;
 
 /**
  * Whether a new managed profile for this provider can SHARE the ambient
@@ -163,9 +167,12 @@ export function AddProviderProfileDialog({
   const cancelLogin = useProvidersCancelLoginForClient(client);
   const submitLoginCode = useProvidersSubmitLoginCodeForClient(client);
   const touchLogin = useProvidersTouchLoginForClient(client);
+  const ensurePack = useProvidersEnsurePackForClient(client);
   const recolorProfile = useRecolorProviderProfileForClient(client);
   const renameProfile = useRenameProviderProfileForClient(client);
+  const supportsLoginOwnership = useProvidersLoginOwnershipForClient(client);
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership,
     mode: "create",
     providerId: state.providerId,
     existingProfileId: null,
@@ -175,6 +182,7 @@ export function AddProviderProfileDialog({
     cancelLogin,
     submitLoginCode,
     touchLogin,
+    ensurePack,
     failureMessages: {
       notStarted:
         "Sign-in did not start. You can retry when the provider is available.",
@@ -346,9 +354,12 @@ export function AddProviderProfileDialog({
           ) : null}
 
           <AddProfileAccountSection
+            providerId={state.providerId}
             flowState={flow.state}
+            loginCapability={state.loginCapability}
             isLocalHost={isLocalHost}
             startPending={flow.startPending}
+            startingCopy={flow.startingCopy}
             cancelPending={flow.cancelPending}
             cancelDisabled={flow.commitPending}
             codePaste={flow.codePaste}
@@ -422,9 +433,12 @@ export function AddProviderProfileDialog({
 }
 
 function AddProfileAccountSection({
+  providerId,
   flowState,
+  loginCapability,
   isLocalHost,
   startPending,
+  startingCopy,
   cancelPending,
   cancelDisabled,
   codePaste,
@@ -442,9 +456,12 @@ function AddProfileAccountSection({
   onRetryLogin,
   onRetryFinalize,
 }: {
+  readonly providerId: ProviderCliState["providerId"];
   readonly flowState: ProviderProfileLoginFlowState;
+  readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
   readonly startPending: boolean;
+  readonly startingCopy: ProviderLoginStartCopy | null;
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
   readonly codePaste: ProviderProfileLoginFlowCodePaste;
@@ -493,8 +510,10 @@ function AddProfileAccountSection({
         <AddProfileWaitingStep
           loginUrl={flowState.kind === "waiting" ? flowState.url : null}
           userCode={flowState.kind === "waiting" ? flowState.userCode : null}
+          loginCapability={loginCapability}
           isLocalHost={isLocalHost}
           queuePending={startPending}
+          startingCopy={startingCopy}
           cancelRequested={
             flowState.kind === "starting" && flowState.cancelRequested
           }
@@ -512,7 +531,9 @@ function AddProfileAccountSection({
   if (flowState.kind === "failed") {
     return (
       <AddProfileFailureStep
+        providerId={providerId}
         message={flowState.message}
+        refusal={flowState.refusal}
         onCancel={onCancel}
         onRetry={onRetryLogin}
       />
@@ -547,7 +568,9 @@ function AddProfileAccountSection({
   if (finalizeError !== null) {
     return (
       <AddProfileFailureStep
+        providerId={providerId}
         message="The account was linked, but the profile color could not be saved."
+        refusal={null}
         onCancel={onCancel}
         onRetry={onRetryFinalize}
       />
@@ -652,29 +675,15 @@ function ShareSkillsAndPluginsField({
 export function WaitingStepDeviceCode(props: {
   readonly processingCode: boolean;
   readonly userCode: string | null;
-  readonly copied: boolean;
-  readonly copy: (value: string) => void;
 }): ReactNode {
   if (props.processingCode || props.userCode === null) return null;
-  const { userCode, copied, copy } = props;
+  const { userCode } = props;
   return (
     <div className="flex flex-wrap items-center gap-2 pl-6">
       <code className="rounded-md border border-border/60 bg-foreground/5 px-2.5 py-1 font-mono text-ui tracking-[0.12em] text-foreground">
         {userCode}
       </code>
-      <Button
-        type="button"
-        size="icon-sm"
-        variant="outline"
-        aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
-        onClick={() => copy(userCode)}
-      >
-        {copied ? (
-          <Check className="size-3.5" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-      </Button>
+      <SignInCopyIconButton value={userCode} kind="code" variant="outline" />
     </div>
   );
 }
@@ -683,12 +692,10 @@ export function WaitingStepUrlActions(props: {
   readonly processingCode: boolean;
   readonly loginUrl: string | null;
   readonly autoOpen: boolean;
-  readonly copied: boolean;
-  readonly copy: (value: string) => void;
   readonly onOpenExternalLink: (url: string) => void;
 }): ReactNode {
   if (props.processingCode || props.loginUrl === null) return null;
-  const { loginUrl, autoOpen, copied, copy, onOpenExternalLink } = props;
+  const { loginUrl, autoOpen, onOpenExternalLink } = props;
   return (
     <div className="flex flex-wrap items-center gap-2 pl-6">
       <Button
@@ -700,19 +707,7 @@ export function WaitingStepUrlActions(props: {
         <ExternalLink className="size-3.5" />
         {openBrowserLabel(autoOpen)}
       </Button>
-      <Button
-        type="button"
-        size="icon-sm"
-        variant="outline"
-        aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-        onClick={() => copy(loginUrl)}
-      >
-        {copied ? (
-          <Check className="size-3.5" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-      </Button>
+      <SignInCopyIconButton value={loginUrl} kind="link" variant="outline" />
     </div>
   );
 }
@@ -752,8 +747,10 @@ function WaitingStepPasteFallback(props: {
 export function AddProfileWaitingStep({
   loginUrl,
   userCode,
+  loginCapability,
   isLocalHost,
   queuePending,
+  startingCopy,
   cancelRequested,
   cancelPending,
   cancelDisabled,
@@ -764,8 +761,15 @@ export function AddProfileWaitingStep({
 }: {
   readonly loginUrl: string | null;
   readonly userCode: string | null;
+  /** Read only for `selfOpensBrowser` - whether this provider's own child
+   *  already opened a browser, which decides whether the GUI opens one too.
+   *  `userCode` above is still the paste-flow signal and is NOT that fact. */
+  readonly loginCapability: ProviderCliState["loginCapability"] | null;
   readonly isLocalHost: boolean;
   readonly queuePending: boolean;
+  /** The flow's `startingCopy`: what a slow start says instead of "Opening
+   *  the sign-in page…". */
+  readonly startingCopy: ProviderLoginStartCopy | null;
   readonly cancelRequested: boolean;
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
@@ -781,20 +785,16 @@ export function AddProfileWaitingStep({
 }): ReactNode {
   const autoOpen = useAutoOpenLoginUrl(
     isLocalHost,
-    userCode,
+    loginCapability,
     loginUrl,
     onOpenExternalLink,
   );
-  const { copied, copy } = useClipboardCopy({
-    resetMs: COPY_CONFIRMATION_RESET_MS,
-    onSuccess: null,
-    onError: handleSignInLinkCopyError,
-  });
   const processingCode = codePaste.phase !== "idle";
   const deviceCode = userCode !== null;
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
     queuePending,
+    startingCopy,
     cancelRequested,
     deviceCode,
   });
@@ -819,15 +819,11 @@ export function AddProfileWaitingStep({
       <WaitingStepDeviceCode
         processingCode={processingCode}
         userCode={userCode}
-        copied={copied}
-        copy={copy}
       />
       <WaitingStepUrlActions
         processingCode={processingCode}
         loginUrl={loginUrl}
         autoOpen={autoOpen}
-        copied={copied}
-        copy={copy}
         onOpenExternalLink={onOpenExternalLink}
       />
       <WaitingStepPasteFallback
@@ -915,11 +911,15 @@ export function AddProfileIdentityStep({
 }
 
 function AddProfileFailureStep({
+  providerId,
   message,
+  refusal,
   onCancel,
   onRetry,
 }: {
+  readonly providerId: ProviderCliState["providerId"];
   readonly message: string;
+  readonly refusal: ProviderLoginRefusal | null;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
 }): ReactNode {
@@ -927,14 +927,22 @@ function AddProfileFailureStep({
     <div className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-ui-sm text-destructive">
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        <span>{message}</span>
+        {refusal === null ? (
+          <span>{message}</span>
+        ) : (
+          <ProviderLoginRefusalMessage
+            providerId={providerId}
+            refusal={refusal}
+          />
+        )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
+        <ProviderLoginRefusalAction refusal={refusal} />
         <Button type="button" size="sm" variant="secondary" onClick={onRetry}>
-          Retry
+          {providerLoginRetryLabel(refusal, "Retry")}
         </Button>
         <ReportIssueAction
           context={createReportIssueContext({

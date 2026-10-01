@@ -1,13 +1,20 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { createInterface } from "node:readline";
 import {
   rebindUpdateMutationCapabilityLiveness,
   type AttemptLockLivenessPublication,
   type UpdateContenderAdmission,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
+import {
+  JsonlLineTooLongError,
+  MAX_JSONL_LINE_BYTES,
+} from "../util/jsonl-line-framer";
+import {
+  readJsonlRequestLines,
+  type JsonlRequestOutcome,
+} from "../util/jsonl-request-stream";
 import { createCliLogger } from "../logger";
 import {
   requireCliUpdateMutationCapability,
@@ -136,6 +143,14 @@ type LeaseResponse =
       readonly kind: "root-executed";
       readonly value: unknown;
     }
+  // The executor was dispatched and then threw: something may have been done,
+  // unlike `refused` (`scripts/desktop-install-cloud.js` tells them apart).
+  | {
+      readonly v: number;
+      readonly id: string;
+      readonly kind: "executor-failed";
+      readonly message: string;
+    }
   | { readonly v: number; readonly id: string; readonly kind: "released" }
   | {
       readonly v: number;
@@ -218,65 +233,112 @@ async function serveMaintenanceLease(
   contenderOptions: WithCliUpdateContenderOptions,
 ): Promise<void> {
   writeProtocol({ v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION, kind: "ready" });
-  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  for await (const line of lines) {
-    const request = parseRequest(line);
-    if (request === null) {
-      writeProtocol({
-        v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
-        id: null,
-        kind: "refused",
-        message: "malformed maintenance lease request",
-      });
-      continue;
-    }
-    if (request.kind === "release") {
-      writeProtocol({
-        v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
-        id: request.id,
-        kind: "released",
-      });
-      return;
-    }
-    try {
-      await requireCliUpdateMutationCapability(capability, contenderOptions);
-      if (request.kind === "verify") {
-        writeProtocol({
-          v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
-          id: request.id,
-          kind: "verified",
-        });
-        continue;
-      }
-      if (request.kind === "execute") {
-        await executeAction(request.action, capability, contenderOptions);
-        writeProtocol({
-          v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
-          id: request.id,
-          kind: "executed",
-        });
-      } else {
-        const value = await superviseRootMaintenanceExecutor(
-          request.executor,
-          capability,
-          contenderOptions,
-        );
-        writeProtocol({
-          v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
-          id: request.id,
-          kind: "root-executed",
-          value,
-        });
-      }
-    } catch (err) {
-      writeProtocol({
-        v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
-        id: request.id,
-        kind: "refused",
-        message: err instanceof Error ? err.message : String(err),
-      });
-      return;
-    }
+  // Framing lives in `../util/jsonl-request-stream`, which is where its three
+  // decisions are documented and pinned: `\n` only (never `readline`'s
+  // U+2028/U+2029, both legal raw inside a JSON string), a trailing fragment at
+  // end of stream dropped rather than answered "malformed", and an over-long
+  // line fatal to the stream rather than a skipped request.
+  try {
+    await readJsonlRequestLines(
+      process.stdin,
+      MAX_JSONL_LINE_BYTES,
+      async (line): Promise<JsonlRequestOutcome> => {
+        const request = parseRequest(line);
+        if (request === null) {
+          writeProtocol({
+            v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+            id: null,
+            kind: "refused",
+            message: "malformed maintenance lease request",
+          });
+          return "continue";
+        }
+        if (request.kind === "release") {
+          writeProtocol({
+            v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+            id: request.id,
+            kind: "released",
+          });
+          return "stop";
+        }
+        try {
+          await requireCliUpdateMutationCapability(
+            capability,
+            contenderOptions,
+          );
+          if (request.kind === "verify") {
+            writeProtocol({
+              v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+              id: request.id,
+              kind: "verified",
+            });
+            return "continue";
+          }
+          if (request.kind === "execute") {
+            await executeAction(request.action, capability, contenderOptions);
+            writeProtocol({
+              v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+              id: request.id,
+              kind: "executed",
+            });
+          } else {
+            try {
+              const value = await superviseRootMaintenanceExecutor(
+                request.executor,
+                capability,
+                contenderOptions,
+              );
+              writeProtocol({
+                v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+                id: request.id,
+                kind: "root-executed",
+                value,
+              });
+            } catch (err) {
+              writeProtocol({
+                v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+                id: request.id,
+                kind: "executor-failed",
+                message: err instanceof Error ? err.message : String(err),
+              });
+              return "stop";
+            }
+          }
+        } catch (err) {
+          writeProtocol({
+            v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+            id: request.id,
+            kind: "refused",
+            message: err instanceof Error ? err.message : String(err),
+          });
+          return "stop";
+        }
+        return "continue";
+      },
+    );
+  } catch (error) {
+    if (!(error instanceof JsonlLineTooLongError)) throw error;
+    // NOT "the reader is lost": an LF framer could resynchronise at the next
+    // `\n` (that is what the framer's `discard()` is for). The reason to stop
+    // is what an over-long line MEANS on this channel. A lease request is tens
+    // of bytes; a line past the bound is a peer that is not speaking this
+    // protocol - a redirected file, a crashed writer, something else on the
+    // pipe. Resynchronising would mean holding a maintenance lease, which
+    // every later update waits behind, while answering an unbounded stream of
+    // garbage. Stopping ends the segment and releases it.
+    //
+    // Stopping here is the SAME path as stdin EOF and as an explicit
+    // `release`: this function returns normally, and the
+    // `withCliUpdateExecutionSegment(...)` call in `runHostMaintenanceLease`
+    // releases the capability on the way out. The only difference is that the
+    // peer is told why first - and in a shape it can already receive, since
+    // `{ id: null, kind: "refused" }` is what a malformed request produces.
+    writeProtocol({
+      v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+      id: null,
+      kind: "refused",
+      message: "maintenance lease request stream desynchronised",
+    });
   }
 }
 
@@ -524,9 +586,12 @@ async function superviseRootMaintenanceExecutor(
       if (actuatorGroupId !== null) {
         if (process.platform === "win32") {
           // Node has no Job-object membership proof. Keep the token published
-          // with retain-on-death so release refuses to unlink it; a repair can
-          // resolve this fail-closed state, but no contender can race an
-          // actuator whose tree we cannot positively enumerate.
+          // with retain-on-death so release refuses to unlink it, and no
+          // contender can race an actuator whose tree we cannot positively
+          // enumerate. Nothing automatic ever breaks that record: the repair
+          // is a person removing the file once no installer is running, which
+          // `traycer host doctor` names (HOST_UPDATE_ATTEMPT_LOCK_UNBREAKABLE)
+          // as soon as this process is gone.
           reject(error);
           return;
         }
@@ -831,6 +896,7 @@ async function executeAction(
         createServiceController(),
         serviceLabelFor(environment),
         { force: false },
+        "unconditional",
       );
       return;
     }

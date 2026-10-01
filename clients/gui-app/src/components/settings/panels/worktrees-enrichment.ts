@@ -14,7 +14,6 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
@@ -26,7 +25,7 @@ import {
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
-  createWorktreeEnrichmentBatcher,
+  createWorktreeEnrichmentBatcherForClient,
   keepResolvedEnrichmentRows,
   perPathEnrichmentQueryKey,
   useBatchedEnrichmentQueries,
@@ -703,19 +702,7 @@ export function useWorktreeActivityEnrichment(
   const readiness = useReactiveHostReadiness(client);
   const batcher = useMemo(
     () =>
-      client === null
-        ? null
-        : createWorktreeEnrichmentBatcher((paths) =>
-            withHostQueryErrorBoundary("worktree.listAllForHost", () =>
-              client.request("worktree.listAllForHost", {
-                includeActivity: true,
-                activityPaths: [...paths],
-                cursor: null,
-                limit: null,
-                forceRefresh: false,
-              }),
-            ),
-          ),
+      client === null ? null : createWorktreeEnrichmentBatcherForClient(client),
     [client],
   );
   // One enrichment query per on-screen path - the cache identity is the path

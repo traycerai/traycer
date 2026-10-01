@@ -21,7 +21,7 @@ const chooserHistoryItem = vi.hoisted<HistoryItem>(() => ({
 }));
 
 vi.mock("@/components/epics/epics-list-panel", () => ({
-  EpicsListPanel: (props: {
+  PickerEpicsListPanel: (props: {
     readonly onOpenItem: ((item: HistoryItem) => void) | null;
   }) => (
     <div data-testid="embedded-history-panel">

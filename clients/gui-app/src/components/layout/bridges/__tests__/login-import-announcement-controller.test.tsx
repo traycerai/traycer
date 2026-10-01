@@ -59,6 +59,7 @@ const READINESS_STUB_PRESENTATION: DefaultHostReadinessPresentation = {
   progress: null,
   lastProgress: null,
   provisioningError: null,
+  ensureFailure: null,
   provisioning: false,
   removed: false,
   hostBusy: false,
@@ -251,6 +252,9 @@ describe("<LoginImportAnnouncementController />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Import logins…" }));
 
     expect(order).toEqual(["request", "navigate"]);
+    // The sign-in rows live on Browser, not General - the intent the toast
+    // arms is only honored on the section that renders the import trigger.
+    expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("browser");
     expect(toastMock.dismiss).toHaveBeenCalledWith(
       "traycer-login-import-announcement",
     );

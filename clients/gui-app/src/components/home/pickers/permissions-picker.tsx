@@ -1,20 +1,28 @@
+import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
+import { useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Badge } from "@/components/ui/badge";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { cn } from "@/lib/utils";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import { useRegionValue } from "@/lib/layout-overrides";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { useComposerTileId } from "@/components/home/composer/composer-tile-hooks";
 import {
+  AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
   AUTO_MID_TURN_NOTICE,
-  PERMISSION_OPTIONS,
+  PERMISSION_PICKER_OPTIONS,
   findPermissionLabel,
   findPermissionOption,
   isPermissionMode,
@@ -24,7 +32,7 @@ import {
   type PermissionMode,
 } from "@/components/home/data/landing-options";
 import {
-  autoJudgeMetaLine,
+  autoModeMidTurnLock,
   type AutoJudgeBilling,
 } from "@/lib/auto-mode/auto-judge-billing";
 
@@ -69,9 +77,8 @@ interface PermissionsPickerProps {
    */
   turnActive: boolean;
   /**
-   * Which pocket this host's judge is charged to, for the `auto` row's meta
-   * line. `null` - still loading, or a host that has no notion of a judge -
-   * renders no meta line at all, which is exactly today's behaviour.
+   * The active judge determines whether Auto can be selected mid-turn.
+   * `null` means that the judge is still unknown; see `autoModeMidTurnLock`.
    */
   judgeBilling: AutoJudgeBilling | null;
   /**
@@ -85,6 +92,17 @@ interface PermissionsPickerProps {
    * in) out from under the panel the user is reading.
    */
   closeFocus: "composer" | "trigger";
+  /** `false` for every mount that isn't a real toolbar slot (the Settings
+   *  default-permission row): keeps that row from registering the
+   *  `composer.access` hotspot under the shared `"landing"` tile id. */
+  readonly interactive: boolean;
+  /**
+   * The trailing "Permission settings…" item's action, or `null` to render no
+   * such item. A composer passes one (it always has a run-target host); the
+   * Settings default-mode row passes `null`, because a Settings surface must
+   * not open Settings.
+   */
+  onOpenPermissionSettings: (() => void) | null;
 }
 
 export function PermissionsPicker(props: PermissionsPickerProps) {
@@ -99,7 +117,14 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     turnActive,
     judgeBilling,
     closeFocus,
+    interactive,
+    onOpenPermissionSettings,
   } = props;
+  // Set by the trailing Settings item for the close it causes. That close must
+  // not hand focus back to the composer: the composer registry can name an
+  // editor in another tab, and restoring focus there would pull that tab over
+  // the Settings surface this item just opened.
+  const openingSettingsRef = useRef(false);
   // Display value is the *normalized* one: when the sticky value isn't in the
   // active harness's supported set (rehydration of a saved chat, the one-frame
   // window between a harness swap and the parent's clamp commit, or any race
@@ -115,11 +140,25 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   );
   const Icon = findPermissionOption(displayValue).icon;
   const label = findPermissionLabel(displayValue);
+  const experimental = displayValue === "auto";
+  const accessibleLabel = experimental ? `${label} — Experimental` : label;
+  // The Auto row's mid-turn lock, when the run's own provider would review:
+  // see `autoModeMidTurnLock`. Read once, for the guard and the row alike.
+  const autoMidTurnLock = autoModeMidTurnLock({
+    turnActive,
+    currentModeIsAuto: displayValue === "auto",
+    judgeBilling,
+  });
   // Layout ▸ Composer's floor for this picker, never `hidden`: the pill reports
   // the permission the next send will run under, so `compact` takes it to the
   // shape a narrow composer already puts it in - icon alone, name on hover -
   // and no further.
-  const compact = useLayoutStore((s) => s.composer.access) === "compact";
+  const compact = useRegionValue("access", "size") === "chip";
+  const tileId = useComposerTileId();
+  const { ref: hotspotRef } = useLayoutRegion({
+    regionId: "access",
+    instanceId: tileId,
+  });
 
   // No tooltip of its own: the wrapper below already renders one (both branches
   // ARE a `TooltipWrapper`), and the label is VISIBLE on this pill until the
@@ -131,30 +170,15 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // control.
   const trigger = (
     <DropdownMenuTrigger asChild>
-      <ToolbarPillButton
-        aria-label={label}
+      <PermissionsTrigger
+        ref={interactive ? hotspotRef : undefined}
+        label={label}
+        aria-label={accessibleLabel}
         disabled={disabled}
-        className={cn(
-          "max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50",
-          compact && "justify-center",
-        )}
-      >
-        <Icon className="size-4 shrink-0" />
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate whitespace-nowrap @max-lg:hidden",
-            compact && "hidden",
-          )}
-        >
-          {label}
-        </span>
-        <ChevronDown
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
-            compact && "hidden",
-          )}
-        />
-      </ToolbarPillButton>
+        compact={compact}
+        experimental={experimental}
+        icon={<Icon className="size-4 shrink-0" />}
+      />
     </DropdownMenuTrigger>
   );
 
@@ -162,7 +186,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     <DropdownMenu>
       {compact ? (
         <TooltipWrapper
-          label={label}
+          label={accessibleLabel}
           side="top"
           sideOffset={undefined}
           align={undefined}
@@ -170,7 +194,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
           {trigger}
         </TooltipWrapper>
       ) : (
-        <NarrowOnlyTooltip label={label}>{trigger}</NarrowOnlyTooltip>
+        <NarrowOnlyTooltip label={accessibleLabel}>{trigger}</NarrowOnlyTooltip>
       )}
       <DropdownMenuContent
         align="start"
@@ -180,6 +204,11 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
         // restores focus to the trigger, leaving the caret out of the textbox.
         // A `"trigger"` caller keeps Radix's own restore (see `closeFocus`).
         onCloseAutoFocus={(event) => {
+          if (openingSettingsRef.current) {
+            openingSettingsRef.current = false;
+            event.preventDefault();
+            return;
+          }
           if (closeFocus !== "composer") return;
           if (focusActiveComposer()) event.preventDefault();
         }}
@@ -201,10 +230,13 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
             ) {
               return;
             }
+            // The same defense for the mid-turn lock: the host refuses this
+            // flip anyway, and a refusal is a toast after the fact.
+            if (next === "auto" && autoMidTurnLock !== null) return;
             onChange(next);
           }}
         >
-          {PERMISSION_OPTIONS.map((option) => {
+          {PERMISSION_PICKER_OPTIONS.map((option) => {
             const OptionIcon = option.icon;
             // The ROW's constraint and the HOST's line, through the one
             // predicate that pairs them. The row alone lights `auto` up on a
@@ -215,11 +247,34 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
               option.id,
               hostKnowsAutoMode,
             );
+            // Supported, but not for THIS turn: the row shows the lock's own
+            // sentence in place of its description, without a contradictory
+            // "switches now" notice.
+            const lockedMidTurn =
+              isSupported && option.id === "auto" && autoMidTurnLock !== null;
+            let description: string;
+            if (!isSupported) {
+              description = unsupportedPermissionModeCopy({
+                mode: option.id,
+                harnessLabel,
+                catalogSupportedModes,
+                hostKnowsAutoMode,
+              });
+            } else if (lockedMidTurn) {
+              description = autoMidTurnLock;
+            } else if (
+              option.id === "auto" &&
+              judgeBilling?.kind === "blocked"
+            ) {
+              description = AUTO_JUDGE_UNAVAILABLE_DESCRIPTION;
+            } else {
+              description = option.description;
+            }
             return (
               <DropdownMenuRadioItem
                 key={option.id}
                 value={option.id}
-                disabled={!isSupported}
+                disabled={!isSupported || lockedMidTurn}
                 // No `title=` here: Radix applies `data-disabled:pointer-events-none`
                 // on the dropdown-menu primitive (see ui/dropdown-menu.tsx) so a
                 // native browser tooltip would never fire on hover anyway. The
@@ -229,23 +284,11 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
                 <OptionIcon className="mt-0.5 size-4 text-muted-foreground" />
                 <PermissionOptionBody
                   label={option.label}
-                  description={
-                    isSupported
-                      ? option.description
-                      : unsupportedPermissionModeCopy({
-                          mode: option.id,
-                          harnessLabel,
-                          catalogSupportedModes,
-                          hostKnowsAutoMode,
-                        })
-                  }
-                  metaLine={
-                    isSupported && option.id === "auto" && judgeBilling !== null
-                      ? autoJudgeMetaLine(judgeBilling)
-                      : null
-                  }
+                  experimental={option.id === "auto"}
+                  description={description}
                   notice={
                     isSupported &&
+                    !lockedMidTurn &&
                     option.id === "auto" &&
                     turnActive &&
                     displayValue !== "auto"
@@ -257,41 +300,46 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
             );
           })}
         </DropdownMenuRadioGroup>
+        {onOpenPermissionSettings !== null ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => {
+                openingSettingsRef.current = true;
+                onOpenPermissionSettings();
+              }}
+            >
+              Permission settings…
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-/**
- * One option's text column: name, what it does, and - on `auto` only - which
- * pocket it spends and what a mid-turn switch actually does.
- *
- * Extracted so the `auto` row's two extra lines do not push the map callback
- * above the complexity ceiling; it renders nothing for `metaLine` / `notice`
- * on every other row, which is what keeps their absence the default.
- */
+/** One option's label and description, plus any mid-turn switching notice. */
 function PermissionOptionBody(props: {
   readonly label: string;
+  readonly experimental: boolean;
   readonly description: string;
-  readonly metaLine: string | null;
   readonly notice: string | null;
 }) {
   return (
     <span className="min-w-0">
-      <span className="block font-medium leading-5 text-foreground">
-        {props.label}
+      <span className="flex flex-wrap items-center gap-2">
+        <span className="font-medium leading-5 text-foreground">
+          {props.label}
+        </span>
+        {props.experimental ? (
+          <Badge variant="muted" size="xs">
+            Experimental
+          </Badge>
+        ) : null}
       </span>
       <span className="block leading-5 text-muted-foreground">
         {props.description}
       </span>
-      {props.metaLine !== null ? (
-        <span
-          data-testid="permission-option-meta"
-          className="block leading-5 text-ui-xs text-muted-foreground"
-        >
-          {props.metaLine}
-        </span>
-      ) : null}
       {props.notice !== null ? (
         <span
           data-testid="permission-option-mid-turn-notice"
@@ -301,5 +349,60 @@ function PermissionOptionBody(props: {
         </span>
       ) : null}
     </span>
+  );
+}
+
+export function PermissionsTrigger({
+  label,
+  disabled,
+  compact,
+  experimental,
+  icon,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  compact: boolean;
+  experimental?: boolean;
+  icon: ReactNode;
+  ref?: Ref<HTMLButtonElement>;
+}) {
+  return (
+    <ToolbarPillButton
+      aria-label={label}
+      {...rest}
+      disabled={disabled}
+      // Shield alone means a SQUARE chip, not a pill with its label removed:
+      // the label and chevron are `hidden` in both of these cases, so keeping
+      // the pill's side padding would leave a 34px box beside the model chip's
+      // 28px one. `@max-lg` is the composer going narrow, `compact` is the
+      // user choosing the chip size in Layout; they arrive at the same shape.
+      className={cn(
+        "min-w-0",
+        experimental ? "max-w-full" : "max-w-[min(32cqw,13rem)]",
+        "@max-lg:size-7 @max-lg:justify-center @max-lg:px-0",
+        compact && "size-7 justify-center px-0",
+      )}
+    >
+      {icon}
+      <span
+        className={cn(
+          "min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap @max-lg:hidden",
+          compact ? "hidden" : "inline-flex",
+        )}
+      >
+        <span className="truncate">{label}</span>
+        {experimental ? (
+          <Badge variant="muted" size="xs">
+            Experimental
+          </Badge>
+        ) : null}
+      </span>
+      <ChevronDown
+        className={cn(
+          "size-3.5 shrink-0 text-muted-foreground @max-lg:hidden",
+          compact && "hidden",
+        )}
+      />
+    </ToolbarPillButton>
   );
 }

@@ -1,4 +1,6 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import type { ComponentProps } from "react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatRunSettings,
@@ -9,6 +11,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import type { RoutingDestinationPicker } from "@/components/chat/fallback/routing-destination-picker";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import {
   composerRateLimitAdvisory,
@@ -25,26 +28,57 @@ import {
   providerProfile,
 } from "./fallback-fixtures";
 
-// The banners fill both cards' `menu` slots, so the real destination menu
-// mounts here even while closed - and its list query reaches for a QueryClient
-// this suite has no reason to stand up. Faked at the same seam the menu and
-// manual-rung suites use. Nothing moves: what THIS suite pins is which CARD
-// renders for a given state, and the menu's own behaviour has its own file.
-vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
-  useFallbackListTargets: () => ({
-    data: undefined,
-    isPending: false,
-    isError: false,
-  }),
+// The routing card carries the routing chooser. Its own behaviour (rows, hold,
+// confirm) has its own suite; what THIS suite pins is which card STATE renders
+// for a given frame and what the card hands its chooser - so the chooser is a
+// recording button, which needs no QueryClient and no TabHostProvider.
+const chooser = vi.hoisted(() => ({
+  props: [] as ComponentProps<typeof RoutingDestinationPicker>[],
+}));
+
+vi.mock("@/components/chat/fallback/routing-destination-picker", () => ({
+  RoutingDestinationPicker: (
+    props: ComponentProps<typeof RoutingDestinationPicker>,
+  ) => {
+    chooser.props.push(props);
+    return (
+      <button type="button" disabled={props.triggerDisabled || !props.canAct}>
+        {props.triggerLabel}
+      </button>
+    );
+  },
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+// `useFallbackModelLabels` alone, as a slug passthrough - the degradation the
+// resolver falls back to with no catalogue. This suite pins which card state
+// renders and that nothing hides it, not model naming (`routing-card.test.tsx`
+// and `fallback-model-labels.test.tsx` own that).
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
+const harness = vi.hoisted(() => ({
+  mutate: vi.fn(),
+}));
+
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
   useHostScopedMutationForClient: () => ({
-    mutate: vi.fn(),
+    mutate: harness.mutate,
     isPending: false,
   }),
 }));
@@ -72,29 +106,46 @@ function pendingAt(
   });
 }
 
+function bannersTree(input: {
+  readonly topBannerKind: "fallback" | "fallback-return" | "none";
+  readonly pending: PendingFallback | undefined;
+  readonly pendingReturn: PendingReturn | undefined;
+  readonly rateLimitAdvisory: ComposerRateLimitAdvisory | null;
+}) {
+  return (
+    <TooltipProvider>
+      <ChatComposerBannerPortalProvider>
+        <ChatComposerFallbackBanners
+          topBannerKind={input.topBannerKind}
+          fallback={{
+            pending: input.pending,
+            pendingReturn: input.pendingReturn,
+          }}
+          rateLimitAdvisory={input.rateLimitAdvisory}
+          client={null}
+          chatId="chat-composer"
+          epicId="epic-composer"
+          hostId="tab-host-b"
+          canAct
+        />
+      </ChatComposerBannerPortalProvider>
+    </TooltipProvider>
+  );
+}
+
 function renderBanners(input: {
   readonly topBannerKind: "fallback" | "fallback-return" | "none";
   readonly pending: PendingFallback | undefined;
   readonly pendingReturn: PendingReturn | undefined;
   readonly rateLimitAdvisory: ComposerRateLimitAdvisory | null;
 }) {
-  return render(
-    <ChatComposerBannerPortalProvider>
-      <ChatComposerFallbackBanners
-        topBannerKind={input.topBannerKind}
-        fallback={{
-          pending: input.pending,
-          pendingReturn: input.pendingReturn,
-        }}
-        rateLimitAdvisory={input.rateLimitAdvisory}
-        client={null}
-        chatId="chat-composer"
-        epicId="epic-composer"
-        hostId="tab-host-b"
-        canAct
-      />
-    </ChatComposerBannerPortalProvider>,
-  );
+  return render(bannersTree(input));
+}
+
+function cardState(): string | null {
+  return screen
+    .getByTestId("routing-card")
+    .getAttribute("data-routing-card-state");
 }
 
 function visiblePrompt(input: {
@@ -121,21 +172,21 @@ function visiblePrompt(input: {
 describe("ChatComposerFallbackBanners", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    chooser.props = [];
   });
 
   afterEach(() => {
     cleanup();
   });
 
-  it("renders the grace card for hold and the waiting card for waiting", () => {
+  it("renders the routing card in its countdown state for hold and its waiting state for waiting", () => {
     const { unmount } = renderBanners({
       topBannerKind: "fallback",
       pending: pendingAt("hold"),
       pendingReturn: undefined,
       rateLimitAdvisory: null,
     });
-    expect(screen.getByTestId("fallback-grace-card")).toBeDefined();
-    expect(screen.queryByTestId("fallback-waiting-card")).toBeNull();
+    expect(cardState()).toBe("countdown");
     unmount();
 
     renderBanners({
@@ -144,11 +195,55 @@ describe("ChatComposerFallbackBanners", () => {
       pendingReturn: undefined,
       rateLimitAdvisory: null,
     });
-    expect(screen.getByTestId("fallback-waiting-card")).toBeDefined();
-    expect(screen.queryByTestId("fallback-grace-card")).toBeNull();
+    expect(cardState()).toBe("waiting");
   });
 
-  it("renders neither card for retrying even when the fallback slot is claimed", () => {
+  it("gives the countdown card a route-chip destination picker, quiet once switching", () => {
+    const hold = pendingAt("hold");
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: hold,
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    const props = chooser.props.at(-1);
+    expect(props?.entry).toEqual({ kind: "countdown", pending: hold });
+    // The "to" end of the route line is the trigger: a chip, not a button.
+    expect(props?.triggerVariant).toBe("route-chip");
+    expect(props?.triggerDisabled).toBe(false);
+    expect(props?.canAct).toBe(true);
+    expect(props?.hostId).toBe("tab-host-b");
+    expect(screen.getByRole("button", { name: /gpt-5/ })).toBeDefined();
+    cleanup();
+
+    chooser.props = [];
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("switching"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(chooser.props.at(-1)?.triggerDisabled).toBe(true);
+  });
+
+  it("gives the waiting card a filled 'Choose another model…' picker", () => {
+    const waiting = pendingAt("waiting");
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: waiting,
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    const props = chooser.props.at(-1);
+    expect(props?.entry).toEqual({ kind: "waiting", pending: waiting });
+    expect(props?.triggerLabel).toBe("Choose another model…");
+    expect(props?.triggerVariant).toBe("default");
+    expect(
+      screen.getByRole("button", { name: "Choose another model…" }),
+    ).toBeDefined();
+  });
+
+  it("renders no card for retrying even when the fallback slot is claimed", () => {
     renderBanners({
       topBannerKind: "fallback",
       pending: pendingAt("retrying"),
@@ -156,11 +251,86 @@ describe("ChatComposerFallbackBanners", () => {
       rateLimitAdvisory: null,
     });
     // Falsification: replace the two independent checks with a ternary else-branch and THIS assertion must go red.
-    expect(screen.queryByTestId("fallback-grace-card")).toBeNull();
-    expect(screen.queryByTestId("fallback-waiting-card")).toBeNull();
+    expect(screen.queryByTestId("routing-card")).toBeNull();
   });
 
-  it("renders the return banner only in the fallback-return slot", () => {
+  // There is no hide control and so no hidden state (clutter cuts,
+  // 2026-09-27): the card is on screen for exactly as long as `pending` is a
+  // countdown or waiting state.
+  it("draws no Hide button on either card", () => {
+    const { unmount } = renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("hold"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(cardState()).toBe("countdown");
+    expect(screen.queryAllByRole("button", { name: /hide/i })).toEqual([]);
+    unmount();
+
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("waiting"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    expect(cardState()).toBe("waiting");
+    expect(screen.queryAllByRole("button", { name: /hide/i })).toEqual([]);
+  });
+
+  it("keeps the card up through every countdown and waiting state of one traversal", () => {
+    const view = renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("hold"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    // One traversal id throughout: a stale "hidden" record keyed by it would
+    // drop the card at some step below. Falsification: reintroduce a
+    // dismissal gate in `FallbackPendingBanner` and any pressed button (next
+    // test) or step here can leave the slot empty.
+    const steps: ReadonlyArray<{
+      readonly state: "hold" | "choosing" | "switching" | "waiting";
+      readonly card: "countdown" | "waiting";
+    }> = [
+      { state: "hold", card: "countdown" },
+      { state: "choosing", card: "countdown" },
+      { state: "switching", card: "countdown" },
+      { state: "waiting", card: "waiting" },
+      { state: "hold", card: "countdown" },
+    ];
+    for (const step of steps) {
+      view.rerender(
+        bannersTree({
+          topBannerKind: "fallback",
+          pending: pendingAt(step.state),
+          pendingReturn: undefined,
+          rateLimitAdvisory: null,
+        }),
+      );
+      expect(cardState()).toBe(step.card);
+    }
+  });
+
+  it("no button on the card can hide it: pressing every one leaves the card in place", () => {
+    renderBanners({
+      topBannerKind: "fallback",
+      pending: pendingAt("hold"),
+      pendingReturn: undefined,
+      rateLimitAdvisory: null,
+    });
+    for (const button of screen
+      .getByTestId("routing-action-row")
+      .querySelectorAll("button")) {
+      fireEvent.click(button);
+    }
+    // The fallback mutations are stubs here, so only a client-side hidden
+    // state could have removed the card - and there is none.
+    expect(screen.queryByTestId("routing-card")).not.toBeNull();
+    expect(cardState()).toBe("countdown");
+  });
+
+  it("renders the return state only in the fallback-return slot", () => {
     const offer = pendingReturn({
       preferredTuple: PREFERRED_CLAUDE_TUPLE,
       fallbackTuple: TARGET_CODEX_TUPLE,
@@ -174,7 +344,7 @@ describe("ChatComposerFallbackBanners", () => {
       pendingReturn: offer,
       rateLimitAdvisory: null,
     });
-    expect(screen.getByTestId("fallback-return-banner")).toBeDefined();
+    expect(cardState()).toBe("return");
     unmount();
 
     renderBanners({
@@ -183,7 +353,7 @@ describe("ChatComposerFallbackBanners", () => {
       pendingReturn: offer,
       rateLimitAdvisory: null,
     });
-    expect(screen.queryByTestId("fallback-return-banner")).toBeNull();
+    expect(screen.queryByTestId("routing-card")).toBeNull();
   });
 });
 
@@ -195,8 +365,8 @@ describe("composerRateLimitAdvisory", () => {
     authenticated: true,
   });
 
-  it("is null when signed out, even for a visible prompt", () => {
-    // Falsification: drop the signedOut check from composerRateLimitAdvisory and THIS assertion must go red.
+  it("is null when withheld, even for a visible prompt", () => {
+    // Falsification: drop the withheld check from composerRateLimitAdvisory and THIS assertion must go red.
     const prompt = visiblePrompt({
       providerId: "codex",
       severity: "near_limit",
@@ -310,7 +480,7 @@ describe("ChatComposerFallbackBanners rate-limit advisory absorption", () => {
         limitedFamilies: [],
       },
     });
-    expect(screen.getByTestId("fallback-return-banner").textContent).toMatch(
+    expect(screen.getByTestId("routing-card").textContent).toMatch(
       /running low/,
     );
   });
@@ -328,9 +498,9 @@ describe("ChatComposerFallbackBanners rate-limit advisory absorption", () => {
         limitedFamilies: [],
       },
     });
-    expect(
-      screen.getByTestId("fallback-return-banner").textContent,
-    ).not.toMatch(/running low|reached its/);
+    expect(screen.getByTestId("routing-card").textContent).not.toMatch(
+      /running low|reached its/,
+    );
   });
 
   it("drops the clause on a MISMATCHED provider even though both profileIds are ambient (null) - the ambient trap", () => {
@@ -351,9 +521,9 @@ describe("ChatComposerFallbackBanners rate-limit advisory absorption", () => {
         limitedFamilies: [],
       },
     });
-    expect(
-      screen.getByTestId("fallback-return-banner").textContent,
-    ).not.toMatch(/running low|reached its/);
+    expect(screen.getByTestId("routing-card").textContent).not.toMatch(
+      /running low|reached its/,
+    );
   });
 
   it("shows no clause when rateLimitAdvisory is null", () => {
@@ -363,8 +533,8 @@ describe("ChatComposerFallbackBanners rate-limit advisory absorption", () => {
       pendingReturn: returnOfferOn(TARGET_CODEX_TUPLE),
       rateLimitAdvisory: null,
     });
-    expect(
-      screen.getByTestId("fallback-return-banner").textContent,
-    ).not.toMatch(/running low|reached its/);
+    expect(screen.getByTestId("routing-card").textContent).not.toMatch(
+      /running low|reached its/,
+    );
   });
 });

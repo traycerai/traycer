@@ -59,28 +59,81 @@ describe("comm-graph tile schema", () => {
         y: -30,
         zoom: 1.5,
         mode: "office" as const,
-        officeView: "towers" as const,
+        officeView: "building" as const,
         officeAutoView: "building" as const,
       },
     };
     expect(parseTileRef(serializeTileRef(ref))).toEqual(ref);
   });
 
-  it('round-trips officeView: "auto" as a real choice, not a degrade', () => {
-    const ref = {
-      ...makeCommGraphTileRef(EPIC_ID),
-      view: {
-        ...DEFAULT_COMM_GRAPH_VIEW,
-        officeView: "auto" as const,
-        officeAutoView: "building" as const,
-      },
-    };
-    const parsed = parseTileRef(serializeTileRef(ref));
-    expect(parsed?.type).toBe("comm-graph");
-    if (parsed === null || parsed.type !== "comm-graph") return;
-    expect(parsed.view.officeView).toBe("auto");
-    expect(parsed.view.officeAutoView).toBe("building");
-  });
+  it.each(["auto", "towers", "city"] as const)(
+    'normalizes a persisted officeView of "%s" (retired) rather than round-tripping it, and retires the office camera it framed',
+    (retired) => {
+      // Auto, Towers and City are gone from the app's choice: a stored
+      // "auto" now means Floor (the same "no gesture, cheapest reading"
+      // answer Auto used to compute), and a stored "towers"/"city" means
+      // Building (the same "too many agents to draw every desk" answer
+      // those two used to differ over). The camera that framed the retired
+      // view is not carried into the view it now reads as - it is reset,
+      // exactly like any other degrade.
+      const parsed = parseTileRef({
+        id: commGraphTileId(EPIC_ID),
+        instanceId: "inst-1",
+        type: "comm-graph",
+        name: "Agent office",
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+        epicId: EPIC_ID,
+        view: {
+          x: 40,
+          y: -12,
+          zoom: 2.5,
+          mode: "office",
+          officeView: retired,
+          officeCameraView: retired === "auto" ? "floor" : retired,
+          officeCamera: { x: 40, y: -12, zoom: 2.5 },
+        },
+      });
+      expect(parsed?.type).toBe("comm-graph");
+      if (parsed === null || parsed.type !== "comm-graph") return;
+      expect(parsed.view.officeView).toBe(
+        retired === "auto" ? "floor" : "building",
+      );
+      expect(parsed.view.officeCamera).toBeNull();
+      expect(parsed.view.officeCameraView).toBeNull();
+    },
+  );
+
+  it.each(["towers", "city"] as const)(
+    'retires the office camera whenever IT is framed against the retired "%s" id, even beside a still-valid officeView',
+    (retired) => {
+      // The reset follows whichever field actually names the retired view -
+      // a person who has since picked a real choice (Building) but whose
+      // camera was framed back when it still said Towers/City must not keep
+      // reopening those now-gone coordinates.
+      const parsed = parseTileRef({
+        id: commGraphTileId(EPIC_ID),
+        instanceId: "inst-1",
+        type: "comm-graph",
+        name: "Agent office",
+        hostId: UNKNOWN_HOST_PLACEHOLDER,
+        epicId: EPIC_ID,
+        view: {
+          x: 0,
+          y: 0,
+          zoom: 1,
+          mode: "office",
+          officeView: "building",
+          officeCameraView: retired,
+          officeCamera: { x: 40, y: -12, zoom: 2.5 },
+        },
+      });
+      expect(parsed?.type).toBe("comm-graph");
+      if (parsed === null || parsed.type !== "comm-graph") return;
+      expect(parsed.view.officeView).toBe("building");
+      expect(parsed.view.officeCamera).toBeNull();
+      expect(parsed.view.officeCameraView).toBeNull();
+    },
+  );
 
   it("degrades an officeView this build does not register, resetting the camera", () => {
     const parsed = parseTileRef({
@@ -126,14 +179,14 @@ describe("comm-graph tile schema", () => {
         y: -220,
         zoom: 3,
         mode: "office",
-        officeView: "towers",
+        officeView: "building",
         officeAutoView: "atrium",
       },
     });
     expect(parsed?.type).toBe("comm-graph");
     if (parsed === null || parsed.type !== "comm-graph") return;
     // The two fields degrade independently; only the auto outcome is gone.
-    expect(parsed.view.officeView).toBe("towers");
+    expect(parsed.view.officeView).toBe("building");
     expect(parsed.view.officeAutoView).toBeNull();
     expect(parsed.view.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
     expect(parsed.view.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
@@ -159,7 +212,10 @@ describe("comm-graph tile schema", () => {
     });
     expect(parsed?.type).toBe("comm-graph");
     if (parsed === null || parsed.type !== "comm-graph") return;
-    expect(parsed.view.officeView).toBe("auto");
+    // "auto" is retired from officeView and normalizes to Floor - it was
+    // never a valid officeAutoView (a measured OUTCOME id, and "auto" names
+    // no view any measurement could land on), so that half is unchanged.
+    expect(parsed.view.officeView).toBe("floor");
     expect(parsed.view.officeAutoView).toBeNull();
   });
 
@@ -222,7 +278,7 @@ describe("comm-graph tile schema", () => {
     expect(parsed.view.officeAutoGeneration).toBe(7);
   });
 
-  it('keeps a dormant Auto outcome when officeView is "auto" - a read value, not a degrade (Finding 20)', () => {
+  it('keeps a dormant Auto outcome when officeView is "auto" - a read value, not a degrade, even though "auto" itself now normalizes to Floor (Finding 20)', () => {
     const parsed = parseTileRef({
       id: commGraphTileId(EPIC_ID),
       instanceId: "inst-1",
@@ -242,7 +298,7 @@ describe("comm-graph tile schema", () => {
     });
     expect(parsed?.type).toBe("comm-graph");
     if (parsed === null || parsed.type !== "comm-graph") return;
-    expect(parsed.view.officeView).toBe("auto");
+    expect(parsed.view.officeView).toBe("floor");
     expect(parsed.view.officeAutoView).toBe("towers");
     expect(parsed.view.officeAutoGeneration).toBe(7);
   });
@@ -260,7 +316,7 @@ describe("comm-graph tile schema", () => {
         y: -220,
         zoom: 3,
         mode: "office",
-        officeView: "towers",
+        officeView: "building",
         officeAutoView: "building",
         // Like `officeView` and `officeAutoView`, a value from a build newer
         // than this one degrades to null - and, like them, that degrade
@@ -272,7 +328,7 @@ describe("comm-graph tile schema", () => {
     if (parsed === null || parsed.type !== "comm-graph") return;
     expect(parsed.view.officeCameraView).toBeNull();
     // The other two fields degrade independently.
-    expect(parsed.view.officeView).toBe("towers");
+    expect(parsed.view.officeView).toBe("building");
     expect(parsed.view.officeAutoView).toBe("building");
     expect(parsed.view.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
     expect(parsed.view.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
@@ -769,11 +825,14 @@ describe("comm-graph tile schema", () => {
 
     it("keeps a framed camera when a DORMANT Auto outcome is stale, and the tile is not on Auto", () => {
       // `officeAutoView` lingers as a record even after the owner picks a
-      // concrete view - "towers" here - so its own unreadability ("skyline",
+      // concrete view - "building" here - so its own unreadability ("skyline",
       // an id no build ships) must not wipe the camera framed for the view
       // the tile actually shows. Only the fields that DO describe this
       // record's camera - `officeView` and `officeCameraView`, both
-      // readable "towers" - govern whether it survives.
+      // readable "building" - govern whether it survives. (Towers itself is
+      // retired and is not a value that can survive this parse any more -
+      // see the normalization cases above - so a still-live view stands in
+      // here for "whatever concrete view this tile is actually on".)
       const parsed = parseTileRef({
         id: commGraphTileId(EPIC_ID),
         instanceId: "inst-1",
@@ -786,16 +845,16 @@ describe("comm-graph tile schema", () => {
           y: 0,
           zoom: 1,
           mode: "office",
-          officeView: "towers",
+          officeView: "building",
           officeAutoView: "skyline",
-          officeCameraView: "towers",
+          officeCameraView: "building",
           officeCamera: { x: 40, y: -12, zoom: 2.5 },
         },
       });
       expect(parsed?.type).toBe("comm-graph");
       if (parsed === null || parsed.type !== "comm-graph") return;
       expect(parsed.view.officeCamera).toEqual({ x: 40, y: -12, zoom: 2.5 });
-      expect(parsed.view.officeCameraView).toBe("towers");
+      expect(parsed.view.officeCameraView).toBe("building");
     });
 
     it("still retires the camera when the ACTIVE Auto outcome is stale", () => {
@@ -842,7 +901,7 @@ describe("comm-graph tile schema", () => {
           y: 0,
           zoom: 1,
           mode: "office",
-          officeView: "towers",
+          officeView: "building",
           officeCameraView: "skyline",
           officeCamera: { x: 40, y: -12, zoom: 2.5 },
         },
@@ -855,7 +914,7 @@ describe("comm-graph tile schema", () => {
     it("keeps a framed camera when officeView is null (inheriting a concrete default), even with a stale dormant outcome", () => {
       // `officeView: null` means "inherit the Settings default", which the
       // renderer resolves to `agentOfficeDefaultView` and may be a concrete
-      // view like Towers - the parser cannot know which, so it must not
+      // view like Building - the parser cannot know which, so it must not
       // treat `null` as Auto and let the dormant, unreadable `officeAutoView`
       // wipe a camera that frames the resolved concrete view.
       const parsed = parseTileRef({
@@ -872,14 +931,14 @@ describe("comm-graph tile schema", () => {
           mode: "office",
           officeView: null,
           officeAutoView: "skyline",
-          officeCameraView: "towers",
+          officeCameraView: "building",
           officeCamera: { x: 40, y: -12, zoom: 2.5 },
         },
       });
       expect(parsed?.type).toBe("comm-graph");
       if (parsed === null || parsed.type !== "comm-graph") return;
       expect(parsed.view.officeCamera).toEqual({ x: 40, y: -12, zoom: 2.5 });
-      expect(parsed.view.officeCameraView).toBe("towers");
+      expect(parsed.view.officeCameraView).toBe("building");
     });
   });
 });
@@ -952,14 +1011,14 @@ describe("updateCommGraphTileView", () => {
     const state = stateWith();
     const next = updateCommGraphTileView(state, commGraphTileId(EPIC_ID), {
       ...DEFAULT_COMM_GRAPH_VIEW,
-      officeView: "towers",
+      officeView: "building",
     });
     const ref = Object.values(next.tilesByInstanceId)[0];
     expect(ref?.type).toBe("comm-graph");
     if (ref === undefined || ref.type !== "comm-graph") return;
     // A compare over x/y/zoom/mode alone would see nothing different here and
     // silently swallow the pick.
-    expect(ref.view.officeView).toBe("towers");
+    expect(ref.view.officeView).toBe("building");
     expect(next).not.toBe(state);
   });
 
@@ -1050,7 +1109,7 @@ describe("updateCommGraphTileCamera", () => {
       view: {
         ...DEFAULT_COMM_GRAPH_VIEW,
         mode: "graph" as const,
-        officeView: "towers" as const,
+        officeView: "campus" as const,
         officeAutoView: "building" as const,
         // Non-null on purpose: the case below proves this survives a plain
         // camera write, which a starting value of `null` cannot distinguish
@@ -1094,7 +1153,7 @@ describe("updateCommGraphTileCamera", () => {
       // non-null.
       officeCameraView: "towers",
       mode: "graph",
-      officeView: "towers",
+      officeView: "campus",
       officeAutoView: "building",
       // The generation field, another one this action does not know about -
       // null since the fixture never measured Auto.
@@ -1163,7 +1222,7 @@ describe("updateCommGraphTileOfficeCamera", () => {
       view: {
         ...DEFAULT_COMM_GRAPH_VIEW,
         mode: "office" as const,
-        officeView: "towers" as const,
+        officeView: "campus" as const,
         officeAutoView: "building" as const,
         officeCameraView: "towers" as const,
       },
@@ -1205,7 +1264,7 @@ describe("updateCommGraphTileOfficeCamera", () => {
       officeCamera: { x: 40, y: -12, zoom: 2.5 },
       officeCameraView: "building",
       mode: "office",
-      officeView: "towers",
+      officeView: "campus",
       officeAutoView: "building",
       officeAutoGeneration: null,
     });

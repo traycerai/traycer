@@ -84,6 +84,7 @@ export interface ElectronTabsOptions {
    */
   readonly onTabBound: (capability: BrowserViewNativeTabCapability) => void;
   readonly onTabReleased: (capability: BrowserViewNativeTabCapability) => void;
+  readonly onDemandChanged: () => void;
 }
 
 interface ElectronTabBirth {
@@ -108,6 +109,8 @@ export interface ElectronTabs {
    * reports: a tile bound to this guest and visible.
    */
   isTabViewed(tabId: string): boolean | null;
+  hasDemand(): boolean;
+  replayBindings(): void;
   connect(): void;
   disconnect(): void;
   dispose(): void;
@@ -203,6 +206,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
           requestIdByTabKey.delete(tabKey);
         }
         releaseByIncarnation.delete(incarnationKey);
+        options.onDemandChanged();
       })
       .catch((cause: unknown) => {
         releaseByIncarnation.delete(incarnationKey);
@@ -240,6 +244,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         nativeKeyFor(birth, birth.provisioned.registrationId),
       );
     }
+    options.onDemandChanged();
   };
 
   function rollbackUnacceptedBirth(birth: ElectronTabBirth): void {
@@ -446,6 +451,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     };
     birthByRequestId.set(frame.requestId, birth);
     requestIdByTabKey.set(tabKey, frame.requestId);
+    options.onDemandChanged();
     return birth.settled;
   };
 
@@ -604,6 +610,14 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   };
 
   return {
+    hasDemand: () => birthByRequestId.size > 0,
+    replayBindings: () => {
+      for (const birth of birthByRequestId.values()) {
+        const provisioned = acceptedProvisioning(birth);
+        if (provisioned !== null)
+          options.onTabBound(nativeKeyFor(birth, provisioned.registrationId));
+      }
+    },
     handleFrame: (frame) => {
       switch (frame.kind) {
         case "createElectronTab":

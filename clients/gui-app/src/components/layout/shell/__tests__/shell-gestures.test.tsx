@@ -838,6 +838,37 @@ describe("useDragToDismissKeyboard", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  it("does not blur on a tap inside a popup of the focused field portalled elsewhere", () => {
+    setMobileApp(true);
+    const editor = document.createElement("div");
+    editor.setAttribute("contenteditable", "true");
+    // jsdom does not compute `isContentEditable` from the attribute.
+    Object.defineProperty(editor, "isContentEditable", {
+      value: true,
+      configurable: true,
+    });
+    document.body.appendChild(editor);
+    editor.focus();
+    expect(document.activeElement).toBe(editor);
+    mountKeyboardDismiss();
+    // The editor's picker menu renders in its own portal, so none of it is
+    // inside the editor's DOM - only the popup marker ties the two together.
+    const popup = document.createElement("div");
+    popup.setAttribute("data-text-entry-popup", "");
+    const row = document.createElement("div");
+    popup.appendChild(row);
+    document.body.appendChild(popup);
+
+    dispatchTouch("touchstart", {
+      touches: [{ clientX: 100, clientY: 100 }],
+      target: row,
+      timeStamp: 0,
+    });
+    dispatchTouchEnd("touchend", 10);
+
+    expect(document.activeElement).toBe(editor);
+  });
+
   it("does not treat a touch that travels past the tap slop as a tap", () => {
     setMobileApp(true);
     const input = focusInput();

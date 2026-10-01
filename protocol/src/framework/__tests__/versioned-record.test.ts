@@ -82,6 +82,18 @@ describe("versioned-record framework - non-object schemas", () => {
       schema: z.unknown(),
     });
 
+    const registry = {
+      "opaque-record": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: opaque, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    };
+
     expect(() =>
       defineVersionedRecordRegistry({
         "opaque-record": {
@@ -94,7 +106,10 @@ describe("versioned-record framework - non-object schemas", () => {
           },
         },
       }),
-    ).toThrow(/Unsupported schema/);
+    ).not.toThrow();
+    expect(() => validateVersionedRecordRegistry(registry)).toThrow(
+      /Unsupported schema/,
+    );
   });
 });
 

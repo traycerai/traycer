@@ -108,6 +108,13 @@ function props(
       autoPermissionModeProtocolSupported: null,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
+      // Unused by this suite - it covers the unanswerable-interview escape
+      // hatch, not Stop.
+      getStopConfirmationTarget: () => ({
+        turnId: null,
+        revision: 0,
+        connectionEpoch: 0,
+      }),
       stopDisabled: true,
       onStopTurn: () => null,
     },
@@ -118,6 +125,8 @@ function props(
       onFileEditDecision: () => undefined,
       onApprovalDecision: () => undefined,
       highlightedApprovalId: null,
+      ruleDraftWorkspace: { remote: null, branch: null },
+      onOpenSettings: () => undefined,
     },
     queue: {
       editingItem: null,
@@ -150,6 +159,7 @@ function props(
       onSettingsChange: null,
       workspaceControls: null,
       workspaceAvailability: WORKSPACE_COMPOSER_READY,
+      suggestedPrompt: undefined,
     },
     todo: null,
     restoreContext: RESTORE_CONTEXT,

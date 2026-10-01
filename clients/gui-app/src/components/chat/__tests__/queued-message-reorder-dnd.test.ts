@@ -273,6 +273,7 @@ function makeQueuedItem(queueItemId: string): ChatQueuedPromptItem {
     sender: { type: "user", userId: "owner-1" },
     settings: TEST_SETTINGS,
     accountContext: { type: "PERSONAL" as const },
+    sentFromHostId: null,
     delivery: "next_turn",
     status: "pending",
     targetTurnId: null,

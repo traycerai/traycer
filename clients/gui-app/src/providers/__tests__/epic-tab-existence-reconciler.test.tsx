@@ -138,7 +138,7 @@ function installAuthFetch(): () => void {
     writable: true,
     value: (input: unknown): Promise<Response> => {
       const url = typeof input === "string" ? input : String(input);
-      if (url.endsWith("/api/v3/user")) {
+      if (url.endsWith("/api/v3/user/negotiated")) {
         return Promise.resolve(
           new Response(
             JSON.stringify({
@@ -175,7 +175,10 @@ function installAuthFetch(): () => void {
               teamSubscriptions: [],
               payAsYouGoUsage: { allowPayAsYouGo: false },
             }),
-            { status: 200 },
+            {
+              status: 200,
+              headers: { "x-traycer-user-record-version": "2.0" },
+            },
           ),
         );
       }

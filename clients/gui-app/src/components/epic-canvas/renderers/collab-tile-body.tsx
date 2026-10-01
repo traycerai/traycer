@@ -24,8 +24,12 @@ import { ArtifactAttachmentScopeContext } from "@/lib/attachments/artifact-attac
 import { useArtifactAttachmentScopeValue } from "@/lib/attachments/use-artifact-attachment-scope-value";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { collabTileNotice } from "./collab-tile-availability-copy";
 import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
+import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
+import { streamSyncingLabel } from "@/lib/sync/stream-syncing-state";
+import { SyncingSweepBar } from "@/components/sync/syncing-sweep-bar";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
 import {
   EPIC_NODE_PLACEHOLDER_TEXT,
@@ -39,6 +43,7 @@ import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
   useEpicArtifactBodySubscribeAnswered,
+  useEpicArtifactBodySyncing,
   useEpicArtifactBodyAwareness,
   useEpicArtifactFragment,
   useEpicCommentsHaveNoUsableRoom,
@@ -59,7 +64,12 @@ import {
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { cn } from "@/lib/utils";
+import {
+  useArrangementValue,
+  useReadingWidthStyle,
+  useRegionShown,
+} from "@/lib/layout-overrides";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
 import { EditorContent } from "@tiptap/react";
@@ -204,6 +214,39 @@ export function CollabTileBody(props: CollabTileBodyProps) {
     fragment === null ||
     fragmentDoc === null ||
     artifactRoomAwareness === null;
+
+  /**
+   * Whether this tile has held THIS artifact's body BOUND - the host served
+   * it and its fragment and awareness were resident here - latched with the
+   * same derived-state idiom as `bodyAnsweredOnce` above.
+   *
+   * It is what tells a reconnect from a first open, and nothing else can: both
+   * arrive here as `retrying` with no fragment. A room that leaves `ready`
+   * discards its local replica (`applyAvailability` -> `tier.invalidate`), so
+   * the fragment goes `null` and a bound tile falls back to this pre-editor
+   * path - that is a real lost connection, and the reader is owed a sentence.
+   * A tile that has never had a body bound is waiting on its first open
+   * attempt, which the host also reports as `retrying`, and is owed the
+   * skeleton. See `collabTileNotice`.
+   *
+   * Deliberately the binding and not the editor's first paint. Tiptap builds
+   * its editor in an effect (`immediatelyRender: false`), so there is a commit
+   * with a bound body and no editor yet; a room that leaves `ready` inside that
+   * window has still been served and lost, which is what "Reconnecting" says.
+   * The sentence is a claim about the connection, not about the pixels.
+   *
+   * Keyed by artifact id rather than a boolean, so a tile that is handed a
+   * different artifact does not carry the previous one's history into the new
+   * document's first open.
+   */
+  const [bodyBoundForId, setBodyBoundForId] = useState<string | null>(
+    bodyPending ? null : props.node.id,
+  );
+  if (!bodyPending && bodyBoundForId !== props.node.id) {
+    setBodyBoundForId(props.node.id);
+  }
+  const bodyBoundOnce = bodyBoundForId === props.node.id;
+
   // Invariant 6. The artifact room is doc-scoped rather than host-scoped, so
   // this bounds on the node itself rather than reaching for a host lease -
   // there is no host here whose name would tell the reader anything.
@@ -218,6 +261,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
         testId={props.testId}
         bodyAvailability={bodyAvailability}
         subscribeAnswered={bodyAnsweredOnce}
+        bodyBoundOnce={bodyBoundOnce}
         budgetElapsed={loadBudgetElapsed}
       />
     );
@@ -234,7 +278,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
 }
 
 /**
- * The three pre-editor states, which used to be ONE.
+ * The pre-editor states, which used to be ONE.
  *
  * `unavailable` and `loading` rendered byte-identical markup - the same three
  * pulsing bars - distinguished only by a `data-testid` suffix no reader can
@@ -242,24 +286,29 @@ export function CollabTileBody(props: CollabTileBodyProps) {
  * document that was about to appear, and the only way to tell them apart was
  * to keep waiting: indefinitely, since neither state ended.
  *
- * Now each says which one it is, and the wait has a deadline (invariant 6).
- * The pulsing bars are kept for the short, genuinely-loading window - they
- * are a good placeholder for content that is coming - and retired the moment
- * the answer is anything else.
+ * Now a refusal says so, a lost connection says so, and the wait has a
+ * deadline (invariant 6). The pulsing bars are kept for the genuinely-loading
+ * window - they are a good placeholder for content that is coming - and that
+ * window includes a FIRST open reported `retrying`, which on the wire is an
+ * open attempt in flight and not a lost connection. `collabTileNotice` holds
+ * the copy and the reasoning.
  *
  * "The answer", precisely: `subscribeAnswered` is false until the body plane
  * has stated something about this artifact, and an UNANSWERED tile is a
- * loading one however `bodyAvailability` reads. The two are separate props
- * rather than one pre-collapsed value so the DOM carries both - a tile that
- * looks stuck can be told apart from one that was refused without re-running
- * the app.
+ * loading one however `bodyAvailability` reads. `bodyBoundOnce` is what
+ * separates a reconnect from a first open. All three are separate props
+ * rather than one pre-collapsed value so the DOM carries each - a tile that
+ * looks stuck can be told apart from one that was refused, or one that lost
+ * its connection, without re-running the app.
  */
 function CollabTileSkeleton(props: {
   readonly testId: string;
   readonly bodyAvailability: EpicArtifactRoomAvailability;
   readonly subscribeAnswered: boolean;
+  readonly bodyBoundOnce: boolean;
   readonly budgetElapsed: boolean;
 }) {
+  const readingWidth = useReadingWidthStyle();
   const testIdSuffix =
     props.subscribeAnswered && props.bodyAvailability === "unavailable"
       ? "unavailable"
@@ -268,6 +317,7 @@ function CollabTileSkeleton(props: {
     props.bodyAvailability,
     props.budgetElapsed,
     props.subscribeAnswered,
+    props.bodyBoundOnce,
   );
 
   return (
@@ -275,8 +325,13 @@ function CollabTileSkeleton(props: {
       data-testid={`${props.testId}-${testIdSuffix}`}
       data-artifact-room-availability={props.bodyAvailability}
       data-body-subscribe-answered={props.subscribeAnswered ? "true" : "false"}
+      data-body-bound-once={props.bodyBoundOnce ? "true" : "false"}
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
-      className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
+      className={cn(
+        "mx-auto flex w-full flex-col gap-3 px-6 py-8",
+        readingWidth.className,
+      )}
+      style={{ maxWidth: readingWidth.maxWidth }}
     >
       {notice === null ? (
         <>
@@ -336,6 +391,7 @@ function draftRangeOwnedByTile(
 }
 
 function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
+  const readingWidth = useReadingWidthStyle();
   const {
     node,
     viewTabId,
@@ -691,6 +747,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // the document instead of holding the tile edge.
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
+      <MobileDrawerVisibleTilePaintReporter ready={editor !== null} />
+      <CollabTileBodySyncStrip artifactId={node.id} testId={testId} />
       <ArtifactHeadingMinimapMount
         editor={editor}
         node={node}
@@ -704,7 +762,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
         className="flex h-full min-h-0 flex-col overflow-y-auto px-6 py-8"
         onScroll={onScroll}
       >
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+        <div
+          className={cn(
+            "mx-auto flex w-full flex-col gap-4",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
           <div className="tc-editor-surface">
             <div
               className="tc-editor-body"
@@ -787,15 +851,70 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
 }
 
 /**
+ * "Syncing…" over a LIVE editor: the host is serving this body from its local
+ * copy while it reconciles that copy with the cloud.
+ *
+ * NON-BLOCKING by construction, and that is the contract it exists under. It
+ * is a sibling overlay that takes no pointer events and owns its own store
+ * subscription, so a sync-state change re-renders this strip and nothing else:
+ * the editor is never hidden, unmounted or re-keyed by it. The pre-editor
+ * states stay `collabTileNotice`'s - a body that is syncing is not a body that
+ * is missing, and saying "Reconnecting to this document…" over one the host
+ * already holds is the state this strip replaced.
+ *
+ * The same sweep as every other surface that says it is syncing, escalated the
+ * same way: after `LINK_DOWN_ESCALATION_MS` the bar stops moving. A sync that
+ * is paused (a credential the host is waiting to see rotated) would otherwise
+ * animate for as long as the tile is open.
+ *
+ * The bar is the whole visible signal; the words are for assistive tech only.
+ * A visible caption had nowhere to go: the tile's top-right corner belongs to
+ * the version-history button, which covered it on every artifact kind, and a
+ * moving bar at the tile edge already says what the word said.
+ */
+function CollabTileBodySyncStrip(props: {
+  readonly artifactId: string;
+  readonly testId: string;
+}) {
+  const syncing = useEpicArtifactBodySyncing(props.artifactId);
+  const escalated = useLoadDeadline(
+    syncing ? props.artifactId : null,
+    LINK_DOWN_ESCALATION_MS,
+  );
+  if (!syncing) return null;
+  return (
+    <div
+      data-testid={`${props.testId}-body-syncing`}
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none absolute inset-x-0 top-0 z-10"
+    >
+      <SyncingSweepBar
+        settled={escalated}
+        testId={`${props.testId}-body-syncing-bar`}
+        className={undefined}
+      />
+      <span
+        data-testid={`${props.testId}-body-syncing-label`}
+        className="sr-only"
+      >
+        {streamSyncingLabel(escalated)}
+      </span>
+    </div>
+  );
+}
+
+/**
  * Gate for the heading rail, kept out of `CollabTileBodyEditor` so its two
  * conditions do not count against that component's complexity ceiling. Only
  * artifact kinds get an outline - a workspace file tile shares this body but
  * is not a document with a heading skeleton.
  *
- * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
- * bar existed - the rail is the only consumer there. On a phone viewport it
- * stays mounted and suppresses only its own rail, because the tile bar's
- * button reads the outline it registers and does not obey `hide`.
+ * A hidden minimap unmounts on a desktop viewport, exactly as before the phone
+ * tile bar existed - the rail is the only consumer there. On a phone viewport
+ * it stays mounted and suppresses only its own rail, because the tile bar's
+ * button reads the outline it registers and ignores the region's `shown`
+ * value.
  */
 function ArtifactHeadingMinimapMount(props: {
   readonly editor: Editor | null;
@@ -803,12 +922,13 @@ function ArtifactHeadingMinimapMount(props: {
   readonly refreshRef: RefObject<() => void>;
   readonly scroller: HTMLElement | null;
 }) {
-  const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  const minimapShown = useRegionShown("minimap");
+  const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
   if (
     props.editor === null ||
     !isEpicArtifactKind(props.node.type) ||
-    (side === "hide" && !isMobileViewport)
+    (!minimapShown && !isMobileViewport)
   ) {
     return null;
   }
@@ -817,7 +937,8 @@ function ArtifactHeadingMinimapMount(props: {
       editor={props.editor}
       refreshRef={props.refreshRef}
       scroller={props.scroller}
-      side={side}
+      shown={minimapShown}
+      side={minimapSide}
     />
   );
 }

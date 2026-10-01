@@ -19,6 +19,7 @@
  * declares `ping`, matching every other stream contract in this registry.
  */
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Hard cap on a single asset's byte size, shared by the host (admission +
@@ -34,13 +35,15 @@ export const MAX_ASSET_BYTES = 20 * 1024 * 1024;
  * `epic.readChatAttachment` and the artifact-attachment response reuse it,
  * which is exactly right: attachments are an image-only channel.
  */
-export const assetMediaTypeSchema = z.enum([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-]);
+export const assetMediaTypeSchema = lazySchema(() =>
+  z.enum([
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+  ]),
+);
 
 /**
  * The 1.1 media-type set: PDF joins the five image formats. A separate
@@ -50,14 +53,16 @@ export const assetMediaTypeSchema = z.enum([
  * literal). The host's resolvers additionally gate admission and emission
  * on the negotiated minor, so the new literal never reaches a 1.0 peer.
  */
-export const assetMediaTypeSchemaV11 = z.enum([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-  "application/pdf",
-]);
+export const assetMediaTypeSchemaV11 = lazySchema(() =>
+  z.enum([
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "application/pdf",
+  ]),
+);
 
 /**
  * The IANA media type of a Word `.docx` document (OOXML WordprocessingML).
@@ -73,32 +78,36 @@ export const DOCX_MEDIA_TYPE =
  * the same admission/emission gating obligation on the host: the literal
  * must never reach a peer that negotiated below 1.2.
  */
-export const assetMediaTypeSchemaV12 = z.enum([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/svg+xml",
-  "application/pdf",
-  DOCX_MEDIA_TYPE,
-]);
+export const assetMediaTypeSchemaV12 = lazySchema(() =>
+  z.enum([
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "application/pdf",
+    DOCX_MEDIA_TYPE,
+  ]),
+);
 
 /** Application-facing media type: the LATEST minor's set. */
 export type AssetMediaType = z.infer<typeof assetMediaTypeSchemaV12>;
 
-export const assetStreamErrorReasonSchema = z.enum([
-  "not-found",
-  // Historical name, kept as the wire literal forever: it means "not a
-  // supported asset type" (since 1.1 that set includes PDF and since 1.2
-  // Word documents, so a request for either on a stream negotiated below
-  // its minor also lands here). Renaming would be a breaking change for
-  // every shipped client's parser; display copy owns the honest phrasing.
-  "not-image",
-  "mismatch",
-  "too-large",
-  "too-many-pixels",
-  "read-failed",
-]);
+export const assetStreamErrorReasonSchema = lazySchema(() =>
+  z.enum([
+    "not-found",
+    // Historical name, kept as the wire literal forever: it means "not a
+    // supported asset type" (since 1.1 that set includes PDF and since 1.2
+    // Word documents, so a request for either on a stream negotiated below
+    // its minor also lands here). Renaming would be a breaking change for
+    // every shipped client's parser; display copy owns the honest phrasing.
+    "not-image",
+    "mismatch",
+    "too-large",
+    "too-many-pixels",
+    "read-failed",
+  ]),
+);
 export type AssetStreamErrorReason = z.infer<
   typeof assetStreamErrorReasonSchema
 >;
@@ -108,94 +117,110 @@ export type AssetStreamErrorReason = z.infer<
  * which is per-version (see the enum pair above).
  */
 const assetHeaderFrameFields = {
-  kind: z.literal("assetHeader"),
-  hasBinaryPayload: z.literal(false),
-  sizeBytes: z.number().int().nonnegative(),
+  kind: lazySchema(() => z.literal("assetHeader")),
+  hasBinaryPayload: lazySchema(() => z.literal(false)),
+  sizeBytes: lazySchema(() => z.number().int().nonnegative()),
   // `null` when the asset has no known intrinsic raster dimensions: an
   // SVG that declares no width/height/viewBox, or a non-raster document
   // (PDF, Word - pages have geometry, but the client learns it from the
   // bytes; the host stays a validate-and-stream layer and parses no
   // documents).
-  width: z.number().int().positive().nullable(),
-  height: z.number().int().positive().nullable(),
+  width: lazySchema(() => z.number().int().positive().nullable()),
+  height: lazySchema(() => z.number().int().positive().nullable()),
   // The git OID for an object side, else a `size:mtimeMs` fingerprint for
   // a worktree file - the blob-cache key's identity component.
-  contentIdentity: z.string(),
+  contentIdentity: lazySchema(() => z.string()),
 };
 
-const assetChunkFrameSchema = z.object({
-  kind: z.literal("assetChunk"),
-  hasBinaryPayload: z.literal(true),
-  index: z.number().int().nonnegative(),
-  byteLength: z.number().int().positive(),
-});
+const assetChunkFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("assetChunk"),
+    hasBinaryPayload: z.literal(true),
+    index: z.number().int().nonnegative(),
+    byteLength: z.number().int().positive(),
+  }),
+);
 
-const assetCompleteFrameSchema = z.object({
-  kind: z.literal("assetComplete"),
-  hasBinaryPayload: z.literal(false),
-});
+const assetCompleteFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("assetComplete"),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
-const assetErrorFrameSchema = z.object({
-  kind: z.literal("assetError"),
-  hasBinaryPayload: z.literal(false),
-  error: z.string(),
-  reason: assetStreamErrorReasonSchema,
-});
+const assetErrorFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("assetError"),
+    hasBinaryPayload: z.literal(false),
+    error: z.string(),
+    reason: assetStreamErrorReasonSchema,
+  }),
+);
 
-const pongFrameSchema = z.object({
-  kind: z.literal("pong"),
-  hasBinaryPayload: z.literal(false),
-});
+const pongFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("pong"),
+    hasBinaryPayload: z.literal(false),
+  }),
+);
 
 /** The FROZEN 1.0 server-frame union: image media types only. */
-export const assetStreamServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ...assetHeaderFrameFields,
-    // Host-authoritative, derived from magic bytes - never trusted from the
-    // requested file's extension.
-    mediaType: assetMediaTypeSchema,
-  }),
-  assetChunkFrameSchema,
-  assetCompleteFrameSchema,
-  assetErrorFrameSchema,
-  pongFrameSchema,
-]);
+export const assetStreamServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...assetHeaderFrameFields,
+      // Host-authoritative, derived from magic bytes - never trusted from the
+      // requested file's extension.
+      mediaType: assetMediaTypeSchema,
+    }),
+    assetChunkFrameSchema,
+    assetCompleteFrameSchema,
+    assetErrorFrameSchema,
+    pongFrameSchema,
+  ]),
+);
 
 /** The 1.1 server-frame union: identical shape, PDF-capable media type. */
-export const assetStreamServerFrameSchemaV11 = z.discriminatedUnion("kind", [
-  z.object({
-    ...assetHeaderFrameFields,
-    mediaType: assetMediaTypeSchemaV11,
-  }),
-  assetChunkFrameSchema,
-  assetCompleteFrameSchema,
-  assetErrorFrameSchema,
-  pongFrameSchema,
-]);
+export const assetStreamServerFrameSchemaV11 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...assetHeaderFrameFields,
+      mediaType: assetMediaTypeSchemaV11,
+    }),
+    assetChunkFrameSchema,
+    assetCompleteFrameSchema,
+    assetErrorFrameSchema,
+    pongFrameSchema,
+  ]),
+);
 
 /** The 1.2 server-frame union: identical shape, Word-capable media type. */
-export const assetStreamServerFrameSchemaV12 = z.discriminatedUnion("kind", [
-  z.object({
-    ...assetHeaderFrameFields,
-    mediaType: assetMediaTypeSchemaV12,
-  }),
-  assetChunkFrameSchema,
-  assetCompleteFrameSchema,
-  assetErrorFrameSchema,
-  pongFrameSchema,
-]);
+export const assetStreamServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...assetHeaderFrameFields,
+      mediaType: assetMediaTypeSchemaV12,
+    }),
+    assetChunkFrameSchema,
+    assetCompleteFrameSchema,
+    assetErrorFrameSchema,
+    pongFrameSchema,
+  ]),
+);
 
 /** Application-facing frame type: the LATEST minor's shape. */
 export type AssetStreamServerFrame = z.infer<
   typeof assetStreamServerFrameSchemaV12
 >;
 
-export const assetStreamClientFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("ping"),
-    hasBinaryPayload: z.literal(false),
-  }),
-]);
+export const assetStreamClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
 export type AssetStreamClientFrame = z.infer<
   typeof assetStreamClientFrameSchema
 >;

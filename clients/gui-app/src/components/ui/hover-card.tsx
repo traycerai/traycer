@@ -1,92 +1,434 @@
 "use client";
 
-import * as React from "react";
-import { HoverCard as HoverCardPrimitive } from "radix-ui";
+import {
+  createContext,
+  use,
+  useCallback,
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import {
+  FloatingDelayGroup,
+  FloatingPortal,
+  autoUpdate,
+  flip,
+  offset,
+  safePolygon,
+  shift,
+  size,
+  useDelayGroup,
+  useDismiss,
+  useFloating,
+  useFocus,
+  useHover,
+  useInteractions,
+  useRole,
+  useTransitionStyles,
+  type FloatingContext,
+  type OpenChangeReason,
+  type Placement,
+  type Side,
+  type UseTransitionStylesProps,
+} from "@floating-ui/react";
+import { Slot } from "radix-ui";
+import { DismissableLayer } from "radix-ui/internal";
 
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
-import { cn } from "@/lib/utils";
+import { useAnyMenuOpen } from "@/components/ui/open-menus";
+import { TooltipsSuppressedContext } from "@/components/ui/tooltip-wrapper";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
+import { cn } from "@/lib/utils";
 
-// Match the tooltip's 500ms hover-in; give a small grace on the way out so the
-// pointer can travel from the trigger into the card to reach its actions
-// (copy-path, links) without it dismissing mid-move.
-const HOVER_CARD_OPEN_DELAY_MS = 500;
-const HOVER_CARD_CLOSE_DELAY_MS = 150;
+/**
+ * The app's hover card: a card (or a label chip) that opens on hover and on
+ * KEYBOARD focus, on Floating UI's interaction hooks.
+ *
+ * Grouped. A list or strip wraps its rows in one `HoverCardGroup`: the first
+ * card waits for intent (500ms), and while one is open, or within 300ms of
+ * the last closing, a sibling's opens at once and the group closes the one
+ * before it, so one card is ever up and moving row to row is a hand-off, not
+ * a new wait. A card outside any group waits every time.
+ *
+ * Shut while any menu is open anywhere.
+ *
+ * A Radix dismissable layer, like every other overlay: above a modal dialog
+ * it takes the pointer (the dialog disables the page's), and it is the top
+ * layer for Escape, so the first Escape closes the card and the next one the
+ * dialog. The layer owns Escape and a press outside; Floating UI owns
+ * positioning, hover, focus, a press on the trigger and ancestor scroll.
+ *
+ * Dismissed by a press on its trigger (a click - a keyboard Enter or Space
+ * included - a right-click, the pointerdown that starts a drag), Escape, a
+ * press outside, or a scroll of any ancestor.
+ * A dismissed card stays shut until the pointer leaves and comes back, which
+ * is what keeps a click from ending in a card that re-opens under the pointer.
+ * The pointer can travel into the card through a safe polygon, so actions
+ * inside it (copy path, a link) stay reachable.
+ *
+ * Focus opens it only when it is `:focus-visible`: Tab gives a keyboard user
+ * the card, a mouse focus does not. The card's content is outside the tab
+ * order (it is a preview, never focus-managed; controls that render later are
+ * taken out too), so any action placed in it must also have a
+ * keyboard-reachable home elsewhere.
+ *
+ * In a group, a card that replaces an open sibling appears at once and the
+ * sibling goes at once: the fade is only for the first open and the last close.
+ */
+export type HoverCardOpenReason =
+  | "hover"
+  | "focus"
+  | "press"
+  | "escape"
+  | "outside-press"
+  | "scroll"
+  | "group"
+  /** Shut by `enabled={false}` or an open menu. */
+  | "disabled";
 
-function HoverCard({
-  openDelay = HOVER_CARD_OPEN_DELAY_MS,
-  closeDelay = HOVER_CARD_CLOSE_DELAY_MS,
-  ...props
-}: React.ComponentProps<typeof HoverCardPrimitive.Root>) {
+/**
+ * What the card IS, from its content: `tooltip` for text alone, `dialog`
+ * (named by `label`) for anything with an action or structure in it.
+ */
+export type HoverCardSemantics =
+  | { readonly role: "tooltip" }
+  | { readonly role: "dialog"; readonly label: string };
+
+export interface HoverCardProps {
+  /** One element; it receives the ref and the interaction props (composed with its own, like `asChild`). */
+  readonly trigger: ReactElement;
+  /** Mounted only while the card is open. */
+  readonly content: ReactNode;
+  /** A popover card surface, or the inverted label chip: the look only. */
+  readonly appearance: "preview" | "tooltip";
+  readonly semantics: HoverCardSemantics;
+  readonly side: Side;
+  readonly align: "start" | "center" | "end";
+  readonly sideOffset: number;
+  /**
+   * `false` keeps it shut, and closes it if open (a controlled parent is
+   * told through `onOpenChange`):
+   * while renaming, dragging, or a popover on the same trigger is open.
+   */
+  readonly enabled: boolean;
+  /** `null` leaves it uncontrolled. */
+  readonly open: boolean | null;
+  readonly onOpenChange:
+    | ((open: boolean, reason: HoverCardOpenReason) => void)
+    | null;
+  readonly testId: string | null;
+  readonly className: string | null;
+}
+
+const HOVER_CARD_DELAY = { open: 500, close: 150 };
+/** How long after the last card closes a sibling still opens at once. */
+const HOVER_CARD_GROUP_TIMEOUT_MS = 300;
+const HOVER_CARD_TRANSITION_MS = 100;
+const HOVER_CARD_FADE = { opacity: 0, transform: "scale(0.95)" };
+
+const TABBABLE =
+  'a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], [contenteditable]:not([contenteditable="false"])';
+
+/**
+ * Takes every control in `root` out of sequential focus, now and whenever one
+ * renders later (metadata that loads after the card opens).
+ */
+function keepOutOfTabOrder(root: HTMLElement | null): (() => void) | undefined {
+  if (root === null) return undefined;
+  const sweep = () => {
+    for (const node of root.querySelectorAll<HTMLElement>(TABBABLE)) {
+      if (node.tabIndex !== -1) node.tabIndex = -1;
+    }
+  };
+  sweep();
+  const observer = new MutationObserver(sweep);
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["tabindex", "href", "contenteditable"],
+  });
+  return () => observer.disconnect();
+}
+
+const HoverCardGroupContext = createContext(false);
+
+/** One list's cards: they share one clock and one open card. */
+export function HoverCardGroup(props: {
+  readonly children: ReactNode;
+}): ReactNode {
   return (
-    <HoverCardPrimitive.Root
-      data-slot="hover-card"
-      openDelay={openDelay}
-      closeDelay={closeDelay}
-      {...props}
-    />
+    <HoverCardGroupContext value>
+      <FloatingDelayGroup
+        delay={HOVER_CARD_DELAY}
+        timeoutMs={HOVER_CARD_GROUP_TIMEOUT_MS}
+      >
+        {props.children}
+      </FloatingDelayGroup>
+    </HoverCardGroupContext>
   );
 }
 
-function HoverCardTrigger({
-  ...props
-}: React.ComponentProps<typeof HoverCardPrimitive.Trigger>) {
-  return (
-    <HoverCardPrimitive.Trigger data-slot="hover-card-trigger" {...props} />
-  );
+function placementOf(side: Side, align: HoverCardProps["align"]): Placement {
+  return align === "center" ? side : `${side}-${align}`;
 }
 
-// Rich hover preview surface, shared verbatim with the composer's @mention
-// preview panel (`HOVER_PREVIEW_SURFACE_CLASS`) so every hover preview in the
-// app reads as the same card.
-//
-// Interactive actions here (copy-path button, PR link) are POINTER-operable
-// previews, not keyboard-navigable. Unlike a Tooltip, HoverCard mounts no
-// visually-hidden a11y clone, so an action exists once in the DOM rather than
-// duplicated - but Radix keeps hover-card content out of the sequential tab
-// order (it opens on hover/focus, yet Tab from the trigger moves past it and
-// closes it). So any action placed here must also have a keyboard-reachable
-// home elsewhere: copy-path lives on the click-open folder rows (`FolderRow`),
-// and the PR link is also in the Epic history list.
-function HoverCardContent({
-  ref,
-  className,
-  align = "start",
-  sideOffset = 4,
-  collisionPadding,
-  ...props
-}: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
+/** A group closing a sibling calls `onOpenChange` with no reason. */
+function reasonOf(reason: OpenChangeReason | undefined): HoverCardOpenReason {
+  switch (reason) {
+    case "hover":
+    case "safe-polygon":
+      return "hover";
+    case "focus":
+    case "focus-out":
+      return "focus";
+    case "reference-press":
+    case "click":
+      return "press";
+    case "escape-key":
+      return "escape";
+    case "outside-press":
+      return "outside-press";
+    case "ancestor-scroll":
+      return "scroll";
+    case "list-navigation":
+    case undefined:
+      return "group";
+  }
+}
+
+function isSibling(currentId: unknown, id: string | undefined): boolean {
+  return currentId !== null && currentId !== id;
+}
+
+function labelOf(semantics: HoverCardSemantics): string | undefined {
+  return semantics.role === "dialog" ? semantics.label : undefined;
+}
+
+/**
+ * The layer's half of dismissal: Escape (it is the top layer, so it comes
+ * before a dialog's) and a press outside. A press on the trigger is
+ * `useDismiss`'s reference press, and focus leaving the trigger is
+ * `useFocus`'s - a hover-opened card outlives focus moving elsewhere.
+ */
+function layerDismissal(
+  context: FloatingContext,
+): Pick<
+  DismissableLayer.DismissableLayerProps,
+  "onEscapeKeyDown" | "onPointerDownOutside" | "onFocusOutside"
+> {
+  return {
+    onEscapeKeyDown: (event) => {
+      event.preventDefault();
+      context.onOpenChange(false, event, "escape-key");
+    },
+    onPointerDownOutside: (event) => {
+      event.preventDefault();
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        context.elements.domReference?.contains(target) === true
+      ) {
+        return;
+      }
+      context.onOpenChange(false, event.detail.originalEvent, "outside-press");
+    },
+    onFocusOutside: (event) => event.preventDefault(),
+  };
+}
+
+/**
+ * A fade for the first open and the last close; none for a card handed over
+ * from a sibling or displaced by one, so a hand-off never paints two cards.
+ */
+function transitionOf(
+  motionEnabled: boolean,
+  enteredByHandoff: boolean,
+  displaced: boolean,
+): UseTransitionStylesProps {
+  if (!motionEnabled) return { duration: 0, initial: {} };
+  return {
+    duration: {
+      open: enteredByHandoff ? 0 : HOVER_CARD_TRANSITION_MS,
+      close: displaced ? 0 : HOVER_CARD_TRANSITION_MS,
+    },
+    initial: enteredByHandoff ? {} : HOVER_CARD_FADE,
+    close: HOVER_CARD_FADE,
+    common: ({ side }) => ({ transformOrigin: TRANSFORM_ORIGIN[side] }),
+  };
+}
+
+/** The card scales out of the edge facing its trigger. */
+const TRANSFORM_ORIGIN: Record<Side, string> = {
+  top: "bottom",
+  right: "left",
+  bottom: "top",
+  left: "right",
+};
+
+/**
+ * Whether no card may open: disabled, while any menu is open (the trigger's
+ * own or another's, since a non-modal menu leaves the rows beside it
+ * hoverable), or inside a scene that is shown rather than used.
+ */
+function useHoverCardSuppressed(enabled: boolean): boolean {
+  const menuOpen = useAnyMenuOpen();
+  const sceneSuppressed = use(TooltipsSuppressedContext);
+  return !enabled || menuOpen || sceneSuppressed;
+}
+
+export function HoverCard(props: HoverCardProps): ReactNode {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const suppressed = useHoverCardSuppressed(props.enabled);
+  // A suppressed card is CLOSED, not hidden, so lifting the suppression shows
+  // nothing until a new hover: it forgets its own open state, and a controlled
+  // parent is told to drop its.
+  if (suppressed && uncontrolledOpen) setUncontrolledOpen(false);
+  const open = (props.open ?? uncontrolledOpen) && !suppressed;
+  const controlledOpen = props.open === true;
+  const onOpenChange = props.onOpenChange;
+  useEffect(() => {
+    if (suppressed && controlledOpen) onOpenChange?.(false, "disabled");
+  }, [suppressed, controlledOpen, onOpenChange]);
+  const grouped = use(HoverCardGroupContext);
+  const motionEnabled = useMotionEnabled();
   // Concealed region (see `portal-concealment-context`): un-present with the
-  // region — the anchor is display:none and cannot deliver the close events.
+  // region - the anchor is display:none and cannot deliver the close events.
   const concealed = usePortalConcealed();
-  // Read above the early return so hook order does not depend on concealment.
-  // The insets are the DEFAULT collision padding; a caller may replace it (see
-  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`). The card's width
-  // comes from its callers, so the cap matters here more than on the primitives
-  // that size themselves.
-  const safeAreaInsets = useSafeAreaCollisionPadding();
-  if (concealed) return null;
+  // The device insets are the collision padding, as for every other overlay
+  // (see `safe-area-collision-padding.ts`).
+  const safeArea = useSafeAreaCollisionPadding();
+  const {
+    refs: anchors,
+    floatingStyles,
+    context,
+  } = useFloating({
+    open,
+    onOpenChange: (next, _event, reason) => {
+      if (next && suppressed) return;
+      if (props.open === null) setUncontrolledOpen(next);
+      onOpenChange?.(next, reasonOf(reason));
+    },
+    placement: placementOf(props.side, props.align),
+    whileElementsMounted: autoUpdate,
+    middleware: [
+      offset(props.sideOffset),
+      flip({ padding: safeArea }),
+      shift({ padding: safeArea }),
+      size({
+        padding: safeArea,
+        apply({ availableWidth, availableHeight, elements }) {
+          elements.floating.style.setProperty(
+            "--hover-card-available-width",
+            `${String(availableWidth)}px`,
+          );
+          elements.floating.style.setProperty(
+            "--hover-card-available-height",
+            `${String(availableHeight)}px`,
+          );
+        },
+      }),
+    ],
+  });
+  // Bound here, not destructured: the setters are methods of the refs bag.
+  const setReference = useCallback(
+    (node: Element | null) => anchors.setReference(node),
+    [anchors],
+  );
+  const setFloating = useCallback(
+    (node: HTMLElement | null) => anchors.setFloating(node),
+    [anchors],
+  );
+  const group = useDelayGroup(context, { enabled: grouped });
+  // Another card of the group is the current one: this card is being handed
+  // over from (it opens at once) or displaced by it (it goes at once).
+  const siblingCurrent =
+    grouped && isSibling(group.currentId, context.floatingId);
+  // Latched when it opens: the group makes this card the current one a layout
+  // effect later, which must not turn a hand-off into a fade mid-entry.
+  const [wasOpen, setWasOpen] = useState(open);
+  const [enteredByHandoff, setEnteredByHandoff] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setEnteredByHandoff(siblingCurrent);
+  }
+  // The interaction hooks stay on while suppressed; only the open is refused
+  // (above). A disabled hook drops its handlers, and with them the pointer
+  // leave and blur that clear its "dismissed until the pointer leaves" latch:
+  // a right-clicked trigger would then never open on focus again.
+  const hover = useHover(context, {
+    delay: grouped ? group.delay : HOVER_CARD_DELAY,
+    mouseOnly: true,
+    handleClose: safePolygon({ requireIntent: false }),
+  });
+  const focus = useFocus(context, {
+    visibleOnly: true,
+  });
+  // Escape and a press outside are the layer's (below).
+  const dismiss = useDismiss(context, {
+    escapeKey: false,
+    outsidePress: false,
+    referencePress: true,
+    ancestorScroll: true,
+  });
+  const role = useRole(context, { role: props.semantics.role });
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+    dismiss,
+    role,
+  ]);
+  const { isMounted, styles } = useTransitionStyles(
+    context,
+    transitionOf(motionEnabled, enteredByHandoff, siblingCurrent),
+  );
   return (
-    <HoverCardPrimitive.Portal>
-      <HoverCardPrimitive.Content
-        ref={ref}
-        data-slot="hover-card-content"
-        align={align}
-        sideOffset={sideOffset}
-        collisionPadding={collisionPadding ?? safeAreaInsets}
-        className={cn(
-          "z-50 origin-(--radix-hover-card-content-transform-origin) outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-          HOVER_PREVIEW_SURFACE_CLASS,
-          // Last of the primitive-owned classes, so the shared surface class
-          // can never displace the cap while a caller's `max-w-*` still can.
-          "max-w-safe-dvw",
-          className,
-        )}
-        {...props}
-      />
-    </HoverCardPrimitive.Portal>
+    <>
+      {/* `Slot` composes the trigger's own handlers and ref with these, as
+          `asChild` did, so a trigger that is also a popover, menu or drag
+          handle keeps every one of its own behaviours. */}
+      <Slot.Root ref={setReference} {...getReferenceProps()}>
+        {props.trigger}
+      </Slot.Root>
+      {isMounted && !concealed ? (
+        <FloatingPortal>
+          <DismissableLayer.Root
+            ref={setFloating}
+            style={floatingStyles}
+            className="z-50"
+            aria-label={labelOf(props.semantics)}
+            {...getFloatingProps()}
+            {...layerDismissal(context)}
+          >
+            <div
+              ref={keepOutOfTabOrder}
+              data-slot="hover-card-content"
+              data-appearance={props.appearance}
+              data-state={open ? "open" : "closed"}
+              data-side={context.placement.split("-")[0]}
+              data-align={context.placement.split("-")[1] ?? "center"}
+              data-testid={props.testId ?? undefined}
+              style={styles}
+              className={cn(
+                "outline-hidden",
+                props.appearance === "tooltip"
+                  ? "rounded-md bg-foreground text-background shadow-sm"
+                  : HOVER_PREVIEW_SURFACE_CLASS,
+                // Last of the primitive-owned classes, so the shared surface
+                // class can never displace the cap while a caller's `max-w-*`
+                // still can.
+                "max-w-safe-dvw",
+                props.className,
+              )}
+            >
+              {props.content}
+            </div>
+          </DismissableLayer.Root>
+        </FloatingPortal>
+      ) : null}
+    </>
   );
 }
-
-export { HoverCard, HoverCardTrigger, HoverCardContent };

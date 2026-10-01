@@ -1,3 +1,4 @@
+import type { ProviderLoginStartCopy } from "@/components/providers/provider-login-start";
 import type { ProviderProfileLoginFlowCodePastePhase } from "./use-provider-profile-login-flow";
 
 export interface WaitingStepCopy {
@@ -19,6 +20,13 @@ export interface WaitingStepCopy {
 export function waitingStepCopy(args: {
   readonly phase: ProviderProfileLoginFlowCodePastePhase;
   readonly queuePending: boolean;
+  /**
+   * What to say instead of "Opening the sign-in page…" while `queuePending`,
+   * when the start is taking longer than a moment (the flow's
+   * `startingCopy`). Null for the ordinary start, and for a caller that is
+   * already past it.
+   */
+  readonly startingCopy: ProviderLoginStartCopy | null;
   readonly cancelRequested: boolean;
   readonly deviceCode: boolean;
 }): WaitingStepCopy {
@@ -30,10 +38,12 @@ export function waitingStepCopy(args: {
     };
   }
   if (args.queuePending) {
-    return {
-      title: "Opening the sign-in page…",
-      guidance: "This should only take a moment.",
-    };
+    return (
+      args.startingCopy ?? {
+        title: "Opening the sign-in page…",
+        guidance: "This should only take a moment.",
+      }
+    );
   }
   if (args.phase === "submitting") {
     return { title: "Sending the code…", guidance: null };
@@ -41,7 +51,7 @@ export function waitingStepCopy(args: {
   if (args.phase === "verifying") {
     return {
       title: "Checking approval…",
-      guidance: "This usually takes only a moment.",
+      guidance: null,
     };
   }
   if (args.deviceCode) {

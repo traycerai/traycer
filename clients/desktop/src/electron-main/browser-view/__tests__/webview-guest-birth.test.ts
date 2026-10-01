@@ -70,7 +70,10 @@ const WINDOW_A = "window-a";
 const WINDOW_B = "window-b";
 const PARTITION = "persist:traycer-test";
 
-type TestPrefs = WebPreferences & { disablePopups?: boolean };
+type TestPrefs = WebPreferences & {
+  disablePopups?: boolean;
+  transparent: boolean | undefined;
+};
 
 class FakeHost extends EventEmitter {
   constructor(readonly id: number) {
@@ -157,6 +160,7 @@ function prefs(): TestPrefs {
     webSecurity: false,
     allowRunningInsecureContent: true,
     webviewTag: true,
+    transparent: true,
   };
 }
 
@@ -200,7 +204,7 @@ describe("webview guest birth", () => {
     const { event, webPreferences } = willAttach(
       host,
       mount.registrationId,
-      { disablePopups: true },
+      { disablePopups: true, transparent: true },
       {},
     );
 
@@ -221,6 +225,7 @@ describe("webview guest birth", () => {
     // No longer hardened: a renderer-supplied disablePopups is stripped, so
     // Chromium's popup blocker stays off and OAuth/GSI popups can open.
     expect(webPreferences.disablePopups).toBeUndefined();
+    expect(webPreferences.transparent).toBe(false);
     expect(webPreferences.preload).toBeUndefined();
     expect(webPreferences.additionalArguments).toBeUndefined();
     expect(webPreferences.enableBlinkFeatures).toBeUndefined();

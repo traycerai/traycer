@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  buildTerminalTileRef,
-  mintNewEpicTerminalTile,
-} from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import {
   peekEpicTerminalDurableCreate,
   resetEpicTerminalDurableCreatesForTests,
@@ -11,7 +8,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import { isHostEpicTerminalRef } from "@/stores/epics/canvas/types";
 
-describe("buildTerminalTileRef", () => {
+describe("mintNewEpicTerminalTile", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
@@ -22,9 +19,10 @@ describe("buildTerminalTileRef", () => {
   });
 
   it("mints a host-authority ref with launch evidence in legacyFallback", () => {
-    const ref = buildTerminalTileRef({
+    const ref = mintNewEpicTerminalTile({
       hostId: "host-1",
       cwd: "/work/repo",
+      epicId: "epic-1",
     });
     expect(isHostEpicTerminalRef(ref)).toBe(true);
     if (!isHostEpicTerminalRef(ref)) return;

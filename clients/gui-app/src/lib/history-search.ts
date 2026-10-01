@@ -5,7 +5,10 @@ import type {
   HistorySortOption,
   HistoryWorkspaceRef,
 } from "@/components/home/data/home-page.data";
-import { dedupSortWorkspaces } from "@/components/home/data/home-page.data";
+import {
+  dedupSortWorkspaces,
+  DEFAULT_SORT,
+} from "@/components/home/data/home-page.data";
 import { appLogger, describeLogError } from "@/lib/logger";
 
 const historyMatchModeSchema = z.enum(["any", "all"]);
@@ -30,10 +33,18 @@ export const historySearchParamsSchema = z.object({
   historyOwnership: z
     .union([historyOwnershipSchema, z.array(historyOwnershipSchema)])
     .optional(),
+  historyLabels: z.union([z.string(), z.array(z.string())]).optional(),
+  historyLabelMode: historyMatchModeSchema.optional(),
+  historyGroups: z.union([z.string(), z.array(z.string())]).optional(),
+  historyUngrouped: z.boolean().optional(),
   historySort: historySortSchema.optional(),
 });
 
 export interface HistorySearchState {
+  readonly labelNames?: ReadonlyArray<string>;
+  readonly labelMode?: HistoryMatchMode;
+  readonly groupIds?: ReadonlyArray<string>;
+  readonly includeUngrouped?: boolean;
   readonly query: string;
   readonly repos: ReadonlyArray<string>;
   readonly repoMode: HistoryMatchMode;
@@ -55,6 +66,10 @@ export interface HistorySearchState {
 export type HistorySearchPatch = Partial<
   Pick<
     HistorySearchState,
+    | "labelNames"
+    | "labelMode"
+    | "groupIds"
+    | "includeUngrouped"
     | "query"
     | "repos"
     | "repoMode"
@@ -70,6 +85,10 @@ export type HistorySearchPatch = Partial<
 };
 
 export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
+  labelNames: [],
+  labelMode: "any",
+  groupIds: [],
+  includeUngrouped: false,
   query: "",
   repos: [],
   repoMode: "any",
@@ -82,7 +101,36 @@ export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
   sortExplicit: false,
 };
 
+/**
+ * Is History showing anything other than the account's whole task feed, in its
+ * default order?
+ *
+ * The union of every narrowing the user can apply - the text query, the facet
+ * filters, and an explicitly chosen non-default sort. Callers that must not
+ * second-guess an explicit request read this: the empty state explains the
+ * narrowing, and the phone's in-progress lift stands down under it (see
+ * the optimistic activity projection), because reordering or backfilling a feed the
+ * user has deliberately narrowed contradicts what they asked for.
+ */
+export function hasActiveHistoryFilters(search: HistorySearchState): boolean {
+  return (
+    (search.labelNames?.length ?? 0) > 0 ||
+    (search.groupIds?.length ?? 0) > 0 ||
+    !!search.includeUngrouped ||
+    search.repos.length > 0 ||
+    search.workspaces.length > 0 ||
+    search.chatHosts.length > 0 ||
+    search.ownershipScopes.length > 0 ||
+    (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
+    search.query.trim().length > 0
+  );
+}
+
 const persistedHistorySearchSchema = z.object({
+  labelNames: z.array(z.string()).optional(),
+  labelMode: historyMatchModeSchema.optional(),
+  groupIds: z.array(z.string()).optional(),
+  includeUngrouped: z.boolean().optional(),
   query: z.string().optional(),
   repos: z.array(z.string()).optional(),
   repoMode: historyMatchModeSchema.optional(),
@@ -111,6 +159,10 @@ export function normalizePersistedHistorySearch(
   const parsed = persistedHistorySearchSchema.safeParse(value);
   if (!parsed.success) return DEFAULT_HISTORY_SEARCH;
   return {
+    labelNames: parsed.data.labelNames ?? [],
+    labelMode: parsed.data.labelMode ?? "any",
+    groupIds: parsed.data.groupIds ?? [],
+    includeUngrouped: parsed.data.includeUngrouped ?? false,
     query: parsed.data.query ?? DEFAULT_HISTORY_SEARCH.query,
     repos: parsed.data.repos ?? DEFAULT_HISTORY_SEARCH.repos,
     repoMode: parsed.data.repoMode ?? DEFAULT_HISTORY_SEARCH.repoMode,
@@ -136,6 +188,10 @@ export function parseHistorySearch(
   const query = normalizeQuery(parsed.data.historyQuery);
   const sortExplicit = parsed.data.historySort !== undefined;
   return {
+    labelNames: normalizeRepos(parsed.data.historyLabels),
+    labelMode: parsed.data.historyLabelMode ?? "any",
+    groupIds: normalizeChatHosts(parsed.data.historyGroups),
+    includeUngrouped: parsed.data.historyUngrouped ?? false,
     query,
     repos: normalizeRepos(parsed.data.historyRepos),
     repoMode: parsed.data.historyRepoMode ?? DEFAULT_HISTORY_SEARCH.repoMode,
@@ -162,6 +218,7 @@ export function patchHistorySearch(
   const sort =
     patch.sort ?? implicitHistorySort(current.sort, query, sortExplicit);
   return {
+    ...patchOrganizationSearch(current, patch),
     query,
     repos: patch.repos ?? current.repos,
     repoMode: patch.repoMode ?? current.repoMode,
@@ -175,10 +232,33 @@ export function patchHistorySearch(
   };
 }
 
+function patchOrganizationSearch(
+  current: HistorySearchState,
+  patch: HistorySearchPatch,
+) {
+  return {
+    labelNames: patch.labelNames ?? current.labelNames ?? [],
+    labelMode: patch.labelMode ?? current.labelMode ?? "any",
+    groupIds: patch.groupIds ?? current.groupIds ?? [],
+    includeUngrouped:
+      patch.includeUngrouped ?? current.includeUngrouped ?? false,
+  };
+}
+function organizationSearchParams(state: HistorySearchState) {
+  return {
+    historyLabels: state.labelNames?.length ? state.labelNames : undefined,
+    historyLabelMode:
+      (state.labelNames?.length ?? 0) > 1 ? state.labelMode : undefined,
+    historyGroups: state.groupIds?.length ? state.groupIds : undefined,
+    historyUngrouped: state.includeUngrouped || undefined,
+  };
+}
+
 export function historySearchToParams(
   state: HistorySearchState,
-): Record<string, string | ReadonlyArray<string> | undefined> {
+): Record<string, string | boolean | ReadonlyArray<string> | undefined> {
   return {
+    ...organizationSearchParams(state),
     historyQuery: state.query.length > 0 ? state.query : undefined,
     historyRepos: state.repos.length > 0 ? state.repos : undefined,
     historyRepoMode:
@@ -212,6 +292,10 @@ export function historySearchToParams(
 }
 
 export type HistorySearchParamKey =
+  | "historyLabels"
+  | "historyLabelMode"
+  | "historyGroups"
+  | "historyUngrouped"
   | "historyQuery"
   | "historyRepos"
   | "historyRepoMode"
@@ -234,6 +318,10 @@ export function clearHistorySearchParams<
   TPrev extends HistorySearchParamRecord,
 >(prev: TPrev): HistorySearchParamsCleared<TPrev> {
   const {
+    historyLabels: _historyLabels,
+    historyLabelMode: _historyLabelMode,
+    historyGroups: _historyGroups,
+    historyUngrouped: _historyUngrouped,
     historyQuery: _historyQuery,
     historyRepos: _historyRepos,
     historyRepoMode: _historyRepoMode,
@@ -263,12 +351,13 @@ function normalizeArray<T extends string>(
 function normalizeRepos(
   value: string | string[] | undefined,
 ): ReadonlyArray<string> {
-  return normalizeArray(value)
-    .flatMap((repo) => {
-      const trimmed = repo.trim();
-      return trimmed.length > 0 ? [trimmed] : [];
-    })
-    .sort((left, right) => left.localeCompare(right));
+  const names = normalizeArray(value).flatMap((name) => {
+    const trimmed = name.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  });
+  return Array.from(new Set(names)).sort((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 function normalizeChatHosts(

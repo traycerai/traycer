@@ -18,6 +18,7 @@ import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
   GIT_DIFF_TILE_DND_TYPE,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  railDragCarry,
   MANAGED_COMMAND_OUTPUT_DND_TYPE,
   PANEL_NODE_FAMILY,
   SIDEBAR_NODE_DND_TYPE,
@@ -25,11 +26,9 @@ import {
   WORKSPACE_FILE_DND_TYPE,
   getArtifactTabDropIndexFromPoint,
   getEpicCanvasDropPreview,
-  getLeftPanelGroupDropPreview,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasDropTargetData,
-  type LeftPanelSectionRect,
   type PointLike,
   type RectLike,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -51,20 +50,26 @@ import {
   type ManagedCommandOutputTileRef,
 } from "@/stores/epics/canvas/types";
 import {
-  areLeftPanelGroupsEqual,
-  moveLeftPanelGroup,
-  moveLeftPanelGroupToEnd,
-  moveLeftPanelGroupToPanelPosition,
-  moveLeftPanelToEnd,
-  moveLeftPanelToGroup,
-  moveLeftPanelToGroupPosition,
-  moveLeftPanelToPanelPosition,
-  useLeftPanelStore,
-  type LeftPanelGroup,
-  type LeftPanelId,
+  expandJoinedPanelSections,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
+import {
+  areRailsEqual,
+  normalizeRail,
+  type RailEntry,
+} from "@/lib/layout/rail";
+import {
+  moveRailPanelBeside,
+  moveRailPanelToEnd,
+  railStackJoin,
+  stackRailPanels,
+  type LayoutArrangement,
+} from "@/lib/layout/layout-arrangement";
+import { applyRail, currentLayoutArrangement } from "@/lib/layout/rail-view";
 import type { QueryClient } from "@tanstack/react-query";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import {
   getEpicSessionHandleHostClient,
   getEpicSessionHandleHostId,
@@ -105,7 +110,7 @@ export function isCanvasDropCompatible(
     return (
       (target.kind === "left-panel-rail-item" ||
         target.kind === "left-panel-rail-list" ||
-        target.kind === "left-panel-group") &&
+        target.kind === "left-panel-body") &&
       target.viewTabId === source.viewTabId
     );
   }
@@ -214,41 +219,11 @@ export function resolveOverlayTileForSource(
 
 // ── Preview resolution ──────────────────────────────────────────────────────
 
-function getElementRect(element: Element): RectLike {
-  const rect = element.getBoundingClientRect();
-  return {
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height,
-  };
-}
-
-function getLeftPanelSectionRect(
-  groupElement: Element,
-  panelId: LeftPanelId,
-): LeftPanelSectionRect | null {
-  const sectionElement = groupElement.querySelector(
-    `[data-left-panel-section-id="${panelId}"]`,
-  );
-  if (sectionElement === null) return null;
-  return {
-    panelId,
-    rect: getElementRect(sectionElement),
-  };
-}
-
 export interface ResolveCanvasDropPreviewInput {
   readonly source: EpicCanvasDragSourceData;
   readonly target: EpicCanvasDropTargetData;
   readonly point: PointLike;
   readonly targetRect: RectLike | null;
-  /**
-   * The droppable's DOM element - only required for `left-panel-group`
-   * targets (section-rect scanning); every other target resolves from
-   * `targetRect` alone.
-   */
-  readonly targetElement: Element | null;
   /** Translated rect of the dragged chip (tab-over-tab center math). */
   readonly activeRect: RectLike | null;
 }
@@ -256,21 +231,7 @@ export interface ResolveCanvasDropPreviewInput {
 export function resolveCanvasDropPreview(
   input: ResolveCanvasDropPreviewInput,
 ): EpicCanvasDropPreview {
-  const { source, target, point, targetRect, targetElement, activeRect } =
-    input;
-  if (target.kind === "left-panel-group") {
-    if (source.kind !== LEFT_PANEL_RAIL_ITEM_DND_TYPE) return null;
-    if (targetElement === null) return null;
-    const sectionRects: ReadonlyArray<LeftPanelSectionRect> =
-      target.panelIds.flatMap((panelId) => {
-        if (source.origin === "panel-section" && source.panelId === panelId) {
-          return [];
-        }
-        const sectionRect = getLeftPanelSectionRect(targetElement, panelId);
-        return sectionRect === null ? [] : [sectionRect];
-      });
-    return getLeftPanelGroupDropPreview(target, sectionRects, point);
-  }
+  const { source, target, point, targetRect, activeRect } = input;
   if (
     target.kind === "artifact-tab" &&
     source.kind === ARTIFACT_TAB_DND_TYPE &&
@@ -316,58 +277,69 @@ type LeftPanelRailDragSource = Extract<
 >;
 
 /**
- * Single source of truth for "left-panel drop → next rail groups". Both the
+ * Single source of truth for "left-panel drop → next rail". Both the
  * preview-time noop check and the drag-end commit resolve through this pure
  * function, so they can never disagree on what a drop does. Returns the next
- * groups (structurally equal to `groups` for a no-op position, e.g. combining
- * a section into its own group) or null when the preview is not a left-panel
- * preview.
+ * rail (equal to `rail` for a no-op position) or null when the preview is not
+ * a left-panel preview.
+ *
+ * A drop on a rail icon says one of three things (L-168): before it, after it,
+ * or INTO it, which stacks the two panels into one body (L-166). A drop on the
+ * sidebar body has the outer two only. It says the same thing whether the icon
+ * came off the rail or off the panel body's own section header, which is why
+ * `source.origin` does not part the branches.
+ *
+ * It resolves through the arrangement's own movers rather than a second copy
+ * of them (R5R-06), so the app's rail drag and the editor's canvas drop place
+ * a member by exactly the same rule.
  */
-export function resolveLeftPanelGroupsForDrop(
+export function resolveRailForDrop(
   source: LeftPanelRailDragSource,
   preview: NonNullable<EpicCanvasDropPreview>,
-  groups: ReadonlyArray<LeftPanelGroup>,
-): ReadonlyArray<LeftPanelGroup> | null {
-  if (preview.kind === "left-panel-rail") {
-    if (source.origin === "rail") {
-      return moveLeftPanelGroup(
-        groups,
-        source.panelId,
-        preview.panelId,
-        preview.position,
-      );
-    }
-    if (preview.position === "combine") {
-      return moveLeftPanelToGroup(groups, source.panelId, preview.panelId);
-    }
-    return moveLeftPanelToGroupPosition(
-      groups,
-      source.panelId,
-      preview.panelId,
-      preview.position,
+  arrangement: LayoutArrangement,
+): ReadonlyArray<RailEntry> | null {
+  const carry = railDragCarry(source);
+  if (preview.kind === "left-panel-rail" && preview.position === "combine") {
+    // The middle band adds the carried panels to the target's stack (L-168,
+    // L-181). `stackRailPanels` returns the arrangement it was given for
+    // anything `railStackJoin` refuses - a full stack, or the two already
+    // stacked together - so a refused drop reaches the "did anything change"
+    // guard below and spends no undo step.
+    return normalizedRail(
+      stackRailPanels(arrangement, source.panelId, preview.panelId, carry),
     );
   }
-  if (preview.kind === "left-panel-section") {
-    return source.origin === "rail"
-      ? moveLeftPanelGroupToPanelPosition(
-          groups,
-          source.panelId,
-          preview.panelId,
-          preview.position,
-        )
-      : moveLeftPanelToPanelPosition(
-          groups,
-          source.panelId,
-          preview.panelId,
-          preview.position,
-        );
+  if (preview.kind === "left-panel-rail") {
+    return normalizedRail(
+      moveRailPanelBeside(arrangement, {
+        sourcePanelId: source.panelId,
+        targetPanelId: preview.panelId,
+        placeAfter: preview.position === "after",
+        carry,
+      }),
+    );
   }
   if (preview.kind === "left-panel-rail-list") {
-    return source.origin === "rail"
-      ? moveLeftPanelGroupToEnd(groups, source.panelId)
-      : moveLeftPanelToEnd(groups, source.panelId);
+    return normalizedRail(
+      moveRailPanelToEnd(arrangement, source.panelId, carry),
+    );
   }
   return null;
+}
+
+/**
+ * The rail a drop produces, held to the rail's own invariants.
+ *
+ * Normalised HERE rather than only in the store, because this function's other
+ * caller is the no-op guard: a panel dropped back where it already is takes a
+ * stack link out and puts it back in the same place, so comparing the raw
+ * mover output against the stored rail called an identical layout a change and
+ * spent an undo step on it (L-166).
+ */
+function normalizedRail(
+  arrangement: LayoutArrangement,
+): ReadonlyArray<RailEntry> {
+  return normalizeRail(arrangement.rail);
 }
 
 export function isLeftPanelDropNoop(
@@ -376,15 +348,22 @@ export function isLeftPanelDropNoop(
 ): boolean {
   if (source.kind !== LEFT_PANEL_RAIL_ITEM_DND_TYPE) return false;
   if (preview === null) return false;
-  const currentGroups = useLeftPanelStore.getState().getPanelGroups();
-  const nextGroups = resolveLeftPanelGroupsForDrop(
-    source,
-    preview,
-    currentGroups,
-  );
-  return (
-    nextGroups !== null && areLeftPanelGroupsEqual(currentGroups, nextGroups)
-  );
+  const arrangement = currentLayoutArrangement();
+  // A join the rail refuses is not a quiet no-op: its preview stays, so the
+  // rail draws the refusal cue over the full stack (L-181).
+  if (
+    preview.kind === "left-panel-rail" &&
+    preview.position === "combine" &&
+    railStackJoin(
+      arrangement.rail,
+      source.panelId,
+      preview.panelId,
+      railDragCarry(source),
+    ) === "full"
+  )
+    return false;
+  const nextRail = resolveRailForDrop(source, preview, arrangement);
+  return nextRail !== null && areRailsEqual(arrangement.rail, nextRail);
 }
 
 // ── Commits ─────────────────────────────────────────────────────────────────
@@ -468,8 +447,7 @@ function placeResolvedCanvasTile(
   const { epicId, tile, target, preview } = resolved;
   if (
     preview.kind === "left-panel-rail" ||
-    preview.kind === "left-panel-rail-list" ||
-    preview.kind === "left-panel-section"
+    preview.kind === "left-panel-rail-list"
   ) {
     return false;
   }
@@ -534,7 +512,7 @@ function placeResolvedCanvasTile(
   if (
     target.kind === "left-panel-rail-item" ||
     target.kind === "left-panel-rail-list" ||
-    target.kind === "left-panel-group"
+    target.kind === "left-panel-body"
   ) {
     return false;
   }
@@ -574,14 +552,22 @@ export function commitResolvedCanvasDrop(
     );
   }
   if (drop.source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
-    const leftPanelStore = useLeftPanelStore.getState();
-    const nextGroups = resolveLeftPanelGroupsForDrop(
-      drop.source,
-      drop.preview,
-      leftPanelStore.getPanelGroups(),
-    );
-    if (nextGroups !== null) {
-      leftPanelStore.applyPanelGroups(nextGroups);
+    const arrangement = currentLayoutArrangement();
+    const nextRail = resolveRailForDrop(drop.source, drop.preview, arrangement);
+    // A refused join (a full stack) keeps its preview so the rail can draw
+    // the refusal, and lands here changing nothing (L-181).
+    if (nextRail !== null && !areRailsEqual(arrangement.rail, nextRail)) {
+      applyRail(nextRail);
+      // A joining member opens with its section showing (L-170). Said at the
+      // COMMIT rather than inside the resolver, which is pure: the resolver
+      // answers what the rail becomes, and this is a fact about the two
+      // panels' own drawing state.
+      if (
+        drop.preview.kind === "left-panel-rail" &&
+        drop.preview.position === "combine"
+      ) {
+        expandJoinedPanelSections(drop.source.panelId, drop.preview.panelId);
+      }
       return true;
     }
     return false;
@@ -643,6 +629,10 @@ export function commitHeaderStripDrop(
 }
 
 export interface SidebarReparentDropInput {
+  readonly hostBinding: Pick<
+    HostRuntimeBinding<HostRpcRegistry>,
+    "hostClient"
+  > | null;
   readonly epicId: string;
   readonly sourceNodeId: string;
   /** The new parent (a row's nodeId) or null to un-nest to root. */
@@ -752,6 +742,18 @@ function agentReparentRoute(
   });
 }
 
+function reparentOwnerHostId(
+  state: OpenEpicState,
+  node: ProjectedReparentNode,
+  sessionHostId: string | null,
+): string | null {
+  return (
+    (node.type === "terminal-agent"
+      ? state.tuiAgents.byId[node.id]?.hostId
+      : state.chats.byId[node.id]?.hostId) ?? sessionHostId
+  );
+}
+
 /**
  * Imperative reparent commit for a `sidebar-node` released on a reparent
  * target. Resolves the live epic session via the registry (`peek`, never
@@ -802,13 +804,15 @@ export async function commitSidebarReparentDrop(
   ) {
     return;
   }
-  // Resolved before the branch: the chat arm of the addressability test needs
-  // the session host to read this host's negotiated record-plane coverage, and
-  // the terminal arm needs nothing - so one read serves both.
-  const reparentHostId = getEpicSessionHandleHostId(handle);
+  // Judge addressability against the same host that will receive the write.
+  const sessionHostId = getEpicSessionHandleHostId(handle);
+  const ownerHostId =
+    evaluation.node.family === "agent"
+      ? reparentOwnerHostId(state, evaluation.node, sessionHostId)
+      : sessionHostId;
   const agentRoute =
     evaluation.node.family === "agent"
-      ? agentReparentRoute(state, evaluation.node, reparentHostId)
+      ? agentReparentRoute(state, evaluation.node, ownerHostId)
       : "doc";
   // A chat the host's record plane will not address has nowhere to go, so the
   // drop is a silent cancel - this file's own rule for a move it cannot make -
@@ -826,10 +830,13 @@ export async function commitSidebarReparentDrop(
     // back into the tree. Refusals (`E_AGENT_NOT_LOCAL` for a row another
     // host owns) are the host's answer and are surfaced as a toast, the same
     // way the hook-based chat mutations surface theirs.
-    const client = getEpicSessionHandleHostClient(handle);
-    if (client === null) return;
-    const sessionHostId = reparentHostId;
     const movedNodeType = evaluation.node.type;
+    if (ownerHostId === null) return;
+    const client =
+      ownerHostId === sessionHostId
+        ? getEpicSessionHandleHostClient(handle)
+        : resolveNamedHostClient(input.hostBinding, ownerHostId);
+    if (client === null) return;
     // The optimistic overlay (Phase 1.1): a registry-backed row has no doc
     // entry, so without this the drop had no local feedback and the node sat
     // under its old parent until the record round-trip - the one branch of
@@ -888,18 +895,20 @@ export async function commitSidebarReparentDrop(
         // the moved pointer back when it is live; when it is disconnected,
         // unsupported, or (for a terminal agent) negotiated below @1.1, only
         // the 20s poll would - so re-ask now, the way every hook-based record
-        // mutation does on success. Scoped to the session's host: that is
-        // the client the request was sent on.
+        // mutation does on success. Refresh both the owner and the viewing
+        // session, which may display a cloud replica of the moved record.
         //
         // "landed" keeps the overlay patch applied until the refreshed rows
         // actually arrive - the ack is proof the host holds the new parent -
         // so the row never snaps back under the old one while the refetch
         // (or, on a refetch failure, the next poll) is in flight. The
         // projection's dead sweep forgets the stamp once the row catches up.
-        if (movedNodeType === "terminal-agent") {
-          invalidateEpicTuiAgentRecords(input.queryClient, sessionHostId);
-        } else {
-          invalidateEpicChatRecords(input.queryClient, sessionHostId);
+        for (const hostId of new Set([ownerHostId, sessionHostId])) {
+          if (movedNodeType === "terminal-agent") {
+            invalidateEpicTuiAgentRecords(input.queryClient, hostId);
+          } else {
+            invalidateEpicChatRecords(input.queryClient, hostId);
+          }
         }
         // `void`: the retire is a round trip now, and this settle handler
         // returns synchronously.

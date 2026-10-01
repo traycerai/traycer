@@ -17,6 +17,10 @@ import { ActivityGroupSegment } from "@/components/chat/segments/activity-group-
 import { LIVE_ACTIVITY_WINDOW_EXIT_MS } from "@/components/chat/segments/live-activity-window-mount";
 import type { ActivityGroupModel } from "@/components/chat/chat-activity-groups";
 import type {
+  ApprovalSegment,
+  ToolSegment,
+} from "@/stores/composer/chat-store";
+import type {
   CommandSegment,
   ReasoningSegment,
 } from "@/stores/composer/chat-store";
@@ -28,6 +32,10 @@ import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-op
 import { createActivityGroupOpenStore } from "@/stores/chats/activity-group-open-store-core";
 import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
 import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 
 // A file-change body lazy-fetches its before/after by hash and renders a themed
 // diff. Stub both so an expanded one renders synchronously, without a
@@ -986,5 +994,171 @@ describe("<ActivityGroupSegment /> live window", () => {
     expect(
       screen.queryAllByRole("button", { name: "Thought for 2s" }),
     ).toHaveLength(1);
+  });
+});
+
+const SHARED_ID = "shared-id";
+
+const SHARED_TOOL: ToolSegment = {
+  id: SHARED_ID,
+  kind: "tool",
+  toolName: "run_command",
+  inputSummary: "echo tool-row-text",
+  inputDetail: null,
+  taskTodoItems: null,
+  error: null,
+  agentMessageSend: null,
+  managedCommand: null,
+  agentMessageReceipt: null,
+  isStreaming: false,
+  endState: null,
+  stopped: false,
+  progress: null,
+  backgroundOutput: null,
+  backgroundTask: null,
+  startedAt: 0,
+  durationMs: null,
+  parentId: null,
+  imageResults: [],
+};
+
+const SHARED_APPROVAL: ApprovalSegment = {
+  id: SHARED_ID,
+  kind: "approval",
+  toolName: "run_command",
+  description: "approval-row-description",
+  inputSummary: null,
+  inputDetail: null,
+  decision: { approved: true, reason: "approval-row-reason" },
+};
+
+describe("<ActivityGroupSegment /> shared child ids", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders both children that share an id across kinds, with no duplicate-key warning", () => {
+    const errors = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const group: ActivityGroupModel = {
+      id: "group-shared",
+      segments: [SHARED_TOOL, SHARED_APPROVAL],
+      isActive: false,
+      isStreaming: false,
+      label: "Ran 1 command",
+      summary: "Ran 1 command",
+      activeStartedAt: null,
+    };
+    renderActivityGroup(group);
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
+
+    expect(screen.getByText("echo tool-row-text")).toBeTruthy();
+    expect(screen.getByText("Approved")).toBeTruthy();
+    const sameKey = errors.mock.calls.filter((call) =>
+      call.some((arg) => typeof arg === "string" && arg.includes("same key")),
+    );
+    expect(sameKey).toEqual([]);
+    errors.mockRestore();
+  });
+});
+
+const REASONING_ONLY_SEGMENT: ReasoningSegment = {
+  id: "reasoning-only-1",
+  kind: "reasoning",
+  markdown: "Weighing the approach.",
+  isStreaming: false,
+  durationMs: 4000,
+};
+
+const REASONING_ONLY_GROUP: ActivityGroupModel = {
+  id: deriveActivityGroupRenderId(REASONING_ONLY_SEGMENT.id),
+  segments: [REASONING_ONLY_SEGMENT],
+  isActive: false,
+  isStreaming: false,
+  label: "Thought for 4s",
+  summary: "Thought for 4s",
+  activeStartedAt: null,
+};
+
+// Chat display settings (audit R1, R3): an untouched group's default open
+// state follows Layout > Chat > Tool activity (or Thinking, for a
+// reasoning-only run) rather than always starting collapsed.
+describe("<ActivityGroupSegment /> default open follows the Chat display settings", () => {
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  it("renders a settled tool run collapsed by default, and open when Tool activity is full", () => {
+    renderActivityGroup(GROUP);
+    expect(screen.queryByText("echo hi")).toBeNull();
+    cleanup();
+
+    useLayoutStore.getState().setRegionValues("toolActivity", { size: "full" });
+    renderActivityGroup(GROUP);
+
+    expect(screen.getByText("echo hi")).toBeTruthy();
+  });
+
+  it("follows Thinking's size, not Tool activity's, for a reasoning-only run", () => {
+    useLayoutStore.getState().setRegionValues("toolActivity", { size: "full" });
+    renderActivityGroup(REASONING_ONLY_GROUP);
+    // Tool activity is full, but this run is reasoning-only, so it stays
+    // collapsed on Thinking's default (chip).
+    expect(screen.queryByText("Weighing the approach.")).toBeNull();
+    cleanup();
+
+    useLayoutStore.getState().setRegionValues("thinking", { size: "full" });
+    renderActivityGroup(REASONING_ONLY_GROUP);
+
+    expect(screen.getByText("Weighing the approach.")).toBeTruthy();
+  });
+
+  it("a click to close under Expanded stays closed after the setting changes back to Expanded", () => {
+    useLayoutStore.getState().setRegionValues("toolActivity", { size: "full" });
+    renderActivityGroup(GROUP);
+    expect(screen.getByText("echo hi")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
+    expect(screen.queryByText("echo hi")).toBeNull();
+
+    // The setting moves away and back to Expanded, which alone would open
+    // the group - the reader's own close has to win regardless.
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("toolActivity", { size: "chip" });
+    });
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("toolActivity", { size: "full" });
+    });
+
+    expect(screen.queryByText("echo hi")).toBeNull();
+  });
+
+  it("a click to open under Collapsed stays open after changing it back to Collapsed", () => {
+    renderActivityGroup(GROUP);
+    expect(screen.queryByText("echo hi")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
+    expect(screen.getByText("echo hi")).toBeTruthy();
+
+    // The setting moves away and back to Collapsed, which alone would close
+    // the group - the reader's own open has to win regardless.
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("toolActivity", { size: "full" });
+    });
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("toolActivity", { size: "chip" });
+    });
+
+    expect(screen.getByText("echo hi")).toBeTruthy();
   });
 });

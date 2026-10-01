@@ -40,7 +40,6 @@ function resetAppearanceSettings(): void {
     artifactIconColorMode: "byType",
     artifactIconColors: DEFAULT_EPIC_NODE_ICON_COLORS,
     pointerCursors: true,
-    chatTurnMinimapSide: "right",
     codeFontFamily: null,
     codeFontSize: DEFAULT_CODE_FONT_SIZE,
     terminalFontFamily: null,
@@ -139,7 +138,7 @@ describe("<AppearanceSettingsPanel /> groups", () => {
 
     const select = screen.getByRole("combobox", { name: "Default view" });
     expect(select.textContent).toBe(
-      DEFAULT_AGENT_OFFICE_VIEW === "auto" ? "Auto" : DEFAULT_AGENT_OFFICE_VIEW,
+      OFFICE_VIEW_LABELS[DEFAULT_AGENT_OFFICE_VIEW],
     );
 
     fireEvent.click(select);

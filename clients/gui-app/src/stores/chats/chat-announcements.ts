@@ -5,18 +5,23 @@ import type {
   PendingFallback,
   PendingReturn,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import type { ProviderNoticeDetail } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
-  DONT_SWITCH_LABEL,
-  FRESH_SESSION_HELPER,
   STOP_WAITING_LABEL,
-  queuedMessagesMovingText,
-  queuedMessagesReturningText,
+  queuedReturningClause,
 } from "@/components/chat/fallback/fallback-copy";
-import { pendingFallbackResumesFailedTuple } from "@/components/chat/fallback/fallback-identity";
+import {
+  countdownRefusalLabel,
+  routingCountdownCountClauses,
+  routingCountdownPlan,
+  type RoutingCountdownPlan,
+} from "@/components/chat/fallback/fallback-state";
 import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
 import { formatWaitTime } from "@/lib/relative-time";
+import {
+  isRoutingCancellationNotice,
+  isRoutingCancellationOutcome,
+} from "@/stores/chats/hidden-transcript-notices";
 
 /**
  * Polite announcements for transcript completions and fallback lifecycle.
@@ -320,13 +325,38 @@ export interface FallbackTraversalAnnouncement {
   readonly text: string;
 }
 
-/** A resolved host plan, with identity text supplied by the card's formatter. */
+/**
+ * The countdown card's plan for a frame, with the destination as the card's
+ * formatter names it.
+ *
+ * `countdown` is `routingCountdownPlan` - the card's own reading of the frame,
+ * never a second one. The two used to disagree about a wait's resume: the
+ * card read the destination against the failed tuple and said "Resuming", the
+ * announcer read the rung alone and said "The chat will switch to" the account
+ * it was already on (seen live).
+ */
 export interface FallbackAnnouncementPlan {
-  readonly planId: string;
-  readonly action: "switch" | "retry" | "wait" | "notify" | "checking";
+  /** The host's plan id, or `null` on a frame that carries no impending step. */
+  readonly planId: string | null;
+  readonly countdown: RoutingCountdownPlan;
+  /** The switch destination, resolved for speech, or `null`. */
   readonly destination: string | null;
-  readonly resumesAt: number | null;
 }
+
+export function fallbackAnnouncementPlan(
+  pending: PendingFallback,
+  destination: string | null,
+): FallbackAnnouncementPlan {
+  const countdown = routingCountdownPlan(pending);
+  return {
+    planId: pending.impendingAction?.planId ?? null,
+    countdown,
+    destination: countdown.kind === "switch" ? destination : null,
+  };
+}
+
+/** What a frame with no plan at all is announced as. */
+const NO_COUNTDOWN_PLAN: RoutingCountdownPlan = { kind: "nothing" };
 
 function fallbackTupleAnnouncementKey(tuple: ChatRunSettings | null): string {
   if (tuple === null) return "none";
@@ -338,53 +368,164 @@ function fallbackTupleAnnouncementKey(tuple: ChatRunSettings | null): string {
   ]);
 }
 
-function cancelOpportunityText(deadline: number | null, now: number): string {
-  const action = `Select ${DONT_SWITCH_LABEL} to cancel.`;
+/**
+ * The button the countdown card offers to refuse this plan, as it is labelled
+ * - by the card's own function, so the name spoken is the button drawn.
+ */
+function countdownRefusalAction(
+  pending: PendingFallback,
+  plan: RoutingCountdownPlan,
+): string {
+  return `Select ${countdownRefusalLabel(pending, plan)} to cancel.`;
+}
+
+/**
+ * The countdown clause, and the one part of it that is not plan-agnostic.
+ *
+ * Two of the three forms say nothing about WHAT is due, and are true on every
+ * plan: "cancel" is honest whatever the plan would have done, and the refusal
+ * named is the one the card draws for this plan ({@link countdownRefusalAction}).
+ *
+ * The due-now form names a switch, and only one plan has one. A resume attempts
+ * the same tuple again, a wait parks until a reset, `nothing` stops and leaves
+ * the error standing, `deciding` does not know yet - on all four, "The switch
+ * is due now" asserted a move that was not going to happen, to the one audience
+ * that cannot see the card contradicting it.
+ *
+ * The seconds are the card headline's: both count down to `pending.deadline`.
+ * They are said once per plan - the observer keys on the plan, never the tick
+ * (`spokenPlanKey`).
+ */
+function cancelOpportunityText(
+  deadline: number | null,
+  now: number,
+  planIsSwitch: boolean,
+  action: string,
+): string {
   if (deadline === null) return action;
   const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000));
-  if (seconds === 0) return `The fallback is due now. ${action}`;
+  if (seconds === 0) {
+    return planIsSwitch
+      ? `The switch is due now. ${action}`
+      : `The countdown is up. ${action}`;
+  }
   return `You have ${seconds} ${seconds === 1 ? "second" : "seconds"} to cancel. ${action}`;
+}
+
+/**
+ * A plan sentence and the identities it NAMED.
+ *
+ * The two travel together because `semanticKey` deduplicates on identity and
+ * the sentence is what the user hears: an identity in the key that the words
+ * never used re-announces text that has not changed, and a spoken one missing
+ * from the key silences a correction. Which identity a line speaks is not
+ * uniform - a resume and a wait name the failed tuple, a switch names its
+ * destination, and `deciding` / `nothing` name neither - so the answer has to
+ * come from the branch that wrote the words rather than from a predicate
+ * standing beside it.
+ */
+interface FallbackPlanLine {
+  readonly text: string;
+  readonly spoken: ReadonlyArray<string>;
 }
 
 function fallbackPlanText(
   plan: FallbackAnnouncementPlan | null,
   failedIdentity: string,
   now: number,
-): string {
-  if (plan === null || plan.action === "notify") {
-    return "No fallback destination is available. The chat will stop and keep the error visible.";
-  }
-  if (plan.action === "checking") {
-    return "The host is checking the next fallback action.";
-  }
-  switch (plan.action) {
-    case "switch":
-      return plan.destination === null
-        ? "The host is checking the next destination."
-        : `The chat will switch to ${plan.destination}.`;
-    case "retry":
-      return `The chat will retry on ${failedIdentity}.`;
+): FallbackPlanLine {
+  const countdown = plan?.countdown ?? NO_COUNTDOWN_PLAN;
+  switch (countdown.kind) {
+    case "nothing":
+      return {
+        text: "There's nowhere to route this chat. It will stop and keep the error visible.",
+        spoken: [],
+      };
+    case "deciding":
+      return { text: "Working out where to route this chat…", spoken: [] };
+    case "switch": {
+      const destination = plan?.destination ?? null;
+      return destination === null
+        ? { text: "The host is checking the next destination.", spoken: [] }
+        : {
+            text: `The chat will switch to ${destination}.`,
+            spoken: [destination],
+          };
+    }
+    // The card's "Resuming in 12s": the wait finishing onto the account the
+    // chat never left, so there is nothing to switch to.
+    case "resume":
+      return {
+        text: `The chat will resume on ${failedIdentity}.`,
+        spoken: [failedIdentity],
+      };
     case "wait":
-      return plan.resumesAt === null
-        ? `The host is checking when ${failedIdentity} can resume.`
-        : `The chat will wait for ${failedIdentity} and resume at ${formatWaitTime(plan.resumesAt, now)}.`;
+      return countdown.resumesAt === null
+        ? {
+            text: `The host is checking when ${failedIdentity} can resume.`,
+            spoken: [failedIdentity],
+          }
+        : {
+            text: `The chat will wait for ${failedIdentity} and resume at ${formatWaitTime(countdown.resumesAt, now)}.`,
+            spoken: [failedIdentity],
+          };
   }
 }
 
+/** A cost-line clause as a sentence of its own: "2 queued messages move with it." */
+function countSentence(clause: string): string {
+  return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`;
+}
+
+/**
+ * The countdown as the card states it: the plan, the count clauses that are
+ * true, and the refusal with its time. Nothing the card no longer shows - the
+ * fresh-session helper is the picker footer's, and a countdown applies to the
+ * failed turn, not "your next message" (clutter cuts, 2026-09-27).
+ */
 function fallbackHoldText(
   pending: PendingFallback,
   plan: FallbackAnnouncementPlan | null,
   failedIdentity: string,
   now: number,
-): string {
-  const parts = [fallbackPlanText(plan, failedIdentity, now)];
-  if (plan?.action === "switch" && plan.destination !== null) {
-    parts.push(FRESH_SESSION_HELPER);
-    const moving = queuedMessagesMovingText(pending.queuedItemsMoving);
-    if (moving !== null) parts.push(moving);
+): FallbackPlanLine {
+  const countdown = plan?.countdown ?? NO_COUNTDOWN_PLAN;
+  const line = fallbackPlanText(plan, failedIdentity, now);
+  const parts = [
+    line.text,
+    ...routingCountdownCountClauses(pending, countdown).map(countSentence),
+    cancelOpportunityText(
+      pending.deadline,
+      now,
+      countdown.kind === "switch",
+      countdownRefusalAction(pending, countdown),
+    ),
+  ];
+  // Everything this wrapper adds - the counts and the countdown - names no
+  // tuple, so the identities are the inner line's unchanged.
+  return { text: parts.join(" "), spoken: line.spoken };
+}
+
+// The plan is keyed only where the sentence SPEAKS it: `hold` and `choosing`.
+// `switching` and `waiting` name a tuple, and a plan moving under an unchanged
+// sentence re-announced it - after a wait's resumed attempt failed, the host
+// entered its next rung while still `switching` onto the resumed tuple, and
+// "Resuming this chat on …" was said again after "Resumed on …" (seen live).
+// A frame with no host plan id is keyed by what the card reads instead: its
+// plan kind and target.
+function spokenPlanKey(
+  pending: PendingFallback,
+  plan: FallbackAnnouncementPlan | null,
+): readonly [string | null, string | null] {
+  if (pending.state !== "hold" && pending.state !== "choosing") {
+    return [null, null];
   }
-  parts.push(cancelOpportunityText(pending.deadline, now));
-  return parts.join(" ");
+  const planId = plan?.planId ?? null;
+  if (planId !== null) return [planId, null];
+  return [
+    (plan?.countdown ?? NO_COUNTDOWN_PLAN).kind,
+    fallbackTupleAnnouncementKey(pending.targetTuple),
+  ];
 }
 
 export function fallbackTraversalAnnouncement(input: {
@@ -399,19 +540,43 @@ export function fallbackTraversalAnnouncement(input: {
   // path owns the intervention window and its subsequent lifecycle.
   if (pending === undefined || pending.state === "retrying") return null;
   let text: string;
+  // The identities this branch actually SPOKE, carried out of the same code
+  // that builds the sentence.
+  //
+  // Not "both of them": `semanticKey` is what the observer deduplicates on, so
+  // an identity in the key the TEXT never used re-enqueues a sentence that has
+  // not changed a character, and a screen reader says it twice.
+  //
+  // Which identity a branch names is genuinely irregular, which is why this is
+  // reported rather than derived. `waiting` and the resume arm of `switching`
+  // name the failed tuple; an ordinary `switching` names its destination; and
+  // `hold` / `choosing` name whichever their PLAN line named - the failed tuple
+  // under a resume and a wait, the destination under a switch, neither under
+  // `deciding`, `nothing` or no plan at all. A predicate standing beside the
+  // text would have to restate all of that and would drift from it the first
+  // time a sentence moved.
+  let spokenIdentities: ReadonlyArray<string>;
   switch (pending.state) {
-    case "hold":
-      text = fallbackHoldText(pending, plan, failedIdentity, now);
+    case "hold": {
+      const line = fallbackHoldText(pending, plan, failedIdentity, now);
+      text = line.text;
+      spokenIdentities = line.spoken;
       break;
-    case "choosing":
-      text = `Fallback countdown paused. ${fallbackPlanText(plan, failedIdentity, now)} Choose a destination or close the menu to resume the countdown.`;
+    }
+    case "choosing": {
+      const line = fallbackPlanText(plan, failedIdentity, now);
+      text = `Countdown paused. ${line.text} Choose a destination or close the menu to resume the countdown.`;
+      spokenIdentities = line.spoken;
       break;
+    }
     case "switching": {
       // The wait rung's resume runs these same phases onto the tuple that
       // failed, so there is nowhere to switch TO: "Switching this chat to <the
-      // model it was already on>" announced a move that never happened.
-      if (pendingFallbackResumesFailedTuple(pending)) {
+      // model it was already on>" announced a move that never happened. The
+      // card's plan decides it, as it decides the card's "Resuming now…".
+      if (plan?.countdown.kind === "resume") {
         text = `Resuming this chat on ${failedIdentity}.`;
+        spokenIdentities = [failedIdentity];
         break;
       }
       const destination = targetIdentity ?? plan?.destination ?? null;
@@ -423,6 +588,11 @@ export function fallbackTraversalAnnouncement(input: {
       // false every time the rung was skipped, as on the way to a wait.
       if (destination === null) return null;
       text = `Switching this chat to ${destination}.`;
+      // The resolved `destination`, not `targetIdentity`: when the catalogue
+      // has not landed this sentence names `plan.destination` instead, and
+      // keying on the input rather than on what was SAID would move the key
+      // while the text stood still.
+      spokenIdentities = [destination];
       break;
     }
     case "waiting": {
@@ -431,18 +601,36 @@ export function fallbackTraversalAnnouncement(input: {
           ? "The host will resume when the verified reset is ready."
           : `Resuming at ${formatWaitTime(pending.deadline, now)}.`;
       text = `Waiting for ${failedIdentity}. ${resume} Select ${STOP_WAITING_LABEL} to cancel.`;
+      spokenIdentities = [failedIdentity];
       break;
     }
   }
   return {
     traversalId: pending.traversalId,
     revision: pending.revision,
-    // No display labels, tick, deadline, queued count or sibling count here.
-    // The host plan id changes when its action or destination changes.
+    // No tick, deadline, queued count or sibling count here. The host plan id
+    // changes when its action or destination changes.
+    //
+    // The SPOKEN identities are in the key, and that is a deliberate exception
+    // to "no display labels". The model catalogue is fetched only once a
+    // fallback exists, so the FIRST fallback of a cold session observes before
+    // it resolves and names the raw slug - "claude-fable-5-1[1m]", the
+    // provider-internal string this feature exists to stop showing. The
+    // resolver updates a moment later, but without them the corrected sentence
+    // deduplicates against the slug one and the user is never told the real
+    // model name.
+    //
+    // Safe to key on precisely because they are pure IDENTITY - provider,
+    // account and model. Unlike a tick or a deadline they change once, when
+    // the catalogue lands, and then hold, so this re-announces a corrected
+    // name rather than re-announcing continuously.
+    //
+    // SPOKEN, not both of them: the branch reports what its sentence named, so
+    // the key moves when the words move and not otherwise.
     semanticKey: JSON.stringify([
       pending.state,
-      plan?.planId ?? null,
-      plan === null ? fallbackTupleAnnouncementKey(pending.targetTuple) : null,
+      ...spokenPlanKey(pending, plan),
+      spokenIdentities,
     ]),
     text,
   };
@@ -453,18 +641,21 @@ export function fallbackReturnAnnouncement(
   preferredIdentity: string,
 ): FallbackTraversalAnnouncement | null {
   if (pending === undefined) return null;
-  const returning = queuedMessagesReturningText(pending.queuedItemsMoving);
-  const parts = [
-    `${preferredIdentity} is available again. You can switch back or stay on the current provider.`,
-    `Switching back applies to your next message${returning ?? ""}.`,
-    FRESH_SESSION_HELPER,
-  ];
+  // The card's headline and its one count clause, when true - nothing the
+  // card no longer shows (clutter cuts, 2026-09-27).
+  const returning = queuedReturningClause(pending.queuedItemsMoving);
+  const parts = [`Switch back to ${preferredIdentity}?`];
+  if (returning !== null) parts.push(`Switching back ${returning}.`);
   return {
     traversalId: pending.traversalId,
     revision: pending.revision,
     semanticKey: JSON.stringify([
       pending.offeredAt,
       fallbackTupleAnnouncementKey(pending.preferredTuple),
+      // Same exception as the traversal key above, for the same reason: this
+      // sentence names a resolved account and model, and on a cold catalogue
+      // the slug-named version would otherwise be the only one ever heard.
+      preferredIdentity,
     ]),
     text: parts.join(" "),
   };
@@ -474,30 +665,14 @@ export interface FallbackNoticeAnnouncement extends FallbackAnnouncement {
   readonly messageId: string;
 }
 
-function fallbackNoticeText(
-  title: string,
-  message: string | null,
-  details: ReadonlyArray<ProviderNoticeDetail>,
-): string {
-  const parts = [title];
-  if (message !== null) parts.push(message);
-  for (const detail of details) {
-    switch (detail.label) {
-      case "To":
-      case "Staying on":
-      case "Now on":
-      case "Provider":
-      case "Preferred":
-      case "Failed on":
-      case "Tried":
-      case "Detail":
-        parts.push(`${detail.label}: ${detail.value}`);
-    }
-  }
-  return parts.reduce((text, part) => {
-    const separator = /[.!?]$/.test(text) ? " " : ". ";
-    return `${text}${separator}${part}`;
-  });
+// A routing notice is spoken by its TITLE alone - the label-form sentence its
+// divider reads ("Switched to Sonnet 5 · Low on Surya after a rate limit").
+// The message and the detail rows are the raw route a bug report wants
+// ("claude/sonnet (Surya 2) → claude/sonnet (Surya)", "Failed on: …",
+// "Tried: none"), and reading them aloud after every hop told a screen-reader
+// user provider slugs no sighted user is shown (seen live).
+function fallbackNoticeText(title: string): string {
+  return title;
 }
 
 /** Confirmed host metadata reaches this path even when its row is unloaded. */
@@ -505,10 +680,14 @@ export function fallbackOutcomeAnnouncement(
   outcome: LastFallbackOutcome | undefined,
 ): FallbackNoticeAnnouncement | null {
   if (outcome === undefined) return null;
+  // The slot carries the transcript's refusal notice too, and what the
+  // transcript hides is not spoken. Silence is the answer after a refusal: an
+  // earlier hop's outcome in the slot was spoken when it landed.
+  if (isRoutingCancellationOutcome(outcome)) return null;
   return {
     key: `notice:${outcome.blockId}`,
     messageId: outcome.assistantMessageId,
-    text: fallbackNoticeText(outcome.title, outcome.message, outcome.details),
+    text: fallbackNoticeText(outcome.title),
   };
 }
 
@@ -538,20 +717,18 @@ export function fallbackNoticeAnnouncements(
       // The return's two endings are in that set (row #4 split
       // `fallback_applied` into the forward hop and these). Both are spoken,
       // and the "stayed put" one is not an exception: a chat that did NOT move
-      // when it offered to is exactly as much news as one that did, and the
-      // host's own "Staying on" detail - already allowlisted in
-      // `fallbackNoticeText` ABOVE - is what says which.
+      // when it offered to is exactly as much news as one that did, and its
+      // title is what says which.
       if (!isFallbackNoticeKind(segment.noticeKind)) {
         continue;
       }
+      // Hidden in the transcript on every host, so never spoken either
+      // (`hidden-transcript-notices.ts`).
+      if (isRoutingCancellationNotice(segment)) continue;
       notices.push({
         key: `notice:${segment.id}`,
         messageId: message.id,
-        text: fallbackNoticeText(
-          segment.title,
-          segment.message,
-          segment.details,
-        ),
+        text: fallbackNoticeText(segment.title),
       });
     }
   }
@@ -588,6 +765,24 @@ export interface FallbackAnnouncementObserver {
   readonly observe: (
     input: FallbackAnnouncementsInput,
   ) => ReadonlyArray<FallbackAnnouncement>;
+  /**
+   * Whether an observation with these inputs would ABSORB rather than speak.
+   *
+   * Exposed for one caller and one reason: a producer that is DEFERRING an
+   * event has to know whether handing it over now would deliver it or bin it.
+   * An absorbing observation still records the key, so a deferred outcome
+   * passed into one is consumed and silently dropped - and the caller cannot
+   * work this out for itself, because absorption turns on state only the
+   * observer holds (the readiness of the PREVIOUS observation, and the
+   * baseline epoch it last saw).
+   *
+   * Call it with the same inputs as the `observe` that follows; `observe`
+   * mutates both, so the answer is only good for the next one.
+   */
+  readonly willAbsorb: (input: {
+    readonly ready: boolean;
+    readonly baselineEpoch: number;
+  }) => boolean;
 }
 
 interface ObservedFallbackTraversal {
@@ -618,10 +813,20 @@ export function createFallbackAnnouncementObserver(): FallbackAnnouncementObserv
   const seenManualOutcomes = new Set<string>();
   const seenUnattendedOutcomes = new Set<string>();
 
+  // One definition of absorption, read by `observe` and answered to callers
+  // through `willAbsorb`. Two spellings of this rule would be a defect waiting
+  // to happen: a producer deciding whether to hand an event over has to be
+  // asking the same question the delivery then answers.
+  const willAbsorb = (input: {
+    readonly ready: boolean;
+    readonly baselineEpoch: number;
+  }): boolean =>
+    baselineEpoch !== input.baselineEpoch || !wasReady || !input.ready;
+
   return {
+    willAbsorb,
     observe: (input) => {
-      const changedEpoch = baselineEpoch !== input.baselineEpoch;
-      const absorb = changedEpoch || !wasReady || !input.ready;
+      const absorb = willAbsorb(input);
       const hydrating = hydrationSequence !== input.hydrationSequence;
       const priorResidentMessageIds = residentMessageIds;
       baselineEpoch = input.baselineEpoch;

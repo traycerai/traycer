@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   use,
   useEffect,
@@ -8,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type {
+  ComponentProps,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
   PointerEvent,
@@ -167,6 +169,14 @@ import {
 } from "@/lib/host/plan-restricted-copy";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
+import { StatusBarMetric } from "@/components/layout/status-bar/status-bar-resource-segment";
+import { useStatusBarResourceMetricViews } from "@/components/layout/status-bar/use-status-bar-resource-views";
+import type { BarReadingForm } from "@/components/layout/tabs/side-strip/side-strip-tokens";
+import { ReadingsLine } from "@/components/layout/readings-line";
+import {
+  statusBarResourceSegmentLabel,
+  type StatusBarResourceMetricView,
+} from "@/lib/resources/status-bar-resource-reading";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { ClosedTilePayload } from "@/stores/epics/canvas/store";
@@ -239,7 +249,12 @@ const ROW_HOVER_REVEAL =
 export type ResourceMonitorPopoverTrigger =
   | {
       readonly trigger: "header-button";
-      readonly className: string | undefined;
+      /**
+       * The glyph, or an outlined box beside the usage button as its equal and
+       * so in that button's own treatment: the strip's tile and readout (F6),
+       * the width they are given, or the header's readings at their own (G6).
+       */
+      readonly form: BarReadingForm;
     }
   | {
       readonly trigger: "custom";
@@ -534,6 +549,7 @@ function ScopedResourceMonitorPopover(props: {
   /** The provided stream client is the picked host's, not a fallback. */
   readonly streamBoundToScope: boolean;
 }) {
+  const placement = useColumnOverlayPlacement("foot");
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const chord = useBindingForAction("app.resources.open");
@@ -552,6 +568,14 @@ function ScopedResourceMonitorPopover(props: {
   // click on the (otherwise event-swallowing) drag area dismisses the popover.
   useTitleBarDragSuppression("resource-monitor", open);
   const scope = props.scope;
+  // The status bar segment's own readings, for the forms that draw them.
+  // Every source under it is a store or context read, so the icon button pays
+  // nothing for asking.
+  const views = useStatusBarResourceMetricViews({
+    hostId: scope.hostId,
+    hostLabel: scope.hostLabel,
+    hasExplicitPick: props.hasExplicitPick,
+  });
   const tooltipLabel = watchesNamedHost(scope, props.hasExplicitPick)
     ? `Resources · ${scope.hostLabel}`
     : "Resources";
@@ -559,7 +583,6 @@ function ScopedResourceMonitorPopover(props: {
     chord === null
       ? tooltipLabel
       : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
-
   return (
     <>
       {/* Held out of the tree entirely under an unresolved pick, rather than
@@ -576,21 +599,16 @@ function ScopedResourceMonitorPopover(props: {
             // Naming the active host on every hover would train people to ignore
             // the one case the words exist for.
             label={tooltip}
-            side="top"
+            side={placement?.side ?? "top"}
             sideOffset={6}
-            align={undefined}
+            align={placement?.align}
           >
             <PopoverTrigger asChild>
               <Button
                 type="button"
-                variant="muted"
-                size="icon-sm"
-                aria-label="Resources"
                 data-testid="resource-monitor-header-button"
-                className={cn(props.trigger.className)}
-              >
-                <Cpu className="size-3.5" />
-              </Button>
+                {...readingButtonLook(props.trigger.form, views)}
+              />
             </PopoverTrigger>
           </TooltipWrapper>
         ) : (
@@ -817,6 +835,7 @@ function ResourceMonitorContent(props: {
   readonly streamBoundToScope: boolean;
   readonly contentSide: "top" | "bottom";
 }) {
+  const placement = useColumnOverlayPlacement("foot");
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const scope = props.scope;
   // The picker earns its row once there is a choice to make. One host means one
@@ -860,8 +879,8 @@ function ResourceMonitorContent(props: {
 
   return (
     <PopoverContent
-      align="end"
-      side={props.contentSide}
+      align={placement?.align ?? "end"}
+      side={placement?.side ?? props.contentSide}
       sideOffset={8}
       collisionPadding={12}
       role="dialog"
@@ -1015,7 +1034,15 @@ function ResourceMonitorHostPickerRow(props: {
           onSelect: () => {
             props.onClose();
             carryViewedHostIntoSettingsScope(scope.hostId);
-            openSettings({ section: "host", resetToGeneral: false });
+            // Named rather than left null: an Overview already open on
+            // another tab comes back to Updates, as every host link does.
+            openSettings({
+              section: "host",
+              resetToGeneral: false,
+              tab: "updates",
+              draft: null,
+              hostId: null,
+            });
           },
         }}
         surface="panel-header"
@@ -2377,7 +2404,7 @@ interface StopTarget {
  * asked: the agent is reported to its senders as having "exited" without
  * replying - a verdict that sticks until it is re-armed - and its record
  * cannot say it was stopped rather than lost. `terminal.kill` carries the
- * intent, so the sender is told the agent "was stopped by the user", the next
+ * intent, so the sender is told the agent "was stopped", the next
  * message resumes the same session, and the row reads asleep instead of gone.
  *
  * Separate from {@link StopTarget} rather than folded into it because the two
@@ -5201,4 +5228,74 @@ function buildProcessRows(input: {
 
 function countLabel(count: number, singular: string, plural: string): string {
   return `${formatProcessCount(count)} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * How the header button draws in each form: the glyph alone, or the readings
+ * in the usage button's own outlined treatment - the strip's filling the
+ * width it is given, the header's a bounded share of the header that gives
+ * way before the tabs and the header's own controls do (G6 review A).
+ */
+function readingButtonLook(
+  form: BarReadingForm,
+  views: ReadonlyArray<StatusBarResourceMetricView>,
+): Pick<
+  ComponentProps<typeof Button>,
+  "variant" | "size" | "aria-label" | "className" | "children"
+> {
+  if (form === "glyph") {
+    return {
+      variant: "muted",
+      size: "icon-sm",
+      "aria-label": "Resources",
+      className: undefined,
+      children: <Cpu className="size-3.5" />,
+    };
+  }
+  const readsOut = form === "readout" || form === "inline";
+  return {
+    variant: "outline",
+    size: "sm",
+    "aria-label": readsOut ? statusBarResourceSegmentLabel(views) : "Resources",
+    className: cn("shadow-xs", form === "inline" ? "min-w-0 shrink" : "w-full"),
+    children: readsOut ? (
+      <ResourceReadout
+        views={views}
+        align={form === "readout" ? "center" : "start"}
+      />
+    ) : (
+      <Cpu className="size-3.5" />
+    ),
+  };
+}
+
+/**
+ * The resource readings on a reading button: the status bar segment's
+ * metrics, drawn the same way, on the one line every bar reading uses
+ * (`ReadingsLine`) - whole readings only. The chip rides at the head of the
+ * line, so it centres with the readings it heads the way the usage tile's
+ * provider icons do. With every metric switched off it says what it is,
+ * and with not even that fitting it draws the chip alone - never a cut
+ * label; the button's accessible name and tooltip still say "Resources".
+ */
+function ResourceReadout(props: {
+  readonly views: ReadonlyArray<StatusBarResourceMetricView>;
+  readonly align: "start" | "center";
+}): ReactNode {
+  return (
+    <ReadingsLine
+      align={props.align}
+      tone="muted"
+      lead={<Cpu className="size-3.5" />}
+      fallback={<Cpu className="size-3.5 shrink-0" />}
+    >
+      {props.views.length === 0 ? (
+        <span>Resources</span>
+      ) : (
+        props.views.map((view) => (
+          <StatusBarMetric key={view.metric} view={view} />
+        ))
+      )}
+    </ReadingsLine>
+  );
 }

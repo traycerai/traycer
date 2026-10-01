@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ArrowDownToLine, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,16 +12,28 @@ import type {
   ApplyStagedOk,
   BusyContinuation,
   HostControllerStatus,
+  HostUpdateDeferral,
   IHostManagement,
   MutationLaneStatus,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
+import {
+  ENABLE_BACKGROUND_SERVICE_LABEL,
+  isServiceTaskNotOwnedMessage,
+  SERVICE_REGISTRATION_DISABLED_CODE,
+} from "@traycer-clients/shared/platform/host-service-notices";
+import {
+  isHostServiceNotice,
+  toastHostServiceNotice,
+} from "@/lib/host/host-service-notice";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
+import { useRunnerRegisterService } from "@/hooks/runner/use-runner-register-service-mutation";
+import { useLocalHostForegroundUpdateLine } from "@/hooks/host/use-local-host-foreground-update-line";
 import {
   HOST_UPDATE_BANNER_SNOOZE_MS,
-  HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS,
   isHostUpdateBannerSnoozed,
   useHostUpdateBannerStore,
 } from "@/stores/settings/host-update-banner-store";
@@ -47,6 +59,8 @@ import {
 import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
+import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
+import { hostUpdateFailureMessage } from "@traycer-clients/shared/host-update/store-format-refusal-copy";
 
 interface HostUpdateBannerProps {
   readonly className: string | undefined;
@@ -132,6 +146,63 @@ interface BusyState {
 interface TerminalOutcomeState {
   readonly intent: BannerIntent;
   readonly message: string;
+  readonly errorCode: string | null;
+}
+
+interface HostServiceNoticeActions {
+  /** Registers this machine's host service, or `null` with no local host. */
+  readonly enableService: (() => void) | null;
+  readonly enableServicePending: boolean;
+  /** Says a service-registration notice once, as a toast. */
+  readonly showServiceNotice: (message: string) => void;
+}
+
+/**
+ * The enable action for a service registration its owner switched off:
+ * Doctor's Register service (`host service install`, the one repair that turns
+ * the task back on), fenced to THIS machine's host like every Doctor repair,
+ * and `null` while no local host is known to fence it to. And the notice a
+ * deferred outcome carries instead of a failed update: said once, with that
+ * action where it helps, and never as the failure banner and Retry (retrying
+ * cannot change a disabled task or another user's task).
+ */
+function useHostServiceNoticeActions(
+  localEntry: HostDirectoryEntry | null,
+): HostServiceNoticeActions {
+  const registerServiceMutation = useRunnerRegisterService();
+  const localHostId = localEntry?.hostId ?? null;
+  const enableService =
+    localHostId === null
+      ? null
+      : (): void => {
+          registerServiceMutation.mutate({ expectedHostId: localHostId });
+        };
+  const showServiceNotice = (message: string): void => {
+    if (isServiceTaskNotOwnedMessage(message) || enableService === null) {
+      toastHostServiceNotice(message);
+      return;
+    }
+    toast.warning(message, {
+      action: {
+        label: ENABLE_BACKGROUND_SERVICE_LABEL,
+        onClick: enableService,
+      },
+    });
+  };
+  return {
+    enableService,
+    enableServicePending: registerServiceMutation.isPending,
+    showServiceNotice,
+  };
+}
+
+/** Why the ready update is waiting, while the row offers one. */
+function readyUpdateDeferral(
+  showUpdate: boolean,
+  status: HostControllerStatus | undefined,
+): HostUpdateDeferral | null {
+  if (!showUpdate || status === undefined) return null;
+  return status.updateDeferral;
 }
 
 function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
@@ -143,6 +214,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   const statusQuery = useRunnerHostControllerStatusQuery();
   const status = statusQuery.data;
+  const foregroundUpdateLine = useLocalHostForegroundUpdateLine();
 
   // The DURABLE attempt, which outranks the two-lane controller status below
   // whenever it has something to say. The controller lane knows this client
@@ -160,6 +232,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   const [busy, setBusy] = useState<BusyState | null>(null);
   const [terminalOutcome, setTerminalOutcome] =
     useState<TerminalOutcomeState | null>(null);
+  const { enableService, enableServicePending, showServiceNotice } =
+    useHostServiceNoticeActions(localEntry);
 
   const applyStagedMutation = useRunnerApplyStaged();
   const activateInstalledMutation = useRunnerActivateInstalled();
@@ -178,6 +252,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     applyMutationOutcome("apply", outcome, {
       setBusy,
       setTerminalOutcome,
+      onServiceNotice: showServiceNotice,
       onOk: (value) => {
         toast.success(`Updated host to v${value.appliedVersion}`);
         useHostUpdateBannerStore.getState().clearSnooze(value.appliedVersion);
@@ -191,6 +266,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     applyMutationOutcome("activate", outcome, {
       setBusy,
       setTerminalOutcome,
+      onServiceNotice: showServiceNotice,
       onOk: () => {
         toast.success("Host activated");
       },
@@ -233,19 +309,14 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   // cannot be snoozed away" (experience doc), and a parked
   // `waiting-to-activate` is precisely the state a person needs to see.
   //
-  // A TERMINAL attempt is different, and used to be treated the same. A rich
-  // `failed`/`complete` view superseded the controller status like every other
-  // non-idle kind, but the branch it superseded INTO rendered no terminal
-  // lifecycle at all — no Retry, no Diagnostics, no dismiss for a failure, no
-  // acknowledgement for a success. The controller lane's own terminal branch
-  // has all of those, and a rich attempt could never reach it. So a detached
-  // attempt that failed left a dead-end banner on the landing page for the
-  // whole retention lifetime of the record, and a completed one simply never
-  // went away.
+  // Failures can be dismissed here, and the dismissal is shared with the
+  // Settings Overview card (one per-attempt list), so a dismissed failure is
+  // gone from both; the Doctor card and `traycer host doctor` still report
+  // the record. Successful updates have no landing notice; Settings owns
+  // that acknowledgement.
   const dismissedAttemptIds = useHostUpdateBannerStore(
     (state) => state.landingDismissedAttemptIds,
   );
-  useLandingCompletionCollapse(localUpdate.view);
   const showOperation =
     operationSupersedesControllerStatus(
       localUpdate.view,
@@ -327,10 +398,11 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
     branch === "operation"
       ? localUpdate.view.kind === "failed"
       : branch === "terminal-outcome";
+  const updateDeferral = readyUpdateDeferral(showUpdate, status);
   const bannerAriaLabel =
     branch === "operation"
       ? operationCopy.accessibleLabel
-      : deriveBannerAriaLabel(terminalOutcome, offeredVersion);
+      : deriveBannerAriaLabel(terminalOutcome, updateDeferral, offeredVersion);
   // Destructive styling tracks the FACT, from whichever source is speaking: a
   // terminal mutation outcome, or an attempt the host reports as failed.
   const bannerClassName = deriveBannerClassName(showsFailure, className);
@@ -348,6 +420,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
       */}
       <LocalHostRestartFlow
         requested={forceRestartRequested}
+        firstLeg="cooperative"
         onClose={() => {
           setForceRestartRequested(false);
         }}
@@ -360,6 +433,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         message={forceDialogProps.message}
         isForcing={isPending}
         forceLabel={forceDialogProps.forceLabel}
+        forceDestructive
         onForce={handleForce}
         onDefer={() => {
           setBusy(null);
@@ -386,6 +460,10 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
           terminalOutcome={terminalOutcome}
           isPending={isPending}
           showUpdate={showUpdate}
+          foregroundUpdateLine={foregroundUpdateLine}
+          updateDeferral={updateDeferral}
+          enableServicePending={enableServicePending}
+          onEnableService={enableService}
           offeredVersion={offeredVersion}
           installedVersion={installedVersion}
           percent={percent}
@@ -427,7 +505,22 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
             runApply(false);
           }}
           onDiagnostics={() => {
-            openSettings({ section: "diagnostics", resetToGeneral: false });
+            openSettings({
+              section: "diagnostics",
+              resetToGeneral: false,
+              tab: null,
+              draft: null,
+              hostId: null,
+            });
+          }}
+          onHostSettings={() => {
+            openSettings({
+              section: "host",
+              resetToGeneral: false,
+              tab: "updates",
+              draft: null,
+              hostId: localUpdate.hostId,
+            });
           }}
           onOperationDismiss={dismissLandingAttempt}
           onTerminalRetry={() => {
@@ -469,8 +562,8 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
  * `idle` does NOT: the host looked and there is no attempt, so the controller's
  * "a stage is ready" / "activation debt" answer is the more useful one.
  *
- * Everything concrete wins — including `unavailable`, whose whole point is to
- * stay visible rather than read as a quiet host.
+ * Concrete progress and problems win, including `unavailable`. Successful
+ * updates belong in Settings and do not raise a landing banner.
  *
  * `unknown` SPLITS, and used to be rejected outright.
  *
@@ -504,10 +597,11 @@ function operationSupersedesControllerStatus(
   view: FleetUpdateView,
   controllerHasConcreteFact: boolean,
 ): boolean {
-  // `isQuietUpdateView` is the shared "nothing to show" predicate — the
-  // Overview hides its operation card on the same test, so the two surfaces
-  // agree on where quiet begins.
   if (isQuietUpdateView(view)) return false;
+  // Retained success is just as quiet as a fresh completion. Opening the
+  // landing page must not acknowledge or dismiss Settings' success notice.
+  const kind = view.kind === "unknown" ? view.lastKnownKind : view.kind;
+  if (kind === "complete" || kind === "finalizing-record") return false;
   if (view.kind === "unknown") return !controllerHasConcreteFact;
   return true;
 }
@@ -531,12 +625,17 @@ interface BannerBodyProps {
   readonly terminalOutcome: TerminalOutcomeState | null;
   readonly isPending: boolean;
   readonly showUpdate: boolean;
+  readonly foregroundUpdateLine: string | null;
+  readonly updateDeferral: HostUpdateDeferral | null;
+  readonly enableServicePending: boolean;
+  readonly onEnableService: (() => void) | null;
   readonly offeredVersion: string | null;
   readonly installedVersion: string | null;
   readonly percent: number | null;
   readonly onForceRestart: () => void;
   readonly onOperationRetry: () => void;
   readonly onDiagnostics: () => void;
+  readonly onHostSettings: () => void;
   readonly onOperationDismiss: (attemptId: string) => void;
   readonly onTerminalRetry: () => void;
   readonly onTerminalDismiss: () => void;
@@ -563,6 +662,7 @@ function BannerBody(props: BannerBodyProps) {
           onForceRestart={props.onForceRestart}
           onRetry={props.onOperationRetry}
           onDiagnostics={props.onDiagnostics}
+          onHostSettings={props.onHostSettings}
           onDismiss={props.onOperationDismiss}
         />
       );
@@ -572,6 +672,7 @@ function BannerBody(props: BannerBodyProps) {
           terminalOutcome={props.terminalOutcome}
           isPending={props.isPending}
           onRetry={props.onTerminalRetry}
+          onHostSettings={props.onHostSettings}
           onDismiss={props.onTerminalDismiss}
         />
       );
@@ -579,6 +680,10 @@ function BannerBody(props: BannerBodyProps) {
       return (
         <UpdateOrDebtContent
           showUpdate={props.showUpdate}
+          foregroundUpdateLine={props.foregroundUpdateLine}
+          updateDeferral={props.updateDeferral}
+          enableServicePending={props.enableServicePending}
+          onEnableService={props.onEnableService}
           offeredVersion={props.offeredVersion}
           installedVersion={props.installedVersion}
           isPending={props.isPending}
@@ -591,9 +696,9 @@ function BannerBody(props: BannerBodyProps) {
 }
 
 /**
- * A terminal attempt the landing banner has finished with.
+ * A failed attempt the landing banner has finished with.
  *
- * `complete` and `failed` only. `unavailable` is deliberately NOT dismissible —
+ * `unavailable` is NOT dismissible —
  * its whole purpose is to stay visible until the record is repaired, and it
  * carries no attempt id to key a dismissal by in any case.
  */
@@ -601,54 +706,9 @@ function isLandingDismissed(
   view: FleetUpdateView,
   dismissedAttemptIds: ReadonlyArray<string>,
 ): boolean {
-  if (
-    view.kind !== "complete" &&
-    view.kind !== "failed" &&
-    view.kind !== "finalizing-record"
-  ) {
-    return false;
-  }
+  if (view.kind !== "failed") return false;
   const attemptId = view.attemptId;
   return attemptId !== null && dismissedAttemptIds.includes(attemptId);
-}
-
-/**
- * A completed update acknowledges itself and collapses.
- *
- * "Completion may auto-collapse after a short acknowledgement; Settings still
- * shows the running version" (experience doc). Without this a retained
- * `complete` record — which the host keeps for days — sat on the landing page
- * indefinitely announcing a success nobody had to act on.
- *
- * Keyed on the attempt id so the timer restarts for a genuinely new completion
- * and does nothing on a re-render. The dismissal it writes is the same one the
- * failure path uses, so "collapsed" and "dismissed" cannot drift into two
- * different notions of hidden.
- */
-function useLandingCompletionCollapse(view: FleetUpdateView): void {
-  const dismissLandingAttempt = useHostUpdateBannerStore(
-    (state) => state.dismissLandingAttempt,
-  );
-  // `finalizing-record` collapses on the same timer, and for the reason above
-  // stated exactly: it is a SUCCESS nobody has to act on, and it outlives a
-  // retained `complete` rather than expiring sooner — the record it names is
-  // reconciled by the next update RUN, which may be days away and may never
-  // come. Leaving it out would have parked "Updated to v1.2.3. Finalizing the
-  // update record." on the landing page permanently, which is the exact defect
-  // this hook was written to fix, reintroduced through its own omission.
-  const completedAttemptId =
-    view.kind === "complete" || view.kind === "finalizing-record"
-      ? view.attemptId
-      : null;
-  useEffect(() => {
-    if (completedAttemptId === null) return;
-    const timer = setTimeout(() => {
-      dismissLandingAttempt(completedAttemptId);
-    }, HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [completedAttemptId, dismissLandingAttempt]);
 }
 
 interface OperationContentProps {
@@ -657,7 +717,51 @@ interface OperationContentProps {
   readonly onForceRestart: () => void;
   readonly onRetry: () => void;
   readonly onDiagnostics: () => void;
+  readonly onHostSettings: () => void;
   readonly onDismiss: (attemptId: string) => void;
+}
+
+interface OperationRecoveryActionProps {
+  readonly view: FleetUpdateView;
+  readonly storeFormatRefusal: boolean;
+  readonly onDiagnostics: () => void;
+  readonly onHostSettings: () => void;
+}
+
+function OperationRecoveryAction(props: OperationRecoveryActionProps) {
+  if (props.storeFormatRefusal) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="shrink-0"
+        onClick={props.onHostSettings}
+        data-testid="host-update-banner-open-host-settings"
+      >
+        Settings › Host
+      </Button>
+    );
+  }
+  if (
+    props.view.kind === "failed" ||
+    props.view.kind === "unavailable" ||
+    props.view.kind === "verification-refused"
+  ) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="shrink-0"
+        onClick={props.onDiagnostics}
+        data-testid="host-update-banner-operation-diagnostics"
+      >
+        Diagnostics
+      </Button>
+    );
+  }
+  return null;
 }
 
 /**
@@ -674,14 +778,21 @@ interface OperationContentProps {
  */
 function OperationContent(props: OperationContentProps) {
   const { view } = props;
+  const storeFormatRefusal =
+    view.errorCode === HOST_STORE_FORMAT_FLOOR_CODE &&
+    (view.kind === "failed" ||
+      (view.kind === "unknown" && view.lastKnownKind === "failed"));
   const percent = operationProgressPercent(view);
   const bytes = operationProgressBytes(view);
   const showProgress = showsProgressBar(view);
   const failedAttemptId = view.kind === "failed" ? view.attemptId : null;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1" data-testid="host-update-banner-phase">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span
+          className="min-w-0 flex-1 @max-sm:basis-full"
+          data-testid="host-update-banner-phase"
+        >
           {props.copy.primary}
           {/*
             Freshness, stated rather than implied. A qualified view is the last
@@ -723,7 +834,7 @@ function OperationContent(props: OperationContentProps) {
             {percent}%
           </span>
         ) : null}
-        {view.kind === "failed" ? (
+        {view.kind === "failed" && !storeFormatRefusal ? (
           <Button
             type="button"
             size="sm"
@@ -735,33 +846,14 @@ function OperationContent(props: OperationContentProps) {
             Retry
           </Button>
         ) : null}
-        {/*
-          Diagnostics for the two states the contract points there: a failure
-          (its "Retry; Diagnostics" pair) and an unreadable record, whose own
-          copy already ends "see Diagnostics" and until now named a place with
-          no way to get to it.
-        */}
-        {/*
-          `verification-refused` joins the two states that point here, and it is
-          the reason it is not on the Retry gate above: a host that refused the
-          authenticated check will refuse it again, so a Retry would be a button
-          whose only outcome is the same refusal. Diagnostics is the one
-          affordance, and the sentence ends by naming it.
-        */}
-        {view.kind === "failed" ||
-        view.kind === "unavailable" ||
-        view.kind === "verification-refused" ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="shrink-0"
-            onClick={props.onDiagnostics}
-            data-testid="host-update-banner-operation-diagnostics"
-          >
-            Diagnostics
-          </Button>
-        ) : null}
+        {/* Diagnostics covers failed/unavailable/verification-refused views;
+            a store-format refusal instead opens the existing Host settings. */}
+        <OperationRecoveryAction
+          view={view}
+          storeFormatRefusal={storeFormatRefusal}
+          onDiagnostics={props.onDiagnostics}
+          onHostSettings={props.onHostSettings}
+        />
         {offersForceRestart(view) ? (
           <Button
             type="button"
@@ -781,14 +873,8 @@ function OperationContent(props: OperationContentProps) {
           </Button>
         ) : null}
         {/*
-          Dismiss exists ONLY for a failure, and only once there is an attempt
-          id to remember it by. There is deliberately no dismiss on an active or
-          parked operation — the doc forbids snoozing those away — and none on a
-          completion, which collapses on its own.
-
-          Dismissing hides this banner and nothing else: the selected-host
-          Overview still shows the failed attempt, because "the failure remains
-          discoverable in the selected-host Overview".
+          Failed attempts are dismissed on the landing page only; Settings
+          retains the failure. Active and parked operations stay visible.
         */}
         {failedAttemptId === null ? null : (
           <Button
@@ -820,6 +906,7 @@ function OperationContent(props: OperationContentProps) {
 interface MutationOutcomeActions<TOk> {
   readonly setBusy: (busy: BusyState | null) => void;
   readonly setTerminalOutcome: (outcome: TerminalOutcomeState | null) => void;
+  readonly onServiceNotice: (message: string) => void;
   readonly onOk: (value: TOk) => void;
 }
 
@@ -843,11 +930,22 @@ function applyMutationOutcome<TOk>(
     });
     return;
   }
+  if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+    actions.setBusy(null);
+    actions.setTerminalOutcome(null);
+    actions.onServiceNotice(outcome.message);
+    return;
+  }
   Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
     blocker: "unknown",
   });
   actions.setBusy(null);
-  actions.setTerminalOutcome({ intent, message: outcome.message });
+  const errorCode = outcome.kind === "failed" ? outcome.errorCode : null;
+  actions.setTerminalOutcome({
+    intent,
+    message: hostUpdateFailureMessage(errorCode, outcome.message),
+    errorCode,
+  });
 }
 
 function resolveForceAction(
@@ -924,10 +1022,14 @@ function deriveForceDialogProps(busy: BusyState | null): ForceDialogProps {
 
 function deriveBannerAriaLabel(
   terminalOutcome: TerminalOutcomeState | null,
+  updateDeferral: HostUpdateDeferral | null,
   offeredVersion: string | null,
 ): string {
   if (terminalOutcome !== null) {
     return `Traycer host update failed: ${terminalOutcome.message}`;
+  }
+  if (updateDeferral !== null) {
+    return `Traycer host update waiting: ${updateDeferral.message}`;
   }
   return `Traycer host update available: ${offeredVersion ?? ""}`;
 }
@@ -936,11 +1038,12 @@ function deriveBannerClassName(
   destructive: boolean,
   className: string | undefined,
 ): string {
+  // Resolve the tint against the theme background rather than the wallpaper.
   const stateClassName = destructive
-    ? "border-destructive/30 bg-destructive/10 text-destructive"
-    : "border-info/30 bg-info/10 text-info-foreground";
+    ? "border-destructive/30 bg-[color-mix(in_srgb,var(--destructive)_10%,var(--background))] text-destructive"
+    : "border-info/30 bg-[color-mix(in_srgb,var(--info)_10%,var(--background))] text-info-foreground";
   return cn(
-    "flex items-center gap-2 rounded-md border px-3 py-2 text-ui-sm",
+    "@container flex items-center gap-2 rounded-md border px-3 py-2 text-ui-sm wrap-anywhere",
     stateClassName,
     className,
   );
@@ -964,6 +1067,7 @@ interface TerminalOutcomeContentProps {
   readonly terminalOutcome: TerminalOutcomeState;
   readonly isPending: boolean;
   readonly onRetry: () => void;
+  readonly onHostSettings: () => void;
   readonly onDismiss: () => void;
 }
 
@@ -976,16 +1080,28 @@ function TerminalOutcomeContent(props: TerminalOutcomeContentProps) {
       >
         {props.terminalOutcome.message}
       </span>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        disabled={props.isPending}
-        onClick={props.onRetry}
-        data-testid="host-update-banner-retry"
-      >
-        Retry
-      </Button>
+      {props.terminalOutcome.errorCode === HOST_STORE_FORMAT_FLOOR_CODE ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={props.onHostSettings}
+          data-testid="host-update-banner-open-host-settings"
+        >
+          Settings › Host
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={props.isPending}
+          onClick={props.onRetry}
+          data-testid="host-update-banner-retry"
+        >
+          Retry
+        </Button>
+      )}
       <Button
         type="button"
         variant="destructive-ghost"
@@ -1002,6 +1118,27 @@ function TerminalOutcomeContent(props: TerminalOutcomeContentProps) {
 
 interface UpdateOrDebtContentProps {
   readonly showUpdate: boolean;
+  /**
+   * A host started in a terminal is running: what the offer says instead, or
+   * `null` (`hostForegroundUpdateLine`). The desktop cannot finish an update
+   * over it (the CLI refuses apply and activation with
+   * `E_HOST_NOT_SERVICE_RUN`), so Update now / Restart host are withheld
+   * until main pushes a view without it, and the line names what does finish
+   * it - the person stopping that run, or, where this app updates no local
+   * host, the person updating it.
+   */
+  readonly foregroundUpdateLine: string | null;
+  /**
+   * Why the ready update is waiting (`HostControllerStatus.updateDeferral`),
+   * or `null`: this account cannot start the service the launch apply would
+   * stop, so it left the stage in place. The row says so instead of Update
+   * now, which could not finish either. For a disabled task it offers the one
+   * action that does - enabling the background service; for a task another
+   * Windows user owns there is none here to offer.
+   */
+  readonly updateDeferral: HostUpdateDeferral | null;
+  readonly enableServicePending: boolean;
+  readonly onEnableService: (() => void) | null;
   readonly offeredVersion: string | null;
   readonly installedVersion: string | null;
   readonly isPending: boolean;
@@ -1010,7 +1147,76 @@ interface UpdateOrDebtContentProps {
   readonly onSnooze: () => void;
 }
 
+interface DeferredUpdateContentProps {
+  readonly deferral: HostUpdateDeferral;
+  readonly onEnableService: (() => void) | null;
+  readonly isPending: boolean;
+  readonly enableServicePending: boolean;
+  readonly onSnooze: () => void;
+}
+
+function DeferredUpdateContent(props: DeferredUpdateContentProps): ReactNode {
+  return (
+    <>
+      <ArrowDownToLine className="size-3.5 shrink-0" aria-hidden />
+      <span
+        className="min-w-0 flex-1"
+        data-testid="host-update-banner-service-disabled"
+      >
+        {props.deferral.message}
+      </span>
+      {props.onEnableService === null ||
+      props.deferral.code !== SERVICE_REGISTRATION_DISABLED_CODE ? null : (
+        <Button
+          type="button"
+          size="sm"
+          variant="default"
+          disabled={props.isPending || props.enableServicePending}
+          onClick={props.onEnableService}
+          data-testid="host-update-banner-enable-service"
+        >
+          {props.enableServicePending ? (
+            <AgentSpinningDots
+              className="mr-2 size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          {ENABLE_BACKGROUND_SERVICE_LABEL}
+        </Button>
+      )}
+      <SnoozeButton onSnooze={props.onSnooze} />
+    </>
+  );
+}
+
 function UpdateOrDebtContent(props: UpdateOrDebtContentProps) {
+  if (props.foregroundUpdateLine !== null) {
+    return (
+      <>
+        <ArrowDownToLine className="size-3.5 shrink-0" aria-hidden />
+        <span
+          className="min-w-0 flex-1"
+          data-testid="host-update-banner-foreground"
+        >
+          {props.foregroundUpdateLine}
+        </span>
+        <SnoozeButton onSnooze={props.onSnooze} />
+      </>
+    );
+  }
+  if (props.showUpdate && props.updateDeferral !== null) {
+    return (
+      <DeferredUpdateContent
+        deferral={props.updateDeferral}
+        onEnableService={props.onEnableService}
+        isPending={props.isPending}
+        enableServicePending={props.enableServicePending}
+        onSnooze={props.onSnooze}
+      />
+    );
+  }
+
   return (
     <>
       <ArrowDownToLine className="size-3.5 shrink-0" aria-hidden />
@@ -1059,18 +1265,24 @@ function UpdateOrDebtContent(props: UpdateOrDebtContentProps) {
         ) : null}
         {props.showUpdate ? "Update now" : "Restart host"}
       </Button>
-      <Button
-        type="button"
-        variant="info-ghost"
-        size="icon-xs"
-        aria-label="Remind me later"
-        data-testid="host-update-banner-snooze"
-        className="text-current"
-        onClick={props.onSnooze}
-      >
-        <X className="size-3" aria-hidden />
-      </Button>
+      <SnoozeButton onSnooze={props.onSnooze} />
     </>
+  );
+}
+
+function SnoozeButton(props: { readonly onSnooze: () => void }) {
+  return (
+    <Button
+      type="button"
+      variant="info-ghost"
+      size="icon-xs"
+      aria-label="Remind me later"
+      data-testid="host-update-banner-snooze"
+      className="text-current"
+      onClick={props.onSnooze}
+    >
+      <X className="size-3" aria-hidden />
+    </Button>
   );
 }
 

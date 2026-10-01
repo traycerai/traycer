@@ -1,0 +1,215 @@
+---
+title: "Panels"
+description: "Understand the sidebar panels inside a Task, the rail, canvas tabs, split views, and the start page panel."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+Panels are the sidebar navigators inside a Task. They help you find and organize agents, terminals, browsers, artifacts, git changes, pull requests, files, sharing, and comments.
+
+You can use panels one at a time, stack them together, or rearrange them around the sidebar as the Task changes.
+
+## Sidebar Panels
+
+| Panel | What it shows |
+|---|---|
+| [Agents](/panels/agents) | Every agent in the Task, on the Chat or Terminal interface. |
+| [Terminals](/panels/terminals) | Plain shell sessions. |
+| [Browsers](/panels/browsers) | Browser tabs open in the Task. |
+| [Artifacts](/panels/artifacts) | Specs, tickets, stories, and reviews. |
+| [Git Diff](/panels/git-diff) | Changed files for a selected worktree. |
+| [Pull Requests](/panels/pull-requests) | Pull requests found in the Task's chats. |
+| [File Tree](/panels/file-tree) | Project files and folders. |
+| [Sharing](/panels/sharing) | People and teams with access to the Task. |
+| [Comments](/panels/comments) | Comment threads for the active artifact. |
+
+Two panels appear only when they have something to show:
+
+- **Pull Requests** appears once a pull request is found in the Task's chats.
+- **Comments** appears when you start or open a comment on the active artifact, and stays while a commentable artifact is open.
+
+The other panels are always in the rail unless you hide them. You can force either conditional panel to show from the [rail's right-click menu](#the-rail).
+
+## The Rail
+
+The rail is the column of panel icons beside the sidebar.
+
+- Click an icon to open its panel. Click the icon of the panel that is already open to collapse the sidebar; the rail stays visible. <kbd>Cmd</kbd> + <kbd>B</kbd> / <kbd>Ctrl</kbd> + <kbd>B</kbd> does the same.
+- Drag the sidebar's edge to resize it. Double-click the edge to reset its width. The width is shared by every Task.
+
+### Show And Hide Panels
+
+Right-click the rail, on an icon or on empty space, to choose which panels it shows:
+
+| Item | What it does |
+|---|---|
+| **Hide '&lt;Panel&gt;'** | Hide the panel you right-clicked. |
+| A checkbox for each panel | Check to show a panel, uncheck to hide it. Checking **Pull Requests** or **Comments** keeps it in the rail even when it has nothing to show; the menu then notes "No PRs yet" or "Needs an open artifact". |
+| **Reset panel visibility** | Return every panel to its default. Shown once you have changed something. |
+
+The last visible panel can't be hidden. Your choices apply to every Task.
+
+**Settings → Layout → Sidebar → Panels** offers the same checkboxes, plus buttons and menus to reorder and group panels. See [Layout](/settings/layout).
+
+## Panel Headers
+
+Each panel has a header. In a combined group, click a header to collapse or expand that panel. Some headers also have actions:
+
+| Panel | Header actions |
+|---|---|
+| Agents | **Add agent**, a filter menu, and **More agent actions**: **Search agents**, **Agent office**, **Collapse all**, and **Select agents**. |
+| Terminals | **New terminal**. |
+| Browsers | **Add browser** and **Search browsers**. |
+| Artifacts | **Add artifact**, a filter menu, and **More artifact actions**, which include **Search artifacts**, **Collapse all**, and **Select artifacts**. |
+| Git Diff | **More Git Diff actions**. |
+| Comments | **Close comments**. |
+
+## Rearranging Panels
+
+Panels can be reorganized from the sidebar.
+
+You can drag a panel to:
+
+- move it above another panel
+- move it below another panel
+- combine it with another panel group
+
+Combining panels keeps both panels visible in the same sidebar area. By default, **Agents** and **Artifacts** are combined. Combine others when two views belong together for the work you are doing, such as **Git Diff** and **File Tree**.
+
+When multiple panels are combined, resize handles let you adjust how much vertical space each panel gets.
+
+Drag a panel by its rail icon or its header. A line shows where it will land.
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/panels-rearrange.mp4" label="Combine two sidebar panels and reorder them" />
+
+## Work Side By Side
+
+Split the canvas into groups to keep agents, terminals, or artifacts visible side by side. Use the tab strip's **Split group right** button, or Shift-click it to split down. See the [split groups demo](/settings/keybindings#split-groups).
+
+You can also drag a tab. Drop it on the edge of a group to split that group, or in the middle of a group to move the tab into it. An outline shows where the tab will land.
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/tile-drag.mp4" label="Drag tabs to split a group and to join another group" />
+
+### Canvas Tab Menu
+
+Right-click a tab in the canvas for:
+
+| Item | What it does |
+|---|---|
+| **Close**, **Close Others**, **Close to the Right**, **Close All** | Close tabs in this group. **Close All** closes the whole group. |
+| **Edit Title** | Rename an agent, terminal, or artifact tab. Shown when you can edit the Task. |
+| **Split Up**, **Split Down**, **Split Left**, **Split Right** | Move the tab into a new group on that side. |
+| **Copy File Path** | Copy the file's full path. File tabs only. |
+| **Reveal in Sidebar** | Show the tab's item in its sidebar panel. |
+| **Usage** | Show the chat's usage. Chat tabs only, when the host supports it. |
+
+### Pane Opener
+
+A blank tab, or an empty group, shows the pane opener. Press <kbd>Cmd</kbd> + <kbd>T</kbd> / <kbd>Ctrl</kbd> + <kbd>T</kbd> to open a blank tab in the active group.
+
+Type in the "Open into pane…" box, or pick a category:
+
+| Entry | Opens |
+|---|---|
+| **Agents** | An agent from this Task. |
+| **Terminals** | A terminal from this Task. |
+| **Browser** | A browser tab. |
+| **Artifacts** | An artifact. |
+| **Files** | A file from a workspace folder. |
+| **Diff** | A changed-file diff. |
+| **Text search** | A search across the Task's artifacts or one workspace folder's code. It supports **Match case**, **Match whole word**, **Use regular expression**, and files to include or exclude. |
+| **Agent office** | The Task's agent office. See [Agent-to-agent](/concepts/agent-to-agent). |
+| **Deleted artifacts** | Artifacts you can restore. Shown when the host supports it. |
+
+Press **Esc** or **Back** to leave a category.
+
+### Find In A Tile
+
+Every tab has its own find bar. It works in chats, artifacts, files, diffs, terminals (including their scrollback), browser tabs running on this computer, and the agent office. Find isn't available in a browser tab [streamed from another machine](/panels/browsers#tabs-on-another-machine), and while you control one, the find shortcut goes to the page.
+
+- Open it with <kbd>Cmd</kbd> + <kbd>F</kbd> on macOS, or <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> on Windows and Linux.
+- Type to search. Toggle **Match case**, and use **Previous match** and **Next match**, or <kbd>Enter</kbd> and <kbd>Shift</kbd> + <kbd>Enter</kbd>. Press **Esc** to close.
+- In an artifact you can edit, <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>F</kbd> / <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> opens the bar with the **Replace** row expanded, with **Replace current match** and **Replace all matches**.
+
+## Window Split View
+
+A header tab can hold two views side by side, for example two Tasks, or a Task and History. Task, draft, History, and Settings tabs can be split; the Home tab can't.
+
+Right-click a header tab for:
+
+| Item | What it does |
+|---|---|
+| **Add tab to new split view** | Put the current tab on the left and leave the right half empty for you to fill. Right-click the tab you are on. <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>N</kbd> / <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>N</kbd> does the same. |
+| **New split view with current tab** | Pair the tab you are on (left) with the tab you right-clicked (right). |
+| **Separate views** | Turn the two halves back into separate tabs. |
+| **Close left view**, **Close right view** | Close one half. |
+| **Reverse views** | Swap the halves. |
+
+The last four items appear when you right-click a split, and in the menu at the front of each split tab.
+
+You can also drag one header tab onto the near half of another to pair them. The dragged tab lands on the side it came from. Dragging past the middle of the other tab reorders the tabs instead.
+
+An empty half reads **Choose view** in the tab strip. The half itself offers:
+
+- **Open Tabs**: pick another open tab.
+- **Create**: **New Task**.
+- **History**: search your Tasks and open one.
+
+You can also drop a dragged tab onto an empty half.
+
+The divider between the halves can be dragged. Focus it and use <kbd>←</kbd> / <kbd>→</kbd> to move it, or <kbd>Home</kbd> / <kbd>End</kbd> to jump to 15% / 85%. Double-click it to reset to 50%. Each half keeps at least 15% of the width.
+
+## Header Tabs
+
+Right-click a Task's header tab for more actions:
+
+| Item | What it does |
+|---|---|
+| **Tab appearance** | Pick a color, a custom color, or an **Icon** of up to two characters. **Reset tab appearance** clears them. |
+| **Add tab to group** | Put the tab in a new or existing tab group. **Remove from group** takes it out. |
+| **Edit Title** | Rename the Task. |
+| **Pin Task in History** | Pin the Task in History, or unpin it. |
+| **Duplicate Tab** | Open a copy of the tab with its tiling layout. |
+| **Open in New Window** | Open the tab in a new window. Available on every header tab except Home. |
+| **Close Other Tabs** | Close every other header tab. |
+| **Reopen Closed Tab** | Restore the last tab you closed. |
+
+Where a Task supports labels and groups, **Labels**, **Task appearance**, and **Add to group** replace **Tab appearance** and **Add tab to group**.
+
+A tab group shows as a chip in the header. Click the chip to collapse or expand the group. Right-click it to name the group ("Name this group"), change its color, or choose **New tab in group**, **Close group**, or **Ungroup**.
+
+When there are more tabs than fit, buttons at the ends of the strip list the hidden tabs, with a "Search hidden tabs…" box.
+
+**Settings → Layout** has **Task tab layout** (**Scroll**, the default, or **Shrink to fit**) and a **Home tab** switch, which is off by default. See [Layout](/settings/layout).
+
+For the command palette, Back and Forward, reopening tabs, and windows, see [Search and navigation](/concepts/search-and-navigation).
+
+## Start Page Panel
+
+The start page, where you begin a new Task, has a panel on its right side for terminals and browser tabs outside any Task.
+
+- The **New tab** chooser offers **Terminal** ("Shell in the selected folder") and **Browser** ("Signed-in browser on this device").
+- With several folders attached, **Create terminal in workspace** asks which folder to use.
+- The panel can be maximized, restored, and collapsed.
+- Right-click a tab for **Rename**, **Close**, and **Close All**.
+
+| Shortcut | macOS | Windows / Linux |
+|---|---|---|
+| Toggle terminal panel | <kbd>Cmd</kbd> + <kbd>J</kbd> | <kbd>Ctrl</kbd> + <kbd>J</kbd> |
+| New terminal | <kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>J</kbd> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>J</kbd> |
+| Maximize terminal panel | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>J</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>J</kbd> |
+| New browser tab | <kbd>Cmd</kbd> + <kbd>Opt</kbd> + <kbd>B</kbd> | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>B</kbd> |
+
+## Drag And Drop Inside Panels
+
+Some panels also support drag and drop for the items they contain.
+
+Common uses include:
+
+- moving artifacts in the artifact hierarchy
+- nesting an agent under another agent
+- keeping related follow-up work near the spec, ticket, story, or review it belongs to
+
+Drag and drop changes organization. It does not turn an agent into an artifact, or an agent into a plain terminal. Agents and artifacts live in separate panels, so an agent cannot be dropped under an artifact.
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/dnd-agent-under-artifact.mp4" label="Drag an agent onto another agent to nest it" />

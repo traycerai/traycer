@@ -33,7 +33,11 @@ export interface FocusActions {
   readonly openPrompt: (row: FocusPromptRow) => void;
   /** Focuses the agent's tile where one is already open, else opens the task's
    * tab focused on it. */
-  readonly openAgent: (epicId: string, agentId: string) => void;
+  readonly openAgent: (
+    epicId: string,
+    agentId: string,
+    hostId: string | null,
+  ) => void;
   /**
    * Opens the CHAT a background row belongs to - the shell's owner, not the
    * shell. There is no cross-task route to a managed-command output tile, and
@@ -46,11 +50,8 @@ export interface FocusActions {
    * Opens the browser tab itself - the parked tile, focused where it is already
    * open, else the task's tab opened on it.
    *
-   * The one action on this page that passes an ORIGIN HOST, and it has to. A
-   * browser session is host-local for life, so `browserSession` routing matches
-   * a tile only when its host matches too; without the origin a same-id tile on
-   * another machine would satisfy the match. Contrast `openChat`, where the id
-   * names an agent and any tile holding it is the right one.
+   * The row's host is part of its identity, just as it is for agents: a tile
+   * on another machine must not satisfy a same-id match.
    */
   readonly openBrowser: (row: FocusBrowserRow) => void;
   readonly openTask: (epicId: string) => void;
@@ -158,31 +159,27 @@ export function useFocusActions(): FocusActions {
   );
 
   const openChat = useCallback(
-    (epicId: string, chatId: string) => {
+    (epicId: string, chatId: string, hostId: string | null) => {
       routeNotificationForHost(
         navigate,
         { kind: "chat", epicId, chatId },
         Date.now(),
-        // No origin host: the activity union names an agent, not the machine it
-        // runs on, so any tile holding that id is the right one to focus. A
-        // prompt is the case that DOES need an origin, and it goes through
-        // `openPrompt`.
-        { originHostId: null, effectiveHostId },
+        { originHostId: hostId, effectiveHostId },
       );
     },
     [navigate, effectiveHostId],
   );
 
   const openAgent = useCallback(
-    (epicId: string, agentId: string) => {
-      openChat(epicId, agentId);
+    (epicId: string, agentId: string, hostId: string | null) => {
+      openChat(epicId, agentId, hostId);
     },
     [openChat],
   );
 
   const openBackground = useCallback(
     (row: FocusBackgroundRow) => {
-      openChat(row.epicId, row.chatId);
+      openChat(row.epicId, row.chatId, row.hostId);
     },
     [openChat],
   );

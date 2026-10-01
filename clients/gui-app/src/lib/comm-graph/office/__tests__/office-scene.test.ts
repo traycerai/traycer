@@ -21,6 +21,7 @@ import {
 } from "@/lib/comm-graph/office/office-scene";
 import {
   CIVIC_ROOMS_EXPECTED,
+  CIVIC_KINDS_EXPECTED,
   AMBULANCE_RIDER_SETS_THE_DWELL,
 } from "@/lib/comm-graph/office/__tests__/civic-rooms-expected";
 import {
@@ -4318,6 +4319,12 @@ describe("OfficeScene amenities", () => {
  */
 describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
   const view = OFFICE_VIEWS[viewId];
+  // Towers and Building share one plaza builder that no longer stands up a
+  // waiting room - an awaiting agent keeps its own desk instead (see
+  // `civic-rooms-expected.ts`). A lounge-specific case still gates on
+  // `CIVIC_ROOMS_EXPECTED` first (no civic rooms at all is a different,
+  // broader claim), then on this for the narrower one.
+  const LOUNGE_EXPECTED = CIVIC_KINDS_EXPECTED[viewId].includes("waiting-room");
 
   /** The sprite box a character standing on this tile would occupy, per the projector. */
   function footRect(layout: OfficeLayout, tile: OfficeTilePos): OfficeRect {
@@ -6466,6 +6473,14 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       context.skip(`${viewId} plans no civic rooms`);
       return;
     }
+    if (!LOUNGE_EXPECTED) {
+      // The whole fixture is three lounge chairs painted in front of the
+      // walk row - Towers and Building have no lounge to seat them in at
+      // all (an awaiting agent keeps its own desk), so there is no box
+      // here for one agent's art to paint over another's.
+      context.skip(`${viewId} keeps an awaiting agent at its own desk`);
+      return;
+    }
     if (view.painter.depth !== "world") {
       context.skip(`${viewId} orders its regions by draw order, not by depth`);
       return;
@@ -7115,6 +7130,13 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       context.skip(`${viewId} plans no civic rooms`);
       return;
     }
+    if (!LOUNGE_EXPECTED) {
+      // The overflow queue this case is about is a lounge concept - no
+      // chairs, no overflow, no queue to be fair about. An awaiting agent
+      // here simply keeps its own desk.
+      context.skip(`${viewId} keeps an awaiting agent at its own desk`);
+      return;
+    }
     // waitingScript puts every waiter in ONE sync, so arrival order would
     // equal id order and this case would pass vacuously. Waves, as the
     // bed case does. A bed wanter sits alongside so a merged (host-only)
@@ -7249,6 +7271,14 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       }),
     );
     expect(tickUntilHome(scene, bedded, home.chairTile)).toBe(true);
+
+    if (!LOUNGE_EXPECTED) {
+      // The crash-home half above is the "other civic/motion assertion"
+      // this case owes every view with civic rooms at all; the lounge half
+      // below is not - Towers and Building have no lounge to walk an
+      // awaiting agent to or home from (it never leaves its own desk).
+      return;
+    }
 
     const waiting = waitingScript({ ...epic, statusById: idle }, 6);
     const waiters = [...waiting[0].entries()]
@@ -7449,6 +7479,14 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       context.skip(`${viewId} plans no civic rooms`);
       return;
     }
+    if (!LOUNGE_EXPECTED) {
+      // `archivedLoungeHolder` requires alpha to already hold a lounge
+      // chair before archiving it - Towers and Building never grant one
+      // (an awaiting agent keeps its own desk), so there is no lounge
+      // claim here to release.
+      context.skip(`${viewId} keeps an awaiting agent at its own desk`);
+      return;
+    }
 
     // Reduced motion: `sendArchivedHome` deletes the character outright on
     // this same sync, so there is no walk to wait out - the seat has to be
@@ -7479,6 +7517,15 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
   it("keeps a civic holder's summons to the counter when its status flips to attention", (context) => {
     if (!CIVIC_ROOMS_EXPECTED[viewId]) {
       context.skip(`${viewId} plans no civic rooms`);
+      return;
+    }
+    if (!LOUNGE_EXPECTED) {
+      // The precondition this case needs - a "civic HOLDER" already
+      // sitting a lounge chair when attention interrupts it - cannot be
+      // built here: Towers and Building never grant an awaiting agent a
+      // lounge seat, so there is no prior civic claim for the release loop
+      // to have to yield to the reception summons.
+      context.skip(`${viewId} keeps an awaiting agent at its own desk`);
       return;
     }
     const epic = makeTestEpic("one-team", 12, 9);
@@ -7835,23 +7882,33 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       civicRoomName(layoutOf(scene), "infirmary"),
     );
 
-    const waiting = waitingScript({ ...epic, statusById: idle }, 6);
-    scene.sync(
-      sceneInput({
-        agents: epic.agents,
-        visibleAgentIds: visible,
-        statusById: waiting[0],
-        reducedMotion: true,
-      }),
-    );
-    const seatedLounge = [...waiting[0].entries()]
-      .filter(([, status]) => status === "awaiting")
-      .map(([id]) => id)
-      .find((id) => bookOf(scene).civicClaimOf(id) === "lounge");
-    if (seatedLounge === undefined) throw new Error("expected a lounge sitter");
-    expect(scene.whereabouts(seatedLounge)).toBe(
-      civicRoomName(layoutOf(scene), "waiting-room"),
-    );
+    // The lounge half is not a claim every enrolled view owes - Towers and
+    // Building plan no waiting room at all (an awaiting agent keeps its own
+    // desk), so there is no lounge sitter to name here for them. Infirmary,
+    // above, and Help desk from the queue, below, are the "other civic/motion
+    // assertions" this case still owes every enrolled view.
+    let seatedLounge: string | undefined;
+    if (LOUNGE_EXPECTED) {
+      const waiting = waitingScript({ ...epic, statusById: idle }, 6);
+      scene.sync(
+        sceneInput({
+          agents: epic.agents,
+          visibleAgentIds: visible,
+          statusById: waiting[0],
+          reducedMotion: true,
+        }),
+      );
+      seatedLounge = [...waiting[0].entries()]
+        .filter(([, status]) => status === "awaiting")
+        .map(([id]) => id)
+        .find((id) => bookOf(scene).civicClaimOf(id) === "lounge");
+      if (seatedLounge === undefined) {
+        throw new Error("expected a lounge sitter");
+      }
+      expect(scene.whereabouts(seatedLounge)).toBe(
+        civicRoomName(layoutOf(scene), "waiting-room"),
+      );
+    }
 
     const queuedId = epic.agents.find(
       (person) =>
@@ -7946,6 +8003,12 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
   it("names a seated lounge agent with this view's own word for the waiting room", (context) => {
     if (!CIVIC_ROOMS_EXPECTED[viewId]) {
       context.skip(`${viewId} plans no civic rooms`);
+      return;
+    }
+    if (!LOUNGE_EXPECTED) {
+      // No waiting room, no word for one - Towers and Building keep an
+      // awaiting agent at its own desk.
+      context.skip(`${viewId} keeps an awaiting agent at its own desk`);
       return;
     }
     const epic = makeTestEpic("one-team", 12, 9);
@@ -8124,13 +8187,23 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     const infirmary = layout.floors[0].civic.find(
       (room) => room.kind === "infirmary",
     );
-    const lounge = layout.floors[0].civic.find(
-      (room) => room.kind === "waiting-room",
-    );
-    if (infirmary === undefined || lounge === undefined) {
-      throw new Error("expected an infirmary and a waiting room");
+    if (infirmary === undefined) {
+      throw new Error("expected an infirmary");
     }
-    expect(lounge.seatIds.length).toBeGreaterThan(0);
+    // The infirmary tally below is the "other civic/motion assertion" this
+    // case owes every enrolled view; the lounge check is not - Towers and
+    // Building plan no waiting room at all (an awaiting agent keeps its own
+    // desk), so there is no such room here to be absent FROM the tally.
+    if (LOUNGE_EXPECTED) {
+      const lounge = layout.floors[0].civic.find(
+        (room) => room.kind === "waiting-room",
+      );
+      if (lounge === undefined) throw new Error("expected a waiting room");
+      expect(lounge.seatIds.length).toBeGreaterThan(0);
+      expect(scene.civicTally().occupiedByRoom.has(lounge.civicRoomId)).toBe(
+        false,
+      );
+    }
 
     let fromBook = 0;
     for (const seatId of infirmary.seatIds) {
@@ -8141,9 +8214,6 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
 
     const tally = scene.civicTally();
     expect(tally.occupiedByRoom.get(infirmary.civicRoomId)).toBe(fromBook);
-    // A room nobody is in is ABSENT, not 0: the map is occupancy, not
-    // a capacity table.
-    expect(tally.occupiedByRoom.has(lounge.civicRoomId)).toBe(false);
 
     scene.sync(
       sceneInput({

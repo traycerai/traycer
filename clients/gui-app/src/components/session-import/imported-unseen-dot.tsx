@@ -22,9 +22,16 @@ export function ImportedUnseenDot(props: { readonly epicId: string }) {
   const harness = useImportedUnseenStore((state) => state.unseen[props.epicId]);
   const tooltipOpen = useStatusGlyphTooltipOpen();
   if (harness === undefined) return null;
+  // `null` means the task holds imported work from more than one provider,
+  // which one task per repository makes ordinary. Naming one of them would be
+  // wrong, and naming all of them is more than a dot's tooltip is for.
+  const sentence =
+    harness === null
+      ? "Imported, not opened yet"
+      : `Imported from ${harnessDisplayName(harness)} - not opened yet`;
   return (
     <TooltipWrapper
-      label={`Imported from ${harnessDisplayName(harness)} - not opened yet`}
+      label={sentence}
       side="top"
       sideOffset={undefined}
       align={undefined}
@@ -34,7 +41,11 @@ export function ImportedUnseenDot(props: { readonly epicId: string }) {
       <span
         data-testid="imported-unseen-dot"
         role="img"
-        aria-label={`Imported from ${harnessDisplayName(harness)}, not opened yet`}
+        aria-label={
+          harness === null
+            ? "Imported, not opened yet"
+            : `Imported from ${harnessDisplayName(harness)}, not opened yet`
+        }
         className="size-1.5 shrink-0 rounded-full bg-primary"
       />
     </TooltipWrapper>

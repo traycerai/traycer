@@ -7,20 +7,18 @@ import { cn } from "@/lib/utils";
 import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { busyWorkPhrase } from "@/components/host/host-restart-copy";
-import {
-  deriveUpdateAffordance,
-  deriveUpdatePill,
-} from "@/components/settings/panels/my-hosts-model";
+import { deriveUpdateAffordance } from "@/components/settings/panels/my-hosts-model";
 
 /**
  * The auto-update policy switch.
  *
- * Now inside the Advanced disclosure, apart from the drain gate below, and the
- * split is about urgency rather than topic. This is a preference someone sets
- * once and forgets, so it belongs with the other settings a person opens
- * Advanced to find; "Apply now — ends N sessions" appears only while an update is
- * genuinely blocked on open sessions, and hiding THAT behind a collapsed
- * disclosure would bury the one control here with a deadline on it.
+ * On the Overview's Updates tab, apart from the drain gate below, which sits in
+ * the notices strip above the tab bar, and the split is about urgency rather
+ * than topic. This is a preference someone sets once and forgets, so it belongs
+ * with the other settings a person opens Updates to find; "Apply now — ends N
+ * sessions" appears only while an update is genuinely blocked on open
+ * sessions, and hiding THAT behind a tab would bury the one control here with a
+ * deadline on it.
  *
  * Works without a live session on purpose: the policy is stored in the
  * account's host registry and the host reads it on its next check-in, which is
@@ -42,8 +40,8 @@ export function HostAutoUpdateRow(props: {
   readonly className: string;
 }): ReactNode {
   const { item, mutation } = props;
-  const pill = deriveUpdatePill(item.status.updateState);
   const isAuto = item.updatePolicy === "auto";
+  const updatePending = item.status.updateState === "pending";
 
   return (
     <div
@@ -66,7 +64,7 @@ export function HostAutoUpdateRow(props: {
         data-testid={`host-auto-update-${item.hostId}`}
       />
       <div className="min-w-0 flex-1">
-        <p className="text-ui-sm text-foreground">Auto-update</p>
+        <p className="text-ui-sm font-medium text-foreground">Auto-update</p>
         {/* ONE sentence, both vantages. This used to fork on `isLocalHost`,
               saying "Installs new versions when no sessions are running."
               locally — which was fiction. The pin is applied by the HOST's own
@@ -92,14 +90,14 @@ export function HostAutoUpdateRow(props: {
           only when no sessions are running.
         </p>
       </div>
-      {pill === null ? null : (
+      {updatePending ? (
         <span
-          className="shrink-0 rounded-sm bg-foreground/8 px-1.5 py-px text-ui-xs text-muted-foreground"
+          className="shrink-0 rounded-sm border border-warning/30 bg-warning/10 px-1.5 py-px text-ui-xs text-warning-foreground"
           data-testid={`host-update-pill-${item.hostId}`}
         >
-          {pill.label}
+          Update pending
         </span>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -140,6 +138,14 @@ export function HostUpdateDrainGateRow(props: {
    * swap (2 agents → 2 terminals) is a moved promise, not a confirm.
    */
   readonly settledBusyBreakdown: HostBusyBreakdown | null;
+  /**
+   * THIS machine's host was started in a terminal: applying the update would
+   * restart it, which nothing here may do, so Apply now gives way to the
+   * sentence saying what finishes it (`hostForegroundUpdateLine`) - the same
+   * one Update now and the version rows show. `null` otherwise, and always for
+   * another machine's host.
+   */
+  readonly foregroundUpdateLine: string | null;
 }): ReactNode {
   const { item, mutation } = props;
   const affordance = deriveUpdateAffordance({
@@ -148,9 +154,14 @@ export function HostUpdateDrainGateRow(props: {
     liveBusyBreakdown: props.liveBusyBreakdown,
   });
   if (affordance.applyNowLabel === null) return null;
+  // A warning callout in the Overview's notices strip, under the update card:
+  // a wait on someone, the same tone the host's own wait wears there.
   return (
-    <div className="flex flex-wrap items-center gap-3 border-t border-border/40 px-5 py-3">
-      <p className="min-w-0 flex-1 text-ui-sm text-muted-foreground">
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-warning-foreground"
+      data-testid={`host-update-drain-gate-${item.hostId}`}
+    >
+      <p className="min-w-0 flex-1 text-ui-sm">
         {affordance.waitingForSessionsLabel ??
           "Waiting for open sessions before applying."}
       </p>
@@ -160,6 +171,7 @@ export function HostUpdateDrainGateRow(props: {
         mutation={mutation}
         settledBusySessionCount={props.settledBusySessionCount}
         settledBusyBreakdown={props.settledBusyBreakdown}
+        foregroundUpdateLine={props.foregroundUpdateLine}
       />
     </div>
   );
@@ -190,6 +202,8 @@ function ApplyNowControl(props: {
    * object — a read that becomes null is lost, not idle-by-kind.
    */
   readonly settledBusyBreakdown: HostBusyBreakdown | null;
+  /** See `HostUpdateDrainGateRow`. */
+  readonly foregroundUpdateLine: string | null;
 }): ReactNode {
   const { hostId, label, mutation } = props;
   // The TARGET is captured when the dialog is armed, not read when it is
@@ -241,27 +255,44 @@ function ApplyNowControl(props: {
 
   return (
     <>
-      <Button
-        type="button"
-        variant="destructive"
-        size="sm"
-        onClick={() => {
-          setArmedHostId(hostId);
-          setArmedCount(props.settledBusySessionCount);
-          setArmedBreakdown(props.settledBusyBreakdown);
-        }}
-        // Arming is refused, not merely refused at confirm time, while the
-        // count is unsettled. The dialog would open naming a number it would
-        // then decline to act on, which is a worse experience than a briefly
-        // inert button — and the window is one host RPC over an already-open
-        // connection.
-        disabled={mutation.isPending || props.settledBusySessionCount === null}
-        data-testid={`host-apply-now-trigger-${hostId}`}
-      >
-        {label}
-      </Button>
+      {/* The force would have the host restart itself into the update, and a
+          host started in a terminal is not ours to restart: say what finishes
+          it instead of offering a button that should not. */}
+      {props.foregroundUpdateLine === null ? (
+        <Button
+          type="button"
+          variant="destructive"
+          size="sm"
+          onClick={() => {
+            setArmedHostId(hostId);
+            setArmedCount(props.settledBusySessionCount);
+            setArmedBreakdown(props.settledBusyBreakdown);
+          }}
+          // Arming is refused, not merely refused at confirm time, while the
+          // count is unsettled. The dialog would open naming a number it would
+          // then decline to act on, which is a worse experience than a briefly
+          // inert button — and the window is one host RPC over an already-open
+          // connection.
+          disabled={
+            mutation.isPending || props.settledBusySessionCount === null
+          }
+          data-testid={`host-apply-now-trigger-${hostId}`}
+        >
+          {label}
+        </Button>
+      ) : (
+        <p
+          className="min-w-0 text-ui-sm"
+          data-testid={`host-apply-now-foreground-${hostId}`}
+        >
+          {props.foregroundUpdateLine}
+        </p>
+      )}
+      {/* A dialog armed before the run began stays up, refusing with the same
+          sentence: the person asked for this, and closing it unexplained would
+          read as the click having been lost. */}
       <ConfirmDestructiveDialog
-        blockedReason={null}
+        blockedReason={props.foregroundUpdateLine}
         open={open}
         onOpenChange={(next) => {
           if (!next) setArmedHostId(null);

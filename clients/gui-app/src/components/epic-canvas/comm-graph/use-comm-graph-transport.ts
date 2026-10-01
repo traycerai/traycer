@@ -27,6 +27,7 @@ import {
 import {
   commGraphCursorAtEnd,
   commGraphCursorIndex,
+  commGraphPlaybackPace,
 } from "@/lib/comm-graph/comm-graph-transport";
 import {
   readCommGraphTimelineEpicState,
@@ -42,11 +43,14 @@ import {
  * gaps would sit still for the minutes an agent spent thinking. One step per
  * tick, scaled by speed, keeps a long session watchable.
  *
- * Exported because an animated renderer has to fit a per-row animation inside
- * one step: reading the same constant is what keeps an envelope from still
- * being in flight when the cursor has moved two rows on.
+ * Re-exported from `lib/comm-graph/comm-graph-transport.ts`, which owns it now
+ * that the scrubber's axis is measured in these same steps. Kept exported from
+ * here because every existing reader reaches for it through the transport, and
+ * an animated renderer has to fit a per-row animation inside one step:
+ * reading the same constant is what keeps an envelope from still being in
+ * flight when the cursor has moved two rows on.
  */
-export const BASE_STEP_MS = 700;
+export { BASE_STEP_MS } from "@/lib/comm-graph/comm-graph-transport";
 
 export interface CommGraphTransport {
   /** `null` = live: the cursor tracks the newest row as rows arrive. */
@@ -105,20 +109,33 @@ export function useCommGraphTransport(
   const cursorKey = cursor === null ? "live" : commGraphCursorKey(cursor);
   useEffect(() => {
     if (!playing) return;
+    // ONE TICK, HOWEVER MANY ROWS. Past the renderer's tick floor a shorter
+    // timer buys nothing, so the fast end of the ladder advances several rows
+    // on a tick of the same length instead - see `commGraphPlaybackPace`.
+    const pace = commGraphPlaybackPace(speed);
     const timer = setTimeout(() => {
       const store = useCommGraphTimelineStore.getState();
-      const current = readCommGraphTimelineEpicState(epicId).cursor;
-      const next = nextCommGraphTimelineEvent(eventsRef.current, current);
-      if (next === null) {
-        // Caught up: playback re-attaches to live rather than parking on the
-        // last row, so the graph keeps evolving instead of freezing one event
-        // behind whatever the agents do next.
-        store.setPlaying(epicId, false);
-        store.setCursor(epicId, null);
-        return;
+      let landed = readCommGraphTimelineEpicState(epicId).cursor;
+      for (let row = 0; row < pace.rowsPerTick; row += 1) {
+        const next = nextCommGraphTimelineEvent(eventsRef.current, landed);
+        if (next === null) {
+          // Caught up: playback re-attaches to live rather than parking on the
+          // last row, so the graph keeps evolving instead of freezing one event
+          // behind whatever the agents do next. Reached MID-TICK as readily as
+          // at the top of one, which is why the loop returns rather than
+          // breaking - a partial advance followed by "and also go live" would
+          // write the cursor twice for one tick.
+          store.setPlaying(epicId, false);
+          store.setCursor(epicId, null);
+          return;
+        }
+        landed = commGraphCursorForEvent(next);
       }
-      store.setCursor(epicId, commGraphCursorForEvent(next));
-    }, BASE_STEP_MS / speed);
+      // ONE WRITE per tick, at the row the loop walked to: writing each
+      // intermediate row would re-render (and re-plan) the whole graph for
+      // states nobody is going to see.
+      store.setCursor(epicId, landed);
+    }, pace.tickMs);
     return () => {
       clearTimeout(timer);
     };

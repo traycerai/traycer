@@ -70,15 +70,12 @@ export interface SetupCardRow {
    * stamped during the send, just before its triggering message persists, and
    * therefore sorts inline ABOVE that message by `createdAt`.
    *
-   * A window WITHOUT a `setup.creating` event is the chat's INITIAL worktree, set
-   * up out-of-band (epic-create / a catch-up back-fill at chat-attach, whose
-   * `Date.now()` stamp can land AFTER the first message). Its `createdAt` is not
-   * trustworthy for ordering, so the transcript pins it to the top - where the
-   * genesis belongs - rather than letting a late stamp sink it below the first
-   * message. This flag is what lets the renderer pin the genesis while leaving a
-   * mid-chat first creation (window 0, but with a creating phase) inline.
+   * Absence also occurs for side-chat setup after a fork. `isGenesisPin`
+   * distinguishes that continuation from the initial worktree, whose late
+   * back-fill timestamp requires pinning above the first message.
    */
   readonly hasCreatingEvent: boolean;
+  readonly isGenesisPin: boolean;
   /**
    * The id of the user message whose send carried this worktree-creation intent,
    * read from the window's `setup.creating` event metadata. Non-null only for a
@@ -126,6 +123,9 @@ export function buildSetupCardRows(
     windowIndex: aligned.identity.windowIndex,
     isActive: aligned.identity.isActive,
     hasCreatingEvent: aligned.identity.hasCreatingEvent,
+    // Legacy whole-log projection supplies its own flag during alignment.
+    // Older windowed hosts omit it; a partial slice cannot prove genesis.
+    isGenesisPin: aligned.identity.isGenesisPin ?? false,
     triggeringMessageId: aligned.triggeringMessageId,
     model: deriveViewModel(
       aligned.events,
@@ -387,6 +387,7 @@ function alignToWholeLog(
         windowIndex: index,
         isActive: window.isActive,
         hasCreatingEvent: window.hasCreatingEvent,
+        isGenesisPin: window.isGenesisPin,
       },
       events: window.events,
       triggeringMessageId: window.triggeringMessageId,
@@ -471,6 +472,7 @@ function alignToWholeLog(
         windowIndex: wholeLog.length + offset,
         isActive: window.isActive,
         hasCreatingEvent: window.hasCreatingEvent,
+        isGenesisPin: false,
       },
       events: window.events,
       triggeringMessageId: window.triggeringMessageId,

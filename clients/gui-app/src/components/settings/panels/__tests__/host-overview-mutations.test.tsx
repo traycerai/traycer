@@ -23,6 +23,16 @@ interface HostBindingMock {
   readonly hostClient: unknown;
   readonly directory: {
     readonly getLocalEntry: () => { readonly hostId: string } | null;
+    // `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+    // `HostBusyForceDeferDialog`) calls `useFocusModel()` ->
+    // `useConnectableHostIds()` -> `useHostDirectoryList()`, which reads
+    // `directory.list()` for its query and subscribes via
+    // `directory.onChange()` in an effect the moment either dialog opens.
+    // Neither answer matters to this suite; they just need to exist.
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
   };
 }
 const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
@@ -84,8 +94,8 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import {
   buildOverviewHostFixture,
   buildOverviewManagement,
-  openHostOverviewAdvanced,
   openHostOverviewMenu,
+  selectHostOverviewTab,
   updateCheckManifest,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
@@ -145,6 +155,8 @@ function bindingWith(hostClient: unknown): HostBindingMock {
         localHostIdMock.current === null
           ? null
           : { hostId: localHostIdMock.current },
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
     },
   };
 }
@@ -1355,9 +1367,9 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
         </RunnerHostProvider>
       </QueryClientProvider>,
     );
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(await waitForButton("Check now"));
-    await openHostOverviewAdvanced();
     fireEvent.click(await waitForButton(/^Install \d/));
 
     // The whole REGION retires, not just the install button. This test used to
@@ -1413,7 +1425,7 @@ describe("<HostSettingsPanel /> Overview OS service externally-managed outcome",
       </QueryClientProvider>,
     );
 
-    await openHostOverviewAdvanced();
+    await selectHostOverviewTab("installation");
     const description = await screen.findByTestId(
       "host-overview-service-description",
     );

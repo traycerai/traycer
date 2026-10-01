@@ -4,13 +4,71 @@ import {
   type QueryClient,
   type QueryKey,
 } from "@tanstack/react-query";
+import {
+  HostClient,
+  type HostQueryInvalidationOptions,
+  type IHostQueryInvalidator,
+} from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { buildHostKeyRotationSweep } from "@/lib/host/host-key-rotation-sweep";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { appLogger } from "@/lib/logger";
-import { queryKeys } from "@/lib/query-keys";
+import { hostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys, queryKeys } from "@/lib/query-keys";
+import {
+  markWorktreeChangedStreamOpen,
+  resetWorktreeChangedCoverageForTests,
+} from "@/lib/worktree/worktree-changed-coverage";
 
 const HOST_ID = "h1";
+function worktreeListingKey(hostId: string, activityPaths: string[] | null) {
+  return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+    hostId,
+    "worktree.listAllForHost",
+    {
+      includeActivity: false,
+      activityPaths,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    },
+  );
+}
+
+function rotationEntry(publicKey: string) {
+  return {
+    ...mockRemoteHostEntry,
+    publicKey,
+    relayFuseGrace: false,
+    recentHostCheckIn: false,
+    planAllowsRemote: true,
+    remoteStatus: {
+      connectivity: "connectable" as const,
+      viewerReachability: "ok" as const,
+      clientCloud: "ok" as const,
+      updateState: "current" as const,
+      appVersion: null,
+      lastSeenAt: null,
+    },
+  };
+}
+
+function worktreeActivityKey(hostId: string, activityPath: string) {
+  return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
+    hostId,
+    "worktree.listAllForHost",
+    {
+      includeActivity: true,
+      activityPaths: [activityPath],
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    },
+  );
+}
 
 /** Same builder shape as `use-host-query.ts` (`queryKeys.hostMethod`). */
 const listModelsKey = queryKeys.hostMethod<
@@ -59,6 +117,231 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     for (const stop of stops.splice(0)) {
       stop();
     }
+    resetWorktreeChangedCoverageForTests();
+  });
+
+  it("a reconnect sweep leaves a covered base listing intact while refetching other host keys and uncovered worktree reads", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const coveredListing = mountCountedQuery(
+      queryClient,
+      worktreeListingKey(HOST_ID, null),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    const uncoveredListing = mountCountedQuery(
+      queryClient,
+      worktreeListingKey(HOST_ID, ["/wt/unmanaged"]),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    const otherHostKey = mountCountedQuery(
+      queryClient,
+      queryKeys.hostMethod<HostRpcRegistry, "git.getCapabilities">(
+        HOST_ID,
+        "git.getCapabilities",
+        { hostId: HOST_ID, runningDir: "/repo", ignoreWhitespace: false },
+      ),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ capabilities: [] }),
+      },
+    );
+    stops.push(coveredListing.stop, uncoveredListing.stop, otherHostKey.stop);
+    await waitUntil(
+      () =>
+        coveredListing.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeListingKey(HOST_ID, null))?.status ===
+          "success" &&
+        uncoveredListing.fetches.count === 1 &&
+        queryClient.getQueryState(
+          worktreeListingKey(HOST_ID, ["/wt/unmanaged"]),
+        )?.status === "success" &&
+        otherHostKey.fetches.count === 1 &&
+        queryClient.getQueryState(controlKey)?.status === "success",
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+
+    await waitUntil(
+      () =>
+        uncoveredListing.fetches.count === 2 &&
+        otherHostKey.fetches.count === 2,
+    );
+    await settle(20);
+    expect(coveredListing.fetches.count).toBe(1);
+    expect(
+      queryClient.getQueryState(worktreeListingKey(HOST_ID, null))
+        ?.isInvalidated,
+    ).toBe(false);
+    expect(uncoveredListing.fetches.count).toBe(2);
+    expect(otherHostKey.fetches.count).toBe(2);
+  });
+
+  it("a reconnect sweep retries a failed covered base listing", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const listing = mountCountedQuery(
+      queryClient,
+      worktreeListingKey(HOST_ID, null),
+      {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("listing unavailable")),
+      },
+    );
+    stops.push(listing.stop);
+    await waitUntil(
+      () =>
+        queryClient.getQueryState(worktreeListingKey(HOST_ID, null))?.status ===
+        "error",
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+    listing.setImpl(() => Promise.resolve({ worktrees: [], nextCursor: null }));
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+
+    await waitUntil(() => listing.fetches.count === 2);
+    await waitUntil(
+      () =>
+        queryClient.getQueryState(worktreeListingKey(HOST_ID, null))?.status ===
+        "success",
+    );
+    expect(listing.fetches.count).toBe(2);
+  });
+
+  it("a key rotation sweeps a successful replay-covered worktree listing that availability recovery leaves alone", async () => {
+    const rotatedHostId = mockRemoteHostEntry.hostId;
+    const queryClient = createAppQueryClient();
+    const underlyingInvalidator = createHostQueryInvalidator(queryClient);
+    const invalidationOptions: Array<{
+      readonly hostId: string | null;
+      readonly options: HostQueryInvalidationOptions;
+    }> = [];
+    const invalidator: IHostQueryInvalidator = {
+      invalidateHostScope: (hostId, options) => {
+        invalidationOptions.push({ hostId, options });
+        underlyingInvalidator.invalidateHostScope(hostId, options);
+      },
+    };
+    const key = worktreeListingKey(rotatedHostId, null);
+    const listing = mountCountedQuery(queryClient, key, {
+      staleTime: Infinity,
+      impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+    });
+    stops.push(listing.stop);
+    await waitUntil(
+      () =>
+        listing.fetches.count === 1 &&
+        queryClient.getQueryState(key)?.status === "success",
+    );
+    markWorktreeChangedStreamOpen(rotatedHostId);
+
+    const client = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator,
+      findHostById: (hostId) =>
+        hostId === rotatedHostId ? mockRemoteHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-rotation",
+        handlers: {},
+      }),
+    });
+    client.notifyHostAvailabilityRecovered(rotatedHostId, "reconnect");
+    await Promise.resolve();
+    await settle(20);
+    expect(listing.fetches.count).toBe(1);
+
+    const sweepHostKeyRotation = buildHostKeyRotationSweep({
+      sweepHostScope: (hostId) =>
+        client.invalidateHostScopeAfterKeyRotation(hostId),
+    });
+    sweepHostKeyRotation([rotationEntry("old-key")]);
+    sweepHostKeyRotation([rotationEntry("rotated-key")]);
+
+    await waitUntil(() => invalidationOptions.length === 2);
+    expect(invalidationOptions[1]).toEqual({
+      hostId: rotatedHostId,
+      options: {
+        refetchActive: true,
+        recovery: "reconnect",
+        ignoreWorktreeReplayCoverage: true,
+      },
+    });
+    await waitUntil(() => listing.fetches.count === 2);
+    expect(listing.fetches.count).toBe(2);
+  });
+
+  it("spares successful covered path activity on reconnect, retries failed activity, and sweeps uncovered hosts", async () => {
+    const queryClient = createAppQueryClient();
+    const invalidator = createHostQueryInvalidator(queryClient);
+    const coveredGood = mountCountedQuery(
+      queryClient,
+      worktreeActivityKey(HOST_ID, "/wt/good"),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    const coveredFailed = mountCountedQuery(
+      queryClient,
+      worktreeActivityKey(HOST_ID, "/wt/failed"),
+      {
+        staleTime: 0,
+        impl: () => Promise.reject(new Error("activity unavailable")),
+      },
+    );
+    const oldHost = "old-host";
+    const uncovered = mountCountedQuery(
+      queryClient,
+      worktreeActivityKey(oldHost, "/wt/old"),
+      {
+        staleTime: 0,
+        impl: () => Promise.resolve({ worktrees: [], nextCursor: null }),
+      },
+    );
+    stops.push(coveredGood.stop, coveredFailed.stop, uncovered.stop);
+    await waitUntil(
+      () =>
+        coveredGood.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeActivityKey(HOST_ID, "/wt/good"))
+          ?.status === "success" &&
+        coveredFailed.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeActivityKey(HOST_ID, "/wt/failed"))
+          ?.status === "error" &&
+        uncovered.fetches.count === 1 &&
+        queryClient.getQueryState(worktreeActivityKey(oldHost, "/wt/old"))
+          ?.status === "success",
+    );
+    markWorktreeChangedStreamOpen(HOST_ID);
+
+    invalidator.invalidateHostScope(HOST_ID, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+    invalidator.invalidateHostScope(oldHost, {
+      refetchActive: true,
+      recovery: "reconnect",
+    });
+
+    await waitUntil(
+      () => coveredFailed.fetches.count === 2 && uncovered.fetches.count === 2,
+    );
+    await settle(20);
+    expect(coveredGood.fetches.count).toBe(1);
+    expect(coveredFailed.fetches.count).toBe(2);
+    expect(uncovered.fetches.count).toBe(2);
   });
 
   it("with refetchActive: true, refetches non-catalog host queries and leaves catalog methods entirely untouched", async () => {

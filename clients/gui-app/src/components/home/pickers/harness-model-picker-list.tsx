@@ -30,7 +30,7 @@ interface HarnessModelPickerListProps {
   readonly onHover: (rowId: string) => void;
   readonly onActive: (rowId: string) => void;
   readonly onSelect: (row: HarnessModelRow) => void;
-  readonly onOpenProviderSettings: () => void;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   readonly runTargetHostId: string | null;
   readonly onClosePicker: () => void;

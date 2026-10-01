@@ -943,7 +943,7 @@ describe("browser.sessions / browser.screencast: the `independent` scope uses @2
     completeHandshake(sockets[0]);
 
     const subscribeFrame = parseSent(sockets[0].textSent[1]);
-    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 1 });
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 2 });
     expect(subscribeFrame.params).toEqual({ scope: { kind: "independent" } });
 
     stream.close();
@@ -969,7 +969,7 @@ describe("browser.sessions against a host serving @1 and @2 (epic scope)", () =>
     completeHandshake(sockets[0]);
 
     const subscribeFrame = parseSent(sockets[0].textSent[1]);
-    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 1 });
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 2 });
     expect(subscribeFrame.params).toEqual({
       scope: { kind: "epic", epicId: "epic-1" },
     });

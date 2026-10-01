@@ -5,8 +5,8 @@ import {
   rateLimitFetchLane,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
-import { useRateLimitQueueScope } from "@/hooks/rate-limits/use-rate-limit-queue-scope";
-import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
+import { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 
 /**
  * On mount (and whenever `providerId` changes), fetches when no successful
@@ -16,17 +16,14 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
  * every one is already represented in this renderer's query cache.
  *
  * This exists because `providerRateLimitQueryOptions` deliberately sets
- * `refetchOnMount: false` for this lane: TanStack's own default would
- * otherwise refetch straight through the query's `queryFn` on every mount,
- * bypassing the queue's single-subprocess-at-a-time guarantee. Routing the
- * mount trigger through `enqueueRateLimitFetch` instead means every
- * popover/Settings-card open (both of which mount this provider's query fresh)
- * gets the exact same guarantee every other automatic trigger (the interval
- * timer, a turn completion) already has: never a second subprocess racing one
- * already queued or in flight.
+ * `refetchOnMount: false` for the `ephemeralProcess` lane: TanStack's own
+ * mount refetch would run the observer's `queryFn`, which sends no `force`,
+ * and an absent `force` reads on the wire as forced - a real CLI probe on
+ * every popover or Settings-card open. Routing the mount trigger through
+ * `fetchProviderRateLimits` with `force: false` instead lets the host answer
+ * from its gauge whenever its floors allow.
  *
- * `httpFetch` providers refetch their existing observer directly. CLI-backed
- * `ephemeralProcess` providers route through the shared serial queue.
+ * `httpFetch` providers refetch their existing observer directly.
  */
 export interface ProviderRateLimitsMountRefreshInput {
   readonly providerId: RateLimitProviderId;
@@ -45,7 +42,7 @@ export function useRefreshProviderRateLimitsOnMount({
   fetchEligible,
   refetch,
 }: ProviderRateLimitsMountRefreshInput): void {
-  const queueScope = useRateLimitQueueScope();
+  const fetchScope = useProviderRateLimitFetchScope();
   useEffect(() => {
     if (!fetchEligible) return;
     const summaryFresh =
@@ -57,21 +54,17 @@ export function useRefreshProviderRateLimitsOnMount({
       void refetch();
       return;
     }
-    void enqueueRateLimitFetchForScope(
-      queueScope,
-      providerId,
-      DEFAULT_ACCOUNT_CONTEXT,
-      {
-        force: false,
-        profileId,
-      },
+    void fetchProviderRateLimits(
+      fetchScope,
+      { providerId, accountContext: DEFAULT_ACCOUNT_CONTEXT, profileId },
+      { force: false },
     );
   }, [
     fetchEligible,
+    fetchScope,
     hasCachedValue,
     profileId,
     providerId,
-    queueScope,
     refetch,
     usageUpdatedAt,
   ]);

@@ -1,0 +1,35 @@
+---
+title: "Agent questions"
+description: "Answer structured questions and compare alternative answers in a fork."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/pending-interview.mp4" label="Answer single-choice, multiple-choice, and free-text questions" />
+
+An agent can ask structured questions while it works. A question card appears in place of the Chat composer. When there is more than one question, a pager shows which one you are on, for example "2 of 3".
+
+## Answer Questions
+
+| Question type       | How to answer                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **Single choice**   | Pick an option. The card moves to the next question on its own. On the last question, picking an option sends your answers.          |
+| **Multiple choice** | Select any options, then click **Next**, or **Submit** on the last question.                                                           |
+| **Free text**       | Choose **Other** and type your own answer.                                                                                             |
+
+**Next** and **Submit** also take ⌘Enter / Ctrl+Enter. **Skip**, or Esc, dismisses the request. If you are typing in a text field, the first Esc leaves the field and the second one skips.
+
+After you submit, the composer returns and a summary such as **Answered 3 questions** stays in the transcript. Expand it to review your answers.
+
+## Compare Answers In A Fork
+
+The question card offers two fork actions. Each opens the **Fork agent** dialog, described in [Forking](/panels/agents#forking).
+
+| Action             | What the fork gets                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cross Question** | A side conversation on the same workspace. The question is carried as a settled review card, so the composer is free for a follow-up question.                  |
+| **A/B Fork**       | A conversation where the questions are open again, so you can try another answer. It runs in new worktrees that carry your uncommitted changes.                 |
+
+Both forks carry the conversation up to the question. The original conversation stays as it is, so you can compare the two. Where the fork opens follows the **Open new tiles** setting in [Opening behavior](/settings/opening-behavior).
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/interview-fork.mp4" label="Cross-question an answer and compare alternatives in a fork" />

@@ -21,6 +21,7 @@ import {
   type HostResourceScope,
   type IndependentHostResourceScope,
 } from "@traycer/protocol/host/resource-scope";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /*
  * Plain-terminal names for the shared host-resource scope
@@ -40,11 +41,13 @@ export const plainTerminalScopeSchema = hostResourceScopeSchema;
 export type PlainTerminalScope = HostResourceScope;
 
 /** Host-resolved launch definition. It is output-only on the public surface. */
-export const plainTerminalLaunchSchema = z.strictObject({
-  cwd: z.string().min(1),
-  shellCommand: z.string().min(1),
-  shellArgs: z.array(z.string()),
-});
+export const plainTerminalLaunchSchema = lazySchema(() =>
+  z.strictObject({
+    cwd: z.string().min(1),
+    shellCommand: z.string().min(1),
+    shellArgs: z.array(z.string()),
+  }),
+);
 export type PlainTerminalLaunch = z.infer<typeof plainTerminalLaunchSchema>;
 
 /**
@@ -53,16 +56,18 @@ export type PlainTerminalLaunch = z.infer<typeof plainTerminalLaunchSchema>;
  * `hostId` is required on every projection; `(hostId, terminalId)` is the
  * fleet identity and is immutable for a terminal's lifetime.
  */
-export const plainTerminalRecordSchema = z.strictObject({
-  terminalId: z.string().min(1),
-  hostId: z.string().min(1),
-  scope: plainTerminalScopeSchema,
-  launch: plainTerminalLaunchSchema,
-  manualTitle: z.string().nullable(),
-  revision: z.number().int().nonnegative(),
-  createdAt: isoMillisecondTimestampSchema,
-  updatedAt: isoMillisecondTimestampSchema,
-});
+export const plainTerminalRecordSchema = lazySchema(() =>
+  z.strictObject({
+    terminalId: z.string().min(1),
+    hostId: z.string().min(1),
+    scope: plainTerminalScopeSchema,
+    launch: plainTerminalLaunchSchema,
+    manualTitle: z.string().nullable(),
+    revision: z.number().int().nonnegative(),
+    createdAt: isoMillisecondTimestampSchema,
+    updatedAt: isoMillisecondTimestampSchema,
+  }),
+);
 export type PlainTerminalRecord = z.infer<typeof plainTerminalRecordSchema>;
 
 /**
@@ -92,9 +97,11 @@ export function plainTerminalFleetIdentityKey(
   return JSON.stringify([identity.hostId, identity.terminalId]);
 }
 
-export const dormantPlainTerminalRuntimeSchema = z.strictObject({
-  status: z.literal("dormant"),
-});
+export const dormantPlainTerminalRuntimeSchema = lazySchema(() =>
+  z.strictObject({
+    status: z.literal("dormant"),
+  }),
+);
 export type DormantPlainTerminalRuntime = z.infer<
   typeof dormantPlainTerminalRuntimeSchema
 >;
@@ -105,9 +112,11 @@ export type DormantPlainTerminalRuntime = z.infer<
  * absence from an unavailable ephemeral plane is not evidence that the PTY
  * is stopped.
  */
-export const unknownPlainTerminalRuntimeSchema = z.strictObject({
-  status: z.literal("unknown"),
-});
+export const unknownPlainTerminalRuntimeSchema = lazySchema(() =>
+  z.strictObject({
+    status: z.literal("unknown"),
+  }),
+);
 export type UnknownPlainTerminalRuntime = z.infer<
   typeof unknownPlainTerminalRuntimeSchema
 >;
@@ -117,122 +126,142 @@ export type UnknownPlainTerminalRuntime = z.infer<
  * `currentCwd` follows the running shell; a manual title never replaces the
  * independently reported foreground process.
  */
-export const runningPlainTerminalRuntimeSchema = z.strictObject({
-  status: z.literal("running"),
-  // The first implementation intentionally keeps this equal to terminalId.
-  sessionId: z.string().min(1),
-  currentCwd: z.string().min(1),
-  activeProcessName: z.string().nullable(),
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-});
+export const runningPlainTerminalRuntimeSchema = lazySchema(() =>
+  z.strictObject({
+    status: z.literal("running"),
+    // The first implementation intentionally keeps this equal to terminalId.
+    sessionId: z.string().min(1),
+    currentCwd: z.string().min(1),
+    activeProcessName: z.string().nullable(),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+  }),
+);
 export type RunningPlainTerminalRuntime = z.infer<
   typeof runningPlainTerminalRuntimeSchema
 >;
 
-export const plainTerminalRuntimeSchema = z.discriminatedUnion("status", [
-  unknownPlainTerminalRuntimeSchema,
-  dormantPlainTerminalRuntimeSchema,
-  runningPlainTerminalRuntimeSchema,
-]);
+export const plainTerminalRuntimeSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    unknownPlainTerminalRuntimeSchema,
+    dormantPlainTerminalRuntimeSchema,
+    runningPlainTerminalRuntimeSchema,
+  ]),
+);
 export type PlainTerminalRuntime = z.infer<typeof plainTerminalRuntimeSchema>;
 
-export const plainTerminalProjectionSchema = z
-  .strictObject({
-    record: plainTerminalRecordSchema,
-    runtime: plainTerminalRuntimeSchema,
-  })
-  .superRefine((projection, ctx) => {
-    if (
-      projection.runtime.status === "running" &&
-      projection.runtime.sessionId !== projection.record.terminalId
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["runtime", "sessionId"],
-        message: "sessionId must equal the logical terminalId",
-      });
-    }
-  });
+export const plainTerminalProjectionSchema = lazySchema(() =>
+  z
+    .strictObject({
+      record: plainTerminalRecordSchema,
+      runtime: plainTerminalRuntimeSchema,
+    })
+    .superRefine((projection, ctx) => {
+      if (
+        projection.runtime.status === "running" &&
+        projection.runtime.sessionId !== projection.record.terminalId
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["runtime", "sessionId"],
+          message: "sessionId must equal the logical terminalId",
+        });
+      }
+    }),
+);
 export type PlainTerminalProjection = z.infer<
   typeof plainTerminalProjectionSchema
 >;
 
-export const runningPlainTerminalProjectionSchema = z
-  .strictObject({
-    record: plainTerminalRecordSchema,
-    runtime: runningPlainTerminalRuntimeSchema,
-  })
-  .superRefine((projection, ctx) => {
-    if (projection.runtime.sessionId !== projection.record.terminalId) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["runtime", "sessionId"],
-        message: "sessionId must equal the logical terminalId",
-      });
-    }
-  });
+export const runningPlainTerminalProjectionSchema = lazySchema(() =>
+  z
+    .strictObject({
+      record: plainTerminalRecordSchema,
+      runtime: runningPlainTerminalRuntimeSchema,
+    })
+    .superRefine((projection, ctx) => {
+      if (projection.runtime.sessionId !== projection.record.terminalId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["runtime", "sessionId"],
+          message: "sessionId must equal the logical terminalId",
+        });
+      }
+    }),
+);
 export type RunningPlainTerminalProjection = z.infer<
   typeof runningPlainTerminalProjectionSchema
 >;
 
 const plainTerminalGridHintFields = {
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
+  cols: lazySchema(() => z.number().int().positive()),
+  rows: lazySchema(() => z.number().int().positive()),
 } as const;
 
-export const createPlainTerminalRequestSchema = z.strictObject({
-  terminalId: z.string().min(1),
-  scope: plainTerminalScopeSchema,
-  cwd: z.string().min(1),
-  ...plainTerminalGridHintFields,
-});
+export const createPlainTerminalRequestSchema = lazySchema(() =>
+  z.strictObject({
+    terminalId: z.string().min(1),
+    scope: plainTerminalScopeSchema,
+    cwd: z.string().min(1),
+    ...plainTerminalGridHintFields,
+  }),
+);
 export type CreatePlainTerminalRequest = z.infer<
   typeof createPlainTerminalRequestSchema
 >;
 
-export const createPlainTerminalResponseSchema = z.strictObject({
-  terminal: runningPlainTerminalProjectionSchema,
-});
+export const createPlainTerminalResponseSchema = lazySchema(() =>
+  z.strictObject({
+    terminal: runningPlainTerminalProjectionSchema,
+  }),
+);
 export type CreatePlainTerminalResponse = z.infer<
   typeof createPlainTerminalResponseSchema
 >;
 
-export const listPlainTerminalsRequestSchema = z.strictObject({
-  scope: plainTerminalScopeSchema,
-});
+export const listPlainTerminalsRequestSchema = lazySchema(() =>
+  z.strictObject({
+    scope: plainTerminalScopeSchema,
+  }),
+);
 export type ListPlainTerminalsRequest = z.infer<
   typeof listPlainTerminalsRequestSchema
 >;
 
 const plainTerminalListTerminalsField = {
-  terminals: z.array(plainTerminalProjectionSchema),
+  terminals: lazySchema(() => z.array(plainTerminalProjectionSchema)),
 } as const;
 
-export const completeFleetPlainTerminalListStateSchema = z.strictObject({
-  coverage: z.literal("complete-fleet"),
-  scope: epicPlainTerminalScopeSchema,
-  ...plainTerminalListTerminalsField,
-});
+export const completeFleetPlainTerminalListStateSchema = lazySchema(() =>
+  z.strictObject({
+    coverage: z.literal("complete-fleet"),
+    scope: epicPlainTerminalScopeSchema,
+    ...plainTerminalListTerminalsField,
+  }),
+);
 export type CompleteFleetPlainTerminalListState = z.infer<
   typeof completeFleetPlainTerminalListStateSchema
 >;
 
-export const partialServingHostPlainTerminalListStateSchema = z.strictObject({
-  coverage: z.literal("partial-serving-host"),
-  scope: epicPlainTerminalScopeSchema,
-  servingHostId: z.string().min(1),
-  ...plainTerminalListTerminalsField,
-});
+export const partialServingHostPlainTerminalListStateSchema = lazySchema(() =>
+  z.strictObject({
+    coverage: z.literal("partial-serving-host"),
+    scope: epicPlainTerminalScopeSchema,
+    servingHostId: z.string().min(1),
+    ...plainTerminalListTerminalsField,
+  }),
+);
 export type PartialServingHostPlainTerminalListState = z.infer<
   typeof partialServingHostPlainTerminalListStateSchema
 >;
 
-export const completeLocalPlainTerminalListStateSchema = z.strictObject({
-  coverage: z.literal("complete-local"),
-  scope: independentPlainTerminalScopeSchema,
-  ...plainTerminalListTerminalsField,
-});
+export const completeLocalPlainTerminalListStateSchema = lazySchema(() =>
+  z.strictObject({
+    coverage: z.literal("complete-local"),
+    scope: independentPlainTerminalScopeSchema,
+    ...plainTerminalListTerminalsField,
+  }),
+);
 export type CompleteLocalPlainTerminalListState = z.infer<
   typeof completeLocalPlainTerminalListStateSchema
 >;
@@ -301,13 +330,15 @@ function refinePlainTerminalListState(
  * collection. Host withdrawal is absence from a later replacement state, not
  * a durable tombstone.
  */
-export const plainTerminalListStateSchema = z
-  .discriminatedUnion("coverage", [
-    completeFleetPlainTerminalListStateSchema,
-    partialServingHostPlainTerminalListStateSchema,
-    completeLocalPlainTerminalListStateSchema,
-  ])
-  .superRefine(refinePlainTerminalListState);
+export const plainTerminalListStateSchema = lazySchema(() =>
+  z
+    .discriminatedUnion("coverage", [
+      completeFleetPlainTerminalListStateSchema,
+      partialServingHostPlainTerminalListStateSchema,
+      completeLocalPlainTerminalListStateSchema,
+    ])
+    .superRefine(refinePlainTerminalListState),
+);
 export type PlainTerminalListState =
   | CompleteFleetPlainTerminalListState
   | PartialServingHostPlainTerminalListState
@@ -317,39 +348,49 @@ export type PlainTerminalListCoverage = PlainTerminalListState["coverage"];
 export const listPlainTerminalsResponseSchema = plainTerminalListStateSchema;
 export type ListPlainTerminalsResponse = PlainTerminalListState;
 
-export const renamePlainTerminalRequestSchema = z.strictObject({
-  terminalId: z.string().min(1),
-  manualTitle: z.string().nullable(),
-});
+export const renamePlainTerminalRequestSchema = lazySchema(() =>
+  z.strictObject({
+    terminalId: z.string().min(1),
+    manualTitle: z.string().nullable(),
+  }),
+);
 export type RenamePlainTerminalRequest = z.infer<
   typeof renamePlainTerminalRequestSchema
 >;
 
-export const renamePlainTerminalResponseSchema = z.strictObject({
-  terminal: plainTerminalProjectionSchema,
-});
+export const renamePlainTerminalResponseSchema = lazySchema(() =>
+  z.strictObject({
+    terminal: plainTerminalProjectionSchema,
+  }),
+);
 export type RenamePlainTerminalResponse = z.infer<
   typeof renamePlainTerminalResponseSchema
 >;
 
-export const ensurePlainTerminalRunningRequestSchema = z.strictObject({
-  terminalId: z.string().min(1),
-  ...plainTerminalGridHintFields,
-});
+export const ensurePlainTerminalRunningRequestSchema = lazySchema(() =>
+  z.strictObject({
+    terminalId: z.string().min(1),
+    ...plainTerminalGridHintFields,
+  }),
+);
 export type EnsurePlainTerminalRunningRequest = z.infer<
   typeof ensurePlainTerminalRunningRequestSchema
 >;
 
-export const ensurePlainTerminalRunningResponseSchema = z.strictObject({
-  terminal: runningPlainTerminalProjectionSchema,
-});
+export const ensurePlainTerminalRunningResponseSchema = lazySchema(() =>
+  z.strictObject({
+    terminal: runningPlainTerminalProjectionSchema,
+  }),
+);
 export type EnsurePlainTerminalRunningResponse = z.infer<
   typeof ensurePlainTerminalRunningResponseSchema
 >;
 
-export const closePlainTerminalRequestSchema = z.strictObject({
-  terminalId: z.string().min(1),
-});
+export const closePlainTerminalRequestSchema = lazySchema(() =>
+  z.strictObject({
+    terminalId: z.string().min(1),
+  }),
+);
 export type ClosePlainTerminalRequest = z.infer<
   typeof closePlainTerminalRequestSchema
 >;
@@ -359,40 +400,42 @@ export type ClosePlainTerminalRequest = z.infer<
  * results. Collection streams do not emit durable tombstones for host
  * withdrawal; this revision remains only for explicit lifetime-delete races.
  */
-export const closePlainTerminalResponseSchema = z.strictObject({
-  terminalId: z.string().min(1),
-  revision: z.number().int().nonnegative(),
-});
+export const closePlainTerminalResponseSchema = lazySchema(() =>
+  z.strictObject({
+    terminalId: z.string().min(1),
+    revision: z.number().int().nonnegative(),
+  }),
+);
 export type ClosePlainTerminalResponse = z.infer<
   typeof closePlainTerminalResponseSchema
 >;
 
-export const legacyPlainTerminalTitleSourceSchema = z.enum([
-  "default",
-  "manual",
-]);
+export const legacyPlainTerminalTitleSourceSchema = lazySchema(() =>
+  z.enum(["default", "manual"]),
+);
 export type LegacyPlainTerminalTitleSource = z.infer<
   typeof legacyPlainTerminalTitleSourceSchema
 >;
 
-export const importLegacyPlainTerminalRequestSchema = z.strictObject({
-  terminalId: z.string().min(1),
-  // Legacy evidence includes the persisted binding. The resolver must compare
-  // it with the current host rather than treating it as client-selected scope.
-  hostId: z.string().min(1),
-  scope: plainTerminalScopeSchema,
-  cwd: z.string().min(1),
-  name: z.string(),
-  titleSource: legacyPlainTerminalTitleSourceSchema,
-  sourceStoreVersion: z.number().int().nonnegative(),
-});
+export const importLegacyPlainTerminalRequestSchema = lazySchema(() =>
+  z.strictObject({
+    terminalId: z.string().min(1),
+    // Legacy evidence includes the persisted binding. The resolver must compare
+    // it with the current host rather than treating it as client-selected scope.
+    hostId: z.string().min(1),
+    scope: plainTerminalScopeSchema,
+    cwd: z.string().min(1),
+    name: z.string(),
+    titleSource: legacyPlainTerminalTitleSourceSchema,
+    sourceStoreVersion: z.number().int().nonnegative(),
+  }),
+);
 export type ImportLegacyPlainTerminalRequest = z.infer<
   typeof importLegacyPlainTerminalRequestSchema
 >;
 
-export const importLegacyPlainTerminalResponseSchema = z.discriminatedUnion(
-  "status",
-  [
+export const importLegacyPlainTerminalResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
     z.strictObject({
       status: z.literal("imported"),
       terminal: plainTerminalProjectionSchema,
@@ -406,7 +449,7 @@ export const importLegacyPlainTerminalResponseSchema = z.discriminatedUnion(
       terminalId: z.string().min(1),
       revision: z.number().int().nonnegative(),
     }),
-  ],
+  ]),
 );
 export type ImportLegacyPlainTerminalResponse = z.infer<
   typeof importLegacyPlainTerminalResponseSchema

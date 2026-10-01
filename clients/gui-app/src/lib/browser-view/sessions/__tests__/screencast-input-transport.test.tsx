@@ -52,7 +52,7 @@ function channelRecorder(): ChannelRecorder {
 function armedOnChannels(): MountedController & {
   readonly channels: ChannelRecorder;
 } {
-  const mounted = mountController();
+  const mounted = mountController(undefined);
   const channels = channelRecorder();
   mounted.controller.setCaptureMode("video");
   mounted.controller.noteViewportEpoch(4);
@@ -139,7 +139,7 @@ describe("screencast input transport", () => {
   });
 
   it("falls back to the mux while the plane is not video", () => {
-    const mounted = mountController();
+    const mounted = mountController(undefined);
     const channels = channelRecorder();
     mounted.controller.notePresentedSequence(7);
     mounted.controller.setInputTransport(channels.transport);
@@ -197,7 +197,7 @@ describe("screencast input transport", () => {
   });
 
   it("holds a mid-arm promotion until the host acks the mux", () => {
-    const mounted = mountController();
+    const mounted = mountController(undefined);
     const channels = channelRecorder();
     mounted.controller.setCaptureMode("video");
     mounted.controller.noteViewportEpoch(4);
@@ -235,7 +235,7 @@ describe("screencast input transport", () => {
   });
 
   it("ignores an input ack from a superseded arm epoch", () => {
-    const mounted = mountController();
+    const mounted = mountController(undefined);
     const channels = channelRecorder();
     mounted.controller.setCaptureMode("video");
     mounted.controller.noteViewportEpoch(4);
@@ -251,7 +251,7 @@ describe("screencast input transport", () => {
   });
 
   it("replays a buffered arming gesture through the channels", () => {
-    const mounted = mountController();
+    const mounted = mountController(undefined);
     const channels = channelRecorder();
     mounted.controller.setCaptureMode("video");
     mounted.controller.noteViewportEpoch(4);

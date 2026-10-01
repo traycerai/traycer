@@ -16,6 +16,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { z } from "zod";
+import { deflateSync } from "fflate";
 import {
   defineFallbackMethodDegrade,
   defineFloorAwareVersionedRpcRegistry,
@@ -38,6 +39,10 @@ import {
   SESSION_CLOSED_FATAL_CODE,
   SESSION_NOT_READY_FATAL_CODE,
 } from "@traycer/protocol/framework/stream-ws-protocol";
+import {
+  RemoteTrafficAccounting,
+  type RemoteTrafficSnapshot,
+} from "@traycer/protocol/host-transport/remote/traffic-accounting";
 import {
   createResponderHandshake,
   generateStaticKeyPair,
@@ -106,10 +111,19 @@ import {
 } from "../active-remote-sessions";
 import {
   HOST_STATUS_LIVENESS_PROBE,
+  readRemoteTrafficDebugClosedSessions,
+  readRemoteTrafficDebugSnapshots,
+  REMOTE_TRAFFIC_DEBUG_STORAGE_KEY,
   RemoteSession,
   type RemoteSessionOptions,
 } from "../remote-session";
+import { RemoteSession as ProtocolRemoteSession } from "@traycer/protocol/host-transport/remote/session";
+import type { RemoteSessionAuth } from "@traycer/protocol/host-transport/remote/auth";
 import { RemoteStreamClient } from "../remote-stream-client";
+import {
+  getNegotiatedStreamMethodVersion,
+  resetNegotiatedStreamVersions,
+} from "../../negotiated-stream-version-registry";
 import { LogicalStream } from "../logical-stream";
 import {
   NOISE_HANDSHAKE_TIMEOUT_MS,
@@ -401,6 +415,8 @@ class FakeRelayHost {
    * method (including the liveness probe) answers normally.
    */
   silentMethods = new Set<string>();
+  /** Delay auto-RESPONSE delivery for timer-bound remote unary tests. */
+  unaryResponseDelayMs: number | null = null;
   /**
    * Withhold the Noise responder message (msg1) after `attach_ack`, so the
    * session sits in `handshaking`.
@@ -801,18 +817,30 @@ class FakeRelayHost {
       ) {
         return;
       }
-      await this.sendMux(connection, {
-        type: MuxFrameType.RESPONSE,
-        streamId: message.streamId,
-        qos: QosClass.INTERACTIVE,
-        json: {
-          requestId: typeof json.requestId === "string" ? json.requestId : "",
-          method,
-          result: this.unaryError === null ? this.unaryResult : null,
-          error: this.unaryError,
-        },
-        binary: null,
-      });
+      const sendResponse = async (): Promise<void> => {
+        await this.sendMux(connection, {
+          type: MuxFrameType.RESPONSE,
+          streamId: message.streamId,
+          qos: QosClass.INTERACTIVE,
+          json: {
+            requestId: typeof json.requestId === "string" ? json.requestId : "",
+            method,
+            result: this.unaryError === null ? this.unaryResult : null,
+            error: this.unaryError,
+          },
+          binary: null,
+        });
+      };
+      const responseDelayMs = this.unaryResponseDelayMs;
+      if (responseDelayMs === null) {
+        await sendResponse();
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            sendResponse().then(resolve, reject);
+          }, responseDelayMs);
+        });
+      }
       // AFTER the send resolves, so this records DELIVERY and not the
       // intention to deliver. `sendMux` awaits WebCrypto encryption, and a
       // test that waits on this entry and then jumps virtual time through a
@@ -2247,14 +2275,15 @@ describe("RemoteSession reconnect ladder accounting", () => {
         expect(line).toBeDefined();
         const total = Number(/reattached in (\d+)ms/.exec(line ?? "")?.[1]);
         const wait = Number(/wait=(\d+)ms/.exec(line ?? "")?.[1]);
-        // `wait` is the difference between integer-millisecond `Date.now()`
-        // stamps, while the real timer may be armed from the event loop's
-        // clock sample taken one tick before the loss handler's stamp. A
-        // genuine 1,000ms timer can therefore log 999ms; one millisecond is
-        // the full possible skew because both printed stamps have 1ms units.
-        // The exact 1,000ms arm is asserted above, independently of this
-        // observation boundary.
-        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS - 1);
+        // `wait` is the production's own wall-clock delta between two
+        // `Date.now()` stamps, while the real timer runs on the event loop's
+        // cached clock, which can be several milliseconds staler than either
+        // stamp: a correct 1,000ms timer can log well under 1,000ms, so no
+        // fixed millisecond tolerance is sound. The regression this guards (the
+        // backoff excluded from the clock) logs a few milliseconds, and half
+        // the rung still separates the two by about 500ms. The exact 1,000ms
+        // arm is asserted above.
+        expect(wait).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS / 2);
         expect(total).toBeGreaterThanOrEqual(wait);
       } finally {
         session.close();
@@ -2682,6 +2711,54 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
       } finally {
         stream.close();
         session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "publishes the negotiated stream method version to the host-keyed registry (remote plane)",
+    async () => {
+      // This suite's `RemoteSession` is the `clients/shared` adapter
+      // (imported above from `../remote-session`), not the bare protocol
+      // core - its constructor hard-codes `onNegotiatedStreamMethodVersions`
+      // to `recordNegotiatedStreamMethodVersions` and its options type omits
+      // the field entirely, so a caller cannot override it. That is exactly
+      // the production wiring this test pins: the remote plane publishes to
+      // the SAME host-keyed registry the local `WsStreamClient` plane does
+      // (see `ws-stream-client.test.ts`'s sibling assertion).
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      // This registry is a module-level singleton shared across the whole
+      // suite, so a sibling test's own "host-1" recording (e.g. the one two
+      // cases above) can still be live here - reset first rather than
+      // asserting a pre-handshake `null` that would be a false negative.
+      resetNegotiatedStreamVersions();
+
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        await vi.waitFor(
+          () =>
+            expect(
+              getNegotiatedStreamMethodVersion("host-1", "cursor.subscribe"),
+            ).not.toBeNull(),
+          WAIT,
+        );
+        expect(
+          getNegotiatedStreamMethodVersion("host-1", "cursor.subscribe"),
+        ).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
+      } finally {
+        session.close();
+        resetNegotiatedStreamVersions();
       }
     },
     TEST_BUDGET_MS,
@@ -5998,6 +6075,98 @@ describe("RemoteSession reassembly progress watchdog", () => {
   );
 
   it(
+    "retires the old row incomplete on a retryable-FATAL re-key, counts no reconnect on either row, and leaves the session's own reconnect counter untouched",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      expect(session.enableTrafficAccounting()).toBe(true);
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let delivered = 0;
+      stream.onServerFrame(() => {
+        delivered += 1;
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const originalId = relay.subscribeStreamIds[0];
+        const [seedFirst, seedLast] = buildChunkFrames(originalId);
+        relay.deliverToClient(await relay.encryptFrame(seedFirst));
+        relay.deliverToClient(await relay.encryptFrame(seedLast));
+        await vi.waitFor(() => expect(delivered).toBe(1), WAIT);
+
+        // A retryable per-stream FATAL re-keys the stream: the OLD id's row
+        // must retire incomplete, and the replacement must open its OWN row
+        // - not resume the old one.
+        await relay.sendStreamFatal(originalId, retryableDropDetails());
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const replacementId = relay.subscribeStreamIds[1];
+        if (replacementId === undefined) {
+          throw new Error("expected the re-keyed replacement subscribe");
+        }
+
+        const snapshot = session.readTrafficSnapshot();
+        if (snapshot === null) {
+          throw new Error("expected traffic accounting to be enabled");
+        }
+        const oldRow = snapshot.streams.find(
+          (row) => row.streamId === originalId,
+        );
+        const newRow = snapshot.streams.find(
+          (row) => row.streamId === replacementId,
+        );
+        if (oldRow === undefined || newRow === undefined) {
+          throw new Error("expected both the retired and replacement rows");
+        }
+        expect(oldRow.incomplete).toBe(true);
+        expect(oldRow.reconnects).toBe(0);
+        expect(newRow.incomplete).toBe(false);
+        // A per-stream re-key is not a CONNECTION drop: the socket never
+        // dropped, so the session-level reconnect counter - the one
+        // `connectionLost()` alone feeds - must stay at zero.
+        expect(snapshot.reconnects).toBe(0);
+
+        const streamBytes = snapshot.streams.reduce(
+          (total, row) => total + row.ciphertextBytes,
+          0,
+        );
+        const streamFrames = snapshot.streams.reduce(
+          (total, row) => total + row.frames,
+          0,
+        );
+        expect(
+          snapshot.relayTextBytes +
+            snapshot.noiseHandshakeBytes +
+            snapshot.unclassifiedBinaryBytes +
+            streamBytes,
+        ).toBe(snapshot.receivedBytes);
+        expect(
+          snapshot.relayTextFrames +
+            snapshot.noiseHandshakeFrames +
+            snapshot.unclassifiedBinaryFrames +
+            streamFrames,
+        ).toBe(snapshot.receivedFrames);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "moves the stall license through a retryable-FATAL re-key - the verdict answers one attempt, not the stream's proven stall",
     async () => {
       // stall -> licensed replacement B -> host answers B with a retryable
@@ -6442,6 +6611,109 @@ describe("RemoteSession per-stream inbound error routing", () => {
     TEST_BUDGET_MS,
   );
 
+  it(
+    "fails the SESSION, not the stream, on a compressed frame that inflates past its declaration",
+    async () => {
+      // The other half of the asymmetry the neighbour above closes. Both
+      // frames are flagged compressed and both fail to decode, but they are
+      // NOT the same fault: the neighbour's payload is bytes `inflateSync`
+      // cannot decode at all ("failed to inflate"), which stays per-stream.
+      // This one decodes CLEANLY but produces far more plaintext than its
+      // own declared length promised - the one inbound fault
+      // `failStreamOnInboundError` does NOT route per-stream
+      // (`MuxFrameOverExpansionError`, chunking.ts), because by the time it
+      // is caught the receiver has already paid for the whole real
+      // expansion once. The caller re-throws, and the inbound IIFE's
+      // `.catch` sends it through `handleConnectionLost(..., "inbound-decode
+      // -failed", "host-transport-plane")` - a full connection drop and
+      // redial, not a per-stream fatal.
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamA = session.subscribe("cursor.subscribe", { cursor: null });
+      const streamB = session.subscribe("cursor.subscribe", { cursor: null });
+      let streamAClosedReason: StreamCloseReason | null = null;
+      streamA.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamAClosedReason = reason;
+        }
+      });
+      let streamBClosedReason: StreamCloseReason | null = null;
+      streamB.onStatusChange((status, reason) => {
+        if (status === "closed") {
+          streamBClosedReason = reason;
+        }
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(2),
+          WAIT,
+        );
+        const [streamIdA] = relay.subscribeStreamIds;
+
+        // A frame FLAGGED compressed whose declared plaintext length clears
+        // BOTH bound checks in `inflateFramePayload` - well under
+        // `BULK_CHUNK_SIZE_BYTES`, and strictly larger than the compressed
+        // payload's own byte length, so a genuine-looking header - but whose
+        // REAL inflated size is the whole megabyte of zeros this deflates:
+        // ~1000x the declaration. Highly compressible input keeps the
+        // compressed bytes tiny so the forged declared length can stay small
+        // too; only the genuine inflate exposes the mismatch.
+        const deflated = deflateSync(new Uint8Array(1024 * 1024), {
+          level: 6,
+        });
+        const declaredPlainLength = 4 + deflated.length + 1;
+        const overExpandingPayload = new Uint8Array(4 + deflated.length);
+        new DataView(overExpandingPayload.buffer).setUint32(
+          0,
+          declaredPlainLength,
+        );
+        overExpandingPayload.set(deflated, 4);
+        const overExpandingFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: streamIdA,
+          seq: 0,
+          qos: QosClass.BULK,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: overExpandingPayload,
+        };
+        relay.deliverToClient(await relay.encryptFrame(overExpandingFrame));
+
+        // The connection-lost path, observed the way this suite observes it
+        // elsewhere (the availability-recovered reconnect case above): a
+        // redial puts a SECOND bearer on `openBearers`. Nothing routes this
+        // per-stream - if this stayed at 1 the production change had
+        // regressed to the neighbour's per-stream route instead.
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
+        expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
+
+        // Neither logical stream was condemned - it is the SHARED CONNECTION
+        // that dropped and redialled, not stream A specifically (which is
+        // what the neighbour's per-stream routing would have done instead).
+        expect(streamAClosedReason).toBeNull();
+        expect(streamBClosedReason).toBeNull();
+        expect(session.isClosed()).toBe(false);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        streamA.close();
+        streamB.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   // An "over-cap sequence via a shrunk-cap reassembler" sub-case
   // (`MuxMessageSizeError` routing) is intentionally NOT covered here.
   // `RemoteSession` constructs the client-side `ActiveConnection.reassembler`
@@ -6694,6 +6966,118 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         },
       },
     });
+
+  const usageSummaryContract = defineRpcContract({
+    method: "host.usage.summary",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ completed: z.boolean() }),
+  });
+  const usageSummaryRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry(["host.usage.summary"] as const, {
+      "host.usage.summary": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: usageSummaryContract,
+              upgradeFromPreviousVersion: null,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  it(
+    "lets host.usage.summary answer at 45s with its extended 90s response budget",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      relay.sendOptionalRpc = true;
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 1, minor: 0 },
+      };
+      relay.unaryResult = { completed: true };
+      relay.unaryResponseDelayMs = 45_000;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: usageSummaryRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const pending = session.sendUnary(
+          "host.usage.summary",
+          {},
+          null,
+          null,
+          null,
+          90_000,
+          false,
+          null,
+        );
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        await vi.advanceTimersByTimeAsync(45_000);
+        await expect(pending).resolves.toEqual({ completed: true });
+        expect(relay.unaryResponses).toHaveLength(1);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps an ordinary remote unary on the 30s default timeout",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryResult = { ready: true };
+      relay.unaryResponseDelayMs = 45_000;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const pending = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          null,
+        );
+        const settled = pending.then(
+          () => null,
+          (reason: unknown) => reason,
+        );
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        await vi.advanceTimersByTimeAsync(UNARY_RESPONSE_TIMEOUT_MS);
+        const error: unknown = await settled;
+        expect(error).toBeInstanceOf(HostTransportFailureError);
+        expect(relay.unaryResponses).toHaveLength(0);
+      } finally {
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 
   // The caller's response budget has to reach the remote unary TIMER, not just
   // the messenger. It used to be dropped on the reasoning that the mux session
@@ -7537,6 +7921,12 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     const lease = new MutableBearerLease("valid-token", "user-1");
     let firstDialTaken = false;
     const redialTimestamps: number[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // The delays armed since the drop (or the previous redial), one list per
+    // redial. Asserted where the timer is armed: a wall-clock gap between two
+    // dials is measured on a different clock than the one the timer runs on.
+    const armedBeforeRedial: (number | undefined)[][] = [];
+    let armedSince = 0;
     const succeedOnceThenFail: IStreamWebSocketFactory = {
       create: (url: string, priority: DialPriority): StreamWebSocketLike => {
         if (!firstDialTaken) {
@@ -7544,6 +7934,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
           return relay.factory.create(url, priority);
         }
         redialTimestamps.push(Date.now());
+        armedBeforeRedial.push(
+          setTimeoutSpy.mock.calls.slice(armedSince).map((call) => call[1]),
+        );
+        armedSince = setTimeoutSpy.mock.calls.length;
         const socket = new FakeSocket(
           () => undefined,
           () => undefined,
@@ -7565,6 +7959,10 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         interval: 20,
       });
 
+      // Marked at the drop: the ready boundary armed a 30s probation timer,
+      // which is not the reconnect timer under test.
+      setTimeoutSpy.mockClear();
+      armedSince = 0;
       const droppedAt = Date.now();
       relay.dropCurrentConnection();
       await vi.waitFor(
@@ -7572,16 +7970,23 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
         { timeout: 8_000, interval: 20 },
       );
 
+      // Rung 0 armed a 0ms timer and did not wait the backoff.
+      expect(armedBeforeRedial[0]).toContain(0);
+      expect(armedBeforeRedial[0]).not.toContain(RECONNECT_INITIAL_BACKOFF_MS);
+      // Rung 1: the real INITIAL_BACKOFF_MS, exactly once, proving the rung-0
+      // special case does not leak into later rungs.
+      expect(
+        armedBeforeRedial[1].filter(
+          (delay) => delay === RECONNECT_INITIAL_BACKOFF_MS,
+        ),
+      ).toHaveLength(1);
+      expect(armedBeforeRedial[1]).not.toContain(0);
       // Rung 0: the redial after losing a HEALTHY session is immediate -
       // allow scheduling jitter, not a full second.
       expect(redialTimestamps[0] - droppedAt).toBeLessThan(200);
-      // Rung 1: the real INITIAL_BACKOFF_MS, proving the rung-0 special
-      // case does not leak into later rungs.
-      const secondGap = redialTimestamps[1] - redialTimestamps[0];
-      expect(secondGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
-      expect(secondGap).toBeLessThan(RECONNECT_INITIAL_BACKOFF_MS + 300);
     } finally {
       session.close();
+      setTimeoutSpy.mockRestore();
     }
   }, 12_000);
 
@@ -7593,25 +7998,50 @@ describe("RemoteSession reconnect backoff ladder (T5, B6)", () => {
     // that reads those attempts. Two evidence-classification tests in this
     // file fail if this regresses, which is the coupling that makes this
     // behaviour load-bearing rather than cosmetic.
+    //
+    // The delay is asserted where it is ARMED, not measured between two dials:
+    // Node arms a timer from libuv's cached loop time, which can be several
+    // milliseconds staler than a `Date.now()` stamped in the dial hook, so a
+    // correct 1000ms timer can fire 999ms or less after the previous stamp. The
+    // armed delay is the same number the timer was given, and no tolerance
+    // constant is needed.
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("valid-token", "user-1");
-    const createTimestamps: number[] = [];
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // The delays armed since the previous dial, one list per dial.
+    const armedBeforeDial: (number | undefined)[][] = [];
+    let armedSince = 0;
     const session = new RemoteSession({
       ...buildSessionOptions(relay, lease, null),
       webSocketFactory: alwaysFailFactory(() => {
-        createTimestamps.push(Date.now());
+        armedBeforeDial.push(
+          setTimeoutSpy.mock.calls.slice(armedSince).map((call) => call[1]),
+        );
+        armedSince = setTimeoutSpy.mock.calls.length;
       }),
     });
     try {
       session.start();
       await vi.waitFor(
-        () => expect(createTimestamps.length).toBeGreaterThanOrEqual(2),
+        () => expect(armedBeforeDial.length).toBeGreaterThanOrEqual(2),
         { timeout: 8_000, interval: 20 },
       );
-      const firstGap = createTimestamps[1] - createTimestamps[0];
-      expect(firstGap).toBeGreaterThanOrEqual(RECONNECT_INITIAL_BACKOFF_MS);
+      // The premise: the claim is "not 0ms", which means nothing if the
+      // initial backoff is itself 0.
+      expect(RECONNECT_INITIAL_BACKOFF_MS).toBeGreaterThan(0);
+      // Between dial 1 and dial 2 the reconnect timer was armed with the
+      // initial backoff, exactly once.
+      expect(
+        armedBeforeDial[1].filter(
+          (delay) => delay === RECONNECT_INITIAL_BACKOFF_MS,
+        ),
+      ).toHaveLength(1);
+      // ...and no immediate (0ms) arm sits beside it: the first failure of a
+      // never-ready session does not take the immediate rung.
+      expect(armedBeforeDial[1]).not.toContain(0);
     } finally {
       session.close();
+      setTimeoutSpy.mockRestore();
     }
   }, 10_000);
   it("the ladder resets to rung 0 only after RECONNECT_STABLE_RESET_MS of sustained ready - a session that already climbed the ladder once and drops again soon after reaching ready does NOT get rung 0 a second time", async () => {
@@ -9015,6 +9445,443 @@ describe("RemoteSession host_attached always rebuilds (D1)", () => {
       }
     },
     SILENCE_PIN_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession opt-in traffic accounting", () => {
+  it.each([
+    [false, 0],
+    [true, 1],
+  ] as const)(
+    "counts only a dropped live relay leg (opened=%s), not failed redials",
+    async (opened, expectedDrops) => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+      const sockets: FakeSocket[] = [];
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        webSocketFactory: {
+          create: () => {
+            const socket = new FakeSocket(vi.fn(), vi.fn());
+            sockets.push(socket);
+            return socket;
+          },
+        },
+      });
+      expect(session.enableTrafficAccounting()).toBe(true);
+      try {
+        session.start();
+        await vi.waitFor(() => expect(sockets).toHaveLength(1), WAIT);
+        const first = sockets[0];
+        if (first === undefined) throw new Error("expected the first dial");
+        expect(first.onopen).not.toBeNull();
+        expect(first.onerror).not.toBeNull();
+        if (opened) first.onopen?.({ type: "open" });
+        first.onerror?.({ message: "fixture transport failure" });
+        expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+        expect(session.readTrafficSnapshot()?.receivedFrames).toBe(0);
+
+        // A new socket must not inherit the prior leg's established state.
+        await vi.waitFor(() => expect(sockets).toHaveLength(2), WAIT);
+        const retry = sockets[1];
+        if (retry === undefined) throw new Error("expected the retry dial");
+        expect(retry.onerror).not.toBeNull();
+        retry.onerror?.({ message: "fixture dial failure" });
+        expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+      } finally {
+        session.close();
+      }
+      expect(session.readTrafficSnapshot()?.reconnects).toBe(expectedDrops);
+    },
+    TEST_BUDGET_MS,
+  );
+
+  function createMemoryStorage(): Storage {
+    const values = new Map<string, string>();
+    return {
+      get length() {
+        return values.size;
+      },
+      clear: () => values.clear(),
+      getItem: (key) => values.get(key) ?? null,
+      key: (index) => Array.from(values.keys()).at(index) ?? null,
+      removeItem: (key) => values.delete(key),
+      setItem: (key, value) => values.set(key, value),
+    };
+  }
+
+  it("enables the debug reader from localStorage and stays off with both flags absent", () => {
+    const sessionStore = createMemoryStorage();
+    const localStore = createMemoryStorage();
+    vi.stubGlobal("sessionStorage", sessionStore);
+    vi.stubGlobal("localStorage", localStore);
+
+    try {
+      const readerCountBefore = readRemoteTrafficDebugSnapshots().length;
+      const lastCaptureSessionBefore = Math.max(
+        -1,
+        ...readRemoteTrafficDebugSnapshots().map((row) => row.captureSession),
+      );
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+      const makeSession = (): RemoteSession<
+        VersionedRpcRegistry,
+        VersionedStreamRpcRegistry
+      > =>
+        new RemoteSession({
+          ...buildSessionOptions(relay, lease, null),
+          streamRegistry: cursorStreamRegistry,
+        });
+
+      expect(sessionStore.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY)).toBeNull();
+      expect(localStore.getItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY)).toBeNull();
+      const noOptInSession = makeSession();
+      try {
+        expect(noOptInSession.readTrafficSnapshot()).toBeNull();
+        expect(readRemoteTrafficDebugSnapshots()).toHaveLength(
+          readerCountBefore,
+        );
+      } finally {
+        noOptInSession.close();
+      }
+
+      localStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+      const localOptInSession = makeSession();
+      try {
+        expect(localOptInSession.readTrafficSnapshot()).not.toBeNull();
+        const readers = readRemoteTrafficDebugSnapshots();
+        expect(readers).toHaveLength(readerCountBefore + 1);
+        expect(readers.at(-1)?.captureSession).toBeGreaterThan(
+          lastCaptureSessionBefore,
+        );
+      } finally {
+        localOptInSession.close();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("releases a closed session's debug reader and keeps live capture ids stable", () => {
+    const sessionStore = createMemoryStorage();
+    const localStore = createMemoryStorage();
+    vi.stubGlobal("sessionStorage", sessionStore);
+    vi.stubGlobal("localStorage", localStore);
+
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("fixture-bearer", "fixture-owner");
+    const makeSession = (): RemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    > =>
+      new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+    const captureSessions = (): number[] =>
+      readRemoteTrafficDebugSnapshots().map((row) => row.captureSession);
+
+    try {
+      const before = captureSessions();
+      sessionStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+      const first = makeSession();
+      const second = makeSession();
+      try {
+        const [firstId, secondId] = captureSessions().slice(before.length);
+        expect(captureSessions()).toHaveLength(before.length + 2);
+
+        const closedBefore = readRemoteTrafficDebugClosedSessions().sessions;
+        first.close();
+        // A closed session's accounting is final: its reader, and the rows it
+        // pins, leave the registry, and the live session keeps the id an
+        // earlier sample recorded it under.
+        expect(captureSessions()).not.toContain(firstId);
+        expect(captureSessions()).toEqual([...before, secondId]);
+        expect(readRemoteTrafficDebugClosedSessions().sessions).toBe(
+          closedBefore + 1,
+        );
+      } finally {
+        first.close();
+        second.close();
+      }
+      expect(captureSessions()).toEqual(before);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it(
+    "counts the bytes of a session opened and closed between two samples, which leaves no row or id gap",
+    async () => {
+      const sessionStore = createMemoryStorage();
+      vi.stubGlobal("sessionStorage", sessionStore);
+      vi.stubGlobal("localStorage", createMemoryStorage());
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+
+      try {
+        const idsBefore = readRemoteTrafficDebugSnapshots().map(
+          (row) => row.captureSession,
+        );
+        const closedBefore = readRemoteTrafficDebugClosedSessions();
+        sessionStore.setItem(REMOTE_TRAFFIC_DEBUG_STORAGE_KEY, "1");
+        const session = new RemoteSession({
+          ...buildSessionOptions(relay, lease, null),
+          streamRegistry: cursorStreamRegistry,
+        });
+        const stream = session.subscribe("cursor.subscribe", {
+          cursor: null,
+        });
+        let received: RemoteTrafficSnapshot | null = null;
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeStreamIds).toHaveLength(1),
+            WAIT,
+          );
+          received = session.readTrafficSnapshot();
+        } finally {
+          stream.close();
+          session.close();
+        }
+        if (received === null) {
+          throw new Error("expected traffic accounting to be enabled");
+        }
+        expect(received.receivedBytes).toBeGreaterThan(0);
+
+        // The newest session is gone without a gap: the ids alone cannot
+        // tell a sample it ever existed.
+        expect(
+          readRemoteTrafficDebugSnapshots().map((row) => row.captureSession),
+        ).toEqual(idsBefore);
+        const closed = readRemoteTrafficDebugClosedSessions();
+        expect(closed.sessions).toBe(closedBefore.sessions + 1);
+        expect(closed.receivedBytes).toBeGreaterThanOrEqual(
+          closedBefore.receivedBytes + received.receivedBytes,
+        );
+        expect(closed.receivedFrames).toBeGreaterThanOrEqual(
+          closedBefore.receivedFrames + received.receivedFrames,
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps the accounting tracker absent while an ordinary session receives frames",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const realDateNow = Date.now.bind(Date);
+      const accountingClockReads: string[] = [];
+      const diagnosticClock = vi.spyOn(Date, "now").mockImplementation(() => {
+        const stack = new Error().stack ?? "";
+        if (stack.includes("traffic-accounting.ts")) {
+          accountingClockReads.push(stack);
+        }
+        return realDateNow();
+      });
+      const accountingMethodSpies = [
+        vi.spyOn(RemoteTrafficAccounting.prototype, "register"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "receiveBinary"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "receiveText"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "classifyHandshake"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "classifyMux"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "end"),
+        vi.spyOn(RemoteTrafficAccounting.prototype, "connectionLost"),
+      ];
+      // `RelaySocket`'s dialer wires `onTextBytes` from a single ternary
+      // (`session.ts` around `this.traffic === null ? undefined : (bytes) =>
+      // this.traffic?.receiveText(bytes)`), so an absent tracker means the
+      // handler itself is `undefined`, not merely a wired no-op - spying on
+      // `RelaySocket` or on the global `TextEncoder` constructor to observe
+      // that from the outside breaks real `new` construction in this
+      // environment (both attempts made the session's own dial fail), so
+      // this is pinned by the `receiveText` spy below instead: it is the
+      // only call `onTextBytes` would ever make, and it never fires.
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      let receivedFrames = 0;
+      stream.onServerFrame(() => {
+        receivedFrames += 1;
+      });
+
+      try {
+        // The debug switch is the only implicit opt-in. With it off, even a
+        // real handshake and repeated in-channel frames must not instantiate
+        // the per-session counter or create snapshots/rows on the hot path.
+        // This suite runs in Node without either browser storage, so the
+        // diagnostic switch remains off. The accounting constructor's
+        // `startedAt` stamp and receiveBinary's elapsed-time stamp are the only
+        // accounting clock reads; asserting no accounting stack reaches Date.now
+        // plus no method calls pins the disabled path.
+        expect(session.readTrafficSnapshot()).toBeNull();
+        expect(accountingClockReads).toEqual([]);
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined) {
+          throw new Error("expected the cursor subscription to open");
+        }
+
+        for (let index = 0; index < 8; index += 1) {
+          await relay.sendStreamFrame(
+            streamId,
+            { kind: "snapshot", hasBinaryPayload: false },
+            null,
+            QosClass.INTERACTIVE,
+          );
+        }
+        await vi.waitFor(() => expect(receivedFrames).toBe(8), WAIT);
+
+        expect(session.readTrafficSnapshot()).toBeNull();
+        for (const spy of accountingMethodSpies) {
+          expect(spy).not.toHaveBeenCalled();
+        }
+        expect(accountingClockReads).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+        for (const spy of accountingMethodSpies) spy.mockRestore();
+        diagnosticClock.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * A host dialing another host constructs the protocol base class directly -
+ * never the clients/shared adapter, which is client-only (bearer auth, the
+ * debug-storage opt-in, negotiated-manifest recording). Traffic accounting is
+ * opt-in on the base class too (b, task list item b): a host dialer that never
+ * calls `enableTrafficAccounting()` must carry the same null tracker through a
+ * real handshake and real frames.
+ */
+describe("RemoteSession host-dialer traffic accounting (protocol base class, task b)", () => {
+  function hostAuth(): RemoteSessionAuth {
+    return {
+      missingOpenAuthCause: "missing-host-credential",
+      readOpenAuth: () => ({
+        bearer: "host-bearer",
+        authz: null,
+        fingerprint: "host-bearer",
+      }),
+      readCredentialUpdateBearer: () => "host-bearer",
+      currentFingerprint: () => "host-bearer",
+      revalidateForReconnect: null,
+    };
+  }
+
+  function buildHostSession(
+    relay: FakeRelayHost,
+  ): InstanceType<
+    typeof ProtocolRemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >
+  > {
+    let nextRequestId = 0;
+    return new ProtocolRemoteSession({
+      hostId: "host-2",
+      attachBaseUrl: "wss://relay.test/attach",
+      hostStaticPublicKey: relay.hostStaticPublicKey,
+      grantProvider: () =>
+        Promise.resolve({
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        }),
+      auth: hostAuth(),
+      clock: null,
+      rpcRegistry: emptyRpcRegistry,
+      streamRegistry: cursorStreamRegistry,
+      webSocketFactory: relay.factory,
+      requestId: () => `host-req-${(nextRequestId += 1)}`,
+      // Host dialers pass null for both: no selection authority to feed, and
+      // no client-side capability publication hook.
+      evidence: null,
+      onNegotiatedMethods: null,
+      servedStreamMajors: {},
+      // Host dialers pass the 330s budget, not the 30s GUI default.
+      unaryResponseMs: 330_000,
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      livenessProbe: null,
+    });
+  }
+
+  it(
+    "never instantiates the accounting tracker through a real handshake and real frames, and enableTrafficAccounting() refuses once started",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const session = buildHostSession(relay);
+
+      try {
+        // Never opted in: no traffic to read before this session has even
+        // dialed.
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        const stream = session.subscribe("cursor.subscribe", {
+          cursor: null,
+        });
+        let receivedFrames = 0;
+        stream.onServerFrame(() => {
+          receivedFrames += 1;
+        });
+
+        session.start();
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        if (streamId === undefined) {
+          throw new Error("expected the cursor subscription to open");
+        }
+
+        for (let index = 0; index < 4; index += 1) {
+          await relay.sendStreamFrame(
+            streamId,
+            { kind: "snapshot", hasBinaryPayload: false },
+            null,
+            QosClass.INTERACTIVE,
+          );
+        }
+        await vi.waitFor(() => expect(receivedFrames).toBe(4), WAIT);
+
+        // Real frames arrived on a real, started session - still null.
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        // Opting in AFTER start() is refused: `enableTrafficAccounting()`
+        // only succeeds from the idle phase (session.ts, "Public surface").
+        expect(session.enableTrafficAccounting()).toBe(false);
+        expect(session.readTrafficSnapshot()).toBeNull();
+
+        stream.close();
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
   );
 });
 

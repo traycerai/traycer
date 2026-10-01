@@ -12,6 +12,7 @@ import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 export function useTuiSetupTerminalTabRegisterDriver(options: {
   binding: WorktreeBinding | null;
   viewTabId: string;
+  owningTileInstanceId: string;
 }): void {
   useRegisterSetupTerminalTabsFromBinding(options);
 }

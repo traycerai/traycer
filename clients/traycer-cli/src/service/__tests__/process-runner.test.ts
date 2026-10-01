@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   ProcessRunError,
   ProcessSpawnError,
+  ProcessTimeoutError,
   runCommand,
+  runCommandForBytes,
 } from "../process-runner";
 
 // Real children, no mocks: the discriminator under test is "did this
@@ -42,6 +44,7 @@ describe("runCommand spawn-failure classification", () => {
     );
     expect(error).toBeInstanceOf(ProcessRunError);
     expect(error).not.toBeInstanceOf(ProcessSpawnError);
+    expect(error).not.toBeInstanceOf(ProcessTimeoutError);
     expect((error as ProcessRunError).exitCode).toBe(3);
   });
 
@@ -60,5 +63,100 @@ describe("runCommand spawn-failure classification", () => {
     );
     expect(error).toBeInstanceOf(ProcessRunError);
     expect(error).not.toBeInstanceOf(ProcessSpawnError);
+    expect(error).not.toBeInstanceOf(ProcessTimeoutError);
+  });
+
+  // The recycle-timeout fix's own discriminator: a child the RUNNER killed
+  // for outliving `timeoutMs` must be distinguishable from every other run
+  // failure, because `launchctl kickstart -k` / `systemctl restart` callers
+  // report this shape as "unconfirmed", never as "failed" - killing the CLI
+  // process withdraws nothing the service manager already accepted.
+  it("a child that outlives timeoutMs is killed and reported as a ProcessTimeoutError", async () => {
+    const error = await rejection(
+      runCommand(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+        ...options,
+        timeoutMs: 200,
+      }),
+    );
+    expect(error).toBeInstanceOf(ProcessTimeoutError);
+    expect(error).toBeInstanceOf(ProcessRunError);
+    expect(error).not.toBeInstanceOf(ProcessSpawnError);
+    expect((error as ProcessTimeoutError).timeoutMs).toBe(200);
+    expect((error as Error).message).toContain("timed out after 200ms");
+  });
+});
+
+// `runCommandForBytes`: {@link runCommand}'s sibling for a read whose stdout
+// is not UTF-8 (`schtasks /Query /XML` on Windows). Real children again - the
+// question is exactly the same class of "did this reach the OS" as above,
+// now against the `{stdout: Buffer, exitCode}` shape and buffer decoding.
+const bytesOptions = {
+  env: undefined,
+  cwd: undefined,
+  timeoutMs: 30_000,
+};
+
+describe("runCommandForBytes", () => {
+  it("resolves { stdout: Buffer, stderr, exitCode } on a non-zero exit, rather than rejecting", async () => {
+    const result = await runCommandForBytes(
+      process.execPath,
+      [
+        "-e",
+        'process.stdout.write("partial-output"); process.stderr.write("ERROR: Access is denied."); process.exit(3)',
+      ],
+      bytesOptions,
+    );
+
+    expect(result.exitCode).toBe(3);
+    expect(Buffer.isBuffer(result.stdout)).toBe(true);
+    expect(result.stdout.toString("utf8")).toBe("partial-output");
+    // What tells a missing task from every other `/Query` failure
+    // (`queryScheduledTaskXml`): an exit code alone cannot.
+    expect(result.stderr).toBe("ERROR: Access is denied.");
+  });
+
+  it("resolves stdout as raw bytes, not a UTF-8-decoded string (the whole reason this function exists)", async () => {
+    // A UTF-16LE-with-BOM buffer: this is exactly the shape `schtasks
+    // /Query /TN <task> /XML` writes, and decoding it as UTF-8 mangles it.
+    // Round-tripping it through the child's stdout and back through
+    // `TextDecoder("utf-16le")` proves the runner never touched the bytes.
+    const text = "<Task>hello</Task>";
+    const utf16le = Buffer.from(`﻿${text}`, "utf16le");
+    const script = `process.stdout.write(Buffer.from(${JSON.stringify(utf16le.toString("base64"))}, "base64"))`;
+
+    const result = await runCommandForBytes(
+      process.execPath,
+      ["-e", script],
+      bytesOptions,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.equals(utf16le)).toBe(true);
+    expect(
+      new TextDecoder("utf-16le", { fatal: true }).decode(
+        result.stdout.subarray(2),
+      ),
+    ).toBe(text);
+  });
+
+  it("rejects when the command does not exist", async () => {
+    const error = await rejection(
+      runCommandForBytes(
+        "traycer-no-such-binary-4f9c2e",
+        ["--version"],
+        bytesOptions,
+      ),
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  });
+
+  it("resolves { exitCode: 0 } for a command that ran and exited cleanly", async () => {
+    const result = await runCommandForBytes(
+      process.execPath,
+      ["-e", "process.exit(0)"],
+      bytesOptions,
+    );
+    expect(result.exitCode).toBe(0);
   });
 });

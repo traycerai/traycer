@@ -56,6 +56,7 @@ function createHarness(): Harness {
         draftBlobBridgeSupported: () => true,
         interviewSettlementActionsProtocolSupported: () => true,
         autoPermissionModeProtocolSupported: () => true,
+        queuePauseReasonProtocolSupported: () => true,
         requestTranscriptRange: () => undefined,
         requestResnapshot: () => undefined,
         close: () => undefined,

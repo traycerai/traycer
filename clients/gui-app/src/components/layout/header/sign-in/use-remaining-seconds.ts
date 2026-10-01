@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { startVisibleInterval } from "@/lib/dom/visible-interval";
 
 /**
  * Whole seconds left until `targetMs`, re-rendering once a second and floored
@@ -20,12 +21,13 @@ export function useRemainingSeconds(targetMs: number): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 1000);
-    return () => {
-      window.clearInterval(interval);
-    };
+    return startVisibleInterval({
+      tick: () => {
+        setNowMs(Date.now());
+      },
+      intervalMs: 1000,
+      fireOnShow: true,
+    });
   }, []);
 
   return remainingSecondsUntil(targetMs, nowMs);

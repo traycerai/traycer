@@ -421,32 +421,45 @@ async function flushPromises(): Promise<void> {
 // pixels, read-failed) share the exact same `case "assetError"` plumbing as
 // `not-found` below and only differ in a `FAILURE_MESSAGES` string, which
 // `Record<AssetStreamFailureReason, string>` already makes exhaustive at
-// compile time.
+// compile time. `read-failed` is the exception: it stands in for every
+// `assetError` reason that is NOT `not-found`, the one reason that reports
+// the file as missing.
 const FALLBACK_CASES = [
   {
     reason: "fatal",
     expected: "This image could not be loaded.",
     totalBytes: null,
+    missing: false,
   },
   {
     reason: "interrupted",
     expected: "The image transfer was interrupted.",
     totalBytes: null,
+    missing: false,
   },
   {
     reason: "length-mismatch",
     expected: "The image transfer did not complete.",
     totalBytes: 3,
+    missing: false,
   },
   {
     reason: "not-found",
     expected: "This file could not be found.",
     totalBytes: null,
+    missing: true,
+  },
+  {
+    reason: "read-failed",
+    expected: "This image could not be read.",
+    totalBytes: null,
+    missing: false,
   },
 ] satisfies readonly {
   readonly reason: AssetStreamFailureReason;
   readonly expected: string;
   readonly totalBytes: number | null;
+  readonly missing: boolean;
 }[];
 
 let mockWsStreamClient: MockWsStreamClient;
@@ -541,6 +554,7 @@ describe("useFileAsset", () => {
         height: 80,
       },
       reason: null,
+      missing: false,
       totalBytes: 3,
       servedFromCache: false,
     });
@@ -755,6 +769,29 @@ describe("useFileAsset", () => {
     unmount();
   });
 
+  it("reports the file as missing when a reconnect's retry finds it deleted", async () => {
+    const { result, unmount } = renderHook(() =>
+      useFileAsset(WORKSPACE_REQUEST),
+    );
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
+    const session = mockWsStreamClient.sessions[0];
+
+    // The header already arrived, so the failure travels through the blob
+    // cache's rejection rather than the pre-header path.
+    act(() => {
+      emitHeader(session, "deleted-during-reconnect", 3);
+      session.emitStatus("reconnecting", null);
+      emitFailure(session, "not-found");
+    });
+    await flushPromises();
+
+    expect(result.current.status).toBe("fallback");
+    expect(result.current.reason).toBe("This file could not be found.");
+    expect(result.current.missing).toBe(true);
+    expect(imageBlobCache.size()).toBe(0);
+    unmount();
+  });
+
   it("reports a browser decode failure by discarding the ready asset", async () => {
     const { result, unmount } = renderHook(() =>
       useFileAsset(WORKSPACE_REQUEST),
@@ -885,7 +922,7 @@ describe("useFileAsset", () => {
     unmount();
   });
 
-  it("opens a fresh stream when a git image remounts during an in-flight transfer", () => {
+  it("rejoins a git image's in-flight stream when remounted", async () => {
     const first = renderHook(() => useFileAsset(GIT_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
@@ -895,16 +932,18 @@ describe("useFileAsset", () => {
     });
     expect(first.result.current.status).toBe("header");
     first.unmount();
-    expect(firstSession.closed).toBe(true);
+    expect(firstSession.closed).toBe(false);
+    expect(imageBlobCache.size()).toBe(1);
 
     const remounted = renderHook(() => useFileAsset(GIT_REQUEST));
-    expect(mockWsStreamClient.sessions).toHaveLength(2);
-    const remountedSession = mockWsStreamClient.sessions[1];
-    expect(remountedSession).not.toBe(firstSession);
-    act(() => {
-      emitHeader(remountedSession, "remount-in-flight", 3);
-    });
+    expect(mockWsStreamClient.sessions).toHaveLength(1);
     expect(remounted.result.current.status).toBe("header");
+    act(() => {
+      emitBytes(firstSession, [1, 2, 3]);
+    });
+    await flushPromises();
+    expect(remounted.result.current.status).toBe("ready");
+    expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
     remounted.unmount();
   });
 
@@ -1253,8 +1292,8 @@ describe("useFileAsset", () => {
   });
 
   it.each(FALLBACK_CASES)(
-    "maps $reason to its exact fallback message",
-    async ({ reason, expected, totalBytes }) => {
+    "maps $reason to its exact fallback message (missing: $missing)",
+    async ({ reason, expected, totalBytes, missing }) => {
       const { result, unmount } = renderHook(() =>
         useFileAsset(WORKSPACE_REQUEST),
       );
@@ -1268,13 +1307,14 @@ describe("useFileAsset", () => {
       expect(result.current.status).toBe("fallback");
 
       expect(result.current.reason).toBe(expected);
+      expect(result.current.missing).toBe(missing);
       expect(result.current.meta).toBeNull();
       expect(result.current.totalBytes).toBe(totalBytes);
       unmount();
     },
   );
 
-  it("closes the stream and releases the cache entry on unmount mid-stream", () => {
+  it("keeps the in-flight stream until grace elapses after last unmount", async () => {
     const acquireSpy = vi.spyOn(imageBlobCache, "acquire");
     const { result, unmount } = renderHook(() =>
       useFileAsset(WORKSPACE_REQUEST),
@@ -1289,7 +1329,8 @@ describe("useFileAsset", () => {
 
     unmount();
 
-    expect(session.closed).toBe(true);
+    expect(session.closed).toBe(false);
+    expect(imageBlobCache.size()).toBe(1);
     expect(acquireSpy).toHaveBeenCalledWith(
       JSON.stringify([
         // The cache key's first element is the account+host scope pair
@@ -1309,6 +1350,11 @@ describe("useFileAsset", () => {
       "grace",
     );
     expect(createObjectUrlMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(session.closed).toBe(true);
     expect(imageBlobCache.size()).toBe(0);
   });
 

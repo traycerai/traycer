@@ -1,7 +1,7 @@
 /**
  * Shared wiring for the two "does a cache-level refresh trigger flip a
- * mounted observer's isFetching" integration tests (the ephemeral queue's
- * `enqueueRateLimitFetch` and the httpFetch lane's `invalidateQueries`).
+ * mounted observer's isFetching" integration tests (`fetchProviderRateLimits`
+ * for the ephemeral lane, and the httpFetch lane's `invalidateQueries`).
  * Not a `.test` file - vitest only collects `*.test.ts(x)`.
  *
  * Builds the production QueryClient configuration (`createAppQueryClient` -
@@ -19,6 +19,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 
@@ -44,6 +45,7 @@ export function createRateLimitSharingHarness(): RateLimitSharingHarness {
   });
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,

@@ -20,13 +20,6 @@ const BASE_FUSE_OPTIONS = {
 } as const;
 
 /**
- * Runs one Fuse pass over `items` and returns matches best-first (Fuse scores
- * are 0 = perfect, 1 = worst). Ties fall back to the input index, so equal
- * scores preserve the caller's ordering and a re-render can never reshuffle
- * rows. `adjustScore` lets a caller re-weight a match by what produced it
- * (e.g. per-provider boosts); pass null to rank on the raw score.
- */
-/**
  * Re-sorts fuzzy matches into literal-hit tiers on the row's primary text
  * (command name, mention label): prefix, then substring, then everything
  * else (fuzzy or secondary-field matches). The shared Fuse pass runs with
@@ -53,12 +46,33 @@ export function resortByNameTier<T>(
   );
 }
 
+export interface FuzzyMatchOptions<T> {
+  /**
+   * Re-weights a match by what produced it (e.g. per-provider boosts); null
+   * ranks on the raw score.
+   */
+  readonly adjustScore: ((item: T, score: number) => number) | null;
+  /**
+   * Settles equal scores before the input index does. A caller whose input
+   * order carries no meaning (the root `@` search concatenates providers)
+   * supplies one, so the concatenation order is never what decides a tie.
+   */
+  readonly compareTies: ((left: T, right: T) => number) | null;
+}
+
+/**
+ * Runs one Fuse pass over `items` and returns matches best-first (Fuse scores
+ * are 0 = perfect, 1 = worst). Equal scores fall to `compareTies` when given,
+ * and to the input index in every case after that, so a re-render can never
+ * reshuffle rows.
+ */
 export function searchFuzzyMatches<T>(
   items: ReadonlyArray<T>,
   query: string,
   keys: NonNullable<IFuseOptions<T>["keys"]>,
-  adjustScore: ((item: T, score: number) => number) | null,
+  options: FuzzyMatchOptions<T>,
 ): ReadonlyArray<ScoredFuzzyMatch<T>> {
+  const { adjustScore, compareTies } = options;
   const fuse = new Fuse([...items], { ...BASE_FUSE_OPTIONS, keys });
   return fuse
     .search(query)
@@ -71,9 +85,9 @@ export function searchFuzzyMatches<T>(
           adjustScore === null ? rawScore : adjustScore(result.item, rawScore),
       };
     })
-    .toSorted((left, right) =>
-      left.score === right.score
-        ? left.refIndex - right.refIndex
-        : left.score - right.score,
-    );
+    .toSorted((left, right) => {
+      if (left.score !== right.score) return left.score - right.score;
+      const tie = compareTies === null ? 0 : compareTies(left.item, right.item);
+      return tie !== 0 ? tie : left.refIndex - right.refIndex;
+    });
 }

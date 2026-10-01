@@ -19,12 +19,25 @@ import type { InitialChatHandoff } from "@/stores/epics/initial-chat-handoff-sto
  *   pending → waitingProjection → waitingChat
  *      └── (driver may be terminated by markFailed at any of the above)
  *   waitingChat (here) → tile mounts → "send"
+ *   waitingChat + delivery view names the message → "consume" (no send)
  *   "send" → markSending → driver returns "noop" until the host acks
  *   "sending" + acceptedAction("send") → "consume"
  *   "sending" + message in messages[] → "consume"
+ *   "sending" + delivery view names the message → "consume"
  *   any state + failedSendRestoration matches → "markFailedByAction"
  *   failedSendRestoration exists → "restoreAndAckFailed" (idempotent;
  *      the chat-session-store's ackFailedSendRestoration clears the slot)
+ *
+ * ASYNC WORKTREE PROVISIONING adds no state and no transition, and the reason
+ * is worth stating because the failure it would otherwise leave is invisible.
+ * A deferred `epic.create` seeds the initial message as a QUEUED item at the
+ * commit point, so this resend always meets a non-empty queue and the host
+ * takes its queue-only duplicate path - which still acks the `send`. That ack
+ * is the "sending" + acceptedAction("send") → "consume" row above. So even a
+ * provision failure the user walks away from (card showing Retry, row still
+ * queued, turn never run) leaves NO handoff entry stuck in `sending`: the
+ * handoff was consumed seconds after the create, by the duplicate's ack, and
+ * the 60 s orphan deadline never has to fire.
  */
 export type HandoffStep =
   | { readonly kind: "noop" }
@@ -49,6 +62,14 @@ export interface HandoffTransitionContext {
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly messages: ReadonlyArray<Message>;
   readonly failedSendRestoration: FailedSendRestorationState | null;
+  /**
+   * The message the host's delivery view names (`chat.subscribe@1.15`), in any
+   * phase, or `null` without one. Naming the handoff's message means the host
+   * already holds it and will hand it back itself if it never starts, so the
+   * resend is never sent: a duplicate while the opening is unresolved, refused
+   * once it is withdrawn, and a second restorer either way.
+   */
+  readonly deliveryMessageId: string | null;
 }
 
 /**
@@ -75,7 +96,14 @@ export function nextHandoffTransition(
   }
 
   if (handoff.status === "waitingChat") {
-    if (!ctx.snapshotLoaded || !ctx.canAct) {
+    if (!ctx.snapshotLoaded) {
+      return { kind: "noop" };
+    }
+    // Nothing was sent, so there is no action to acknowledge.
+    if (deliveryViewNamesHandoff(handoff, ctx)) {
+      return { kind: "consume", clientActionId: null };
+    }
+    if (!ctx.canAct) {
       return { kind: "noop" };
     }
     return { kind: "send" };
@@ -129,9 +157,19 @@ function sendingStep(
     ctx.messages.some(
       (message) =>
         message.role === "user" && message.messageId === handoff.messageId,
-    )
+    ) ||
+    deliveryViewNamesHandoff(handoff, ctx)
   ) {
     return { kind: "consume", clientActionId: handoff.clientActionId };
   }
   return { kind: "noop" };
+}
+
+function deliveryViewNamesHandoff(
+  handoff: InitialChatHandoff,
+  ctx: HandoffTransitionContext,
+): boolean {
+  return (
+    handoff.messageId !== null && handoff.messageId === ctx.deliveryMessageId
+  );
 }

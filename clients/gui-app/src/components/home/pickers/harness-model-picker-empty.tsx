@@ -63,7 +63,7 @@ interface ModelRowsStateProps {
    *  decides whether a terminal sign-in applies. `null` until resolved. */
   readonly activeProviderState: ProviderCliState | null;
   readonly rowsCount: number;
-  readonly onOpenProviderSettings: () => void;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
   /** Where a provider's setup terminal lands - see the type's doc. */
   readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
   /** The picker's run-target host, which that terminal is minted on. */
@@ -213,12 +213,12 @@ function noModelsLabel(
   return `No ${activeProvider.label} models match`;
 }
 
-// The state row shown when the active provider is unavailable. API-key
-// providers stay visible in the picker so they can surface a CTA that walks the
-// user to Settings → Providers instead of a dead-end "unavailable" row.
+// Availability can fail on a credential OR a binary, even for the same
+// provider. Only the host's typed reason identifies the remedy. Older hosts
+// without that field keep their existing API-key affordance.
 function unavailableProviderState(
   provider: GuiHarnessCatalogEntry,
-  onOpenProviderSettings: () => void,
+  onOpenProviderSettings: (focusTab: string) => void,
 ): ReactNode {
   if (
     provider.enabled &&
@@ -234,7 +234,51 @@ function unavailableProviderState(
     );
   }
 
-  if (provider.requiresApiKey) {
+  const reason = provider.unavailableReason ?? null;
+  if (reason === "missing-binary") {
+    return (
+      <PickerStateRow
+        label={`${provider.label} CLI not found`}
+        icon={undefined}
+        action={
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              useProvidersFocusStore.getState().setFocusHarnessId(provider.id);
+              // CLI candidates live on General; Account is the default for
+              // providers that accept a key, including shared-binary aliases.
+              // The tab goes THROUGH the callback rather than into the store
+              // here: the callback ends by setting the focus tab itself, so a
+              // write made before calling it is overwritten and lost.
+              onOpenProviderSettings("general");
+            }}
+          >
+            Set up CLI
+          </Button>
+        }
+      />
+    );
+  }
+  if (reason === "external-cli-required" || reason === "other") {
+    // Amp's SDK ignores Traycer's CLI selection. Its error already names the
+    // install command and AMP_CLI_PATH; preserve it without a Settings CTA.
+    // Unclassified failures likewise get their actual reason, not a guess.
+    return (
+      <PickerStateRow
+        label={provider.error?.trim() || `${provider.label} unavailable`}
+        icon={undefined}
+        action={undefined}
+      />
+    );
+  }
+  // Every other reason has returned above, so `reason` is now
+  // `"missing-credential"` or `null`, and `null` means an OLD HOST that sends
+  // no reason at all. Its fallback is the pre-reason behaviour: the key CTA for
+  // any provider that takes a key. This used to spell that as
+  // `reason === null && provider.requiresApiKey`, which narrowing makes
+  // redundant - the comment is where that intent lives now.
+  if (reason === "missing-credential" || provider.requiresApiKey) {
     return (
       <ProviderApiKeyCta
         harnessId={provider.id}
@@ -352,7 +396,7 @@ function ProviderSetupCta(props: {
 function ProviderApiKeyCta(props: {
   readonly harnessId: GuiHarnessCatalogEntry["id"];
   readonly label: string;
-  readonly onOpenProviderSettings: () => void;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
 }): ReactNode {
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
@@ -374,7 +418,9 @@ function ProviderApiKeyCta(props: {
           // Pre-select this provider in the settings panel so the user lands on
           // its API-key field, not the first provider in the rail.
           useProvidersFocusStore.getState().setFocusHarnessId(props.harnessId);
-          props.onOpenProviderSettings();
+          // Unchanged destination - this CTA has always landed on the tab the
+          // callback chose. Named here only because the tab is now explicit.
+          props.onOpenProviderSettings("usage");
         }}
       >
         Add API key

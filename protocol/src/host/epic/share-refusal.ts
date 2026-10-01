@@ -33,10 +33,11 @@
  */
 import { z } from "zod";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
- * Why a promotion has not finished, coarsened to the four states a user is
- * told apart. The host's own pending vocabulary is wider and process-shaped
+ * Why a promotion has not finished, coarsened to the states a user is told
+ * apart. The host's own pending vocabulary is wider and process-shaped
  * (`promoting`, `retry-cooldown`, `epic-busy`, `rooms-unconfirmed`,
  * `promotion-failed`, `promotion-unavailable`, ...); this is the closed wire
  * union it maps onto:
@@ -46,18 +47,22 @@ import type { RpcErrorCode } from "@traycer/protocol/framework/index";
  * - `busy`           - something else holds the epic (an agent turn writing
  *   into it, another attempt in flight, rooms not yet acknowledged).
  * - `offline`        - the cloud was not reachable for the attempt.
+ * - `unverified`     - the caller's session holds no cloud verdict, so no
+ *   attempt was made for it. The host knows THAT and not WHY: the verdict is a
+ *   boolean the client asserts, and it is lost alike to an unreachable authn
+ *   (where the `offline` advice is right) and to an expired, revoked or
+ *   terminally rejected session (where the advice is to sign in again). The
+ *   client holds the cause, so it renders this reason from its own session
+ *   state rather than from one sentence.
  * - `failed`         - the attempt failed, or this host cannot promote at all.
  *   The only bucket where retrying unchanged is not the advice.
  *
  * A host value with no bucket here must map to `failed` rather than be
  * dropped: silence is what the pending state already suffered from.
  */
-export const epicSharePromotionPendingReasonSchema = z.enum([
-  "recent-attempt",
-  "busy",
-  "offline",
-  "failed",
-]);
+export const epicSharePromotionPendingReasonSchema = lazySchema(() =>
+  z.enum(["recent-attempt", "busy", "offline", "unverified", "failed"]),
+);
 export type EpicSharePromotionPendingReason = z.infer<
   typeof epicSharePromotionPendingReasonSchema
 >;
@@ -68,19 +73,21 @@ export type EpicSharePromotionPendingReason = z.infer<
  * again be typeless - `refused` is where an unmapped or newly-added refusal
  * lands instead of falling through to a resolver-fault 500.
  */
-export const epicShareRefusalSchema = z.discriminatedUnion("kind", [
-  /** The epic lives only on this machine and the caller has no cloud sync. */
-  z.object({ kind: z.literal("needs-cloud-sync") }),
-  /** A local-homed epic created by a different account on this machine. */
-  z.object({ kind: z.literal("not-owned") }),
-  /** Entitled and owned, but the epic has not finished reaching the cloud. */
-  z.object({
-    kind: z.literal("promotion-pending"),
-    reason: epicSharePromotionPendingReasonSchema,
-  }),
-  /** Refused for a reason this line does not model. */
-  z.object({ kind: z.literal("refused") }),
-]);
+export const epicShareRefusalSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    /** The epic lives only on this machine and the caller has no cloud sync. */
+    z.object({ kind: z.literal("needs-cloud-sync") }),
+    /** A local-homed epic created by a different account on this machine. */
+    z.object({ kind: z.literal("not-owned") }),
+    /** Entitled and owned, but the epic has not finished reaching the cloud. */
+    z.object({
+      kind: z.literal("promotion-pending"),
+      reason: epicSharePromotionPendingReasonSchema,
+    }),
+    /** Refused for a reason this line does not model. */
+    z.object({ kind: z.literal("refused") }),
+  ]),
+);
 export type EpicShareRefusal = z.infer<typeof epicShareRefusalSchema>;
 
 type EpicShareRefusalKind = EpicShareRefusal["kind"];
@@ -98,6 +105,7 @@ const EPIC_SHARE_PENDING_CODE_BY_REASON = {
   "recent-attempt": "E_SHARE_PENDING_RECENT_ATTEMPT",
   busy: "E_SHARE_PENDING_BUSY",
   offline: "E_SHARE_PENDING_OFFLINE",
+  unverified: "E_SHARE_PENDING_UNVERIFIED",
   failed: "E_SHARE_PENDING_FAILED",
 } as const satisfies Record<EpicSharePromotionPendingReason, RpcErrorCode>;
 

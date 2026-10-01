@@ -13,7 +13,12 @@ import {
 import { useMermaidPngDownload } from "@/editor-core/nodes/mermaid/use-mermaid-png-download";
 import { useMermaidThemeKey } from "@/editor-core/nodes/mermaid/use-mermaid-theme-key";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import {
+  FIND_BLOCK_ATTR,
+  FIND_VISIBLE_ATTR,
+} from "@/lib/find-engine/find-blocks";
 import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
+import { FindMirror } from "./find-mirror";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -49,7 +54,7 @@ export function MermaidBlock(props: MermaidBlockProps) {
   const code = decodeMermaidCode(props["data-code"] ?? "");
   if (code.length === 0) {
     return (
-      <div className="tc-node-mermaid">
+      <div className="tc-node-mermaid" data-find-skip="">
         <div className="tc-node-block__empty">Empty mermaid block</div>
       </div>
     );
@@ -157,7 +162,11 @@ function MermaidRenderSession(props: {
     // Excluded from quote selection: the toolbar and rendered SVG are
     // non-prose UI inside quotable markdown - a drag across the diagram would
     // otherwise leak SVG label/error text into the quoted blockquote.
-    <div className="tc-node-mermaid" data-quote-exclude="">
+    <div
+      className="tc-node-mermaid"
+      data-quote-exclude=""
+      {...{ [FIND_BLOCK_ATTR]: "mermaid" }}
+    >
       <MermaidBlockToolbar
         editing={false}
         editable={false}
@@ -167,11 +176,21 @@ function MermaidRenderSession(props: {
         onSharePng={shareMermaidPng}
         downloadDisabled={downloadDisabled}
       />
+      {/* Chat find counts the diagram on its source; the drawing's labels are
+          what the painter can colour for a hit in that source. */}
+      <FindMirror text={sourceCode} />
 
       <figure
         className="tc-node-mermaid__preview m-0"
         role={render.status === "pending" ? "img" : undefined}
         aria-label={render.status === "pending" ? ariaLabel : undefined}
+        // Only a diagram drawn from the mirrored source has words the painter
+        // may colour: the error body quotes the failing source, and while a
+        // streaming fence waits out the render debounce the drawing still
+        // shows the previous source. The block mark stands in meanwhile.
+        {...(render.status === "ready" && renderCode === sourceCode
+          ? { [FIND_VISIBLE_ATTR]: "" }
+          : {})}
       >
         {render.status === "pending" ? (
           <div className="tc-node-block__skeleton" aria-hidden="true">
@@ -191,7 +210,10 @@ function MermaidRenderSession(props: {
           </MermaidExpandButton>
         ) : null}
         {render.status === "error" ? (
-          <div className="tc-node-block__error" role="alert">
+          // Chat find counts the fence on its source, which the mirror already
+          // carries, so the error text must stay out of the find walk or the
+          // counter and the painter drift apart.
+          <div className="tc-node-block__error" role="alert" data-find-skip="">
             <div className="tc-node-block__error-title">
               Mermaid parse error
             </div>

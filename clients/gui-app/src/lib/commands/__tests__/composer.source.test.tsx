@@ -12,6 +12,10 @@ import {
   registerActiveModelPicker,
   resetActiveModelPickerForTests,
 } from "@/lib/commands/active-model-picker-registry";
+import {
+  registerActiveDraftsControl,
+  resetActiveDraftsControlForTests,
+} from "@/lib/commands/active-drafts-control-registry";
 import { composerSource } from "@/lib/commands/sources/composer.source";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -158,6 +162,15 @@ vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
     latestConversationWorkspaceSeedMock.seed,
 }));
 
+// The row itself is a boundary: what happens once `openDrafts` is called
+// (registry-then-dialog-store routing) is `active-drafts-control-registry`'s
+// own test file's job. This file is only about the row's shape and that it
+// calls the seam with the right entry point.
+const openDraftsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/keybindings/dispatch", () => ({
+  openDrafts: openDraftsMock,
+}));
+
 function ctx(
   activeEpicId: string | null,
   focusedComposerKind: FocusedComposerKind | null,
@@ -298,8 +311,10 @@ describe("composerSource", () => {
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
+    resetActiveDraftsControlForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
+    openDraftsMock.mockReset();
   });
 
   afterEach(() => {
@@ -309,13 +324,18 @@ describe("composerSource", () => {
     resetCanvasStore();
     resetFocusedComposerControlsForTests();
     resetActiveModelPickerForTests();
+    resetActiveDraftsControlForTests();
     useNewConversationModalOpenStore.getState().close();
     useNewConversationModalStore.getState().resetForTests();
+    openDraftsMock.mockReset();
   });
 
-  it("emits nothing when no composer is registered", () => {
+  // H13: Drafts stays in the palette with no composer focused, but Cmd+S
+  // is not advertised because it only opens the start-page control.
+  it("emits only the Drafts row when no composer is registered", () => {
     const items = captureItems(null, null);
-    expect(items).toEqual([]);
+    expect(items.map((i) => i.id)).toEqual(["composer:drafts"]);
+    expect(items[0]?.shortcut).toBe(null);
   });
 
   it("landing composer shows provider / model; no new-chat items", () => {
@@ -333,19 +353,55 @@ describe("composerSource", () => {
     expect(ids).not.toContain("composer:new-chat:replace");
   });
 
-  it("emits a context-gated Stash prompt row bound to composer.stash", () => {
+  it("emits a Drafts row with no actionId, whose run() opens the avatar Drafts dialog", () => {
     registerFocusedComposerControls(
       "landing",
       stubControls({}),
       TEST_HOST_CLIENT,
     );
     const item = captureItems(null, "landing").find(
-      (row) => row.id === "composer:stash-prompt",
+      (row) => row.id === "composer:drafts",
     );
     expect(item).toBeDefined();
-    expect(item?.actionId).toBe("composer.stash");
-    expect(item?.label).toBe("Stash prompt");
+    // `null`, not `"composer.drafts"`: the row does not route through the
+    // central dispatcher (Cmd+S opens only the start-page control) - it
+    // calls the shared `openDrafts` seam directly, entry point "palette".
+    expect(item?.actionId).toBe(null);
+    expect(item?.label).toBe("Drafts");
+    expect(item?.shortcut).toBe(null);
+
+    void item?.run(ctx(null, "landing"));
+
+    expect(openDraftsMock).toHaveBeenCalledWith("palette");
+  });
+
+  it("advertises Cmd+S on the Drafts row only while a start-page control is registered", () => {
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    registerActiveDraftsControl(() => undefined);
+    const item = captureItems(null, "landing").find(
+      (row) => row.id === "composer:drafts",
+    );
     expect(item?.shortcut).toBe("mod+s");
+  });
+
+  // H13: unlike every other row here, Drafts does not depend on a focused
+  // composer - the palette still opens the avatar dialog when no start-page
+  // control is active, without advertising Cmd+S.
+  it("keeps the Drafts row on a non-landing composer", () => {
+    registerFocusedComposerControls(
+      "chat-tile",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    const item = captureItems("epic-1", "chat-tile").find(
+      (row) => row.id === "composer:drafts",
+    );
+    expect(item).toBeDefined();
+    expect(item?.shortcut).toBe(null);
   });
 
   it("hides Change model… when no picker is registered", () => {

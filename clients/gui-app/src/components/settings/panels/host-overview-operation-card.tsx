@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
 import {
@@ -10,8 +11,10 @@ import {
 import {
   offersForceRestart,
   type FleetUpdateView,
+  type FleetUpdateViewKind,
 } from "@/lib/host/fleet-update/fleet-update-view";
 import { cn } from "@/lib/utils";
+import type { HostUpdateCompletion } from "@/hooks/host/use-host-update-completion";
 
 /**
  * The selected host's update operation, on its Overview.
@@ -19,9 +22,8 @@ import { cn } from "@/lib/utils";
  * Deliberately the SAME two functions the landing banner renders from —
  * `describeUpdateOperation` for the sentence and `offersForceRestart` for the
  * affordance — so the two surfaces cannot describe one attempt differently or
- * disagree about whether force is offered. This component owns layout and
- * nothing else; every decision it looks like it is making was already made in
- * the projection.
+ * disagree about whether force is offered. Successful updates are acknowledged
+ * here with a dismissible notice that auto-collapses; landing shows no success.
  *
  * WHAT IT DOES NOT DO, which is the load-bearing half:
  *
@@ -36,14 +38,12 @@ import { cn } from "@/lib/utils";
  * want to restart — parked on live work, or failed — are exactly the states a
  * page-wide lock would trap them in.
  *
- * IT ALSO DOES NOT READ THE LANDING BANNER'S DISMISSAL STATE, and that omission
- * is load-bearing rather than incidental. Dismissing a failed update on the home
- * screen is client-local presentation state; "the failure remains discoverable
- * in the selected-host Overview until host-side expiry or a newer attempt
- * supersedes it" (experience doc). This card IS that Overview. Wiring
- * `landingDismissedAttemptIds` in here — an easy-looking consistency fix —
- * would delete the evidence the dismissal was explicitly allowed to hide only
- * from the other surface.
+ * Successful and failed attempts can both be dismissed here; only a success
+ * collapses on its own. A dismissed failure is hidden, not erased: the record
+ * stays on the host until it expires or a newer attempt supersedes it, and
+ * the Doctor card below still reports it. The acknowledgement itself is the
+ * PANEL's (`completion`), so this card's own mount and unmount never restart
+ * its timer.
  *
  * Retry and Diagnostics are likewise absent ON PURPOSE. Both already exist on
  * this page: the version rows below are how a person installs again, and the
@@ -133,8 +133,23 @@ export function HostOverviewOperationCard(props: {
    * the remedy row.
    */
   readonly cliFloorBlocked: boolean;
+  /**
+   * The terminal-attempt acknowledgement (`useHostUpdateCompletion`), held by
+   * the panel so this card's own mount and unmount never restart its timer.
+   */
+  readonly completion: HostUpdateCompletion;
+  /**
+   * The panel withheld this card's Restart / Force controls because THIS
+   * machine's host was started in a terminal: each would reach the CLI and be
+   * refused. The card then says, in this sentence, what does finish the
+   * update (`hostForegroundUpdateLine`); `null` when nothing was withheld.
+   * Decided by the panel, like every other control here.
+   */
+  readonly foregroundHeldFinish: string | null;
 }): ReactNode {
-  const { view } = props;
+  const { view, completion } = props;
+  if (completion.dismissed) return null;
+
   const copy = describeUpdateOperation({
     view,
     hostName: props.hostName,
@@ -154,12 +169,7 @@ export function HostOverviewOperationCard(props: {
       data-testid="host-overview-operation-card"
       className={cn(
         "flex flex-col gap-2 rounded-md border px-3 py-2 text-ui-sm",
-        // `bg-foreground/5`, never `bg-muted`: this card sits on the raised
-        // Overview surface, where every preset theme's dark variant collapses
-        // `--muted` into the card colour and the fill would simply vanish.
-        view.kind === "failed"
-          ? "border-destructive/30 bg-destructive/10 text-destructive"
-          : "border-border/60 bg-foreground/5",
+        operationCardTone(view),
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -216,7 +226,25 @@ export function HostOverviewOperationCard(props: {
             onForceRestart={props.onForceRestart}
           />
         ) : null}
+        {completion.dismiss === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Dismiss"
+            className="shrink-0"
+            onClick={completion.dismiss}
+            data-testid="host-overview-operation-dismiss"
+          >
+            <X className="size-3" aria-hidden />
+          </Button>
+        )}
       </div>
+      {props.foregroundHeldFinish === null ? null : (
+        <p data-testid="host-overview-operation-foreground">
+          {props.foregroundHeldFinish}
+        </p>
+      )}
       {showProgress ? (
         <UpdateProgressBar
           percent={percent}
@@ -229,10 +257,59 @@ export function HostOverviewOperationCard(props: {
 }
 
 /**
+ * The card's tone, by what the update is doing: info while it runs, warning
+ * while it waits on someone, destructive when it failed, success when it
+ * landed. A view the page can no longer vouch for (`unknown`, or `qualified`)
+ * stays neutral, because a tone is a claim about the present. A failure is the
+ * exception: the host still holds that record, so it stays true after contact
+ * is lost, and it kept its red before this table existed.
+ *
+ * `bg-foreground/5`, never `bg-muted`, for the neutral arm: this card sits on
+ * the raised Overview surface, where every preset theme's dark variant
+ * collapses `--muted` into the card colour and the fill would simply vanish.
+ */
+const NEUTRAL_TONE = "border-border/60 bg-foreground/5";
+const INFO_TONE = "border-info/30 bg-info/10 text-info-foreground";
+const WARNING_TONE = "border-warning/30 bg-warning/10 text-warning-foreground";
+
+const OPERATION_CARD_TONE: Record<FleetUpdateViewKind, string> = {
+  updating: INFO_TONE,
+  downloading: INFO_TONE,
+  preparing: INFO_TONE,
+  applying: INFO_TONE,
+  restarting: INFO_TONE,
+  reconnecting: INFO_TONE,
+  verifying: INFO_TONE,
+  "waiting-for-work": WARNING_TONE,
+  "waiting-to-activate": WARNING_TONE,
+  failed: "border-destructive/30 bg-destructive/10 text-destructive",
+  complete: "border-success/30 bg-success/10 text-success-foreground",
+  "finalizing-record": NEUTRAL_TONE,
+  "verification-refused": NEUTRAL_TONE,
+  unavailable: NEUTRAL_TONE,
+  idle: NEUTRAL_TONE,
+  unknown: NEUTRAL_TONE,
+};
+
+function operationCardTone(view: FleetUpdateView): string {
+  // A failure keeps its red however the page holds it: read live, qualified,
+  // or retained as the last phase of a view that aged into `unknown`. The
+  // picker's retained word for it ("update failed") is the same claim.
+  const described = view.kind === "unknown" ? view.lastKnownKind : view.kind;
+  if (described === "failed") return OPERATION_CARD_TONE.failed;
+  if (view.qualified) return NEUTRAL_TONE;
+  return OPERATION_CARD_TONE[view.kind];
+}
+
+/**
  * The one force control the card offers when `offersForceRestart` holds.
  * Which force it is depends on WHO parked: a record-derived staged wait has
  * no attempt to force-restart into, so its way forward is the updater itself
  * re-run with `--force`; an attempt-record park keeps the force-restart route.
+ *
+ * Destructive-styled, both of them: each ends the running work it names, and
+ * the Overview styles every control that does (Apply now, and the busy
+ * dialogs' Force) the same way. Restart beside them stays ordinary.
  */
 function ForceControl(props: {
   readonly onForceUpdate: (() => void) | null;
@@ -243,7 +320,7 @@ function ForceControl(props: {
       <Button
         type="button"
         size="sm"
-        variant="default"
+        variant="destructive"
         className="shrink-0"
         onClick={props.onForceUpdate}
         data-testid="host-overview-operation-force-update"
@@ -257,7 +334,7 @@ function ForceControl(props: {
     <Button
       type="button"
       size="sm"
-      variant="default"
+      variant="destructive"
       className="shrink-0"
       onClick={props.onForceRestart}
       data-testid="host-overview-operation-force-restart"

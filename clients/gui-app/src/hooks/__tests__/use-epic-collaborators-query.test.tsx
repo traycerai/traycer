@@ -65,6 +65,7 @@ const fakeClient: HostRequester<HostRpcRegistry> = {
     Promise.reject(new Error("unused in this test")),
   requestWithResponseTimeout: () =>
     Promise.reject(new Error("unused in this test")),
+  requestWithOptions: () => Promise.reject(new Error("unused in this test")),
 };
 
 vi.mock("@/hooks/host/use-host-query", () => ({

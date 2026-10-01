@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Plain-JSON value vocabulary + the canonical encoder for the
@@ -119,25 +120,26 @@ export function readJsonProperty(
 // back the value it was given, so no own key is rebuilt away (see the module
 // note above). Input is pinned alongside output so consumers can embed these
 // in codecs whose `encode` side stays typed as JSON.
-export const jsonValueSchema: z.ZodType<JsonValue, JsonValue> = z
-  .any()
-  .superRefine((value, ctx) => {
+export const jsonValueSchema: z.ZodType<JsonValue, JsonValue> = lazySchema(() =>
+  z.any().superRefine((value, ctx) => {
     if (isJsonValue(value)) return;
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "Expected a JSON value (no undefined, NaN, or non-plain object)",
     });
-  });
+  }),
+);
 
-export const jsonObjectSchema: z.ZodType<JsonObject, JsonObject> = z
-  .any()
-  .superRefine((value, ctx) => {
-    if (isJsonObject(value)) return;
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: "Expected a JSON object",
-    });
-  });
+export const jsonObjectSchema: z.ZodType<JsonObject, JsonObject> = lazySchema(
+  () =>
+    z.any().superRefine((value, ctx) => {
+      if (isJsonObject(value)) return;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Expected a JSON object",
+      });
+    }),
+);
 
 // ---- Canonical form ---------------------------------------------------- //
 

@@ -1,14 +1,20 @@
 import { z } from "zod";
-import { hostBusyBreakdownSchema } from "@traycer/protocol/host/status/contracts";
+import {
+  hostBusyBreakdownV1Schema,
+  hostBusyBreakdownV2Schema,
+} from "@traycer/protocol/host/status/contracts";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Caller-generated identity for one logical restart action. Retries must keep
  * the same value so a host can adopt the claim it already granted rather than
  * treating its own in-flight restart as competing work.
  */
-export const hostRestartRequestSchema = z.object({
-  transitionId: z.string().min(1),
-});
+export const hostRestartRequestSchema = lazySchema(() =>
+  z.object({
+    transitionId: z.string().min(1),
+  }),
+);
 
 /**
  * The v1.0 busy explanation: the one live count the drain projection could
@@ -17,9 +23,11 @@ export const hostRestartRequestSchema = z.object({
  * dialog then rendered as "0 sessions are still working", a contradiction in
  * front of the user. v1.1 exists to close that gap.
  */
-export const hostRestartBusyVerdictV10Schema = z.object({
-  busySessionCount: z.number().int().nonnegative(),
-});
+export const hostRestartBusyVerdictV10Schema = lazySchema(() =>
+  z.object({
+    busySessionCount: z.number().int().nonnegative(),
+  }),
+);
 
 /**
  * Which deny signals beyond the countable sessions refused the claim.
@@ -30,10 +38,12 @@ export const hostRestartBusyVerdictV10Schema = z.object({
  * destroy is alive" (which includes a plain terminal sitting at a prompt —
  * the host deliberately has no idle signal for those).
  */
-export const hostRestartBusyBlockersSchema = z.object({
-  workingAgents: z.boolean(),
-  runningTerminals: z.boolean(),
-});
+export const hostRestartBusyBlockersSchema = lazySchema(() =>
+  z.object({
+    workingAgents: z.boolean(),
+    runningTerminals: z.boolean(),
+  }),
+);
 
 /**
  * v1.1 verdict: the count plus the blocker breakdown.
@@ -46,10 +56,12 @@ export const hostRestartBusyBlockersSchema = z.object({
  * case would put an affirmative "nothing is blocking" in the host's mouth
  * under a verdict that says the opposite.
  */
-export const hostRestartBusyVerdictV11Schema = z.object({
-  busySessionCount: z.number().int().nonnegative(),
-  blockers: hostRestartBusyBlockersSchema.nullable(),
-});
+export const hostRestartBusyVerdictV11Schema = lazySchema(() =>
+  z.object({
+    busySessionCount: z.number().int().nonnegative(),
+    blockers: hostRestartBusyBlockersSchema.nullable(),
+  }),
+);
 
 /**
  * v1.2 verdict: the v1.1 count + blockers, plus a typed `busyBreakdown`.
@@ -58,36 +70,71 @@ export const hostRestartBusyVerdictV11Schema = z.object({
  * NOT that every component is zero. `blockers` is unchanged: a v1.2 host
  * still names the boolean deny signals, and a v1.1 host still upgrades them
  * to `null`.
+ *
+ * FROZEN at the V1 breakdown: this is what `host.restart` @1.2 shipped. The
+ * unversioned name stays bound to it so existing importers keep compiling
+ * against the shape they read; @1.3 is {@link hostRestartBusyVerdictV13Schema}.
  */
-export const hostRestartBusyVerdictSchema = z.object({
-  busySessionCount: z.number().int().nonnegative(),
-  blockers: hostRestartBusyBlockersSchema.nullable(),
-  busyBreakdown: hostBusyBreakdownSchema.nullable(),
-});
-
-export const hostRestartResponseV10Schema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("accepted") }),
+export const hostRestartBusyVerdictSchema = lazySchema(() =>
   z.object({
-    outcome: z.literal("busy"),
-    verdict: hostRestartBusyVerdictV10Schema,
+    busySessionCount: z.number().int().nonnegative(),
+    blockers: hostRestartBusyBlockersSchema.nullable(),
+    busyBreakdown: hostBusyBreakdownV1Schema.nullable(),
   }),
-]);
+);
 
-export const hostRestartResponseV11Schema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("accepted") }),
-  z.object({
-    outcome: z.literal("busy"),
-    verdict: hostRestartBusyVerdictV11Schema,
+/**
+ * v1.3 verdict: v1.2's, with `busyBreakdown` at V2 (V1 plus the informational
+ * `shells` and `scheduledWakes` counts, each `null` when the host did not
+ * report it). `busySessionCount` and `blockers` keep their v1.2 meaning; the
+ * two new counts are not part of the total.
+ */
+export const hostRestartBusyVerdictV13Schema = lazySchema(() =>
+  hostRestartBusyVerdictSchema.extend({
+    busyBreakdown: hostBusyBreakdownV2Schema.nullable(),
   }),
-]);
+);
 
-export const hostRestartResponseSchema = z.discriminatedUnion("outcome", [
-  z.object({ outcome: z.literal("accepted") }),
-  z.object({
-    outcome: z.literal("busy"),
-    verdict: hostRestartBusyVerdictSchema,
-  }),
-]);
+export const hostRestartResponseV10Schema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("accepted") }),
+    z.object({
+      outcome: z.literal("busy"),
+      verdict: hostRestartBusyVerdictV10Schema,
+    }),
+  ]),
+);
+
+export const hostRestartResponseV11Schema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("accepted") }),
+    z.object({
+      outcome: z.literal("busy"),
+      verdict: hostRestartBusyVerdictV11Schema,
+    }),
+  ]),
+);
+
+/** The v1.2 response, frozen with {@link hostRestartBusyVerdictSchema}. */
+export const hostRestartResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("accepted") }),
+    z.object({
+      outcome: z.literal("busy"),
+      verdict: hostRestartBusyVerdictSchema,
+    }),
+  ]),
+);
+
+export const hostRestartResponseV13Schema = lazySchema(() =>
+  z.discriminatedUnion("outcome", [
+    z.object({ outcome: z.literal("accepted") }),
+    z.object({
+      outcome: z.literal("busy"),
+      verdict: hostRestartBusyVerdictV13Schema,
+    }),
+  ]),
+);
 
 export type HostRestartRequest = z.infer<typeof hostRestartRequestSchema>;
 export type HostRestartBusyBlockers = z.infer<
@@ -96,4 +143,10 @@ export type HostRestartBusyBlockers = z.infer<
 export type HostRestartBusyVerdict = z.infer<
   typeof hostRestartBusyVerdictSchema
 >;
+export type HostRestartBusyVerdictV13 = z.infer<
+  typeof hostRestartBusyVerdictV13Schema
+>;
 export type HostRestartResponse = z.infer<typeof hostRestartResponseSchema>;
+export type HostRestartResponseV13 = z.infer<
+  typeof hostRestartResponseV13Schema
+>;

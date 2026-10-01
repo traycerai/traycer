@@ -1,4 +1,38 @@
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
+
+/**
+ * How long a child that `execFile`'s timeout signalled has to exit before it
+ * is SIGKILLed.
+ *
+ * `execFile`'s timeout sends SIGTERM and destroys the child's stdio, but its
+ * callback fires only on the child's `close`, and that needs the child to
+ * EXIT. A child that ignores SIGTERM therefore held the promise open for as
+ * long as it ran - a timeout that did not time out
+ * (`process-runner-timeout-escalation.test.ts`). The stdio destroy already
+ * frees a call whose grandchild holds the pipes; this escalation frees one
+ * whose child outlives the signal.
+ */
+export const PROCESS_TIMEOUT_KILL_GRACE_MS = 2_000;
+
+/**
+ * Arm the SIGKILL that follows `execFile`'s own timeout signal, and return the
+ * disarm the completion callback calls first. A call with no timeout
+ * (`timeoutMs <= 0`, which `execFile` reads as "none") arms nothing.
+ */
+function armTimeoutKillEscalation(
+  child: ChildProcess,
+  timeoutMs: number,
+): () => void {
+  if (timeoutMs <= 0) return () => undefined;
+  const timer = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already gone: its `close` settles the call.
+    }
+  }, timeoutMs + PROCESS_TIMEOUT_KILL_GRACE_MS);
+  return () => clearTimeout(timer);
+}
 
 export interface RunResult {
   readonly stdout: string;
@@ -14,6 +48,18 @@ export interface RunOptions {
   // for commands like `launchctl bootout` whose non-zero exit is an
   // expected "already gone" signal.
   readonly tolerateNonZeroExit: boolean;
+}
+
+/**
+ * {@link RunOptions} for a command that must never wait on its stdin:
+ * `runCommand` ends the child's stdin as soon as it is spawned, so a prompt
+ * the command may print reads EOF and returns at once instead of holding the
+ * call until its timeout. `schtasks /Create` without `/F` is the one user: on
+ * a task that already exists it refuses, and a build that asked "overwrite?
+ * (Y/N)" first would otherwise wait on the open pipe `execFile` leaves.
+ */
+export interface EndedStdinRunOptions extends RunOptions {
+  readonly endStdin: true;
 }
 
 // Promisified `child_process.execFile` with consistent error semantics
@@ -33,6 +79,8 @@ export function runCommand(
     // child that DID run and overflowed `maxBuffer`
     // (`ERR_CHILD_PROCESS_STDIO_MAXBUFFER`), which must stay a run failure.
     let spawned = false;
+    // Assigned once `execFile` returns; the callback always runs later.
+    let disarmEscalation: () => void = () => undefined;
     const child = execFile(
       command,
       [...args],
@@ -45,6 +93,7 @@ export function runCommand(
         encoding: "utf8",
       },
       (err, stdout, stderr) => {
+        disarmEscalation();
         const stdoutStr = String(stdout);
         const stderrStr = String(stderr);
         if (err === null) {
@@ -73,9 +122,10 @@ export function runCommand(
         // runner killed carries a signal, and one that overflowed `maxBuffer`
         // carries a string code but DID start - the pid keeps it a run error.
         const spawnFailed = !spawned && typeof err.code === "string" && !killed;
+        const timedOut = !spawnFailed && killed && signal !== null;
         const summary = spawnFailed
           ? `could not be spawned (${err.code})`
-          : killed && signal !== null
+          : timedOut
             ? `timed out after ${options.timeoutMs}ms (killed via ${signal})`
             : `exited with code ${exitCode}`;
         const message = `${command} ${args.join(" ")} ${summary}: ${stderrStr.trim() || stdoutStr.trim()}`;
@@ -89,14 +139,24 @@ export function runCommand(
                 stdoutStr,
                 stderrStr,
               )
-            : new ProcessRunError(
-                message,
-                command,
-                args,
-                exitCode,
-                stdoutStr,
-                stderrStr,
-              ),
+            : timedOut
+              ? new ProcessTimeoutError(
+                  message,
+                  command,
+                  args,
+                  exitCode,
+                  stdoutStr,
+                  stderrStr,
+                  options.timeoutMs,
+                )
+              : new ProcessRunError(
+                  message,
+                  command,
+                  args,
+                  exitCode,
+                  stdoutStr,
+                  stderrStr,
+                ),
         );
       },
     );
@@ -110,6 +170,64 @@ export function runCommand(
     child.once("spawn", () => {
       spawned = true;
     });
+    if ("endStdin" in options && options.endStdin === true) {
+      child.stdin?.end();
+    }
+    disarmEscalation = armTimeoutKillEscalation(child, options.timeoutMs);
+  });
+}
+
+export interface RunBytesResult {
+  readonly stdout: Buffer;
+  /**
+   * The child's stderr, decoded as UTF-8 (lossy): diagnostic text for the
+   * caller that must tell one failure from another, never parsed as data.
+   */
+  readonly stderr: string;
+  readonly exitCode: number;
+}
+
+/**
+ * {@link runCommand} for a READ whose stdout is not UTF-8 - `schtasks /Query
+ * /XML` writes UTF-16LE, which a `utf8` decode turns into garbage. Resolves
+ * with the raw bytes and the exit code whatever that code is (the caller
+ * decides what a non-zero exit means); rejects only when the child could not
+ * be run at all, ran past `timeoutMs`, or overflowed the output cap.
+ */
+export function runCommandForBytes(
+  command: string,
+  args: readonly string[],
+  options: Omit<RunOptions, "tolerateNonZeroExit">,
+): Promise<RunBytesResult> {
+  return new Promise((resolve, reject) => {
+    // Assigned once `execFile` returns; the callback always runs later.
+    let disarmEscalation: () => void = () => undefined;
+    const child = execFile(
+      command,
+      [...args],
+      {
+        env: options.env ?? process.env,
+        cwd: options.cwd,
+        timeout: options.timeoutMs,
+        windowsHide: true,
+        maxBuffer: 4 * 1024 * 1024,
+        encoding: "buffer",
+      },
+      (err, stdout, stderr) => {
+        disarmEscalation();
+        const stderrText = stderr.toString("utf8");
+        if (err === null) {
+          resolve({ stdout, stderr: stderrText, exitCode: 0 });
+          return;
+        }
+        if (typeof err.code === "number") {
+          resolve({ stdout, stderr: stderrText, exitCode: err.code });
+          return;
+        }
+        reject(err);
+      },
+    );
+    disarmEscalation = armTimeoutKillEscalation(child, options.timeoutMs);
   });
 }
 
@@ -156,5 +274,39 @@ export class ProcessSpawnError extends ProcessRunError {
   ) {
     super(message, command, args, exitCode, stdout, stderr);
     this.name = "ProcessSpawnError";
+  }
+}
+
+/**
+ * The child ran past `timeoutMs` and this runner killed it. Still a
+ * {@link ProcessRunError} for every caller that only asks "did it fail", and a
+ * distinct class for the callers whose command outlives the process that
+ * issued it: killing `launchctl kickstart -k` or `systemctl restart` does not
+ * withdraw a request the service manager has already accepted - it finishes
+ * the job regardless - so such a caller must report a timeout as unconfirmed,
+ * never as the operation having failed.
+ *
+ * The discriminator is that the child died BY the runner's timeout signal
+ * (`killed` with a `signal`). A child that traps SIGTERM and exits with a code
+ * of its own reads as an ordinary {@link ProcessRunError}, a genuine failure.
+ * That is right for `launchctl` and `systemctl`, which do not trap it, and is
+ * why this is not a general-purpose timeout class for any binary. One that
+ * ignores SIGTERM past {@link PROCESS_TIMEOUT_KILL_GRACE_MS} is SIGKILLed and
+ * reads as a timeout (`killed via SIGKILL`).
+ */
+export class ProcessTimeoutError extends ProcessRunError {
+  public readonly timeoutMs: number;
+  constructor(
+    message: string,
+    command: string,
+    args: readonly string[],
+    exitCode: number,
+    stdout: string,
+    stderr: string,
+    timeoutMs: number,
+  ) {
+    super(message, command, args, exitCode, stdout, stderr);
+    this.name = "ProcessTimeoutError";
+    this.timeoutMs = timeoutMs;
   }
 }

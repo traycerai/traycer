@@ -167,7 +167,11 @@ export function searchSettings(
     buildSearchDocuments(context),
     trimmed,
     SEARCH_KEYS,
-    (document, score) => score * KIND_SCORE_FACTOR[document.entry.kind],
+    {
+      adjustScore: (document, score) =>
+        score * KIND_SCORE_FACTOR[document.entry.kind],
+      compareTies: null,
+    },
   );
   return resortByNameTier(matches, trimmed, (document) => document.label)
     .slice(0, MAX_RESULTS)
@@ -189,6 +193,9 @@ export function searchSettings(
  * a page (Providers' seven concept rows).
  */
 export function settingsSearchResultKey(entry: SettingsSearchEntry): string {
+  // A launch result is told apart by the setting it launches: two of them can
+  // share a label ("Usage limits" is in the status bar and the header).
+  if (entry.launch !== null) return `${entry.section}:launch:${entry.launch}`;
   return `${entry.section}:${entry.anchor ?? entry.label}`;
 }
 

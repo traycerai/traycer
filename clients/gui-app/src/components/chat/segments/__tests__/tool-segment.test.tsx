@@ -47,7 +47,57 @@ function inputProps(toolName: string, input: unknown) {
   };
 }
 
+// Cross-task opens go through the top-level task navigation seam
+// (`activateTabIntent`), not the current task's tile navigation.
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  activateTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return { ...actual, useNavigate: () => navigationMocks.navigate };
+});
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return { ...actual, activateTabIntent: navigationMocks.activateTabIntent };
+});
+
+function expectCrossTaskActivation(node: {
+  readonly id: string;
+  readonly type: "chat" | "terminal-agent";
+  readonly hostId: string;
+}): void {
+  expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+  const call = navigationMocks.activateTabIntent.mock.calls.at(0);
+  if (call === undefined) throw new Error("activateTabIntent was not called");
+  const [navigate, intent] = call;
+  expect(navigate).toBe(navigationMocks.navigate);
+  expect(intent).toMatchObject({
+    kind: "open-epic",
+    epicId: "epic-2",
+    includeNestedFocus: true,
+    preparation: { kind: "open-tile", gesture: "explicit", node },
+  });
+  // The other task is activated at the top level; the current task's tile
+  // navigation must not also open a tile (no double open).
+  expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+}
+
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: () => ({ data: undefined }),
+}));
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+  useMaybeTabHostClient: () => null,
+}));
+
 vi.mock("@/lib/epic-selectors", () => ({
+  useRegisteredEpicLiveAgents: () => [],
   useEpicAgentReference: (referenceId: string) => {
     if (referenceId === "agent-receiver-1") {
       return {
@@ -85,6 +135,43 @@ vi.mock("@/lib/epic-selectors", () => ({
   },
   useOpenEpicId: () => "epic-1",
 }));
+
+// Cross-task peers come from the shared `useA2AMessagePeer` hook. An id with
+// no entry falls through to the real hook, so every same-task test above keeps
+// exercising the current-task projection fast path unchanged.
+const peerMocks = vi.hoisted(() => ({
+  /** Every (agentId, origin) the card asked the hook about. */
+  origins: [] as { agentId: string; origin: unknown }[],
+  byId: {} as Record<
+    string,
+    {
+      epicId: string;
+      agentId: string;
+      hostId: string;
+      title: string | null;
+      surface: "gui" | "tui";
+    } | null
+  >,
+}));
+
+vi.mock(
+  import("@/hooks/agent/use-a2a-message-peer"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useA2AMessagePeer: (
+        agentId: string,
+        origin: Parameters<typeof actual.useA2AMessagePeer>[1],
+      ) => {
+        peerMocks.origins.push({ agentId, origin });
+        return agentId in peerMocks.byId
+          ? peerMocks.byId[agentId]
+          : actual.useA2AMessagePeer(agentId, origin);
+      },
+    };
+  },
+);
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
@@ -550,6 +637,153 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       useChatTranscriptJumpStore.getState().requestsByChatId[key],
     ).toBeUndefined();
   });
+
+  describe("cross-task receivers", () => {
+    const CROSS_ID = "cross-receiver-1";
+    const CANONICAL_ID = "cccc1234-1111-4111-8111-111111111111";
+
+    afterEach(() => {
+      navigationMocks.activateTabIntent.mockClear();
+      peerMocks.byId = {};
+      peerMocks.origins = [];
+    });
+
+    function renderSend(
+      receiverAgentId: string,
+      receipt: { receiverAgentId: string; messageId: string } | null,
+    ) {
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id="a2a-send-cross"
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId,
+            message: "Please continue in the other task.",
+            responseId: null,
+            expectReply: false,
+          }}
+          managedCommand={null}
+          agentMessageReceipt={receipt}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={0}
+          durationMs={null}
+          variant="card"
+        />,
+      );
+    }
+
+    it("shows the cross-task title and opens the OTHER task on its host, jumping to the receipt", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Task Agent",
+        surface: "gui",
+      };
+      renderSend(CROSS_ID, {
+        receiverAgentId: CROSS_ID,
+        messageId: "cross-message-1",
+      });
+
+      // The card hands the hook its receipt so a fork's inherited card can
+      // still resolve by the receiver's (fork-preserved) message id.
+      expect(peerMocks.origins).toContainEqual({
+        agentId: CROSS_ID,
+        origin: { direction: "sent", messageId: "cross-message-1" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cross Task Agent" }));
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "chat",
+        hostId: "host-2",
+      });
+      const key = chatTranscriptJumpKey("host-2", CROSS_ID);
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
+      ).toEqual({ kind: "message", messageId: "cross-message-1" });
+    });
+
+    it("opens a cross-task terminal agent without parking a jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Terminal",
+        surface: "tui",
+      };
+      renderSend(CROSS_ID, {
+        receiverAgentId: CROSS_ID,
+        messageId: "cross-message-1",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Cross Terminal" }));
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "terminal-agent",
+        hostId: "host-2",
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+    });
+
+    it("renders the abbreviated id as plain text when the peer cannot be resolved", () => {
+      peerMocks.byId[CROSS_ID] = null;
+      renderSend(CROSS_ID, null);
+
+      // Without a receipt there is no message to anchor a fork lookup to.
+      expect(peerMocks.origins).toContainEqual({
+        agentId: CROSS_ID,
+        origin: null,
+      });
+      expect(screen.getByText(`${CROSS_ID.slice(0, 8)}...`)).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: `${CROSS_ID.slice(0, 8)}...` }),
+      ).toBeNull();
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
+    });
+
+    it("resolves the peer from the receipt's canonical id when the input id is abbreviated", () => {
+      const abbreviated = CANONICAL_ID.slice(0, 8);
+      // Only the canonical id resolves; the abbreviated input id must not be
+      // what the card asks the hook about.
+      peerMocks.byId[abbreviated] = null;
+      peerMocks.byId[CANONICAL_ID] = {
+        epicId: "epic-2",
+        agentId: CANONICAL_ID,
+        hostId: "host-2",
+        title: "Canonical Peer",
+        surface: "gui",
+      };
+      renderSend(abbreviated, {
+        receiverAgentId: CANONICAL_ID,
+        messageId: "cross-message-2",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Canonical Peer" }));
+
+      expectCrossTaskActivation({
+        id: CANONICAL_ID,
+        type: "chat",
+        hostId: "host-2",
+      });
+      const key = chatTranscriptJumpKey("host-2", CANONICAL_ID);
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
+      ).toEqual({ kind: "message", messageId: "cross-message-2" });
+    });
+  });
 });
 
 describe("<ToolSegment /> input rendering", () => {
@@ -588,6 +822,42 @@ describe("<ToolSegment /> input rendering", () => {
     expect(screen.getByText("Inspect checkout")).toBeTruthy();
     expect(view.container.querySelector("svg")).not.toBeNull();
     expect(screen.queryByText("mcp__browser__repl")).toBeNull();
+  });
+
+  it("paints a long command's whole line in the header and stays expandable", () => {
+    // Well past the 80-unit persisted summary cap. The header span truncates
+    // itself with CSS, so it must receive the whole command, not the capped cut.
+    const command = `bun run --filter @traycer/gui-app vitest run ${"src/components/chat/segments/__tests__/tool-segment.test.tsx ".repeat(2)}--reporter verbose`;
+    const props = inputProps("Bash", { command });
+    expect(props.inputSummary?.endsWith("\u2026")).toBe(true);
+
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="bash-long-command"
+        toolName="Bash"
+        {...props}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText(command)).toBeTruthy();
+    expect(screen.queryByText(/\u2026/)).toBeNull();
+    // Still expandable: the header no longer proves the call is fully shown by
+    // the persisted summary, so the expand affordance must survive.
+    expect(screen.getByRole("button", { name: /Bash/ })).toBeTruthy();
   });
 
   it("expands a grep call into a reconstructed command, not JSON", () => {

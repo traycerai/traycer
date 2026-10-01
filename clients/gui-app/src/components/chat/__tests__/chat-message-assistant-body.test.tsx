@@ -11,13 +11,21 @@ import type { Mock } from "vitest";
 import type { ReactNode } from "react";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
+import {
+  OpenSubagentAsChatContext,
+  queryOpenAsChatControl,
+  type OpenSubagentAsChat,
+} from "@/components/chat/segments/subagent-open-as-chat";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type {
   AssistantTurnMeta,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
+  ApprovalSegment,
   MessageSegment,
+  SubagentSegment as SubagentSegmentModel,
+  ToolSegment,
 } from "@/stores/composer/chat-store";
 
 function render(ui: ReactNode) {
@@ -96,6 +104,33 @@ const ERROR_SEGMENT: MessageSegment = {
   failure: null,
 };
 
+const PROMOTED_SUBAGENT_SEGMENT: SubagentSegmentModel = {
+  id: "subagent-from-transcript",
+  kind: "subagent",
+  name: "reviewer",
+  agentType: null,
+  task: "Review the implementation",
+  progressUpdates: [],
+  result: null,
+  isStreaming: false,
+  endState: null,
+  stopped: false,
+  startedAt: null,
+  durationMs: null,
+  spawnToolCallId: null,
+  parentId: null,
+  workflowMeta: null,
+  children: [
+    {
+      id: "subagent-transcript-text",
+      kind: "text",
+      markdown: "Child transcript",
+      isStreaming: false,
+      parentId: "subagent-from-transcript",
+    },
+  ],
+};
+
 const STOPPED: ChatMessageStoppedInfo = {
   stoppedAt: 1_700_000_000_000,
   reason: "Stop requested by owner.",
@@ -164,6 +199,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     nextStepActions: null,
     forkAction: null,
     interviewDeliveryRetry: null,
+    routingSettledNoticeId: null,
   };
 }
 
@@ -218,6 +254,35 @@ describe("AssistantMessageBody autonomous resume rendering", () => {
     const footer = screen.getByTestId("assistant-elapsed-footer");
     expect(footer.textContent).toMatch(/ for 5s$/);
     expect(footer.textContent).not.toContain("Resumed · no response");
+  });
+});
+
+describe("AssistantMessageBody promoted subagent controls", () => {
+  it("opens by the transcript id and exposes that id's control for focus restoration", () => {
+    const open = vi.fn<OpenSubagentAsChat>();
+    const { container } = render(
+      <OpenSubagentAsChatContext.Provider value={open}>
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({ segments: [PROMOTED_SUBAGENT_SEGMENT] })}
+        />
+      </OpenSubagentAsChatContext.Provider>,
+    );
+
+    const button = screen.getByRole("button", { name: "Open as chat" });
+    fireEvent.click(button);
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect({
+      openedId: open.mock.calls[0]?.[0],
+      focusControl: queryOpenAsChatControl(
+        container,
+        PROMOTED_SUBAGENT_SEGMENT.id,
+      ),
+    }).toEqual({
+      openedId: PROMOTED_SUBAGENT_SEGMENT.id,
+      focusControl: button,
+    });
   });
 });
 
@@ -761,5 +826,63 @@ describe("AssistantMessageBody Timing tooltip section", () => {
     // No agent metadata, so no Agent section - Timing is the only content.
     expect(screen.queryByText("Agent")).toBeNull();
     expect(screen.queryByText("Provider")).toBeNull();
+  });
+});
+
+const SHARED_ID = "shared-id";
+
+const SHARED_TOOL: ToolSegment = {
+  id: SHARED_ID,
+  kind: "tool",
+  toolName: "run_command",
+  inputSummary: "echo tool-row-text",
+  inputDetail: null,
+  taskTodoItems: null,
+  error: null,
+  agentMessageSend: null,
+  managedCommand: null,
+  agentMessageReceipt: null,
+  isStreaming: false,
+  endState: null,
+  stopped: false,
+  progress: null,
+  backgroundOutput: null,
+  backgroundTask: null,
+  startedAt: 0,
+  durationMs: null,
+  parentId: null,
+  imageResults: [],
+};
+
+const SHARED_APPROVAL: ApprovalSegment = {
+  id: SHARED_ID,
+  kind: "approval",
+  toolName: "run_command",
+  description: "approval-row-description",
+  inputSummary: null,
+  inputDetail: null,
+  decision: { approved: true, reason: "approval-row-reason" },
+};
+
+describe("AssistantMessageBody shared block ids", () => {
+  it("renders a tool and an approval sharing one id, with no duplicate-key warning", () => {
+    const errors = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    render(
+      <AssistantMessageBody
+        turnId={null}
+        {...bodyProps({ segments: [SHARED_TOOL, SHARED_APPROVAL] })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Ran 1 command/ }));
+
+    expect(screen.getByText("echo tool-row-text")).toBeTruthy();
+    expect(screen.getByText("Approved")).toBeTruthy();
+    const sameKey = errors.mock.calls.filter((call) =>
+      call.some((arg) => typeof arg === "string" && arg.includes("same key")),
+    );
+    expect(sameKey).toEqual([]);
+    errors.mockRestore();
   });
 });

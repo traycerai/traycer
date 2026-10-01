@@ -21,10 +21,11 @@ export const LOG_TAIL_POLL_INTERVAL_MS = 500;
 /** ~30s at the default poll interval. */
 export const LOG_TAIL_MAX_MISSING_RETRIES = 60;
 
-// Bound for ONE poll's read. `host.log` is unbounded within a host's lifetime
-// (nothing truncates it; rotation only happens at a start), so a follower that
-// allocated `size - offset` in one go would size a buffer off a file another
-// process controls. A supervisor that is mirroring for weeks, or one that
+// Bound for ONE poll's read. `host.log` grows to the host's own 10 MB rotation
+// threshold within a lifetime, and past it when that rotation cannot happen
+// (nothing truncates it; the supervisor rotates only at a start), so a follower
+// that allocated `size - offset` in one go would size a buffer off a file
+// another process controls. A supervisor that is mirroring for weeks, or one that
 // resumes after any gap, could allocate gigabytes. Reading a capped slice per
 // tick loses nothing: the offset advances by what was read and the next tick
 // (500ms later) takes the next slice.

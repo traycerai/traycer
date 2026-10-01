@@ -11,6 +11,7 @@ import {
   agentSessionStateSchema,
 } from "@traycer/protocol/host/agent-session-state";
 import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -52,29 +53,31 @@ export const harnessIdSchema = getRecordSchema(
 );
 export type HarnessId = z.infer<typeof harnessIdSchema>;
 
-export const guiHarnessIdSchema = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-  "reasonix",
-  "antigravity",
-]);
+export const guiHarnessIdSchema = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+  ]),
+);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
 /**
@@ -92,27 +95,29 @@ export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
  * harness admitted to one line but frozen off the other would silently break
  * whichever schema borrowed the wrong copy. Do NOT add new harnesses here.
  */
-export const guiHarnessIdSchemaPreReasonix = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-]);
+export const guiHarnessIdSchemaPreReasonix = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+  ]),
+);
 export type GuiHarnessIdPreReasonix = z.infer<
   typeof guiHarnessIdSchemaPreReasonix
 >;
@@ -125,13 +130,9 @@ export type GuiHarnessIdPreReasonix = z.infer<
  * callers. Do NOT add new harnesses here - extend the latest
  * `guiHarnessIdSchema` and use the existing v2 bridge instead.
  */
-export const guiHarnessIdSchemaV10 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-]);
+export const guiHarnessIdSchemaV10 = lazySchema(() =>
+  harnessIdSchema.extract(["claude", "codex", "opencode", "traycer", "cursor"]),
+);
 export type GuiHarnessIdV10 = z.infer<typeof guiHarnessIdSchemaV10>;
 
 /**
@@ -141,21 +142,23 @@ export type GuiHarnessIdV10 = z.infer<typeof guiHarnessIdSchemaV10>;
  * carry it. Do NOT add new harnesses here - extend the latest
  * `guiHarnessIdSchema` and use the existing version bridges instead.
  */
-export const guiHarnessIdSchemaV20 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-]);
+export const guiHarnessIdSchemaV20 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+  ]),
+);
 export type GuiHarnessIdV20 = z.infer<typeof guiHarnessIdSchemaV20>;
 
 /**
@@ -165,22 +168,24 @@ export type GuiHarnessIdV20 = z.infer<typeof guiHarnessIdSchemaV20>;
  * harnesses here - extend the latest `guiHarnessIdSchema` and use the
  * existing version bridges instead.
  */
-export const guiHarnessIdSchemaV30 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-]);
+export const guiHarnessIdSchemaV30 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+  ]),
+);
 export type GuiHarnessIdV30 = z.infer<typeof guiHarnessIdSchemaV30>;
 
 /**
@@ -190,24 +195,26 @@ export type GuiHarnessIdV30 = z.infer<typeof guiHarnessIdSchemaV30>;
  * post-v4.0 ids. Do NOT add new harnesses here - extend the latest
  * `guiHarnessIdSchema` and use the existing bridges instead.
  */
-export const guiHarnessIdSchemaV40 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-]);
+export const guiHarnessIdSchemaV40 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+  ]),
+);
 export type GuiHarnessIdV40 = z.infer<typeof guiHarnessIdSchemaV40>;
 
 /**
@@ -219,25 +226,27 @@ export type GuiHarnessIdV40 = z.infer<typeof guiHarnessIdSchemaV40>;
  * post-v5.0 ids. Do NOT add new harnesses here - extend the latest
  * `guiHarnessIdSchema` and use the existing v6 bridge instead.
  */
-export const guiHarnessIdSchemaV50 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-]);
+export const guiHarnessIdSchemaV50 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+  ]),
+);
 export type GuiHarnessIdV50 = z.infer<typeof guiHarnessIdSchemaV50>;
 
 /**
@@ -250,26 +259,28 @@ export type GuiHarnessIdV50 = z.infer<typeof guiHarnessIdSchemaV50>;
  * bridges that drop post-v6.0 ids. Do NOT add new harnesses here - extend the
  * latest `guiHarnessIdSchema` and use the existing v7 bridge instead.
  */
-export const guiHarnessIdSchemaV60 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-]);
+export const guiHarnessIdSchemaV60 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+  ]),
+);
 export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
 
 /**
@@ -283,27 +294,29 @@ export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
  * extend the latest `guiHarnessIdSchema`; a v8.0 bridge drops post-v7.0 ids
  * for older callers.
  */
-export const guiHarnessIdSchemaV70 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-]);
+export const guiHarnessIdSchemaV70 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+  ]),
+);
 export type GuiHarnessIdV70 = z.infer<typeof guiHarnessIdSchemaV70>;
 
 /**
@@ -320,36 +333,35 @@ export type GuiHarnessIdV70 = z.infer<typeof guiHarnessIdSchemaV70>;
  * v9.0 owns live growth now. Do NOT add new harnesses here - extend the latest
  * `guiHarnessIdSchema`; a v9.0 bridge drops post-v8.0 ids for older callers.
  */
-export const guiHarnessIdSchemaV80 = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "traycer",
-  "cursor",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-  "amp",
-  "devin",
-  "pi",
-  "hermes",
-  "omp",
-  "huggingface",
-  "reasonix",
-]);
+export const guiHarnessIdSchemaV80 = lazySchema(() =>
+  harnessIdSchema.extract([
+    "claude",
+    "codex",
+    "opencode",
+    "traycer",
+    "cursor",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+  ]),
+);
 export type GuiHarnessIdV80 = z.infer<typeof guiHarnessIdSchemaV80>;
 
-export const tuiHarnessIdSchema = harnessIdSchema.extract([
-  "claude",
-  "codex",
-  "opencode",
-  "cursor",
-]);
+export const tuiHarnessIdSchema = lazySchema(() =>
+  harnessIdSchema.extract(["claude", "codex", "opencode", "cursor"]),
+);
 export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
 export type A2ACapabilityTarget = {
@@ -467,9 +479,9 @@ export const AGENT_FACING_HARNESS_IDS = [
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
 
-export const agentFacingHarnessIdSchema = harnessIdSchema.extract([
-  ...AGENT_FACING_HARNESS_IDS,
-]);
+export const agentFacingHarnessIdSchema = lazySchema(() =>
+  harnessIdSchema.extract([...AGENT_FACING_HARNESS_IDS]),
+);
 export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
 
 /**
@@ -483,22 +495,26 @@ export type AgentFacingHarnessId = z.infer<typeof agentFacingHarnessIdSchema>;
  *  - primacy from order (the first entry is the working directory).
  * This mirrors the CLI's `--cwd` / `--workspace-entry <src>=<run>` ergonomics.
  */
-export const createAgentWorkspaceEntrySchema = z.object({
-  path: z.string(),
-  // The source workspace `path` belongs to. Null (or omitted) means `path` IS
-  // the workspace - an existing folder bound as-is, no worktree.
-  workspacePath: z.string().nullable().default(null),
-});
+export const createAgentWorkspaceEntrySchema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    // The source workspace `path` belongs to. Null (or omitted) means `path` IS
+    // the workspace - an existing folder bound as-is, no worktree.
+    workspacePath: z.string().nullable().default(null),
+  }),
+);
 export type CreateAgentWorkspaceEntry = z.infer<
   typeof createAgentWorkspaceEntrySchema
 >;
 
-export const createAgentWorkspaceSchema = z
-  .object({
-    entries: z.array(createAgentWorkspaceEntrySchema),
-  })
-  .nullable()
-  .default(null);
+export const createAgentWorkspaceSchema = lazySchema(() =>
+  z
+    .object({
+      entries: z.array(createAgentWorkspaceEntrySchema),
+    })
+    .nullable()
+    .default(null),
+);
 export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
 
 /**
@@ -512,12 +528,12 @@ export type CreateAgentWorkspace = z.infer<typeof createAgentWorkspaceSchema>;
  */
 export const AMBIENT_PROFILE_ID_SENTINEL = "ambient";
 
-const managedProfileIdSchema = z
-  .string()
-  .refine((profileId) => profileId !== AMBIENT_PROFILE_ID_SENTINEL, {
+const managedProfileIdSchema = lazySchema(() =>
+  z.string().refine((profileId) => profileId !== AMBIENT_PROFILE_ID_SENTINEL, {
     message:
       'profileId must not be the reserved "ambient" sentinel - use { kind: "ambient" } to select the ambient login.',
-  });
+  }),
+);
 
 /**
  * Explicit selection of which provider profile (subscription) an agent
@@ -543,12 +559,14 @@ const managedProfileIdSchema = z
  *     Never offered by new discovery, rate-limit, configuration, tool, or
  *     CLI contracts - see the A2A profile-awareness ticket's guardrails.
  */
-export const profileSelectionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("last_used") }),
-  z.object({ kind: z.literal("ambient") }),
-  z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
-  z.object({ kind: z.literal("inherit_sender") }),
-]);
+export const profileSelectionSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("last_used") }),
+    z.object({ kind: z.literal("ambient") }),
+    z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
+    z.object({ kind: z.literal("inherit_sender") }),
+  ]),
+);
 export type ProfileSelection = z.infer<typeof profileSelectionSchema>;
 
 /**
@@ -558,10 +576,12 @@ export type ProfileSelection = z.infer<typeof profileSelectionSchema>;
  * profile surface: discovery's effective-selection field, detailed rate-limit
  * reads, and `agent.configure` (see `agent/profiles.ts`).
  */
-export const concreteProfileSelectionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("ambient") }),
-  z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
-]);
+export const concreteProfileSelectionSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("ambient") }),
+    z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
+  ]),
+);
 export type ConcreteProfileSelection = z.infer<
   typeof concreteProfileSelectionSchema
 >;
@@ -594,25 +614,29 @@ export type ConcreteProfileSelection = z.infer<
  * explicit `profileSelection` model above; see `agentCreateUpgradeV10ToV20` /
  * `agentCreateDowngradeV20ToV10` in `contracts.ts` for the bridge.
  */
-export const createAgentRequestSchema = z.object({
-  senderAgentId: z.string(),
-  epicId: z.string(),
-  name: z.string().min(1).nullable().default(null),
-  surface: z.enum(["gui", "tui"]).nullable(),
-  harnessId: agentFacingHarnessIdSchema.nullable(),
-  model: z.string().nullable(),
-  agentMode: agentModeSchema.nullable(),
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean().nullable(),
-  workspace: createAgentWorkspaceSchema,
-  profileId: z.string().nullable().default(null),
-});
+export const createAgentRequestSchema = lazySchema(() =>
+  z.object({
+    senderAgentId: z.string(),
+    epicId: z.string(),
+    name: z.string().min(1).nullable().default(null),
+    surface: z.enum(["gui", "tui"]).nullable(),
+    harnessId: agentFacingHarnessIdSchema.nullable(),
+    model: z.string().nullable(),
+    agentMode: agentModeSchema.nullable(),
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean().nullable(),
+    workspace: createAgentWorkspaceSchema,
+    profileId: z.string().nullable().default(null),
+  }),
+);
 export type CreateAgentRequest = z.infer<typeof createAgentRequestSchema>;
 
-export const createAgentResponseSchema = z.object({
-  agentId: z.string(),
-  warnings: z.array(z.string()),
-});
+export const createAgentResponseSchema = lazySchema(() =>
+  z.object({
+    agentId: z.string(),
+    warnings: z.array(z.string()),
+  }),
+);
 export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
 
 /**
@@ -624,19 +648,21 @@ export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
  * `contracts.ts`. The response is unchanged (same `warnings` list), so
  * `agent.create@2.0` reuses `createAgentResponseSchema` directly.
  */
-export const createAgentRequestSchemaV20 = z.object({
-  senderAgentId: z.string(),
-  epicId: z.string(),
-  name: z.string().min(1).nullable().default(null),
-  surface: z.enum(["gui", "tui"]).nullable(),
-  harnessId: agentFacingHarnessIdSchema.nullable(),
-  model: z.string().nullable(),
-  agentMode: agentModeSchema.nullable(),
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean().nullable(),
-  workspace: createAgentWorkspaceSchema,
-  profileSelection: profileSelectionSchema,
-});
+export const createAgentRequestSchemaV20 = lazySchema(() =>
+  z.object({
+    senderAgentId: z.string(),
+    epicId: z.string(),
+    name: z.string().min(1).nullable().default(null),
+    surface: z.enum(["gui", "tui"]).nullable(),
+    harnessId: agentFacingHarnessIdSchema.nullable(),
+    model: z.string().nullable(),
+    agentMode: agentModeSchema.nullable(),
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean().nullable(),
+    workspace: createAgentWorkspaceSchema,
+    profileSelection: profileSelectionSchema,
+  }),
+);
 export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
 
 /**
@@ -655,15 +681,19 @@ export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
  * the released client/host floor passes this version, together with the
  * equally-blocked `prepareTuiLaunch` / `createTuiAgent` request shapes.
  */
-export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
-  permissionMode: permissionModeSchema.nullable(),
-});
+export const createAgentRequestSchemaV30 = lazySchema(() =>
+  createAgentRequestSchemaV20.extend({
+    permissionMode: permissionModeSchema.nullable(),
+  }),
+);
 export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
 
-export const agentSelectionGuideRequestSchema = z.object({
-  epicId: z.string(),
-  senderAgentId: z.string(),
-});
+export const agentSelectionGuideRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    senderAgentId: z.string(),
+  }),
+);
 export type AgentSelectionGuideRequest = z.infer<
   typeof agentSelectionGuideRequestSchema
 >;
@@ -672,28 +702,29 @@ export type AgentSelectionGuideRequest = z.infer<
 // global source, with higher priority values for more specific workspaces.
 // Clients sort by priority and layer workspace instructions over the global
 // guide. The paths are kept for attribution in the rendered instructions.
-export const agentSelectionGuideSourceSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("workspace"),
-    workspacePath: z.string(),
-    path: z.string(),
-    priority: z.number(),
-    content: z.string(),
-  }),
-  z.object({
-    kind: z.literal("global"),
-    path: z.string(),
-    priority: z.number(),
-    content: z.string(),
-  }),
-]);
+export const agentSelectionGuideSourceSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("workspace"),
+      workspacePath: z.string(),
+      path: z.string(),
+      priority: z.number(),
+      content: z.string(),
+    }),
+    z.object({
+      kind: z.literal("global"),
+      path: z.string(),
+      priority: z.number(),
+      content: z.string(),
+    }),
+  ]),
+);
 export type AgentSelectionGuideResponseSource = z.infer<
   typeof agentSelectionGuideSourceSchema
 >;
 
-export const agentSelectionGuideResponseSchema = z.discriminatedUnion(
-  "status",
-  [
+export const agentSelectionGuideResponseSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
     z.object({
       status: z.literal("found"),
       sources: z.array(agentSelectionGuideSourceSchema),
@@ -702,7 +733,7 @@ export const agentSelectionGuideResponseSchema = z.discriminatedUnion(
       status: z.literal("not_found"),
       message: z.string(),
     }),
-  ],
+  ]),
 );
 export type AgentSelectionGuideResponse = z.infer<
   typeof agentSelectionGuideResponseSchema
@@ -713,93 +744,115 @@ export type AgentSelectionGuideResponse = z.infer<
 // These are default-host scoped and carry no epic. Provider choices are
 // already host state, so the host computes the generated default from its
 // current provider configuration.
-export const agentSelectionGuideGlobalGetRequestSchema = z.object({});
+export const agentSelectionGuideGlobalGetRequestSchema = lazySchema(() =>
+  z.object({}),
+);
 export type AgentSelectionGuideGlobalGetRequest = z.infer<
   typeof agentSelectionGuideGlobalGetRequestSchema
 >;
 
-export const agentSelectionGuideGlobalGetResponseSchema = z.object({
-  content: z.string(),
-  generatedDefaultContent: z.string(),
-});
+export const agentSelectionGuideGlobalGetResponseSchema = lazySchema(() =>
+  z.object({
+    content: z.string(),
+    generatedDefaultContent: z.string(),
+  }),
+);
 export type AgentSelectionGuideGlobalGetResponse = z.infer<
   typeof agentSelectionGuideGlobalGetResponseSchema
 >;
 
 export const agentSelectionGuideGlobalOnboardingDraftGetRequestSchema =
-  z.object({});
+  lazySchema(() => z.object({}));
 export type AgentSelectionGuideGlobalOnboardingDraftGetRequest = z.infer<
   typeof agentSelectionGuideGlobalOnboardingDraftGetRequestSchema
 >;
 
 export const agentSelectionGuideGlobalOnboardingDraftGetResponseSchema =
-  z.object({
-    content: z.string().nullable(),
-    generatedDefaultContent: z.string(),
-    providersSettled: z.boolean(),
-  });
+  lazySchema(() =>
+    z.object({
+      content: z.string().nullable(),
+      generatedDefaultContent: z.string(),
+      providersSettled: z.boolean(),
+    }),
+  );
 export type AgentSelectionGuideGlobalOnboardingDraftGetResponse = z.infer<
   typeof agentSelectionGuideGlobalOnboardingDraftGetResponseSchema
 >;
 
-export const agentSelectionGuideGlobalSetRequestSchema = z.object({
-  content: z.string(),
-});
+export const agentSelectionGuideGlobalSetRequestSchema = lazySchema(() =>
+  z.object({
+    content: z.string(),
+  }),
+);
 export type AgentSelectionGuideGlobalSetRequest = z.infer<
   typeof agentSelectionGuideGlobalSetRequestSchema
 >;
 
-export const agentSelectionGuideGlobalSetResponseSchema = z.object({
-  content: z.string(),
-  generatedDefaultContent: z.string(),
-});
+export const agentSelectionGuideGlobalSetResponseSchema = lazySchema(() =>
+  z.object({
+    content: z.string(),
+    generatedDefaultContent: z.string(),
+  }),
+);
 export type AgentSelectionGuideGlobalSetResponse = z.infer<
   typeof agentSelectionGuideGlobalSetResponseSchema
 >;
 
-export const agentSelectionGuideGlobalResetRequestSchema = z.object({});
+export const agentSelectionGuideGlobalResetRequestSchema = lazySchema(() =>
+  z.object({}),
+);
 export type AgentSelectionGuideGlobalResetRequest = z.infer<
   typeof agentSelectionGuideGlobalResetRequestSchema
 >;
 
-export const agentSelectionGuideGlobalResetResponseSchema = z.object({
-  content: z.string(),
-  generatedDefaultContent: z.string(),
-});
+export const agentSelectionGuideGlobalResetResponseSchema = lazySchema(() =>
+  z.object({
+    content: z.string(),
+    generatedDefaultContent: z.string(),
+  }),
+);
 export type AgentSelectionGuideGlobalResetResponse = z.infer<
   typeof agentSelectionGuideGlobalResetResponseSchema
 >;
 
-export const listHarnessModelsRequestSchemaV10 = z.object({
-  epicId: z.string(),
-  senderAgentId: z.string(),
-  harnessId: agentFacingHarnessIdSchema,
-});
+export const listHarnessModelsRequestSchemaV10 = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    senderAgentId: z.string(),
+    harnessId: agentFacingHarnessIdSchema,
+  }),
+);
 export type ListHarnessModelsRequestV10 = z.infer<
   typeof listHarnessModelsRequestSchemaV10
 >;
 
-export const listHarnessModelsRequestSchemaV20 = z.object({
-  epicId: z.string().nullable().default(null),
-  senderAgentId: z.string().nullable().default(null),
-  harnessId: agentFacingHarnessIdSchema,
-});
+export const listHarnessModelsRequestSchemaV20 = lazySchema(() =>
+  z.object({
+    epicId: z.string().nullable().default(null),
+    senderAgentId: z.string().nullable().default(null),
+    harnessId: agentFacingHarnessIdSchema,
+  }),
+);
 export const listHarnessModelsRequestSchema = listHarnessModelsRequestSchemaV20;
 export type ListHarnessModelsRequest = z.infer<
   typeof listHarnessModelsRequestSchemaV20
 >;
 
-export const harnessModelSummarySchema = z.object({
-  id: z.string(),
-  reasoningEfforts: z.array(z.string()),
-  fastModeAvailable: z.boolean(),
-});
+export const harnessModelSummarySchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    reasoningEfforts: z.array(z.string()),
+    fastModeAvailable: z.boolean(),
+  }),
+);
 export type HarnessModelSummary = z.infer<typeof harnessModelSummarySchema>;
 
-export const listHarnessModelsResponseSchema = z.object({
-  harnessId: agentFacingHarnessIdSchema,
-  models: z.array(harnessModelSummarySchema),
-});
+export const listHarnessModelsResponseSchema = lazySchema(() =>
+  z.object({
+    harnessId: agentFacingHarnessIdSchema,
+    models: z.array(harnessModelSummarySchema),
+  }),
+);
 export type ListHarnessModelsResponse = z.infer<
   typeof listHarnessModelsResponseSchema
 >;
@@ -817,57 +870,61 @@ export type ListHarnessModelsResponse = z.infer<
  * (`agent.sendMessage`) reject them with `RECEIVER_NOT_LOCAL` until the
  * relay/mailbox transport lands.
  */
-const releasedAgentSummarySchema = z.object({
-  id: z.string(),
-  parentId: z.string().nullable(),
-  hostId: z.string(),
-  isLocal: z.boolean(),
-  surface: z.enum(["gui", "tui"]),
-  harnessId: harnessIdSchema.nullable(),
-  isSelf: z.boolean(),
-  /**
-   * Human-facing title of the chat/TUI agent. Sourced from the epic Y.Doc
-   * (which replicates cross-host), so it is populated for every row regardless
-   * of locality - unlike `folderPaths`/`active`, which are local-only. `null`
-   * when the agent has not been titled yet.
-   */
-  title: z.string().nullable(),
-  capabilities: z.object({
-    readTranscript: z.boolean(),
-    sendMessage: z.boolean(),
+const releasedAgentSummarySchema = lazySchema(() =>
+  z.object({
+    id: z.string(),
+    parentId: z.string().nullable(),
+    hostId: z.string(),
+    isLocal: z.boolean(),
+    surface: z.enum(["gui", "tui"]),
+    harnessId: harnessIdSchema.nullable(),
+    isSelf: z.boolean(),
+    /**
+     * Human-facing title of the chat/TUI agent. Sourced from the epic Y.Doc
+     * (which replicates cross-host), so it is populated for every row regardless
+     * of locality - unlike `folderPaths`/`active`, which are local-only. `null`
+     * when the agent has not been titled yet.
+     */
+    title: z.string().nullable(),
+    capabilities: z.object({
+      readTranscript: z.boolean(),
+      sendMessage: z.boolean(),
+    }),
+    /**
+     * Whether the agent is actively executing right now - a GUI turn running
+     * or a TUI CLI producing output. Sourced from the activity tracker's
+     * `hasActivity` level (NOT effective-active: an agent merely owing an A2A
+     * reply is not "working"). `false` for cross-host rows and whenever the
+     * responding host has no activity tracker wired.
+     */
+    active: z.boolean(),
+    /**
+     * Absolute working directories the agent runs against, so a caller can see
+     * where each agent operates. For an agent bound to git worktrees these are
+     * the worktree paths; otherwise the epic's workspace folders (TUI agents
+     * persist their own; GUI chats inherit the epic's). Empty for cross-host
+     * GUI rows whose local paths the responding host cannot resolve.
+     */
+    folderPaths: z.array(z.string()),
+    /**
+     * Whether the agent runs in a dedicated git worktree (any bound entry is in
+     * worktree mode) rather than directly in a workspace folder. `false` for
+     * cross-host rows and agents with no local worktree binding.
+     */
+    isWorktree: z.boolean(),
   }),
-  /**
-   * Whether the agent is actively executing right now - a GUI turn running
-   * or a TUI CLI producing output. Sourced from the activity tracker's
-   * `hasActivity` level (NOT effective-active: an agent merely owing an A2A
-   * reply is not "working"). `false` for cross-host rows and whenever the
-   * responding host has no activity tracker wired.
-   */
-  active: z.boolean(),
-  /**
-   * Absolute working directories the agent runs against, so a caller can see
-   * where each agent operates. For an agent bound to git worktrees these are
-   * the worktree paths; otherwise the epic's workspace folders (TUI agents
-   * persist their own; GUI chats inherit the epic's). Empty for cross-host
-   * GUI rows whose local paths the responding host cannot resolve.
-   */
-  folderPaths: z.array(z.string()),
-  /**
-   * Whether the agent runs in a dedicated git worktree (any bound entry is in
-   * worktree mode) rather than directly in a workspace folder. `false` for
-   * cross-host rows and agents with no local worktree binding.
-   */
-  isWorktree: z.boolean(),
-});
+);
 
-export const agentRunConfigSchema = z.object({
-  model: z.union([
-    z.object({ kind: z.literal("concrete"), slug: z.string() }),
-    z.object({ kind: z.literal("provider-default") }),
-  ]),
-  reasoningEffort: z.string().nullable(),
-  fastMode: z.boolean().nullable(),
-});
+export const agentRunConfigSchema = lazySchema(() =>
+  z.object({
+    model: z.union([
+      z.object({ kind: z.literal("concrete"), slug: z.string() }),
+      z.object({ kind: z.literal("provider-default") }),
+    ]),
+    reasoningEffort: z.string().nullable(),
+    fastMode: z.boolean().nullable(),
+  }),
+);
 export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
 
 /**
@@ -881,9 +938,11 @@ export type AgentRunConfig = z.infer<typeof agentRunConfigSchema>;
  * kind - each pins a harness enum a released major shipped - so do not read
  * this as one of them and do not freeze its enum.
  */
-export const agentSummarySchemaV90 = releasedAgentSummarySchema.extend({
-  runConfig: agentRunConfigSchema.nullable().default(null),
-});
+export const agentSummarySchemaV90 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    runConfig: agentRunConfigSchema.nullable().default(null),
+  }),
+);
 export type AgentSummaryV90 = z.infer<typeof agentSummarySchemaV90>;
 
 // ── `agent.list@9.1`: is a silent peer asleep, or over? ────────────────────
@@ -904,40 +963,46 @@ export type AgentSummaryV90 = z.infer<typeof agentSummarySchemaV90>;
 // Two plain added keys, so a `@9.0` caller's schema strips them and the eight
 // major-9 downgrade bridges keep working unchanged - each reparses through a
 // frozen summary that drops the pair on the way out.
-export const agentSummarySchema = agentSummarySchemaV90.extend({
-  /**
-   * The agent's session as its BINDING host knows it, or `null` when this
-   * host cannot know - a cross-host row, a GUI chat (which has no PTY session
-   * to be asleep), or a record written before the facet existed.
-   */
-  sessionState: agentSessionStateSchema.nullable(),
-  /**
-   * Why the last session ended, for a `sleeping` agent. Display metadata: all
-   * four reasons resume identically, so a caller must never branch on it to
-   * decide whether the agent can be addressed.
-   */
-  lastExit: agentSessionLastExitSchema.nullable(),
-});
+export const agentSummarySchema = lazySchema(() =>
+  agentSummarySchemaV90.extend({
+    /**
+     * The agent's session as its BINDING host knows it, or `null` when this
+     * host cannot know - a cross-host row, a GUI chat (which has no PTY session
+     * to be asleep), or a record written before the facet existed.
+     */
+    sessionState: agentSessionStateSchema.nullable(),
+    /**
+     * Why the last session ended, for a `sleeping` agent. Display metadata: all
+     * four reasons resume identically, so a caller must never branch on it to
+     * decide whether the agent can be addressed.
+     */
+    lastExit: agentSessionLastExitSchema.nullable(),
+  }),
+);
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 
-export const listAgentsScopeSchema = z.enum(["user", "all"]);
+export const listAgentsScopeSchema = lazySchema(() => z.enum(["user", "all"]));
 export type ListAgentsScope = z.infer<typeof listAgentsScopeSchema>;
 
-export const listAgentsRequestSchema = z.object({
-  epicId: z.string(),
-  senderAgentId: z.string(),
-  scope: listAgentsScopeSchema,
-});
+export const listAgentsRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    senderAgentId: z.string(),
+    scope: listAgentsScopeSchema,
+  }),
+);
 export type ListAgentsRequest = z.infer<typeof listAgentsRequestSchema>;
 
-export const listAgentsResponseSchema = z.object({
-  caller: z.object({
-    agentId: z.string(),
-    canSendMessages: z.boolean(),
+export const listAgentsResponseSchema = lazySchema(() =>
+  z.object({
+    caller: z.object({
+      agentId: z.string(),
+      canSendMessages: z.boolean(),
+    }),
+    scope: listAgentsScopeSchema,
+    agents: z.array(agentSummarySchema),
   }),
-  scope: listAgentsScopeSchema,
-  agents: z.array(agentSummarySchema),
-});
+);
 export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
 
 // ── Frozen protocol-v1.0 agent.list response ───────────────────────────────
@@ -946,14 +1011,18 @@ export type ListAgentsResponse = z.infer<typeof listAgentsResponseSchema>;
 // build time, so an old CLI would hit a strict enum on those rows. v1.0 is
 // frozen; the v2.0 line carries them and a v2→v1 bridge drops them for v1.0
 // callers. Do not add new harnesses here - use the existing v2 bridge.
-export const agentSummarySchemaV10 = releasedAgentSummarySchema.extend({
-  harnessId: harnessIdSchema
-    .extract(["claude", "codex", "opencode", "traycer", "cursor"])
-    .nullable(),
-});
-export const listAgentsResponseSchemaV10 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV10),
-});
+export const agentSummarySchemaV10 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: harnessIdSchema
+      .extract(["claude", "codex", "opencode", "traycer", "cursor"])
+      .nullable(),
+  }),
+);
+export const listAgentsResponseSchemaV10 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV10),
+  }),
+);
 export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 
 // ── Frozen protocol-v2.0 agent.list response (before Amp) ──────────────────
@@ -962,12 +1031,16 @@ export type ListAgentsResponseV10 = z.infer<typeof listAgentsResponseSchemaV10>;
 // predates Amp) would hit a strict enum on those rows. v2.0 is frozen here as
 // actually shipped (before Amp). Do not add new harnesses here - use the
 // existing version bridges.
-export const agentSummarySchemaV20 = releasedAgentSummarySchema.extend({
-  harnessId: guiHarnessIdSchemaV20.nullable(),
-});
-export const listAgentsResponseSchemaV20 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV20),
-});
+export const agentSummarySchemaV20 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV20.nullable(),
+  }),
+);
+export const listAgentsResponseSchemaV20 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV20),
+  }),
+);
 export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 
 // ── Frozen protocol-v3.0 agent.list response (with Amp, before Devin/Pi) ───
@@ -976,12 +1049,16 @@ export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 // would hit a strict enum on those rows. v3.0 is frozen here as actually
 // shipped (with Amp). Do not add new harnesses here - use the existing
 // version bridges.
-export const agentSummarySchemaV30 = releasedAgentSummarySchema.extend({
-  harnessId: guiHarnessIdSchemaV30.nullable(),
-});
-export const listAgentsResponseSchemaV30 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV30),
-});
+export const agentSummarySchemaV30 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV30.nullable(),
+  }),
+);
+export const listAgentsResponseSchemaV30 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV30),
+  }),
+);
 export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
 
 // ── Frozen protocol-v4.0 agent.list response (with Devin/Pi, pre-Hermes/omp) ─
@@ -991,12 +1068,16 @@ export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
 // shipped (with Devin/Pi); the v5.0 line carries Hermes/omp rows and v5→v4 /
 // v5→v3 / v5→v2 / v5→v1 bridges drop them for older callers. Do not add new
 // harnesses here - use the existing v5 bridge.
-export const agentSummarySchemaV40 = releasedAgentSummarySchema.extend({
-  harnessId: guiHarnessIdSchemaV40.nullable(),
-});
-export const listAgentsResponseSchemaV40 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV40),
-});
+export const agentSummarySchemaV40 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV40.nullable(),
+  }),
+);
+export const listAgentsResponseSchemaV40 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV40),
+  }),
+);
 export type ListAgentsResponseV40 = z.infer<typeof listAgentsResponseSchemaV40>;
 
 // ── Frozen protocol-v5.0 agent.list response (with Hermes, before omp) ──────
@@ -1007,12 +1088,16 @@ export type ListAgentsResponseV40 = z.infer<typeof listAgentsResponseSchemaV40>;
 // shipped; the v6.0 line carries omp rows and v6→v5 … v6→v1 bridges drop them
 // for older callers. Do not add new harnesses here - use the existing v6
 // bridge.
-export const agentSummarySchemaV50 = releasedAgentSummarySchema.extend({
-  harnessId: guiHarnessIdSchemaV50.nullable(),
-});
-export const listAgentsResponseSchemaV50 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV50),
-});
+export const agentSummarySchemaV50 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV50.nullable(),
+  }),
+);
+export const listAgentsResponseSchemaV50 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV50),
+  }),
+);
 export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
 
 // ── Frozen protocol-v6.0 agent.list response (with omp, pre-Hugging Face) ───
@@ -1023,12 +1108,16 @@ export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
 // shipped; the v7.0 line carries Hugging Face rows and v7→v6 … v7→v1 bridges
 // drop them for older callers. Do not add new harnesses here - use the
 // existing v7 bridge.
-export const agentSummarySchemaV60 = releasedAgentSummarySchema.extend({
-  harnessId: guiHarnessIdSchemaV60.nullable(),
-});
-export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV60),
-});
+export const agentSummarySchemaV60 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV60.nullable(),
+  }),
+);
+export const listAgentsResponseSchemaV60 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV60),
+  }),
+);
 export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
 
 // ── Frozen protocol-v7.0 agent.list response (with Hugging Face, pre-Reasonix)
@@ -1045,13 +1134,17 @@ export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
 // pinning only the id over a LIVE body is the half-freeze
 // `guiHarnessOptionBaseShapeV70` had to correct in `gui/unary-schemas.ts`. A
 // field added to `agentSummarySchema` must not widen this released line.
-export const agentSummarySchemaV70 = releasedAgentSummarySchema.extend({
-  harnessId: guiHarnessIdSchemaV70.nullable(),
-  runConfig: agentRunConfigSchema.nullable().default(null),
-});
-export const listAgentsResponseSchemaV70 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV70),
-});
+export const agentSummarySchemaV70 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV70.nullable(),
+    runConfig: agentRunConfigSchema.nullable().default(null),
+  }),
+);
+export const listAgentsResponseSchemaV70 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV70),
+  }),
+);
 export type ListAgentsResponseV70 = z.infer<typeof listAgentsResponseSchemaV70>;
 
 // ── Frozen protocol-v8.0 agent.list response (with Reasonix, pre-Antigravity)
@@ -1062,13 +1155,17 @@ export type ListAgentsResponseV70 = z.infer<typeof listAgentsResponseSchemaV70>;
 //
 // Hand-frozen off `releasedAgentSummarySchema` for the same reason v7.0 is: a
 // field added to the live `agentSummarySchema` must not widen a released line.
-export const agentSummarySchemaV80 = releasedAgentSummarySchema.extend({
-  harnessId: guiHarnessIdSchemaV80.nullable(),
-  runConfig: agentRunConfigSchema.nullable().default(null),
-});
-export const listAgentsResponseSchemaV80 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV80),
-});
+export const agentSummarySchemaV80 = lazySchema(() =>
+  releasedAgentSummarySchema.extend({
+    harnessId: guiHarnessIdSchemaV80.nullable(),
+    runConfig: agentRunConfigSchema.nullable().default(null),
+  }),
+);
+export const listAgentsResponseSchemaV80 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV80),
+  }),
+);
 export type ListAgentsResponseV80 = z.infer<typeof listAgentsResponseSchemaV80>;
 
 /**
@@ -1076,9 +1173,11 @@ export type ListAgentsResponseV80 = z.infer<typeof listAgentsResponseSchemaV80>;
  * carries. See {@link agentSummarySchemaV90}: the suffix marks the MINOR that
  * moved past it, not a pinned harness enum.
  */
-export const listAgentsResponseSchemaV90 = listAgentsResponseSchema.extend({
-  agents: z.array(agentSummarySchemaV90),
-});
+export const listAgentsResponseSchemaV90 = lazySchema(() =>
+  listAgentsResponseSchema.extend({
+    agents: z.array(agentSummarySchemaV90),
+  }),
+);
 export type ListAgentsResponseV90 = z.infer<typeof listAgentsResponseSchemaV90>;
 
 /**
@@ -1103,14 +1202,16 @@ export type ListAgentsResponseV90 = z.infer<typeof listAgentsResponseSchemaV90>;
  *     epic Y.Doc already replicates artifact records cross-host, but
  *     the message-delivery transport does not.
  */
-export const sendAgentMessageRequestSchema = z.object({
-  senderAgentId: z.string(),
-  epicId: z.string(),
-  receiverAgentId: z.string(),
-  prompt: z.string(),
-  responseId: z.string().nullable(),
-  expectReply: z.boolean(),
-});
+export const sendAgentMessageRequestSchema = lazySchema(() =>
+  z.object({
+    senderAgentId: z.string(),
+    epicId: z.string(),
+    receiverAgentId: z.string(),
+    prompt: z.string(),
+    responseId: z.string().nullable(),
+    expectReply: z.boolean(),
+  }),
+);
 export type SendAgentMessageRequest = z.infer<
   typeof sendAgentMessageRequestSchema
 >;
@@ -1121,9 +1222,11 @@ export type SendAgentMessageRequest = z.infer<
  * `null` when no reply is expected (one-shot delivery or a final reply
  * that itself closes a thread).
  */
-export const sendAgentMessageResponseSchema = z.object({
-  responseId: z.string().nullable(),
-});
+export const sendAgentMessageResponseSchema = lazySchema(() =>
+  z.object({
+    responseId: z.string().nullable(),
+  }),
+);
 export type SendAgentMessageResponse = z.infer<
   typeof sendAgentMessageResponseSchema
 >;
@@ -1139,17 +1242,21 @@ export type SendAgentMessageResponse = z.infer<
  * reads remain local to the agent's bound host because its provider session
  * store and credentials are host-local.
  */
-export const getAgentTranscriptRequestSchema = z.object({
-  epicId: z.string(),
-  agentId: z.string(),
-});
+export const getAgentTranscriptRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    agentId: z.string(),
+  }),
+);
 export type GetAgentTranscriptRequest = z.infer<
   typeof getAgentTranscriptRequestSchema
 >;
 
-export const getAgentTranscriptResponseSchema = z.object({
-  transcript: z.string(),
-});
+export const getAgentTranscriptResponseSchema = lazySchema(() =>
+  z.object({
+    transcript: z.string(),
+  }),
+);
 export type GetAgentTranscriptResponse = z.infer<
   typeof getAgentTranscriptResponseSchema
 >;
@@ -1173,11 +1280,13 @@ export type GetAgentTranscriptResponse = z.infer<
  * is purged under a transient cancel-guard so the subtree can't revive
  * itself, but a later message wakes any of these agents normally.
  */
-export const stopAgentRequestSchema = z.object({
-  epicId: z.string(),
-  agentId: z.string(),
-  cascade: z.boolean(),
-});
+export const stopAgentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    agentId: z.string(),
+    cascade: z.boolean(),
+  }),
+);
 export type StopAgentRequest = z.infer<typeof stopAgentRequestSchema>;
 
 /**
@@ -1185,9 +1294,11 @@ export type StopAgentRequest = z.infer<typeof stopAgentRequestSchema>;
  * `cascade` was set, every active descendant it reached. Output only - the
  * caller never sends a list of ids.
  */
-export const stopAgentResponseSchema = z.object({
-  stoppedAgentIds: z.array(z.string()),
-});
+export const stopAgentResponseSchema = lazySchema(() =>
+  z.object({
+    stoppedAgentIds: z.array(z.string()),
+  }),
+);
 export type StopAgentResponse = z.infer<typeof stopAgentResponseSchema>;
 
 /**
@@ -1210,11 +1321,13 @@ export type StopAgentResponse = z.infer<typeof stopAgentResponseSchema>;
  * profile id - that intent is expressed exclusively through `{ kind:
  * "ambient" }`.
  */
-export const forkAgentProfileSelectionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("inherit") }),
-  z.object({ kind: z.literal("ambient") }),
-  z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
-]);
+export const forkAgentProfileSelectionSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("inherit") }),
+    z.object({ kind: z.literal("ambient") }),
+    z.object({ kind: z.literal("profile"), profileId: managedProfileIdSchema }),
+  ]),
+);
 export type ForkAgentProfileSelection = z.infer<
   typeof forkAgentProfileSelectionSchema
 >;
@@ -1250,26 +1363,30 @@ export type ForkAgentProfileSelection = z.infer<
  * `forkSource` feature). Terminal forks stay Claude-only; other harnesses
  * are refused for lacking a native session fork.
  */
-export const forkAgentRequestSchema = z.object({
-  epicId: z.string(),
-  senderAgentId: z.string(),
-  agentId: z.string(),
-  name: z.string().min(1).nullable().default(null),
-  permissionMode: permissionModeSchema,
-  workspace: createAgentWorkspaceSchema,
-  profileSelection: forkAgentProfileSelectionSchema,
-});
+export const forkAgentRequestSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string(),
+    senderAgentId: z.string(),
+    agentId: z.string(),
+    name: z.string().min(1).nullable().default(null),
+    permissionMode: permissionModeSchema,
+    workspace: createAgentWorkspaceSchema,
+    profileSelection: forkAgentProfileSelectionSchema,
+  }),
+);
 export type ForkAgentRequest = z.infer<typeof forkAgentRequestSchema>;
 
 /**
  * Mirrors `AgentForkResponse` (`agent-fork-service.ts`) field-for-field.
  */
-export const forkAgentResponseSchema = z.object({
-  agentId: z.string(),
-  sourceAgentId: z.string(),
-  forkedFromMessageId: z.string().nullable(),
-  warnings: z.array(z.string()),
-  effectiveProfileId: z.string().nullable(),
-  profileOverrideApplied: z.boolean(),
-});
+export const forkAgentResponseSchema = lazySchema(() =>
+  z.object({
+    agentId: z.string(),
+    sourceAgentId: z.string(),
+    forkedFromMessageId: z.string().nullable(),
+    warnings: z.array(z.string()),
+    effectiveProfileId: z.string().nullable(),
+    profileOverrideApplied: z.boolean(),
+  }),
+);
 export type ForkAgentResponse = z.infer<typeof forkAgentResponseSchema>;

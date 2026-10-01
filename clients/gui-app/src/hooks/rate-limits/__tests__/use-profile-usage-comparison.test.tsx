@@ -16,8 +16,9 @@ import {
 } from "@traycer/protocol/host/index";
 import type { ReactNode } from "react";
 import { queryKeys } from "@/lib/query-keys";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import type { RunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
-import { __resetRateLimitQueueForTests } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { __resetProviderRateLimitFetchesForTests } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
 import { rateLimitProviderState } from "./profile-usage-fixtures";
 
@@ -97,6 +98,7 @@ function buildHostScope(
   const entry = { ...mockLocalHostEntry, hostId };
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: { invalidateHostScope: () => {} },
     findHostById: (id) => (id === entry.hostId ? entry : null),
     messenger: new MockHostMessenger<HostRpcRegistry>({
@@ -115,10 +117,11 @@ function buildHostScope(
     hostId,
     client,
     isReady: true,
-    queueScope: {
+    fetchScope: {
       hostId,
       queryClient,
-      request: (_hostId, method, params) => client.request(method, params),
+      request: (method, params, responseTimeoutMs) =>
+        client.requestWithResponseTimeout(method, params, responseTimeoutMs),
     },
   };
   return { scope, requestSpy: handler };
@@ -152,7 +155,7 @@ function goodResponse(): RateLimitUsageResponse {
 
 describe("useProfileUsageComparison", () => {
   beforeEach(() => {
-    __resetRateLimitQueueForTests();
+    __resetProviderRateLimitFetchesForTests();
     scopesRef.byHostId.clear();
     providerStateRef.providers = [
       rateLimitProviderState("claude-code", "authenticated"),
@@ -161,7 +164,7 @@ describe("useProfileUsageComparison", () => {
   });
   afterEach(() => {
     cleanup();
-    __resetRateLimitQueueForTests();
+    __resetProviderRateLimitFetchesForTests();
     scopesRef.byHostId.clear();
     providerStateRef.providers = [];
   });
@@ -344,7 +347,7 @@ describe("useProfileUsageComparison", () => {
     ]);
   });
 
-  it("routes an explicit refresh to exactly the previewed profile via the ephemeralProcess queue, and never to a sibling profile", async () => {
+  it("routes an explicit refresh to exactly the previewed profile via fetchProviderRateLimits, and never to a sibling profile", async () => {
     const queryClient = new QueryClient();
     const calls: Array<unknown> = [];
     const { scope } = buildHostScope("default-host", queryClient, (params) => {
@@ -521,7 +524,11 @@ describe("useProfileUsageComparison", () => {
     ).toBeUndefined();
   });
 
-  it("serializes two profiles' ephemeralProcess refreshes through the shared queue, one at a time", async () => {
+  it("runs two profiles' ephemeralProcess refreshes CONCURRENTLY rather than serializing them", async () => {
+    // The deleted shared serial queue used to hold p-b's request behind p-a's
+    // until p-a settled. `fetchProviderRateLimits` has no such lane: both
+    // requests reach the host independently, so p-b - which resolves right
+    // away - finishes well before p-a's gate is ever released.
     const queryClient = new QueryClient();
     const order: string[] = [];
     const releaseFirstRef: { current: (() => void) | null } = { current: null };
@@ -533,7 +540,7 @@ describe("useProfileUsageComparison", () => {
       order.push(`start:${profileId}`);
       if (profileId === "p-a") {
         return firstGate.then(() => {
-          order.push(`end:${profileId}`);
+          order.push("end:p-a");
           return goodResponse();
         });
       }
@@ -558,11 +565,14 @@ describe("useProfileUsageComparison", () => {
     const refreshA = result.current.entries.get("p-a")?.refresh();
     const refreshB = result.current.entries.get("p-b")?.refresh();
 
-    await waitFor(() => expect(order).toEqual(["start:p-a"]));
-    // p-b's own fetch has not started yet (it is waiting its turn behind p-a
-    // in the shared serial queue), so it reads as queued, not refreshing.
+    // Both requests are dispatched, and p-b's unbated one has already
+    // resolved, before p-a's gate is touched at all - independence, not a
+    // serial hand-off.
     await waitFor(() =>
-      expect(result.current.entries.get("p-b")?.refreshStatus).toBe("queued"),
+      expect(order).toEqual(["start:p-a", "start:p-b", "end:p-b"]),
+    );
+    await waitFor(() =>
+      expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle"),
     );
     expect(result.current.entries.get("p-a")?.refreshStatus).toBe("refreshing");
 
@@ -570,9 +580,9 @@ describe("useProfileUsageComparison", () => {
     await refreshA;
     await refreshB;
 
-    expect(order).toEqual(["start:p-a", "end:p-a", "start:p-b", "end:p-b"]);
+    expect(order).toEqual(["start:p-a", "start:p-b", "end:p-b", "end:p-a"]);
     await waitFor(() =>
-      expect(result.current.entries.get("p-b")?.refreshStatus).toBe("idle"),
+      expect(result.current.entries.get("p-a")?.refreshStatus).toBe("idle"),
     );
   });
 

@@ -114,6 +114,27 @@ export function selectGlobalLastRunSettings(
   return state.legacyGlobalLastRunSettings;
 }
 
+/**
+ * Whether the tuple `selectGlobalLastRunSettings` hands back for `hostId` is
+ * that host's OWN record, or the unattributed legacy tier it falls back to.
+ *
+ * Seeding a composer does not need this - a remembered default is precisely
+ * what the legacy tier is for, and it is why a single-host install keeps its
+ * memory across the bucketing migration. A caller that resolves the tuple
+ * against something HOST-SCOPED does: the legacy record carries no host, so a
+ * model slug in it may name a different model on the host now being asked, and
+ * the answer comes back wrong rather than absent.
+ */
+export function globalLastRunSettingsAreHostOwned(
+  state: Pick<ComposerRunSettingsStore, "globalLastRunSettingsByHostId">,
+  hostId: string | null,
+): boolean {
+  return (
+    hostId !== null &&
+    Object.hasOwn(state.globalLastRunSettingsByHostId, hostId)
+  );
+}
+
 /** Reactive selector for one (epic, host) last-run entry, with the same
  *  per-key legacy fallback as `selectGlobalLastRunSettings`. */
 export function selectEpicRunSettingsEntry(

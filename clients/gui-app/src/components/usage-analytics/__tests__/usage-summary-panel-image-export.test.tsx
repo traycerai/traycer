@@ -14,6 +14,7 @@ import type {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UsageSummaryPanel } from "@/components/usage-analytics/usage-summary-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { formatDateRangeLabel } from "@/lib/usage-analytics/format-metric-value";
 import { lastNCalendarDays } from "@/lib/usage-analytics/day-window";
 
@@ -193,6 +194,7 @@ function renderPanel(
   // client. Matches `usage-summary-panel-host-scope.test.tsx`.
   const spine = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
+    schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: { invalidateHostScope: () => undefined },
     // Load-bearing, not boilerplate: a requester resolves its entry through
     // this at property-access time, and `captureAuthority` refuses a routed

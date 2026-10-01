@@ -22,3 +22,18 @@ export const BRAND_DARK_GROUND_CLASS = "bg-zinc-950";
  * silently desync the native launch image.
  */
 export const BRAND_DARK_GROUND_HEX = "#09090b";
+
+/**
+ * The theme tokens for anything drawn ON the dark ground: the base dark
+ * palette, re-declared on the element that carries it (`theme-base-dark` in
+ * `styles/theme-fallback.css`), so every control inside resolves dark-ground
+ * colours whichever theme, preset or custom palette is active on `<html>`.
+ *
+ * Without it the ground is fixed and the controls are not: under a light theme
+ * a button's label and surface come from the light palette while the text
+ * around them is painted for the dark ground, and a variant with no text colour
+ * of its own inherits white onto a light fill. Pinning each control would be one
+ * pin per control, and a call site may not colour a component anyway - the
+ * scope is what keeps a control added later legible too.
+ */
+export const BRAND_DARK_TOKENS_CLASS = "theme-base-dark";

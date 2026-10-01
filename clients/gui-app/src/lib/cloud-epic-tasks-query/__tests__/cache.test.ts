@@ -13,8 +13,10 @@ import {
   cloudEpicTasksLastKnownQueryKey,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
+import { epicPinReadingListQueryOptions } from "@/lib/cloud-epic-tasks-query/reconciler-local-home-query";
 import {
   readEpicTitlesFromCloudTaskCaches,
+  reconcileAuthoritativeEpicTitleInCloudTaskCaches,
   removeDeletedEpicsFromCloudTaskCaches,
   setEpicLocalHomeInCloudTaskCaches,
   setEpicPinnedInCloudTaskCaches,
@@ -603,6 +605,168 @@ describe("setEpicPinnedInCloudTaskCaches", () => {
     expect(taskPinnedAt(queryClient, batchKey, "epic-a")).toBe(true);
     expect(taskPinnedAt(queryClient, batchKey, "epic-b")).toBe(false);
     expect(taskPinnedAt(queryClient, otherUserBatchKey, "epic-a")).toBe(false);
+  });
+});
+
+/**
+ * The per-host pin READING cache also supplies Current tasks rows (title, home,
+ * pin), so it takes the same title and delete writes as History's first page.
+ */
+describe("the pin-reading cache follows title and delete writes", () => {
+  const PIN_SCOPE = { hostId: "host-pin", userId: "user-pin" };
+  const PIN_PARAMS = {
+    limit: 1,
+    filters: { taskType: "epic" as const },
+    extensionPhaseVersion: "1",
+    extensionEpicVersion: "1",
+  };
+
+  function pinReadingOptions(userId: string) {
+    return epicPinReadingListQueryOptions({
+      hostId: PIN_SCOPE.hostId,
+      userId,
+      params: PIN_PARAMS,
+      population: ["epic-pin-a"],
+    });
+  }
+
+  function localRowFor(id: string, title: string, userId: string) {
+    return { ...listTaskLight(id, title, userId), home: "local" as const };
+  }
+
+  function titlesAt(queryClient: QueryClient, key: readonly unknown[]) {
+    return queryClient
+      .getQueryData<ListTasksResponse>(key)
+      ?.tasks.map((task) => task.epic?.light?.title);
+  }
+
+  beforeEach(() => {
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      generationByIdentity: {},
+      deletedEpicIdsByScope: {},
+    });
+  });
+
+  it("patches a title into the cached reading for its host and user only, and reads it back", () => {
+    const queryClient = new QueryClient();
+    const own = pinReadingOptions(PIN_SCOPE.userId).queryKey;
+    const otherUser = pinReadingOptions("user-other").queryKey;
+    queryClient.setQueryData<ListTasksResponse>(own, {
+      tasks: [localRowFor("epic-pin-a", "Old", PIN_SCOPE.userId)],
+      hasMore: false,
+    });
+    queryClient.setQueryData<ListTasksResponse>(otherUser, {
+      tasks: [localRowFor("epic-pin-a", "Old", "user-other")],
+      hasMore: false,
+    });
+
+    updateEpicTitleInCloudTaskCaches(
+      queryClient,
+      PIN_SCOPE,
+      "epic-pin-a",
+      "Renamed",
+    );
+
+    expect(titlesAt(queryClient, own)).toEqual(["Renamed"]);
+    expect(titlesAt(queryClient, otherUser)).toEqual(["Old"]);
+    expect(
+      readEpicTitlesFromCloudTaskCaches(queryClient, PIN_SCOPE, ["epic-pin-a"]),
+    ).toEqual({ "epic-pin-a": "Renamed" });
+  });
+
+  it("an authoritative rename cancels an in-flight reading, so its stale first delivery cannot land", async () => {
+    const queryClient = new QueryClient();
+    const options = pinReadingOptions(PIN_SCOPE.userId);
+    let deliverStale: (page: ListTasksResponse) => void = () => undefined;
+    const inFlight = queryClient.fetchQuery(
+      queryOptions({
+        ...options,
+        queryFn: () =>
+          new Promise<ListTasksResponse>((resolve) => {
+            deliverStale = resolve;
+          }),
+      }),
+    );
+    const settled = inFlight.then(
+      () => "resolved",
+      () => "cancelled",
+    );
+
+    reconcileAuthoritativeEpicTitleInCloudTaskCaches(
+      queryClient,
+      PIN_SCOPE,
+      "epic-pin-a",
+      "Renamed",
+    );
+    deliverStale({
+      tasks: [localRowFor("epic-pin-a", "Old", PIN_SCOPE.userId)],
+      hasMore: false,
+    });
+
+    expect(await settled).toBe("cancelled");
+    expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
+  });
+
+  it("removes a deleted epic from the cached reading and refuses its late delivery, admitting only a preserved row", () => {
+    const queryClient = new QueryClient();
+    const options = pinReadingOptions(PIN_SCOPE.userId);
+    queryClient.getQueryCache().build(queryClient, {
+      queryKey: options.queryKey,
+      queryFn: options.queryFn,
+      structuralSharing: options.structuralSharing,
+    });
+    queryClient.setQueryData<ListTasksResponse>(options.queryKey, {
+      tasks: [localRowFor("epic-pin-gone", "Gone", PIN_SCOPE.userId)],
+      hasMore: false,
+    });
+    // The SAME epic id, same user, on a sibling host: a delete scoped to host A
+    // must leave it alone, in the cache and at the structural-sharing ledger.
+    const sibling = epicPinReadingListQueryOptions({
+      hostId: "host-pin-sibling",
+      userId: PIN_SCOPE.userId,
+      params: PIN_PARAMS,
+      population: ["epic-pin-a"],
+    });
+    queryClient.getQueryCache().build(queryClient, {
+      queryKey: sibling.queryKey,
+      queryFn: sibling.queryFn,
+      structuralSharing: sibling.structuralSharing,
+    });
+    queryClient.setQueryData<ListTasksResponse>(sibling.queryKey, {
+      tasks: [localRowFor("epic-pin-gone", "Gone", PIN_SCOPE.userId)],
+      hasMore: false,
+    });
+
+    removeDeletedEpicsFromCloudTaskCaches(queryClient, PIN_SCOPE, [
+      "epic-pin-gone",
+    ]);
+    expect(titlesAt(queryClient, options.queryKey)).toEqual([]);
+    expect(titlesAt(queryClient, sibling.queryKey)).toEqual(["Gone"]);
+    // No tombstone on the sibling either: a fresh delivery of the same id lands.
+    queryClient.setQueryData<ListTasksResponse>(sibling.queryKey, {
+      tasks: [localRowFor("epic-pin-gone", "Gone again", PIN_SCOPE.userId)],
+      hasMore: false,
+    });
+    expect(titlesAt(queryClient, sibling.queryKey)).toEqual(["Gone again"]);
+
+    // A late delivery of the same ordinary row goes back through the ledger.
+    queryClient.setQueryData<ListTasksResponse>(options.queryKey, {
+      tasks: [localRowFor("epic-pin-gone", "Gone", PIN_SCOPE.userId)],
+      hasMore: false,
+    });
+    expect(titlesAt(queryClient, options.queryKey)).toEqual([]);
+
+    queryClient.setQueryData<ListTasksResponse>(options.queryKey, {
+      tasks: [
+        {
+          ...localRowFor("epic-pin-gone", "Gone", PIN_SCOPE.userId),
+          preservation: "orphaned-local-edits",
+        },
+      ],
+      hasMore: false,
+    });
+    expect(titlesAt(queryClient, options.queryKey)).toEqual(["Gone"]);
   });
 });
 

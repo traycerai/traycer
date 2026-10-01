@@ -56,10 +56,15 @@ const MIGRATED_CALLERS: readonly string[] = [
   "clients/traycer-cli/src/host/attested-install-runtime.ts",
   "clients/traycer-cli/src/host/stamp-runtime.ts",
   "clients/traycer-cli/src/host/update-run.ts",
-  // Arrived with the same merge, in neither list, and was caught by the
-  // discovery scan rather than by anyone reading the diff. This is the exact
-  // case cold review B added that scan for, on its first real outing.
-  "clients/traycer-cli/src/commands/host-start.ts",
+  // The supervisor relaunch admission's installed identity:
+  // `supervisorRelaunchInstalledIdentityOf` builds it from the full install
+  // record, and `commands/host-start.ts` reads it through
+  // `readSupervisorRelaunchInstalledIdentity` instead of encoding its own. So
+  // does the restart commands' park comparison
+  // (`host/parked-activation-relaunch.ts`, traycer#2208): it keeps its own
+  // install READ, whose failures it must tell apart from an absent record,
+  // and maps the record through the same function.
+  "clients/shared/host-update/contender.ts",
   // Desktop main's own capture, migrated with Q7. It is the only caller
   // outside this package, and the only one whose encoded string is compared
   // ACROSS A PROCESS BOUNDARY: desktop main reads the fingerprint from disk

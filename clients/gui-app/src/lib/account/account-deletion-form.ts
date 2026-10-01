@@ -22,10 +22,15 @@ const FORM_BASE_URL =
  * The two email questions on the form. Google Forms names each by an opaque
  * `entry.<id>`, so these are named constants with the question they answer
  * written down, checkable against the live form. The form's first question -
- * "how do you sign in, Email or GitHub?" - is left for the user, since only
- * they know it and a wrong answer routes the request to the wrong branch; the
- * account address is the same on either branch, so prefilling both covers
- * whichever the user picks.
+ * "how do you sign in, Email, GitHub or Apple?" - is left for the user, since
+ * only they know it and a wrong answer routes the request to the wrong
+ * branch; the account address is the same on every branch, so prefilling both
+ * addresses covers whichever the user picks.
+ *
+ * Apple is on that list because Sign in with Apple is a supported provider.
+ * An Apple account whose owner chose Hide My Email carries the relay address
+ * on the account, and that is exactly the address the prefill uses, so the
+ * request still names the right account.
  */
 const ACCOUNT_EMAIL_ENTRY = "entry.833738174";
 const CONTACT_EMAIL_ENTRY = "entry.671973110";

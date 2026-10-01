@@ -1,4 +1,4 @@
-import type { ImageBytes } from "@/lib/attachments/image-bytes";
+import type { ImageBlob, ImageBytes } from "@/lib/attachments/image-bytes";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { DraftWrite } from "@traycer/protocol/host";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -7,12 +7,16 @@ import {
   getImageBytes,
   putImageBytesAtHash,
   releaseSession,
+  sha256Hex,
 } from "@/lib/composer/landing-image-store";
+import {
+  landingLiveImageRootHashes,
+  tryReserveLandingImageResidency,
+} from "@/lib/composer/landing-image-budget";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { bytesToBase64, base64ToBytes } from "@/lib/composer/image-base64";
-import { sniffImageMimeType } from "@/lib/composer/prompt-stash-image-signature";
-import { readPromptStashRestoreBlobs } from "@/lib/composer/prompt-stash-repository";
-import type { PromptStashImageBlob } from "@/lib/composer/prompt-stash-codec";
+import { bytesToBase64Async, base64ToBytes } from "@/lib/composer/image-base64";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "./draft-blob-transport-budget";
+import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   authorizesCloudCapability,
@@ -102,12 +106,84 @@ const inFlightBlobUploads = new Map<string, Map<string, Promise<boolean>>>();
 const unbridgeableBlobs = new Map<string, Set<string>>();
 const blobEpochs = new Map<string, number>();
 
+/**
+ * ## The per-host upload gate
+ *
+ * At most {@link DRAFT_BLOB_UPLOAD_CONCURRENCY} `drafts.putBlob` requests in
+ * flight per host, counted across EVERY caller in this renderer rather than
+ * per call. A per-call pool bounded one submit's burst and nothing else:
+ * `adoptUnadoptedLandingDraftsForHost` starts one `putDraftBlobs` per restored
+ * draft and awaits them together, a draft write and a submit can overlap, and
+ * each of those would have brought its own three workers - so restoring twenty
+ * image-bearing drafts could open sixty FileReader encodes and sixty
+ * multi-megabyte requests at once. One counter per host is what actually
+ * limits the renderer's live encodes and the host's inbound frames.
+ *
+ * Slots hand over FIFO: a released slot goes to the longest waiter, so a call
+ * that arrived first finishes first and a progress listener sees its own
+ * digests settle in order. A holder never waits on the gate (it waits only on
+ * its request, or on another holder's flight when it joins one), so the gate
+ * cannot deadlock.
+ */
+interface UploadGate {
+  inFlight: number;
+  readonly waiters: Array<() => void>;
+}
+
+const uploadGates = new Map<string, UploadGate>();
+
+/**
+ * Takes a slot SYNCHRONOUSLY when one is free (`null`), else returns the
+ * promise that resolves once a released slot has been handed to this caller.
+ *
+ * Synchronous on purpose, not `await`ed through a resolved promise: the
+ * flight that follows captures the host's blob epoch at its START and
+ * registers itself for de-duplication before its first await, and the
+ * callers that bump the epoch or re-bootstrap right after starting a put rely
+ * on the flight having begun in the same tick as the call (see the module
+ * doc's ordering argument). One extra microtask between the call and the
+ * flight would move that capture to after the caller's next synchronous
+ * step.
+ */
+function acquireUploadSlot(hostId: string): Promise<void> | null {
+  const existing = uploadGates.get(hostId);
+  const gate: UploadGate = existing ?? { inFlight: 0, waiters: [] };
+  if (existing === undefined) uploadGates.set(hostId, gate);
+  if (gate.inFlight < DRAFT_BLOB_UPLOAD_CONCURRENCY) {
+    gate.inFlight += 1;
+    return null;
+  }
+  return new Promise((resolve) => {
+    gate.waiters.push(resolve);
+  });
+}
+
+function releaseUploadSlot(hostId: string): void {
+  const gate = uploadGates.get(hostId);
+  if (gate === undefined) return;
+  const next = gate.waiters.shift();
+  if (next !== undefined) {
+    // The slot passes straight to the waiter; `inFlight` is unchanged.
+    next();
+    return;
+  }
+  gate.inFlight -= 1;
+  if (gate.inFlight === 0) uploadGates.delete(hostId);
+}
+
+/** How many uploads one host has in flight right now; for tests. */
+export function draftBlobUploadsInFlight(hostId: string): number {
+  return uploadGates.get(hostId)?.inFlight ?? 0;
+}
+
 export function resetDraftBlobTransportForTests(): void {
   blobUnsupportedHosts.clear();
   confirmedBlobOwners.clear();
   inFlightBlobUploads.clear();
   unbridgeableBlobs.clear();
   blobEpochs.clear();
+  uploadGates.clear();
+  verdictWaiters.clear();
 }
 
 /**
@@ -253,8 +329,33 @@ export function hostWithholdsDraftBlobs(hostId: string): boolean {
   return blobUnsupportedHosts.has(hostId);
 }
 
+/**
+ * Calls waiting on a host's capability verdict; see
+ * `putDraftBlobsWithProgress`. Per HOST, like the gate and the flag it is
+ * the notification for: the verdict is one fact about the host, and every
+ * call with digests up on it is entitled to it the moment it is known, not
+ * only the call whose own request happened to be the one refused.
+ */
+const verdictWaiters = new Map<string, Set<() => void>>();
+
 function markBlobUnsupported(hostId: string): void {
   blobUnsupportedHosts.add(hostId);
+  const waiters = verdictWaiters.get(hostId);
+  if (waiters === undefined) return;
+  verdictWaiters.delete(hostId);
+  for (const wake of waiters) wake();
+}
+
+function awaitVerdict(hostId: string, wake: () => void): () => void {
+  const waiters = verdictWaiters.get(hostId) ?? new Set<() => void>();
+  verdictWaiters.set(hostId, waiters);
+  waiters.add(wake);
+  return () => {
+    waiters.delete(wake);
+    if (waiters.size === 0 && verdictWaiters.get(hostId) === waiters) {
+      verdictWaiters.delete(hostId);
+    }
+  };
 }
 
 function isBlobUnsupported(error: unknown): boolean {
@@ -264,24 +365,27 @@ function isBlobUnsupported(error: unknown): boolean {
   );
 }
 
-async function localBytesForHash(
-  hash: string,
-): Promise<Uint8Array<ArrayBuffer> | null> {
-  const fromLanding = await getImageBytes(hash);
-  if (fromLanding !== undefined) return fromLanding;
-  const stash = await readPromptStashRestoreBlobs([hash]);
-  if (stash.status !== "ok") return null;
-  return stash.blobs.get(hash)?.bytes ?? null;
-}
-
 /**
- * Upload every `blobHashes` entry the local partition (or stash repo)
- * still holds. Missing local bytes and digest-mismatch skip that hash
- * (fail closed per-image). A host that withholds the methods is treated
- * as an old host: hash-only content, never an error surface.
+ * Upload every `blobHashes` entry the local landing partition still holds.
+ * Missing local bytes and digest-mismatch skip that hash (fail closed
+ * per-image). A host that withholds the methods is treated as an old host:
+ * hash-only content, never an error surface.
  */
 export type DraftBlobClient = {
   readonly request: HostRequester<HostRpcRegistry>["request"];
+  /**
+   * `drafts.putBlob` rides this, never the plain `request` above, because it
+   * needs an idempotency key and a budget the default 30s unary one cannot
+   * give a multi-megabyte body.
+   *
+   * Widened on the TYPE rather than at the call site so every provider - the
+   * draft mirror, tab recovery, the composer - hands over a client that can
+   * make that call. A `request`-only client was enough while uploads rode the
+   * default budget with no key; it is not enough now, and a type that still
+   * said so would push the choice back to whichever caller happened to be
+   * first.
+   */
+  readonly requestWithOptions: HostRequester<HostRpcRegistry>["requestWithOptions"];
 };
 
 export async function putDraftBlobsForWrite(
@@ -299,23 +403,163 @@ export async function putDraftBlobs(
   hashes: readonly string[],
   ownerUserId: string | null,
 ): Promise<ReadonlyArray<string>> {
+  return putDraftBlobsWithProgress({
+    hostId,
+    client,
+    hashes,
+    ownerUserId,
+    onProgress: null,
+  });
+}
+
+/**
+ * How many `drafts.putBlob` requests one call keeps in flight at once.
+ *
+ * Uploads used to be strictly serial, and a fifteen-image submit was fifteen
+ * round trips end to end - on a local host that is ~40 ms each, on a remote
+ * host it is a relay session's worth of pacing each. Three at a time keeps a
+ * burst's wall clock near the slowest single upload without asking a remote
+ * session to interleave more bodies than its per-session pacer can drain, and
+ * without the renderer holding more than three base64 copies of an image at
+ * once (each is ~5 MiB for a prepared image).
+ */
+export const DRAFT_BLOB_UPLOAD_CONCURRENCY = 3;
+
+/** Where an upload burst is, for a surface that wants to show it. */
+export interface DraftBlobUploadProgress {
+  /** Digests answered so far, confirmed or not. */
+  readonly completed: number;
+  /** Digests this call had to send - the memo hits are not counted. */
+  readonly total: number;
+}
+
+export type DraftBlobUploadProgressListener = (
+  progress: DraftBlobUploadProgress,
+) => void;
+
+/**
+ * {@link putDraftBlobs} with a progress listener. The listener is called once
+ * before the first request with `completed: 0` and once after every digest
+ * settles, on the same tick, so a caller rendering "k of N" sees every step.
+ * `null` reports nothing and is what the plain entry point passes.
+ *
+ * Digests are de-duplicated first: two nodes carrying one image are one upload,
+ * and with several in flight at once the in-flight join below would otherwise
+ * report the same digest twice.
+ */
+export async function putDraftBlobsWithProgress(input: {
+  readonly hostId: string;
+  readonly client: DraftBlobClient;
+  readonly hashes: readonly string[];
+  readonly ownerUserId: string | null;
+  readonly onProgress: DraftBlobUploadProgressListener | null;
+}): Promise<ReadonlyArray<string>> {
+  const { hostId, client, hashes, ownerUserId, onProgress } = input;
   if (hashes.length === 0) return [];
   if (blobUnsupportedHosts.has(hostId)) return [];
   const confirmed: string[] = [];
-  for (const sha256 of hashes) {
+  const pending: string[] = [];
+  for (const sha256 of new Set(hashes)) {
     // The memo hit, and the whole point of the ticket: no local read, no
     // base64, no request.
     if (isDraftBlobConfirmed(hostId, sha256, ownerUserId)) {
       confirmed.push(sha256);
       continue;
     }
-    if (await joinOrStartBlobUpload(hostId, client, sha256, ownerUserId)) {
-      confirmed.push(sha256);
-    }
-    // Checked after each digest rather than only on the throw: a joined upload
-    // can be the one that discovers the host withholds the methods, and its
-    // joiner sees that only through this flag.
-    if (blobUnsupportedHosts.has(hostId)) return confirmed;
+    pending.push(sha256);
+  }
+  if (pending.length === 0) return confirmed;
+  const total = pending.length;
+  let completed = 0;
+  let settled = false;
+  onProgress?.({ completed, total });
+  // The capability verdict ends the call on its own. Once one request has
+  // answered that the host withholds the method, every digest not yet sent
+  // is skipped - but the siblings already on the wire are still awaited by
+  // a plain `Promise.all`, and a sibling whose response is delayed or lost
+  // would hold an old-host fallback that is already decided until its own
+  // budget expired. The serial loop returned at the first refusal; this
+  // does the same by racing the fan-out against the verdict. The siblings
+  // finish on their own (their flights never reject and release their slots
+  // in `finally`), and nothing they settle after this returns is reported.
+  //
+  // The verdict is the HOST's, delivered by `markBlobUnsupported` to every
+  // call waiting on that host - not only to the call whose own request was
+  // the refused one. Overlapping calls share the gate and the flag, so a
+  // call whose requests are all delayed, with no digest left in its queue
+  // to observe the flag, would otherwise wait its whole budget on a
+  // fallback another call had already decided for it.
+  let resolveVerdict: () => void = () => undefined;
+  const verdict = new Promise<void>((resolve) => {
+    resolveVerdict = resolve;
+  });
+  const stopAwaitingVerdict = awaitVerdict(hostId, resolveVerdict);
+  // Every digest queues on the HOST's gate (see "The per-host upload gate"),
+  // not on a pool of this call's own, so the limit holds across overlapping
+  // callers. Each digest still settles into this call's own progress count.
+  const fanOut = Promise.all(
+    pending.map(async (sha256) => {
+      let acknowledged = false;
+      // A flight already going up for this digest is joined WITHOUT a slot:
+      // the slot is the initiator's for the flight's duration, and a joiner
+      // holding a second one would charge the host's limit for a request it
+      // never sends - three joiners of one flight would fill the gate and
+      // park a fourth caller's genuinely new digest behind them.
+      const joined = joinBlobUploadInFlight(hostId, sha256, ownerUserId);
+      if (joined !== null) {
+        acknowledged = await joined;
+      } else {
+        const slot = acquireUploadSlot(hostId);
+        if (slot !== null) await slot;
+        // A flight for this digest that another caller started while this
+        // one waited: joined AFTER the slot is given back, so the slot is
+        // only ever held by a caller whose own request is on the wire. Held
+        // through the join, an initiator and two late joiners of one slow
+        // body would fill the gate while issuing a single request.
+        let joinedAfterWait: Promise<boolean> | null = null;
+        try {
+          // Re-checked once the slot is held, all three: while this digest
+          // waited for a slot, another caller's flight for it may have
+          // finished (the memo now holds it - a second multi-megabyte upload
+          // of a confirmed digest is the waste the memo exists to prevent)
+          // or may still be up (joined below, slot-free), and a sibling may
+          // have learned the host withholds the method - a joined upload can
+          // be the one that discovers that, and its joiner sees it only
+          // through this flag. Every digest still waiting stops at the same
+          // signal, so the remaining ones are never sent.
+          if (isDraftBlobConfirmed(hostId, sha256, ownerUserId)) {
+            acknowledged = true;
+          } else if (!blobUnsupportedHosts.has(hostId)) {
+            joinedAfterWait = joinBlobUploadInFlight(
+              hostId,
+              sha256,
+              ownerUserId,
+            );
+            if (joinedAfterWait === null) {
+              acknowledged = await joinOrStartBlobUpload(
+                hostId,
+                client,
+                sha256,
+                ownerUserId,
+              );
+            }
+          }
+        } finally {
+          releaseUploadSlot(hostId);
+        }
+        if (joinedAfterWait !== null) acknowledged = await joinedAfterWait;
+      }
+      if (acknowledged && !settled) confirmed.push(sha256);
+      if (settled) return;
+      completed += 1;
+      onProgress?.({ completed, total });
+    }),
+  );
+  try {
+    await Promise.race([fanOut, verdict]);
+  } finally {
+    settled = true;
+    stopAwaitingVerdict();
   }
   return confirmed;
 }
@@ -386,9 +630,9 @@ function joinOrStartBlobUpload(
   sha256: string,
   ownerUserId: string | null,
 ): Promise<boolean> {
+  const joined = joinBlobUploadInFlight(hostId, sha256, ownerUserId);
+  if (joined !== null) return joined;
   const key = blobUploadKey(sha256, ownerUserId);
-  const joined = inFlightBlobUploads.get(hostId)?.get(key);
-  if (joined !== undefined) return joined;
   // Never rejects - every failure is contained into `false` - so the cleanup
   // below and the joiners above need no rejection handling of their own.
   const flight = uploadOneDraftBlob(hostId, client, sha256, ownerUserId);
@@ -410,6 +654,18 @@ function joinOrStartBlobUpload(
   return flight;
 }
 
+/** The flight already going up for `(host, digest, owner)`, or `null`. */
+function joinBlobUploadInFlight(
+  hostId: string,
+  sha256: string,
+  ownerUserId: string | null,
+): Promise<boolean> | null {
+  return (
+    inFlightBlobUploads.get(hostId)?.get(blobUploadKey(sha256, ownerUserId)) ??
+    null
+  );
+}
+
 /** Resolves `true` when the host acknowledged holding the digest. Never rejects. */
 async function uploadOneDraftBlob(
   hostId: string,
@@ -422,18 +678,48 @@ async function uploadOneDraftBlob(
   // is answered.
   const epoch = blobEpochOf(hostId);
   try {
-    // Inside the try, not before it. The local read is IndexedDB (or the stash
-    // repo) and can reject; outside the containment that rejection escaped as
-    // the flight's own, and the cleanup `.finally` chained onto it - which
-    // nothing awaits - became a SECOND, detached unhandled rejection even when
-    // the caller handled the first. The "never rejects" claim above has to be
-    // true across the whole operation for that discarded promise to be safe.
-    const bytes = await localBytesForHash(sha256);
-    if (bytes === null) return false;
-    const response = await client.request("drafts.putBlob", {
-      sha256,
-      bytesBase64: bytesToBase64(bytes),
-    });
+    // Inside the try, not before it. The local read is IndexedDB and can
+    // reject; outside the containment that rejection escaped as the flight's
+    // own, and the cleanup `.finally` chained onto it - which nothing awaits -
+    // became a SECOND, detached unhandled rejection even when the caller
+    // handled the first. The "never rejects" claim above has to be true across
+    // the whole operation for that discarded promise to be safe.
+    const bytes = await getImageBytes(sha256);
+    if (bytes === undefined) return false;
+    // Encoded off the main thread: this is a prepared image of up to 3.75 MiB,
+    // and the synchronous helper spends ~70 ms of renderer time per image on
+    // it - jank the composer shows as a stutter for every image in a burst.
+    const bytesBase64 = await bytesToBase64Async(bytes);
+    const response = await client.requestWithOptions(
+      "drafts.putBlob",
+      { sha256, bytesBase64 },
+      {
+        // The blob's OWN digest. A `putBlob` the transport replays - because a
+        // relay leg died mid-body and the retrying messenger re-sent it - is by
+        // construction the same upload: the params are byte-identical and the
+        // host stores content-addressed bytes, so the second arrival resolves
+        // to the same file rather than a second copy.
+        //
+        // It is NOT what keeps two concurrent callers to one body: the key
+        // deduplicates a TRANSPORT replay of one submission, while two
+        // submissions are two flights. That is `inFlightBlobUploads`' job.
+        idempotencyKey: sha256,
+        // The default unary budget is 30s, sized for a few KB of JSON crossing
+        // a relay. A prepared image is ~5 MiB once base64 has inflated it and
+        // rides ONE request, so under the default a genuinely-succeeding
+        // upload is discarded client-side while the host stores the bytes.
+        responseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+        // No floor: the method has existed since `drafts@1.0`, and a host that
+        // withholds it is already handled as an old host below.
+        requiredHostMethodVersion: null,
+        // No caller cancellation. The upload is a background mirror of a draft
+        // the user has already pasted; abandoning it mid-body would leave the
+        // hash unconfirmed and force an inline send for bytes that were nearly
+        // there. With joiners sharing this one request, a caller-owned abort
+        // would also cancel somebody else's.
+        signal: undefined,
+      },
+    );
     if (!response.ok) {
       appLogger.warn("[draft-blobs] putBlob digest-mismatch", { sha256 });
       return false;
@@ -511,8 +797,29 @@ export function readDraftBlobsIntoLocalStore(
   hostId: string,
   client: DraftBlobClient,
   hashes: readonly string[],
-): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
-  return readDraftBlobs(hostId, client, hashes, putImageBytesAtHash);
+): Promise<ReadonlyMap<string, ImageBlob>> {
+  return readDraftBlobs(hostId, client, hashes, storeRecoveredHostBlob);
+}
+
+async function storeRecoveredHostBlob(
+  hash: string,
+  bytes: ImageBytes,
+): Promise<"stored" | "ephemeral" | "invalid"> {
+  // An unrooted pre-apply read and a full partition may hand verified bytes
+  // to this caller, but must not create a resident session/IDB entry.
+  // Verify before reserving: overlapping replies for this hash can have
+  // different lengths until their digests have been checked. An unverified
+  // smaller reply must not reserve on behalf of a larger valid reply.
+  if ((await sha256Hex(bytes)) !== hash) return "invalid";
+  const reservation = landingLiveImageRootHashes().has(hash)
+    ? tryReserveLandingImageResidency([{ hash, bytes: bytes.byteLength }])
+    : null;
+  if (reservation === null) return "ephemeral";
+  try {
+    return (await putImageBytesAtHash(hash, bytes)) ? "stored" : "invalid";
+  } finally {
+    reservation.release();
+  }
 }
 
 /** Read without storing so recovery can admit the complete byte batch first.
@@ -522,17 +829,22 @@ export function readDraftBlobsForRecovery(
   hostId: string,
   client: DraftBlobClient,
   hashes: readonly string[],
-): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
-  return readDraftBlobs(hostId, client, hashes, () => Promise.resolve(true));
+): Promise<ReadonlyMap<string, ImageBlob>> {
+  return readDraftBlobs(hostId, client, hashes, () =>
+    Promise.resolve("ephemeral" as const),
+  );
 }
 
 async function readDraftBlobs(
   hostId: string,
   client: DraftBlobClient,
   hashes: readonly string[],
-  store: (hash: string, bytes: ImageBytes) => Promise<boolean>,
-): Promise<ReadonlyMap<string, PromptStashImageBlob>> {
-  const images = new Map<string, PromptStashImageBlob>();
+  store: (
+    hash: string,
+    bytes: ImageBytes,
+  ) => Promise<"stored" | "ephemeral" | "invalid">,
+): Promise<ReadonlyMap<string, ImageBlob>> {
+  const images = new Map<string, ImageBlob>();
   if (hashes.length === 0) return images;
   if (blobUnsupportedHosts.has(hostId)) return images;
   // Captured before the first request, exactly as `uploadOneDraftBlob` does.
@@ -579,10 +891,10 @@ async function readDraftBlobs(
       // fetch; winning it wrongly costs an image in the wrong account's
       // partition.
       if (!stillServingBlobIdentity(owner)) return images;
-      const stored = await store(sha256, bytes);
-      if (!stored) continue;
+      const disposition = await store(sha256, bytes);
+      if (disposition === "invalid") continue;
       if (!stillServingBlobIdentity(owner)) {
-        retireCrossedBlobWrite(sha256);
+        if (disposition === "stored") retireCrossedBlobWrite(sha256);
         return images;
       }
       const mimeType = sniffImageMimeType(bytes) ?? "image/png";

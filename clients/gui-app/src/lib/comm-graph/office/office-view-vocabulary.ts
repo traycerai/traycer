@@ -62,20 +62,18 @@ export const OFFICE_VIEW_LABELS: Readonly<Record<OfficeViewId, string>> = {
   city: "City",
 };
 
-/**
- * What a tile's view setting can be: a view, or `"auto"` - which is a choice
- * about how to choose, not a seventh office.
- */
-export type OfficeViewChoice = "auto" | OfficeViewId;
+/** Views offered in the app. Retired layout ids remain readable for migration. */
+export type OfficeViewChoice =
+  | "floor"
+  | "building"
+  | "mission-control"
+  | "campus";
 
-/**
- * Auto first, then every view in registry order - what a control offering the
- * choice lists, and the same order the tile's own picker uses because both
- * read this rather than a second list that would drift from it.
- */
 export const OFFICE_VIEW_CHOICES: ReadonlyArray<OfficeViewChoice> = [
-  "auto",
-  ...OFFICE_VIEW_IDS,
+  "floor",
+  "building",
+  "mission-control",
+  "campus",
 ];
 
 /**

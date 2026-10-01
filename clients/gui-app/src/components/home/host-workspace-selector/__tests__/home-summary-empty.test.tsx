@@ -69,6 +69,12 @@ interface MockHostClient {
   // routes through (`useHostClientForHostId`).
   getRequestContext(): object;
   request(method: string, payload: unknown): Promise<unknown>;
+  /**
+   * `epic.create` carries an idempotency key, and only the combined entry
+   * point expresses one - so a stub that stops at `request` compiles and then
+   * fails at RUN time the moment a create is driven through this client.
+   */
+  requestWithOptions(method: string, payload: unknown): Promise<unknown>;
   onChange(): () => void;
 }
 
@@ -89,6 +95,8 @@ function createMockHostClient(
     getRequestContextUserId: () => "user-home",
     getRequestContext: () => ({}),
     request,
+    requestWithOptions: (method: string, payload: unknown) =>
+      request(method, payload),
     onChange: () => () => undefined,
   };
 }

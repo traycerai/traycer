@@ -1,6 +1,9 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
-export const providerIdSchema = z.enum([
+// The literal list is the enum's source, and what module-scope consumers read:
+// reading `.options` at module scope would build the schema at import.
+export const PROVIDER_ID_VALUES = [
   "claude-code",
   "codex",
   "opencode",
@@ -22,7 +25,8 @@ export const providerIdSchema = z.enum([
   "huggingface",
   "reasonix",
   "antigravity",
-]);
+] as const;
+export const providerIdSchema = lazySchema(() => z.enum(PROVIDER_ID_VALUES));
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
 /**
@@ -31,13 +35,9 @@ export type ProviderId = z.infer<typeof providerIdSchema>;
  * harness providers; the v2.0 line adds them with a v2→v1 downgrade bridge. Do
  * not add new providers here.
  */
-export const providerIdSchemaV10 = z.enum([
-  "claude-code",
-  "codex",
-  "opencode",
-  "cursor",
-  "traycer",
-]);
+export const providerIdSchemaV10 = lazySchema(() =>
+  z.enum(["claude-code", "codex", "opencode", "cursor", "traycer"]),
+);
 export type ProviderIdV10 = z.infer<typeof providerIdSchemaV10>;
 
 /**
@@ -46,19 +46,21 @@ export type ProviderIdV10 = z.infer<typeof providerIdSchemaV10>;
  * client never receives the Amp provider. Do not add new providers here -
  * extend the latest `providerIdSchema` and use the existing version bridges.
  */
-export const providerIdSchemaV20 = z.enum([
-  "claude-code",
-  "codex",
-  "opencode",
-  "cursor",
-  "traycer",
-  "grok",
-  "qwen",
-  "kiro",
-  "droid",
-  "kimi",
-  "copilot",
-  "kilocode",
-  "openrouter",
-]);
+export const providerIdSchemaV20 = lazySchema(() =>
+  z.enum([
+    "claude-code",
+    "codex",
+    "opencode",
+    "cursor",
+    "traycer",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+  ]),
+);
 export type ProviderIdV20 = z.infer<typeof providerIdSchemaV20>;

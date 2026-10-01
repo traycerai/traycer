@@ -6,7 +6,11 @@ import type {
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
-import { didServiceRegistrationCommit } from "./cli-invocation-record";
+import {
+  isUnreportedSpawnEdgeRefusal,
+  refusedSpawnEdgeError,
+  runWithLeaseAtServiceSpawnEdge,
+} from "./spawn-edge";
 import { isSelfNamingCliInvocation } from "./cli-invocation-shape";
 import {
   createServiceController,
@@ -27,6 +31,16 @@ import {
   withServiceMutationAuthority,
 } from "./mutation-authority";
 import type { HostStartAdoptionPublisher } from "../host/host-start-adoption";
+import {
+  isServiceTaskNotOwnedError,
+  serviceTaskNotOwnedReasonOf,
+} from "./platforms/windows-task-gate";
+import {
+  SERVICE_KEPT_DISABLED_WARNING,
+  serviceTaskNotOwnedWarning,
+  type ServiceRegistrationWarning,
+} from "./registration-owner";
+import { withServiceInstallReport } from "./registration-repair";
 
 // Windows only: the pre-swap stop kills every process the slot scan can
 // see, but a handle it cannot (an orphaned child whose CWD is inside
@@ -111,6 +125,12 @@ export interface ServiceInstallLifecycleState {
   // the historical `restart`/`start` strings from older CLIs.
   postSwapAction: "start" | "install" | "none";
   postSwapError: string | null;
+  // Non-null when the post-swap re-registration finished WITHOUT starting the
+  // host, for a reason that is not a failure: the registration is another
+  // user's (Windows: refused by the task ownership gate) or its owner disabled
+  // it (carried over, not started). The bytes are committed either way and the
+  // command succeeds; this is what it tells the person.
+  postSwapWarning: ServiceRegistrationWarning | null;
 }
 
 export interface ServiceInstallLifecycleHandle {
@@ -210,6 +230,7 @@ export function createServiceInstallLifecycle(
     stoppedBeforeSwap: false,
     postSwapAction: "none",
     postSwapError: null,
+    postSwapWarning: null,
   };
   let verifyMutationCapability = async (): Promise<void> => {};
   let publishHostStartAdoption: HostStartAdoptionPublisher = async () => {};
@@ -370,7 +391,9 @@ export function createServiceInstallLifecycle(
           async () =>
             controller.relaunchAfterRestart(label, { forcedRecycle: true }),
         ),
-      );
+      ).catch((cause: unknown) => {
+        throw reportRelaunchRefusedAfterInstallStop(label, cause);
+      });
     },
     afterSwap: async () => {
       // At the TOP, before every branch below: the bytes are committed and
@@ -491,14 +514,21 @@ export function createServiceInstallLifecycle(
               state.postSwapAction = "start";
             } catch (cause) {
               if (isServiceMutationAuthorityError(cause)) throw cause;
+              // Only a RESOLVED stop proves the host is down; after a
+              // degraded one it may still be live, and the refusal is
+              // reported as itself.
+              const reported = state.stoppedBeforeSwap
+                ? reportRelaunchRefusedAfterInstallStop(label, cause)
+                : cause;
               state.postSwapError =
-                cause instanceof Error ? cause.message : String(cause);
+                reported instanceof Error ? reported.message : String(reported);
             }
           }
           return;
         }
         if (state.priorState === "not-installed") {
-          if (options.bootstrap === null) {
+          const bootstrap = options.bootstrap;
+          if (bootstrap === null) {
             // Update / non-bootstrap callers leave registration to the
             // operator (`traycer host service install`).
             state.postSwapAction = "none";
@@ -506,17 +536,36 @@ export function createServiceInstallLifecycle(
           }
           state.postSwapAction = "install";
           try {
-            await registerService({
-              controller,
-              label,
-              environment: options.environment,
-              bootstrap: options.bootstrap,
-              preservedCli: null,
-              verifyMutationCapability,
-              publishHostStartAdoption,
-            });
+            const report = await withServiceInstallReport(() =>
+              registerService({
+                controller,
+                label,
+                environment: options.environment,
+                bootstrap,
+                preservedCli: null,
+                verifyMutationCapability,
+                publishHostStartAdoption,
+              }),
+            );
+            // Not installed when this command looked, but this account's task
+            // - disabled by its owner - can appear before the registration's
+            // own read (`createGatedTask`). That write keeps it disabled and
+            // starts nothing, and the command says so, exactly as it does for
+            // an existing registration below.
+            state.postSwapWarning = report.keptDisabled
+              ? SERVICE_KEPT_DISABLED_WARNING
+              : null;
           } catch (cause) {
             if (isServiceMutationAuthorityError(cause)) throw cause;
+            // Another user's task under this name: this account's bytes are
+            // in, its registration was refused and nothing of theirs was
+            // touched. A warning, not a failure.
+            if (isServiceTaskNotOwnedError(cause)) {
+              state.postSwapWarning = serviceTaskNotOwnedWarning(
+                serviceTaskNotOwnedReasonOf(cause),
+              );
+              return;
+            }
             // No rollback - the new host stays in place. The command
             // surfaces this as a warning and steers the user toward
             // `traycer host doctor` / `traycer host service install`
@@ -574,29 +623,44 @@ export function createServiceInstallLifecycle(
             (await isSelfNamingCliInvocation(registeredCli))
               ? null
               : registeredCli;
-          await registerService({
-            controller,
-            label,
-            environment: options.environment,
-            // host update leaves bootstrap null (it must not invent a
-            // registration on a clean machine). For an already-registered
-            // service, reuse the caller's bootstrap flags when present;
-            // otherwise re-resolve the CLI with linger off and self-
-            // invocation permitted. Manifest / well-known bin still win
-            // when present (cli-binary.ts steps 1–2); self-invocation is
-            // only the Brew/manual fallback documented there. Without it,
-            // host update stops an existing service and then fails to
-            // re-register on installs that never staged ~/.traycer/cli.
-            bootstrap: options.bootstrap ?? {
-              enableLinger: false,
-              allowSelfInvocation: true,
-            },
-            preservedCli,
-            verifyMutationCapability,
-            publishHostStartAdoption,
-          });
+          const report = await withServiceInstallReport(() =>
+            registerService({
+              controller,
+              label,
+              environment: options.environment,
+              // host update leaves bootstrap null (it must not invent a
+              // registration on a clean machine). For an already-registered
+              // service, reuse the caller's bootstrap flags when present;
+              // otherwise re-resolve the CLI with linger off and self-
+              // invocation permitted. Manifest / well-known bin still win
+              // when present (cli-binary.ts steps 1–2); self-invocation is
+              // only the Brew/manual fallback documented there. Without it,
+              // host update stops an existing service and then fails to
+              // re-register on installs that never staged ~/.traycer/cli.
+              bootstrap: options.bootstrap ?? {
+                enableLinger: false,
+                allowSelfInvocation: true,
+              },
+              preservedCli,
+              verifyMutationCapability,
+              publishHostStartAdoption,
+            }),
+          );
+          // A registration its owner disabled was carried over and NOT
+          // started (the explicit repair alone turns it back on): the bytes
+          // are in, the host is stopped, and the command says why - from the
+          // install's own read, not a second one.
+          state.postSwapWarning = report.keptDisabled
+            ? SERVICE_KEPT_DISABLED_WARNING
+            : null;
         } catch (cause) {
           if (isServiceMutationAuthorityError(cause)) throw cause;
+          if (isServiceTaskNotOwnedError(cause)) {
+            state.postSwapWarning = serviceTaskNotOwnedWarning(
+              serviceTaskNotOwnedReasonOf(cause),
+            );
+            return;
+          }
           // No rollback. New host is in place; surface the failure
           // so the command can warn the user and Doctor can flag it.
           state.postSwapError =
@@ -649,11 +713,20 @@ export function createBytesOnlyInstallLifecycle(
   hooks: InstallPhaseHooks,
 ): InstallHostLifecycle {
   let verifyMutationCapability = async (): Promise<void> => {};
+  // The same publisher seam `createServiceInstallLifecycle` carries, and for
+  // the same start: the Windows restore below is a service start, and one
+  // with no proof reads as unattended - under a parking mode with no live
+  // desktop the supervisor it launches parks, and a host that was running
+  // before this install is left stopped.
+  let publishHostStartAdoption: HostStartAdoptionPublisher = async () => {};
   let hostWasRunning = false;
   return {
     swapLockRecovery: swapLockRecoveryFor(label),
     setMutationVerifier: (verify) => {
       verifyMutationCapability = verify;
+    },
+    setHostStartAdoptionPublisher: (publish) => {
+      publishHostStartAdoption = publish;
     },
     beforeSwap: async (): Promise<void> => {
       if (process.platform !== "win32") return;
@@ -679,8 +752,15 @@ export function createBytesOnlyInstallLifecycle(
     restartAfterAbortedSwap: async (): Promise<void> => {
       if (!hostWasRunning) return;
       await withServiceMutationAuthority(verifyMutationCapability, () =>
-        controller.start(label),
-      );
+        runWithPublishedHostStartAdoption(
+          publishHostStartAdoption,
+          controller,
+          label,
+          () => controller.start(label),
+        ),
+      ).catch((cause: unknown) => {
+        throw reportRelaunchRefusedAfterInstallStop(label, cause);
+      });
     },
     beforeSwapCommit: () => hooks.beforeSwapCommit(),
     afterSwap: () => hooks.afterSwap(),
@@ -734,6 +814,24 @@ async function registerService(opts: RegisterServiceOptions): Promise<void> {
   );
 }
 
+// A relaunch this lifecycle requests after its OWN stop - the pre-swap
+// `controller.stop`, whose intent is `stop`, so no service manager owes the
+// host a comeback. A publication refused at that relaunch's edge therefore
+// leaves the host stopped, and the error says so. Any other error, and a
+// refusal a controller already reported, is returned as itself.
+function reportRelaunchRefusedAfterInstallStop(
+  label: ServiceLabel,
+  cause: unknown,
+): unknown {
+  if (!isUnreportedSpawnEdgeRefusal(cause)) return cause;
+  return refusedSpawnEdgeError(cause, {
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    operation: `relaunch of '${label.id}' after the install stopped it`,
+    leaves: "The host was stopped for the install and is still stopped.",
+    recovery: "Run 'traycer host service start' to start it again.",
+  });
+}
+
 async function runWithPublishedHostStartAdoption(
   publish: HostStartAdoptionPublisher,
   controller: Pick<ServiceController, "hostStartAdoptionLabel">,
@@ -741,25 +839,12 @@ async function runWithPublishedHostStartAdoption(
   start: () => Promise<void>,
 ): Promise<void> {
   const serviceLabel = await controller.hostStartAdoptionLabel(label);
-  const lease = await publish(serviceLabel);
-  try {
-    await start();
-    await lease?.waitForSpawn();
-  } catch (error) {
-    // The invocation-record decorator can reject AFTER the service manager
-    // accepted the registration and began launching the supervisor (record
-    // commit, lifecycle write, stale-marker clear). The supervisor is coming
-    // up and will present this lease; cancelling it now would refuse or kill
-    // an admitted child and leave a registered service hostless. So the lease
-    // is honoured first and the record error surfaces afterwards. A spawn
-    // wait that itself fails must not replace the error being reported.
-    if (didServiceRegistrationCommit(error)) {
-      await lease?.waitForSpawn().catch(() => undefined);
-    }
-    throw error;
-  } finally {
-    // cancel() propagating out of this `finally` would swap in its own error
-    // for the actuator or record error being reported.
-    await lease?.cancel().catch(() => undefined);
-  }
+  // Published at the controller's first spawn edge, not here - see
+  // `runWithLeaseAtServiceSpawnEdge`, which also honours a lease through the
+  // invocation-record decorator's post-registration rejections (record
+  // commit, lifecycle write, stale-marker clear) before surfacing them.
+  await runWithLeaseAtServiceSpawnEdge(async () => {
+    const lease = await publish(serviceLabel);
+    return lease === undefined ? null : lease;
+  }, start);
 }

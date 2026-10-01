@@ -126,6 +126,33 @@ describe("draft entry routes", () => {
     expect(invokeIndexBeforeLoad("unverified")).toBeNull();
   });
 
+  // A retained (closed) draft is not a visible tab: closing or moving away the
+  // last tab navigates to `/`, which must still send the window to a fresh
+  // draft instead of leaving it empty.
+  it.each(["signed-in", "unverified"])(
+    "/ redirects a %s user whose only landing draft is retained closed",
+    (status) => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      useLandingDraftStore.setState((state) => ({
+        drafts: state.drafts.map((d) =>
+          d.id === id ? { ...d, closed: true } : d,
+        ),
+        activeDraftId: null,
+      }));
+
+      const thrown = invokeIndexBeforeLoad(status);
+      expect(isRedirect(thrown)).toBe(true);
+      const response = thrown as Response & { options: { to: string } };
+      expect(response.options.to).toBe("/draft/new");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    },
+  );
+
+  it("/ keeps a signed-in user on root while an open landing draft exists", () => {
+    useLandingDraftStore.getState().createDraft(null);
+    expect(invokeIndexBeforeLoad("signed-in")).toBeNull();
+  });
+
   it("/draft/new requests a controller-owned draft creation and replace", async () => {
     const { createDraftAndReplaceRoute } =
       await import("@/lib/draft-entry-route");

@@ -7,24 +7,24 @@ import {
 import type { MinimapListEntry } from "@/components/minimap/minimap-list-card";
 import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
-import type { MinimapPlacement } from "@/stores/settings/settings-store";
 
 /**
  * Whether the turn minimap mounts at all.
  *
- * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
- * bar existed - the rail is the only consumer there, so nothing is left to
- * publish an outline for. On a phone viewport it stays mounted and suppresses
- * only its own rail, because the tile bar's button reads the outline it
- * registers and that button deliberately does not obey `hide`.
+ * A hidden minimap unmounts on a desktop viewport, exactly as before the phone
+ * tile bar existed - the rail is the only consumer there, so nothing is left
+ * to publish an outline for. On a phone viewport it stays mounted and
+ * suppresses only its own rail, because the tile bar's button reads the
+ * outline it registers and that button deliberately ignores the region's
+ * `shown` value.
  */
 export function shouldMountChatTurnMinimap(input: {
   readonly hasContent: boolean;
-  readonly side: MinimapPlacement;
+  readonly shown: boolean;
   readonly mobileViewport: boolean;
 }): boolean {
   if (!input.hasContent) return false;
-  return input.side !== "hide" || input.mobileViewport;
+  return input.shown || input.mobileViewport;
 }
 
 /**
@@ -48,11 +48,11 @@ export function shouldMountChatTurnMinimap(input: {
  * the phone tile bar's data, and the whole point of publishing it.
  */
 export function shouldRunChatTurnMinimapRail(input: {
-  readonly side: MinimapPlacement;
+  readonly shown: boolean;
   readonly coarsePointer: boolean;
   readonly mobileViewport: boolean;
 }): boolean {
-  return input.side !== "hide" && !input.coarsePointer && !input.mobileViewport;
+  return input.shown && !input.coarsePointer && !input.mobileViewport;
 }
 
 export const CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE =

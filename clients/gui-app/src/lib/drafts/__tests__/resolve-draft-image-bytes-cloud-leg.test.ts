@@ -3,9 +3,13 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@/lib/host";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { getImageBytes, putImage } from "@/lib/composer/landing-image-store";
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
-import { resetDraftBlobTransportForTests } from "@/lib/drafts/draft-blob-transport";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  resetDraftBlobTransportForTests,
+  type DraftBlobClient,
+} from "@/lib/drafts/draft-blob-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   recordCloudDraftImageSources,
@@ -31,6 +35,18 @@ const IDENTITY: CloudChatIdentity = {
 };
 
 type FakeRequest = HostRequester<HostRpcRegistry>["request"];
+
+// A rooted hash is one a live draft actually names: only those may spend the
+// resident budget. See the sibling recovery-module test file for the same
+// pattern; the cloud leg's write-back consults this exact registry.
+const liveLandingImageRoots = new Set<string>();
+registerExtraImageRootSource({
+  hashes: () => [...liveLandingImageRoots],
+});
+
+function rootLandingImages(...hashes: string[]): void {
+  for (const hash of hashes) liveLandingImageRoots.add(hash);
+}
 
 // See the sibling recovery-module test file for why every image's content
 // must be unique across the whole file: `landing-image-store`'s session
@@ -62,7 +78,10 @@ interface RecordedCall {
 
 function targetWithClient(handle: FakeRequest): {
   readonly target: DraftImageByteTarget;
-  readonly client: { readonly request: FakeRequest };
+  // `DraftBlobClient`, not a `{ request }` shape: every consumer below takes
+  // the whole client, and a return type narrower than the value silently
+  // erases `requestWithOptions` at each of them however right the value is.
+  readonly client: DraftBlobClient;
   readonly calls: RecordedCall[];
 } {
   const calls: RecordedCall[] = [];
@@ -70,7 +89,7 @@ function targetWithClient(handle: FakeRequest): {
     calls.push({ method });
     return handle(method, params);
   };
-  const client = { request };
+  const client = { request, requestWithOptions: request };
   return { target: { hostId: HOST, client }, client, calls };
 }
 
@@ -85,6 +104,7 @@ beforeEach(() => {
 afterEach(() => {
   resetDraftBlobTransportForTests();
   resetCloudDraftImageRecoveryForTests();
+  liveLandingImageRoots.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -115,6 +135,7 @@ describe("resolveDraftImageBytes - leg order with a recorded cloud source", () =
   it("returns a target-host hit via drafts.readBlob and never reaches the cloud", async () => {
     const bytes = uniqueBytes(4);
     const hash = await sha256HexOf(bytes);
+    rootLandingImages(hash);
     const { target, client, calls } = targetWithClient(((method, _params) => {
       if (method === "drafts.readBlob") {
         return Promise.resolve({
@@ -140,9 +161,10 @@ describe("resolveDraftImageBytes - leg order with a recorded cloud source", () =
     ).toBe(false);
   });
 
-  it("falls through to the cloud leg only when both local and host legs miss", async () => {
+  it("falls through to the cloud leg only when both local and host legs miss, and stores for a rooted hash", async () => {
     const bytes = uniqueBytes(3);
     const hash = await sha256HexOf(bytes);
+    rootLandingImages(hash);
     const { target, client, calls } = targetWithClient(((method, _params) => {
       if (method === "drafts.readBlob") {
         return Promise.resolve({
@@ -176,6 +198,44 @@ describe("resolveDraftImageBytes - leg order with a recorded cloud source", () =
       "epic.readCloudChatPayload",
     ]);
     expect(await getImageBytes(hash)).toEqual(bytes);
+  });
+
+  it("falls through to the cloud leg for an unrooted hash: verified bytes return, but nothing becomes resident", async () => {
+    const bytes = uniqueBytes(7);
+    const hash = await sha256HexOf(bytes);
+    const { target, client, calls } = targetWithClient(((method, _params) => {
+      if (method === "drafts.readBlob") {
+        return Promise.resolve({
+          ok: false as const,
+          reason: "missing" as const,
+        });
+      }
+      if (method === "epic.readCloudChatPayload") {
+        return Promise.resolve({
+          outcome: {
+            status: "ok" as const,
+            bytesBase64: toBase64(bytes),
+            byteLength: bytes.byteLength,
+          },
+        });
+      }
+      throw new Error(`unexpected ${String(method)}`);
+    }) as FakeRequest);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: HOST,
+      client,
+      hashes: [hash],
+    });
+
+    const resolved = await resolveDraftImageBytes(hash, target);
+
+    expect(resolved).toEqual(bytes);
+    expect(calls.map((call) => call.method)).toEqual([
+      "drafts.readBlob",
+      "epic.readCloudChatPayload",
+    ]);
+    expect(await getImageBytes(hash)).toBeUndefined();
   });
 
   it("never throws through the resolver when the cloud leg's transport rejects", async () => {

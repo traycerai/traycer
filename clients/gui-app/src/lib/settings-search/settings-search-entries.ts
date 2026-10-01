@@ -14,6 +14,8 @@ import { DELETE_ACCOUNT } from "@/components/settings/panels/delete-account-sett
 import { DEVICES } from "@/components/settings/panels/devices-sessions.definitions";
 import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
+import { GETTING_STARTED } from "@/components/settings/panels/getting-started-settings.definitions";
+import { BROWSER } from "@/components/settings/panels/browser-settings.definitions";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { KEYBINDINGS } from "@/components/settings/panels/keybindings-settings.definitions";
@@ -26,6 +28,7 @@ import { PROVIDERS } from "@/components/settings/panels/providers-settings.defin
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { USAGE } from "@/components/settings/panels/usage-settings.definitions";
 import { WORKTREES } from "@/components/settings/panels/worktrees-settings.definitions";
+import { LAYOUT_LAUNCH_ENTRIES } from "@/components/layout-editor/layout-search.definitions";
 import {
   assembleSettingsSearchEntries,
   type AnySettingsSectionCollection,
@@ -36,12 +39,14 @@ import {
 export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollection> =
   [
     GENERAL,
+    BROWSER,
     APPEARANCE,
     OPENING_BEHAVIOR,
     APP_NOTIFICATIONS,
     KEYBINDINGS,
     APP_DIAGNOSTICS,
     LAYOUT,
+    GETTING_STARTED,
     DEVICES,
     LINK_PHONE,
     USAGE,
@@ -59,7 +64,11 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
 
 /**
  * Every settings surface a query can land on: each collection's page entry and
- * its entry-owning rows and groups, with every contributor's words folded in.
+ * its entry-owning rows and groups, with every contributor's words folded in -
+ * then one result per layout region, which land on no element of their own
+ * (see `LAYOUT_LAUNCH_ENTRIES`).
  */
-export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> =
-  assembleSettingsSearchEntries(SETTINGS_SEARCH_COLLECTIONS);
+export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
+  ...assembleSettingsSearchEntries(SETTINGS_SEARCH_COLLECTIONS),
+  ...LAYOUT_LAUNCH_ENTRIES,
+];

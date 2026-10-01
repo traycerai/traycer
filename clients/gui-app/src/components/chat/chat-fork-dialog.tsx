@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -106,7 +107,8 @@ interface ForkWorkspaceStagingSession {
 export interface ChatForkDialogTarget {
   readonly sourceChatId: string;
   readonly sourceChatTitle: string;
-  readonly assistantMessageId: string;
+  // null asks the destination to choose its latest available checkpoint on submit.
+  readonly assistantMessageId: string | null;
   // Q&A forks identify the exact interview block within an assistant row;
   // ordinary message-level forks leave this null and retain the whole row.
   readonly interviewBlockId: string | null;
@@ -433,20 +435,31 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       chatLineCarriesAutoMode: null,
     },
   );
-  // Cross-host asks the STRONGER question, and only cross-host.
+  // Cross-host asks a DIFFERENT question from same-host, and only cross-host.
   //
   // The toolbar store retains the previous host's slug across a retarget while
   // the new target's harness/model queries load, so a bare slug-length check
   // leaves Fork enabled long enough to submit a model the selected host may not
-  // provide. `selectionCatalogConfirmed` is false until the catalog for this
-  // `catalog.hostId` actually covers the resolved slug.
+  // provide. What cross-host needs is "the catalog for this `catalog.hostId`
+  // has answered", and the store says so through either of its loaded-catalog
+  // verdicts: the catalog covers the slug (`selectionCatalogConfirmed`), or it
+  // does not and the picker presents its first row in the slug's place
+  // (`selectionHealedForDisplay`). The second is submittable on purpose. The
+  // substitute is what the picker shows and what `submit` sends (it reads the
+  // derived selection), so Fork goes by the row on screen rather than by a
+  // model the target never listed - gating on the latter held Fork shut with
+  // nothing on screen to say why. What still blocks: a catalog that has not
+  // answered, and one that answered EMPTY - there is no first row to present,
+  // the slug resolves to "" (which the store also reports as a substitution),
+  // and `chatRunSettingsSchema` refuses an empty model. Hence the slug check
+  // on both arms.
   //
   // Same-host keeps the length check every sibling surface uses (the composer's
   // own Send, `terminal-agent-fork-dialog`), because there the slug came from
   // THIS host's memory and the memory write gate is itself
   // `selectionCatalogConfirmed` - a persisted slug was catalog-confirmed when it
-  // was recorded. Applying the strong form here too would buy nothing and cost
-  // real availability: the flag also goes false on an UNLOAD (the models query
+  // was recorded. Requiring a loaded catalog here too would buy nothing and
+  // cost real availability: both flags go false on an UNLOAD (the models query
   // detaches, `modelsLoaded: false`), so a transient detach would disable a
   // same-host fork with nothing on screen to explain it and no action that
   // reopens it. Cross-host has a producer for that state - pick another host -
@@ -455,11 +468,17 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     toolbarStore,
     (s) => s.selectionCatalogConfirmed,
   );
+  const catalogSubstituted = useStore(
+    toolbarStore,
+    (s) => s.selectionHealedForDisplay,
+  );
   const modelSlugPresent = useStore(
     toolbarStore,
     (s) => s.selection.modelSlug.length > 0,
   );
-  const modelResolved = isCrossHost ? catalogConfirmed : modelSlugPresent;
+  const modelResolved =
+    modelSlugPresent &&
+    (!isCrossHost || catalogConfirmed || catalogSubstituted);
   const modelPickerKey =
     target === null
       ? "fork-dialog-closed"
@@ -580,7 +599,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   useEffect(() => {
     if (activeWorkspaceTarget === null) return;
     const session: ForkWorkspaceStagingSession = {
-      owner: Symbol(activeWorkspaceTarget.assistantMessageId),
+      owner: Symbol(activeWorkspaceTarget.assistantMessageId ?? "latest"),
       touched: new Map(),
     };
     stagingSessionRef.current = session;
@@ -684,19 +703,23 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         workspaceMode,
         worktreeIntent,
         initialMessage: null,
-        forkSource: {
-          boundary: "assistantMessage",
-          sourceChatId: target.sourceChatId,
-          assistantMessageId: target.assistantMessageId,
-          interviewBlockId: target.interviewBlockId,
-          carriedInterviews: target.carriedInterviews,
-          // The owner this dialog renders for the source chat (V12's hint), or
-          // `null` when it does not know. A target host with no registry facts
-          // of its own - the cross-host case - has nothing else to check the
-          // cloud publication's owner against, and treats a supplied value as
-          // the expectation, so it must never be invented.
-          sourceOwnerUserId,
-        },
+        // Both fork shapes carry the rendered source owner so a destination
+        // with no local chat record can verify the cloud publication's owner.
+        forkSource:
+          target.assistantMessageId === null
+            ? {
+                boundary: "latest",
+                sourceChatId: target.sourceChatId,
+                sourceOwnerUserId,
+              }
+            : {
+                boundary: "assistantMessage",
+                sourceChatId: target.sourceChatId,
+                assistantMessageId: target.assistantMessageId,
+                interviewBlockId: target.interviewBlockId,
+                carriedInterviews: target.carriedInterviews,
+                sourceOwnerUserId,
+              },
       },
       {
         onSuccess: (result) => {
@@ -842,6 +865,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         ))}
         <DialogHeader>
           <DialogTitle>Fork agent</DialogTitle>
+          {target !== null && target.assistantMessageId === null ? (
+            <DialogDescription>
+              {isCrossHost
+                ? "The fork uses the latest usable cloud backup available when you click Fork. Work still in progress may not be included."
+                : "The fork uses the latest saved checkpoint available when you click Fork."}{" "}
+              The original agent continues working.
+            </DialogDescription>
+          ) : null}
         </DialogHeader>
         <div
           className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto px-4 pb-2"
@@ -885,6 +916,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 // shows its steps without the button.
                 terminalLoginSurface={null}
                 profileAdmission={null}
+                embedding={null}
               />
             </div>
           </section>

@@ -30,21 +30,33 @@ export class RangeHighlighter {
     ranges: readonly Range[],
     activeIndex: number,
   ): void {
+    this.paintRanges(
+      root,
+      ranges,
+      activeIndex >= 0 ? (ranges.at(activeIndex) ?? null) : null,
+    );
+  }
+
+  /** `active` is painted as the active match; every other range as a match. */
+  paintRanges(
+    root: HTMLElement,
+    ranges: readonly Range[],
+    active: Range | null,
+  ): void {
     const registry = getHighlights();
     if (registry === null) return;
-    if (ranges.length === 0) {
+    if (ranges.length === 0 && active === null) {
       this.clear();
       return;
     }
     this.ensureStyle(root);
-    const others = ranges.filter((_, index) => index !== activeIndex);
+    const others = ranges.filter((range) => range !== active);
     if (others.length > 0) {
       registry.set(this.matchName, new Highlight(...others));
     } else {
       registry.delete(this.matchName);
     }
-    const active = ranges.at(activeIndex);
-    if (activeIndex >= 0 && active !== undefined) {
+    if (active !== null) {
       registry.set(this.activeName, new Highlight(active));
     } else {
       registry.delete(this.activeName);

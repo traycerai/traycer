@@ -9,6 +9,8 @@ import {
   type ChatSubscribeWindowedServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { ChatSkeletonResume } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
@@ -42,6 +44,12 @@ export interface ChatStreamCallbacks {
     frame: Extract<
       ChatSubscribeServerFrame,
       { readonly kind: "messageAccepted" }
+    >,
+  ) => void;
+  readonly onMessageDeliveryChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "messageDeliveryChanged" }
     >,
   ) => void;
   readonly onQueueChanged: (
@@ -137,10 +145,33 @@ export interface ChatStreamCallbacks {
       { readonly kind: "managedCommandsChanged" }
     >,
   ) => void;
+  /**
+   * The agent's port forwards changed (`chat.subscribe@1.14`): the whole set.
+   * A host below that line never sends it, so against an older host this is
+   * simply never called and the snapshot's `portForwards` stays `[]`.
+   */
+  readonly onPortForwardsChanged: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "portForwardsChanged" }
+    >,
+  ) => void;
   readonly onHeldUpdatesChanged: (
     frame: Extract<
       ChatSubscribeServerFrame,
       { readonly kind: "heldUpdatesChanged" }
+    >,
+  ) => void;
+  /**
+   * The active turn's thinking-token estimate moved (`chat.subscribe@1.20`),
+   * coalesced host-side to at most one a second. Turn-scoped: apply it only
+   * while `turnId` is the active turn. A host below `1.20` never sends it, so
+   * against an older host this is simply never called.
+   */
+  readonly onThinkingTokens: (
+    frame: Extract<
+      ChatSubscribeServerFrame,
+      { readonly kind: "thinkingTokens" }
     >,
   ) => void;
   /**
@@ -200,6 +231,21 @@ export interface ChatStreamCallbacks {
       { readonly kind: "accumulatedChanges" }
     >,
   ) => void;
+
+  // ─── Skeleton resume (`chat.subscribe@1.19`) ──────────────────────────────
+
+  /**
+   * The skeleton this chat already holds, described for the host, or `null`
+   * to claim nothing. Read immediately before EVERY wire subscribe - the first
+   * one and each reconnect - and only when the subscribe is about to declare a
+   * line that carries the claim, so a reconnect always describes what the
+   * chat holds by then.
+   *
+   * A read, not an event: it must be synchronous and must not open anything.
+   * Remembering what it offered is allowed, because the answer - the first
+   * `skeletonChunk` of that connection - is where the offer is spent.
+   */
+  readonly readSkeletonResume: () => ChatSkeletonResume | null;
 }
 
 /**
@@ -207,6 +253,26 @@ export interface ChatStreamCallbacks {
  * annotations on user messages. Anything below it cannot author them.
  */
 const CHAT_SUBSCRIBE_BROWSER_PAYLOAD_MINOR = 7;
+
+/**
+ * The `chat.subscribe` minor that carries the skeleton-resume claim on its
+ * open request. A literal, not the registry's `latestMinor`: a floor written
+ * as the ceiling slides up with the next minor and stops offering the claim to
+ * every host still on this one.
+ */
+const CHAT_SUBSCRIBE_SKELETON_RESUME_MINOR = 19;
+
+/**
+ * `null` is a transport that cannot report the version (the worker proxy),
+ * which by that parameter's contract means the newest line - so the claim goes.
+ */
+function carriesSkeletonResume(version: SchemaVersion | null): boolean {
+  return (
+    version === null ||
+    (version.major === 1 &&
+      version.minor >= CHAT_SUBSCRIBE_SKELETON_RESUME_MINOR)
+  );
+}
 
 export interface ChatStreamClientOptions {
   readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
@@ -234,10 +300,21 @@ export class ChatStreamClient {
     this.epicId = options.epicId;
     this.chatId = options.chatId;
     this.closed = false;
-    this.session = options.wsStreamClient.subscribe("chat.subscribe", {
-      epicId: options.epicId,
-      chatId: options.chatId,
-    });
+    // Re-read on every wire subscribe, so a reconnect describes the skeleton
+    // the chat holds THEN rather than the empty one it opened with. Against a
+    // line below the claim nothing is read at all: the older line's open
+    // request would strip the claim anyway, and reading would record an offer
+    // no host will ever answer.
+    this.session = options.wsStreamClient.subscribeWithParamsProvider(
+      "chat.subscribe",
+      (onWireVersion) => ({
+        epicId: options.epicId,
+        chatId: options.chatId,
+        resume: carriesSkeletonResume(onWireVersion)
+          ? this.callbacks.readSkeletonResume()
+          : null,
+      }),
+    );
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
@@ -326,6 +403,22 @@ export class ChatStreamClient {
     return supportsAutoPermissionMode(
       this.session.getNegotiatedSchemaVersion(),
     );
+  }
+
+  /**
+   * Whether THIS session's negotiated line publishes why its queue is paused
+   * (`queue.pausedReason`, `chat.subscribe@1.18`).
+   *
+   * Asked of the session for the reason {@link autoPermissionModeProtocolSupported}
+   * gives: `chat.subscribe` is a stream method, so the unary manifest cannot
+   * answer it. A host on an older line still writes the transcript's
+   * queue-pause notice and sends no reason, so the notice is the only place
+   * that line's user learns why the queue stopped - which is what the answer
+   * decides.
+   */
+  queuePauseReasonProtocolSupported(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 1 && version.minor >= 18;
   }
 
   /**
@@ -469,6 +562,10 @@ export class ChatStreamClient {
         this.callbacks.onMessageAccepted(frame);
         return;
       }
+      case "messageDeliveryChanged": {
+        this.callbacks.onMessageDeliveryChanged(frame);
+        return;
+      }
       case "queueChanged": {
         this.callbacks.onQueueChanged(frame);
         return;
@@ -537,8 +634,16 @@ export class ChatStreamClient {
         this.callbacks.onManagedCommandsChanged(frame);
         return;
       }
+      case "portForwardsChanged": {
+        this.callbacks.onPortForwardsChanged(frame);
+        return;
+      }
       case "heldUpdatesChanged": {
         this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
+      case "thinkingTokens": {
+        this.callbacks.onThinkingTokens(frame);
         return;
       }
       case "pong": {
@@ -717,6 +822,10 @@ export class ChatStreamClient {
         this.callbacks.onMessageAccepted(frame);
         return;
       }
+      case "messageDeliveryChanged": {
+        this.callbacks.onMessageDeliveryChanged(frame);
+        return;
+      }
       case "queueChanged": {
         this.callbacks.onQueueChanged(frame);
         return;
@@ -785,8 +894,16 @@ export class ChatStreamClient {
         this.callbacks.onManagedCommandsChanged(frame);
         return;
       }
+      case "portForwardsChanged": {
+        this.callbacks.onPortForwardsChanged(frame);
+        return;
+      }
       case "heldUpdatesChanged": {
         this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
+      case "thinkingTokens": {
+        this.callbacks.onThinkingTokens(frame);
         return;
       }
       case "pong": {

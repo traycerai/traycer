@@ -38,8 +38,21 @@ describe("<AddProfileWaitingStep />", () => {
         <AddProfileWaitingStep
           loginUrl="https://auth.openai.com/oauth/authorize?state=test"
           userCode={null}
+          // Deliberately `{}` on a REMOTE host: the remote branch returns
+          // before the marker is read, so this row also pins that a child
+          // which opens its own browser is irrelevant when that browser is on
+          // a machine the user cannot see.
+          loginCapability={{
+            oauthArgs: ["login"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: {},
+          }}
           isLocalHost={false}
           queuePending={false}
+          startingCopy={null}
           cancelRequested={false}
           cancelPending={false}
           cancelDisabled={false}
@@ -95,14 +108,27 @@ describe("<AddProfileWaitingStep />", () => {
     }
   });
 
-  it("does not auto-open on a local host when there is no device code", () => {
+  // Retitled: the absence of a device code used to BE the reason this did not
+  // auto-open, and that was the proxy that gave Kimi two consent tabs. The
+  // reason is now stated directly - Claude's CLI opens the browser itself - and
+  // `userCode` stays null only because Claude has no device code to show.
+  it("does not auto-open on a local host when the child opens its own browser", () => {
     const onOpenExternalLink = vi.fn();
     render(
       <AddProfileWaitingStep
         loginUrl="https://claude.com/cai/oauth/authorize?code=true"
         userCode={null}
+        loginCapability={{
+          oauthArgs: ["setup-token"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: {},
+        }}
         isLocalHost
         queuePending={false}
+        startingCopy={null}
         cancelRequested={false}
         cancelPending={false}
         cancelDisabled={false}
@@ -127,8 +153,20 @@ describe("<AddProfileWaitingStep />", () => {
       <AddProfileWaitingStep
         loginUrl="https://auth.openai.com/codex/device"
         userCode="7CH1-OXNVU"
+        // Codex prints a URL and a code for the GUI to open, so the marker is
+        // null and the tab is ours to open. The device code is what gets
+        // DISPLAYED here; it is no longer what decides the opening.
+        loginCapability={{
+          oauthArgs: ["login", "--device-auth"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: {},
+          selfOpensBrowser: null,
+        }}
         isLocalHost
         queuePending={false}
+        startingCopy={null}
         cancelRequested={false}
         cancelPending={false}
         cancelDisabled={false}
@@ -145,5 +183,83 @@ describe("<AddProfileWaitingStep />", () => {
       screen.getByRole("button", { name: "Open browser again" }),
     ).toBeDefined();
     cleanup();
+  });
+
+  it("shows the tick only on the copy button that was clicked", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    const writeText = vi.fn((_value: string) => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      render(
+        <AddProfileWaitingStep
+          loginUrl="https://auth.openai.com/codex/device"
+          userCode="7CH1-OXNVU"
+          loginCapability={{
+            oauthArgs: ["login", "--device-auth"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: {},
+            selfOpensBrowser: null,
+          }}
+          isLocalHost={false}
+          queuePending={false}
+          startingCopy={null}
+          cancelRequested={false}
+          cancelPending={false}
+          cancelDisabled={false}
+          waiting
+          codePaste={DISABLED_CODE_PASTE}
+          onOpenExternalLink={() => {}}
+          onCancel={() => {}}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy sign-in code" }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(
+        screen.getByRole("button", { name: "Copied sign-in code" }),
+      ).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Copy sign-in link" }),
+      ).toBeDefined();
+      expect(writeText).toHaveBeenCalledWith("7CH1-OXNVU");
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy sign-in link" }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(
+        screen.getByRole("button", { name: "Copied sign-in link" }),
+      ).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: "Copied sign-in code" }),
+      ).toBeDefined();
+      expect(writeText).toHaveBeenCalledWith(
+        "https://auth.openai.com/codex/device",
+      );
+    } finally {
+      cleanup();
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
   });
 });

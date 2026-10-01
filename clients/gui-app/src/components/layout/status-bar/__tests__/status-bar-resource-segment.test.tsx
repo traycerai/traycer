@@ -6,10 +6,10 @@ import {
   type GlobalResourceProjection,
 } from "@/stores/resources/resources-registry";
 import {
-  DEFAULT_STATUS_BAR_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-  type ResourceMetric,
-} from "@/stores/settings/layout-store";
+} from "@/stores/layout/layout-store";
+import type { ResourceMetric } from "@/lib/layout/layout-values";
 
 /**
  * What the segment does with the data it is handed — attribution above all,
@@ -36,12 +36,6 @@ vi.mock("@/stores/resources/resources-registry", async (importOriginal) => {
     useGlobalResourceProjection: () => registry.projection,
   };
 });
-
-const desktopAppResourceUsageMock = vi.hoisted(() => vi.fn(() => null));
-
-vi.mock("@/hooks/resources/use-desktop-app-resource-usage", () => ({
-  useDesktopAppResourceUsage: desktopAppResourceUsageMock,
-}));
 
 vi.mock("@/hooks/resources/use-global-resources-unsupported", () => ({
   useGlobalResourcesUnsupported: () => registry.unsupported,
@@ -81,10 +75,10 @@ function renderSegment(props: { readonly hasExplicitPick: boolean }): void {
   render(
     <TooltipProvider delayDuration={0}>
       <StatusBarResourceSegment
-        density="full"
         hostId="host-b"
         hostLabel="Office Linux"
         hasExplicitPick={props.hasExplicitPick}
+        interactive={false}
       />
     </TooltipProvider>,
   );
@@ -98,39 +92,12 @@ describe("<StatusBarResourceSegment />", () => {
   beforeEach(() => {
     registry.projection = EMPTY_GLOBAL_RESOURCE_PROJECTION;
     registry.unsupported = false;
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
-    desktopAppResourceUsageMock.mockClear();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   afterEach(() => {
     cleanup();
-    useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
-    desktopAppResourceUsageMock.mockClear();
-  });
-
-  it("subscribes desktop-app usage only under the desktop-app scope, never host-tree", () => {
-    // The sampler starts a once-a-second IPC poll on its first subscriber, so
-    // asking for it under the default host-tree scope - where the strip never
-    // renders it - would run that poll all session for a number nothing shows.
-    renderSegment({ hasExplicitPick: false });
-
-    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(false);
-  });
-
-  it("enables the sampler under the desktop-app scope", () => {
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        resources: {
-          ...DEFAULT_STATUS_BAR_LAYOUT.resources,
-          scope: "desktop-app",
-        },
-      },
-    });
-
-    renderSegment({ hasExplicitPick: false });
-
-    expect(desktopAppResourceUsageMock).toHaveBeenCalledWith(true);
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   });
 
   it("renders the watched host's numbers", () => {
@@ -140,6 +107,21 @@ describe("<StatusBarResourceSegment />", () => {
 
     expect(metricText("cpu")).toContain("12%");
     expect(metricText("processes")).toContain("14");
+  });
+
+  it("prints every metric with its label - the segment never shortens itself for a narrow window", () => {
+    // The usage cluster beside it is the box that gives way, by scrolling;
+    // this readout is pinned at its natural width and says the same thing at
+    // every width, so a reader never has to guess which number is which.
+    registry.projection = liveProjection("host-b");
+
+    renderSegment({ hasExplicitPick: true });
+
+    expect(metricText("cpu")).toBe("cpu12%");
+    expect(metricText("processes")).toBe("procs14");
+    expect(
+      screen.getByTestId("status-bar-resource-segment").className,
+    ).toContain("shrink-0");
   });
 
   it("draws no numbers from a projection belonging to another machine", () => {
@@ -181,11 +163,11 @@ describe("<StatusBarResourceSegment />", () => {
   it("says so when every metric is switched off", () => {
     // Reachable from Settings, which has one switch per metric. An icon with no
     // readout beside it is what a broken segment looks like.
-    useLayoutStore.setState({
-      statusBar: {
-        ...DEFAULT_STATUS_BAR_LAYOUT,
-        resources: { ...DEFAULT_STATUS_BAR_LAYOUT.resources, metrics: [] },
-      },
+    useLayoutStore.getState().setRegionValues("resourceMonitor", {
+      cpu: false,
+      memory: false,
+      processes: false,
+      ramShare: false,
     });
 
     renderSegment({ hasExplicitPick: false });
@@ -204,8 +186,7 @@ describe("<StatusBarResourceSegment />", () => {
   it("names every metric and its reading, so the numbers survive the label", () => {
     // The same `aria-label` rule the empty state relies on cuts the other way
     // once there IS a readout: the name REPLACES the flattened contents, so a
-    // bare "Resources" hid every figure in the segment from a screen reader at
-    // every density - not only the ones that drop the visible label.
+    // bare "Resources" hid every figure in the segment from a screen reader.
     registry.projection = liveProjection("host-b");
 
     renderSegment({ hasExplicitPick: true });

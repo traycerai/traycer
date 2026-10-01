@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { shouldAutoOpenLoginUrl } from "@/components/providers/provider-signin-availability";
 
 /** Label for the waiting-step browser button: "again" only after we opened it. */
@@ -13,11 +14,11 @@ export function openBrowserLabel(autoOpen: boolean): string {
  */
 export function useAutoOpenLoginUrl(
   isLocalHost: boolean,
-  userCode: string | null,
+  loginCapability: ProviderCliState["loginCapability"] | undefined,
   loginUrl: string | null,
   onOpen: (url: string) => void,
 ): boolean {
-  const autoOpen = shouldAutoOpenLoginUrl(isLocalHost, userCode);
+  const autoOpen = shouldAutoOpenLoginUrl(isLocalHost, loginCapability);
   const openedUrlRef = useRef<string | null>(null);
   useEffect(() => {
     if (!autoOpen || loginUrl === null) return;

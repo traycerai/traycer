@@ -122,3 +122,61 @@
 :root.dark {
   color-scheme: dark;
 }
+/* A subtree painted on a fixed dark ground, whatever theme is active: the
+   base dark palette, declared on the element so it outranks the tokens the
+   theme applier writes on <html>, and the `dark:` variant follows it. */
+@utility theme-base-dark {
+  color-scheme: dark;
+  --background: oklch(0.205 0 0);
+  --foreground: oklch(0.985 0 0);
+  --canvas: oklch(0.145 0 0);
+  --canvas-foreground: oklch(0.985 0 0);
+  --canvas-border: oklch(1 0 0 / 10%);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.72 0.14 142);
+  --success-foreground: oklch(0.75 0.15 145);
+  --warning: oklch(0.78 0.14 80);
+  --warning-foreground: oklch(0.9 0.08 85);
+  --info: oklch(0.72 0.13 250);
+  --info-foreground: oklch(0.8 0.1 240);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --reasoning-max-accent: oklch(0.62 0.19 295);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --term-ansi-black: #18181b;
+  --term-ansi-red: #ef4444;
+  --term-ansi-green: #22c55e;
+  --term-ansi-yellow: #eab308;
+  --term-ansi-blue: #3b82f6;
+  --term-ansi-magenta: #a855f7;
+  --term-ansi-cyan: #06b6d4;
+  --term-ansi-white: #d4d4d8;
+  --term-ansi-bright-black: #52525b;
+  --term-ansi-bright-red: #f87171;
+  --term-ansi-bright-green: #4ade80;
+  --term-ansi-bright-yellow: #facc15;
+  --term-ansi-bright-blue: #60a5fa;
+  --term-ansi-bright-magenta: #c084fc;
+  --term-ansi-bright-cyan: #22d3ee;
+  --term-ansi-bright-white: #fafafa;
+  --sidebar: var(--background);
+  --sidebar-foreground: var(--foreground);
+}

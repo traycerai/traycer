@@ -22,14 +22,18 @@ import {
   HOVER_PREVIEW_SURFACE_CLASS,
 } from "@/components/ui/hover-preview-surface";
 import type { MentionPreview } from "@/lib/composer/types";
+import { subscribeNativeKeyboardState } from "@/lib/native-keyboard";
 import type { MentionPathTree } from "@/lib/path";
 import { cn } from "@/lib/utils";
 
+import {
+  composerMenuViewportPadding,
+  readComposerMenuReservedEdges,
+} from "./composer-menu-middleware";
 import { panelFitFor } from "./mention-preview-panel-fit";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
 const PANEL_GUTTER_PX = 6;
-const PANEL_BOUNDARY_PADDING_PX = 8;
 // The root row absorbs the full relative-path prefix as one string; past
 // this many characters it stops fitting the panel's fixed width on one
 // line, so it gets middle-elided instead of left to CSS tail-truncate.
@@ -55,9 +59,12 @@ export interface MentionPreviewPanelProps {
  * Info-only preview panel pinned beside the composer's @mention/slash menu.
  * Anchored to the active row (via a floating-ui virtual reference reading
  * its live rect), so it tracks the highlighted row vertically as selection
- * changes. Placement prefers the right; `flip` falls back to the left; the
- * `size` gate hides the panel entirely once neither side has room, rather
- * than letting it render past the viewport edge or overlap the list.
+ * changes. Placement prefers the right; `flip` falls back to the left;
+ * `shift` clamps it inside the viewport horizontally, which overlaps the list
+ * when neither side has room; the `size` gate caps it to the viewport and
+ * hides it when too little space is left (see `panelFitFor`). The usable
+ * viewport is the menu's own (`composerMenuViewportPadding`), so the panel
+ * never occupies the strip the software keyboard covers either.
  */
 export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
   const { panelRef, listRef, activeIndex, preview, disabledReason } = props;
@@ -105,21 +112,19 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
         setFits(false);
         return;
       }
+      // The same usable area as the menu it sits beside, so it never occupies
+      // the strip the software keyboard covers either.
+      const padding = composerMenuViewportPadding(
+        readComposerMenuReservedEdges(),
+      );
       void computePosition(virtualReference, panel, {
         placement: "right-start",
         middleware: [
           offset(PANEL_GUTTER_PX),
-          flip({
-            fallbackPlacements: ["left-start"],
-            padding: PANEL_BOUNDARY_PADDING_PX,
-          }),
-          shift({
-            mainAxis: false,
-            crossAxis: true,
-            padding: PANEL_BOUNDARY_PADDING_PX,
-          }),
+          flip({ fallbackPlacements: ["left-start"], padding }),
+          shift({ mainAxis: false, crossAxis: true, padding }),
           size({
-            padding: PANEL_BOUNDARY_PADDING_PX,
+            padding,
             apply: ({ availableWidth, availableHeight, elements }) => {
               const fit = panelFitFor(availableWidth, availableHeight);
               setFits(fit.fits);
@@ -136,7 +141,13 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     };
 
     reposition();
-    return autoUpdate(virtualReference, panel, reposition);
+    const stopAutoUpdate = autoUpdate(virtualReference, panel, reposition);
+    // A keyboard opening or closing moves nothing `autoUpdate` observes.
+    const unsubscribeKeyboard = subscribeNativeKeyboardState(reposition);
+    return () => {
+      stopAutoUpdate();
+      unsubscribeKeyboard();
+    };
   }, [panelRef, listRef, activeIndex, preview]);
 
   if (preview === null) return null;
@@ -146,6 +157,10 @@ export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
     <div
       ref={panelRef}
       data-slot="mention-preview-panel"
+      // Describes the editor popup's active row, so it is part of that popup:
+      // tapping it must not dismiss the soft keyboard (see
+      // `isWithinTextEntryPopup`).
+      data-text-entry-popup=""
       role="presentation"
       aria-hidden
       className={cn(

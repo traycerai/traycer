@@ -6,6 +6,7 @@ import {
   renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
@@ -43,6 +44,7 @@ import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/ho
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
   createChatSessionStore,
+  withdrawnMessageDeliveryId,
   type ChatSessionStoreHandle,
   type ConfirmedManualFallbackAction,
 } from "@/stores/chats/chat-session-store";
@@ -71,12 +73,17 @@ import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 import { usePublishConfirmedManualFallbackAction } from "@/components/chat/fallback/use-confirmed-manual-action";
 import { usePublishUnattendedFallbackOutcome } from "@/components/chat/fallback/use-unattended-fallback-outcome";
 import { useFallbackRunManualRung } from "@/components/chat/fallback/use-fallback-actions";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import {
   installLegendListViewportMetrics,
   setLegendListScrollContainerScrollHeightOverride,
@@ -285,6 +292,7 @@ function providerNoticeSegment(input: {
   return {
     id: input.id,
     kind: "provider_notice",
+    receipt: null,
     status: "completed",
     noticeKind: input.noticeKind,
     tone: "info",
@@ -520,6 +528,7 @@ function windowedSnapshotBase(input: {
       accumulatedFileChangeCount: 0,
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       transcriptEpoch: input.transcriptEpoch,
       rowCount: input.rowCount,
       indexRevision: null,
@@ -632,6 +641,7 @@ function bootstrap(
       accumulatedFileChanges: [],
       managedCommands: [],
       heldUpdates: [],
+      portForwards: [],
       pendingFallback: pending,
       pendingReturn: returning,
       lastFallbackOutcome,
@@ -691,7 +701,7 @@ const runManualRungState = vi.hoisted(() => ({
   // working unchanged; only the unmount-survival test below swaps in a
   // controllable deferred promise.
   handler: (): Promise<RunManualRungResponse> =>
-    Promise.resolve({ outcome: "applied" }),
+    Promise.resolve({ outcome: "applied", detail: null }),
   callCount: { current: 0 },
 }));
 
@@ -741,6 +751,174 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
+// The routing chooser (opened from the waiting card's "Choose another model…")
+// reads the host through these hooks. The picker suites' shared doubles stand
+// in for them here, and nothing else changes: the store, the announcer and the
+// pick's mutation lifecycle - what this file proves - stay real.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).catalogModule(),
+);
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).providersEnsurePackModule(),
+);
+vi.mock(
+  "@/hooks/providers/use-providers-set-profile-enabled-mutation",
+  async () =>
+    (
+      await import("../fallback/__tests__/routing-picker-kit")
+    ).providersSetProfileEnabledModule(),
+);
+vi.mock("@/hooks/host/use-reactive-host-readiness", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).reactiveHostReadinessModule(),
+);
+vi.mock("@/hooks/agent/use-host-reachability", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostReachabilityModule(),
+);
+vi.mock("@/hooks/host/use-addressable-host-id", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).addressableHostIdModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-entry", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryEntryModule(),
+);
+vi.mock("@/hooks/host/use-host-directory-list-query", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).hostDirectoryListModule(),
+);
+vi.mock("@/hooks/rate-limits/use-profile-usage-comparison", async () =>
+  (
+    await import("../fallback/__tests__/routing-picker-kit")
+  ).usageComparisonModule(),
+);
+vi.mock("react-virtuoso", async () =>
+  (await import("../fallback/__tests__/routing-picker-kit")).virtuosoModule(),
+);
+
+/**
+ * `useFallbackModelLabels` alone, kept real everywhere else in the module -
+ * same double as the retired grace-card suite used, and for the same reason:
+ * this file's real `HostClient`/`MockHostMessenger` has no
+ * `agent.gui.listHarnesses`/`agent.gui.listModels` handler, so the real hook
+ * would hit an unhandled-method `HostRpcError` on every mount - which is
+ * harmless (the resolver degrades to the slug, matching every literal already
+ * pinned in this file) but noisy, and gives this file no way to prove the
+ * ONE thing worth proving at this level: that the announcer and a composer
+ * card, fed the SAME resolver, cannot print two different names for one
+ * tuple. `null` (every case but that one) is the slug passthrough every
+ * existing literal here already assumes.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+  // The real catalogues hook resolves only the harnesses its caller asked
+  // for at render. Off by default so every other case keeps resolving any
+  // tuple; the case that pins the announcer's render-time subjects turns it on.
+  askedOnly: false,
+  // Every `useFallbackModelCatalogues` call, in order: what was asked about
+  // and whether the reads were enabled.
+  calls: [] as Array<{
+    readonly harnessIds: ReadonlyArray<string>;
+    readonly enabled: boolean;
+  }>,
+}));
+
+/**
+ * Catalogue-settled flag for `useFallbackModelCatalogues`. Default `true` so
+ * every existing case in this file still consumes a manual switch on the first
+ * observation. The hold that waits on an unsettled catalogue is pinned in the
+ * nested describe below; this mock previously claimed that hold already had
+ * "its own pin" elsewhere, which was false.
+ *
+ * `settledFor` is a STABLE function identity (replaced only when a test mints
+ * a new one) so a layout-effect re-observation is a deliberate settle, not an
+ * accidental new arrow on every render.
+ */
+const catalogueSettled = vi.hoisted(() => {
+  const state: {
+    value: boolean;
+    settledFor: (harnessId: string) => boolean;
+  } = {
+    value: true,
+    settledFor: (_harnessId: string): boolean => state.value,
+  };
+  return state;
+});
+
+function mintCatalogueSettledFor(): (harnessId: string) => boolean {
+  return (_harnessId: string): boolean => catalogueSettled.value;
+}
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    const labelFor = (harnessId: string, model: string): string =>
+      modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model;
+    // One resolver per asked-for set, so its identity is as stable as the
+    // real hook's and a re-render does not read as a catalogue landing.
+    const askedResolvers = new Map<
+      string,
+      (harnessId: string, model: string) => string
+    >();
+    const labelForAsked = (
+      harnessIdsInPlay: ReadonlyArray<string | null>,
+    ): ((harnessId: string, model: string) => string) => {
+      const key = harnessIdsInPlay
+        .flatMap((id) => (id === null ? [] : [id]))
+        .sort()
+        .join(" ");
+      const known = askedResolvers.get(key);
+      if (known !== undefined) return known;
+      const asked = new Set(key.split(" "));
+      const resolver = (harnessId: string, model: string): string =>
+        asked.has(harnessId) ? labelFor(harnessId, model) : model;
+      askedResolvers.set(key, resolver);
+      return resolver;
+    };
+    return {
+      ...actual,
+      // BOTH exports, deliberately. `useFallbackModelLabels` is a thin wrapper
+      // over `useFallbackModelCatalogues` in the real module, but it calls it
+      // MODULE-INTERNALLY - a mock of one export never reaches the other. The
+      // announcer takes the catalogues hook and the composer cards take the
+      // labels hook, so doubling only one would leave this file's whole point
+      // (that the two cannot print one tuple two ways) resting on two
+      // different resolvers, which is the agreement it exists to disprove.
+      useFallbackModelLabels: () => labelFor,
+      useFallbackModelCatalogues: (
+        _client: unknown,
+        harnessIdsInPlay: ReadonlyArray<string | null>,
+        enabled: boolean,
+      ) => {
+        modelLabelOverride.calls.push({
+          harnessIds: harnessIdsInPlay.flatMap((id) =>
+            id === null ? [] : [id],
+          ),
+          enabled,
+        });
+        return {
+          labelFor: modelLabelOverride.askedOnly
+            ? labelForAsked(harnessIdsInPlay)
+            : labelFor,
+          settledFor: catalogueSettled.settledFor,
+        };
+      },
+    };
+  },
+);
+
 // One fixed, always-selectable destination - inert for every case in this
 // file except the MF11 real-parent-transition pin below, which is the only
 // test that opens a destination menu at all.
@@ -771,7 +949,10 @@ vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
   useFallbackListTargets: () => ({
     data: CHOOSE_TARGET_LIST_DATA,
     isPending: false,
+    isFetching: false,
     isError: false,
+    // The picker refetches on open; the listing here is fixed.
+    refetch: () => Promise.resolve(),
   }),
 }));
 
@@ -881,6 +1062,7 @@ function chatScene(
           messages={state.messages}
           transcriptWindow={state.transcriptWindow}
           onVisibleOrdinalRangeChange={() => undefined}
+          onFindReadOrdinalChange={() => undefined}
           baselineEpoch={state.baselineEpoch}
           hydrationSequence={state.hydrationSequence}
           coldRewrittenMessageIds={state.coldRewrittenMessageIds}
@@ -952,18 +1134,20 @@ function renderBanners(
 ) {
   const result = render(
     <QueryClientProvider client={queryClient}>
-      <ChatComposerBannerPortalProvider>
-        <ChatComposerFallbackBanners
-          topBannerKind="fallback"
-          fallback={{ pending, pendingReturn: undefined }}
-          rateLimitAdvisory={null}
-          client={liveHostClient}
-          chatId={CHAT_ID}
-          epicId={EPIC_ID}
-          hostId={HOST_ID}
-          canAct
-        />
-      </ChatComposerBannerPortalProvider>
+      <TabHostProvider hostId={HOST_ID}>
+        <ChatComposerBannerPortalProvider>
+          <ChatComposerFallbackBanners
+            topBannerKind="fallback"
+            fallback={{ pending, pendingReturn: undefined }}
+            rateLimitAdvisory={null}
+            client={liveHostClient}
+            chatId={CHAT_ID}
+            epicId={EPIC_ID}
+            hostId={HOST_ID}
+            canAct
+          />
+        </ChatComposerBannerPortalProvider>
+      </TabHostProvider>
     </QueryClientProvider>,
   );
   return {
@@ -971,18 +1155,20 @@ function renderBanners(
     rerenderWith: (nextPending: PendingFallback | undefined) => {
       result.rerender(
         <QueryClientProvider client={queryClient}>
-          <ChatComposerBannerPortalProvider>
-            <ChatComposerFallbackBanners
-              topBannerKind="fallback"
-              fallback={{ pending: nextPending, pendingReturn: undefined }}
-              rateLimitAdvisory={null}
-              client={liveHostClient}
-              chatId={CHAT_ID}
-              epicId={EPIC_ID}
-              hostId={HOST_ID}
-              canAct
-            />
-          </ChatComposerBannerPortalProvider>
+          <TabHostProvider hostId={HOST_ID}>
+            <ChatComposerBannerPortalProvider>
+              <ChatComposerFallbackBanners
+                topBannerKind="fallback"
+                fallback={{ pending: nextPending, pendingReturn: undefined }}
+                rateLimitAdvisory={null}
+                client={liveHostClient}
+                chatId={CHAT_ID}
+                epicId={EPIC_ID}
+                hostId={HOST_ID}
+                canAct
+              />
+            </ChatComposerBannerPortalProvider>
+          </TabHostProvider>
         </QueryClientProvider>,
       );
     },
@@ -1171,12 +1357,18 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   beforeEach(() => {
     installLegendListViewportMetrics();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
-    useSettingsStore.setState({
-      chatTurnMinimapSide: "right",
-      quoteReplyEnabled: false,
-    });
-    runManualRungState.handler = () => Promise.resolve({ outcome: "applied" });
+    // The minimap's side/shown live on the layout store now; the shipped
+    // default (right, shown) is what this file always wanted here.
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useSettingsStore.setState({ quoteReplyEnabled: false });
+    runManualRungState.handler = () =>
+      Promise.resolve({ outcome: "applied", detail: null });
     runManualRungState.callCount.current = 0;
+    modelLabelOverride.value = null;
+    modelLabelOverride.askedOnly = false;
+    modelLabelOverride.calls = [];
+    catalogueSettled.value = true;
+    catalogueSettled.settledFor = mintCatalogueSettledFor();
     disposeAllChatSessions();
   });
 
@@ -1232,10 +1424,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     await flushAnnouncer();
     const holdText = liveRegionText();
     expect(holdText).toContain(`The chat will switch to ${TARGET_IDENTITY}.`);
-    expect(holdText).toContain(FRESH_SESSION_HELPER);
-    expect(holdText).toContain(
-      "2 queued messages will run on the new settings too.",
-    );
+    // The card's count clause as a sentence; never a sentence the card cut.
+    expect(holdText).toContain("2 queued messages move with it.");
+    expect(holdText).not.toContain(FRESH_SESSION_HELPER);
     expect(holdText).toContain("You have 12 seconds to cancel.");
     // No focus theft: the announcer is a live region, not a focus target.
     expect(document.activeElement).toBe(focusProbe);
@@ -1256,7 +1447,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       undefined,
     );
     await flushAnnouncer();
-    expect(liveRegionText()).toContain("Fallback countdown paused.");
+    expect(liveRegionText()).toContain("Countdown paused.");
 
     // SWITCHING - now committed via `targetTuple`.
     setTurnState(
@@ -1308,12 +1499,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // (not span presence) also catches the real queue joining several
     // pending entries into ONE span and duplicating the sentence inside it,
     // either within a single batch or across separate commits.
-    expect(
-      countSentenceOccurrences(
-        noticeCommits,
-        `Switched providers. To: ${TARGET_IDENTITY}`,
-      ),
-    ).toBe(1);
+    expect(countSentenceOccurrences(noticeCommits, "Switched providers")).toBe(
+      1,
+    );
 
     // A RETURN offer - independent channel, names the preferred identity.
     setTurnState(
@@ -1328,9 +1516,9 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     );
     await flushAnnouncer();
     const returnText = liveRegionText();
-    expect(returnText).toContain(PREFERRED_IDENTITY);
-    expect(returnText).toContain("is available again");
-    expect(returnText).toContain("and moves 1 queued message back");
+    expect(returnText).toContain(`Switch back to ${PREFERRED_IDENTITY}?`);
+    expect(returnText).toContain("Switching back moves 1 queued message back.");
+    expect(returnText).not.toContain(FRESH_SESSION_HELPER);
 
     // Falsification: drop the `impendingAction.target` fallback in F5's
     // `pendingFallbackDestinationTuple` identity helper and the HOLD
@@ -1411,7 +1599,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const holdIndex = batched.indexOf(
       `The chat will switch to ${TARGET_IDENTITY}.`,
     );
-    const choosingIndex = batched.indexOf("Fallback countdown paused.");
+    const choosingIndex = batched.indexOf("Countdown paused.");
     const switchingIndex = batched.indexOf(
       `Switching this chat to ${TARGET_IDENTITY}.`,
     );
@@ -1890,7 +2078,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       undefined,
     );
     await flushAnnouncer();
-    expect(liveRegionText()).toContain("Fallback countdown paused.");
+    expect(liveRegionText()).toContain("Countdown paused.");
   });
 
   it("D71: a confirmed manual switch speaks AFTER the initiating trigger unmounts, via the mutation's real host-level onSuccess (not a per-call callback that dies with the component); the same record replayed is silent, a later sequence with identical words speaks again as a genuinely new DOM node", async () => {
@@ -1935,7 +2123,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // the QueryClient's mutation cache, not by the unmounted component) is
     // what must still fire.
     await act(async () => {
-      firstDeferred.resolve({ outcome: "applied" });
+      firstDeferred.resolve({ outcome: "applied", detail: null });
       await firstDeferred.promise;
     });
     await flushAnnouncer();
@@ -1974,7 +2162,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     });
     secondTrigger.unmount();
     await act(async () => {
-      secondDeferred.resolve({ outcome: "applied" });
+      secondDeferred.resolve({ outcome: "applied", detail: null });
       await secondDeferred.promise;
     });
     await flushAnnouncer();
@@ -2265,7 +2453,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
     const chat = renderChat(baselineEpoch, undefined);
     runManualRungState.handler = () =>
-      Promise.resolve({ outcome: "no_active_traversal" });
+      Promise.resolve({ outcome: "no_active_traversal", detail: null });
     const trigger = renderTrigger(
       {
         userMessageId: "user-msg-refused",
@@ -2340,11 +2528,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
 
       // The RPC stays unresolved. The PARENT transitions to "switching" -
@@ -2353,9 +2543,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       // point of this pin is that production transition, not a test-driven
       // teardown.
       banners.rerenderWith(switchingPending(2));
-      expect(
-        screen.queryByRole("button", { name: /gpt-6-astra-mini/ }),
-      ).toBeNull();
+      expect(screen.queryByRole("option", { name: /GPT-4\.1/ })).toBeNull();
 
       const commits = await captureLiveRegionCommits(() => {
         deferred.resolve({ outcome: "traversal_advanced" });
@@ -2402,11 +2590,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
       banners.rerenderWith(switchingPending(2));
 
@@ -2433,11 +2623,13 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       const deferred = makeDeferred<ChooseTargetResponse>();
       chooseTargetState.handler = () => deferred.promise;
 
-      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose another model…" }),
+      );
+      // The chooser stages a pick and the footer's Switch sends it.
+      fireEvent.click(screen.getByRole("option", { name: /GPT-4\.1/ }));
       act(() => {
-        fireEvent.click(
-          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
-        );
+        fireEvent.click(screen.getByRole("button", { name: "Switch" }));
       });
       // Deliberately NO parent transition here - the menu stays mounted and
       // OPEN (`inlineMenuOpen: true`) for the whole test, which is what stops
@@ -2451,8 +2643,15 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       expect(
         harness.handle.store.getState().unattendedFallbackOutcome,
       ).toBeNull();
-      // The menu's OWN inline line is what actually reports this refusal.
-      expect(screen.getByText("This chat already resumed.")).toBeDefined();
+      // The menu's OWN inline line is what actually reports this refusal: its
+      // live region (the visible copy beside it is aria-hidden).
+      expect(
+        within(screen.getByRole("dialog"))
+          .getAllByRole("status")
+          .some(
+            (region) => region.textContent === "This chat already resumed.",
+          ),
+      ).toBe(true);
     });
   });
 
@@ -2523,7 +2722,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       sequence: 1,
     };
   }
-  const D224_HELD_TEXT = `Switched providers. To: ${TARGET_IDENTITY}`;
+  const D224_HELD_TEXT = "Switched providers";
 
   // A genuinely different block, used only by the negative case's retained
   // "still speaks live afterward" tail.
@@ -2538,7 +2737,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       sequence: 7,
     };
   }
-  const D224_FOLLOWUP_TEXT = `Fallback settled. Now on: ${TARGET_IDENTITY}`;
+  const D224_FOLLOWUP_TEXT = "Fallback settled";
 
   it("D224 (unchanged epoch): a real unmount with NO reconnect while gone, remounted, then a genuinely DEFERRED (unhydrated-tail) held outcome speaks exactly once, and completing the tail afterward does not replay it", async () => {
     const { harness, epoch } = establishD224Baseline();
@@ -2768,7 +2967,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       sequence: 1,
     };
   }
-  const R1_EVENTUAL_TEXT = `Switched providers. To: ${TARGET_IDENTITY}`;
+  const R1_EVENTUAL_TEXT = "Switched providers";
 
   const R1_ASSISTANT_SENDER: AgentSender = {
     type: "agent",
@@ -2930,6 +3129,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
           ? []
           : state.transcriptDerived.setupCardWindows,
       pendingUserMessages: state.pendingUserMessages,
+      withdrawnMessageId: withdrawnMessageDeliveryId(state.messageDelivery),
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
       pendingApprovals: state.pendingApprovals,
@@ -2989,5 +3189,623 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // job (the liveOutcome/metadata-then-body and body-then-metadata
     // describe block); this test is not a substitute falsifier for that
     // guard.
+  });
+
+  /**
+   * The model-catalogue-label resolver, end to end: the announcer
+   * (`ChatMessages`) and a composer card (`FallbackGraceCard`, via the real
+   * `ChatComposerFallbackBanners`) are TWO independent renderers naming the
+   * SAME tuple, and `useFallbackModelLabels` exists precisely so they cannot
+   * name it differently - see that hook's own doc in `fallback-identity.ts`.
+   *
+   * `modelLabelOverride` (this file's `useFallbackModelLabels` double) is the
+   * one resolver both trees below read - a real catalogue would answer both
+   * from the same cached `agent.gui.listModels` read, and mocking one level
+   * down from that lets this test stay about the AGREEMENT rather than
+   * re-proving the resolver's own mapping rules, which
+   * `fallback-model-labels.test.tsx` already owns.
+   *
+   * Falsification: have either renderer read `tuple.model` directly instead
+   * of threading `modelLabelFor` through - that renderer's assertion below
+   * goes red while the other stays green, which is exactly the divergence
+   * this hook exists to make impossible.
+   */
+  it("the announcer and a composer card name the SAME resolved label for one tuple - they cannot diverge", async () => {
+    const harness = createHarness();
+    registerHarness(harness);
+    modelLabelOverride.value = new Map([
+      [`${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`, "Astra Mini"],
+    ]);
+
+    const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+    const chat = renderChat(baselineEpoch, undefined);
+
+    const pending = pendingFallback({
+      state: "switching",
+      traversalId: "trav-agree",
+      revision: 1,
+      deadline: null,
+      targetTuple: TARGET_TUPLE,
+      impendingAction: null,
+      queuedItemsMoving: 0,
+    });
+    setTurnState(harness, pending, undefined, undefined);
+    await flushAnnouncer();
+    const announced = liveRegionText();
+    expect(announced).toContain("Astra Mini");
+    expect(announced).not.toContain(TARGET_TUPLE.model);
+
+    // The identical `PendingFallback` DTO, rendered by the composer's real
+    // grace card via `renderBanners` - sharing the chat's own `QueryClient`,
+    // and (module-mocked) the exact same resolver function the announcer
+    // above just read.
+    renderBanners(pending, chat.queryClient);
+    const card = screen.getByTestId("routing-card").textContent;
+    expect(card).toContain("Astra Mini");
+    expect(card).not.toContain(TARGET_TUPLE.model);
+  });
+
+  it("a countdown whose first frame already names its destination is announced once, by its resolved name - never the slug first", async () => {
+    // Falsification: observe the store event against the resolvers of the
+    // render BEFORE it (asked about no harness) and the plan is spoken twice,
+    // "gpt-6-astra-mini · high" and then "Astra Mini · high" (seen live).
+    modelLabelOverride.askedOnly = true;
+    modelLabelOverride.value = new Map([
+      [`${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`, "Astra Mini"],
+    ]);
+    const harness = createHarness();
+    registerHarness(harness);
+    const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+    renderChat(baselineEpoch, undefined);
+
+    const commits = await captureLiveRegionCommits(() => {
+      setTurnState(
+        harness,
+        pendingFallback({
+          state: "hold",
+          traversalId: "trav-named",
+          revision: 1,
+          deadline: Date.now() + 15_000,
+          targetTuple: null,
+          impendingAction: impendingAction({
+            planId: "plan-named",
+            rung: "tier",
+            target: TARGET_TUPLE,
+            resumesAt: null,
+            pending: null,
+          }),
+          queuedItemsMoving: 0,
+        }),
+        undefined,
+        undefined,
+      );
+    });
+    expect(countSentenceOccurrences(commits, "The chat will switch to")).toBe(
+      1,
+    );
+    expect(
+      countSentenceOccurrences(
+        commits,
+        `The chat will switch to Astra Mini · high on ${TARGET_PROFILE_LABEL}.`,
+      ),
+    ).toBe(1);
+    expect(commits.join(" ")).not.toContain(TARGET_TUPLE.model);
+  });
+
+  /**
+   * F8: a burst that INTRODUCES a harness and moves past it before React
+   * renders. The deferred frame naming it is drained by the render of the
+   * burst's LAST state, so its harness has to be asked about by that render
+   * even though the final state no longer names it - otherwise a catalogue
+   * already warm in the cache is never read and the slug is spoken.
+   */
+  describe("F8: a deferred frame's harness is asked about until the frame is spoken", () => {
+    const B_TUPLE: ChatRunSettings = {
+      harnessId: "claude",
+      model: "claude-opus-5",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "acct-south",
+    };
+    const C_TUPLE: ChatRunSettings = {
+      harnessId: "opencode",
+      model: "grok-code-fast",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: "acct-south",
+    };
+    const B_SENTENCE = `Switching this chat to Claude Code · Opus 5 on ${TARGET_PROFILE_LABEL}.`;
+
+    function waitingOnA(): PendingFallback {
+      return pendingFallback({
+        state: "waiting",
+        traversalId: "trav-f8",
+        revision: 1,
+        deadline: Date.now() + 3_600_000,
+        targetTuple: null,
+        impendingAction: null,
+        queuedItemsMoving: 0,
+      });
+    }
+
+    function switchingToB(): PendingFallback {
+      return pendingFallback({
+        state: "switching",
+        traversalId: "trav-f8",
+        revision: 2,
+        deadline: null,
+        targetTuple: B_TUPLE,
+        impendingAction: null,
+        queuedItemsMoving: 0,
+      });
+    }
+
+    async function renderWaitingOnA(
+      labels: ReadonlyMap<string, string>,
+    ): Promise<Harness> {
+      modelLabelOverride.askedOnly = true;
+      modelLabelOverride.value = labels;
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(
+        harness,
+        waitingOnA(),
+        undefined,
+        undefined,
+      );
+      renderChat(baselineEpoch, undefined);
+      await flushAnnouncer();
+      return harness;
+    }
+
+    const WARM_LABELS: ReadonlyMap<string, string> = new Map([
+      [`${B_TUPLE.harnessId}:${B_TUPLE.model}`, "Opus 5"],
+      [`${C_TUPLE.harnessId}:${C_TUPLE.model}`, "Grok Code Fast"],
+    ]);
+
+    it("A → B → cleared in one batch: B's switch is spoken once, by its label", async () => {
+      const harness = await renderWaitingOnA(WARM_LABELS);
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(harness, undefined, undefined, undefined);
+      });
+      // Falsification: drain the deferred frame with resolvers asked only
+      // about the final (fallback-free) state and this reads
+      // "Switching this chat to Claude Code · claude-opus-5 on acct-sou."
+      expect(countSentenceOccurrences(commits, "Switching this chat to")).toBe(
+        1,
+      );
+      expect(countSentenceOccurrences(commits, B_SENTENCE)).toBe(1);
+      expect(commits.join(" ")).not.toContain(B_TUPLE.model);
+    });
+
+    it("the drain render asks about B with its reads on, and B is let go once the frame is spoken", async () => {
+      const harness = await renderWaitingOnA(WARM_LABELS);
+      modelLabelOverride.calls = [];
+      await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(harness, undefined, undefined, undefined);
+      });
+      await flushAnnouncer();
+      const calls = modelLabelOverride.calls;
+      // The final state names no fallback, so only the queued frame can have
+      // put B in the request - and with the reads on, or a cold slot never
+      // loads.
+      expect(
+        calls.some(
+          (call) => call.enabled && call.harnessIds.includes(B_TUPLE.harnessId),
+        ),
+      ).toBe(true);
+      // Released: the last render asks about nobody and reads nothing.
+      expect(calls.at(-1)).toEqual({ harnessIds: [], enabled: false });
+    });
+
+    it("a catalogue still cold when the frame is spoken names the slug once - the announcement is not held for it", async () => {
+      // No label for B: asked about, not answered. A countdown is not held for
+      // a network read; the frame is spoken now, once, in order.
+      const harness = await renderWaitingOnA(new Map());
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(harness, undefined, undefined, undefined);
+      });
+      expect(commits).toEqual([
+        `Switching this chat to Claude Code · ${B_TUPLE.model} on ${TARGET_PROFILE_LABEL}.`,
+      ]);
+    });
+
+    it("A → B → C in one batch: both destinations are spoken by label, in order", async () => {
+      const harness = await renderWaitingOnA(WARM_LABELS);
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, switchingToB(), undefined, undefined);
+        setTurnState(
+          harness,
+          pendingFallback({
+            state: "hold",
+            traversalId: "trav-f8",
+            revision: 3,
+            deadline: Date.now() + 15_000,
+            targetTuple: null,
+            impendingAction: impendingAction({
+              planId: "plan-f8-c",
+              rung: "tier",
+              target: C_TUPLE,
+              resumesAt: null,
+              pending: null,
+            }),
+            queuedItemsMoving: 0,
+          }),
+          undefined,
+          undefined,
+        );
+      });
+      const joined = commits.join(" ");
+      expect(countSentenceOccurrences(commits, B_SENTENCE)).toBe(1);
+      expect(countSentenceOccurrences(commits, "The chat will switch to")).toBe(
+        1,
+      );
+      expect(joined).toContain("Grok Code Fast");
+      expect(joined.indexOf(B_SENTENCE)).toBeLessThan(
+        joined.indexOf("The chat will switch to"),
+      );
+      expect(joined).not.toContain(B_TUPLE.model);
+      expect(joined).not.toContain(C_TUPLE.model);
+    });
+  });
+
+  /**
+   * Manual-switch catalogue-label hold: `observeManualFallbackAction` will not
+   * consume a confirmed switch while `settledFor(target.harnessId)` is false,
+   * until either the catalogue settles or `MANUAL_LABEL_HOLD_MS` elapses on a
+   * READY surface. 10_000 below is that constant; it is not imported, so a
+   * change to the production figure fails these tests rather than silently
+   * tracking it.
+   */
+  describe("manual-switch catalogue-label hold", () => {
+    const RESOLVED_MANUAL_MODEL_LABEL = "Astra Mini";
+    const MANUAL_SWITCH_RESOLVED_IDENTITY = `Codex · ${RESOLVED_MANUAL_MODEL_LABEL} · high on ${TARGET_PROFILE_LABEL}`;
+    const SWITCHED_SLUG_SENTENCE = `Switched this chat to ${MANUAL_SWITCH_TARGET_IDENTITY}.`;
+    const SWITCHED_RESOLVED_SENTENCE = `Switched this chat to ${MANUAL_SWITCH_RESOLVED_IDENTITY}.`;
+    // `MANUAL_LABEL_HOLD_MS` in chat-messages.tsx. Literal on purpose.
+    const MANUAL_LABEL_HOLD_MS = 10_000;
+
+    function publishHeldSwitch(harness: Harness): void {
+      harness.handle.store.getState().publishConfirmedManualFallbackAction({
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        rung: "switch",
+        userMessageId: "user-msg-hold",
+        turnId: "turn-hold",
+        target: TARGET_TUPLE,
+      });
+    }
+
+    function settleCatalogue(): void {
+      catalogueSettled.value = true;
+      catalogueSettled.settledFor = mintCatalogueSettledFor();
+    }
+
+    function unsettleCatalogue(): void {
+      catalogueSettled.value = false;
+      catalogueSettled.settledFor = mintCatalogueSettledFor();
+    }
+
+    it("holds the confirmed switch and does not announce while the catalogue is unsettled", async () => {
+      // Falsification: drop the `!modelCatalogueSettledFor(...)` hold in
+      // `observeManualFallbackAction` - this speaks the slug sentence on the
+      // first observation instead of staying silent.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+      expect(liveRegionText()).not.toContain(TARGET_TUPLE.model);
+    });
+
+    it("announces the resolved label exactly once when the catalogue settles before the deadline", async () => {
+      // Falsification: announce on first sight (no hold) - the sentence would
+      // carry the RAW SLUG, because the override is applied only at settle.
+      // Falsification: wait for the deadline instead of settle - advancing
+      // 9s then settling would still be silent here, or would speak the slug
+      // if the deadline were shorter than 9s.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      act(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS - 1_000);
+      });
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      modelLabelOverride.value = new Map([
+        [
+          `${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`,
+          RESOLVED_MANUAL_MODEL_LABEL,
+        ],
+      ]);
+      settleCatalogue();
+      const commits = await captureLiveRegionCommits(() => {
+        chat.rerenderWith({});
+      });
+      expect(
+        countSentenceOccurrences(commits, SWITCHED_RESOLVED_SENTENCE),
+      ).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_RESOLVED_SENTENCE);
+      expect(liveRegionText()).not.toContain(TARGET_TUPLE.model);
+    });
+
+    it("announces the raw slug at the deadline when the catalogue never settles, woken by the timer alone", async () => {
+      // Falsification: omit the `window.setTimeout` that re-calls
+      // `observeState` - nothing else changes here, so the sentence never
+      // lands. Falsification: consume on first sight - this would speak
+      // BEFORE the timer, and `captureLiveRegionCommits` around the advance
+      // would see 0 inserts.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS);
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      expect(liveRegionText()).toContain(TARGET_TUPLE.model);
+    });
+
+    it("does not re-announce the same switch after the deadline has consumed it", async () => {
+      // Falsification: leave `lastManualSequence` at the pre-hold value after
+      // expiry (the hold's "return the OLD sequence" path leaking past
+      // consume) - a later observation would insert a second span.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+
+      await captureLiveRegionCommits(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS);
+      });
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      const spokenNode = liveRegionSpan();
+      expect(spokenNode).not.toBeNull();
+
+      const commits = await captureLiveRegionCommits(() => {
+        setTurnState(harness, undefined, undefined, undefined);
+        chat.rerenderWith({});
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(0);
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      expect(liveRegionSpan()).toBe(spokenNode);
+    });
+
+    it("clears the hold timer on unmount so it does not outlive the surface", async () => {
+      // Falsification: drop the `clearTimeout` in the store-subscription
+      // layout effect's cleanup (the one after "must not outlive them") - the
+      // hold timeout stays pending. The wake no longer reads the store
+      // (`setManualHoldTick` instead) and React 19 does not warn on a
+      // post-unmount setState, so nothing about the wake FIRING is observable;
+      // the timer itself has to be.
+      //
+      // A cold `vi.getTimerCount()` cannot answer it either. A varying number
+      // of unrelated fake timers are pending while the announcement commits -
+      // 1, 3 or 4 across runs - and they are not this component's to clear, so
+      // an absolute count and a delta both flaked, roughly one run in three.
+      // Advancing by 0 does not settle it; they are not all zero-delay.
+      //
+      // What makes the count answerable is running the clock to one tick SHORT
+      // of the deadline. Every other timer is shorter-lived and fires; the
+      // hold's is the one thing that cannot, because it was armed for exactly
+      // this window. So the 1 below is the hold, by construction.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      // The advance re-observes, and the hold survives it: the catalogue is
+      // still unsettled and the deadline still has a millisecond to run. The
+      // silence assertion after it is what says so.
+      await act(async () => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS - 1);
+        await Promise.resolve();
+      });
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      expect(vi.getTimerCount()).toBe(1);
+      chat.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("drops a switch first seen while the observer would absorb, instead of holding it past the history window", async () => {
+      // The hold's other end, and the reason `canSpeak` is read TWICE.
+      //
+      // `confirmedManualFallbackAction` is never cleared from the store and a
+      // remount resets `lastManualSequence` to 0, so a warm store re-offers an
+      // old switch as new. What keeps it quiet is that the observation it is
+      // handed to absorbs - the announcer records the key and pushes nothing.
+      // That absorption IS the history filter.
+      //
+      // Deferring instead carries the event PAST that window: the hold outlives
+      // every absorbing frame and the deadline then waits for a speaking one,
+      // which is exactly the frame the filter is down. Falsification: gate only
+      // the deferred exits on `canSpeak` (the P1 fix alone) - the hold is taken
+      // while not ready, survives the restore, and the last block below speaks
+      // a switch the user already lived through.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      renderChat(baselineEpoch, undefined);
+
+      // Not ready BEFORE the switch exists, so its first sight is an absorbing
+      // observation - the same position a warm remount puts an old event in.
+      harness.callbacks().onConnectionStatus("connecting", null, null);
+      await flushAnnouncer();
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        harness.callbacks().onConnectionStatus("open", null, null);
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS + 5_000);
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(0);
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      // There is deliberately NO further assertion that the event was
+      // "consumed rather than left pending". It cannot be observed from here,
+      // and an assertion that looks like it checks it would be inert.
+      //
+      // Measured, not assumed. Ablating the sequence advance in `consume()`
+      // leaves the dropped event rediscoverable, and every way of provoking a
+      // later observation stays silent anyway: after a consume-and-drop `held`
+      // is null, so no wake is armed and nothing re-observes on its own;
+      // `rerenderWith({})` patches no prop and writes nothing to the store, so
+      // no layout-effect dependency moves; pairing it with `settleCatalogue()`
+      // (which does move one) still commits nothing; and cycling readiness to
+      // force a frame re-absorbs, which re-drops the rediscovered event and
+      // hides the very thing being looked for. Both configurations produce an
+      // empty commit list and an empty live region.
+      //
+      // Which is the mechanism working, not a gap: the drop is idempotent, so
+      // rediscovery is harmless here even when the sequence does not move. The
+      // assertion above - silence across a readiness restore and a full
+      // deadline - is this test's whole pin, and it reddens on the real defect.
+    });
+
+    it("keeps holding a switch whose catalogue settles while the surface cannot announce, and speaks the resolved label once it can", async () => {
+      // The gap the deadline test could not see, because it is the COMMON
+      // path rather than the rare one: the catalogue simply answering.
+      //
+      // Pre-fix, `!modelCatalogueSettledFor(...)` guarded only the unsettled
+      // branch, so a settle falling in a not-ready frame dropped straight
+      // through to consume - into an absorbing observe, which records the key
+      // and pushes nothing while the sequence advances. Permanently silent
+      // about a switch that did happen, with the label right there.
+      //
+      // Falsification: gate only the deadline on `canSpeak` and leave the
+      // settled exit ungated - the middle block below consumes and the final
+      // one finds nothing left to say.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      // Published while READY, so this event is genuine news and the hold is
+      // legitimately taken. That is what separates this case from the one
+      // above; the difference is not the settle, it is whose news it is.
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      harness.callbacks().onConnectionStatus("connecting", null, null);
+      await flushAnnouncer();
+
+      modelLabelOverride.value = new Map([
+        [
+          `${TARGET_TUPLE.harnessId}:${TARGET_TUPLE.model}`,
+          RESOLVED_MANUAL_MODEL_LABEL,
+        ],
+      ]);
+      settleCatalogue();
+      const whileUnready = await captureLiveRegionCommits(() => {
+        chat.rerenderWith({});
+      });
+      expect(
+        countSentenceOccurrences(whileUnready, SWITCHED_RESOLVED_SENTENCE),
+      ).toBe(0);
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        harness.callbacks().onConnectionStatus("open", null, null);
+        // The restore observe absorbs (`!wasReady`); the 0ms wake is what
+        // brings the hold back to a frame that can actually speak.
+        vi.advanceTimersByTime(0);
+      });
+      expect(
+        countSentenceOccurrences(commits, SWITCHED_RESOLVED_SENTENCE),
+      ).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_RESOLVED_SENTENCE);
+      expect(liveRegionText()).not.toContain(TARGET_TUPLE.model);
+    });
+
+    it("does not expire the hold while the surface cannot announce, and still speaks the slug once it can", async () => {
+      // Readiness lever: `connectionStatus` `"connecting"` / `"open"`.
+      // `"connecting"` does not bump `connectionEpoch` (this file's reconnect
+      // pin already documents that), so flipping back to `"open"` restores
+      // `ready` without a snapshot rewrite. `visible` is reachable but also
+      // rebases the completion observer, which `reset()`s the shared queue.
+      //
+      // The silent-while-not-ready assertion below is a prerequisite, not the
+      // pin: reverting `canSpeak` to plain `ready` still stays silent here,
+      // because `observe` absorbs a not-ready (and the first ready) frame.
+      //
+      // The speak-after-restore assertion is the pin. It breaks on either
+      // production piece:
+      //   - `canSpeak: ready` (not `!willAbsorb`) consumes the event into
+      //     the absorbing first-ready observe and never speaks.
+      //   - Dropping the 0ms wake (`wakeMs = remainingMs > 0 ? remainingMs
+      //     : ready ? 0 : null`) leaves the hold stuck after that observe
+      //     clears `wasReady`, with nothing else scheduled to re-observe.
+      vi.useFakeTimers();
+      unsettleCatalogue();
+      const harness = createHarness();
+      registerHarness(harness);
+      const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
+      renderChat(baselineEpoch, undefined);
+      publishHeldSwitch(harness);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      harness.callbacks().onConnectionStatus("connecting", null, null);
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      act(() => {
+        vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS + 5_000);
+      });
+      await flushAnnouncer();
+      expect(liveRegionText()).not.toContain("Switched this chat to");
+
+      const commits = await captureLiveRegionCommits(() => {
+        harness.callbacks().onConnectionStatus("open", null, null);
+        // The restore observe is absorbing (`!wasReady`). Production arms a
+        // 0ms timer so the next observe — now non-absorbing — can expire.
+        vi.advanceTimersByTime(0);
+      });
+      expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(1);
+      expect(liveRegionText()).toBe(SWITCHED_SLUG_SENTENCE);
+      expect(liveRegionText()).toContain(TARGET_TUPLE.model);
+    });
   });
 });

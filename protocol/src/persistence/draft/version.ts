@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * The single literal version of the `draft/v1` head-dialect contract.
@@ -18,10 +19,12 @@ export const DRAFT_HEAD_SCHEMA_VERSION = { major: 1, minor: 0 } as const;
 
 export type DraftHeadSchemaVersion = typeof DRAFT_HEAD_SCHEMA_VERSION;
 
-export const draftHeadSchemaVersionSchema = z.object({
-  major: z.literal(DRAFT_HEAD_SCHEMA_VERSION.major),
-  minor: z.literal(DRAFT_HEAD_SCHEMA_VERSION.minor),
-});
+export const draftHeadSchemaVersionSchema = lazySchema(() =>
+  z.object({
+    major: z.literal(DRAFT_HEAD_SCHEMA_VERSION.major),
+    minor: z.literal(DRAFT_HEAD_SCHEMA_VERSION.minor),
+  }),
+);
 
 /**
  * Reader acceptance is the SAME pin as the writer. A 1.0 decoder must not

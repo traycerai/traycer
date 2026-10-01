@@ -76,6 +76,8 @@ describe("composer draft host-mirror bookkeeping", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -154,6 +156,8 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -180,6 +184,8 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
           origin: null,
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -213,6 +219,8 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
           origin: "own",
           supersedes: null,
           publication: null,
+          chatTitle: null,
+          epicTitle: null,
         },
       },
     });
@@ -295,6 +303,8 @@ describe("collectComposerDirtyWrites: pending inline image node race rule", () =
       ownerHostId: null,
       origin: null,
       publication: null,
+      chatTitle: null,
+      epicTitle: null,
       // `supersedes` names the ancestor a fork-only draft replaces (#1913);
       // this fixture is an ordinary draft, which never has one.
       supersedes: null,

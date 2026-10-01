@@ -270,10 +270,23 @@ describe("useFocusActions", () => {
     });
   });
 
-  it("openAgent(epicId, agentId) routes with a {kind: chat, epicId, chatId: agentId} payload, chatId equal to the agent id", () => {
+  it("openAgent(epicId, agentId, hostId) routes with a {kind: chat, epicId, chatId: agentId} payload, chatId equal to the agent id, and the agent's OWN host as the origin", () => {
     const result = renderActions();
 
-    result.current.openAgent("epic-1", "agent-1");
+    result.current.openAgent("epic-1", "agent-1", "agent-host-1");
+
+    expect(routeNotificationForHostMock).toHaveBeenCalledExactlyOnceWith(
+      navigateMock,
+      { kind: "chat", epicId: "epic-1", chatId: "agent-1" },
+      expect.any(Number),
+      { originHostId: "agent-host-1", effectiveHostId: "effective-host-1" },
+    );
+  });
+
+  it("openAgent forwards a null hostId unchanged - a same-id cross-host tile must not satisfy the match", () => {
+    const result = renderActions();
+
+    result.current.openAgent("epic-1", "agent-1", null);
 
     expect(routeNotificationForHostMock).toHaveBeenCalledExactlyOnceWith(
       navigateMock,
@@ -297,8 +310,28 @@ describe("useFocusActions", () => {
   });
 
   describe("openBackground", () => {
-    it("routes to the owning chat with {kind: chat, epicId: row.epicId, chatId: row.chatId} for a managed-command row", () => {
+    it("routes to the owning chat with {kind: chat, epicId: row.epicId, chatId: row.chatId} for a managed-command row, using the row's OWN host as the origin", () => {
       const row = managedCommandRow({});
+
+      const result = renderActions();
+
+      result.current.openBackground(row);
+
+      // `row.hostId` defaults to "host-1" (`managedCommandRow`/
+      // `makeFocusBackgroundChat`) - a same-id chat on another host must not
+      // satisfy this match, so the row's own host has to travel as the origin
+      // rather than being dropped.
+      expect(routeNotificationForHostMock).toHaveBeenCalledExactlyOnceWith(
+        navigateMock,
+        { kind: "chat", epicId: row.epicId, chatId: row.chatId },
+        expect.any(Number),
+        { originHostId: "host-1", effectiveHostId: "effective-host-1" },
+      );
+    });
+
+    it("routes to the owning chat for a background-item row too - it does not depend on stoppable, and still forwards the row's own host", () => {
+      const row = backgroundItemRow();
+      expect(row.stoppable).toBe(false);
       const result = renderActions();
 
       result.current.openBackground(row);
@@ -307,13 +340,13 @@ describe("useFocusActions", () => {
         navigateMock,
         { kind: "chat", epicId: row.epicId, chatId: row.chatId },
         expect.any(Number),
-        { originHostId: null, effectiveHostId: "effective-host-1" },
+        { originHostId: "host-1", effectiveHostId: "effective-host-1" },
       );
     });
 
-    it("routes to the owning chat for a background-item row too - it does not depend on stoppable", () => {
-      const row = backgroundItemRow();
-      expect(row.stoppable).toBe(false);
+    it("routes with a null origin when the row itself carries no host", () => {
+      const row = managedCommandRow({ hostId: null });
+
       const result = renderActions();
 
       result.current.openBackground(row);

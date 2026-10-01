@@ -4,9 +4,11 @@ import {
   Bell,
   Bot,
   Boxes,
-  Gavel,
   GitBranch,
+  ListChecks,
+  Globe,
   Keyboard,
+  KeyRound,
   LineChart,
   Palette,
   PanelBottom,
@@ -23,7 +25,9 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
+  | "getting-started"
   | "general"
+  | "browser"
   | "appearance"
   | "layout"
   | "opening-behavior"
@@ -84,7 +88,7 @@ export const FALLBACK_SETTINGS_SECTION_ID =
  * it varies by host it sits under the picker") becomes structural rather than
  * memorised.
  */
-export type SettingsSectionGroupId = "app" | "account" | "host";
+export type SettingsSectionGroupId = "guide" | "app" | "account" | "host";
 
 export interface SettingsSectionGroup {
   readonly id: SettingsSectionGroupId;
@@ -92,13 +96,13 @@ export interface SettingsSectionGroup {
 }
 
 /**
- * Application and Account lead: both are short, both are fixed, and neither
- * ever changes shape, so they hold stable positions at the top of the rail.
+ * Getting started leads in its own group, followed by Application and Account.
  * The host group goes last because it is the only one whose contents are
  * scoped — it carries the picker, and everything beneath the picker belongs
  * to whichever host that picker names.
  */
 export const SETTINGS_SECTION_GROUPS: ReadonlyArray<SettingsSectionGroup> = [
+  { id: "guide", label: "Guide" },
   { id: "app", label: "Application" },
   { id: "account", label: "Account" },
   { id: "host", label: "Host" },
@@ -127,12 +131,13 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now nineteen. The whole
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now twenty-one. The whole
  * host group - Overview, Providers, Worktrees, the host's Notifications,
  * Permissions, Agent selection, Fallback, Shell and Diagnostics - is the
- * eleventh through nineteenth and goes without. Overview is the newest to lose
- * one, to Layout taking the seventh Application slot. Permissions and Fallback
- * were both added into the digit-less tail and so moved no existing shortcut -
+ * twelfth through twentieth desktop entries and goes without. Browser is
+ * the third Application entry, so Layout is the eighth and Usage is the first
+ * account entry without a digit on desktop. Permissions and Fallback were
+ * both added into the digit-less tail and so moved no existing shortcut -
  * Permissions sits between Notifications and Agent selection, Fallback between
  * Agent selection and Shell, all already there.
  *
@@ -157,6 +162,13 @@ export interface SettingsSection {
  */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   {
+    id: "getting-started",
+    label: "Getting started",
+    icon: ListChecks,
+    group: "guide",
+  },
+
+  {
     id: "general",
     label: "General",
     icon: SettingsIcon,
@@ -168,9 +180,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Palette,
     group: "app",
   },
-  // Where a click LANDS - links, tile placement, and agent-opened browser
-  // tabs. One page rather than a control each in Browser, Appearance and
-  // General, because all three answer the same question.
+  {
+    id: "browser",
+    label: "Browser",
+    icon: Globe,
+    group: "app",
+  },
   {
     id: "opening-behavior",
     label: "Opening behavior",
@@ -284,17 +299,19 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Bell,
     group: "host",
   },
-  // What an agent may do on this machine without asking: the judge that
-  // reviews actions under the `auto` permission mode, the policy it follows
-  // and the rules that always apply. Its own page rather than rows on Agent
+  // What an agent may do on its own: the mode a conversation starts in, the
+  // judge that reviews actions under the `auto` permission mode, the rules it
+  // follows, and what it decided. Its own page rather than rows on Agent
   // selection - that page is about which agent gets CHOSEN for a task, and
-  // permissions are a different question. The app-wide DEFAULT permission
-  // mode stays on General: it is one preference for this app, not per machine
-  // (SETTINGS.md, "Scope: the organising idea").
+  // permissions are a different question. In the Host group because three of
+  // its four tabs are per machine; the Modes tab is the one application-scoped
+  // region on a host page (SETTINGS.md, "Scope: the organising idea").
   {
     id: "permissions",
     label: "Permissions",
-    icon: Gavel,
+    // A key, the common permissions glyph; a gavel at sidebar size read as a
+    // broom.
+    icon: KeyRound,
     group: "host",
   },
   // "Agent selection", not "Agents": this section configures HOW a coding agent
@@ -310,13 +327,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   },
   // Beside Agent selection, and for the same reason it sits under the picker at
   // all: both configure how a chat agent gets ROUTED, and both answer per host,
-  // because the providers and accounts a fallback can reach are that machine's.
-  // "Fallback" and not "Automatic fallback" - the section is the whole subject,
-  // and "Automatic fallback" is the master toggle INSIDE it, so using the same
-  // words for both would make the rail row read as a switch.
+  // because the providers and accounts a route can reach are that machine's.
+  // "Model routing" and not "Route automatically" - the section is the whole
+  // subject, and "Route automatically" is the master toggle INSIDE it, so using
+  // the same words for both would make the rail row read as a switch.
   {
     id: "fallback",
-    label: "Fallback",
+    label: "Model routing",
     icon: Waypoints,
     group: "host",
   },

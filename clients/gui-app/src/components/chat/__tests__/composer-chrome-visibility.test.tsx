@@ -24,10 +24,9 @@ import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 import {
-  DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
-} from "@/stores/settings/layout-store";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+} from "@/stores/layout/layout-store";
 
 const RELIABLE_USAGE: TokenUsage = {
   inputTokens: 50_000,
@@ -46,12 +45,11 @@ function render(ui: ReactElement) {
 }
 
 function resetComposerLayout(): void {
-  useLayoutStore.setState({ composer: DEFAULT_COMPOSER_LAYOUT });
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
 }
 
 function resetContextUsageSettings(): void {
   window.localStorage.clear();
-  useSettingsStore.setState({ pinContextUsageBreakdown: false });
 }
 
 beforeEach(() => {
@@ -94,7 +92,9 @@ describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'",
   // component owns is never invoked through a path it no longer renders.
   it("removes the button and its hidden input when hidden, leaving the attach callback untouched", () => {
     const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
-    useLayoutStore.getState().setComposerAttachImage("hidden");
+    useLayoutStore
+      .getState()
+      .setRegionValues("attachImage", { shown: "hidden" });
     const { container } = render(
       <ComposerAttachImageButton onAttachImages={onAttachImages} />,
     );
@@ -129,7 +129,7 @@ describe("ComposerMicButton follows Layout ▸ Composer 'Microphone'", () => {
   });
 
   it("renders nothing when mic is hidden", () => {
-    useLayoutStore.getState().setComposerMic("hidden");
+    useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
     const { container } = render(
       <ComposerMicButton control={dictationControl("idle")} />,
     );
@@ -151,7 +151,7 @@ describe("ComposerMicPreparing follows Layout ▸ Composer 'Microphone'", () => 
   });
 
   it("renders nothing when mic is hidden - it holds the mic's slot, not its own", () => {
-    useLayoutStore.getState().setComposerMic("hidden");
+    useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
     const { container } = render(<ComposerMicPreparing status={status} />);
 
     expect(container.firstChild).toBeNull();
@@ -162,11 +162,11 @@ describe("Dictation hotkey stays wired when Layout ▸ Composer hides the mic bu
   // `useDictationHotkey` never reads the layout store - the button is a pure
   // view and the shortcut is a composer-level concern with its own route, per
   // the setting's own description ("this does not turn voice input off").
-  // Driving the real module-level hotkey singleton with `composer.mic` set to
-  // "hidden" is the honest way to pin that boundary, rather than asserting a
-  // negative about a store the hook never touches.
+  // Driving the real module-level hotkey singleton with the `mic` region's
+  // `shown` set to "hidden" is the honest way to pin that boundary, rather
+  // than asserting a negative about a store the hook never touches.
   it("still starts dictation on the bound chord (Control+Shift+M) with mic hidden", () => {
-    useLayoutStore.getState().setComposerMic("hidden");
+    useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
     const start = vi.fn();
     const stop = vi.fn();
     const cancel = vi.fn();
@@ -206,45 +206,90 @@ describe("Dictation hotkey stays wired when Layout ▸ Composer hides the mic bu
 
 // ── Access (permission mode) ────────────────────────────────────────────────
 
-function renderPermissionsPicker() {
+function renderPermissionsPicker(value: "full_access" | "auto") {
   return render(
     <PermissionsPicker
-      value="full_access"
+      value={value}
       disabled={false}
       onChange={vi.fn()}
       supportedPermissionModes={null}
       harnessLabel={null}
       catalogSupportedModes={null}
-      hostKnowsAutoMode={false}
+      // Only matters for `value: "auto"`, which needs the host to be able to
+      // spell it or the display value clamps down to `auto_accept_edits`;
+      // `false` is the original fixture's value and is inert for every other
+      // mode (see `normalizePermissionMode`).
+      hostKnowsAutoMode={value === "auto"}
       turnActive={false}
       judgeBilling={null}
       closeFocus="composer"
+      interactive
+      onOpenPermissionSettings={null}
     />,
   );
 }
 
+// The label text sits in a `<span class="truncate">`, itself the first child
+// of the name+chip wrapper span that actually carries the `hidden` utility
+// (it also owns the Experimental badge on the Auto row, so the pair hides as
+// one group) - `hidden` is never on the text node itself.
+function labelGroup(button: HTMLElement, label: string): HTMLElement {
+  const text = within(button).getByText(label);
+  const group = text.parentElement;
+  if (group === null) throw new Error("label has no wrapper");
+  return group;
+}
+
 describe("PermissionsPicker follows Layout ▸ Composer 'Access'", () => {
   it("shows the label and chevron when access is visible", () => {
-    renderPermissionsPicker();
+    renderPermissionsPicker("full_access");
 
     const button = screen.getByRole("button", { name: "Full access" });
-    const label = within(button).getByText("Full access");
+    const group = labelGroup(button, "Full access");
     const chevron = button.querySelectorAll("svg")[1];
 
-    expect(label.className.split(/\s+/)).not.toContain("hidden");
+    expect(group.className.split(/\s+/)).not.toContain("hidden");
     expect(chevron.getAttribute("class")?.split(/\s+/)).not.toContain("hidden");
   });
 
-  it("hides the label and chevron but keeps the accessible name when access is compact", () => {
-    useLayoutStore.getState().setComposerAccess("compact");
-    renderPermissionsPicker();
+  it("hides the label group and chevron but keeps the accessible name when access is compact", () => {
+    useLayoutStore.getState().setRegionValues("access", { size: "chip" });
+    renderPermissionsPicker("full_access");
 
     const button = screen.getByRole("button", { name: "Full access" });
-    const label = within(button).getByText("Full access");
+    const group = labelGroup(button, "Full access");
     const chevron = button.querySelectorAll("svg")[1];
 
-    expect(label.className.split(/\s+/)).toContain("hidden");
+    expect(group.className.split(/\s+/)).toContain("hidden");
     expect(chevron.getAttribute("class")?.split(/\s+/)).toContain("hidden");
+  });
+
+  // Auto's Experimental badge sits inside the same wrapper as its label, so a
+  // switch to compact must hide the whole name+chip group together rather
+  // than leaving the chip visible once the label text disappears.
+  it("hides Auto's label+Experimental-chip group together when access is compact", () => {
+    useLayoutStore.getState().setRegionValues("access", { size: "chip" });
+    renderPermissionsPicker("auto");
+
+    const button = screen.getByRole("button", {
+      name: "Auto — Experimental",
+    });
+    const group = labelGroup(button, "Auto");
+
+    expect(group.className.split(/\s+/)).toContain("hidden");
+    expect(within(group).getByText("Experimental")).toBeTruthy();
+  });
+
+  it("shows Auto's label and Experimental chip together when access is visible", () => {
+    renderPermissionsPicker("auto");
+
+    const button = screen.getByRole("button", {
+      name: "Auto — Experimental",
+    });
+    const group = labelGroup(button, "Auto");
+
+    expect(group.className.split(/\s+/)).not.toContain("hidden");
+    expect(within(group).getByText("Experimental")).toBeTruthy();
   });
 });
 
@@ -258,14 +303,18 @@ describe("Context usage compact action follows Layout ▸ Composer 'Compact conv
   });
 
   it("hides the inline compact action when compactButton is hidden", () => {
-    useLayoutStore.getState().setComposerCompactButton("hidden");
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { compactButton: "hidden" });
     render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={vi.fn()} />);
 
     expect(screen.queryByTestId("context-usage-compact-action")).toBeNull();
   });
 
   it("shows the pinned-strip compact action when compactButton is visible", () => {
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: true });
     render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={vi.fn()} />);
 
     const strip = screen.getByTestId("context-usage-pinned-strip");
@@ -275,8 +324,12 @@ describe("Context usage compact action follows Layout ▸ Composer 'Compact conv
   });
 
   it("hides the pinned-strip compact action when compactButton is hidden", () => {
-    useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    useLayoutStore.getState().setComposerCompactButton("hidden");
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: true });
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { compactButton: "hidden" });
     render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={vi.fn()} />);
 
     const strip = screen.getByTestId("context-usage-pinned-strip");

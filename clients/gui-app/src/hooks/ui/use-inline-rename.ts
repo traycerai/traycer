@@ -100,6 +100,16 @@ export function useInlineRename(args: {
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       event.stopPropagation();
+      // An IME's Enter/Escape confirms or cancels the composition, not the
+      // edit. Prefer nativeEvent.isComposing: React's KeyboardEvent typing in
+      // this package does not expose isComposing on the synthetic event.
+      if (
+        event.nativeEvent.isComposing ||
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- Safari reports the IME-confirming Enter with isComposing already false; only keyCode 229 marks it, and there is no non-deprecated spelling
+        event.keyCode === 229
+      ) {
+        return;
+      }
       if (event.key === "Enter") {
         event.preventDefault();
         finish(true);

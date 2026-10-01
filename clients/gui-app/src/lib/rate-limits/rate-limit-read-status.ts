@@ -35,9 +35,9 @@ import {
  * is non-null only when the failure arrived via a fatal-error frame, so it
  * names that case and nothing else.
  *
- * A leaf module (no local imports) so both the queue - which schedules the
- * follow-up read - and the surfaces that decide whether to show a failure share
- * one definition instead of drifting apart.
+ * `fetchProviderRateLimits` uses it to decide whether a failed read gets its
+ * one delayed collection from the host's gauge instead of surfacing as an
+ * error; the collection's own outcome is what the surfaces then see.
  */
 export function isRateLimitReadStillRunningOnHost(error: unknown): boolean {
   return (
@@ -46,46 +46,4 @@ export function isRateLimitReadStillRunningOnHost(error: unknown): boolean {
     !(error instanceof HostRequestAbortedError) &&
     error.fatalDetails === null
   );
-}
-
-/**
- * Whether a rate-limit pull's error state should be PRESENTED as a failure.
- *
- * A read we stopped waiting for is not one: the probe is still running, the
- * queue has scheduled a follow-up to collect it, and the surface keeps showing
- * its last-known-good reading meanwhile. Reporting "couldn't fetch usage" there
- * would be the visible-failure-then-silent-success behaviour this layer is
- * meant to stop.
- *
- * `queueOwned` is what makes that reasoning true rather than assumed. The whole
- * justification for hiding the failure is that SOMETHING will come back for the
- * answer, and the only thing that does is the `ephemeralProcess` queue's
- * follow-up. An `httpFetch` provider (openrouter, kilocode, cursor) never
- * enters that queue - it refetches its own query directly - so nothing is
- * scheduled, nothing collects, and suppressing there just hides a dropped
- * connection behind cached usage that looks healthy, or an empty Settings card
- * with no error, until some later poll happens along. Callers pass the lane
- * rather than the provider id so this stays a leaf module.
- *
- * `followUpExhausted` is the same requirement applied to the queue-owned lane
- * itself, which owns a BUDGET rather than an open-ended promise. The queue
- * allows one delayed collection per target
- * (`RATE_LIMIT_READ_FOLLOW_UP_LIMIT`); when that collection also comes back
- * unheard, `scheduleReadFollowUp` declines another and the guarantee is spent.
- * Suppressing past that point is the `httpFetch` mistake one level deeper -
- * lane membership was never the real premise, a pending collection was - so the
- * exhausted target reports its failure and stops vouching for a reading nothing
- * is coming to refresh. Callers read it from the queue registry
- * (`useIsRateLimitReadFollowUpExhausted`), keeping this a leaf module.
- */
-export function isRateLimitQueryFailure(query: {
-  readonly isError: boolean;
-  readonly error: unknown;
-  readonly queueOwned: boolean;
-  readonly followUpExhausted: boolean;
-}): boolean {
-  if (!query.isError) return false;
-  if (!query.queueOwned) return true;
-  if (query.followUpExhausted) return true;
-  return !isRateLimitReadStillRunningOnHost(query.error);
 }

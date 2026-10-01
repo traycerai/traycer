@@ -666,6 +666,7 @@ function imageAttrs(id: string) {
     b64content: id,
     mimeType: "image/png",
     size: id.length,
+    byHashEligible: true,
   };
 }
 

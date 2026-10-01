@@ -1,0 +1,63 @@
+---
+title: "Terminals"
+description: "Use Terminals for plain shell sessions."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+The **Terminals** panel is for plain terminal sessions. These are shells you run yourself, not coding agents.
+
+Terminal Agents do not live here. They live in [Agents](/panels/agents). For the full distinction, see [Terminal Agents VS Terminals](/concepts/terminal-agents-vs-terminals).
+
+## Create A Terminal
+
+Click **New terminal** (the **+** in the panel header). The picker has two sections:
+
+- **Host**: the machine the shell runs on.
+- **Workspaces**: the folder the shell starts in. It starts on the Task's primary folder. Use "Search repo, branch, or path…" to find another.
+
+Click **Launch**, or press <kbd>Cmd</kbd> + <kbd>Enter</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd>.
+
+If the Task has no folders, the terminal starts in the Task's own folder on that host, `~/.traycer/epics/<task-id>`. The shell program comes from [Shell](/settings/shell) settings; you can't pass a command when you launch.
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/terminals-panel.mp4" label="Launch a terminal in a workspace folder and switch between terminals" />
+
+## Terminal Rows
+
+- Click a row to open the terminal as a tab.
+- Drag a row onto the canvas to open it there: onto a tab strip to add it as a tab, or onto the edge of a group to split that group.
+- Double-click a row to rename it. Press **Enter** to save or **Esc** to cancel.
+- Hover a row and click **⋯**, or right-click it, for:
+
+| Item | What it does |
+|---|---|
+| **Rename** | Give the terminal a custom name. |
+| **Copy ID** | Copy the terminal's ID. |
+| **Close** | End the shell and close its tab. There is no confirmation. |
+
+Closing a terminal's tab does not end the shell; the terminal stays in the panel. When a shell exits on its own, the terminal leaves the list.
+
+### Terminal Names
+
+A terminal's name, in the panel and on its tab, is the first of these that applies:
+
+1. The custom name you gave it.
+2. The folder and the program running in the foreground, for example `api · vim`.
+3. The folder and "New Terminal", when nothing is running in the foreground.
+4. "New Terminal".
+
+The folder is the last part of the shell's current directory, so the name follows `cd`.
+
+## Find In A Terminal
+
+The panel has no search. To search inside a terminal, including its scrollback, open the terminal and press <kbd>Cmd</kbd> + <kbd>F</kbd> on macOS or <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> on Windows and Linux. See [Find In A Tile](/panels#find-in-a-tile).
+
+## What Terminals Are For
+
+Use terminal sessions for package scripts, tests, logs, local debugging, and one-off commands.
+
+Plain terminals do not receive Traycer's agent prompt, skills, artifact instructions, or agent-to-agent communication tools.
+
+Terminals can also live outside a Task, in the [start page panel](/panels#start-page-panel).
+
+Cross-host terminal behavior is covered in [Hosts](/concepts/hosts).

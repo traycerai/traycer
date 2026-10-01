@@ -19,11 +19,28 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   };
 });
 
-const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
-    current: null,
-  }),
-);
+// `HostRestartSessions` (mounted inside `RestartHostConfirmDialog` and
+// `HostBusyForceDeferDialog`, both reachable from this card's Restart
+// controls) calls `useFocusModel()` -> `useConnectableHostIds()` ->
+// `useHostDirectoryList()`, which reads `binding.directory` unconditionally
+// at render time and subscribes via `directory.onChange` in an effect. A
+// binding mock with no `directory` throws ("Invalid value used as weak map
+// key" / "directory.onChange is not a function") the moment either dialog
+// opens, so every fixture below needs one even though this suite never reads
+// its answer.
+interface HostBindingMock {
+  readonly hostClient: unknown;
+  readonly directory: {
+    readonly list: () => Promise<readonly []>;
+    readonly onChange: (listener: () => void) => {
+      readonly dispose: () => void;
+    };
+    readonly getLocalEntry: () => null;
+  };
+}
+const hostBindingMock = vi.hoisted((): { current: HostBindingMock | null } => ({
+  current: null,
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostBinding: () => hostBindingMock.current };
@@ -57,7 +74,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { ManifestMethodEntry } from "@traycer/protocol/framework/index";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import type { HostStatusUpdateOperation } from "@traycer/protocol/host/status/index";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostGetInstallationInfoResponseV11 } from "@traycer/protocol/host/maintenance/index";
 import type { HostAvailableManifest } from "@traycer/protocol/host/maintenance/index";
@@ -66,12 +83,18 @@ import type {
   HostStagedRecord,
 } from "@traycer/protocol/config/installation-records";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { resetHostServiceWriteLatchesForTest } from "@/components/settings/panels/host-service-write-latch-store";
+import {
+  HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS,
+  useHostUpdateBannerStore,
+} from "@/stores/settings/host-update-banner-store";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import {
   buildOverviewHostFixture,
+  selectHostOverviewTab,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 
@@ -105,6 +128,23 @@ function scopeFrom(
     hostId,
     status: "ready",
     client: fixture.client,
+  };
+}
+
+/**
+ * A host binding whose `directory` answers with an empty listing and inert
+ * change subscription — this suite never asserts on the directory itself,
+ * only on the fact that `HostRestartSessions` can mount beneath it without
+ * throwing.
+ */
+function bindingWith(hostClient: unknown): HostBindingMock {
+  return {
+    hostClient,
+    directory: {
+      list: () => Promise.resolve([]),
+      onChange: () => ({ dispose: () => undefined }),
+      getLocalEntry: () => null,
+    },
   };
 }
 
@@ -158,8 +198,8 @@ function renderPanelPersistent(): { rerender: () => void } {
 }
 
 function attemptOperation(
-  overrides: Partial<Extract<HostStatusUpdateOperation, { kind: "attempt" }>>,
-): HostStatusUpdateOperation {
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
   return {
     kind: "attempt",
     attemptId: "attempt-1",
@@ -181,7 +221,7 @@ function attemptOperation(
 }
 
 function statusWith(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
   return {
     ready: true,
@@ -204,7 +244,7 @@ function statusWith(
 // carrying the whole signal, and that is exactly the shape this suite's
 // coarse-progress tests below exercise.
 function statusWithCoarseProgress(
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   updateProgress: ResponseOfMethod<
     HostRpcRegistry,
     "host.status"
@@ -247,7 +287,7 @@ function floorCapableMinorFor(method: string): number {
 
 function statusWithBusy(
   hostVersion: string,
-  operation: HostStatusUpdateOperation,
+  operation: HostStatusUpdateOperationV2,
   busy: boolean,
   busySessionCount: number,
 ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
@@ -424,6 +464,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  useHostUpdateBannerStore.setState({ landingDismissedAttemptIds: [] });
   vi.useRealTimers();
 });
 
@@ -446,7 +487,7 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -474,7 +515,7 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -514,7 +555,7 @@ describe("HostOverviewOperationCard — measured byte progress (G5)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -562,7 +603,7 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -570,8 +611,17 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
     // the absence is asserted only after a render derived from the status
     // reply is on screen. (The fixture's own call counter is bypassed by an
     // overridden handler, and a counted call proves the request, not the
-    // render.)
-    await screen.findByText(/1\.5\.0-live/);
+    // render.) T2's version card now ALSO states the running version, so the
+    // header's health line is no longer the only element carrying it -
+    // anchor on the version card's own testid instead of the ambiguous text.
+    // The version card leads Updates now, not the page's default (Installation)
+    // tab, so this reads there.
+    await selectHostOverviewTab("updates");
+    await waitFor(() => {
+      expect(screen.getByTestId("host-overview-version").textContent).toBe(
+        "v1.5.0-live",
+      );
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByText(/Host is up to date/i)).toBeNull();
   });
@@ -589,7 +639,7 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -611,7 +661,7 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -648,7 +698,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
    * what holds it to that.
    */
   function statusRunning(
-    operation: HostStatusUpdateOperation,
+    operation: HostStatusUpdateOperationV2,
     hostVersion: string,
   ): ResponseOfMethod<HostRpcRegistry, "host.status"> {
     return {
@@ -673,7 +723,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
     return screen.findByTestId("host-overview-operation-card");
@@ -719,7 +769,7 @@ describe("HostOverviewOperationCard — a refused completion write is not a fail
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -783,7 +833,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -821,7 +871,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -853,7 +903,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -909,7 +959,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -951,7 +1001,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1029,7 +1079,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordFloorCapableHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1079,10 +1129,14 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
+    // The remedy sentence is the version card's own answer, on Updates; the
+    // operation card itself lives in the notices strip and is on screen on
+    // every tab regardless.
+    await selectHostOverviewTab("updates");
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
     );
@@ -1119,7 +1173,6 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
   });
 
   it("hides both force controls when the staged version is absent from the check manifest", async () => {
-    let checkCalls = 0;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1131,28 +1184,39 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       overrideHandlers: {
         "host.status": () =>
           statusWithBusy("1.3.0-rc.2", { kind: "none" }, true, 2),
-        "host.update.check": () => {
-          checkCalls += 1;
-          return {
-            outcome: "ok" as const,
-            effectiveIncludePreReleases: true,
-            includePreReleasesSource: "explicit-include" as const,
-            manifest: {
-              ...clearStagedManifest("1.3.0-rc.2"),
-              latest: "1.3.0-rc.2",
-            },
-          };
-        },
+        "host.update.check": () => ({
+          outcome: "ok" as const,
+          effectiveIncludePreReleases: true,
+          includePreReleasesSource: "explicit-include" as const,
+          manifest: {
+            ...clearStagedManifest("1.3.0-rc.2"),
+            latest: "1.3.0-rc.2",
+          },
+        }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    const queryClient = renderPanel();
 
     await screen.findByTestId("host-overview-operation-card");
-    await screen.findByText("This host is running the latest version.");
-    await waitFor(() => expect(checkCalls).toBeGreaterThan(0));
+    // T2's version card withholds its own answer sentence while an update is
+    // in flight (this park has neither a CLI-floor remedy nor activation
+    // debt to except it), so "This host is running the latest version." does
+    // not render here any more. The settled-render anchor is the check's
+    // OWN answer landing in the cache — not merely REQUESTED
+    // (`checkCalls > 0` can pass during the still-loading frame, before the
+    // negative assertions below have anything to be negative ABOUT).
+    await waitFor(() => {
+      const queries = queryClient.getQueryCache().findAll({
+        queryKey: hostQueryKeys.methodScope("host-a", "host.update.check"),
+      });
+      expect(queries.some((query) => query.state.status === "success")).toBe(
+        true,
+      );
+    });
+    await act(async () => {});
     // Same anchor as above: the absent controls must be absent FROM the
     // staged-wait card, not from some other view.
     expect(
@@ -1204,9 +1268,13 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
+    // The failure line lands on the version card's own answer, on Updates;
+    // the force control that triggers it is the notices strip's operation
+    // card, which is on screen on every tab regardless.
+    await selectHostOverviewTab("updates");
 
     const forceButton = await screen.findByTestId(
       "host-overview-operation-force-update",
@@ -1262,9 +1330,11 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
+    // The failure line lands on the version card's own answer, on Updates.
+    await selectHostOverviewTab("updates");
 
     fireEvent.click(
       await screen.findByTestId("host-overview-operation-force-update"),
@@ -1301,15 +1371,19 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
     // Wait for a render derived from the status/installation reply before
     // asserting absence, exactly as the sibling "no coarse marker" test above
     // does - otherwise the assertion would pass vacuously during the loading
-    // frame.
-    await screen.findByText(/1\.5\.0/);
+    // frame. T2's version card now ALSO carries the running version, so
+    // "1.5.0" is no longer unique on screen - anchor on the version card's
+    // own testid instead. The version card leads Updates, not the page's
+    // default (Installation) tab.
+    await selectHostOverviewTab("updates");
+    await screen.findByTestId("host-overview-version");
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
   });
 
@@ -1340,7 +1414,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -1352,7 +1426,13 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     await screen.findByTestId("host-overview-operation-restart");
 
     // Nothing about the read changes - only the scope stops being usable,
-    // the way a negotiated peer going unreachable would leave it.
+    // the way a negotiated peer going unreachable would leave it. The
+    // notices strip's `!offline` gate (`host-overview-panel.tsx`'s
+    // `operationShown`) withholds the operation card entirely once the scope
+    // is unusable — the offline notice is the strip's only wording then, and
+    // it carries the retained phase clause itself — so the qualification
+    // this pin is about now shows there instead of on
+    // `host-overview-operation-phase`.
     scopeOverrides.current = {
       ...scopeFrom("host-a", fixture),
       status: "unreachable",
@@ -1361,10 +1441,25 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toBe("Last seen: Update installed — restart host to finish");
+        screen.getByTestId("host-overview-offline-notice").textContent,
+      ).toContain("with v1.3.0-rc.3 installed and waiting for a restart");
     });
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByTestId("host-overview-operation-restart")).toBeNull();
+
+    // The offline notice's clause alone does not prove demotion: a live
+    // `waiting-to-activate` view prints the identical "with vX installed and
+    // waiting for a restart" phrase, since `describeLastSeenUpdateClause`'s
+    // table is keyed on the phase, not on `qualified`. The surface that used
+    // to make that distinction (the header pill's own table) is gone along
+    // with the pill, and the operation card that still carries a
+    // demoted-vs-live phrase table is itself withdrawn here by the same
+    // `!offline` gate. The demotion mechanism stays covered independent of
+    // this unusable-scope scenario — see the retained-bytes test above
+    // (a genuine live-to-demoted transition on a scope that stays USABLE,
+    // where the card is still on screen to show it) and the
+    // `deriveHostOverviewVersionTag`/`inFlightUpdateKind` retained-view cases
+    // in `host-overview-notices.test.tsx`.
   });
 
   it("staged wait: an UNUSABLE scope keeps the sentence (qualified as retained) but withdraws Force update…", async () => {
@@ -1400,7 +1495,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -1412,14 +1507,26 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     };
     panel.rerender();
 
+    // The notices strip's `!offline` gate withholds the operation card
+    // entirely once the scope is unusable (the offline notice is the
+    // strip's only wording then, and it carries the retained phase clause
+    // itself).
     await waitFor(() => {
       expect(
-        screen.getByTestId("host-overview-operation-phase").textContent,
-      ).toMatch(/^Last seen: Update waits for/);
+        screen.getByTestId("host-overview-offline-notice").textContent,
+      ).toMatch(/waited for work to finish/);
     });
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
+
+    // Same as the activation-debt pin above: a live `waiting-for-work` view
+    // prints the identical "waited for work to finish" phrase, so the
+    // offline notice's clause alone cannot prove demotion, and the surface
+    // that used to prove it (the header pill) is gone along with the card
+    // it would have discriminated against. See that pin's comment for where
+    // the demotion mechanism stays covered.
   });
 
   it("(c4) an OPEN force-update offer CLOSES when the scope turns unusable — the withdrawal of the Force update… control, one commit late", async () => {
@@ -1456,7 +1563,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const panel = renderPanelPersistent();
 
@@ -1555,18 +1662,30 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
-    // Baseline: install matches the running rc.2 - no debt.
-    await screen.findByText(/1\.3\.0-rc\.2/);
+    // Baseline: install matches the running rc.2 - no debt. T2's version
+    // card also carries the running version now, so anchor on its own
+    // testid rather than the no-longer-unique text.
+    await waitFor(() => {
+      expect(screen.getByTestId("host-overview-version").textContent).toBe(
+        "v1.3.0-rc.2",
+      );
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // Advance past the 10s `host.status` poll: the host reports rc.3, and the
-    // installation query re-keys onto a fresh, still-pending read.
+    // installation query re-keys onto a fresh, still-pending read. Anchor on
+    // the version card's own testid - the text is no longer unique on screen.
     await vi.advanceTimersByTimeAsync(11_000);
-    await screen.findByText(/1\.3\.0-rc\.3/);
+    await waitFor(() => {
+      expect(screen.getByTestId("host-overview-version").textContent).toBe(
+        "v1.3.0-rc.3",
+      );
+    });
     // AT LEAST two, not exactly two: the installation query's own 10 s poll
     // and the status poll that re-keys it fire from the same tick, and their
     // order is not this pin's to assume - when the installation poll lands
@@ -1630,7 +1749,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1696,7 +1815,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1769,7 +1888,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1872,7 +1991,7 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1951,7 +2070,7 @@ describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1974,7 +2093,7 @@ describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -1998,7 +2117,7 @@ describe("HostOverviewOperationCard — onForceRestart (attempt park)", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2032,7 +2151,7 @@ describe("HostOverviewOperationCard — capability gates", () => {
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2095,7 +2214,7 @@ describe("HostOverviewOperationCard — capability gates", () => {
       "host-a",
       ALL_OVERVIEW_METHODS.filter((method) => method !== "host.update.install"),
     );
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2168,14 +2287,16 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
   it("reads the command-line-tools sentence, not the zero-session count", async () => {
     const fixture = floorParkFixture(floorStagedManifest("1.3.0-rc.3"));
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
     // Wait for the REGION to have found the floor before reading the card:
     // the remedy row is the observable that says the summary walk finished and
     // `updates.cliFloor` is populated, and until it is the card is legitimately
-    // still showing the count.
+    // still showing the count. The remedy row and its "Show installation
+    // help" button are the version card's, on Updates.
+    await selectHostOverviewTab("updates");
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
     );
@@ -2200,7 +2321,7 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
     // substitution that ignored the flag) turns this red.
     const fixture = floorParkFixture(clearStagedManifest("1.3.0-rc.3"));
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
@@ -2242,7 +2363,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     methods: readonly string[],
   ) {
     recordNegotiatedHostMethods("host-a", methods);
-    hostBindingMock.current = { hostClient: fixture.client };
+    hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
   }
 
@@ -2281,6 +2402,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
       ALL_OVERVIEW_METHODS.filter((method) => method !== "host.update.install"),
     );
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByTestId("host-overview-updates-degraded");
     // The floor really was read — otherwise this pin would pass for the
@@ -2321,6 +2443,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     const panel = renderPanelPersistent();
+    await selectHostOverviewTab("updates");
 
     // Healthy first: the substitution is on, and its button is really there.
     await waitFor(() => {
@@ -2345,12 +2468,18 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
         screen.queryByRole("button", { name: "Show installation help" }),
       ).toBeNull();
     });
-    // Retained, and WITHOUT the clause that names a button nobody can see.
-    const phase = screen.getByTestId(
-      "host-overview-operation-phase",
+    // T2's Status tab withholds the update card entirely once the host
+    // can't be reached - the offline notice is the tab's only unreachable
+    // wording then, and its clause (`describeLastSeenUpdateClause`) never
+    // names the CLI-floor fix at all (it is built with `cliFloorBlocked:
+    // false` unconditionally) - so there is no route left to a "Last seen: …
+    // — see installation help" sentence with no button anywhere on the page.
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    const notice = screen.getByTestId(
+      "host-overview-offline-notice",
     ).textContent;
-    expect(phase).toContain("Last seen:");
-    expect(phase).not.toContain("installation help");
+    expect(notice).toContain("waited for work to finish");
+    expect(notice).not.toContain("installation help");
   });
 
   // ── J2: the floor named must be the PARK's, not the summary walk's ───────
@@ -2380,6 +2509,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     // The walk DID find a floor — the remedy row is on screen. Without this
     // the pin would pass on a page with no floor anywhere.
@@ -2412,6 +2542,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByRole("button", { name: "Show installation help" });
     await waitFor(() => {
@@ -2493,6 +2624,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, [...ALL_OVERVIEW_METHODS, "host.update.continue"]);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByRole("button", { name: "Show installation help" });
     await waitFor(() => {
@@ -2535,6 +2667,7 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     });
     bindFixture(fixture, ALL_OVERVIEW_METHODS);
     renderPanel();
+    await selectHostOverviewTab("updates");
 
     await screen.findByRole("button", { name: "Show installation help" });
     await waitFor(() => {
@@ -2547,5 +2680,465 @@ describe("HostOverviewOperationCard — the floor sentence and its affordance", 
     expect(
       screen.queryByTestId("host-overview-operation-force-update"),
     ).toBeNull();
+  });
+});
+
+// `useHostUpdateCompletion` (`hooks/host/use-host-update-completion.ts`):
+// a completed/finalizing-record update is SETTINGS-ONLY. The landing banner
+// never renders that kind at all and never calls this hook (G9,
+// `host-update-banner-bound.test.tsx`), so there is no cross-surface contract
+// to pin for a success — this card owns the manual dismiss, the auto-collapse
+// timer, and its own write into `landingDismissedAttemptIds`. A FAILURE is
+// dismissible here as well, by hand only, through the same per-attempt list
+// the landing banner writes: one dismissal hides the failure on both
+// surfaces, and a newer attempt id arrives undismissed.
+describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", () => {
+  const HOST_ID = "host-a";
+
+  function completeOperation(attemptId: string): HostStatusUpdateOperationV2 {
+    return attemptOperation({
+      attemptId,
+      phase: "complete",
+      execution: "terminal",
+      liveness: "terminal",
+    });
+  }
+
+  function bindComplete(attemptId: string): void {
+    const fixture = buildOverviewHostFixture({
+      hostId: HOST_ID,
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => statusWith(completeOperation(attemptId)),
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+  }
+
+  it("a completed attempt offers a manual Dismiss (host-overview-operation-dismiss), and clicking it hides the card immediately", async () => {
+    bindComplete("attempt-complete-a");
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toMatch(/Updated to v2\.1\.0/);
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-complete-a");
+  });
+
+  it("the Settings surface auto-collapses a completed attempt on its own after HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS, with no landing banner mounted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    bindComplete("attempt-complete-timer");
+    renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).not.toContain("attempt-complete-timer");
+
+    await vi.advanceTimersByTimeAsync(
+      HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS + 100,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-complete-timer");
+  });
+
+  it("a finalizing-record view (a refused completion write, running the target version) is dismissible the same way", async () => {
+    // Same shape the "a refused completion write is not a failure" suite
+    // above uses to reach `finalizing-record`: an abandoned `verifying`
+    // executor, host running the target, coarse `{state:"updating"}` marker
+    // beside the untouched record.
+    const fixture = buildOverviewHostFixture({
+      hostId: HOST_ID,
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () => ({
+          ...statusWith(
+            attemptOperation({
+              attemptId: "attempt-finalizing-1",
+              phase: "verifying",
+              liveness: "interrupted",
+              targetVersion: "2.1.0",
+            }),
+          ),
+          hostVersion: "2.1.0",
+          updateProgress: { state: "updating", error: null },
+        }),
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    await waitFor(() => {
+      expect(card.textContent).toMatch(/update record is still open/);
+    });
+
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-finalizing-1");
+  });
+
+  it("a dismissal survives a remount, and does not pre-dismiss a NEWER attempt id on the same host", async () => {
+    bindComplete("attempt-old-settings");
+    const queryClient1 = renderPanel();
+
+    await screen.findByTestId("host-overview-operation-card");
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(queryClient1.isFetching()).toBe(0);
+    });
+
+    // Remount: unmount the tree and mount a fresh one, same attempt id. The
+    // dismissal is persisted zustand state (not component state), so it
+    // survives a genuine unmount/remount, not merely a rerender.
+    cleanup();
+    hostBindingMock.current = null;
+    bindComplete("attempt-old-settings");
+    renderPanel();
+    // Wait for a render derived from the status reply before asserting
+    // absence, same as the sibling "no coarse marker" test above. T2's
+    // version card also carries the running version, so anchor on its own
+    // testid rather than the no-longer-unique text. The version card now
+    // leads the Updates tab, so visit it first.
+    await selectHostOverviewTab("updates");
+    await screen.findByTestId("host-overview-version");
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+
+    // A NEWER attempt id on the same host is not pre-dismissed.
+    cleanup();
+    hostBindingMock.current = null;
+    bindComplete("attempt-new-settings");
+    renderPanel();
+    await screen.findByTestId("host-overview-operation-card");
+  });
+
+  function bindFailed(attemptId: string): void {
+    const fixture = buildOverviewHostFixture({
+      hostId: HOST_ID,
+      isLocalMachine: true,
+      overrideHandlers: {
+        "host.status": () =>
+          statusWith(
+            attemptOperation({
+              attemptId,
+              phase: "failed",
+              execution: "terminal",
+              liveness: "terminal",
+              error: {
+                code: "verify-timeout",
+                message: "the host did not become healthy at that version",
+                phase: "verifying",
+              },
+            }),
+          ),
+      },
+    });
+    recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+  }
+
+  it("a FAILED attempt offers a manual Dismiss, clicking it hides the card, and the dismissal is remembered by attempt id", async () => {
+    bindFailed("attempt-failed-dismiss");
+    renderPanel();
+
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toMatch(/Update failed/);
+    fireEvent.click(
+      await screen.findByTestId("host-overview-operation-dismiss"),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+    expect(
+      useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+    ).toContain("attempt-failed-dismiss");
+  });
+
+  it("a FAILED attempt is never auto-collapsed — only the person dismisses it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      bindFailed("attempt-failed-no-timer");
+      renderPanel();
+      await screen.findByTestId("host-overview-operation-card");
+      await vi.advanceTimersByTimeAsync(
+        HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS * 2,
+      );
+      expect(
+        screen.queryByTestId("host-overview-operation-card"),
+      ).not.toBeNull();
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).not.toContain("attempt-failed-no-timer");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a FAILED attempt already dismissed (by id) on the landing banner is dismissed on Settings too, and a NEWER failed attempt id is not", async () => {
+    // A prior landing dismissal writes this attempt id into the SAME
+    // per-attempt list the Settings card consults, so the failure is hidden
+    // on both surfaces at once.
+    useHostUpdateBannerStore
+      .getState()
+      .dismissLandingAttempt("attempt-failed-shared");
+    bindFailed("attempt-failed-shared");
+    const queryClient = renderPanel();
+    await selectHostOverviewTab("updates");
+    await screen.findByTestId("host-overview-version");
+    expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    await waitFor(() => {
+      expect(queryClient.isFetching()).toBe(0);
+    });
+
+    // Tear the first tree down for real (`QueryClient.unmount` would only
+    // detach the cache, leaving the panel mounted beside the next one).
+    cleanup();
+    hostBindingMock.current = null;
+    bindFailed("attempt-failed-newer");
+    renderPanel();
+    const card = await screen.findByTestId("host-overview-operation-card");
+    expect(card.textContent).toMatch(/Update failed/);
+    expect(
+      screen.queryByTestId("host-overview-operation-dismiss"),
+    ).not.toBeNull();
+  });
+
+  const NON_TERMINAL_CASES: ReadonlyArray<{
+    readonly name: string;
+    readonly operation: HostStatusUpdateOperationV2;
+  }> = [
+    {
+      name: "active (downloading)",
+      operation: attemptOperation({ phase: "downloading" }),
+    },
+    {
+      name: "parked (waiting-for-work)",
+      operation: attemptOperation({
+        phase: "waiting-for-work",
+        execution: "parked",
+        busySessionCount: 2,
+      }),
+    },
+  ];
+
+  it.each(NON_TERMINAL_CASES)(
+    "offers no dismiss control for a $name attempt",
+    async ({ operation }) => {
+      const fixture = buildOverviewHostFixture({
+        hostId: HOST_ID,
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": () => statusWith(operation),
+        },
+      });
+      recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      scopeOverrides.current = scopeFrom(HOST_ID, fixture);
+      renderPanel();
+
+      await screen.findByTestId("host-overview-operation-card");
+      expect(
+        screen.queryByTestId("host-overview-operation-dismiss"),
+      ).toBeNull();
+    },
+  );
+
+  // PR2069 (CodeRabbit): disconnecting demotes a live view to
+  // `unknown`/`lastKnownKind` with the same attemptId, and the completion
+  // hook used to resolve an id only off `view.kind` — so a retained success
+  // lost its dismiss/timer, and a fresh dismissal stopped matching once the
+  // kind changed and the card reappeared.
+  describe("retained (stale) success — PR2069 regression", () => {
+    function bindDisconnectable(operation: HostStatusUpdateOperationV2): {
+      readonly disconnect: () => void;
+    } {
+      const fixture = buildOverviewHostFixture({
+        hostId: HOST_ID,
+        isLocalMachine: true,
+        overrideHandlers: {
+          "host.status": () => statusWith(operation),
+        },
+      });
+      recordNegotiatedHostMethods(HOST_ID, ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = bindingWith(fixture.client);
+      const connectedScope = scopeFrom(HOST_ID, fixture);
+      scopeOverrides.current = connectedScope;
+      return {
+        disconnect: () => {
+          scopeOverrides.current = { ...connectedScope, status: "unreachable" };
+        },
+      };
+    }
+
+    it("a completed attempt is dismissible while reachable; once the scope goes unusable the offline notice takes over and the card (with it) withdraws", async () => {
+      // T2 changes what "retained" MEANS for this card: the Status tab now
+      // withholds the update card entirely while the host can't be reached
+      // (`offline`) and shows the ONE offline notice in its place — carrying
+      // whatever phase clause applies, which for `complete` is none (see
+      // `LAST_SEEN_CLAUSE.complete === null` in `host-update-operation-copy.ts`).
+      // So a stale completed attempt is no longer dismissible from a scope
+      // that has gone unusable; dismissing it is still live right up to that
+      // point, which is what this pin now proves.
+      const { disconnect } = bindDisconnectable(
+        completeOperation("attempt-retained-dismiss"),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toBe("Updated to v2.1.0");
+      });
+
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-dismiss"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).toContain("attempt-retained-dismiss");
+
+      // Going unusable afterward is a no-op for the (already dismissed) card:
+      // the offline notice is the tab's only unreachable wording now.
+      disconnect();
+      panel.rerender();
+      await screen.findByTestId("host-overview-offline-notice");
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+
+    it("a FRESH dismissal stays hidden once the view demotes to retained/stale — it does not reappear on disconnect", async () => {
+      const { disconnect } = bindDisconnectable(
+        completeOperation("attempt-fresh-then-retained"),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-dismiss"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
+
+      // Same transition the sibling test above renders "Last seen: …" for
+      // when not dismissed; here it must not resurrect a dismissed card.
+      disconnect();
+      panel.rerender();
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+
+    it("a FAILED attempt is dismissible while reachable; once the scope goes unusable the offline notice replaces the card and the dismissal holds", async () => {
+      // A terminal `failed` phase: staleness retains the raw phase, so only
+      // a phase that already IS "failed" retains as failed. T2's Status tab
+      // withholds the update card entirely once the host can't be reached —
+      // the offline notice is the tab's only unreachable wording then — so
+      // the retained "Last seen: Update failed" sentence this pin used to
+      // read off the card now lives there instead (with no phase clause:
+      // `LAST_SEEN_CLAUSE.failed === null`). The dismiss is offered for the
+      // failure exactly as for a success, and a dismissal taken while
+      // reachable is not resurrected by the demotion to `unknown`.
+      const { disconnect } = bindDisconnectable(
+        attemptOperation({
+          attemptId: "attempt-retained-failed",
+          phase: "failed",
+          execution: "terminal",
+          liveness: "terminal",
+        }),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("host-overview-operation-phase").textContent,
+        ).toBe("Update failed");
+      });
+      fireEvent.click(
+        await screen.findByTestId("host-overview-operation-dismiss"),
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      });
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).toContain("attempt-retained-failed");
+
+      disconnect();
+      panel.rerender();
+      await screen.findByTestId("host-overview-offline-notice");
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+    });
+
+    it("a fresh success that demotes to retained mid-window still auto-collapses at the original deadline, not a restarted one", async () => {
+      // The timer this pin is about (`useHostUpdateCompletion`) lives at
+      // PANEL level, not on the card, specifically so it keeps running
+      // whatever the card is showing — see that hook's own doc comment. Once
+      // the scope goes unusable T2's Status tab withholds the card in favor
+      // of the offline notice, which makes `host-overview-operation-card`
+      // absent from the moment of disconnect regardless of the timer — so
+      // this pin now reads the timer's effect off the STORE it writes to,
+      // the one observable that still distinguishes "still counting down"
+      // from "fired".
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const { disconnect } = bindDisconnectable(
+        completeOperation("attempt-deadline"),
+      );
+      const panel = renderPanelPersistent();
+
+      await screen.findByTestId("host-overview-operation-card");
+
+      // Disconnect mid-window: same attemptId, so the timer isn't re-armed.
+      await vi.advanceTimersByTimeAsync(
+        HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS / 2,
+      );
+      disconnect();
+      panel.rerender();
+      await screen.findByTestId("host-overview-offline-notice");
+      expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
+      expect(
+        useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+      ).not.toContain("attempt-deadline");
+
+      await vi.advanceTimersByTimeAsync(
+        HOST_UPDATE_COMPLETE_ACKNOWLEDGE_MS / 2 + 100,
+      );
+      await waitFor(() => {
+        expect(
+          useHostUpdateBannerStore.getState().landingDismissedAttemptIds,
+        ).toContain("attempt-deadline");
+      });
+    });
   });
 });

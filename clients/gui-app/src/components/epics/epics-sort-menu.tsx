@@ -33,14 +33,15 @@ export function EpicsSortMenu(props: EpicsSortMenuProps) {
   const currentLabel =
     SORT_OPTIONS.find((option) => option.value === value)?.label ?? "Sort";
 
+  const trigger = (
+    <Button type="button" variant="muted" size="sm">
+      <ArrowDownUp className="size-4" />
+      {currentLabel}
+    </Button>
+  );
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button type="button" variant="muted" size="sm">
-          <ArrowDownUp className="size-4" />
-          {currentLabel}
-        </Button>
-      </DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
         <DropdownMenuLabel>Sort by</DropdownMenuLabel>
         <DropdownMenuSeparator />

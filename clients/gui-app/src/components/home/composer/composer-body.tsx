@@ -14,6 +14,7 @@ import type { ComposerPickerStore } from "@/components/chat/composer/picker/comp
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
+import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
@@ -22,6 +23,7 @@ import { TerminalLaunchPanel } from "@/components/home/composer/terminal-launch-
 import type { ComposerMode } from "@/components/home/data/landing-options";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { ComposerToolbar } from "@/components/home/toolbar/composer-toolbar";
+import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import { cn } from "@/lib/utils";
@@ -61,7 +63,9 @@ export interface ComposerBodyProps {
    * only the landing composer asks for `"collapsed"`, and only below `md`.
    */
   readonly toolbarLayout: "full" | "collapsed";
-  readonly stashControl: ReactNode;
+  /** Forwarded to `ComposerShell`; see its prop of the same name. */
+  readonly expansion: ComposerExpansion | null;
+  readonly draftsControl: ReactNode;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
   readonly dictationControl: ComposerDictationControl | null;
@@ -128,7 +132,8 @@ export function ComposerBody({
   header,
   topBanner,
   toolbarLayout,
-  stashControl,
+  expansion,
+  draftsControl,
   attachmentsStrip,
   workspaceControls,
   dictationControl,
@@ -186,7 +191,11 @@ export function ComposerBody({
         onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
         onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
         dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
-        utilityRail={composerMode === "chat" ? stashControl : null}
+        // D11: a terminal-mode draft is still a draft, so the rail renders in
+        // both modes. The attachments strip below stays chat-only - the
+        // terminal launcher has no attachments.
+        utilityRail={draftsControl}
+        expansion={expansion}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>
@@ -237,11 +246,13 @@ export function ComposerBody({
         toolbar={
           <div className={hiddenInTerminal}>
             <SurfaceActivityProvider active={composerMode === "chat"}>
-              {toolbarLayout === "collapsed" ? (
-                <ComposerMobileToolbar {...sharedToolbarProps} />
-              ) : (
-                <ComposerToolbar {...sharedToolbarProps} />
-              )}
+              <ComposerTileIdProvider tileId="landing">
+                {toolbarLayout === "collapsed" ? (
+                  <ComposerMobileToolbar {...sharedToolbarProps} />
+                ) : (
+                  <ComposerToolbar {...sharedToolbarProps} />
+                )}
+              </ComposerTileIdProvider>
             </SurfaceActivityProvider>
           </div>
         }

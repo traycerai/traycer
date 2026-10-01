@@ -1,3 +1,4 @@
+import type { NotificationFeedOccurrence } from "@traycer-clients/shared/notifications/feed-delivery";
 import { useCallback, useEffect } from "react";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
@@ -8,6 +9,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 
 export interface NotificationShowRequest {
+  readonly feedOccurrences?: ReadonlyArray<NotificationFeedOccurrence>;
   readonly title: string;
   readonly body: string;
   readonly payload: unknown;
@@ -37,6 +39,7 @@ export function useNotificationShow(): NotificationShow {
       deliveryKey,
       feedSource,
       foregroundAppLocal,
+      feedOccurrences,
     }) =>
       runnerHost.notifications.show(
         title,
@@ -46,6 +49,7 @@ export function useNotificationShow(): NotificationShow {
         deliveryKey,
         feedSource,
         foregroundAppLocal,
+        feedOccurrences ?? null,
       ),
     [runnerHost],
   );

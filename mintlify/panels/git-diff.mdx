@@ -1,0 +1,90 @@
+---
+title: "Git Diff"
+description: "Use Git Diff to inspect and edit changed files in a workspace or worktree."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/git-diff-panel.mp4" label="Choose a worktree and inspect a file diff" />
+
+The **Git Diff** panel shows changed files for the selected workspace folder or worktree.
+
+Use it to inspect what changed before asking an agent to continue, before creating a review artifact, or before switching context.
+
+For how agents choose worktrees, see [Worktrees](/concepts/worktrees).
+
+## Panel Controls
+
+The panel includes:
+
+- **A workspace picker.** It lists the Task's workspace folders, their worktrees, and their submodules. Search with "Search branch, workspace, submodule, or path...".
+- **Open workspace in editor** and **Choose editor**, to open the selected folder in an installed editor.
+- **A filter box**, "Filter files...", or "Filter submodules and files..." when the folder has submodules.
+- **More Git Diff actions** (**⋯** in the panel header), with **Switch to tree view** or **Switch to list view**, and **Refresh**.
+
+Changed files are grouped into sections:
+
+| Section | Holds |
+|---|---|
+| **Merge Changes** | Files with merge conflicts. |
+| **Staged** | Changes in the index. |
+| **Changes** | Unstaged changes and untracked files. |
+
+Each file shows a status letter: **A** added, **M** modified, **D** deleted, **R** renamed, **C** copied, or **!** conflicted.
+
+Submodules are listed with a **Submodule** tag. **Differs from parent** means the submodule's checked-out commit is not the one the parent repository records. Clean submodules are hidden behind "Show N clean submodules".
+
+The panel is for reading and editing changes. It has no stage, unstage, revert, or discard actions; use your terminal or editor for those.
+
+## Diff View
+
+Click a changed file to open its diff. To see every file in a section as one combined diff, click the diff icon on that section's heading.
+
+The diff toolbar has:
+
+| Control | What it does |
+|---|---|
+| **Split view** / **Unified view** | Switch between side-by-side and inline diffs. Split is the default. |
+| **Expand all** / **Collapse all** | Expand or collapse every file in a combined diff. |
+| **Refresh diff** | Reload the diff. |
+| **Diff settings** | Toggle **Backgrounds** (on by default), **Line numbers** (on), **Word wrap** (off), and **Ignore whitespace** (off), and choose an **Indicator style**: **Bars** (default), **Plus / minus**, or **Hidden**. On a local host, the bottom of this menu has **Open in editor**. |
+
+Use [find in a tile](/panels#find-in-a-tile) to search a diff.
+
+Diffs have no line comments. Comment threads belong to [artifacts](/panels/comments).
+
+### Edit In Place
+
+Click inside the diff of an unstaged or untracked file to edit it there. Deleted files can't be edited.
+
+Changes save automatically shortly after you stop typing. A status label shows **Saving**, **Saved**, **Unsaved**, or **Save failed**. If the file also changed on disk, the label reads **Conflict**; choose **Use disk** to take the file on disk, or **Keep mine** to keep your edit.
+
+## States
+
+The panel and the diff view show explicit states for common cases:
+
+| State | What you see |
+|---|---|
+| No git repositories | "No git workspaces available", with a prompt to add workspaces to the agent. |
+| No changes | "No changes", when the panel last updated, and **Refresh**. |
+| Workspaces can't be read | "Git workspaces unavailable", for example when folders were moved or deleted, with **Retry**. |
+| The host isn't responding | "Can't reach this host", with **Retry** and **Use default host**. |
+| The host is too old | "Git panel unavailable", with **Update Traycer Host**. |
+| Live file watching isn't available | A "Periodic refresh" notice. Changes still appear, on a timer instead of instantly. |
+| A very large diff | "Diff truncated after N bytes", with **Load Full**. |
+| A binary file | "Binary File", with **Open Externally**. |
+| A file that is no longer changed | "No Longer Changed". |
+
+### Repository Operations
+
+While a git operation is in progress, a banner above the file list says so:
+
+| Operation | Banner |
+|---|---|
+| Merge | "Merge in progress - N conflicts" |
+| Rebase | "Rebase in progress - step X/Y onto &lt;commit&gt;" |
+| Cherry-pick | "Cherry-pick in progress - picking &lt;commit&gt;" |
+| Revert | "Revert in progress - reverting &lt;commit&gt;" |
+| Patch apply | "git am in progress", with the patch name when known |
+| Bisect | "Bisect in progress" |
+| Any other | "Repository operation in progress" |

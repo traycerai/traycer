@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { LOG_LEVELS, DEFAULT_LOG_LEVEL } from "./log-level";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Current on-disk schema version for `~/.traycer/cli/config.json`. Bump it
@@ -24,7 +25,9 @@ export interface EnvOverrideEntry {
   readonly value: EnvOverrideValue;
 }
 
-const envOverrideMapSchema = z.record(z.string(), z.string().nullable());
+const envOverrideMapSchema = lazySchema(() =>
+  z.record(z.string(), z.string().nullable()),
+);
 
 /**
  * The `logs` block in `~/.traycer/cli/config.json`: two independent thresholds —
@@ -34,12 +37,17 @@ const envOverrideMapSchema = z.record(z.string(), z.string().nullable());
  * compatibility cost is that a pre-feature binary's writer drops it on its next
  * write (the setting then resolves back to the `info` default).
  */
-export const logsConfigSchema = z
-  .object({
-    cliLogLevel: z.enum(LOG_LEVELS).default(DEFAULT_LOG_LEVEL),
-    hostLogLevel: z.enum(LOG_LEVELS).default(DEFAULT_LOG_LEVEL),
-  })
-  .default({ cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL });
+export const logsConfigSchema = lazySchema(() =>
+  z
+    .object({
+      cliLogLevel: z.enum(LOG_LEVELS).default(DEFAULT_LOG_LEVEL),
+      hostLogLevel: z.enum(LOG_LEVELS).default(DEFAULT_LOG_LEVEL),
+    })
+    .default({
+      cliLogLevel: DEFAULT_LOG_LEVEL,
+      hostLogLevel: DEFAULT_LOG_LEVEL,
+    }),
+);
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
 
 /**
@@ -50,11 +58,13 @@ export type LogsConfig = z.infer<typeof logsConfigSchema>;
  * `.default()`-ed like every other block, so older config files keep validating
  * without a `CLI_CONFIG_VERSION` bump.
  */
-export const browserConfigSchema = z
-  .object({
-    agentAccess: z.boolean().default(true),
-  })
-  .default({ agentAccess: true });
+export const browserConfigSchema = lazySchema(() =>
+  z
+    .object({
+      agentAccess: z.boolean().default(true),
+    })
+    .default({ agentAccess: true }),
+);
 export type BrowserConfig = z.infer<typeof browserConfigSchema>;
 
 /**
@@ -67,16 +77,20 @@ export type BrowserConfig = z.infer<typeof browserConfigSchema>;
  * permissive default while the file plainly says `agentAccess: false`. Failing
  * open is for a block we cannot read, never for one we can.
  */
-export const browserOnlyConfigSchema = z.object({
-  browser: browserConfigSchema,
-});
+export const browserOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    browser: browserConfigSchema,
+  }),
+);
 
-export const featureSettingsSchema = z
-  .object({
-    agentRoles: z.boolean().default(false),
-    artifactVersioning: z.boolean().default(false),
-  })
-  .default({ agentRoles: false, artifactVersioning: false });
+export const featureSettingsSchema = lazySchema(() =>
+  z
+    .object({
+      agentRoles: z.boolean().default(false),
+      artifactVersioning: z.boolean().default(false),
+    })
+    .default({ agentRoles: false, artifactVersioning: false }),
+);
 export type FeatureSettings = z.infer<typeof featureSettingsSchema>;
 
 /**
@@ -114,10 +128,12 @@ export type FeatureSettings = z.infer<typeof featureSettingsSchema>;
  * makes "the visible flags differ from the family default" equivalent to
  * "a non-null deviation is on disk".
  */
-const shellEntrySchema = z.object({
-  path: z.string(),
-  args: z.array(z.string()).nullable(),
-});
+const shellEntrySchema = lazySchema(() =>
+  z.object({
+    path: z.string(),
+    args: z.array(z.string()).nullable(),
+  }),
+);
 
 /** A single remembered/customised launch spec: one added program and its flags. */
 export interface ShellEntry {
@@ -125,34 +141,36 @@ export interface ShellEntry {
   readonly args: readonly string[] | null;
 }
 
-export const cliConfigSchema = z
-  .object({
-    version: z.literal(CLI_CONFIG_VERSION),
-    // Each section defaults so a partial file (e.g. only `shell.path` set, or
-    // `envOverrides` absent) still reads - restoring the tolerance the previous
-    // hand-rolled reader had. Defaults fill ONLY missing/`undefined` fields;
-    // a present-but-wrong-typed value (e.g. `path: 5`) is still rejected, so
-    // genuine corruption is still surfaced.
-    shell: z
-      .object({
-        path: z.string().nullable().default(null),
-        args: z.array(z.string()).nullable().default(null),
-        entries: z.array(shellEntrySchema).default([]),
-      })
-      .default({ path: null, args: null, entries: [] }),
-    envOverrides: envOverrideMapSchema.default({}),
-    logs: logsConfigSchema,
-    features: featureSettingsSchema,
-    browser: browserConfigSchema,
-  })
-  // Top-level only: an unknown BLOCK survives a read-modify-write instead of
-  // being stripped. Two binaries share this file - an older CLI or host that
-  // predates a block must not silently delete the newer one's setting on its
-  // next write (which is exactly how `logs`/`features` would have been lost).
-  // Unknown keys INSIDE a known block are still stripped: those are the shapes
-  // both sides already agree on, so an extra key there is corruption, not the
-  // future.
-  .passthrough();
+export const cliConfigSchema = lazySchema(() =>
+  z
+    .object({
+      version: z.literal(CLI_CONFIG_VERSION),
+      // Each section defaults so a partial file (e.g. only `shell.path` set, or
+      // `envOverrides` absent) still reads - restoring the tolerance the previous
+      // hand-rolled reader had. Defaults fill ONLY missing/`undefined` fields;
+      // a present-but-wrong-typed value (e.g. `path: 5`) is still rejected, so
+      // genuine corruption is still surfaced.
+      shell: z
+        .object({
+          path: z.string().nullable().default(null),
+          args: z.array(z.string()).nullable().default(null),
+          entries: z.array(shellEntrySchema).default([]),
+        })
+        .default({ path: null, args: null, entries: [] }),
+      envOverrides: envOverrideMapSchema.default({}),
+      logs: logsConfigSchema,
+      features: featureSettingsSchema,
+      browser: browserConfigSchema,
+    })
+    // Top-level only: an unknown BLOCK survives a read-modify-write instead of
+    // being stripped. Two binaries share this file - an older CLI or host that
+    // predates a block must not silently delete the newer one's setting on its
+    // next write (which is exactly how `logs`/`features` would have been lost).
+    // Unknown keys INSIDE a known block are still stripped: those are the shapes
+    // both sides already agree on, so an extra key there is corruption, not the
+    // future.
+    .passthrough(),
+);
 
 export type CliConfig = z.infer<typeof cliConfigSchema>;
 

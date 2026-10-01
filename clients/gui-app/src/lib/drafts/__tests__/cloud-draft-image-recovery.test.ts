@@ -5,7 +5,13 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { CloudChatIdentity } from "@traycer/protocol/host/epic/cloud-chat";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 
-import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  registerExtraImageRootSource,
+  resetLandingImageBudgetReservationsForTesting,
+  tryReserveLandingImageBudget,
+} from "@/lib/composer/landing-image-budget";
 import {
   getImageBytes,
   sessionImageBytes,
@@ -70,6 +76,15 @@ vi.mock("@/lib/composer/landing-image-store", async (importOriginal) => {
  */
 const OWNER = "user-1";
 
+const liveLandingImageRoots = new Set<string>();
+registerExtraImageRootSource({
+  hashes: () => [...liveLandingImageRoots],
+});
+
+function rootLandingImages(...hashes: string[]): void {
+  for (const hash of hashes) liveLandingImageRoots.add(hash);
+}
+
 const IDENTITY: CloudChatIdentity = {
   taskId: "scp_1",
   chatId: "draft-1",
@@ -104,7 +119,7 @@ function recordingClient(handle: FakeHandler): {
     calls.push({ method, params });
     return handle(method, params);
   }) as FakeRequest;
-  return { client: { request }, calls };
+  return { client: { request, requestWithOptions: request }, calls };
 }
 
 /** A client that answers every `epic.readCloudChatPayload` the same way. */
@@ -159,6 +174,7 @@ function bytesB(): Uint8Array<ArrayBuffer> {
 
 beforeEach(() => {
   installFreshIndexedDb();
+  liveLandingImageRoots.clear();
   useAuthStore.setState({
     status: "signed-in",
     // The store guarantees non-null `contextMetadata` in every signed-in
@@ -172,6 +188,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetCloudDraftImageRecoveryForTests();
+  liveLandingImageRoots.clear();
   useAuthStore.setState(useAuthStore.getInitialState(), true);
 });
 
@@ -180,6 +197,7 @@ describe("cloud-draft-image-recovery", () => {
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
     const { client, calls } = okClient(toBase64(bytes), bytes.byteLength);
+    rootLandingImages(hash);
 
     recordCloudDraftImageSources({
       identity: IDENTITY,
@@ -210,6 +228,7 @@ describe("cloud-draft-image-recovery", () => {
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    rootLandingImages(hash);
 
     recordCloudDraftImageSources({
       identity: IDENTITY,
@@ -221,6 +240,104 @@ describe("cloud-draft-image-recovery", () => {
 
     expect(await readCloudDraftImageBytes(hash)).toEqual(bytes);
     expect(imageGcMocks.scheduleLandingImageReconcile).toHaveBeenCalled();
+  });
+
+  it("a full resident budget returns verified bytes ephemerally: no IDB/session entry afterward", async () => {
+    // Fill the whole budget with an unrelated, unreleased reservation BEFORE
+    // this hash is rooted, then ask the cloud leg to recover it. The
+    // write-back has somewhere to reserve for exactly zero bytes.
+    const filler = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(filler).not.toBeNull();
+
+    const bytes = bytesA();
+    const hash = await sha256HexOf(bytes);
+    rootLandingImages(hash);
+    const { client } = okClient(toBase64(bytes), bytes.byteLength);
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-a",
+      client,
+      hashes: [hash],
+    });
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    expect(result).toEqual(bytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+
+    filler?.release();
+    resetLandingImageBudgetReservationsForTesting();
+  });
+
+  it("a tried-and-rejected corrupt candidate never under-charges the next candidate's reservation", async () => {
+    // Verification runs BEFORE reservation (`verifyAndMaybeStoreCloudImage`),
+    // so a corrupt response for a hash never touches the ledger at all - it
+    // cannot leave a residual charge for a LATER, larger valid response for
+    // the SAME hash to dedupe onto. The walk tries the newest candidate
+    // first, so the corrupt one (recorded second, on a newer draft) is tried
+    // and rejected before the older, valid one is tried at all - with almost
+    // the whole budget already spent, so the valid reply only lands resident
+    // if the rejected attempt left it an under-charge to dedupe onto.
+    const validBytes = bytesA();
+    const hash = await sha256HexOf(validBytes);
+    const corruptBytes = bytesB(); // does NOT hash to `hash`
+
+    const filler = tryReserveLandingImageBudget([
+      {
+        hash: null,
+        bytes: LANDING_IMAGE_BUDGET_BYTES - validBytes.byteLength + 1,
+      },
+    ]);
+    expect(filler).not.toBeNull();
+    rootLandingImages(hash);
+
+    const valid = recordingClient((_method, _params) =>
+      Promise.resolve({
+        outcome: {
+          status: "ok" as const,
+          bytesBase64: toBase64(validBytes),
+          byteLength: validBytes.byteLength,
+        },
+      }),
+    );
+    const corrupt = recordingClient((_method, _params) =>
+      Promise.resolve({
+        outcome: {
+          status: "ok" as const,
+          bytesBase64: toBase64(corruptBytes),
+          byteLength: corruptBytes.byteLength,
+        },
+      }),
+    );
+    // Older draft, valid bytes for this hash.
+    recordCloudDraftImageSources({
+      identity: IDENTITY,
+      hostId: "host-valid",
+      client: valid.client,
+      hashes: [hash],
+    });
+    // Newer draft, corrupt bytes for the SAME hash - tried FIRST.
+    recordCloudDraftImageSources({
+      identity: { ...IDENTITY, chatId: "draft-2" },
+      hostId: "host-corrupt",
+      client: corrupt.client,
+      hashes: [hash],
+    });
+
+    const result = await readCloudDraftImageBytes(hash);
+
+    expect(corrupt.calls).toHaveLength(1);
+    expect(valid.calls).toHaveLength(1);
+    // The valid reply still reaches its caller, ephemerally: its own
+    // (correctly-sized) reservation is refused near the cap, so nothing
+    // becomes resident.
+    expect(result).toEqual(validBytes);
+    expect(await getImageBytes(hash)).toBeUndefined();
+
+    filler?.release();
+    resetLandingImageBudgetReservationsForTesting();
   });
 
   it("refuses a digest mismatch: stores nothing and answers null, with a matching-bytes positive control", async () => {
@@ -247,6 +364,7 @@ describe("cloud-draft-image-recovery", () => {
     // above would go red if verification were removed.
     const goodBytes = bytesB();
     const goodHash = await sha256HexOf(goodBytes);
+    rootLandingImages(goodHash);
     const { client: matchClient } = okClient(
       toBase64(goodBytes),
       goodBytes.byteLength,
@@ -282,17 +400,19 @@ describe("cloud-draft-image-recovery", () => {
       });
     });
 
-    await recoverCloudDraftImages({
+    const recovered = await recoverCloudDraftImages({
       identity: IDENTITY,
       hostId: "host-a",
       client,
       hashes: [missingHash, availableHash],
     });
 
+    expect(recovered.has(missingHash)).toBe(false);
+    expect(recovered.get(availableHash)).toEqual(availableBytes);
     expect(await getImageBytes(missingHash)).toBeUndefined();
-    // Sibling hash in the same eager pass: proves the pass ran to completion
-    // rather than dying on the first miss.
-    expect(await getImageBytes(availableHash)).toEqual(availableBytes);
+    // An explicit recovery can return verified bytes to its waiting caller,
+    // while an unrooted hash stays out of persistent landing-image storage.
+    expect(await getImageBytes(availableHash)).toBeUndefined();
   });
 
   it("never throws: a transport rejection answers null through both the lazy leg and the eager pass", async () => {
@@ -318,7 +438,7 @@ describe("cloud-draft-image-recovery", () => {
         client,
         hashes: [hash],
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual(new Map());
   });
 
   it("issues no request for an unrecorded hash, paired with a recorded hash that does", async () => {
@@ -464,6 +584,7 @@ describe("cloud-draft-image-recovery", () => {
     const localHash = await sha256HexOf(localBytes);
     const remoteBytes = bytesB();
     const remoteHash = await sha256HexOf(remoteBytes);
+    rootLandingImages(localHash, remoteHash);
 
     // Pre-seed the partition for `localHash` via a first, independent
     // recovery (exercises real production code, not a store bypass).
@@ -557,6 +678,7 @@ describe("cloud-draft-image-recovery", () => {
     // permanently unreachable.
     const bytes = bytesA();
     const hash = await sha256HexOf(bytes);
+    rootLandingImages(hash);
 
     const good = recordingClient((_method, _params) => ({
       outcome: {
@@ -951,6 +1073,7 @@ describe("cloud-draft-image-recovery", () => {
       status: "signed-in",
       contextMetadata: { userId: OWNER, username: OWNER },
     });
+    rootLandingImages(hash);
 
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
     recordCloudDraftImageSources({
@@ -968,6 +1091,7 @@ describe("cloud-draft-image-recovery", () => {
         // The switch lands after the bytes are durable and before the caller
         // is answered - the window the pre-write check cannot see.
         useAuthStore.setState(useAuthStore.getInitialState(), true);
+        liveLandingImageRoots.delete(hash);
         return stored;
       },
     );
@@ -995,6 +1119,7 @@ describe("cloud-draft-image-recovery", () => {
       status: "signed-in",
       contextMetadata: { userId: OWNER, username: OWNER },
     });
+    rootLandingImages(hash);
 
     const { client } = okClient(toBase64(bytes), bytes.byteLength);
     recordCloudDraftImageSources({
@@ -1013,6 +1138,7 @@ describe("cloud-draft-image-recovery", () => {
           status: "signed-in",
           contextMetadata: { userId: "user-other", username: "other" },
         });
+        liveLandingImageRoots.delete(hash);
         return stored;
       },
     );

@@ -144,6 +144,25 @@ export interface FocusBrowserRow {
    * mounted-only limit as every other name on this page. */
   readonly drivenByAgentName: string | null;
 }
+/**
+ * Which link a degraded activity slice is missing. The first two are this
+ * client's own stream to the host; the last two are that host's link to the
+ * cloud, which is what carries the other machines' activity into its union.
+ */
+export const FOCUS_DEGRADED_REASONS = [
+  "host-lost",
+  "host-reconnecting",
+  "cloud-disconnected",
+  "cloud-reconnecting",
+] as const;
+
+export type FocusDegradedReason = (typeof FOCUS_DEGRADED_REASONS)[number];
+
+export interface FocusDegradedHost {
+  readonly hostId: string;
+  readonly reason: FocusDegradedReason;
+}
+
 export interface FocusModel {
   readonly prompts: ReadonlyArray<FocusPromptRow>; // attention order (blocking first, newest first)
   readonly tasks: ReadonlyArray<FocusTaskRow>; // tasks with ≥1 running agent; needsYou first, then most agents in turn
@@ -154,16 +173,16 @@ export interface FocusModel {
   readonly coverage: {
     readonly activity: "live" | "reconnecting" | "disconnected" | "unknown";
     /**
-     * The hosts whose OWN activity slice is degraded, sorted, for the sections
-     * that group by host.
+     * The hosts whose OWN activity slice is degraded, sorted by host id, each
+     * with the link that is down.
      *
      * `activity` above is the worst slice's verdict for the whole page; this is
      * the per-host breakdown behind it, so a section grouped by host can put
      * the notice on the one heading it belongs under instead of over the entire
-     * page. Empty whenever nothing is degraded, which is also the single-host
-     * install's steady state.
+     * page, and the page-wide notice can say why. Empty whenever nothing is
+     * degraded, which is also the single-host install's steady state.
      */
-    readonly degradedHostIds: ReadonlyArray<string>;
+    readonly degradedHosts: ReadonlyArray<FocusDegradedHost>;
     readonly notifications: "local" | "cloud";
     readonly backgroundIsMountedOnly: true;
     /** The same literal-`true` shape, for the same reason: browser inventory
@@ -173,5 +192,4 @@ export interface FocusModel {
      * caption that declares this limit. */
     readonly browsersAreMountedOnly: true;
   };
-  readonly badgeCount: number; // prompts.length
 }

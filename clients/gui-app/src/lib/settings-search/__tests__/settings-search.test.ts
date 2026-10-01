@@ -33,7 +33,6 @@ const DESKTOP: SettingsAvailabilityContext = {
   }),
   featureSettings: null,
   mobileApp: false,
-  mobileFooter: false,
 };
 
 /** The installed mobile app: no desktop bridges, push permission present. */
@@ -48,7 +47,6 @@ const MOBILE: SettingsAvailabilityContext = {
   }),
   featureSettings: null,
   mobileApp: true,
-  mobileFooter: false,
 };
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */
@@ -77,6 +75,16 @@ function landingFor(
   return `${first.entry.section}#${first.entry.anchor ?? "<top>"}`;
 }
 
+/** The layout regions a query offers - a launch result acts on one of these. */
+function launchesFor(
+  query: string,
+  context: SettingsAvailabilityContext,
+): ReadonlyArray<string> {
+  return searchSettings(query, context).flatMap((result) =>
+    result.entry.launch === null ? [] : [result.entry.launch],
+  );
+}
+
 describe("settings search", () => {
   it("returns nothing for a query that asks for nothing", () => {
     // Not "everything": the caller renders its ordinary section list in this
@@ -86,12 +94,12 @@ describe("settings search", () => {
   });
 
   it("finds a row by its exact name", () => {
-    expect(labelsFor("minimap side", DESKTOP)[0]).toBe("Minimap position");
+    expect(labelsFor("panel animations", DESKTOP)[0]).toBe("Panel animations");
   });
 
   it("tolerates a typo", () => {
     // The whole reason this runs through Fuse rather than `includes`.
-    expect(labelsFor("minmap", DESKTOP)[0]).toBe("Minimap position");
+    expect(labelsFor("minmap", DESKTOP)[0]).toBe("Minimap");
     expect(labelsFor("typograpy", DESKTOP)).toContain("Fonts and text");
   });
 
@@ -107,12 +115,37 @@ describe("settings search", () => {
     expect(labelsFor("proxy", DESKTOP)).toContain("Shell");
   });
 
+  it("reaches the replay card by the words the old General row owned", () => {
+    // The tour's replay moved out of General, and its vocabulary moved with
+    // it: these queries appear in no label anywhere and must still land on
+    // the card, anchor included, rather than at the top of a page.
+    expect(landingFor("walkthrough", DESKTOP)).toBe(
+      "getting-started#getting-started-product-tour",
+    );
+    for (const query of ["product tour", "first run", "intro"]) {
+      expect(labelsFor(query, DESKTOP)).toContain("Initial tour");
+    }
+  });
+
+  it("reaches the Notifications page by its former name, Inbox", () => {
+    // The strip's drawer was renamed from "Inbox" to "Notifications"; the old
+    // name stays in the page's keywords so it is still findable.
+    expect(landingFor("inbox", DESKTOP)).toBe("notifications#<top>");
+  });
+
   it("reaches a bespoke page through the vocabulary it is really about", () => {
     // Providers and Worktrees have no indexable rows — they are per-provider
     // and per-worktree at runtime — so their reachability IS their keywords.
     expect(labelsFor("mcp", DESKTOP)).toContain("MCP servers");
     expect(labelsFor("api key", DESKTOP)).toContain("API key");
     expect(labelsFor("rate limit", DESKTOP)).toContain("Profiles & limits");
+  });
+
+  it("reaches the Appearance diff viewer rows by their own vocabulary", () => {
+    expect(landingFor("line numbers", DESKTOP)).toBe(
+      "appearance#appearance-diff-line-numbers",
+    );
+    expect(labelsFor("gutter", DESKTOP)).toContain("Gutter marks");
   });
 
   it("prefers the specific row over the group that contains it", () => {
@@ -122,6 +155,35 @@ describe("settings search", () => {
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].entry.kind).toBe("setting");
     expect(results[0].entry.anchor).toBe("appearance-terminal-cursor");
+  });
+
+  it("lands each Permissions query on the tab or row it is about", () => {
+    // "judge" is also in Providers' keywords ("auto mode judge"), so this pins
+    // that the Permissions tab still outranks it.
+    expect(landingFor("default permission", DESKTOP)).toBe(
+      "permissions#permissions-default-permission-mode",
+    );
+    expect(landingFor("judge", DESKTOP)).toBe(
+      "permissions#permissions-tab-judge",
+    );
+    expect(landingFor("policy", DESKTOP)).toBe(
+      "permissions#permissions-tab-rules",
+    );
+    expect(landingFor("allow rule", DESKTOP)).toBe(
+      "permissions#permissions-tab-rules",
+    );
+    expect(landingFor("activity", DESKTOP)).toBe(
+      "permissions#permissions-tab-activity",
+    );
+  });
+
+  it("lands built-in reviewer vocabulary on Providers and keeps auto mode judge on the Judge tab", () => {
+    expect(landingFor("built-in reviewer", DESKTOP)).toBe("providers#<top>");
+    expect(landingFor("own classifier", DESKTOP)).toBe("providers#<top>");
+    expect(landingFor("claude code", DESKTOP)).toBe("providers#<top>");
+    expect(landingFor("auto mode judge", DESKTOP)).toBe(
+      "permissions#permissions-tab-judge",
+    );
   });
 
   it("still lets a page win on its own name", () => {
@@ -166,7 +228,7 @@ describe("settings search", () => {
     expect(landingFor("terminal font", DESKTOP)).toBe(
       "appearance#appearance-terminal-font",
     );
-    expect(landingFor("website sessions", DESKTOP)).toBe("general#<top>");
+    expect(landingFor("website sessions", DESKTOP)).toBe("browser#<top>");
   });
 
   it("returns nothing for a query with no plausible match", () => {
@@ -179,35 +241,20 @@ describe("settings search", () => {
   });
 
   describe("Layout", () => {
-    it("lands the relocated rows under Layout and nowhere else", () => {
-      // Four rows moved off General and Appearance onto the Layout page. A
-      // query for the new name lands on the row; a query for the OLD name
-      // reaches it through the keywords; neither old page offers it any more.
-      expect(landingFor("minimap side", DESKTOP)).toBe(
-        "layout#layout-minimap-side",
+    it("reaches a region by its own name and by the words the old rows owned", () => {
+      // A region result carries the region rather than an element: the page
+      // draws every region section, so there is nothing on it to scroll to.
+      expect(launchesFor("minimap", DESKTOP)).toContain("minimap");
+      expect(launchesFor("context usage", DESKTOP)).toContain("contextUsage");
+      expect(launchesFor("home tab", DESKTOP)).toContain("homeTab");
+      expect(launchesFor("microphone", DESKTOP)).toContain("mic");
+      // The old names reach the same regions through the registry's keywords,
+      // which is what keeps a reader who learned the previous page's wording
+      // from landing nowhere.
+      expect(launchesFor("resource monitor", DESKTOP)).toContain(
+        "resourceMonitor",
       );
-      expect(landingFor("pin context breakdown", DESKTOP)).toBe(
-        "layout#layout-pin-context-breakdown",
-      );
-      expect(landingsFor("pin context usage breakdown", DESKTOP)).toContain(
-        "layout#layout-pin-context-breakdown",
-      );
-      expect(landingsFor("navigator resource stats", DESKTOP)).toContain(
-        "layout#layout-sidebar-resource-chips",
-      );
-      expect(landingFor("home tab", DESKTOP)).toBe("layout#layout-home-tab");
-      // The header resource-monitor row renders only under header placement,
-      // so its old name reaches the Status bar group rather than a row.
-      expect(landingsFor("global resources button", DESKTOP)).toContain(
-        "layout#layout-status-bar",
-      );
-      for (const label of [
-        "Pin context usage breakdown",
-        "Show global resources button",
-        "Show navigator resource stats",
-      ]) {
-        expect(labelsFor(label, DESKTOP), label).not.toContain(label);
-      }
+      expect(launchesFor("attach image", DESKTOP)).toContain("attachImage");
       // Appearance no longer offers the row at all. Asserted on the LABEL
       // rather than on "no appearance hit for this query": the threshold is
       // loose enough that a two-word query weak-matches unrelated rows on the
@@ -221,81 +268,45 @@ describe("settings search", () => {
       ).toEqual([]);
     });
 
+    it("offers every region but the microphone in the installed mobile app too", () => {
+      // A region the strip does not host is hosted by the header instead, so
+      // no shell withholds one for that reason - the switch that used to gate
+      // the whole page is gone with the page. The mic alone follows its own
+      // row's availability, which the mobile app lacks.
+      const cases: ReadonlyArray<readonly [string, string]> = [
+        ["minimap", "minimap"],
+        ["usage limits", "usageLimits"],
+        ["resource monitor", "resourceMonitor"],
+      ];
+      for (const [query, region] of cases) {
+        expect(launchesFor(query, MOBILE), query).toContain(region);
+      }
+      expect(launchesFor("microphone", MOBILE)).not.toContain("mic");
+    });
+
     it("still lets the page win on its own name", () => {
       expect(labelsFor("layout", DESKTOP)[0]).toBe("Layout");
     });
 
-    it("prefers a composer row over the group and over General's composer group", () => {
-      // "Attach image" is a row under Layout ▸ Composer; General's "Chat &
-      // composer" group shares the word and must not outrank the row.
-      expect(landingFor("attach image", DESKTOP)).toBe(
-        "layout#layout-composer-attach-image",
+    it("lands a surface's own name on that surface's card", () => {
+      // The surface groups are the page's only anchors, so a word about a
+      // whole surface has a card to land on rather than one of its regions.
+      expect(landingsFor("status bar", DESKTOP)).toContain(
+        "layout#layout-surface-status-bar",
       );
-      expect(landingFor("microphone", DESKTOP)).toBe(
-        "layout#layout-composer-mic",
-      );
-    });
-
-    it("tells the picker footer's reasoning control from the chip's reasoning level", () => {
-      // Two rows about the same subject, one word apart. Each has to be
-      // reachable by the name it goes by on the page.
-      expect(landingFor("reasoning control", DESKTOP)).toBe(
-        "layout#layout-composer-reasoning-control",
-      );
-      expect(landingFor("reasoning level", DESKTOP)).toBe(
-        "layout#layout-composer-reasoning-indicator",
-      );
-      // And by the word for the control itself, which is what a reader
-      // looking for "that slider" will type.
-      expect(landingsFor("slider", DESKTOP)).toContain(
-        "layout#layout-composer-reasoning-control",
+      expect(landingsFor("top bar", DESKTOP)).toContain(
+        "layout#layout-surface-top-bar",
       );
     });
 
-    it("offers the footer controls on desktop and withholds them in the mobile app", () => {
-      for (const label of ["Usage limits", "Resource monitor"]) {
-        expect(labelsFor(label, DESKTOP), label).toContain(label);
-        expect(labelsFor(label, MOBILE), label).not.toContain(label);
-      }
-      // The group itself stays: the mobile build collapses it to a note, and
-      // the page's first heading is the same on every build.
-      expect(labelsFor("status bar", MOBILE)).toContain("Status bar");
-    });
-
-    it("gives those controls back to the mobile app once the footer is on", () => {
-      const mobileWithFooter = { ...MOBILE, mobileFooter: true };
-      for (const label of ["Usage limits", "Resource monitor"]) {
-        expect(labelsFor(label, mobileWithFooter), label).toContain(label);
-      }
-    });
-
-    it("lands Placement on the group rather than on a row a resize can take away", () => {
-      // Two facts decide whether the row is drawn and only one is a shell: the
-      // build, and the VIEWPORT - below `md` the shell reads `mobileFooter` in
-      // place of `placement`, so the segment is hidden in any narrow window
-      // including a desktop one. An anchored entry would resolve to nothing
-      // there, so the word reaches the group instead and its result lands on a
-      // card every shell draws.
-      const results = labelsFor("placement", DESKTOP);
-      expect(results).not.toContain("Placement");
-      expect(results).toContain("Status bar");
-      // Still findable on the build that never draws the row at all, for the
-      // same reason: the destination is the group.
-      expect(labelsFor("placement", MOBILE)).toContain("Status bar");
-    });
-
-    it("indexes the mobile footer switch in the installed app only", () => {
-      expect(labelsFor("Footer status bar", MOBILE)).toContain(
-        "Footer status bar",
+    it("indexes the small-screen status bar row in the installed app only", () => {
+      expect(labelsFor("status bar on small screens", MOBILE)).toContain(
+        "Status bar on small screens",
       );
-      // On both sides of its own gate - it is the control that flips it.
-      expect(
-        labelsFor("Footer status bar", { ...MOBILE, mobileFooter: true }),
-      ).toContain("Footer status bar");
-      // Not on desktop: the row is drawn there only below `md`, which is a
-      // mode no index can promise.
-      expect(labelsFor("Footer status bar", DESKTOP)).not.toContain(
-        "Footer status bar",
+      // Not on desktop: every other build draws the strip whenever the usage
+      // host says so, so the switch would pick between two identical outcomes.
+      expect(labelsFor("status bar on small screens", DESKTOP)).not.toContain(
+        "Status bar on small screens",
       );
     });
   });
@@ -310,6 +321,10 @@ describe("settings search", () => {
         "OS notifications",
         "Voice input",
         "Prevent sleep while running",
+        "Customize layout",
+        "Tab overflow",
+        "Readings on agent rows",
+        "Reading width",
       ]) {
         expect(labelsFor(label, DESKTOP), label).toContain(label);
         expect(labelsFor(label, MOBILE), label).not.toContain(label);
@@ -335,39 +350,43 @@ describe("settings search", () => {
       );
     });
 
-    it("never offers the data-gated Browser rows", () => {
+    it("never offers the data-gated Browser rows, but still offers the page itself", () => {
       // "Detected dev origins" renders only once a terminal has printed a
       // local URL. No shell can promise that, so no shell offers it.
       expect(labelsFor("dev origins", DESKTOP)).not.toContain(
         "Detected dev origins",
       );
-      expect(labelsFor("browser", DESKTOP)).not.toContain("Browser");
+      // The Browser PAGE is unconditional - only its dev-origins/website-
+      // sessions rows are data/host-gated - so "browser" now surfaces it.
+      expect(labelsFor("browser", DESKTOP)).toContain("Browser");
     });
 
-    it("sends selected-host vocabulary to the Overview page", () => {
+    it("sends selected-host vocabulary to its Overview tab", () => {
       // Every group on a host-scoped page is dropped or concealed for an
-      // unresolved, connecting or vanished host, so none is a target. Their
-      // words still reach the Overview page, in any shell.
+      // unresolved, connecting or vanished host, so none of the in-body
+      // groups is a target — but each of the four tabs anchors on its own
+      // trigger, which renders in every host state, so these words now land
+      // on the TAB that answers them rather than on the bare page.
       for (const context of [DESKTOP, MOBILE]) {
+        for (const query of ["uninstall", "danger zone", "installation"]) {
+          expect(landingsFor(query, context), query).toContain(
+            "host#host-overview-tab-installation",
+          );
+        }
         for (const query of [
-          "uninstall",
           "snapshots",
           "import your work",
           "data migration",
-          "installation",
-          "danger zone",
         ]) {
-          expect(landingsFor(query, context), query).toContain("host#<top>");
+          expect(landingsFor(query, context), query).toContain(
+            "host#host-overview-tab-data",
+          );
         }
       }
-      expect(
-        searchSettings("installation danger zone", DESKTOP).filter(
-          (result) =>
-            result.entry.section === "host" && result.entry.anchor !== null,
-        ),
-      ).toEqual([]);
+      // "Installation" is deliberately not in this list: that is now the
+      // Installation TAB's own label, so a search for it correctly returns a
+      // result labeled "Installation" — the tab trigger, not an in-body row.
       for (const label of [
-        "Installation",
         "Remove Traycer from this computer",
         "Remove from account",
         "File edit snapshots",
@@ -379,6 +398,19 @@ describe("settings search", () => {
       }
     });
 
+    it("finds a setting through search, landing on the tab that holds it", () => {
+      for (const [query, anchor] of [
+        ["uninstall", "host-overview-tab-installation"],
+        ["port forward", "host-overview-tab-ports"],
+        ["release candidate", "host-overview-tab-updates"],
+        ["import", "host-overview-tab-data"],
+        ["version history", "host-overview-tab-data"],
+        ["host id", "host-overview-tab-installation"],
+      ] as const) {
+        expect(landingsFor(query, DESKTOP), query).toContain(`host#${anchor}`);
+      }
+    });
+
     it("sends runtime-gated groups' vocabulary to their pages", () => {
       // Website sessions also waits on a bound host runtime and a first read
       // of the browser bridge; host Notifications' and Fallback's groups sit
@@ -387,7 +419,7 @@ describe("settings search", () => {
       // the page.
       for (const context of [DESKTOP, MOBILE]) {
         for (const query of ["stay signed in", "cookies", "website sessions"]) {
-          expect(landingsFor(query, context), query).toContain("general#<top>");
+          expect(landingsFor(query, context), query).toContain("browser#<top>");
         }
         for (const query of ["notification hooks", "webhook", "toast"]) {
           expect(landingsFor(query, context), query).toContain(
@@ -407,7 +439,7 @@ describe("settings search", () => {
         "Saved website sessions",
         "In-app notifications",
         "Notification hooks",
-        "Automatic fallback",
+        "Route automatically",
       ]) {
         expect(labelsFor(label, DESKTOP), label).not.toContain(label);
       }

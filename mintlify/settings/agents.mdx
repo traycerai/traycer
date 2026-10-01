@@ -1,0 +1,48 @@
+---
+title: "Agent selection"
+description: "Edit the instructions Traycer agents follow when they pick a coding agent, model, and reasoning effort for a child agent."
+---
+
+**Agent selection** holds the instructions Traycer agents follow when they create or reconfigure a child agent: which coding agent to use, which model, and how much reasoning effort.
+
+This page configures _how a coding agent gets chosen_. It does not manage the agents inside a Task; those live in the [Agents](/panels/agents) panel. For the coordination model, see [Agent-to-Agent](/concepts/agent-to-agent).
+
+## What The Guide Covers
+
+The agent selection guide is Markdown, written for agents. Use it to say:
+
+- which coding agent to use for delegated work
+- which model and thinking effort to prefer
+- how to route implementation, review, and exploration work
+
+Agents read the guide before they create or reconfigure a child agent.
+
+## The Global Guide
+
+Settings edits the global guide on the host selected with the host switcher at the top of the Settings sidebar; see [Host Picker](/settings#host-picker). On that host, the file is:
+
+```text
+~/.traycer/agent-selection-guide.md
+```
+
+The editor has **Edit** and **Preview** tabs. It saves as you type and when you leave it; the status next to it reads **Saving…**, **Saved**, or **Not saved** if a save failed.
+
+**Revert to default** replaces the guide with a default built from the providers available on that host. It asks first, and your custom instructions are lost.
+
+## Workspace Guides
+
+For a specific repo, add a workspace guide at:
+
+```text
+<workspace>/.traycer/agent-selection-guide.md
+```
+
+Write it in the repo directly; Settings edits only the global guide.
+
+Every guide that exists applies. Workspace guides come first, then the global guide, so a workspace guide refines the global one instead of replacing it. Use one when a repo needs different agent choices, models, review expectations, or implementation preferences.
+
+## What It Doesn't Configure
+
+The guide applies to Traycer agents only. Subagents that a coding agent starts on its own follow that provider's configuration and have no Traycer agent ID.
+
+For how child agents appear in the Agents tree, see [Agents](/panels/agents). For supported coding agents, see [Agents & Models](/agents-and-models/coding-agents).

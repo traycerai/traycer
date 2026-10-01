@@ -16,6 +16,15 @@ describe("deriveToolInputDetail", () => {
     ).toEqual({ kind: "command", command: 'grep -n -C 3 "overflow-anchor"' });
   });
 
+  it("reconstructs a grep CLI from the lowercase tool name", () => {
+    const input = { pattern: "overflow-anchor", "-n": true };
+
+    expect(deriveToolInputDetail("grep", input)).toEqual({
+      kind: "command",
+      command: 'grep -n "overflow-anchor"',
+    });
+  });
+
   it("uses the literal command for shell tools", () => {
     expect(
       deriveToolInputDetail("shell", { command: "npm run build" }),

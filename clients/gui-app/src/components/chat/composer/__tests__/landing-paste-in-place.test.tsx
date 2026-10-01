@@ -457,7 +457,13 @@ function makeLandingIngest(
             mocks.scheduleLandingImageReconcile();
             return;
           }
-          editor.commands.rewriteImageAttachmentHashById(id, hash);
+          editor.commands.rewriteImageAttachmentHashById(id, {
+            hash,
+            fileName: image.fileName,
+            mimeType: image.mimeType,
+            size: bytes.byteLength,
+            byHashEligible: true,
+          });
         } catch {
           if (!editor.isDestroyed) {
             editor.commands.removeImageAttachmentById(id);

@@ -93,7 +93,7 @@ export function resolveAppWideHostClient(
  * subtree's ambient host identity.
  */
 export function resolveNamedHostClient(
-  binding: HostRuntimeBinding<HostRpcRegistry> | null,
+  binding: Pick<HostRuntimeBinding<HostRpcRegistry>, "hostClient"> | null,
   hostId: string,
 ): HostClient<HostRpcRegistry> | null {
   if (binding === null) {

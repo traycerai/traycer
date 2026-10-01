@@ -4,10 +4,12 @@
  * did not fit" are different facts, and a reader deciding whether to resend
  * needs the right one.
  *
- * Pure/synchronous-ish: the image node is dropped before any resolver would
- * ever run, so this needs neither IndexedDB nor an image-decoding stub.
+ * The note now rides in a closed start-page draft rather than a stash entry,
+ * so every assertion reads the installed draft's content. The image node is
+ * dropped before any resolver would ever run, so this needs no image-decoding
+ * stub.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
@@ -15,6 +17,7 @@ import {
   buildTextOnlyPromptHandoff,
   type DroppedImageCause,
 } from "@/lib/drafts/unrecorded-prompt-handoff";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 
 function contentWithOneImage(text: string): JsonContent {
   return {
@@ -57,8 +60,8 @@ function annotationRecord(imageHash: string): BrowserAnnotationRecord {
 const CAUSES: readonly DroppedImageCause[] = [
   "missing",
   "timed-out",
-  "too-large",
   "capacity",
+  "unsupported",
   "unprepared",
 ];
 
@@ -67,24 +70,36 @@ const DROPPED_IMAGE_CLAUSE_FRAGMENT: Readonly<
 > = {
   missing: "the bytes are no longer on this device",
   "timed-out": "the bytes could not be read in time",
-  "too-large": "it was over the size limit for a stashed image",
-  capacity: "it did not fit in the prompt stash",
-  unprepared: "it could not be prepared for the stash",
+  capacity: "it did not fit in this window's image budget",
+  unsupported: "its format cannot be kept in a draft",
+  unprepared: "it could not be prepared for a draft",
 };
+
+/** Always current: every handoff mints a new draft id. */
+function installedText(draftId: string | null): string {
+  const draft = useLandingDraftStore
+    .getState()
+    .drafts.find((row) => row.id === draftId);
+  if (draft === undefined) throw new Error("expected an installed draft");
+  return JSON.stringify(draft.content);
+}
+
+beforeEach(() => {
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+});
 
 describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause", () => {
   it("every cause's note is unique text (DRIVE RED)", async () => {
     const notes = new Map<DroppedImageCause, string>();
     for (const cause of CAUSES) {
-      const snapshot = await buildTextOnlyPromptHandoff({
-        id: `id-${cause}`,
-        createdAt: 1,
+      const { draftId } = await buildTextOnlyPromptHandoff({
         content: contentWithOneImage("hello"),
         reason: "Reason.",
         browserAnnotations: [],
         cause,
+        stillCurrent: () => true,
       });
-      notes.set(cause, JSON.stringify(snapshot.entry.content));
+      notes.set(cause, installedText(draftId));
     }
     // Every note is different text - no two causes are described the same
     // way.
@@ -93,15 +108,14 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
 
   it("the three most user-visible causes name their own, correct fact (DRIVE RED)", async () => {
     async function noteFor(cause: DroppedImageCause): Promise<string> {
-      const snapshot = await buildTextOnlyPromptHandoff({
-        id: `id-${cause}`,
-        createdAt: 1,
+      const { draftId } = await buildTextOnlyPromptHandoff({
         content: contentWithOneImage("hello"),
         reason: "Reason.",
         browserAnnotations: [],
         cause,
+        stillCurrent: () => true,
       });
-      return JSON.stringify(snapshot.entry.content);
+      return installedText(draftId);
     }
     expect(await noteFor("missing")).toContain(
       "the bytes are no longer on this device",
@@ -110,25 +124,57 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
       "the bytes could not be read in time",
     );
     expect(await noteFor("capacity")).toContain(
-      "it did not fit in the prompt stash",
+      "it did not fit in this window's image budget",
     );
   });
 
   it("the text and the qualification both survive alongside the dropped-image note", async () => {
     const TEXT = "the words the user actually typed";
-    const snapshot = await buildTextOnlyPromptHandoff({
-      id: "id-survive",
-      createdAt: 1,
+    const { draftId } = await buildTextOnlyPromptHandoff({
       content: contentWithOneImage(TEXT),
       reason: "Reason.",
       browserAnnotations: [],
       cause: "capacity",
+      stillCurrent: () => true,
     });
-    const text = JSON.stringify(snapshot.entry.content);
+    const text = installedText(draftId);
     expect(text).toContain(TEXT);
     expect(text).toContain("Reason.");
-    expect(snapshot.entry.blobHashes).toEqual([]);
     expect(text).not.toContain("hash");
+    expect(text).not.toContain("imageAttachment");
+  });
+
+  it("installs a CLOSED draft and leaves the active one alone", async () => {
+    // The row is a put-away draft, not a tab the disposal steals focus into:
+    // the handoff runs during teardown, when the user is looking at something
+    // else entirely.
+    useLandingDraftStore.setState({ activeDraftId: "somebody-elses-draft" });
+    const { draftId } = await buildTextOnlyPromptHandoff({
+      content: contentWithOneImage("hello"),
+      reason: "Reason.",
+      browserAnnotations: [],
+      cause: "capacity",
+      stillCurrent: () => true,
+    });
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((row) => row.id === draftId);
+    expect(draft?.closed).toBe(true);
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(
+      "somebody-elses-draft",
+    );
+  });
+
+  it("installs NOTHING once the identity fence has moved (DRIVE RED)", async () => {
+    const { draftId } = await buildTextOnlyPromptHandoff({
+      content: contentWithOneImage("a prompt from the outgoing account"),
+      reason: "Reason.",
+      browserAnnotations: [],
+      cause: "capacity",
+      stillCurrent: () => false,
+    });
+    expect(draftId).toBeNull();
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
   });
 
   it("states a dropped annotation WITHOUT borrowing the image's cause (DRIVE RED)", async () => {
@@ -136,20 +182,19 @@ describe("R6F3: DroppedImageCause produces a distinct, truthful note per cause",
     // image. Reusing it for the sidecar blames the crop for something that
     // did not happen to it: under `missing`, the image resolver aborts before
     // annotation capture is ever reached, so the crop is untouched and
-    // perfectly readable - yet the entry would announce that its bytes are no
-    // longer on this device. Records are dropped here because this path
-    // carries no blobs at all, which is a structural decision rather than a
-    // failure of these bytes.
+    // perfectly readable - yet the draft would announce that its bytes are no
+    // longer on this device. Records are dropped here because a landing draft
+    // has no annotation sidecar at all, which is a structural decision rather
+    // than a failure of these bytes.
     for (const cause of CAUSES) {
-      const snapshot = await buildTextOnlyPromptHandoff({
-        id: `id-annotation-${cause}`,
-        createdAt: 1,
+      const { draftId } = await buildTextOnlyPromptHandoff({
         content: contentWithOneImage("hello"),
         browserAnnotations: [annotationRecord("crop-hash")],
         reason: "Not accepted.",
         cause,
+        stillCurrent: () => true,
       });
-      const text = JSON.stringify(snapshot.entry.content);
+      const text = installedText(draftId);
       expect(text).toContain("A browser annotation was not saved with it.");
       // The image sentence still carries its own cause; the annotation one
       // must not inherit it.

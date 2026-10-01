@@ -2,11 +2,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { FallbackGraceCard } from "@/components/chat/fallback/fallback-grace-card";
-import { FallbackWaitingCard } from "@/components/chat/fallback/fallback-waiting-card";
-import { FallbackWaitResumedMarker } from "@/components/chat/fallback/fallback-notice-attribution";
+import { RoutingCard } from "@/components/chat/fallback/routing-card";
 import { ProviderNoticeSegment } from "@/components/chat/segments/provider-notice-segment";
-import { ErrorSegment } from "@/components/chat/segments/error-segment";
 import { FALLBACK_SETTINGS_SECTION_ID } from "@/lib/settings-sections";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
@@ -22,6 +19,30 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
+}));
+
+// `useFallbackModelLabels` alone, as a slug passthrough - the degradation the
+// resolver falls back to with no catalogue. None of this file's cases assert a
+// model name (only `openFallbackSettings` navigation is under test here).
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
+// The chooser has its own suite and needs a host runtime this file has no
+// provider for; the gear under test does not touch it.
+vi.mock("@/components/chat/fallback/routing-destination-picker", () => ({
+  RoutingDestinationPicker: () => null,
 }));
 
 vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
@@ -50,6 +71,10 @@ function assertSettingsLandedOnTabHost(): void {
   expect(mocks.openSettings).toHaveBeenCalledWith({
     section: FALLBACK_SETTINGS_SECTION_ID,
     resetToGeneral: false,
+    tab: null,
+    draft: null,
+    // The host travels through the scope store above, not the intent.
+    hostId: null,
   });
 }
 
@@ -65,120 +90,108 @@ describe("fallback settings links carry the tab host", () => {
     useSettingsHostScopeStore.getState().setScopedHostId(null);
   });
 
-  it("opens Fallback settings on the tab host from the grace card", () => {
-    render(
-      <TabHostProvider hostId={TAB_HOST}>
-        <FallbackGraceCard
-          pending={pendingFallback({
-            state: "hold",
-            reason: "rate_limit",
-            failedTuple: FAILED_CLAUDE_TUPLE,
-            targetTuple: TARGET_CODEX_TUPLE,
-            impendingAction: null,
-            deadline: Date.now() + 12_000,
-            attempt: 1,
-            maxAttempts: 3,
-            queuedItemsMoving: 0,
-            siblingSwitching: 0,
-            traversalId: "traversal-settings",
-            revision: 1,
-          })}
-          client={null}
-          chatId="chat-settings"
-          epicId="epic-settings"
-          hostId={TAB_HOST}
-          canAct
-          menu={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
-    assertSettingsLandedOnTabHost();
-  });
-
-  it("opens Fallback settings on the tab host from the waiting card", () => {
-    render(
-      <TabHostProvider hostId={TAB_HOST}>
-        <FallbackWaitingCard
-          pending={pendingFallback({
-            state: "waiting",
-            reason: "rate_limit",
-            failedTuple: FAILED_CLAUDE_TUPLE,
-            targetTuple: null,
-            impendingAction: null,
-            deadline: Date.now() + 60_000,
-            attempt: 1,
-            maxAttempts: 1,
-            queuedItemsMoving: 0,
-            siblingSwitching: 0,
-            traversalId: "traversal-settings",
-            revision: 1,
-          })}
-          client={null}
-          chatId="chat-settings"
-          epicId="epic-settings"
-          hostId={TAB_HOST}
-          canAct
-          menu={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
-    assertSettingsLandedOnTabHost();
-  });
-
-  it("opens Fallback settings on the tab host from an expanded fallback_applied notice", () => {
-    render(
-      <TabHostProvider hostId={TAB_HOST}>
-        <ProviderNoticeSegment
-          status="completed"
-          noticeKind="fallback_applied"
-          tone="info"
-          title="Switched providers"
-          message="Moved to Codex."
-          details={DETAILS}
-          findUnitId={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByRole("button"));
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
-    assertSettingsLandedOnTabHost();
-  });
-
-  it("opens Fallback settings on the tab host from the resumed-turn marker", () => {
-    render(
-      <TabHostProvider hostId={TAB_HOST}>
-        <FallbackWaitResumedMarker
-          title="Resumed after waiting"
-          message="The limit reset."
-          details={DETAILS}
-          findUnitId={null}
-        />
-      </TabHostProvider>,
-    );
-    fireEvent.click(screen.getByText("Resumed after waiting"));
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
-    assertSettingsLandedOnTabHost();
-  });
-
-  it("opens Fallback settings on the tab host from an auth error row", () => {
+  it("opens Fallback settings on the tab host from the routing card's gear (countdown)", () => {
     render(
       <TooltipProvider>
         <TabHostProvider hostId={TAB_HOST}>
-          <ErrorSegment
-            turnId={null}
-            message="Signed out of Claude Code."
-            code="auth"
-            recoverable
-            findUnitId={null}
-            harnessId="claude"
-            failure={{ reason: "auth" }}
+          <RoutingCard
+            state={{
+              kind: "countdown",
+              pending: pendingFallback({
+                state: "hold",
+                reason: "rate_limit",
+                failedTuple: FAILED_CLAUDE_TUPLE,
+                targetTuple: TARGET_CODEX_TUPLE,
+                impendingAction: null,
+                deadline: Date.now() + 12_000,
+                attempt: 1,
+                maxAttempts: 3,
+                queuedItemsMoving: 0,
+                siblingSwitching: 0,
+                traversalId: "traversal-settings",
+                revision: 1,
+              }),
+            }}
+            client={null}
+            chatId="chat-settings"
+            epicId="epic-settings"
+            hostId={TAB_HOST}
+            canAct
           />
         </TabHostProvider>
       </TooltipProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Fallback settings" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Model routing settings" }),
+    );
     assertSettingsLandedOnTabHost();
   });
+
+  it("opens Fallback settings on the tab host from the routing card's gear (waiting)", () => {
+    render(
+      <TooltipProvider>
+        <TabHostProvider hostId={TAB_HOST}>
+          <RoutingCard
+            state={{
+              kind: "waiting",
+              pending: pendingFallback({
+                state: "waiting",
+                reason: "rate_limit",
+                failedTuple: FAILED_CLAUDE_TUPLE,
+                targetTuple: null,
+                impendingAction: null,
+                deadline: Date.now() + 60_000,
+                attempt: 1,
+                maxAttempts: 1,
+                queuedItemsMoving: 0,
+                siblingSwitching: 0,
+                traversalId: "traversal-settings",
+                revision: 1,
+              }),
+            }}
+            client={null}
+            chatId="chat-settings"
+            epicId="epic-settings"
+            hostId={TAB_HOST}
+            canAct
+          />
+        </TabHostProvider>
+      </TooltipProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Model routing settings" }),
+    );
+    assertSettingsLandedOnTabHost();
+  });
+
+  // Clutter cuts (2026-09-27): the notice and the resumed marker no longer
+  // carry a "Model routing" text action; the gear on the live cards above is
+  // the one way to settings, and neither notice opens settings on its own.
+  it.each(["fallback_applied", "fallback_wait_resumed"] as const)(
+    "offers no settings action from an expanded %s notice",
+    (noticeKind) => {
+      render(
+        <TabHostProvider hostId={TAB_HOST}>
+          <ProviderNoticeSegment
+            status="completed"
+            noticeKind={noticeKind}
+            tone="info"
+            title="Switched providers"
+            message="Moved to Codex."
+            details={DETAILS}
+            findUnitId={null}
+          />
+        </TabHostProvider>,
+      );
+      fireEvent.click(screen.getByRole("button"));
+      // The details did open, so the absence below is not an unopened box.
+      expect(screen.getByText("Claude Code → Codex")).toBeDefined();
+      expect(
+        screen.queryByRole("button", { name: "Model routing" }),
+      ).toBeNull();
+      expect(screen.queryByText("Model routing")).toBeNull();
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+      expect(mocks.openSettings).not.toHaveBeenCalled();
+    },
+  );
 });

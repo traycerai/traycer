@@ -10,6 +10,27 @@
         android:theme="@style/AppTheme">
 
         <!--
+            Android 16 (targetSdk 36, which is what variables.gradle sets)
+            ignores android:screenOrientation outright on any display at least
+            sw600dp - so without this the portrait lock below silently does
+            nothing on a tablet while still holding on a phone. This property
+            is the documented opt-out, and it is deliberately at application
+            level rather than on the activity: the app has one activity and one
+            layout, so there is nothing to stage.
+
+            TEMPORARY BY DESIGN. Google removes it at targetSdk 37, after which
+            tablets rotate freely again and this element stops doing anything.
+            That is an acceptable end state rather than something to solve
+            later: the phone layout is the only layout the app has and it
+            already survives rotation, which is how Android shipped until this
+            lock was added. When the pin moves to 37, delete this and the
+            android:screenOrientation below together.
+        -->
+        <property
+            android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+            android:value="true" />
+
+        <!--
             adjustResize is the Android half of the Keyboard config in
             capacitor.config.ts: `resize: Native` and `autoBackdropColor` are
             BOTH iOS-only options, so without this the platform picks its own
@@ -24,6 +45,7 @@
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
 

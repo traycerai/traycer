@@ -8,6 +8,7 @@ import {
   DRAFT_HEAD_DIALECT,
   draftHeadSchemaVersionSchema,
 } from "@traycer/protocol/persistence/draft/version";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -21,20 +22,26 @@ const jsonContentSchema = getRecordSchema(
  * composer draft is not stored under its epic (collaborators would see
  * unsent text). Null means "this kind has no such target".
  */
-export const draftTargetSchema = z.object({
-  epicId: z.string().min(1).nullable(),
-  chatId: z.string().min(1).nullable(),
-  blockId: z.string().min(1).nullable(),
-});
+export const draftTargetSchema = lazySchema(() =>
+  z.object({
+    epicId: z.string().min(1).nullable(),
+    chatId: z.string().min(1).nullable(),
+    blockId: z.string().min(1).nullable(),
+  }),
+);
 export type DraftTarget = z.infer<typeof draftTargetSchema>;
 
-export const draftSelectionSchema = z.object({
-  from: z.number().int().nonnegative(),
-  to: z.number().int().nonnegative(),
-});
+export const draftSelectionSchema = lazySchema(() =>
+  z.object({
+    from: z.number().int().nonnegative(),
+    to: z.number().int().nonnegative(),
+  }),
+);
 export type DraftSelection = z.infer<typeof draftSelectionSchema>;
 
-export const draftComposerModeSchema = z.enum(["chat", "terminal"]);
+export const draftComposerModeSchema = lazySchema(() =>
+  z.enum(["chat", "terminal"]),
+);
 export type DraftComposerMode = z.infer<typeof draftComposerModeSchema>;
 
 /**
@@ -55,14 +62,16 @@ export type DraftComposerMode = z.infer<typeof draftComposerModeSchema>;
  * There are no legacy draft rows to accommodate, so `.default(null)` would
  * only hide an omitting writer as a null-clobber.
  */
-export const draftComposerPortableSchema = z.object({
-  content: jsonContentSchema,
-  selection: draftSelectionSchema.nullable(),
-  runSettings: chatRunSettingsStrictSchema.nullable(),
-  composerMode: draftComposerModeSchema,
-  blobHashes: z.array(sha256HexSchema),
-  closed: z.boolean().default(false),
-});
+export const draftComposerPortableSchema = lazySchema(() =>
+  z.object({
+    content: jsonContentSchema,
+    selection: draftSelectionSchema.nullable(),
+    runSettings: chatRunSettingsStrictSchema.nullable(),
+    composerMode: draftComposerModeSchema,
+    blobHashes: z.array(sha256HexSchema),
+    closed: z.boolean().default(false),
+  }),
+);
 export type DraftComposerPortable = z.infer<typeof draftComposerPortableSchema>;
 
 /**
@@ -73,10 +82,11 @@ export type DraftComposerPortable = z.infer<typeof draftComposerPortableSchema>;
  * whole-document LWW that write replaces a retained `closed: true` row.
  * Every write branch names the state explicitly.
  */
-export const draftComposerPortableWriteSchema =
+export const draftComposerPortableWriteSchema = lazySchema(() =>
   draftComposerPortableSchema.extend({
     closed: z.boolean(),
-  });
+  }),
+);
 export type DraftComposerPortableWrite = z.infer<
   typeof draftComposerPortableWriteSchema
 >;
@@ -96,19 +106,23 @@ export type DraftComposerPortableWrite = z.infer<
  * unreleased and still pinned at {1,0}, so this is an in-place dialect edit,
  * not a new minor.
  */
-export const draftInterviewAnswerSchema = z.object({
-  questionIdentity: z.string().min(1).optional(),
-  selected: z.array(z.string()),
-  selectedOptionIndices: z.array(z.number().int().nonnegative()).optional(),
-  otherText: z.string(),
-  otherSelected: z.boolean(),
-});
+export const draftInterviewAnswerSchema = lazySchema(() =>
+  z.object({
+    questionIdentity: z.string().min(1).optional(),
+    selected: z.array(z.string()),
+    selectedOptionIndices: z.array(z.number().int().nonnegative()).optional(),
+    otherText: z.string(),
+    otherSelected: z.boolean(),
+  }),
+);
 export type DraftInterviewAnswer = z.infer<typeof draftInterviewAnswerSchema>;
 
-export const draftInterviewPortableSchema = z.object({
-  pageIndex: z.number().int().nonnegative(),
-  answers: z.array(draftInterviewAnswerSchema),
-});
+export const draftInterviewPortableSchema = lazySchema(() =>
+  z.object({
+    pageIndex: z.number().int().nonnegative(),
+    answers: z.array(draftInterviewAnswerSchema),
+  }),
+);
 export type DraftInterviewPortable = z.infer<
   typeof draftInterviewPortableSchema
 >;
@@ -118,25 +132,27 @@ export type DraftInterviewPortable = z.infer<
  * delete). `createdAt` is the capture time; `blobHashes` are the same
  * sha256 identity the local stash repository already uses.
  */
-export const draftStashPortableSchema = z.object({
-  content: jsonContentSchema,
-  blobHashes: z.array(sha256HexSchema),
-  createdAt: z.number().int().nonnegative(),
-  /**
-   * Browser-annotation sidecar records captured with the prompt.
-   *
-   * A crop's provenance - the page, the comment, the elements it marked -
-   * lives beside the content, not in it: the image node carries only a hash.
-   * Stashing the prompt without these keeps the picture and loses everything
-   * that made it evidence, so they travel with the entry. Their `imageHash`
-   * is always one of `blobHashes`, including for a crop the content itself no
-   * longer references.
-   *
-   * `.default([])` so entries written before this field parse cleanly, same as
-   * `droppedElementCount` inside the record.
-   */
-  annotations: z.array(browserAnnotationRecordSchema).default([]),
-});
+export const draftStashPortableSchema = lazySchema(() =>
+  z.object({
+    content: jsonContentSchema,
+    blobHashes: z.array(sha256HexSchema),
+    createdAt: z.number().int().nonnegative(),
+    /**
+     * Browser-annotation sidecar records captured with the prompt.
+     *
+     * A crop's provenance - the page, the comment, the elements it marked -
+     * lives beside the content, not in it: the image node carries only a hash.
+     * Stashing the prompt without these keeps the picture and loses everything
+     * that made it evidence, so they travel with the entry. Their `imageHash`
+     * is always one of `blobHashes`, including for a crop the content itself no
+     * longer references.
+     *
+     * `.default([])` so entries written before this field parse cleanly, same as
+     * `droppedElementCount` inside the record.
+     */
+    annotations: z.array(browserAnnotationRecordSchema).default([]),
+  }),
+);
 export type DraftStashPortable = z.infer<typeof draftStashPortableSchema>;
 
 /**
@@ -145,26 +161,30 @@ export type DraftStashPortable = z.infer<typeof draftStashPortableSchema>;
  * the snapshot rather than trusting foreign paths. Null only for a
  * legacy row that predates host stamping.
  */
-export const draftWorkspaceFolderInfoSchema = z.object({
-  path: z.string().min(1),
-  name: z.string().min(1),
-  repoIdentifier: z
-    .object({
-      owner: z.string().min(1),
-      repo: z.string().min(1),
-    })
-    .nullable(),
-  hostId: z.string().min(1).nullable(),
-});
+export const draftWorkspaceFolderInfoSchema = lazySchema(() =>
+  z.object({
+    path: z.string().min(1),
+    name: z.string().min(1),
+    repoIdentifier: z
+      .object({
+        owner: z.string().min(1),
+        repo: z.string().min(1),
+      })
+      .nullable(),
+    hostId: z.string().min(1).nullable(),
+  }),
+);
 export type DraftWorkspaceFolderInfo = z.infer<
   typeof draftWorkspaceFolderInfoSchema
 >;
 
-export const draftWorkspaceSnapshotSchema = z.object({
-  folders: z.array(z.string().min(1)),
-  folderInfoByPath: z.record(z.string(), draftWorkspaceFolderInfoSchema),
-  primaryPath: z.string().min(1).nullable(),
-});
+export const draftWorkspaceSnapshotSchema = lazySchema(() =>
+  z.object({
+    folders: z.array(z.string().min(1)),
+    folderInfoByPath: z.record(z.string(), draftWorkspaceFolderInfoSchema),
+    primaryPath: z.string().min(1).nullable(),
+  }),
+);
 export type DraftWorkspaceSnapshot = z.infer<
   typeof draftWorkspaceSnapshotSchema
 >;
@@ -174,10 +194,12 @@ export type DraftWorkspaceSnapshot = z.infer<
  * the host-tagged snapshot (decision log #11); a foreign claim must not
  * project it as universal.
  */
-export const draftHostLocalSchema = z.object({
-  hostId: z.string().min(1),
-  workspace: draftWorkspaceSnapshotSchema.nullable(),
-});
+export const draftHostLocalSchema = lazySchema(() =>
+  z.object({
+    hostId: z.string().min(1),
+    workspace: draftWorkspaceSnapshotSchema.nullable(),
+  }),
+);
 export type DraftHostLocal = z.infer<typeof draftHostLocalSchema>;
 
 /**
@@ -186,23 +208,19 @@ export type DraftHostLocal = z.infer<typeof draftHostLocalSchema>;
  * new-chat / chat-composer are all `draft` and keep their screen identity
  * in `surfaceKind`.
  */
-export const draftDialectKindSchema = z.enum([
-  "draft",
-  "stash-entry",
-  "interview",
-]);
+export const draftDialectKindSchema = lazySchema(() =>
+  z.enum(["draft", "stash-entry", "interview"]),
+);
 export type DraftDialectKind = z.infer<typeof draftDialectKindSchema>;
 
-export const draftSurfaceKindSchema = z.enum([
-  "landing",
-  "new-chat",
-  "chat-composer",
-]);
+export const draftSurfaceKindSchema = lazySchema(() =>
+  z.enum(["landing", "new-chat", "chat-composer"]),
+);
 export type DraftSurfaceKind = z.infer<typeof draftSurfaceKindSchema>;
 
 const draftHeadCommonFields = {
-  dialect: z.literal(DRAFT_HEAD_DIALECT),
-  lastTouchedAt: z.number().int().nonnegative(),
+  dialect: lazySchema(() => z.literal(DRAFT_HEAD_DIALECT)),
+  lastTouchedAt: lazySchema(() => z.number().int().nonnegative()),
   target: draftTargetSchema,
   hostLocal: draftHostLocalSchema,
 } as const;
@@ -211,27 +229,29 @@ const draftHeadCommonFields = {
  * Writer-side payload: pinned `schemaVersion`, no `parts` key (that key is
  * reserved for the tenant envelope the document codec derives).
  */
-export const draftHeadSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ...draftHeadCommonFields,
-    schemaVersion: draftHeadSchemaVersionSchema,
-    kind: z.literal("draft"),
-    surfaceKind: draftSurfaceKindSchema,
-    portable: draftComposerPortableSchema,
-  }),
-  z.object({
-    ...draftHeadCommonFields,
-    schemaVersion: draftHeadSchemaVersionSchema,
-    kind: z.literal("interview"),
-    portable: draftInterviewPortableSchema,
-  }),
-  z.object({
-    ...draftHeadCommonFields,
-    schemaVersion: draftHeadSchemaVersionSchema,
-    kind: z.literal("stash-entry"),
-    portable: draftStashPortableSchema,
-  }),
-]);
+export const draftHeadSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...draftHeadCommonFields,
+      schemaVersion: draftHeadSchemaVersionSchema,
+      kind: z.literal("draft"),
+      surfaceKind: draftSurfaceKindSchema,
+      portable: draftComposerPortableSchema,
+    }),
+    z.object({
+      ...draftHeadCommonFields,
+      schemaVersion: draftHeadSchemaVersionSchema,
+      kind: z.literal("interview"),
+      portable: draftInterviewPortableSchema,
+    }),
+    z.object({
+      ...draftHeadCommonFields,
+      schemaVersion: draftHeadSchemaVersionSchema,
+      kind: z.literal("stash-entry"),
+      portable: draftStashPortableSchema,
+    }),
+  ]),
+);
 export type DraftHeadRecord = z.infer<typeof draftHeadSchema>;
 
 /**

@@ -81,11 +81,11 @@ function createMenuFixture(
 
 function renderBootMenus(
   fixture: MenuFixture,
-  onOpenSettings: () => void,
+  onMenuOpenSettings: () => void,
 ): RenderResult {
   return render(
     <RunnerHostProvider runnerHost={fixture.host}>
-      <BootDesktopMenus onOpenSettings={onOpenSettings} />
+      <BootDesktopMenus onMenuOpenSettings={onMenuOpenSettings} />
     </RunnerHostProvider>,
   );
 }
@@ -100,12 +100,12 @@ describe("<BootDesktopMenus />", () => {
   for (const platform of ["linux", "win32"] as const) {
     it(`handles settings and support dialogs on ${platform} before HostRuntimeProvider mounts`, () => {
       const fixture = createMenuFixture(platform);
-      const onOpenSettings = vi.fn();
-      renderBootMenus(fixture, onOpenSettings);
+      const onMenuOpenSettings = vi.fn();
+      renderBootMenus(fixture, onMenuOpenSettings);
 
       expect(fixture.listenerCount()).toBe(1);
       act(() => fixture.emit("app.openSettings"));
-      expect(onOpenSettings).toHaveBeenCalledOnce();
+      expect(onMenuOpenSettings).toHaveBeenCalledOnce();
 
       act(() => fixture.emit("app.openLogs"));
       expect(useDesktopDialogStore.getState().activeDialog).toBe("logs");
@@ -141,7 +141,7 @@ describe("<BootDesktopMenus />", () => {
       expect(fixture.listenerCount()).toBe(1);
       view.rerender(
         <RunnerHostProvider runnerHost={fixture.host}>
-          <BootDesktopMenus onOpenSettings={() => undefined} />
+          <BootDesktopMenus onMenuOpenSettings={() => undefined} />
         </RunnerHostProvider>,
       );
       expect(fixture.listenerCount()).toBe(1);

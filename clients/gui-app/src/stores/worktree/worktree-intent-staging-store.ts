@@ -1475,6 +1475,73 @@ export function readStagedWorktreeIntent(
 }
 
 /**
+ * Whether the slot holds a pick that is NOT the one being asked about.
+ *
+ * The question a dispatch whose intent came from SOMEWHERE ELSE has to ask
+ * before consuming. `consumeForDispatch` takes the whole slot unconditionally,
+ * which is right for a send whose intent IS the slot's pick (every
+ * `sendMessage`), and wrong for one carrying an intent of its own: it would
+ * swallow a choice the user made while that dispatch was waiting, and then -
+ * because the consume writes the mark that authorizes a hand-back - let the
+ * older intent be restored over it on a rejection.
+ *
+ * An EMPTY slot does not differ. There is no competing choice to lose, so the
+ * caller may claim it and own its hand-back; that is the ordinary case for a
+ * freshly created chat, whose owner slot is written only by a user pick
+ * (`host-workspace-selector.tsx`'s `emit`) and is otherwise untouched.
+ *
+ * "Differs" is STRUCTURAL and whole-intent, with no partial match. A
+ * `WorktreeIntent` is one decision per workspace folder taken together, and the
+ * slot can only be consumed whole, so a pick overlapping this one on some
+ * folders and not others is a different choice for at least one folder and
+ * there is no way to take only the agreeing half. The comparison is a plain
+ * deep equality rather than a hand-rolled walk of the union so that a new
+ * variant or field in `worktreeFolderIntentSchema` cannot silently start
+ * comparing equal - the failure mode of a hand-rolled one is to MISS a
+ * difference, which is the direction that loses the user's pick.
+ */
+export function stagedWorktreeIntentDiffersFrom(
+  key: WorktreeStagingKey,
+  intent: WorktreeIntent,
+): boolean {
+  const staged = readStagedWorktreeIntent(key);
+  if (staged === null) return false;
+  return !jsonValuesEqual(staged, intent);
+}
+
+function isUnknownArray(value: object): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
+function isUnknownRecord(value: object): value is Record<string, unknown> {
+  return !Array.isArray(value);
+}
+
+/**
+ * Deep equality over parsed-JSON values. `WorktreeIntent` is exactly that -
+ * every field is a string, boolean, array or plain object out of Zod - so
+ * structural identity is the whole question, and an absent key is genuinely
+ * distinct from a present one (the `new`-branch union has an arm carrying
+ * `collision`/`retryIdentity` and an arm without).
+ */
+function jsonValuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object") return false;
+  if (a === null || b === null) return false;
+  if (isUnknownArray(a) || isUnknownArray(b)) {
+    if (!isUnknownArray(a) || !isUnknownArray(b)) return false;
+    if (a.length !== b.length) return false;
+    return a.every((item, index) => jsonValuesEqual(item, b[index]));
+  }
+  if (!isUnknownRecord(a) || !isUnknownRecord(b)) return false;
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  return aKeys.every(
+    (aKey) => Object.hasOwn(b, aKey) && jsonValuesEqual(a[aKey], b[aKey]),
+  );
+}
+
+/**
  * Whether ANY host's copy of this slot holds a staged intent - the read that
  * matches `clearForAllHosts`'s reach.
  *

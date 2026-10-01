@@ -1,0 +1,181 @@
+---
+title: "Artifacts"
+description: "Browse, organize, and track the specs, tickets, stories, and reviews in a Task."
+---
+
+import { FeatureVideo } from "/snippets/feature-video.jsx";
+
+Artifacts are durable documents inside a Task. They keep plans, work items, and review findings where you and your agents can both find them, instead of leaving them buried in a chat transcript.
+
+The **Artifacts** panel shows the Task's artifact tree. Open an artifact to read or edit it in a tile. See [Editing artifacts](/panels/artifacts/editing).
+
+## Artifact Types
+
+| Type       | Use it for                                                                               | Status |
+| ---------- | ---------------------------------------------------------------------------------------- | ------ |
+| **Spec**   | Durable context: goals, requirements, constraints, decisions, plans, and walkthroughs.   | No     |
+| **Ticket** | A unit of implementation work: what needs to change and how to verify it.                | Yes    |
+| **Story**  | A group of related artifacts, such as the tickets and specs that serve one user journey. | Yes    |
+| **Review** | Review findings, critique, decisions, and follow-ups.                                    | No     |
+
+Specs and reviews are shared context. Tickets and stories track work, so they carry a status.
+
+## Hierarchy
+
+Artifacts nest under other artifacts, and any type can hold any other type. A common shape:
+
+```text
+Task
+└─ Spec
+   ├─ Ticket
+   ├─ Story
+   │  └─ Ticket
+   └─ Review
+```
+
+Only artifacts nest in this tree. Agents are listed in the [Agents](/panels/agents) panel and can't be placed under an artifact.
+
+Drag an artifact in the panel to change its parent. An artifact can't be moved into its own subtree.
+
+## Status
+
+Tickets and stories have one of three statuses. New tickets and stories start as **Todo**.
+
+| Status          | Meaning                          | Value in the file |
+| --------------- | -------------------------------- | ----------------- |
+| **Todo**        | Work exists but has not started. | `0`               |
+| **In Progress** | Work is underway.                | `1`               |
+| **Done**        | Work is complete.                | `2`               |
+
+Change the status with the status pill at the top of an open ticket or story. Viewers see the pill but can't change it. The value column is what appears in the artifact's file on disk; see [Artifacts on Disk](#artifacts-on-disk).
+
+<FeatureVideo src="https://assets.traycer.ai/docs/videos/artifact-status.mp4" label="Change a ticket status" />
+
+## Panel Controls
+
+The panel header has three controls:
+
+| Control                       | What it does                                                                                   |
+| ----------------------------- | ---------------------------------------------------------------------------------------------- |
+| **Add artifact** (+)          | Creates a top-level artifact: **New ticket**, **New spec**, **New story**, or **New review**.  |
+| **More artifact actions** (⋯) | Opens **Search artifacts**, **Deleted artifacts**, **Collapse all**, and **Select artifacts**. |
+| **Filter artifacts**          | Sets the ordering and filters, described below.                                                |
+
+Each row also has its own controls when you hover it:
+
+- **Add child artifact** (+) creates a new artifact nested under that row, with the same four types.
+- The row's **⋯** menu, also available by right-clicking the row, has **Export as Markdown**, **Export as PDF**, **Rename**, **Copy ID**, and **Delete**.
+
+### Filter and Order
+
+**Filter artifacts** opens these options:
+
+| Option         | Choices                                                                           |
+| -------------- | --------------------------------------------------------------------------------- |
+| **Ordering**   | **Last updated**, **Date created**, or **Name**; **Descending** or **Ascending**. |
+| **Status**     | **Todo**, **In Progress**, **Done**.                                              |
+| **Type**       | **Spec**, **Ticket**, **Story**, **Review**.                                      |
+| **Read state** | **All**, **Unread**, **Read**.                                                    |
+
+The menu also has **Mark all as read** and, once you have changed anything, **Reset view**.
+
+Specs and reviews have no status, so any **Status** filter hides them.
+
+### Read and Unread
+
+A thin bar beside a row marks an artifact that changed since you last opened it (**Unread artifact**). A collapsed row whose children include unread artifacts shows a fainter bar (**Contains unread artifacts**). Opening an artifact marks it read.
+
+Read state is kept per device, so each collaborator and each of your devices has its own view of what's new.
+
+### Search
+
+**Search artifacts** in the ⋯ menu replaces the header with a search field. Typing while the tree has focus starts a search too, and Esc closes it.
+
+Search matches artifact titles, folder paths, and body text. It reads the Task's files on disk, so it isn't offered to Viewers, or in a Task with no artifacts yet.
+
+### Select Several Artifacts
+
+Choose **Select artifacts** from the ⋯ menu, or ⌘-click / Ctrl-click rows. The header then shows how many are selected, with **Select all**, **Cancel selection**, an export button, and a delete button. See [Export](/panels/artifacts/export).
+
+## Working With Artifacts
+
+| Action            | How                                                                                                  |
+| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| **Create**        | **Add artifact** (+) in the header, or **Add child artifact** (+) on a row.                          |
+| **Rename**        | **Rename** in the row menu. The title shows in the panel, the tab, and references to the artifact.   |
+| **Move**          | Drag the row onto its new parent.                                                                    |
+| **Change status** | Use the status pill at the top of an open ticket or story.                                           |
+| **Comment**       | Select text in the artifact and add a thread. See [Comments](/panels/comments).                      |
+| **Export**        | **Export as Markdown** or **Export as PDF** in the row menu. See [Export](/panels/artifacts/export). |
+| **Delete**        | **Delete** in the row menu. This also deletes the artifacts nested under it.                         |
+
+Creating, editing, moving, and deleting artifacts needs the **Editor** or **Owner** role. See [Roles](/panels/sharing#roles).
+
+### Deleting and Restoring
+
+Deleting an artifact removes it, and every artifact nested under it, from the tree. You can bring deleted artifacts back from **Deleted artifacts** in the panel's ⋯ menu. See [Version history and recovery](/panels/artifacts/version-history).
+
+## Artifacts on Disk
+
+The live document you edit in the app is the primary copy of each artifact. The host that has the Task open also keeps a Markdown copy of every artifact on disk and syncs it both ways: edits in the app are written to the file, and edits to the file flow back into the app.
+
+The copy exists only for people with the **Editor** or **Owner** role. Viewers have no files on disk.
+
+```text
+~/.traycer/epics/<task-id>/artifacts/
+└─ <artifact-folder>/
+   ├─ index.md
+   ├─ .comments/
+   │  └─ <thread-id>.md
+   └─ <child-folder>/
+      └─ index.md
+```
+
+- Each artifact is a folder, named after the artifact's title when it was created, that holds an `index.md`.
+- Nested artifacts are nested folders.
+- A new folder with an `index.md` becomes a new artifact in the Task. This is how agents create artifacts.
+
+Each `index.md` starts with frontmatter:
+
+```markdown
+---
+title: "Offline mode"
+kind: ticket
+status: 1
+comments: 2 open, 1 resolved
+---
+```
+
+| Field      | Meaning                                                                                         |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| `title`    | The artifact's title.                                                                           |
+| `kind`     | `spec`, `ticket`, `story`, or `review`.                                                         |
+| `status`   | Tickets and stories only: `0` Todo, `1` In Progress, `2` Done.                                  |
+| `comments` | Written by Traycer: `none`, or counts such as `2 open, 1 resolved`. It can lag behind the app. |
+
+Comment threads are copied into a hidden `.comments/` folder beside the artifact, one file per thread. Agents read those files, and resolve a thread by changing its `status:` line. See [Comments and Agents](/panels/comments#comments-and-agents).
+
+Because the files are plain Markdown, you and your agents can search and edit them with ordinary tools.
+
+## More on Artifacts
+
+<CardGroup cols={2}>
+  <Card title="Editing" icon="pen" href="/panels/artifacts/editing">
+    The editor toolbar, links, images, and sending passages to a chat.
+  </Card>
+  <Card title="Version history and recovery" icon="clock-rotate-left" href="/panels/artifacts/version-history">
+    Compare and restore earlier versions, and bring back deleted artifacts.
+  </Card>
+  <Card title="Export" icon="file-export" href="/panels/artifacts/export">
+    Save artifacts as Markdown or PDF, one at a time or as a ZIP.
+  </Card>
+  <Card title="Diagrams" icon="diagram-project" href="/panels/artifacts/diagrams">
+    Mermaid diagrams that render inline.
+  </Card>
+  <Card title="Wireframes" icon="window-maximize" href="/panels/artifacts/wireframes">
+    Live HTML previews of proposed screens.
+  </Card>
+  <Card title="Artifact workflow" icon="list-check" href="/concepts/artifact-workflow">
+    The skills agents use to plan, build, and review with artifacts.
+  </Card>
+</CardGroup>

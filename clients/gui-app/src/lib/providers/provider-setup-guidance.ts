@@ -4,13 +4,11 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  providerHostBlockLabel,
   providerSupportsTerminalLogin,
-  providerTerminalLoginPackBlock,
+  providerTerminalLoginHostBlock,
+  type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
-import {
-  providerPackPreparingLabel,
-  type ProviderPackPreparing,
-} from "@/components/providers/provider-pack-readiness";
 import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-provider-terminal-login-scope-support";
 
 /**
@@ -27,23 +25,27 @@ import type { ProviderTerminalLoginScopeSupport } from "@/hooks/providers/use-pr
  * default, overridden per provider where that framing is wrong.
  *
  * Two kinds of override. `TERMINAL_SIGN_IN_COPY` re-words the generic
- * sign-in for the launch-the-CLI providers: the default says the terminal
- * "prints a sign-in code", but what actually opens is the CLI's own UI, and
- * a user left in front of a TUI with no instruction is where that flow
- * stalls - so the first step names the thing to type. It stays the GENERIC
- * guidance in every other respect (no manual command, the same labels), so
- * an old host that declares no capability still shows nothing for them.
+ * sign-in for providers where "prints a sign-in code" is wrong: the
+ * launch-the-CLI providers (what actually opens is the CLI's own UI, and a
+ * user left in front of a TUI with no instruction is where that flow stalls
+ * - so the first step names the thing to type) and Kilo Code, Amp and Kiro
+ * (a provider picker, a link that finishes in that terminal, and an
+ * account-choice prompt). It stays the GENERIC guidance in every other
+ * respect (no manual command, the same labels), so an old host that
+ * declares no capability still shows nothing for them.
  *
- * Reasonix is the full override. The generic surfaces describe a sign-in: "Sign in
- * from a terminal", "prints a sign-in code". For a provider that owns its own
- * credential store that framing is wrong in a way that costs the user real
- * time - Reasonix's own startup warning names an environment variable
- * (`missing env DEEPSEEK_API_KEY`), so the natural next move is to export it
- * in the shell, and the shipped CLI ignores the process environment entirely
- * (byte-verified against 1.35.0: the same key exported into the environment
- * produced an outbound `x-api-key` of length 0; only `<reasonix-home>/.env`
- * worked). The only thing that helps is telling the user exactly where the
- * key goes.
+ * Reasonix and Hermes are the full override. The generic surfaces describe a
+ * sign-in: "Sign in from a terminal", "prints a sign-in code". For a
+ * provider that owns its own credential store that framing is wrong in a
+ * way that costs the user real time - Reasonix's own startup warning names
+ * an environment variable (`missing env DEEPSEEK_API_KEY`), so the natural
+ * next move is to export it in the shell, and the shipped CLI ignores the
+ * process environment entirely (byte-verified against 1.35.0: the same key
+ * exported into the environment produced an outbound `x-api-key` of length
+ * 0; only `<reasonix-home>/.env` worked). Hermes is the same shape:
+ * `~/.hermes/.env` overrides same-named injected env vars, and
+ * `config.yaml model.provider` beats env keys. The only thing that helps is
+ * telling the user exactly where the key goes.
  *
  * The in-app path is the terminal action (`terminalActionLabel`) that the
  * picker's setup CTA, the composer banner and the picker's auth line all
@@ -91,7 +93,7 @@ export interface ProviderSetupGuidance {
   readonly terminalHint: string;
 }
 
-const PROVIDER_SETUP_GUIDANCE: {
+export const PROVIDER_SETUP_GUIDANCE: {
   readonly [k in ProviderId]?: ProviderSetupGuidance;
 } = {
   reasonix: {
@@ -110,6 +112,23 @@ const PROVIDER_SETUP_GUIDANCE: {
     terminalHint:
       "Reasonix asks for your provider API key in that terminal. Finish there, then use Refresh above.",
   },
+  hermes: {
+    summary:
+      "Hermes Agent keeps provider API keys in its own store, not in your shell environment.",
+    stepsAfterAction: [
+      "Choose your inference provider from the list in that terminal.",
+      "Give that provider an API key when Hermes asks for one.",
+      "Refresh this list.",
+    ],
+    noSurfaceStep:
+      "Choose “Set up in terminal” from a chat's model picker or the start page's. It opens Hermes' setup wizard on the host that composer runs on.",
+    epicOnlyStep:
+      "Open a chat and choose “Set up in terminal” from its model picker. This host's version can open Hermes' setup wizard from a chat, but not from the start page.",
+    manualCommand: "hermes setup model",
+    terminalActionLabel: "Set up in terminal",
+    terminalHint:
+      "Hermes asks for an inference provider and its API key in that terminal. Finish there, then use Refresh above.",
+  },
 };
 
 /** The per-provider copy override, if this provider has one. Copy only - see
@@ -121,9 +140,9 @@ export function providerSetupGuidance(
 }
 
 /**
- * The sentences that differ for a provider whose sign-in terminal opens the
- * CLI itself rather than a login command. Each names the step the user takes
- * INSIDE that CLI, which is the one thing the generic copy cannot say.
+ * The sentences that differ for a provider whose sign-in is not "it prints
+ * a sign-in code". Each names the step the user takes in that terminal,
+ * which is the one thing the generic copy cannot say.
  */
 interface TerminalSignInCopy {
   readonly summary: string;
@@ -132,7 +151,7 @@ interface TerminalSignInCopy {
   readonly terminalHint: string;
 }
 
-const TERMINAL_SIGN_IN_COPY: {
+export const TERMINAL_SIGN_IN_COPY: {
   readonly [k in ProviderId]?: TerminalSignInCopy;
 } = {
   qwen: {
@@ -164,14 +183,38 @@ const TERMINAL_SIGN_IN_COPY: {
     terminalHint:
       "OpenCode asks for the provider and sign-in method in that terminal. Complete it there, then use Refresh above.",
   },
+  kilocode: {
+    summary:
+      "Kilo Code signs in from a terminal, one provider account at a time.",
+    firstStep:
+      "Pick the provider and sign-in method in that terminal and follow the prompts.",
+    terminalHint:
+      "Kilo Code asks for the provider and sign-in method in that terminal. Complete it there, then use Refresh above.",
+  },
+  amp: {
+    summary:
+      "Amp signs in from a terminal: it prints a sign-in link, and finishes in that terminal.",
+    firstStep:
+      "Open the link that terminal prints — on your own machine Amp may open it for you — then follow it through and answer whatever the terminal asks for next.",
+    terminalHint:
+      "Amp prints a sign-in link and waits in that terminal. Finish there, then use Refresh above.",
+  },
+  kiro: {
+    summary:
+      "Kiro signs in from a terminal, and asks which account to use first.",
+    firstStep:
+      "Choose a sign-in method in that terminal, then follow what it shows — for a social account that is a link to open and a code to confirm.",
+    terminalHint:
+      "Kiro asks which account to use in that terminal, then walks you through that account's sign-in. Finish there, then use Refresh above.",
+  },
 };
 
 /**
  * The generic terminal sign-in copy for a provider with no override. Reached
  * only through `providerTerminalGuidance`, which is what keeps the picker and
- * the banner describing one flow the same way. The launch-the-CLI providers re-word the
- * three sentences that would otherwise describe a sign-in code nothing prints
- * (`TERMINAL_SIGN_IN_COPY`) and keep everything else.
+ * the banner describing one flow the same way. `TERMINAL_SIGN_IN_COPY`
+ * re-words the three sentences that would otherwise describe a sign-in code
+ * nothing prints, and keeps everything else.
  */
 export function defaultTerminalSignInGuidance(
   providerId: ProviderId,
@@ -230,29 +273,30 @@ export function providerTerminalGuidance(
  * the host's call (`terminalLogin`), while whether there is guidance to SHOW is
  * the copy table's. A host predating the capability - or any host at all, for a
  * provider the table knows and the host does not - can still be told where its
- * credentials go, which is how Reasonix's `reasonix setup` instructions
- * survived before this button existed. Gating the copy on the capability
- * dropped them and left a signed-out Reasonix at the generic error state with
- * no way forward.
+ * credentials go, which is how Reasonix's `reasonix setup` and Hermes'
+ * `hermes setup model` instructions survived before this button existed.
+ * Gating the copy on the capability dropped them and left a signed-out
+ * Reasonix at the generic error state with no way forward.
  *
  * `state` is the `providers.list` row; while that has not resolved (`null`)
  * the capability answer is "not yet", never "no" - it re-resolves when the row
  * lands. It takes the whole row rather than `loginCapability` alone because a
- * second fact on the same row gates the SAME button: whether the provider's
- * managed pack would let the host spawn its CLI at all (`packPreparing`).
+ * second fact on the same row gates the SAME button: whether the host would
+ * act on the click at all (`hostBlock`).
  */
 export interface ProviderTerminalSetup {
   readonly guidance: ProviderSetupGuidance;
   /** Whether the connected host can open the sign-in terminal itself. */
   readonly canStartTerminal: boolean;
   /**
-   * The pack state blocking that terminal RIGHT NOW, or `null`. Transient
-   * where `canStartTerminal` is permanent: the host advertises the capability,
-   * and will honour it once the download lands - so this is not folded into
+   * What blocks that terminal RIGHT NOW, or `null`: the provider is off, its
+   * CLI is missing, or its pack is still on its way. Transient where
+   * `canStartTerminal` is permanent: the host advertises the capability, and
+   * will honour it once the block clears - so this is not folded into
    * `canStartTerminal`, whose `false` means "there is no button on this host
    * at all" and leads the copy with the manual route.
    */
-  readonly packPreparing: ProviderPackPreparing | null;
+  readonly hostBlock: ProviderHostBlock | null;
 }
 
 export function resolveProviderTerminalSetup(
@@ -265,27 +309,27 @@ export function resolveProviderTerminalSetup(
     // anything left to offer; the generic sign-in copy is all button.
     return override === null
       ? null
-      : { guidance: override, canStartTerminal: false, packPreparing: null };
+      : { guidance: override, canStartTerminal: false, hostBlock: null };
   }
   return {
     guidance: providerTerminalGuidance(providerId),
     canStartTerminal: true,
-    packPreparing: providerTerminalLoginPackBlock(state),
+    hostBlock: providerTerminalLoginHostBlock(state),
   };
 }
 
 /**
- * What to render where the button would be while `packPreparing` blocks it -
- * the same "Preparing X… 43%" / "X setup failed - …" sentence every other
- * gated surface shows, so the picker cannot phrase the wait a fourth way.
+ * What to render where the button would be while `hostBlock` stands - the
+ * same "Preparing X… 43%" / "X setup failed - …" sentence every other gated
+ * surface shows, so the picker cannot phrase the wait a fourth way.
  */
 export function providerSetupPreparingLabel(
   setup: ProviderTerminalSetup,
   providerId: ProviderId,
 ): string | null {
-  if (setup.packPreparing === null) return null;
-  return providerPackPreparingLabel(
-    setup.packPreparing,
+  if (setup.hostBlock === null) return null;
+  return providerHostBlockLabel(
+    setup.hostBlock,
     PROVIDER_DISPLAY_NAMES[providerId],
   );
 }
@@ -315,9 +359,9 @@ export type ProviderSetupActionPlacement =
    */
   | "unsupported-scope"
   /**
-   * A button here in principle, but the provider's pack cannot spawn yet. The
-   * preparing label stands where the button would; the steps read as they do
-   * for `here`, because that is what they will be once it lands.
+   * A button here in principle, but the host would refuse the click right now
+   * (`hostBlock`). The label stands where the button would; the steps read as
+   * they do for `here`, because that is what they will be once it clears.
    */
   | "preparing";
 
@@ -340,7 +384,7 @@ export function providerSetupActionPlacement(
   hasSurface: boolean,
   scopeSupport: ProviderTerminalLoginScopeSupport,
 ): ProviderSetupActionPlacement {
-  // Permanent reasons first: a pack that will finish downloading does not
+  // Permanent reasons first: a block that will clear by itself does not
   // change a host that can never carry this scope.
   if (!setup.canStartTerminal) return "unsupported-host";
   // `unsupported-scope` leads the steps with "this host's version can open
@@ -348,7 +392,7 @@ export function providerSetupActionPlacement(
   // proves. An unknown manifest, or no host at all, gets the claim-free copy.
   if (scopeSupport === "unknown") return "unsupported-host";
   if (scopeSupport === "unsupported") return "unsupported-scope";
-  if (setup.packPreparing !== null) return "preparing";
+  if (setup.hostBlock !== null) return "preparing";
   return hasSurface ? "here" : "other-surface";
 }
 

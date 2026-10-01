@@ -204,6 +204,22 @@ export type EpicRoomEvent =
       readonly kind: "room-availability";
       readonly artifactRoomId: string;
       readonly availability: EpicArtifactRoomAvailability;
+    }
+  /**
+   * Where a READY body stands against the host's cloud (`artifact.subscribe@1.1`
+   * only - `@1` never emits it).
+   *
+   * Beside availability rather than inside it: a `"syncing"` body is served
+   * and editable, and the tile keeps its editor mounted under a non-blocking
+   * affordance. Folding it into `"retrying"` would unmount the editor over a
+   * document the host already holds, which is the state this event exists to
+   * end. Forgotten with the body: the replica drops it on every snapshot and
+   * every non-ready transition, and the host re-states it after the next seed.
+   */
+  | {
+      readonly kind: "room-body-sync";
+      readonly artifactRoomId: string;
+      readonly state: "syncing" | "synced";
     };
 
 // ─── Control plane ────────────────────────────────────────────────────────

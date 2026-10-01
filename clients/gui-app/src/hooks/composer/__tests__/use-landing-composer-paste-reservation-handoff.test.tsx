@@ -12,7 +12,10 @@ import {
 import { toast } from "sonner";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
-import type { ComposerPasteEditorHandle } from "@/hooks/composer/use-composer-paste";
+import {
+  MAX_IMAGE_SOURCE_BYTES,
+  type ComposerPasteEditorHandle,
+} from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
 import {
   LANDING_IMAGE_BUDGET_BYTES,
@@ -92,6 +95,9 @@ vi.mock("sonner", () => ({
 }));
 
 let urlCounter = 0;
+// One preparation session per test (queue-serialization fix), created fresh
+// in `beforeEach` and shared across every `useLandingComposerPaste` call in
+// a given test - never a fresh one inside a `renderHook` callback.
 
 beforeEach(async () => {
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
@@ -462,9 +468,13 @@ describe("useLandingComposerPaste - reservation handoff (B2)", () => {
       }),
     );
 
-    // Empty accepted: oversized only - collectImages drops it before reserve.
+    // Empty accepted: over the SOURCE ceiling only - collectImages drops it
+    // before reserve. (10 MB no longer qualifies: the old 5 MiB refusal moved
+    // to the output ceiling, so a file that size is now prepared and attached.)
     const oversized = new File(["x"], "big.png", { type: "image/png" });
-    Object.defineProperty(oversized, "size", { value: 10 * 1024 * 1024 });
+    Object.defineProperty(oversized, "size", {
+      value: MAX_IMAGE_SOURCE_BYTES + 1,
+    });
     act(() => {
       result.current.attachImageFiles([oversized]);
     });

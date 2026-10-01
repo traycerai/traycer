@@ -1,4 +1,5 @@
-import { AlertTriangle, Check, Copy, ExternalLink } from "lucide-react";
+import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useId, useMemo, useState } from "react";
 import {
@@ -40,6 +41,7 @@ import { waitingStepCopy } from "@/components/settings/panels/waiting-step-copy"
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-login-mutation";
+import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
@@ -48,25 +50,27 @@ import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-sub
 import { useProvidersTouchLogin } from "@/hooks/providers/use-providers-touch-login-mutation";
 import { useTabRefreshProviders } from "@/hooks/providers/use-tab-refresh-providers";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { HostRuntimeContext, useHostBinding } from "@/lib/host/runtime";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import {
+  providerHostBlockLabel,
   providerLoginIsRemoteSafe,
   providerSupportsTerminalLogin,
-  providerTerminalLoginPackBlock,
+  providerTerminalLoginHostBlock,
+  type ProviderHostBlock,
 } from "@/components/providers/provider-signin-availability";
-import {
-  providerPackPreparingLabel,
-  type ProviderPackPreparing,
-} from "@/components/providers/provider-pack-readiness";
 import { useProviderTerminalLogin } from "@/hooks/providers/use-provider-terminal-login";
 import { providerTerminalGuidance } from "@/lib/providers/provider-setup-guidance";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
+import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-label";
 
 function noop(): void {}
 
@@ -154,7 +158,13 @@ function ProfileUnavailableBanner({
         .getState()
         .setFocusHarnessId(providerIdToGuiHarnessId(providerId));
     }
-    openSettings({ section: "providers", resetToGeneral: false });
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
   };
   return (
     <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
@@ -246,12 +256,14 @@ function deriveLoginOptions(
   readonly canOauth: boolean;
   readonly canTerminalLogin: boolean;
   /**
-   * The pack state blocking the terminal login right now, or null. A terminal
-   * login spawns the provider's CLI, so a pack that cannot spawn yet turns
-   * the row's button into a request whose only answer is the host's
-   * `preparing` error; the row shows the wait instead.
+   * What blocks a sign-in on the host right now, or null: the provider is
+   * off, its CLI is missing, or its pack is still on its way. Both sign-ins
+   * spawn the provider's CLI, so while this stands a button would be a
+   * request whose only answer is the host's refusal; the banner shows the
+   * reason where the button would be. Null when neither sign-in applies to
+   * this provider here, since there is no button to stand in for.
    */
-  readonly terminalLoginPackBlock: ProviderPackPreparing | null;
+  readonly signInHostBlock: ProviderHostBlock | null;
 } {
   const loginCapability: ProviderLoginCapability | null =
     state !== null ? state.loginCapability : null;
@@ -280,17 +292,19 @@ function deriveLoginOptions(
   // guessing here instead stripped the OAuth option from the banner of the one
   // provider it was meant to serve. (The terminal row above has no such
   // constraint - a TUI is what it is for.)
-  const canOauth =
+  const oauthApplies =
     !canTerminalLogin &&
     oauthArgs !== null &&
     (isLocalHost || providerLoginIsRemoteSafe(loginCapability));
+  const signInHostBlock =
+    oauthApplies || canTerminalLogin
+      ? providerTerminalLoginHostBlock(state)
+      : null;
   return {
     envVars,
-    canOauth,
+    canOauth: oauthApplies && signInHostBlock === null,
     canTerminalLogin,
-    terminalLoginPackBlock: canTerminalLogin
-      ? providerTerminalLoginPackBlock(state)
-      : null,
+    signInHostBlock,
   };
 }
 
@@ -300,13 +314,13 @@ function deriveLoginOptions(
  * Terminal sign-in needs a canvas view to open the terminal into. Outside one
  * (the home composer) the banner falls through to the paste form / CLI stub
  * rather than drawing a button that cannot deliver a terminal. A provider
- * whose pack cannot spawn yet keeps its ROW - the wait is the thing to show -
+ * the host cannot run yet keeps its ROW - the reason is the thing to show -
  * but not its button. The `button` arm carries the ids it narrowed, so the
  * row it feeds cannot be handed a null view.
  */
 function deriveTerminalLoginRow(input: {
   readonly canTerminalLogin: boolean;
-  readonly terminalLoginPackBlock: ProviderPackPreparing | null;
+  readonly signInHostBlock: ProviderHostBlock | null;
   readonly epicId: string | null;
   readonly viewTabId: string | null;
 }):
@@ -316,7 +330,7 @@ function deriveTerminalLoginRow(input: {
       readonly epicId: string;
       readonly viewTabId: string;
     }
-  | { readonly kind: "preparing"; readonly preparing: ProviderPackPreparing } {
+  | { readonly kind: "blocked" } {
   if (
     !input.canTerminalLogin ||
     input.epicId === null ||
@@ -324,10 +338,25 @@ function deriveTerminalLoginRow(input: {
   ) {
     return { kind: "none" };
   }
-  if (input.terminalLoginPackBlock !== null) {
-    return { kind: "preparing", preparing: input.terminalLoginPackBlock };
-  }
+  if (input.signInHostBlock !== null) return { kind: "blocked" };
   return { kind: "button", epicId: input.epicId, viewTabId: input.viewTabId };
+}
+
+/**
+ * The block to show one line for, or null. It stands in for whichever sign-in
+ * this banner would otherwise offer: the OAuth form, or the terminal row. A
+ * terminal sign-in with no canvas to open into draws no row at all, so it has
+ * no reason to give either.
+ */
+function deriveBlockedSignIn(
+  signInHostBlock: ProviderHostBlock | null,
+  canTerminalLogin: boolean,
+  terminalRowKind: "none" | "button" | "blocked",
+): ProviderHostBlock | null {
+  if (signInHostBlock === null) return null;
+  return terminalRowKind === "blocked" || !canTerminalLogin
+    ? signInHostBlock
+    : null;
 }
 
 /**
@@ -451,14 +480,19 @@ function ReauthBannerInner({
   readonly viewTabId: string | null;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
-  const { envVars, canOauth, canTerminalLogin, terminalLoginPackBlock } =
+  const { envVars, canOauth, canTerminalLogin, signInHostBlock } =
     deriveLoginOptions(state, isLocalHost);
   const terminalRow = deriveTerminalLoginRow({
     canTerminalLogin,
-    terminalLoginPackBlock,
+    signInHostBlock,
     epicId,
     viewTabId,
   });
+  const blockedSignIn = deriveBlockedSignIn(
+    signInHostBlock,
+    canTerminalLogin,
+    terminalRow.kind,
+  );
   // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
   // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
   // override, matching how Settings > Providers stores it.
@@ -469,6 +503,7 @@ function ReauthBannerInner({
   // vars. Direct the user to the CLI.
   if (
     !canOauth &&
+    blockedSignIn === null &&
     terminalRow.kind === "none" &&
     envVars.length === 0 &&
     !apiKeySupported
@@ -507,9 +542,9 @@ function ReauthBannerInner({
           viewTabId={terminalRow.viewTabId}
         />
       ) : null}
-      {terminalRow.kind === "preparing" ? (
+      {blockedSignIn !== null ? (
         <span role="status" className="text-ui-xs text-muted-foreground">
-          {providerPackPreparingLabel(terminalRow.preparing, providerLabel)}
+          {providerHostBlockLabel(blockedSignIn, providerLabel)}
         </span>
       ) : null}
       {envVars.length > 0 || apiKeySupported ? (
@@ -612,8 +647,11 @@ function OAuthReauthForm({
   const cancelLogin = useProvidersCancelLogin();
   const submitLoginCode = useProvidersSubmitLoginCode();
   const touchLogin = useProvidersTouchLogin();
+  const ensurePack = useProvidersEnsurePack();
 
+  const supportsLoginOwnership = useProvidersLoginOwnership();
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership,
     mode: "reauth",
     providerId,
     // No profile picker yet - re-auth always targets the ambient login, not
@@ -625,6 +663,7 @@ function OAuthReauthForm({
     cancelLogin,
     submitLoginCode,
     touchLogin,
+    ensurePack,
     failureMessages: {
       notStarted: "Sign-in did not start. Try again.",
       notFinished: "Sign-in did not finish. Try again.",
@@ -643,6 +682,7 @@ function OAuthReauthForm({
       <OAuthWaitingRow
         loginUrl={flow.state.url}
         userCode={flow.state.userCode}
+        loginCapability={loginCapability}
         isLocalHost={isLocalHost}
         codePaste={flow.codePaste}
         cancelPending={flow.cancelPending}
@@ -656,22 +696,45 @@ function OAuthReauthForm({
     return (
       <div className="flex flex-col gap-2">
         <span className="text-ui-xs text-destructive">
-          {flow.state.message}
+          {flow.state.refusal === null ? (
+            flow.state.message
+          ) : (
+            <ProviderLoginRefusalMessage
+              providerId={providerId}
+              refusal={flow.state.refusal}
+            />
+          )}
         </span>
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
+          <ProviderLoginRefusalAction refusal={flow.state.refusal} />
           <Button size="sm" variant="secondary" onClick={onAuthenticate}>
-            Try again
+            {providerLoginRetryLabel(flow.state.refusal, "Try again")}
           </Button>
         </div>
       </div>
     );
   }
 
+  // A start that is taking longer than a moment - the provider's pack is
+  // downloading, or its login child is still coming up - says so, and can be
+  // cancelled: a disabled button over a minute-long wait reads as a hang.
+  if (flow.state.kind === "starting" && flow.startingCopy !== null) {
+    return (
+      <OAuthStartingRow
+        title={flow.startingCopy.title}
+        guidance={flow.startingCopy.guidance}
+        cancelRequested={flow.state.cancelRequested}
+        cancelPending={flow.cancelPending}
+        onCancel={flow.cancel}
+      />
+    );
+  }
+
   // "start" and "cancelled" both fall back to the Authenticate button - a
   // cancelled ambient reconnect reverts straight to it, same as before code
-  // paste existed. "starting" keeps showing it too, pending/disabled, the
-  // same way the original single-mutation form did (no separate
-  // intermediate row).
+  // paste existed. An ordinary "starting" keeps showing it too,
+  // pending/disabled, the same way the original single-mutation form did (no
+  // separate intermediate row).
   return (
     <div className="flex flex-col gap-2">
       <div>
@@ -692,6 +755,42 @@ function OAuthReauthForm({
   );
 }
 
+// The banner's row for a start that outlasts "a moment". Same shape as
+// `OAuthWaitingRow`'s header and footer, with nothing between them: there is
+// no link and no code until the start has settled.
+function OAuthStartingRow(props: {
+  readonly title: string;
+  readonly guidance: string;
+  readonly cancelRequested: boolean;
+  readonly cancelPending: boolean;
+  readonly onCancel: () => void;
+}): ReactNode {
+  return (
+    <div className="flex flex-col gap-2.5" aria-live="polite">
+      <div className="flex items-start gap-2 text-ui-sm text-foreground">
+        <MutedAgentSpinner />
+        <div className="min-w-0">
+          <div className="font-medium">{props.title}</div>
+          <p className="mt-0.5 text-ui-xs leading-relaxed text-muted-foreground">
+            {props.guidance}
+          </p>
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={props.cancelRequested || props.cancelPending}
+          onClick={props.onCancel}
+        >
+          {props.cancelPending ? <MutedAgentSpinner /> : null}
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // Compact counterpart of `AddProfileWaitingStep`: one browser-approval status
 // with code paste available as a conditional fallback. The same field, copy,
 // restart notice, and mutation-derived status are shared across all surfaces.
@@ -700,21 +799,11 @@ function OAuthWaitingDetails(props: {
   readonly userCode: string | null;
   readonly loginUrl: string | null;
   readonly autoOpen: boolean;
-  readonly copied: boolean;
-  readonly copy: (value: string) => void;
   readonly codePaste: ProviderProfileLoginFlow["codePaste"];
   readonly openLink: (url: string, kind: "auth", event: null) => Promise<void>;
 }): ReactNode {
-  const {
-    processingCode,
-    userCode,
-    loginUrl,
-    autoOpen,
-    copied,
-    copy,
-    codePaste,
-    openLink,
-  } = props;
+  const { processingCode, userCode, loginUrl, autoOpen, codePaste, openLink } =
+    props;
   return (
     <>
       {processingCode || userCode === null ? null : (
@@ -722,18 +811,7 @@ function OAuthWaitingDetails(props: {
           <code className="rounded-md border border-border/60 bg-foreground/5 px-2 py-0.5 font-mono text-ui tracking-[0.12em] text-foreground">
             {userCode}
           </code>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
-            onClick={() => copy(userCode)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          <SignInCopyIconButton value={userCode} kind="code" variant="ghost" />
         </div>
       )}
       {processingCode || loginUrl === null ? null : (
@@ -748,18 +826,7 @@ function OAuthWaitingDetails(props: {
             <ExternalLink className="size-3.5" />
             {openBrowserLabel(autoOpen)}
           </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-            onClick={() => copy(loginUrl)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
+          <SignInCopyIconButton value={loginUrl} kind="link" variant="ghost" />
         </div>
       )}
       {codePaste.enabled && userCode === null ? (
@@ -789,6 +856,7 @@ function OAuthWaitingDetails(props: {
 function OAuthWaitingRow({
   loginUrl,
   userCode,
+  loginCapability,
   isLocalHost,
   codePaste,
   cancelPending,
@@ -797,6 +865,7 @@ function OAuthWaitingRow({
 }: {
   readonly loginUrl: string | null;
   readonly userCode: string | null;
+  readonly loginCapability: ProviderLoginCapability | null;
   readonly isLocalHost: boolean;
   readonly codePaste: ProviderProfileLoginFlow["codePaste"];
   readonly cancelPending: boolean;
@@ -806,21 +875,17 @@ function OAuthWaitingRow({
   const openLink = useOpenLink();
   const autoOpen = useAutoOpenLoginUrl(
     isLocalHost,
-    userCode,
+    loginCapability,
     loginUrl,
     (url) => {
       void openLink(url, "auth", null);
     },
   );
-  const { copied, copy } = useClipboardCopy({
-    resetMs: 1600,
-    onSuccess: null,
-    onError: handleSignInLinkCopyError,
-  });
   const processingCode = codePaste.phase !== "idle";
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
     queuePending: false,
+    startingCopy: null,
     cancelRequested: false,
     deviceCode: userCode !== null,
   });
@@ -845,8 +910,6 @@ function OAuthWaitingRow({
         userCode={userCode}
         loginUrl={loginUrl}
         autoOpen={autoOpen}
-        copied={copied}
-        copy={copy}
         codePaste={codePaste}
         openLink={openLink}
       />

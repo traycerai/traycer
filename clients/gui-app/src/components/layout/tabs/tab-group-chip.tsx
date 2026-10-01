@@ -1,21 +1,18 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
-import { ChevronRight, Plus, Ungroup, X } from "lucide-react";
-import { useNavigate } from "@tanstack/react-router";
+import { useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
-import { TabColorPicker } from "./tab-appearance-menu";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { TabGroupEditor } from "./tab-group-editor";
 import { cn } from "@/lib/utils";
+import { stripGroupMarkKey } from "@/stores/tabs/strip-motion";
+import { useStripEntrance } from "./use-strip-entrance";
 
 export function TabGroupChip(props: {
   readonly groupId: string;
@@ -23,11 +20,18 @@ export function TabGroupChip(props: {
   readonly onClose: (groupId: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const navigate = useNavigate();
   const { group, groupId } = props;
+  const chipRef = useRef<HTMLButtonElement | null>(null);
+  // A group a reopen brings back opens its chip first; its tabs follow.
+  useStripEntrance(chipRef, stripGroupMarkKey(groupId), "chip");
   const actions = useTabsStore.getState();
   return (
-    <Popover open={editing} onOpenChange={setEditing}>
+    <Popover
+      open={editing}
+      onOpenChange={(open) => {
+        setEditing(open);
+      }}
+    >
       <PopoverTrigger asChild>
         <TooltipWrapper
           label="Right-click to edit group"
@@ -36,10 +40,14 @@ export function TabGroupChip(props: {
           align="start"
         >
           <button
+            ref={chipRef}
             type="button"
+            // A strip member of its own: a closing slot's spacer is placed
+            // relative to it (`strip-exit-ghosts.ts`).
+            data-strip-group-chip={groupId}
             aria-label={`${group.name || "Unnamed group"}: ${group.collapsed ? "expand" : "collapse"} group`}
             aria-expanded={!group.collapsed}
-            className="relative mx-1 mb-2 flex min-h-6 max-w-48 shrink-0 items-center gap-1 rounded-md bg-[var(--swatch)] px-2 text-ui-xs font-medium text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]"
+            className="relative mx-1 flex min-h-6 self-center max-w-48 shrink-0 items-center gap-1 rounded-md bg-[var(--swatch)] px-2 text-ui-xs font-medium text-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [-webkit-app-region:no-drag]"
             style={{ "--swatch": group.color } as CSSProperties}
             onClick={(event) => {
               event.preventDefault();
@@ -60,13 +68,6 @@ export function TabGroupChip(props: {
               }
             }}
           >
-            {!group.collapsed ? (
-              <span
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 -bottom-2 h-0.5 bg-[var(--swatch)]"
-                style={{ "--swatch": group.color } as CSSProperties}
-              />
-            ) : null}
             <ChevronRight
               aria-hidden
               className={cn(
@@ -79,62 +80,12 @@ export function TabGroupChip(props: {
         </TooltipWrapper>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-fit max-w-xs">
-        <Input
-          aria-label="Group name"
-          placeholder="Name this group"
-          maxLength={80}
-          value={group.name}
-          onChange={(event) =>
-            actions.updateGroup(groupId, { name: event.target.value })
-          }
-          onKeyDown={(event) => {
-            if (event.key === "Enter") setEditing(false);
-          }}
+        <TabGroupEditor
+          groupId={groupId}
+          group={group}
+          onClose={props.onClose}
+          onDone={() => setEditing(false)}
         />
-        <TabColorPicker
-          menu={false}
-          color={group.color}
-          onChange={(color) => actions.updateGroup(groupId, { color })}
-        />
-        <div className="flex flex-col border-t pt-2">
-          <Button
-            variant="ghost"
-            className="justify-start"
-            onClick={() => {
-              setEditing(false);
-              navigateToTabIntent(
-                navigate,
-                { ...openNewEpicIntent(), groupId },
-                undefined,
-              );
-            }}
-          >
-            <Plus />
-            New tab in group
-          </Button>
-          <Button
-            variant="ghost"
-            className="justify-start"
-            onClick={() => {
-              setEditing(false);
-              props.onClose(groupId);
-            }}
-          >
-            <X />
-            Close group
-          </Button>
-          <Button
-            variant="ghost"
-            className="justify-start"
-            onClick={() => {
-              setEditing(false);
-              actions.ungroup(groupId);
-            }}
-          >
-            <Ungroup />
-            Ungroup
-          </Button>
-        </div>
       </PopoverContent>
     </Popover>
   );

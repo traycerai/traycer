@@ -7,7 +7,7 @@
 // turning a healthy channel into `ChunkSequenceMismatchError`s. fflate is here
 // specifically because it is sync and isomorphic; native zlib is faster but
 // Node-only, and this module runs in the browser too.
-import { deflateSync, Inflate } from "fflate";
+import { deflateSync, inflateSync } from "fflate";
 import {
   MAX_MUX_MESSAGE_BYTES,
   MUX_FRAME_HEADER_LEN,
@@ -119,11 +119,6 @@ export const COMPRESSION_MIN_PAYLOAD_BYTES = 4096;
  */
 const COMPRESSION_LEVEL = 1;
 
-// A DEFLATE stream can expand by roughly this factor. It sizes each input push
-// so `Inflate`'s synchronous callback can reject a lie about the plaintext
-// length before one push performs material work beyond the receive bound.
-const DEFLATE_MAX_EXPANSION_RATIO = 1032;
-
 /**
  * A compressed payload is `[plainLen:u32 BE][deflate bytes]`. The length
  * prefix is not redundant with the reassembler's own accounting: it is what
@@ -180,6 +175,22 @@ export function encodeMuxMessageBody(
     body.set(binary, BODY_HEADER_LEN + jsonLen);
   }
   return body;
+}
+
+/**
+ * Exact length of the body {@link encodeMuxMessageBody} would produce, without
+ * building it. For a sender that must account for what it queued in the same
+ * unit the schedulers report debt in (remaining BODY bytes).
+ */
+export function muxMessageBodySize(
+  json: Record<string, unknown> | null,
+  binary: Uint8Array | null,
+): number {
+  return (
+    BODY_HEADER_LEN +
+    (json === null ? 0 : textEncoder.encode(JSON.stringify(json)).length) +
+    (binary === null ? 0 : binary.length)
+  );
 }
 
 export interface DecodedMessageBody {
@@ -295,14 +306,40 @@ function compressFramePayload(plain: Uint8Array): Uint8Array | null {
  * into a reconnect loop — reconnect, re-request the same body, fail again —
  * which is the outcome the per-stream routing exists to prevent.
  *
- * The output buffer is deliberately allocated ONE BYTE LARGER than the
- * declared length. The synchronous `Inflate` callback is fed bounded slices
- * of the compressed source and stops the decoder as soon as its actual output
- * would pass the declared length. That preserves the old three-way sentinel
- * post-condition without letting `inflateSync(..., { out })` walk an attacker
- * supplied gigabyte of output merely to discover the extra byte: exact output
- * is accepted, a short expansion reports its count, and an over-expansion is
- * represented by the spare byte as `more than plainLength`.
+ * The frame is inflated in ONE synchronous call into an output buffer
+ * allocated ONE BYTE LARGER than the declared length. `inflateSync(...,
+ * { out })` never grows a caller-supplied buffer: a write past its end is
+ * dropped and the returned view is clamped to the buffer, so the spare byte
+ * is the whole over-expansion signal - exact output is accepted, a short
+ * expansion reports its count, and anything longer shows up as `plainLength
+ * + 1` and is reported as `more than plainLength`.
+ *
+ * ONE call, and not a streaming `Inflate` fed in bounded slices, is the
+ * load-bearing part. An earlier version pushed `(plainLength - written) /
+ * 1032` bytes at a time - about 63 bytes for a full frame, shrinking toward
+ * one - so that a forged length prefix could be caught after one push's worth
+ * of expansion instead of after the whole stream. fflate's streaming decoder
+ * pays a fixed cost per push (it re-grows its output window, copies the
+ * 32 KiB back-reference window and re-enters the block state), so a 64 KiB
+ * frame became ~800 pushes and ~0.65 s of receiver main-thread CPU, which is
+ * ~17 s per uploaded image on a remote host and every other RPC on that host
+ * starved while it ran. That was measured, on a real host, with a CPU profile
+ * that put 99% of the upload inside this function.
+ *
+ * What the single call gives up is bounded and worth stating: a MALICIOUS
+ * frame whose stream inflates far past its declared length is walked to its
+ * end before it is rejected. The input is bounded by the declaration itself -
+ * a compressed payload must be SMALLER than its declared plaintext, which a
+ * genuine sender guarantees and the check below enforces - so the input is
+ * under a chunk's worth of compressed bytes, and DEFLATE expands at most
+ * ~1032:1: the worst case is ~66 MB of dropped writes, tens of milliseconds.
+ * That one verdict - over-expansion, which no genuine sender can produce -
+ * is then routed to the SESSION rather than the stream
+ * ({@link MuxFrameOverExpansionError}), so a peer that means to repeat it
+ * pays a reconnect per attempt instead of a stream id. The per-stream
+ * routing above is kept for every other decode fault, which is caught for
+ * its own cost. A legitimate frame that cost 0.65 s is the wrong side of
+ * that trade by four orders of magnitude.
  */
 function inflateFramePayload(payload: Uint8Array): Uint8Array {
   if (payload.length < COMPRESSED_PAYLOAD_HEADER_LEN) {
@@ -320,58 +357,89 @@ function inflateFramePayload(payload: Uint8Array): Uint8Array {
       `compressed frame declares ${plainLength} plaintext bytes, over the ${BULK_CHUNK_SIZE_BYTES}-byte chunk bound`,
     );
   }
-  const out = new Uint8Array(plainLength + 1);
-  let written = 0;
-  const outputLimitExceeded = new Error(
-    "compressed frame output limit exceeded",
-  );
-  const inflater = new Inflate((chunk) => {
-    if (chunk.length > plainLength - written) {
-      throw outputLimitExceeded;
-    }
-    out.set(chunk, written);
-    written += chunk.length;
-  });
-  const compressed = payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN);
-  try {
-    for (let offset = 0; offset < compressed.length;) {
-      // `Inflate` calls ondata after each push, not each decoded symbol. Keep
-      // one push's possible expansion inside the remaining output budget so a
-      // forged small prefix cannot turn into a renderer-thread-sized inflate.
-      const inputLength = Math.max(
-        1,
-        Math.floor((plainLength - written) / DEFLATE_MAX_EXPANSION_RATIO),
-      );
-      const end = Math.min(offset + inputLength, compressed.length);
-      inflater.push(
-        compressed.subarray(offset, end),
-        end === compressed.length,
-      );
-      offset = end;
-    }
-  } catch (error) {
-    if (error === outputLimitExceeded) {
-      // The spare byte is the old, deliberate representation for an output
-      // that exceeded the declared length. The post-condition below keeps its
-      // wording and accepted exact-length case unchanged.
-      written = plainLength + 1;
-    } else {
-      throw new MuxFrameDecodeError(
-        `compressed frame payload failed to inflate: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  // The INPUT bound, checked before a byte is inflated. A sender compresses
+  // a frame only when the header plus the deflated bytes came out SMALLER
+  // than the plaintext (`compressFramePayload` returns null otherwise, and
+  // has since compression shipped), so a compressed payload at or over its
+  // own declared plaintext length is one no sender produces. Without this
+  // the declared length bounded only the OUTPUT buffer: a frame at the mux
+  // ceiling declaring one plaintext byte would still be walked through the
+  // whole inflate before the length check rejected it. With it, the inflate
+  // below reads fewer than `plainLength` compressed bytes, so the work it can
+  // be made to do is bounded by the declaration the peer chose.
+  if (payload.length >= plainLength) {
+    throw new MuxFrameDecodeError(
+      `compressed frame payload of ${payload.length} bytes is not smaller than its declared ${plainLength} plaintext bytes`,
+    );
   }
-  if (written !== plainLength) {
+  const out = new Uint8Array(plainLength + 1);
+  const compressed = payload.subarray(COMPRESSED_PAYLOAD_HEADER_LEN);
+  let written: number;
+  try {
+    written = inflateSync(compressed, { out }).length;
+  } catch (error) {
+    // The OTHER shape of over-expansion. fflate never resizes a
+    // caller-supplied buffer: its Huffman path writes past the end silently
+    // (typed-array writes out of range are dropped), but a STORED block copies
+    // with `buf.set(..., bt)`, which throws `RangeError` once the output
+    // position is already past the buffer - so a frame whose Huffman blocks
+    // overran the declaration and which then carries a stored block (even an
+    // empty one, as a sync flush writes) arrives here instead of at the
+    // length check below. With the buffer sized to the declaration plus one,
+    // a `RangeError` can only mean the output ran past it: fflate reports
+    // every malformed-stream condition through its own coded errors, never
+    // `RangeError`. Classified as over-expansion so it takes the same
+    // session-level route; anything else is a per-stream decode fault.
+    if (error instanceof RangeError) {
+      throw new MuxFrameOverExpansionError(
+        `compressed frame inflated to more than ${plainLength} bytes, declared ${plainLength}`,
+      );
+    }
+    throw new MuxFrameDecodeError(
+      `compressed frame payload failed to inflate: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (written > plainLength) {
     // "more than" rather than a count: the spare byte proves the payload
     // over-expanded without measuring by how much, and inventing a figure the
-    // buffer never held would be worse than naming the direction.
-    const actual =
-      written > plainLength ? `more than ${plainLength}` : `${written}`;
+    // buffer never held would be worse than naming the direction. Its own
+    // class, because this is the one verdict that is session-level - see
+    // {@link MuxFrameOverExpansionError}.
+    throw new MuxFrameOverExpansionError(
+      `compressed frame inflated to more than ${plainLength} bytes, declared ${plainLength}`,
+    );
+  }
+  if (written !== plainLength) {
     throw new MuxFrameDecodeError(
-      `compressed frame inflated to ${actual} bytes, declared ${plainLength}`,
+      `compressed frame inflated to ${written} bytes, declared ${plainLength}`,
     );
   }
   return out.subarray(0, written);
+}
+
+/**
+ * A compressed frame that inflated to MORE bytes than it declared.
+ *
+ * Distinct from every other `MuxFrameDecodeError` because it is the one
+ * inbound fault a genuine peer cannot produce and the one whose cost the
+ * receiver cannot bound: the sender writes the exact length it deflated, so
+ * a payload that expands past its declaration carries a forged prefix - and
+ * by the time that is known, the inflate has already walked the whole
+ * expansion, up to ~1032x the declaration (~66 MB for a full chunk). A
+ * corrupt or short payload is caught for its own cost and stays a
+ * per-stream verdict; this one is routed to the SESSION by
+ * `RemoteSession.failStreamOnInboundError` (and its host-side mirror), so
+ * that repeating it costs the peer a reconnect - a relay grant and a Noise
+ * handshake - per attempt, rather than one fresh stream id. Receive credits
+ * are not a bound here: they are spent on the peer's own word (the BULK flag
+ * is peer-controlled and no receive-side balance is enforced), so a peer
+ * that means to repeat this can simply not spend them.
+ */
+export class MuxFrameOverExpansionError extends MuxFrameDecodeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "MuxFrameOverExpansionError";
+  }
 }
 
 /**
@@ -517,6 +585,55 @@ export class ChunkSequenceMismatchError extends ChunkReassemblyError {
     super(message);
     this.name = "ChunkSequenceMismatchError";
   }
+}
+
+/** Wire code for {@link StreamFrameNotAllowedError}; the same word on both peers' logs. */
+export const STREAM_FRAME_NOT_ALLOWED_CODE = "STREAM_FRAME_NOT_ALLOWED";
+
+/**
+ * Thrown for a frame its stream's method forbids outright (see
+ * {@link unchunkedStreamFrameViolation}). A `ChunkReassemblyError` so it takes
+ * the existing per-stream recovery route; distinguished so it surfaces under
+ * its own code rather than as a reassembly fault, which it is not - nothing
+ * was reassembled.
+ */
+export class StreamFrameNotAllowedError extends ChunkReassemblyError {
+  constructor(message: string) {
+    super(message);
+    this.name = "StreamFrameNotAllowedError";
+  }
+}
+
+/**
+ * The frame rule for a stream whose method never chunks (a tunnel): EVERY mux
+ * frame on it - data, and equally its CLOSE, FATAL or anything else - is one
+ * whole message whose WHOLE encoded length (header, body header, json and
+ * binary together) fits one chunk. Returns the violation, or `null`.
+ *
+ * Callers apply it only to a stream they have already identified as such; it
+ * deliberately does not look at the frame type, because the reassembler
+ * accumulates a chunked CLOSE exactly as readily as a chunked STREAM_FRAME.
+ *
+ * Checked on the raw decrypted frame, BEFORE the reassembler sees it. That
+ * position is the point: past it a chunk sequence accumulates toward the
+ * generic 512 MiB message cap and the session-wide reassembly budget, neither
+ * of which a byte tunnel has any business reaching, and an unchunked frame
+ * padded in its JSON section would hand the consumer a small view pinning a
+ * frame-sized backing buffer. Bounding the whole frame bounds that pin to one
+ * chunk per frame.
+ */
+export function unchunkedStreamFrameViolation(
+  frame: MuxFrame,
+  encodedFrameBytes: number,
+): string | null {
+  if (frame.chunked) {
+    return `chunked frame on stream ${frame.streamId}, whose method never chunks`;
+  }
+  const maxFrameBytes = MUX_FRAME_HEADER_LEN + BULK_CHUNK_SIZE_BYTES;
+  if (encodedFrameBytes > maxFrameBytes) {
+    return `frame of ${encodedFrameBytes} bytes on stream ${frame.streamId} exceeds the ${maxFrameBytes}-byte bound for its method`;
+  }
+  return null;
 }
 
 interface StreamAccumulator {

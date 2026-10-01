@@ -15,6 +15,9 @@ import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport
 import { isUnknownHost } from "@/lib/host/constants";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
 import { EpicSurface } from "@/components/epic-tabs/epic-surface";
+import { EpicSessionControllerBridge } from "@/providers/epic-session-controller-bridge";
+import { setTestEffectiveHost } from "@/lib/registries/test-support/epic-session-controller-test-support";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { TabSurfaceActivityProvider } from "@/components/layout/tab-surface-activity";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
@@ -328,6 +331,11 @@ function renderTwoEpicSurfaces(): void {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <TestRouterProvider>
+          {/* What the app mounts once, above every tab: the session
+              controller's environment. Sessions belong to open tabs, so a
+              surface rendered without it observes a controller that cannot
+              build anything. */}
+          <EpicSessionControllerBridge />
           <TabSurfaceActivityProvider
             activity={{ visible: true, focused: true }}
           >
@@ -357,6 +365,10 @@ describe("<EpicSurface /> split isolation", () => {
       { userId: "test-user", username: "test-user" },
       [],
     );
+    // The session controller reads the selection authority's STORE, which
+    // only a mounted kernel bridge writes. Seeded with the id the mocked
+    // `useEffectiveHostId` answers, so both readers agree.
+    setTestEffectiveHost("default-host", true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLeftPanelStore.setState(useLeftPanelStore.getInitialState(), true);
     useEpicCanvasStore.getState().openEpicTabWithId(TAB_A, EPIC_A, "Epic A");
@@ -381,6 +393,7 @@ describe("<EpicSurface /> split isolation", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLeftPanelStore.setState(useLeftPanelStore.getInitialState(), true);
     useAuthStore.getState().setSignedOut();
+    useSelectionAuthorityStore.getState().reset();
   });
 
   it("keeps two live Epic bodies isolated across sessions, sidebars, canvases, hosts, and scrolling", async () => {

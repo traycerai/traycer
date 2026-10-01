@@ -343,14 +343,16 @@ function collectCloudIndicatorEntry(
  * never allocated an all-false record. */
 /**
  * `pendingApproval` is the wire's generic "needs a person" flag: every
- * pending-prompt kind but `interview.requested` lights it, driven off the
+ * agent pending-prompt kind but `interview.requested` lights it, driven off the
  * shared `HOST_NOTIFICATION_PENDING_PROMPT_KINDS` tuple so a new kind lights
- * this glyph (and the host SQL projection) by joining that tuple.
+ * this glyph (and the host SQL projection) by joining that tuple. Browser
+ * prompts belong to their browser tab and do not decorate the requesting chat.
  */
 function indicatorContribution(
   entry: HostNotificationEntryV22,
 ): HostNotificationsIndicatorState | null {
   if (
+    entry.kind === "browser.human.needed" ||
     !("resolvedAt" in entry) ||
     entry.resolvedAt !== null ||
     !HOST_NOTIFICATION_PENDING_PROMPT_KINDS.includes(entry.kind)

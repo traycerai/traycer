@@ -60,7 +60,12 @@ export interface BrowserSaveLoginsController {
   readonly enabled: boolean | null;
   /** A set call is in flight. */
   readonly pending: boolean;
-  readonly setEnabled: (enabled: boolean) => void;
+  /**
+   * Resolves to the value the machine SETTLED on, or null when nothing was
+   * written (no bridge, a call already in flight, or a refused write), so a
+   * caller acting on "now enabled" acts on the truth rather than the request.
+   */
+  readonly setEnabled: (enabled: boolean) => Promise<boolean | null>;
 }
 
 /**
@@ -112,9 +117,9 @@ export function useBrowserSaveLogins(
   return {
     enabled,
     pending: setSaveLogins.isPending,
-    setEnabled: (next: boolean) => {
-      if (browserView === null || setSaveLogins.isPending) return;
-      setSaveLogins.mutate(next);
+    setEnabled: async (next: boolean) => {
+      if (browserView === null || setSaveLogins.isPending) return null;
+      return setSaveLogins.mutateAsync(next).catch(() => null);
     },
   };
 }

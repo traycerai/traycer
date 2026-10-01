@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * RPC payloads for the host's display name — the host-mastered rename surface.
@@ -18,7 +19,7 @@ import { z } from "zod";
 /** Transport-safety bound only — see the module doc for who owns the real rule. */
 export const HOST_NAME_MAX_TRANSPORT_LENGTH = 1024;
 
-const emptyRequestSchema = z.object({});
+const emptyRequestSchema = lazySchema(() => z.object({}));
 
 /**
  * What every identity call answers with:
@@ -42,11 +43,13 @@ const emptyRequestSchema = z.object({});
  * previous one. Single source of truth with bounded registry lag - not
  * instant agreement - is the contract of moving the name onto the host.
  */
-export const hostIdentitySchema = z.object({
-  systemName: z.string().min(1),
-  customName: z.string().min(1).nullable(),
-  effectiveName: z.string().min(1),
-});
+export const hostIdentitySchema = lazySchema(() =>
+  z.object({
+    systemName: z.string().min(1),
+    customName: z.string().min(1).nullable(),
+    effectiveName: z.string().min(1),
+  }),
+);
 export type HostIdentity = z.infer<typeof hostIdentitySchema>;
 
 export const hostIdentityGetRequestSchema = emptyRequestSchema;
@@ -64,9 +67,11 @@ export type HostIdentityGetResponse = z.infer<
  * registration label (which is the system hostname only on a host that was not
  * started with one) — see {@link hostIdentitySchema}.
  */
-export const hostIdentitySetRequestSchema = z.object({
-  customName: z.string().max(HOST_NAME_MAX_TRANSPORT_LENGTH).nullable(),
-});
+export const hostIdentitySetRequestSchema = lazySchema(() =>
+  z.object({
+    customName: z.string().max(HOST_NAME_MAX_TRANSPORT_LENGTH).nullable(),
+  }),
+);
 export type HostIdentitySetRequest = z.infer<
   typeof hostIdentitySetRequestSchema
 >;

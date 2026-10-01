@@ -87,7 +87,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
-import { __setCommGraphSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
+import { __setCommGraphCloudSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
+import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
+import { __setCommGraphDataCommitWindowMsForTests } from "@/lib/comm-graph/comm-graph-data-commit-window";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   commGraphTileId,
   makeCommGraphTileRef,
@@ -107,6 +110,8 @@ const EPIC_ID = "epic-comm-graph-mode";
 const TAB_ID = "tab-comm-graph-mode";
 const CHAT_ID = "chat-1";
 const HOST_A = "host-a";
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
 
 const harness = createEpicSessionTestHarness(EPIC_ID);
 let queryClient: QueryClient;
@@ -179,11 +184,15 @@ function storedView(): CommGraphTileViewState | null {
 }
 
 beforeEach(() => {
+  // Frames publish as they are applied: these cases read the snapshot in the
+  // tick they push in.
+  __setCommGraphDataCommitWindowMsForTests(0);
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   harness.install(seedDoc, "owner");
-  __setCommGraphSubscriptionOpenerForTests(() => ({
+  useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  __setCommGraphCloudSubscriptionOpenerForTests(() => ({
     close: () => undefined,
   }));
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -193,11 +202,16 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  __setCommGraphSubscriptionOpenerForTests(null);
+  // Unmount BEFORE the auth store flips - see the cloud-authority hook
+  // suite's afterEach for why.
+  cleanup();
+  __setCommGraphCloudSubscriptionOpenerForTests(null);
   harness.teardown();
+  useAuthStore.getState().setSignedOut();
+  __resetCommGraphCloudRegistryForTests();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   queryClient.clear();
-  cleanup();
+  __setCommGraphDataCommitWindowMsForTests(null);
 });
 
 describe("comm-graph view mode", () => {
@@ -278,7 +292,7 @@ describe("comm-graph view mode", () => {
           y: -220,
           zoom: 3,
           mode: "office",
-          officeView: "towers",
+          officeView: "campus",
           officeAutoView: "building",
         });
     });
@@ -290,7 +304,7 @@ describe("comm-graph view mode", () => {
     });
 
     expect(storedView()?.mode).toBe("graph");
-    expect(storedView()?.officeView).toBe("towers");
+    expect(storedView()?.officeView).toBe("campus");
     expect(storedView()?.officeAutoView).toBe("building");
     // The Graph's own camera survives the hop into Graph mode - it is the
     // one being drawn now, and nothing resets it on the way in.
@@ -304,7 +318,7 @@ describe("comm-graph view mode", () => {
     });
 
     expect(storedView()?.mode).toBe("office");
-    expect(storedView()?.officeView).toBe("towers");
+    expect(storedView()?.officeView).toBe("campus");
     expect(storedView()?.officeAutoView).toBe("building");
     // And it survives the hop back to Office too - the Graph's camera is
     // the Graph's alone now, untouched by either direction of the switch.

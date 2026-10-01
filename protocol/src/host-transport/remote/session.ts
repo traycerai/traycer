@@ -17,6 +17,10 @@ import {
 } from "@traycer/protocol/framework/capability-manifest";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  HOST_TUNNEL_OPEN_METHOD,
+  streamMethodForbidsChunking,
+} from "@traycer/protocol/host/tunnel-stream";
+import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
@@ -24,6 +28,7 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import {
   clockSkewStreamReason,
   type NegotiatedManifestRecorder,
+  type NegotiatedStreamVersionRecorder,
   type ServerClockSkewSignal,
   type ServedStreamMajors,
   type WakeProbeTuning,
@@ -98,6 +103,7 @@ import {
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
+  SESSION_CAPABILITY_TUNNEL_STREAMS,
   creditPayloadSchema,
   decodeMuxFrame,
   encodeMuxFrame,
@@ -118,6 +124,10 @@ import {
 import {
   ChunkReassembler,
   ChunkReassemblyError,
+  MuxFrameOverExpansionError,
+  STREAM_FRAME_NOT_ALLOWED_CODE,
+  StreamFrameNotAllowedError,
+  unchunkedStreamFrameViolation,
   OutboundChunkSource,
   type OutboundMessage,
   type ReassembledMessage,
@@ -127,6 +137,10 @@ import { NoiseChannel } from "./noise-channel";
 import { RelaySocket, type RelayKillReason } from "./relay-socket";
 import type { AttachGrant, AttachGrantProvider } from "./grant";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
+import {
+  RemoteTrafficAccounting,
+  type RemoteTrafficSnapshot,
+} from "./traffic-accounting";
 
 /**
  * Streaming methods that ride the credit-gated `BULK` mux queue instead of
@@ -141,6 +155,9 @@ import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 const BULK_QOS_STREAM_METHODS: ReadonlySet<string> = new Set([
   "workspace.streamAsset",
   "git.streamFileAsset",
+  // Tunnel data must yield to interactive traffic exactly as a bulk transfer
+  // does; its own per-stream window (`tunnel-stream.ts`) sits above this.
+  HOST_TUNNEL_OPEN_METHOD,
 ]);
 
 function qosForStreamMethod(method: string): QosClassValue {
@@ -395,6 +412,20 @@ export interface RemoteSessionOptions<
    * Optional client-side capability publication hook. `null` on host dialers.
    */
   readonly onNegotiatedMethods: NegotiatedManifestRecorder | null;
+  /**
+   * The stream sibling of {@link onNegotiatedMethods}: publishes what a
+   * subscribe on each stream method would negotiate with this host, so a
+   * dispatch that holds only a host id can read a stream version floor without
+   * owning a session.
+   *
+   * OPTIONAL rather than `| null`, unlike its unary sibling, because it arrived
+   * later: every existing composition - the client's own adapter aside, that is
+   * the host dialing another host - already constructs these options, and a
+   * required field would be a compile break for a publication host dialers have
+   * no use for. Omitted means "publish nothing", which is what a host dialer
+   * wants: nothing in a host process reads a per-host stream version registry.
+   */
+  readonly onNegotiatedStreamMethodVersions?: NegotiatedStreamVersionRecorder;
   /** Stream majors this composition can actually serve. */
   readonly servedStreamMajors: ServedStreamMajors;
   /**
@@ -725,6 +756,8 @@ interface ActiveConnection {
    * go out compressed.
    */
   bodyCompressionSupported: boolean;
+  /** Whether the HOST advertised `SESSION_CAPABILITY_TUNNEL_STREAMS`; gates `host.tunnel.open` in `openSubscription`. */
+  tunnelStreamsSupported: boolean;
   hostAttached: boolean;
   /**
    * When this connection last received a frame THROUGH THE NOISE CHANNEL -
@@ -888,6 +921,8 @@ export class RemoteSession<
    */
   private connectionLostAt = 0;
   private connection: ActiveConnection | null = null;
+  /** Null on the normal path: no per-frame diagnostic object or clock read. */
+  private traffic: RemoteTrafficAccounting | null = null;
 
   /**
    * This session instance's namespace for the selection authority's evidence
@@ -1149,6 +1184,23 @@ export class RemoteSession<
   }
 
   // ---- Public surface (consumed by the messenger + stream client) -------- //
+
+  /** Opt in before the first dial so handshake and control totals reconcile. */
+  enableTrafficAccounting(): boolean {
+    if (this.phase !== "idle") return false;
+    this.traffic = new RemoteTrafficAccounting();
+    return true;
+  }
+
+  readTrafficSnapshot(): RemoteTrafficSnapshot | null {
+    return this.traffic?.snapshot() ?? null;
+  }
+
+  /** A debug reader bound only to accounting, never to this session's auth. */
+  protected trafficSnapshotReader(): (() => RemoteTrafficSnapshot) | null {
+    const accounting = this.traffic;
+    return accounting === null ? null : accounting.snapshot.bind(accounting);
+  }
 
   /** Kicks off the first connect if the session is idle. Idempotent. */
   start(): void {
@@ -1671,6 +1723,7 @@ export class RemoteSession<
       );
     }
     const streamId = this.allocateStreamId();
+    this.traffic?.register(streamId, method, "rpc", prepared.onWirePayload);
     const replaySafe = wireIdempotencyKey !== null;
     return new Promise<unknown>((resolve, reject) => {
       {
@@ -1724,6 +1777,7 @@ export class RemoteSession<
           });
         } catch (cause) {
           this.clearPendingUnary(streamId);
+          this.traffic?.end(streamId, true);
           // Nothing was enqueued, so nothing follows on this stream.
           this.retireOutboundSeq(streamId);
           reject(asHostRpcError(cause, requestId, method));
@@ -1793,6 +1847,7 @@ export class RemoteSession<
       port: this,
     });
     this.subscriptions.set(streamId, stream);
+    this.traffic?.register(streamId, method, "stream", null);
     if (this.phase === "ready" && this.connection !== null) {
       this.openSubscription(this.connection, stream);
     } else {
@@ -1987,6 +2042,7 @@ export class RemoteSession<
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
     for (const stream of this.subscriptions.values()) {
+      this.traffic?.end(stream.streamId, true);
       stream.notifyStatus("closed", { kind: "caller" }, null);
     }
     this.subscriptions.clear();
@@ -2040,6 +2096,7 @@ export class RemoteSession<
       connection.scheduler.dropStreamOutbound(streamId);
       connection.reassembler.forget(streamId);
       this.markStreamTerminal(streamId);
+      this.traffic?.end(streamId, true);
       this.subscriptions.delete(streamId);
       this.restoredStreamIds.delete(streamId);
       const nextSeq = this.retireOutboundSeq(streamId);
@@ -2090,8 +2147,13 @@ export class RemoteSession<
     );
   }
 
+  streamOutboundDebtBytes(streamId: number): number {
+    return this.connection?.scheduler.queuedBytesForStream(streamId) ?? 0;
+  }
+
   closeStream(streamId: number, reason: string): void {
     const connection = this.connection;
+    this.traffic?.end(streamId, false);
     this.subscriptions.delete(streamId);
     this.restoredStreamIds.delete(streamId);
     const nextSeq = this.retireOutboundSeq(streamId);
@@ -2218,6 +2280,8 @@ export class RemoteSession<
       initialBulkCredits: INITIAL_BULK_SEND_CREDITS,
       now: undefined,
     });
+    scheduler.onFrameWritten = (streamId) =>
+      this.subscriptions.get(streamId)?.notifyOutboundProgress();
     const noise = await NoiseChannel.begin(this.options.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
@@ -2230,6 +2294,10 @@ export class RemoteSession<
       handlers: {
         onAttachAck: () => this.onAttachAck(generation),
         onData: (bytes) => this.onData(generation, bytes),
+        onTextBytes:
+          this.traffic === null
+            ? undefined
+            : (bytes) => this.traffic?.receiveText(bytes),
         onHostDetached: () => this.onHostDetached(generation),
         onHostAttached: () => this.onHostAttached(generation),
         onReauthAck: () => undefined,
@@ -2273,6 +2341,7 @@ export class RemoteSession<
       cloudVerdictUpdateSupported: false,
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
+      tunnelStreamsSupported: false,
       hostAttached: true,
       lastInChannelInboundAt: Date.now(),
       inChannelFrames: 0,
@@ -2311,6 +2380,9 @@ export class RemoteSession<
   }
 
   private onData(generation: number, bytes: Uint8Array): void {
+    // Count delivery before generation filtering: a late socket frame still
+    // consumed incoming bytes, even when it cannot enter the current mux.
+    const receivedAtMs = this.traffic?.receiveBinary(bytes.byteLength) ?? 0;
     if (!this.isCurrent(generation)) {
       return;
     }
@@ -2319,6 +2391,7 @@ export class RemoteSession<
       return;
     }
     if (this.phase === "handshaking") {
+      this.traffic?.classifyHandshake(bytes.byteLength);
       // Before ready, and harmless: this IS the host's own responder message,
       // so it counts as the host speaking even though the session cannot
       // carry traffic yet.
@@ -2358,6 +2431,12 @@ export class RemoteSession<
         return;
       }
       const frame = decodeMuxFrame(muxBytes);
+      this.traffic?.classifyMux(
+        frame,
+        bytes.byteLength,
+        muxBytes.byteLength,
+        receivedAtMs,
+      );
       // Bulk credit accounting is PER FRAME at receipt, symmetric with the
       // host's spend-per-frame-sent — counting per completed message would
       // deadlock any transfer longer than the initial credit window at
@@ -2387,6 +2466,20 @@ export class RemoteSession<
       }
       let message: ReassembledMessage | null;
       try {
+        // BEFORE the reassembler, and for EVERY mux type on the stream (a
+        // chunked CLOSE accumulates as readily as chunked data): a stream
+        // whose method never chunks (a tunnel) must not be able to accumulate
+        // toward the generic message cap, or pin a frame-sized buffer behind
+        // a one-byte payload.
+        const subscribed = this.subscriptions.get(frame.streamId);
+        const violation =
+          subscribed !== undefined &&
+          streamMethodForbidsChunking(subscribed.method)
+            ? unchunkedStreamFrameViolation(frame, muxBytes.length)
+            : null;
+        if (violation !== null) {
+          throw new StreamFrameNotAllowedError(violation);
+        }
         message = connection.reassembler.accept(frame);
       } catch (error) {
         if (this.failStreamOnInboundError(generation, frame, error)) {
@@ -2464,6 +2557,16 @@ export class RemoteSession<
     ) {
       return false;
     }
+    // The one decode fault that IS session-level: a compressed frame that
+    // inflated past its own declaration. No genuine sender produces it, and
+    // it is the only inbound fault whose cost is paid in full before it can
+    // be rejected, so leaving it per-stream would let a peer repeat ~66 MB
+    // of receiver work per fresh stream id at no cost to itself. Falling
+    // through to the caller's re-throw routes it to `handleConnectionLost`
+    // like a malformed frame header. See `MuxFrameOverExpansionError`.
+    if (error instanceof MuxFrameOverExpansionError) {
+      return false;
+    }
     if (frame.streamId === SESSION_CONTROL_STREAM_ID) {
       return false;
     }
@@ -2509,6 +2612,7 @@ export class RemoteSession<
       connection.reassembler.forget(frame.streamId);
     }
     this.markStreamTerminal(frame.streamId);
+    this.traffic?.end(frame.streamId, true);
     // Retired BEFORE the enqueue even though the delete used to sit below
     // it: the CLOSE draws its seq when the scheduler pulls, which is after
     // every synchronous line of this method, so a delete anywhere in here
@@ -2730,6 +2834,7 @@ export class RemoteSession<
         // across re-keys, and the old id stays tombstoned so relay-delayed
         // frames from before the verdict remain dead.
         this.subscriptions.delete(message.streamId);
+        this.traffic?.end(message.streamId, true);
         const reopenAttempts = this.streamReopenAttempts.get(message.streamId);
         this.streamReopenAttempts.delete(message.streamId);
         const freshStreamId = this.allocateStreamId();
@@ -2753,6 +2858,7 @@ export class RemoteSession<
         return;
       }
       stream.goFatal(details);
+      this.traffic?.end(message.streamId, true);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
@@ -2768,6 +2874,7 @@ export class RemoteSession<
       if (stream === undefined) {
         return;
       }
+      this.traffic?.end(message.streamId, false);
       stream.notifyStatus("closed", { kind: "caller" }, null);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
@@ -2910,6 +3017,14 @@ export class RemoteSession<
     // notification-feed selection deliberately need the prediction that lets
     // them decide whether to open an optional stream in the first place.
     this.notifyMethodSupportListeners();
+    // Same moment, same evidence, for the per-HOST reader: a caller holding
+    // only a host id (a composer deciding hash-only versus inlined bytes)
+    // cannot ask a session it does not own. Published from
+    // `streamMethodCapability`, which is the only place the two manifests and
+    // this composition's served majors are checked against each other - a raw
+    // manifest key would not answer the question. Re-published on every
+    // re-attach, which is when a host upgraded underneath us re-handshakes.
+    this.publishNegotiatedStreamMethodVersions();
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -2921,6 +3036,9 @@ export class RemoteSession<
     );
     connection.bodyCompressionSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_BODY_COMPRESSION,
+    );
+    connection.tunnelStreamsSupported = parsed.data.capabilities.includes(
+      SESSION_CAPABILITY_TUNNEL_STREAMS,
     );
     if (
       parsed.data.capabilities.includes(SESSION_CAPABILITY_FINE_CREDITS) &&
@@ -3112,6 +3230,7 @@ export class RemoteSession<
   ): void {
     connection.reassembler.forget(streamId);
     this.markStreamTerminal(streamId);
+    this.traffic?.end(streamId, true);
     this.restoredStreamIds.delete(streamId);
     const nextSeq = this.retireOutboundSeq(streamId);
     this.subscriptions.delete(streamId);
@@ -3442,6 +3561,35 @@ export class RemoteSession<
     if (hostManifest === null) {
       return;
     }
+    if (
+      stream.method === HOST_TUNNEL_OPEN_METHOD &&
+      !connection.tunnelStreamsSupported
+    ) {
+      // Refused HERE, before any SUBSCRIBE: a host that never advertised the
+      // capability does not run the tunnel's per-stream window, so the typed
+      // answer - naming the host as the side to upgrade - is the only honest
+      // one, and it must not depend on what that host's manifest happens to
+      // list.
+      stream.goFatal({
+        code: "INCOMPATIBLE",
+        reason: `The host does not support tunnel streams ('${SESSION_CAPABILITY_TUNNEL_STREAMS}'); update the Traycer host on that machine`,
+        incompatibleMethods: [
+          {
+            method: stream.method,
+            clientCanonical: this.clientManifests.stream[stream.method] ?? null,
+            hostCanonical: hostManifest.stream[stream.method] ?? null,
+            blocking: "host-missing-method",
+          },
+        ],
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
+      });
+      this.traffic?.end(stream.streamId, true);
+      this.subscriptions.delete(stream.streamId);
+      return;
+    }
     const selectedClientManifest = selectConnectionManifestForPeer(
       this.options.streamRegistry,
       this.clientManifests.stream,
@@ -3484,6 +3632,7 @@ export class RemoteSession<
           )
         : compat.details;
       stream.goFatal(details);
+      this.traffic?.end(stream.streamId, true);
       this.subscriptions.delete(stream.streamId);
       this.stallReopenedStreamIds.delete(stream.streamId);
       return;
@@ -3508,6 +3657,12 @@ export class RemoteSession<
       stream.readParams(
         selectStreamSubscribeVersion(clientCanonical, hostCanonical),
       ),
+    );
+    this.traffic?.register(
+      stream.streamId,
+      stream.method,
+      "stream",
+      prepared.onWirePayload,
     );
     stream.updateSchemaVersion(prepared.onWireVersion);
     this.enqueueMessage(connection, {
@@ -3571,6 +3726,31 @@ export class RemoteSession<
    * host is at least as new as this client. The Start Page renders one such
    * reader per remote host and crashed on open.
    */
+  /**
+   * Hands {@link RemoteSessionOptions.onNegotiatedStreamMethodVersions} the
+   * version a subscribe would settle on for every method this composition's
+   * registry names, omitting the ones this pairing cannot bridge.
+   *
+   * Every entry goes through `streamMethodCapability`, so the published map is
+   * by construction the same answer `getMethodSchemaVersion` gives for this
+   * session - one source, two readers. It also warms that method cache, which
+   * is keyed on the very manifest object just installed.
+   */
+  private publishNegotiatedStreamMethodVersions(): void {
+    const publish = this.options.onNegotiatedStreamMethodVersions;
+    if (publish === undefined) {
+      return;
+    }
+    const versions = new Map<string, SchemaVersion>();
+    for (const method of Object.keys(this.options.streamRegistry)) {
+      const schemaVersion = this.streamMethodCapability(method).schemaVersion;
+      if (schemaVersion !== null) {
+        versions.set(method, schemaVersion);
+      }
+    }
+    publish(this.options.hostId, versions);
+  }
+
   private streamMethodCapability(method: string): StreamMethodCapability {
     const hostManifest = this.connection?.hostManifest;
     if (hostManifest === null || hostManifest === undefined) {
@@ -3651,6 +3831,7 @@ export class RemoteSession<
     }
     const { streamId, entry } = pending;
     this.clearPendingUnary(streamId);
+    this.traffic?.end(streamId, false);
     // The response ends the exchange; the client sends nothing further here.
     this.retireOutboundSeq(streamId);
     if (parsed.data.error !== null) {
@@ -3918,6 +4099,9 @@ export class RemoteSession<
     cause: string,
     retryCause: FatalErrorDetails | null,
   ): void {
+    if (this.traffic !== null && this.connection?.relaySocket.hasOpened()) {
+      this.traffic.connectionLost();
+    }
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();
@@ -4358,6 +4542,7 @@ export class RemoteSession<
     this.clearAllTimers();
     this.teardownConnection("session-fatal");
     for (const stream of this.subscriptions.values()) {
+      this.traffic?.end(stream.streamId, true);
       stream.goFatal(details);
     }
     this.subscriptions.clear();
@@ -4983,6 +5168,7 @@ export class RemoteSession<
       return;
     }
     this.clearPendingUnary(streamId);
+    this.traffic?.end(streamId, true);
     const nextSeq = this.retireOutboundSeq(streamId);
     // A rejected unary's stream is terminal. Drop any still-queued request
     // upload, clear any partial response accumulator, tombstone the id so a
@@ -5035,6 +5221,7 @@ export class RemoteSession<
 
   private rejectAllPendingUnary(error: HostRpcError): void {
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
+      this.traffic?.end(streamId, true);
       if (entry.timer !== null) {
         clearTimeout(entry.timer);
       }
@@ -5046,6 +5233,7 @@ export class RemoteSession<
 
   private rejectPendingOnConnectionDrop(): void {
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
+      this.traffic?.end(streamId, true);
       if (entry.timer !== null) {
         clearTimeout(entry.timer);
       }
@@ -5623,7 +5811,11 @@ function streamInboundFailureCode(
 ):
   | "STREAM_MESSAGE_TOO_LARGE"
   | "STREAM_BODY_DECODE_FAILED"
-  | "STREAM_CHUNK_REASSEMBLY_FAILED" {
+  | "STREAM_CHUNK_REASSEMBLY_FAILED"
+  | typeof STREAM_FRAME_NOT_ALLOWED_CODE {
+  if (error instanceof StreamFrameNotAllowedError) {
+    return STREAM_FRAME_NOT_ALLOWED_CODE;
+  }
   if (error instanceof MuxMessageSizeError) {
     return "STREAM_MESSAGE_TOO_LARGE";
   }

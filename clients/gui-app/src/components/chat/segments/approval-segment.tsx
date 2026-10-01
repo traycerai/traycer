@@ -2,10 +2,12 @@ import { Check, X } from "lucide-react";
 import { useState } from "react";
 import type { ApprovalDecision } from "@traycer/protocol/persistence/epic/schemas";
 import type { ToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import { cn } from "@/lib/utils";
 import { SegmentCard } from "./segment-card";
 import { SegmentRow } from "./segment-row";
 import { ToolInputPanel } from "./tool-input-panel";
+import { resolvedApprovalBodyText } from "./approval-text";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ResolvedApprovalSegmentProps {
@@ -44,17 +46,31 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
   const header = (
     <ResolvedApprovalHeader
       label={label}
-      inputSummary={inputSummary}
+      // The whole input on one line, cut by the header's own `truncate` at the
+      // row's width (`toolHeaderLine`); the body below still compares against
+      // the persisted summary.
+      inputSummary={toolHeaderLine(toolName, inputSummary, inputDetail)}
       decision={decision}
     />
+  );
+  const bodyText = resolvedApprovalBodyText(
+    label,
+    inputSummary,
+    description,
+    inputDetail,
   );
   const body = (
     <ResolvedApprovalBody
-      description={description}
-      inputDetail={inputDetail}
+      request={bodyText.request}
+      inputDetail={bodyText.inputDetail}
       decision={decision}
     />
   );
+  // A row whose header already says everything has nothing to open.
+  const expandable =
+    bodyText.request !== null ||
+    bodyText.inputDetail !== null ||
+    decision.reason !== null;
   const tone = decision.approved ? "default" : "destructive";
 
   if (variant === "row") {
@@ -67,7 +83,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
         body={body}
         tone={tone}
         stickyHeader
-        expandable
+        expandable={expandable}
         headerFindUnitId={props.headerFindUnitId}
         bodyFindUnitId={null}
         className={undefined}
@@ -86,7 +102,7 @@ export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
       tone={tone}
       headerPosition="normal"
       bodyOverflow="hidden"
-      expandable
+      expandable={expandable}
       headerFindUnitId={props.headerFindUnitId}
       bodyFindUnitId={null}
       className={undefined}
@@ -154,20 +170,20 @@ function ResolvedApprovalHeader(props: {
 }
 
 function ResolvedApprovalBody(props: {
-  description: string | null;
+  request: string | null;
   inputDetail: ToolInputDetail | null;
   decision: ApprovalDecision;
 }) {
-  const { description, inputDetail, decision } = props;
+  const { request, inputDetail, decision } = props;
   return (
     <div className="flex flex-col gap-2">
-      {description !== null ? (
+      {request !== null ? (
         <div className="flex flex-col gap-1">
           <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
             Request
           </span>
           <p className="m-0 whitespace-pre-wrap text-foreground/85">
-            {description}
+            {request}
           </p>
         </div>
       ) : null}

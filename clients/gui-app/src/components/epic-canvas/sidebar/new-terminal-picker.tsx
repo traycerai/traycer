@@ -1,3 +1,4 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 /**
  * Picker popover behind the Terminals panel "+" action. Top section picks
  * the host (machine); below it the shared worktree folder list shows
@@ -38,7 +39,6 @@ import { tileIntent } from "@/lib/canvas/tile-open/intent";
 interface NewTerminalPickerProps {
   readonly epicId: string;
   readonly tabId: string;
-  readonly onBeforeOpen: (() => void) | undefined;
   /**
    * Fired synchronously right after a terminal is launched (before the popover
    * closes). The desktop sidebar passes `null`; the mobile switcher sheet uses
@@ -48,7 +48,8 @@ interface NewTerminalPickerProps {
 }
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
-  const { epicId, onBeforeOpen, onLaunched, tabId } = props;
+  const placement = useColumnOverlayPlacement("row");
+  const { epicId, onLaunched, tabId } = props;
   const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
   const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
@@ -71,13 +72,12 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      // `PopoverContent` mounts `NewTerminalPickerBody` only while open, so the
-      // explicit-row reset and double-launch latch that used to be reset here
-      // now start fresh with the body itself. Only the caller hook remains.
-      if (open) onBeforeOpen?.();
+      // `PopoverContent` mounts `NewTerminalPickerBody` only while open, so
+      // the explicit-row reset and double-launch latch that used to be reset
+      // here now start fresh with the body itself.
       setIsOpen(open);
     },
-    [onBeforeOpen, setIsOpen],
+    [setIsOpen],
   );
 
   const handleLaunch = useCallback(
@@ -111,7 +111,8 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
       </PopoverTrigger>
       <PopoverContent
         layout="bare"
-        align="start"
+        side={placement?.side}
+        align={placement?.align ?? "start"}
         className="w-[min(90vw,28rem)]"
         data-testid="new-terminal-picker-popover"
         // The host picker's list is a nested Radix popover: it portals OUTSIDE

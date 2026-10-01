@@ -15,6 +15,45 @@ browser/secure-storage/native-HTTP; adapt the shared GUI for safe areas and
 touch in mobile-only CSS. Must not: change or duplicate the RPC protocol, host
 lifecycle, authn, cloud UI, or the dev-slot allocator.
 
+## Layout invariants
+
+**One layout, every device — in the installed app.** The installed app is a
+phone-layout product on iPad as much as iPhone — by product decision, not by
+measurement. This same entry is also served to a plain browser tab (the
+launcher's `gui-app` stream), and that tab is **not** phone-only: it decides
+by width like any other window, so `make dev-gui-app` still shows the desktop
+layout in a wide browser. Three pieces hold the native side, and all three
+have to move together or the app half-changes shell:
+
+- `src/web/main.tsx` calls `setPhoneLayoutOnly(Capacitor.isNativePlatform())`,
+  and `useIsMobileViewport()` reads that before it consults a media query. It
+  is set from the same check as `isMobileApp()` but is deliberately a separate
+  flag: `isMobileApp()` stays product-only (store copy, the single-composer
+  draft model) and decides no layout anywhere.
+- `main.tsx` loads one of two stylesheets off that same check, before the
+  first render. `src/web/index.css` is the shared entry with the real
+  breakpoints, and is what the browser tab gets. `src/web/index.native.css`
+  imports it and pushes every Tailwind breakpoint out of reach, so `md:` and
+  `lg:` utilities cannot paint desktop controls over the phone shell at tablet
+  widths. The comment there explains why it is a sentinel value and not
+  `--breakpoint-*: initial`. **Raw `@media` rules outside Tailwind do not get
+  this for free** — a hand-written `max-width: 767px` tier is phone styling
+  that silently stops applying on a tablet running the phone shell. Either key
+  it on the resolved layout, or override it in `index.native.css`, which is
+  what the first-task coachmark's type scale does.
+- Both platforms are portrait-locked on tablets as well as phones. iOS:
+  `UISupportedInterfaceOrientations~ipad` in **both** `Info.plist` and
+  `Info-Dev.plist` (Debug builds use the latter, so they are what the lock is
+  actually exercised on), plus `UIRequiresFullScreen`, which Apple requires of
+  an app that drops an orientation. Treat that key as compatibility mode, not
+  a guarantee: Stage Manager and iPadOS 26 windowing still scale the app, and
+  it is deprecated against the iOS 27 SDK. Android:
+  `android:screenOrientation` on `MainActivity`, plus the
+  `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, without which
+  targetSdk 36 ignores that lock on anything sw600dp or larger. The opt-out
+  disappears at targetSdk 37 and the comment in the manifest says what to do
+  then (delete both; the phone layout handles free rotation).
+
 ## Host and auth invariants
 
 - No bundled local host — `onLocalHostChange` emits `null`, never transitions.
@@ -74,6 +113,10 @@ lifecycle, authn, cloud UI, or the dev-slot allocator.
 bun run --cwd clients/mobile compile | test | build:web | sync:ios | sync:android
 bun run --cwd clients/mobile dev:ios -- --slot <slot>      # dev:android
 ```
+
+`compile` and `test` are whole-project runs. The commit hook compiles, and CI
+tests; run one yourself only to diagnose its failure (see the root
+`AGENTS.md`).
 
 Normal entry points live in the internal repo: `make dev-gui-app` then
 `make dev-ios` / `make dev-android` (resolve the worktree's slot, install,

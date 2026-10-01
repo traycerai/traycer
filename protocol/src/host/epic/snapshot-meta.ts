@@ -20,6 +20,8 @@ import {
   taskRepoAssociationSchema,
   userTaskWorkspaceSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
+
 
 const permissionRoleSchema = getRecordSchema(
   commonRecordRegistry,
@@ -27,19 +29,19 @@ const permissionRoleSchema = getRecordSchema(
   "latest",
 );
 
-export const localRepoMappingEntrySchema = z.object({
+export const localRepoMappingEntrySchema = lazySchema(() => z.object({
   repoIdentifier: z.string(),
   workspacePath: z.string(),
   lastSyncedAt: z.number(),
-});
+}));
 export type LocalRepoMappingEntry = z.infer<typeof localRepoMappingEntrySchema>;
 
-export const resolvedWorkspaceFolderSchema = z.object({
+export const resolvedWorkspaceFolderSchema = lazySchema(() => z.object({
   workspacePath: z.string(),
   hostId: z.string(),
   repoIdentifier: taskRepoIdentifierSchema.nullable(),
   lastSyncedAt: z.number().nullable(),
-});
+}));
 export type ResolvedWorkspaceFolder = z.infer<
   typeof resolvedWorkspaceFolderSchema
 >;
@@ -56,7 +58,7 @@ export type ResolvedWorkspaceFolder = z.infer<
  * the field were always populated reads `undefined` (the `providers.list`
  * #258 incident). New fields go on a new minor's shape below.
  */
-export const snapshotMetaEpicSchemaV10 = z.object({
+export const snapshotMetaEpicSchemaV10 = lazySchema(() => z.object({
   schemaVersion: z.string(),
   epicLight: epicLightSchema.nullable(),
   permissionRole: permissionRoleSchema.nullable(),
@@ -66,7 +68,7 @@ export const snapshotMetaEpicSchemaV10 = z.object({
   workspaceFolders: z.array(resolvedWorkspaceFolderSchema),
   unresolvedRepos: z.array(taskRepoIdentifierSchema),
   hostStateVectorBase64: z.string(),
-});
+}));
 export type SnapshotMetaEpicV10 = z.infer<typeof snapshotMetaEpicSchemaV10>;
 
 /**
@@ -78,7 +80,7 @@ export type SnapshotMetaEpicV10 = z.infer<typeof snapshotMetaEpicSchemaV10>;
  * silently strip the extra key a `@1.2`-built frame carries. `@1.3` extends
  * THIS shape the same way - see {@link snapshotMetaEpicSchema}.
  */
-export const snapshotMetaEpicSchemaV12 = snapshotMetaEpicSchemaV10.extend({
+export const snapshotMetaEpicSchemaV12 = lazySchema(() => snapshotMetaEpicSchemaV10.extend({
   /**
    * The concrete cloud collaboration room the host opened for this snapshot.
    *
@@ -103,7 +105,7 @@ export const snapshotMetaEpicSchemaV12 = snapshotMetaEpicSchemaV10.extend({
    * fact instead of a runtime coin flip.
    */
   roomId: z.string().optional(),
-});
+}));
 export type SnapshotMetaEpicV12 = z.infer<typeof snapshotMetaEpicSchemaV12>;
 
 /**
@@ -114,7 +116,7 @@ export type SnapshotMetaEpicV12 = z.infer<typeof snapshotMetaEpicSchemaV12>;
  * object rather than a mutation of {@link snapshotMetaEpicSchemaV12}, per the
  * frozen-per-minor rule.
  */
-export const snapshotMetaEpicSchema = snapshotMetaEpicSchemaV12.extend({
+export const snapshotMetaEpicSchema = lazySchema(() => snapshotMetaEpicSchemaV12.extend({
   /**
    * Present ONLY when the snapshot frame's binary payload is a Yjs **delta**
    * computed against the state vector this client offered in the open
@@ -143,7 +145,7 @@ export const snapshotMetaEpicSchema = snapshotMetaEpicSchemaV12.extend({
    * would drop every byte the delta legitimately omitted.
    */
   seededFromOffer: z.literal(true).optional(),
-});
+}));
 export type SnapshotMetaEpic = z.infer<typeof snapshotMetaEpicSchema>;
 
 /**
@@ -158,7 +160,7 @@ export type SnapshotMetaEpic = z.infer<typeof snapshotMetaEpicSchema>;
  * keeps the renderer's `snapshotMeta` consumer from observing semantically
  * wrong placeholder values between the early frame and the real snapshot.
  */
-export const earlyMetaEpicSchema = z.object({
+export const earlyMetaEpicSchema = lazySchema(() => z.object({
   epicLight: epicLightSchema.nullable(),
   permissionRole: permissionRoleSchema.nullable(),
   repos: z.array(taskRepoAssociationSchema),
@@ -166,5 +168,5 @@ export const earlyMetaEpicSchema = z.object({
   repoMapping: z.array(localRepoMappingEntrySchema),
   workspaceFolders: z.array(resolvedWorkspaceFolderSchema),
   unresolvedRepos: z.array(taskRepoIdentifierSchema),
-});
+}));
 export type EarlyMetaEpic = z.infer<typeof earlyMetaEpicSchema>;

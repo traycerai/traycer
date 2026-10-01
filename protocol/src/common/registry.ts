@@ -16,6 +16,7 @@ import {
   permissionRoleSchema,
   ticketStatusSchema,
 } from "@traycer/protocol/common/_internal/schemas";
+import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
  * Shared-vocabulary record registry.
@@ -61,14 +62,16 @@ export type JsonContent = {
   text?: string;
 };
 
-const jsonContentSchema: z.ZodType<JsonContent> = z.lazy(() =>
-  z.object({
-    type: z.string().optional(),
-    attrs: z.record(z.string(), z.unknown()).optional(),
-    content: z.array(jsonContentSchema).optional(),
-    marks: z.array(jsonContentMarkSchema).optional(),
-    text: z.string().optional(),
-  }),
+const jsonContentSchema: z.ZodType<JsonContent> = lazySchema(() =>
+  z.lazy(() =>
+    z.object({
+      type: z.string().optional(),
+      attrs: z.record(z.string(), z.unknown()).optional(),
+      content: z.array(jsonContentSchema).optional(),
+      marks: z.array(jsonContentMarkSchema).optional(),
+      text: z.string().optional(),
+    }),
+  ),
 );
 
 export const jsonContentRecordV100 = defineRecordContract({

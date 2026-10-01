@@ -1,52 +1,26 @@
 import type { ReactNode } from "react";
 import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { EnumSelect } from "@/components/settings/settings-enum-select";
 import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
-import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import { altLabel, modLabel, shiftLabel } from "@/lib/keybindings/platform";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import {
-  isAgentTabSurfacing,
-  isBrowserTilePlacement,
   isLinkOpenDefault,
   isLinkOpenMode,
+  type LinkOpenMode,
+  type LinkOpenSettings,
   isTilePlacement,
   isTilePlacementDefault,
   useSettingsStore,
-  type AgentTabSurfacing,
-  type BrowserTilePlacement,
-  type LinkOpenMode,
-  type LinkOpenSettings,
   type TilePlacement,
   type TilePlacementSettings,
 } from "@/stores/settings/settings-store";
-
-/**
- * Settings > Opening behavior: the one page that answers "where does the thing
- * I just clicked end up". Three groups - links (which surface a URL opens on),
- * tile placement (this pane, a split, or picture-in-picture), and agent-opened
- * tabs (whether a tab the agent opened surfaces at all). The last one used to
- * sit as a standalone row under tile placement, where it read as a fifth
- * per-type override drawn with the wrong tint; it is a gate, not a placement.
- *
- * Every control is a plain enum select over the settings store. The modifier
- * keys that override a choice per click get ONE platform-aware legend under
- * the groups instead of a clause in each row's copy: none of them is
- * configurable, so repeating them per row spends description space that the
- * row's own scope needs.
- */
 
 const LINK_OPEN_MODE_LABELS: Record<LinkOpenMode, string> = {
   "in-app": "In Traycer",
@@ -68,18 +42,6 @@ const TILE_PLACEMENT_DEFAULT_LABELS: Record<
   ...TILE_PLACEMENT_LABELS,
   "per-category": "Per tile type",
 };
-/** Only the browser category can float - the other two have no PiP host. */
-const BROWSER_TILE_PLACEMENT_LABELS: Record<BrowserTilePlacement, string> = {
-  ...TILE_PLACEMENT_LABELS,
-  pip: "Picture in picture",
-};
-const AGENT_TAB_SURFACING_LABELS: Record<AgentTabSurfacing, string> = {
-  surface: "Like any browser tile",
-  off: "Leave in the sidebar",
-};
-
-const TRIGGER_CLASS = "w-[min(60vw,12rem)]";
-
 /**
  * A single-tile viewport has nowhere to put a split or a floating tile, so
  * every placement choice on this page collapses to "here". Said as the row's
@@ -100,8 +62,6 @@ export function OpeningBehaviorPanel(): ReactNode {
   const setLinkOpen = useSettingsStore((s) => s.setLinkOpen);
   const tilePlacement = useSettingsStore((s) => s.tilePlacement);
   const setTilePlacement = useSettingsStore((s) => s.setTilePlacement);
-  const agentTabSurfacing = useSettingsStore((s) => s.agentTabSurfacing);
-  const setAgentTabSurfacing = useSettingsStore((s) => s.setAgentTabSurfacing);
   const compact = useSettingsDensity() === "compact";
   const singleTileViewport = useIsMobileViewport();
 
@@ -224,21 +184,6 @@ export function OpeningBehaviorPanel(): ReactNode {
                 }
               />
               <SettingsRow
-                row={OPENING_BEHAVIOR.definitions.tileBrowser}
-                control={
-                  <EnumSelect
-                    labels={BROWSER_TILE_PLACEMENT_LABELS}
-                    isValue={isBrowserTilePlacement}
-                    value={tilePlacement.browser}
-                    onValueChange={(browser) => {
-                      trackOpeningBehaviorSetting("tilePlacement");
-                      setTilePlacement({ browser });
-                    }}
-                    ariaLabel="Browsers"
-                  />
-                }
-              />
-              <SettingsRow
                 row={OPENING_BEHAVIOR.definitions.tileSideChat}
                 control={
                   <EnumSelect
@@ -257,30 +202,6 @@ export function OpeningBehaviorPanel(): ReactNode {
           ) : null}
         </SettingsGroup>
 
-        <SettingsGroup
-          group={OPENING_BEHAVIOR.definitions.agentTabs}
-          showTitle
-          tone="default"
-          dataTestId="settings-opening-agent-tabs"
-          fill={false}
-        >
-          <SettingsRow
-            row={OPENING_BEHAVIOR.definitions.agentOpenedTabs}
-            control={
-              <EnumSelect
-                labels={AGENT_TAB_SURFACING_LABELS}
-                isValue={isAgentTabSurfacing}
-                value={agentTabSurfacing}
-                onValueChange={(value) => {
-                  trackOpeningBehaviorSetting("agentTabSurfacing");
-                  setAgentTabSurfacing(value);
-                }}
-                ariaLabel="Agent-opened tabs"
-              />
-            }
-          />
-        </SettingsGroup>
-
         <p className="px-1 text-ui-sm text-muted-foreground">
           {MODIFIER_LEGEND}
         </p>
@@ -288,7 +209,6 @@ export function OpeningBehaviorPanel(): ReactNode {
     </SettingsPanelShell>
   );
 }
-
 /** The four per-kind link rows differ only in copy and which field they set. */
 function LinkKindRow(props: {
   readonly row: SettingsRowDefinition;
@@ -311,51 +231,5 @@ function LinkKindRow(props: {
         />
       }
     />
-  );
-}
-
-/**
- * One `Select` over a string-union setting: the labels record supplies both
- * the options and their order, and the union's own store guard narrows what
- * Radix hands back. Moved here from `browser-settings-section.tsx` with the
- * controls it served.
- */
-function EnumSelect<T extends string>(props: {
-  /**
-   * Options and their order. Each caller declares its own constant as
-   * `Record<Union, string>`, so member coverage is checked there.
-   */
-  readonly labels: Readonly<Record<string, string>>;
-  readonly value: T;
-  readonly isValue: (value: string) => value is T;
-  readonly onValueChange: (value: T) => void;
-  /** Verbatim the row's visible label - a spoken name that matches what is read. */
-  readonly ariaLabel: string;
-}): ReactNode {
-  // The row's description, spoken after the name instead of being lost.
-  const describedById = useSettingsRowDescriptionId();
-  return (
-    <Select
-      value={props.value}
-      onValueChange={(value) => {
-        if (props.isValue(value)) props.onValueChange(value);
-      }}
-    >
-      <SelectTrigger
-        aria-label={props.ariaLabel}
-        aria-describedby={describedById}
-        className={TRIGGER_CLASS}
-        size="sm"
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {Object.entries(props.labels).map(([value, label]) => (
-          <SelectItem key={value} value={value}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }

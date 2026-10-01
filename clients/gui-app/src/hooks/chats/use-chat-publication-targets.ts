@@ -90,6 +90,33 @@ export function invalidateChatPublicationTargets(
   });
 }
 
+/** Capture the publication identity before deletion removes the local row. */
+export function readCachedChatPublicationId(
+  queryClient: QueryClient,
+  hostId: string | null,
+  epicId: string,
+  chatId: string,
+): string | null {
+  if (hostId === null) return null;
+  // TanStack partial matching: an empty chatIds array matches every cached
+  // id set for this epic. Prefer the latest answer across those sets.
+  const queries = queryClient.getQueryCache().findAll({
+    queryKey: queryKeys.hostMethod<
+      HostRpcRegistry,
+      typeof PUBLICATION_TARGETS_METHOD
+    >(hostId, PUBLICATION_TARGETS_METHOD, { epicId, chatIds: [] }),
+  });
+  queries.sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt);
+  for (const query of queries) {
+    const data = queryClient.getQueryData<
+      ResponseOfMethod<HostRpcRegistry, typeof PUBLICATION_TARGETS_METHOD>
+    >(query.queryKey);
+    const redirect = data?.redirected.find((entry) => entry.chatId === chatId);
+    if (redirect !== undefined) return redirect.publicationChatId;
+  }
+  return null;
+}
+
 /**
  * States the degrade ONCE per epic, at `info`.
  *

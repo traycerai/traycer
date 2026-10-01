@@ -4,6 +4,7 @@ import { SwitcherNewChatAction } from "@/components/epic-canvas/mobile/switcher-
 import { SwitcherAgentsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
 import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
+import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import {
   ChatTreeSurfaceContext,
   type ChatTreeSurface,
@@ -93,7 +94,14 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
           }
           viewMenu={<SwitcherAgentsViewMenu epicId={epicId} />}
         />
-        <ChatTreePanelBody epicId={epicId} tabId={tabId} />
+        {/* Titles only here. The desktop panel's message hits read the PANEL's
+            search store, and this sheet's query is its own state (above), so
+            the section would search a box that is not the one on screen. */}
+        <ChatTreePanelBody
+          epicId={epicId}
+          tabId={tabId}
+          messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+        />
       </div>
     </ChatTreeSurfaceContext.Provider>
   );
