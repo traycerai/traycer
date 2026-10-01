@@ -46,7 +46,7 @@ export function HostDangerZone(props: {
       dataTestId="host-danger-zone"
       fill={false}
     >
-      <HostRemovalRow host={scope.host} />
+      <HostRemovalRow host={scope.host} onRemoved={scope.returnToActive} />
     </SettingsGroup>
   );
 }
@@ -63,7 +63,10 @@ export function HostDangerZone(props: {
  * Account removal is registered-only: a directory-only host has no membership to
  * end, so the row would be a destructive control with nothing behind it.
  */
-function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
+function HostRemovalRow(props: {
+  readonly host: HostScopeOption;
+  readonly onRemoved: () => void;
+}): ReactNode {
   const { host } = props;
   if (host.isLocalMachine) return <RemoveTraycerRow />;
   if (!host.registered) return null;
@@ -75,6 +78,7 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
       key={host.hostId}
       hostId={host.hostId}
       hostName={host.name}
+      onRemoved={props.onRemoved}
     />
   );
 }
@@ -107,12 +111,21 @@ function HostRemovalRow(props: { readonly host: HostScopeOption }): ReactNode {
  * exists. Coming back requires the host to be set up again on that machine —
  * and because the row is deregistered rather than revoked, a re-enrollment
  * re-adopts the SAME id with its policy preserved.
+ *
+ * A successful removal hands the page back to the active host (`onRemoved`).
+ * Otherwise Settings stays pinned to the id just removed, and the next list
+ * refresh resolves that pin to the `vanished` notice - "<uuid> is no longer
+ * registered" - for a removal the user confirmed seconds ago. That notice is
+ * for a host that disappears out from under the page; here the user asked for
+ * the removal and the toast names it, so following the active host again is
+ * not the silent retarget `resolveScopedHost` refuses.
  */
 function RemoveFromAccountRow(props: {
   readonly hostId: string;
   readonly hostName: string;
+  readonly onRemoved: () => void;
 }): ReactNode {
-  const { hostId, hostName } = props;
+  const { hostId, hostName, onRemoved } = props;
   const [confirmOpen, setConfirmOpen] = useState(false);
   // Closing over `hostId` is NOT by itself what stops a scope change from
   // retargeting an open confirmation - a re-render with a new prop rebuilds
@@ -159,6 +172,8 @@ function RemoveFromAccountRow(props: {
             onSuccess: () => {
               setConfirmOpen(false);
               toast.success(`Removed ${hostName} from this account`);
+              // Last: it moves the scope, which remounts this row's page.
+              onRemoved();
             },
           });
         }}
