@@ -69,10 +69,12 @@ function ProfileCopyEntryButtonForHost(props: {
 
   const ambient = profile.kind === "ambient";
   let disabledReason: string | null = null;
-  if (ambient && profile.auth.status !== "authenticated") {
+  if (ambient && profile.auth.status === "unauthenticated") {
     // The source reads the Terminal account's registry row, which exists
     // only once it has been seen signed in; a signed-out one has nothing to
-    // copy and would only ever answer "source missing".
+    // copy and would only ever answer "source missing". Only a KNOWN
+    // sign-out blocks: `unknown` is what a disabled Terminal account or an
+    // unprobed one reports, and the host accepts those as a source.
     disabledReason = `Sign in to the Terminal account on ${sourceName} first.`;
   } else if (supported === null) {
     disabledReason = `Checking what ${sourceName} supports…`;

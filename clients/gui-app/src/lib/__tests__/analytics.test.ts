@@ -112,6 +112,39 @@ describe("analytics", () => {
     ).toEqual({ provider: "antigravity", mode: "create" });
   });
 
+  it("keeps a profile copy's source kind, which is what splits Terminal-account copies from managed ones", async () => {
+    // A property on the event type but missing from the runtime key list is
+    // dropped silently by the sanitizer, with the event still sent - which is
+    // exactly how `source_kind` first shipped.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 2,
+        source_kind: "ambient",
+      }),
+    ).toEqual({
+      provider: "codex",
+      destination_count: 2,
+      source_kind: "ambient",
+    });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 1,
+        source_kind: "terminal",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 1,
+      }),
+    ).toBeNull();
+  });
+
   it("accepts every settings section the type union declares", async () => {
     // The runtime allowlist is what `section` is validated against, and a
     // union member missing from it drops the event with no error anywhere -
@@ -1762,18 +1795,25 @@ describe("profile copy analytics allowlists", () => {
       sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
         provider: "claude-code",
         destination_count: 2,
+        source_kind: "managed",
       }),
-    ).toEqual({ provider: "claude-code", destination_count: 2 });
+    ).toEqual({
+      provider: "claude-code",
+      destination_count: 2,
+      source_kind: "managed",
+    });
     expect(
       sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
         provider: "claude-code",
         destination_count: 10_001,
+        source_kind: "managed",
       }),
     ).toBeNull();
     expect(
       sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
         provider: "claude-code",
         destination_count: -1,
+        source_kind: "managed",
       }),
     ).toBeNull();
   });

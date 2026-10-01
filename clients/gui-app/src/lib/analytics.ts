@@ -1693,7 +1693,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
   ),
   ...eventKeyEntries(
     [AnalyticsEvent.ProfileCopyStarted],
-    ["provider", "destination_count"],
+    ["provider", "destination_count", "source_kind"],
   ),
   ...eventKeyEntries(
     [AnalyticsEvent.ProfileCopyAttemptSettled],
@@ -2059,6 +2059,7 @@ const EXACT_PROPERTY_VALUES: {
   permission: new Set(["denied", "granted", "unavailable"]),
   pressure_tier: ANALYTICS_RESOURCE_PRESSURE_TIERS,
   provider: ANALYTICS_PROVIDERS,
+  source_kind: new Set(["managed", "ambient"]),
   region: ANALYTICS_LAYOUT_REGIONS,
   role: new Set(["editor", "owner", "viewer"]),
   session_duration_bucket: ANALYTICS_LAYOUT_DURATION_BUCKETS,

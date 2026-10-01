@@ -83,6 +83,13 @@ export function useProfileCopyLoginAwaitMutation(
     client,
     method: "providers.profileCopy.login.await",
     responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+    // No per-wait abort, unlike `providers.awaitLogin` (traycer#2299): that
+    // request's params name no attempt, so a cancelled attempt's in-flight
+    // wait was joined by the next one and answered for it. This request
+    // names the attempt (`profileCopyLoginControlRequestSchema`), so the
+    // only wait a join can share is this attempt's own, and that answer is
+    // the right one for every window waiting on it.
+    signalFor: null,
     options: {
       gcTime: LOGIN_MUTATION_GC_TIME_MS,
       mutationKey: profileCopyMutationKeys.loginAwait(

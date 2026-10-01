@@ -282,6 +282,26 @@ describe("ProfileCopyEntryButton", () => {
       "Sign in to the Terminal account on Studio Mac first.",
     );
 
+    // Only a KNOWN sign-out blocks. `unknown` is what a disabled or not yet
+    // probed Terminal account reports, and the host still reads its row.
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyEntryButton
+            hostId={SOURCE_HOST_ID}
+            providerId="claude-code"
+            profile={{
+              ...signedIn,
+              auth: { ...signedIn.auth, status: "unknown" },
+            }}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: /Copy to devices/ }),
+    ).toHaveProperty("disabled", false);
+
     // The sign-in reason leads the chain: it holds even while support is
     // unknown, and a managed profile that is signed out is not subject to it.
     harness.support = null;
