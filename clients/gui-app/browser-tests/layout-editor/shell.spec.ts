@@ -2244,7 +2244,12 @@ test.describe("the shell with the panel loaded on the left", () => {
     const epsilon = await rowRect(page, "epic:fixture-epsilon");
     const delta = await rowRect(page, "epic:fixture-delta");
     await pressAt(page, epsilon.cx, epsilon.cy);
-    await moveInSteps(page, { x: epsilon.cx, y: delta.cy - 8 });
+    // Past Delta's centre and clear of its split zone (a quarter of the row
+    // either side of the centre), so the drop is a move.
+    await moveInSteps(page, {
+      x: epsilon.cx,
+      y: delta.cy - delta.height / 2 + 4,
+    });
     await nextFrames(page, 6);
     await releasePointer(page);
     await expect
