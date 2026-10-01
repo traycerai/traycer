@@ -13,30 +13,35 @@
  * provisional order moves a tab under the pointer, which changes the hit, which
  * changes the provisional order - and the strip oscillates.
  *
- * Two properties are load-bearing and both fall out of the swap rule rather
- * than being tuned in:
+ * Each neighbour of the dragged tab is read in zones along the axis, against
+ * the strip as it is drawn this frame:
+ *
+ * - its **middle half** splits with it, at once;
+ * - its **near quarter**, the side the dragged tab came from, keeps the tab on
+ *   that side;
+ * - its **far quarter** passes it: the neighbour moves over to the side the tab
+ *   came from, and the gap opens beyond it.
+ *
+ * A neighbour that cannot be split with (a split pair, or any neighbour in a
+ * strip that never splits, such as a tile strip or a keyboard drag) has no
+ * middle, and is passed at its centre as Chrome passes tabs.
+ *
+ * Two properties are load-bearing and both fall out of the rule rather than
+ * being tuned in:
  *
  * - **Monotonicity.** A monotone pointer sweep yields a monotone index.
- * - **Hysteresis.** After a swap the neighbour's centre has moved, so reversing
- *   requires re-crossing `sourceExtent` - see `swapHysteresisPx`. Note this is
- *   the SOURCE's extent, not the mean of the pair: the two coincide only for
- *   equal-extent items, and a split group is one strip item of its own extent.
+ * - **No flicker.** A neighbour that has just moved over is drawn behind the
+ *   dragged tab, a whole tab and gap from where it was, so the centre that
+ *   passed it is outside it: reversing has to come back through its near
+ *   quarter and middle before it reaches the quarter that passes it back.
  *
- * In a strip with tab groups the neighbours' centres the swap rule crosses are
- * the ones the drag draws (`strip-group-layout.ts`): a group's header and block
+ * In a strip with tab groups the neighbours the zones are read against are the
+ * ones the drag draws (`strip-group-layout.ts`): a group's header and block
  * padding are laid out where the provisional order puts them, not carried in a
- * slot's `advance`, so a tab swaps with a neighbour when it reaches the
- * neighbour as drawn. The layout depends on the group the dragged tab is in,
- * and that on the index, so each frame settles the two against each other from
- * the previous frame's group.
- *
- * A split (pair-into-split) is deliberate, a move is the default. The dragged
- * centre has to stay in the MIDDLE HALF of a mergeable neighbour for
- * `SPLIT_HOLD_MS` before the state becomes a merge; anywhere else, and in the
- * middle before the hold completes, it is a reorder. The clock is an input
- * (`now`), carried between frames in the previous state's `hold`, so the model
- * stays a pure function: the caller owns the timer that asks again when the
- * pointer holds still.
+ * slot's `advance`. The layout depends on the group the dragged tab is in, and
+ * that on the index, so each frame settles the two against each other from the
+ * previous frame's group. A split is drawn in that same layout, so showing or
+ * dropping it moves nothing.
  *
  * A reorder also decides group membership, by position: the group whose block
  * (or chip and members) the dragged centre is inside, when that group is one of
@@ -53,7 +58,7 @@
  * back over the source slot. Pointer-resolved zones make that gesture a dead
  * zone - the tab overlaps the target, nothing highlights, nothing swaps -
  * which reads as the drag simply not working. The centre moves 1:1 with the
- * pointer, so monotonicity and hysteresis are unaffected by the choice; what
+ * pointer, so monotonicity and no flicker are unaffected by the choice; what
  * changes is that every boundary sits where the visible tab says it is.
  */
 import {
@@ -148,15 +153,6 @@ export interface StripDragGeometry {
  */
 export type MergeSide = "left" | "right";
 
-/**
- * How long the dragged centre has been in the middle half of `itemId`, from
- * the `now` of the frame it entered it.
- */
-export interface StripHold {
-  readonly itemId: string;
-  readonly since: number;
-}
-
 export type StripDragState =
   | {
       readonly kind: "reorder";
@@ -165,21 +161,20 @@ export type StripDragState =
       readonly groupId: string | null;
       /** Whether that is a group the dragged item is not in now. */
       readonly joinsGroup: boolean;
-      /** The middle-half hold under way; it arms a split at `SPLIT_HOLD_MS`. */
-      readonly hold: StripHold | null;
     }
   | {
       readonly kind: "merge";
+      /** Where the strip is drawn while the split shows: the move it sits on. */
       readonly targetIndex: number;
+      readonly groupId: string | null;
       readonly targetItemId: string;
       readonly targetSide: MergeSide;
-      readonly hold: StripHold;
     };
 
-/** How long the dragged centre rests in a task's middle half to arm a split. */
-export const SPLIT_HOLD_MS = 350;
-
-/** The middle half of a task is within this fraction of its extent of its centre. */
+/**
+ * A task's middle half is within this fraction of its extent of its centre;
+ * the quarter beyond it on either side is its near or far quarter.
+ */
 const SPLIT_ZONE_RADIUS = 0.25;
 
 export interface ResolveStripDragInput {
@@ -193,26 +188,13 @@ export interface ResolveStripDragInput {
    */
   readonly contentOrigin: number;
   readonly pointer: number;
-  /** The frame's time, in ms; only differences between frames are read. */
-  readonly now: number;
-  /** False for a keyboard drag, which never splits. */
+  /** False for a strip or a drag that never splits (a tile strip, a keyboard drag). */
   readonly canSplit: boolean;
   /**
-   * Carries the settled `targetIndex` between frames - see the swap rule - and
-   * the hold's start.
+   * The previous frame's state: where the strip is drawn now, which every zone
+   * is read against.
    */
   readonly previous: StripDragState | null;
-}
-
-/**
- * Distance the pointer must travel back before a just-made swap reverses.
- * Both crossings use the approached tab's midpoint. After the swap that tab
- * occupies the source slot, so the midpoint shift - and therefore
- * hysteresis - is exactly the dragged source extent, independent of unequal
- * neighbour extents.
- */
-export function swapHysteresisPx(sourceExtent: number): number {
-  return sourceExtent;
 }
 
 /**
@@ -437,17 +419,25 @@ function lockedGroupIds(geometry: StripDragGeometry): ReadonlySet<string> {
   );
 }
 
+/** What a frame reads its neighbours with: the dragged centre, and the groups it cannot join. */
+interface Pass {
+  readonly locked: ReadonlySet<string>;
+  readonly centre: number;
+  readonly canSplit: boolean;
+}
+
 /**
- * How many slots crossing the neighbour on `step`'s side takes: one, or the
- * whole run of a locked group the dragged tab is not in, which is crossed as
- * one unit when the centre passes the run's own centre, so the dragged tab is
- * never left inside it. 0 when the centre has not passed.
+ * How many slots passing the neighbour on `step`'s side takes: one, once the
+ * centre reaches the neighbour's far quarter (its centre, for a neighbour with
+ * no middle to split on), or the whole run of a locked group the dragged tab is
+ * not in, which is passed as one unit at the run's own centre, so the dragged
+ * tab is never left inside it. 0 when the centre has not passed.
  */
 function slotsCrossed(
   laidOut: ReadonlyArray<LaidOutSlot>,
   index: number,
   step: 1 | -1,
-  pass: { readonly locked: ReadonlySet<string>; readonly centre: number },
+  pass: Pass,
 ): number {
   const { locked, centre } = pass;
   if (index + step < 0 || index + step >= laidOut.length) return 0;
@@ -459,9 +449,16 @@ function slotsCrossed(
     groupId !== laidOut[index].slot.groupId
       ? runLength(laidOut, index + step, step, groupId)
       : 1;
-  const runCentre =
-    run === 1 ? first.centre : centreOfRun(first, laidOut[index + step * run]);
-  const passed = step === 1 ? centre > runCentre : centre < runCentre;
+  const middle =
+    run === 1 && pass.canSplit && first.slot.isMergeTarget
+      ? first.slot.extent * SPLIT_ZONE_RADIUS
+      : 0;
+  const threshold =
+    (run === 1
+      ? first.centre
+      : centreOfRun(first, laidOut[index + step * run])) +
+    step * middle;
+  const passed = step === 1 ? centre > threshold : centre < threshold;
   return passed ? run : 0;
 }
 
@@ -517,10 +514,19 @@ function settleTargetIndex(
   geometry: StripDragGeometry,
   contentOrigin: number,
   startIndex: number,
-  dragged: { readonly centre: number; readonly groupId: string | null },
+  dragged: {
+    readonly centre: number;
+    readonly groupId: string | null;
+    readonly canSplit: boolean;
+  },
 ): number {
-  const { centre, groupId } = dragged;
+  const { groupId } = dragged;
   const locked = lockedGroupIds(geometry);
+  const pass: Pass = {
+    locked,
+    centre: dragged.centre,
+    canSplit: dragged.canSplit,
+  };
   const { low, high } = movableRange(geometry, locked);
   let index = Math.min(Math.max(startIndex, low), high);
   // Bounded by the slot count: each iteration moves the index at least one step
@@ -530,12 +536,12 @@ function settleTargetIndex(
       targetIndex: index,
       groupId,
     });
-    const forward = slotsCrossed(laidOut, index, 1, { locked, centre });
+    const forward = slotsCrossed(laidOut, index, 1, pass);
     if (forward > 0 && index + forward <= high) {
       index += forward;
       continue;
     }
-    const back = slotsCrossed(laidOut, index, -1, { locked, centre });
+    const back = slotsCrossed(laidOut, index, -1, pass);
     if (back > 0 && index - back >= low) {
       index -= back;
       continue;
@@ -553,13 +559,12 @@ interface SplitCandidateResult {
 /**
  * The mergeable neighbour whose MIDDLE HALF the dragged tab's centre is
  * currently inside, or null. Candidacy is purely positional - centre within
- * `SPLIT_ZONE_RADIUS` of a neighbour's provisional centre - with NO
- * travel-direction filter: after a swap, the passed tab sits a full
- * `sourceExtent` behind the dragged centre, so it can only re-arm when the
- * centre genuinely re-enters its middle (a narrow tab still overlapping a wide
- * neighbour it just passed, or the user reversing onto it). Filtering by net
- * travel instead re-created the dead zone the module doc forbids: reverse after
- * a swap and the tab visibly sat on the neighbour with nothing highlighted.
+ * `SPLIT_ZONE_RADIUS` of a neighbour's drawn centre - with NO travel-direction
+ * filter: a passed tab sits a whole tab and gap behind the dragged centre, so
+ * it can only become the target again when the centre genuinely re-enters its
+ * middle, which is the user reversing onto it. Filtering by net travel instead
+ * re-created the dead zone the module doc forbids: reverse after a pass and the
+ * tab visibly sat on the neighbour with nothing highlighted.
  * Both neighbours are candidates; the nearer one wins on a strip narrow enough
  * for both middles to contain the centre. A candidate AHEAD of the dragged tab
  * is approached from its start (the dragged tab would take the pair's left
@@ -640,22 +645,6 @@ function dropGroupId(
   return groupId !== null && locked.has(groupId) ? null : groupId;
 }
 
-/**
- * The hold the next frame carries: the one under way when the centre is still
- * in the same task's middle, else a new one starting now, else none.
- */
-function nextHold(
-  candidate: SplitCandidateResult | null,
-  previous: StripDragState | null,
-  now: number,
-): StripHold | null {
-  if (candidate === null) return null;
-  const itemId = candidate.slot.itemId;
-  return previous?.hold?.itemId === itemId
-    ? previous.hold
-    : { itemId, since: now };
-}
-
 /** How often a frame settles the index and the dragged tab's group against each other. */
 const SETTLE_PASSES = 3;
 
@@ -665,28 +654,32 @@ const SETTLE_PASSES = 3;
  * the neighbours it swaps with, and the index decides which group is beside it -
  * so the group of the previous frame (the source's own to begin with) starts the
  * index settling, the group is read off the result, and the two repeat until
- * they agree. Crossing a neighbour needs the dragged centre past where that
+ * they agree. Passing a neighbour needs the dragged centre past where that
  * neighbour is drawn, and a group's chrome only ever moves it away from the
- * centre that has just crossed, so the pass settles in a step or two.
+ * centre that has just passed, so the pass settles in a step or two.
  */
 function settleDrop(input: {
   readonly geometry: StripDragGeometry;
   readonly contentOrigin: number;
   readonly previous: StripDragState | null;
   readonly centre: number;
+  readonly canSplit: boolean;
 }): {
   readonly targetIndex: number;
   readonly groupId: string | null;
   readonly laidOut: ReadonlyArray<LaidOutSlot>;
 } {
   const { geometry, contentOrigin, previous, centre } = input;
-  const sourceGroupId = geometry.slots[geometry.sourceIndex]?.groupId ?? null;
-  let groupId = previous?.kind === "reorder" ? previous.groupId : sourceGroupId;
+  let groupId =
+    previous === null
+      ? (geometry.slots[geometry.sourceIndex]?.groupId ?? null)
+      : previous.groupId;
   let targetIndex = previousTargetIndex(geometry, previous);
   for (let pass = 0; pass < SETTLE_PASSES; pass += 1) {
     targetIndex = settleTargetIndex(geometry, contentOrigin, targetIndex, {
       centre,
       groupId,
+      canSplit: input.canSplit,
     });
     const laidOut = layOutProvisional(geometry, contentOrigin, {
       targetIndex,
@@ -713,20 +706,19 @@ function settleDrop(input: {
 
 /**
  * The whole gesture in one pure step. Same inputs always give the same output,
- * which is what makes the monotonicity and hysteresis properties testable
+ * which is what makes the monotonicity and no-flicker properties testable
  * without a browser.
  */
 export function resolveStripDragState(
   input: ResolveStripDragInput,
 ): StripDragState {
-  const { geometry, contentOrigin, pointer, previous } = input;
+  const { geometry, contentOrigin, pointer, previous, canSplit } = input;
   if (geometry.slots.length === 0) {
     return {
       kind: "reorder",
       targetIndex: 0,
       groupId: null,
       joinsGroup: false,
-      hold: null,
     };
   }
   // The overlay's centre: where the user sees the tab, offset from the pointer
@@ -739,34 +731,28 @@ export function resolveStripDragState(
     contentOrigin,
     previous,
     centre: draggedCentre,
+    canSplit,
   });
-  const candidate = input.canSplit
+  const candidate = canSplit
     ? splitCandidate(laidOut, targetIndex, draggedCentre)
     : null;
-  const hold = nextHold(candidate, previous, input.now);
-  if (
-    candidate !== null &&
-    hold !== null &&
-    input.now - hold.since >= SPLIT_HOLD_MS
-  ) {
+  if (candidate !== null) {
     return {
       kind: "merge",
       targetIndex,
+      groupId,
       targetItemId: candidate.slot.itemId,
       targetSide: candidate.side,
-      hold,
     };
   }
-  // Off every mergeable middle, or not held there long enough: a plain reorder
-  // at this very pointer position, so the merge-to-reorder transition is
-  // continuous rather than a jump.
+  // Off every mergeable middle: a plain reorder at this very pointer position,
+  // drawn the same as the split it may have just left, so nothing jumps.
   const sourceGroupId = geometry.slots[geometry.sourceIndex]?.groupId ?? null;
   return {
     kind: "reorder",
     targetIndex,
     groupId,
     joinsGroup: groupId !== null && groupId !== sourceGroupId,
-    hold,
   };
 }
 

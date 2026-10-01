@@ -12,7 +12,6 @@ import { create } from "zustand";
 import type {
   MergeSide,
   StripDragState,
-  StripHold,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 import type { StripAxisId } from "@/components/epic-canvas/dnd/strip-axis";
 import type { StripGroupPlacement } from "@/components/epic-canvas/dnd/strip-group-layout";
@@ -198,31 +197,19 @@ function headerStripDragStateEqual(
 ): boolean {
   if (left === right) return true;
   if (left === null || right === null) return false;
-  if (left.targetIndex !== right.targetIndex) return false;
-  // The hold is state the NEXT resolve reads back, so it counts: a resolve that
-  // dropped it as "equal" would restart the hold on every frame.
-  if (!stripHoldEqual(left.hold, right.hold)) return false;
+  if (
+    left.targetIndex !== right.targetIndex ||
+    left.groupId !== right.groupId
+  ) {
+    return false;
+  }
   if (left.kind === "reorder") {
-    return (
-      right.kind === "reorder" &&
-      left.groupId === right.groupId &&
-      left.joinsGroup === right.joinsGroup
-    );
+    return right.kind === "reorder" && left.joinsGroup === right.joinsGroup;
   }
   return (
     right.kind === "merge" &&
     left.targetItemId === right.targetItemId &&
     left.targetSide === right.targetSide
-  );
-}
-
-function stripHoldEqual(left: StripHold | null, right: StripHold | null) {
-  if (left === right) return true;
-  return (
-    left !== null &&
-    right !== null &&
-    left.itemId === right.itemId &&
-    left.since === right.since
   );
 }
 

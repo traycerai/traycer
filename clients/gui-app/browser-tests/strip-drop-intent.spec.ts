@@ -8,12 +8,12 @@ import {
   type Point,
 } from "./support/fixtures.ts";
 
-// Drop intent on both strips, in real Chrome with real mouse input: a drop
-// over a task is a MOVE unless the dragged tab rested in the task's middle half
-// for the hold, which arms a split; and where the drop lands decides the
-// group it ends up in. The hold and the group's extent are the claims only a
-// real pointer on real layout answers. The zones, the hold's arithmetic and the
-// membership rule are in `strip-drag-model.test.ts`.
+// Drop intent on both strips, in real Chrome with real mouse input: a task's
+// middle half splits at once, its near quarter keeps the dragged tab on that
+// side, its far quarter passes it; and where the drop lands decides the group
+// it ends up in. The zones against real rows and the group's extent are the
+// claims only a real pointer on real layout answers. The zones' arithmetic and
+// the membership rule are in `strip-drag-model.test.ts`.
 
 test.use({ viewport: { width: 1300, height: 900 } });
 
@@ -44,31 +44,32 @@ async function readStrip(page: Page): Promise<z.infer<typeof stripSchema>> {
   );
 }
 
+const rowSchema = z.object({ centre: z.number(), height: z.number() });
 const gapSchema = z.object({
   overlay: z.number(),
-  before: z.number().nullable(),
-  after: z.number().nullable(),
+  before: rowSchema.nullable(),
+  after: rowSchema.nullable(),
 });
 
 /**
- * The dragged Delta overlay's centre, and the centres of the rows drawn just
- * before and just after the gap its tab left, down the strip.
+ * The dragged Delta overlay's centre, and the rows drawn just before and just
+ * after the gap its tab left, down the strip.
  */
 async function readGap(page: Page): Promise<z.infer<typeof gapSchema>> {
   return gapSchema.parse(
     await page.evaluate(`(() => {
-      const centreY = (node) => {
+      const row = (node) => {
         const box = node.getBoundingClientRect();
-        return box.top + box.height / 2;
+        return { centre: box.top + box.height / 2, height: box.height };
       };
       const overlay = document.querySelector('[data-testid="header-tab-drag-overlay"]');
       const frames = [...document.querySelectorAll("[data-strip-item-id]")]
-        .sort((a, b) => centreY(a) - centreY(b));
+        .sort((a, b) => row(a).centre - row(b).centre);
       const gap = frames.findIndex((n) => n.getAttribute("data-strip-item-id") === "tab:epic:fixture-delta");
       return {
-        overlay: centreY(overlay),
-        before: gap > 0 ? centreY(frames[gap - 1]) : null,
-        after: gap >= 0 && gap < frames.length - 1 ? centreY(frames[gap + 1]) : null,
+        overlay: row(overlay).centre,
+        before: gap > 0 ? row(frames[gap - 1]) : null,
+        after: gap >= 0 && gap < frames.length - 1 ? row(frames[gap + 1]) : null,
       };
     })()`),
   );
@@ -90,21 +91,28 @@ test.describe("the vertical strip", () => {
 
   /**
    * Delta, which is below the group "Work" (Alpha and the Beta | Gamma pair),
-   * dragged until its centre rests on the lower part of Alpha's row: inside
-   * Alpha's middle half, on the group's own block.
+   * dragged up until its centre is `into` px into Alpha's row from its bottom
+   * edge, on the group's own block.
    */
-  async function dragDeltaOntoAlpha(page: Page): Promise<void> {
+  async function dragDeltaIntoAlpha(page: Page, into: number): Promise<void> {
     const delta = await centreOf(page.getByTestId("tab-epic-fixture-delta"));
-    const alpha = await centreOf(page.getByTestId("tab-epic-fixture-alpha"));
-    await dragTo(page, delta, { x: delta.x, y: alpha.y + 4 });
+    const alpha = await page
+      .getByTestId("tab-epic-fixture-alpha")
+      .boundingBox();
+    if (alpha === null) throw new Error("no layout");
+    await dragTo(page, delta, {
+      x: delta.x,
+      y: alpha.y + alpha.height - into,
+    });
   }
 
-  test("moves a task dropped over another task's middle at once, and puts it in the group it lands in", async ({
+  test("moves a task dropped in another task's near quarter beside it, and puts it in the group it lands in", async ({
     page,
   }) => {
     await openSidebar(page);
 
-    await dragDeltaOntoAlpha(page);
+    // Alpha's lower quarter, the side Delta comes from.
+    await dragDeltaIntoAlpha(page, 3);
     // The drop will join the group: its block brightens and the line is drawn
     // inside it.
     const block = page.getByTestId("side-tab-group-block-fixture-group");
@@ -128,14 +136,21 @@ test.describe("the vertical strip", () => {
     expect(strip.groups["fixture-delta"]).toBe("fixture-group");
   });
 
-  test("splits a task dropped over another task's middle after the hold", async ({
+  test("shows the split at once over another task's middle, and splits on the drop", async ({
     page,
   }) => {
     await openSidebar(page);
 
-    await dragDeltaOntoAlpha(page);
-    // The pointer rests; the split arms when the hold has run its course.
-    await expect(page.getByTestId("side-tab-pair-preview")).toBeVisible();
+    const alpha = await page
+      .getByTestId("tab-epic-fixture-alpha")
+      .boundingBox();
+    if (alpha === null) throw new Error("no layout");
+    await dragDeltaIntoAlpha(page, alpha.height / 2 - 4);
+    // On the first painted frames, with no pause for it.
+    await nextFrames(page, 2);
+    expect(await page.getByTestId("side-tab-pair-preview").isVisible()).toBe(
+      true,
+    );
     await page.mouse.up();
 
     const strip = await readStrip(page);
@@ -191,7 +206,7 @@ test.describe("the vertical strip", () => {
     await page.mouse.up();
   });
 
-  test("swaps with a row exactly where it is drawn, for a task dragged down into a block and back out", async ({
+  test("passes a row at its far quarter as it is drawn, for a task dragged down into a block and back out", async ({
     page,
   }) => {
     await openSidebar(page);
@@ -214,13 +229,22 @@ test.describe("the vertical strip", () => {
     for (const y of sweep) {
       await page.mouse.move(delta.x, y, { steps: 2 });
       await nextFrames(page, 30);
-      // A row has been swapped with once the dragged centre has crossed where
-      // it is drawn, and not before: at rest the overlay is always between the
-      // rows drawn either side of its gap, in both directions.
+      // A row is passed once the dragged centre reaches its far quarter where
+      // it is drawn, and not before: at rest the overlay never reaches past
+      // the near three quarters of the rows drawn either side of its gap, in
+      // both directions.
       const { overlay, before, after } = await readGap(page);
       expect(overlay).toBeCloseTo(y, 0);
-      if (before !== null) expect(overlay).toBeGreaterThanOrEqual(before - 1);
-      if (after !== null) expect(overlay).toBeLessThanOrEqual(after + 1);
+      if (before !== null) {
+        expect(overlay).toBeGreaterThanOrEqual(
+          before.centre - before.height / 4 - 1,
+        );
+      }
+      if (after !== null) {
+        expect(overlay).toBeLessThanOrEqual(
+          after.centre + after.height / 4 + 1,
+        );
+      }
     }
     await page.mouse.up();
   });
@@ -379,25 +403,32 @@ test.describe("the top bar", () => {
   }
 
   /**
-   * The third task, dragged left until its centre rests on the right part of
-   * the second, which is alone in the group: inside that task's middle half and
-   * on the group's own outline.
+   * The third task, dragged left until its centre is `into` px into the
+   * second, which is alone in the group, from the second's right edge: on the
+   * group's own outline.
    */
-  async function dragThirdOntoGroup(
+  async function dragThirdIntoGroup(
     page: Page,
     tabIds: ReadonlyArray<string>,
+    into: number,
   ): Promise<void> {
     const third = await centreOf(page.getByTestId(`tab-epic-${tabIds[2]}`));
-    const second = await centreOf(page.getByTestId(`tab-epic-${tabIds[1]}`));
-    await dragTo(page, third, { x: second.x + 20, y: third.y });
+    const second = await page
+      .getByTestId(`tab-epic-${tabIds[1]}`)
+      .boundingBox();
+    if (second === null) throw new Error("no layout");
+    await dragTo(page, third, {
+      x: second.x + second.width - into,
+      y: third.y,
+    });
   }
 
-  test("moves a task dropped over a one-task group's task at once, and joins it to the group", async ({
+  test("moves a task dropped in a one-task group's task's near quarter beside it, and joins it to the group", async ({
     page,
   }) => {
     const tabIds = await openTopBar(page);
 
-    await dragThirdOntoGroup(page, tabIds);
+    await dragThirdIntoGroup(page, tabIds, 6);
     // The drop will join the group: the line is drawn on the group's own last
     // tab, not on the ungrouped tab after it.
     await expect(
@@ -414,15 +445,23 @@ test.describe("the top bar", () => {
     expect(strip.groups[tabIds[2]]).not.toBeNull();
   });
 
-  test("splits a task dropped over another task's middle after the hold", async ({
+  test("shows the split at once over another task's middle, and splits on the drop", async ({
     page,
   }) => {
     const tabIds = await openTopBar(page);
+    const second = await page
+      .getByTestId(`tab-epic-${tabIds[1]}`)
+      .boundingBox();
+    if (second === null) throw new Error("no layout");
 
-    await dragThirdOntoGroup(page, tabIds);
-    await expect(
-      page.locator('[data-testid^="tab-strip-pair-preview-"]'),
-    ).toBeVisible();
+    await dragThirdIntoGroup(page, tabIds, second.width / 2 - 20);
+    // On the first painted frames, with no pause for it.
+    await nextFrames(page, 2);
+    expect(
+      await page
+        .locator('[data-testid^="tab-strip-pair-preview-"]')
+        .isVisible(),
+    ).toBe(true);
     await page.mouse.up();
 
     const strip = await readStrip(page);

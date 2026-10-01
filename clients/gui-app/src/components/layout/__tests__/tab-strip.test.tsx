@@ -1370,14 +1370,14 @@ describe("<TabStrip />", () => {
         "x",
         null,
       );
-      // Dragging rightward onto B, held in its middle: the split is armed with
-      // the dragged tab taking the pair's left side.
+      // Dragging rightward onto B's middle: the split shows with the dragged
+      // tab taking the pair's left side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 0,
+        groupId: null,
         targetItemId: "tab:epic:e-b",
         targetSide: "left",
-        hold: { itemId: "tab:epic:e-b", since: 0 },
       });
       dndStore.headerStripDropIndexChanged(null);
       dndStore.topLevelStripPairPreviewChanged({
@@ -1420,7 +1420,6 @@ describe("<TabStrip />", () => {
         targetIndex: 0,
         groupId: null,
         joinsGroup: false,
-        hold: null,
       });
       dndStore.headerStripDropIndexChanged(1);
     });
@@ -1453,14 +1452,14 @@ describe("<TabStrip />", () => {
         "x",
         null,
       );
-      // Dragging leftward back onto B, held in its middle: the dragged tab
-      // would take the pair's right side.
+      // Dragging leftward back onto B's middle: the dragged tab would take the
+      // pair's right side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 1,
+        groupId: null,
         targetItemId: "tab:epic:e-b",
         targetSide: "right",
-        hold: { itemId: "tab:epic:e-b", since: 0 },
       });
       dndStore.headerStripDropIndexChanged(null);
       dndStore.topLevelStripPairPreviewChanged({

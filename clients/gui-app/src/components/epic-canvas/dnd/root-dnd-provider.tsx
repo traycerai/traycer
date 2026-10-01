@@ -133,12 +133,12 @@ import {
   overlayStartForPointer,
   remapGeometryToSlots,
   resolveStripDragState,
-  SPLIT_HOLD_MS,
   stripLayoutFor,
   stripOffsetsFor,
   type MergeSide,
   type StripDragGeometry,
   type StripDragState,
+  type StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 import {
   HEADER_STRIP_SCROLL_TEST_ID,
@@ -207,7 +207,7 @@ interface HeaderStripDragSession extends HeaderStripDeclaration {
   readonly geometry: StripDragGeometry;
   readonly sourceRect: RectLike;
   readonly overlayOrigin: PointLike | null;
-  /** A keyboard drag never splits: it has no pointer to hold over a task. */
+  /** A keyboard drag never splits; splitting stays in the tab's menu. */
   readonly canSplit: boolean;
 }
 
@@ -223,54 +223,6 @@ let activeHeaderStripSession: HeaderStripDragSession | null = null;
 
 /** Hysteresis latch for the header tear-off preview/commit boundary. */
 let headerTearOffActive = false;
-
-/**
- * The timer that asks the strip model again once a hold in a task's middle has
- * run its course. A pointer that rests sends no more moves, so without it the
- * split would arm only on the next twitch.
- */
-let splitHoldTimer: number | null = null;
-
-function clearSplitHoldTimer(): void {
-  if (splitHoldTimer === null) return;
-  window.clearTimeout(splitHoldTimer);
-  splitHoldTimer = null;
-}
-
-function armSplitHoldTimer(state: StripDragState): void {
-  clearSplitHoldTimer();
-  if (state.kind !== "reorder" || state.hold === null) return;
-  const remaining = SPLIT_HOLD_MS - (performance.now() - state.hold.since);
-  splitHoldTimer = window.setTimeout(replayHeaderStripHold, remaining);
-}
-
-/**
- * Resolve the header strip again at the last pointer, if a hold is still what
- * the strip last published. Any path that cleared the state (the tear-off
- * preview, a fillable slot) has already ended the hold, so there is nothing to
- * replay.
- */
-function replayHeaderStripHold(): void {
-  splitHoldTimer = null;
-  const dndStore = useEpicDndStore.getState();
-  const state = dndStore.headerStripDragState;
-  const headerTab = dndStore.activeHeaderTab;
-  const point = currentReleasePointerPoint();
-  if (
-    state === null ||
-    state.kind !== "reorder" ||
-    state.hold === null ||
-    headerTab === null ||
-    point === null
-  ) {
-    return;
-  }
-  publishHeaderStripDragState({
-    headerTab,
-    session: activeHeaderStripSession,
-    point,
-  });
-}
 
 /**
  * Latest raw pointer, tracked independently of dnd-kit's render cycle.
@@ -750,7 +702,6 @@ function updateTileStripPreview(
       geometry,
       contentOrigin,
       pointer: point.x,
-      now: performance.now(),
       canSplit: false,
       previous: dndStore.headerStripDragState,
     });
@@ -870,26 +821,41 @@ function updateHeaderTabSourcePreview(input: {
 /**
  * Explicit per-item displacement, the same mechanism the tile strip uses. No
  * layout projection means no projection can be left mid-flight. The strip is
- * laid out as the drop would leave it - a split puts the tab beside the one it
- * pairs with, in that tab's group - so a group's header and block move with its
- * tabs.
+ * laid out as the move would leave it, a group's header and block moving with
+ * its tabs; a split shows over that same layout, which is the one its zones
+ * were read against, so showing it moves nothing.
  */
 function publishHeaderStripLayout(
   geometry: StripDragGeometry,
   state: StripDragState,
 ): void {
   const dndStore = useEpicDndStore.getState();
-  const targetId = state.kind === "merge" ? state.targetItemId : null;
-  const layout = stripLayoutFor(
-    geometry,
-    state.targetIndex,
-    state.kind === "reorder"
-      ? state.groupId
-      : (geometry.slots.find((slot) => slot.itemId === targetId)?.groupId ??
-          null),
-  );
+  const layout = stripLayoutFor(geometry, state.targetIndex, state.groupId);
   dndStore.headerStripOffsetsChanged(layout.offsets);
   dndStore.headerStripGroupPlacementsChanged(layout.groups);
+}
+
+/**
+ * The slots, each one a merge target only when the dragged tab could pair with
+ * it now: a split pair, a locked tab or a kind that never splits pairs with
+ * nothing. A slot that cannot be split with has no middle, so the drag passes
+ * it at its centre instead of showing a split that would drop as nothing.
+ */
+function pairableSlots(
+  headerTab: HeaderTabDragData,
+  slots: ReadonlyArray<StripSlot>,
+): ReadonlyArray<StripSlot> {
+  const layout = layoutFromTabsStore();
+  return slots.map((slot) => {
+    const index = layout.items.findIndex((item) => item.id === slot.itemId);
+    if (!slot.isMergeTarget || index < 0) {
+      return { ...slot, isMergeTarget: false };
+    }
+    const target = stripPairTargetForIndex(index, layout);
+    const pairable =
+      target !== null && resolveLiveTopLevelDrop(headerTab, target) !== null;
+    return pairable ? slot : { ...slot, isMergeTarget: false };
+  });
 }
 
 /**
@@ -909,7 +875,7 @@ function publishHeaderStripDragState(input: {
       ? null
       : remapGeometryToSlots(
           session.geometry,
-          slots,
+          pairableSlots(headerTab, slots),
           readHeaderStripGroups(session.axis, slots, headerTab.stripItemId),
         );
   activeHeaderStripSession =
@@ -918,7 +884,6 @@ function publishHeaderStripDragState(input: {
     session === null ? null : readHeaderStripContentOrigin(session.axis);
   if (session === null || geometry === null || contentOrigin === null) {
     reportStripGeometryFailure("header");
-    clearSplitHoldTimer();
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     clearHeaderStripLayout();
@@ -929,12 +894,10 @@ function publishHeaderStripDragState(input: {
     geometry,
     contentOrigin,
     pointer: session.axis.pointerMain(input.point),
-    now: performance.now(),
     canSplit: session.canSplit,
     previous: dndStore.headerStripDragState,
   });
   dndStore.headerStripDragStateChanged(next);
-  armSplitHoldTimer(next);
   publishHeaderStripLayout(geometry, next);
   // A merge shows the pair highlight and nothing else - an insertion line
   // beside a highlighted merge target advertises two different outcomes for
@@ -1780,7 +1743,6 @@ export function RootDndProvider(props: RootDndProviderProps) {
     lastPointerDown = null;
     stripGeometryFailureReported = false;
     headerTearOffActive = false;
-    clearSplitHoldTimer();
     useEpicDndStore.getState().dragEnded();
   }, []);
 

@@ -26,7 +26,6 @@ import {
 } from "@tanstack/react-router";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
-import { SPLIT_HOLD_MS } from "@/components/epic-canvas/dnd/strip-drag-model";
 import {
   ARTIFACT_TAB_DND_TYPE,
   getArtifactTabDragId,
@@ -353,14 +352,6 @@ function overlayTransform(): string | null {
   return overlays.length === 1 ? overlays[0].style.transform : null;
 }
 
-/**
- * Takes over the clock the hold reads (`performance.now`) and its timer, after
- * the strip has mounted on the real one.
- */
-function takeOverHoldClock(): void {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-}
-
 function stripItemIds(): ReadonlyArray<string> {
   return useTabsStore.getState().items.map((item) => item.id);
 }
@@ -390,7 +381,8 @@ describe("RootDndProvider on a vertical strip", () => {
       it("reorders a row along y and moves the overlay on y only", async () => {
         const view = await mountVerticalStrip(edge);
         const drag = pressAndActivate(view, ROW_A, inBand, 1);
-        // The dragged centre passes B's centre (150) but not the split's.
+        // The dragged centre passes B's far quarter (from 158) and stops short
+        // of the split's centre.
         moveTo(drag, inBand, 170);
 
         const store = useEpicDndStore.getState();
@@ -404,7 +396,6 @@ describe("RootDndProvider on a vertical strip", () => {
           targetIndex: 1,
           groupId: null,
           joinsGroup: false,
-          hold: null,
         });
         expect(store.headerStripOffsets.get(ROW_B.stripItemId)).toBe(-34);
         expect(store.headerStripOffsets.get(ROW_A.stripItemId)).toBe(34);
@@ -457,51 +448,31 @@ describe("RootDndProvider on a vertical strip", () => {
         ] as const;
 
         for (const approach of approaches) {
-          it(`arms a split only once held there, approached ${approach.name}`, async () => {
+          it(`shows the split at once, approached ${approach.name}`, async () => {
             const view = await mountVerticalStrip(edge);
-            takeOverHoldClock();
             const drag = pressAndActivate(view, approach.dragged, inBand, 2);
             moveTo(drag, inBand, approach.centre);
+
             const store = useEpicDndStore.getState();
-            // Entered, not held: a move, with the hold under way.
-            expect(store.headerStripDragState).toMatchObject({
-              kind: "reorder",
-              targetIndex: approach.targetIndex,
-              hold: { itemId: approach.target.stripItemId },
-            });
-            expect(store.topLevelStripPairPreview).toBeNull();
-
-            // The pointer rests: no move arrives, the hold's own timer does.
-            act(() => {
-              vi.advanceTimersByTime(SPLIT_HOLD_MS);
-            });
-
-            expect(
-              useEpicDndStore.getState().headerStripDragState,
-            ).toMatchObject({
+            expect(store.headerStripDragState).toEqual({
               kind: "merge",
               targetIndex: approach.targetIndex,
+              groupId: null,
               targetItemId: approach.target.stripItemId,
               targetSide: approach.side,
             });
-            expect(useEpicDndStore.getState().topLevelStripPairPreview).toEqual(
-              {
-                targetRef: approach.targetRef,
-                side: approach.side,
-              },
-            );
+            expect(store.topLevelStripPairPreview).toEqual({
+              targetRef: approach.targetRef,
+              side: approach.side,
+            });
             releaseAt(drag, inBand, approach.centre);
           });
         }
 
-        it("splits on a held release", async () => {
+        it("splits on a release there", async () => {
           const view = await mountVerticalStrip(edge);
-          takeOverHoldClock();
           const drag = pressAndActivate(view, ROW_A, inBand, 12);
           moveTo(drag, inBand, 145);
-          act(() => {
-            vi.advanceTimersByTime(SPLIT_HOLD_MS);
-          });
 
           releaseAt(drag, inBand, 145);
 
@@ -511,31 +482,13 @@ describe("RootDndProvider on a vertical strip", () => {
             right: { kind: "tab", ref: B },
           });
         });
-
-        it("splits nothing on a release in the middle before the hold completes", async () => {
-          const view = await mountVerticalStrip(edge);
-          takeOverHoldClock();
-          const drag = pressAndActivate(view, ROW_A, inBand, 14);
-          moveTo(drag, inBand, 145);
-          act(() => {
-            vi.advanceTimersByTime(SPLIT_HOLD_MS - 1);
-          });
-
-          releaseAt(drag, inBand, 145);
-
-          expect(stripItemIds()).toEqual([
-            ROW_A.stripItemId,
-            ROW_B.stripItemId,
-            SPLIT_ID,
-            ROW_C.stripItemId,
-          ]);
-        });
       });
 
       it("drags a split pair whole, displacing a neighbour by the pair's extent", async () => {
         const view = await mountVerticalStrip(edge);
         const drag = pressAndActivate(view, ROW_SPLIT, inBand, 4);
-        // C's centre is 252; the pair's centre passes it.
+        // C's centre is 252; the pair's centre passes it. A pair pairs with
+        // nothing, so C has no middle to split on: it is passed at its centre.
         moveTo(drag, inBand, 256);
 
         const store = useEpicDndStore.getState();
@@ -548,7 +501,6 @@ describe("RootDndProvider on a vertical strip", () => {
           targetIndex: 3,
           groupId: null,
           joinsGroup: false,
-          hold: null,
         });
         // C moves up by the pair's 66px plus the gap; the pair moves down by
         // C's advance, which as the last slot is its bare 32px extent.
@@ -573,9 +525,8 @@ describe("RootDndProvider on a vertical strip", () => {
   }
 
   describe("a keyboard drag", () => {
-    it("never splits, though the dragged row rests in another row's middle", async () => {
+    it("never splits, though the dragged row is in another row's middle", async () => {
       const view = await mountVerticalStrip("left");
-      takeOverHoldClock();
       const source = view.getByTestId(`row-${ROW_C.stripItemId}`);
       source.focus();
       act(() => {
@@ -586,20 +537,16 @@ describe("RootDndProvider on a vertical strip", () => {
       // dragged row is. A keyboard drag grabs the row at (0, 0), so its centre
       // is the pointer's y plus the row's start and half its height: put it at
       // 152, inside the middle half of B (centre 150), where a pointer drag
-      // arms a split once held.
+      // splits.
       const pointerY = 152 - ROW_C.top - ROW_C.height / 2;
       act(() => {
         fireEvent.pointerMove(source, { clientX: 120, clientY: pointerY });
-      });
-      act(() => {
-        vi.advanceTimersByTime(2 * SPLIT_HOLD_MS);
       });
 
       const store = useEpicDndStore.getState();
       expect(store.headerStripDragState).toMatchObject({
         kind: "reorder",
         targetIndex: 2,
-        hold: null,
       });
       expect(store.topLevelStripPairPreview).toBeNull();
       act(() => {
@@ -801,10 +748,10 @@ describe("RootDndProvider on a vertical strip", () => {
         organizationOf(command),
       );
       const drag = pressAndActivate(view, ROW_B, inBand, 28);
-      // Past A's centre (116), above the block's top (130).
-      moveTo(drag, inBand, 112);
+      // Past A's far quarter (from 108), above the block's top (130).
+      moveTo(drag, inBand, 106);
 
-      releaseAt(drag, inBand, 112);
+      releaseAt(drag, inBand, 106);
       await act(async () => {
         await Promise.resolve();
       });
@@ -877,15 +824,15 @@ describe("RootDndProvider on a vertical strip", () => {
         null,
       );
       const drag = pressAndActivate(view, ROW_B, inBand, 21);
-      // Past A's centre (116), above the block's top (130).
-      moveTo(drag, inBand, 112);
+      // Past A's far quarter (from 108), above the block's top (130).
+      moveTo(drag, inBand, 106);
       expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
         kind: "reorder",
         groupId: null,
         joinsGroup: false,
       });
 
-      releaseAt(drag, inBand, 112);
+      releaseAt(drag, inBand, 106);
 
       expect(groupOf(B)).toBeNull();
       expect(groupOf(X)).toBe("g");

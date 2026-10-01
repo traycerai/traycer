@@ -11,8 +11,6 @@ import {
   reconstructionErrorPx,
   remapGeometryToSlots,
   resolveStripDragState,
-  SPLIT_HOLD_MS,
-  swapHysteresisPx,
   type ResolveStripDragInput,
   type StripDragGeometry,
   type StripDragState,
@@ -22,48 +20,54 @@ import {
 
 const ORIGIN = 200;
 
-/** One frame of the gesture at time 0 with splitting on, as a pointer sweep takes it. */
+/** One frame of a pointer drag, which can split. */
 function resolve(
-  input: Omit<ResolveStripDragInput, "now" | "canSplit">,
+  input: Omit<ResolveStripDragInput, "canSplit">,
 ): StripDragState {
-  return resolveStripDragState({ ...input, now: 0, canSplit: true });
+  return resolveStripDragState({ ...input, canSplit: true });
 }
 
-/** One frame at `now`, for the tests that read the hold. */
-function resolveAt(
-  input: Omit<ResolveStripDragInput, "now" | "canSplit">,
-  now: number,
-): StripDragState {
-  return resolveStripDragState({ ...input, now, canSplit: true });
-}
-
-/**
- * The state after the dragged centre has rested at `centre` for the hold: a
- * frame that enters at time 0 and one more `SPLIT_HOLD_MS` later.
- */
-function afterHold(
+/** The state with the dragged centre at `centre`, from `previous`. */
+function resolveCentre(
   geometry: StripDragGeometry,
   centre: number,
   previous: StripDragState | null,
 ): StripDragState {
-  const input = {
+  return resolve({
     geometry,
     contentOrigin: ORIGIN,
     pointer: pointerForCentre(geometry, centre),
-  };
-  const entered = resolveAt({ ...input, previous }, 0);
-  return resolveAt({ ...input, previous: entered }, SPLIT_HOLD_MS);
+    previous,
+  });
 }
 
 /** A reorder state at `targetIndex`, the carry-over a frame resolves from. */
 function reorderAt(targetIndex: number): StripDragState {
-  return {
-    kind: "reorder",
-    targetIndex,
-    groupId: null,
-    joinsGroup: false,
-    hold: null,
-  };
+  return { kind: "reorder", targetIndex, groupId: null, joinsGroup: false };
+}
+
+/** What a frame shows: a split on a task, or the gap at an index. */
+function shown(state: StripDragState): string {
+  return state.kind === "merge"
+    ? `split ${state.targetItemId}`
+    : `gap ${state.targetIndex}`;
+}
+
+/**
+ * Whether any shown state comes back after another one replaced it, which is
+ * what a flicker is: under a monotone sweep each state is shown in one run.
+ */
+function flickers(states: ReadonlyArray<StripDragState>): boolean {
+  const ended = new Set<string>();
+  let current: string | null = null;
+  for (const state of states) {
+    const next = shown(state);
+    if (next === current) continue;
+    if (ended.has(next)) return true;
+    if (current !== null) ended.add(current);
+    current = next;
+  }
+  return false;
 }
 
 function slots(
@@ -191,60 +195,6 @@ function range(from: number, to: number, step: number): ReadonlyArray<number> {
 }
 
 describe("header strip drag model", () => {
-  describe("hysteresis is derived from the swap rule", () => {
-    it("depends on the source width alone, not the mean of the pair", () => {
-      // The two formulations coincide only for equal widths, which is exactly
-      // why the mean is the wrong figure: a split group is one strip item of
-      // its own width.
-      expect(swapHysteresisPx(191)).toBe(191);
-      expect(swapHysteresisPx(382)).toBe(382);
-      expect(swapHysteresisPx(120)).toBe(120);
-    });
-
-    it("measures the real reversal distance on an asymmetric strip", () => {
-      const geometry = geometryFor([120, 300, 200], 0, null);
-      const forward = range(0, 900, 1).map((offset) => ({
-        x: ORIGIN + offset,
-        index: resolve({
-          geometry,
-          contentOrigin: ORIGIN,
-          pointer: ORIGIN + offset,
-          previous: null,
-        }).targetIndex,
-      }));
-      const swapForward = forward.find((entry) => entry.index === 1);
-      expect(swapForward).toBeDefined();
-
-      // Now approach the same boundary from the far side and find where it
-      // swaps back. The gap between the two crossings is the hysteresis.
-      let previous: StripDragState | null = reorderAt(1);
-      let swapBackX: number | null = null;
-      for (let x = swapForward?.x ?? 0; x > ORIGIN - 400; x -= 1) {
-        const next = resolve({
-          geometry,
-          contentOrigin: ORIGIN,
-          pointer: x,
-          previous,
-        });
-        previous = next;
-        if (next.targetIndex === 0) {
-          swapBackX = x;
-          break;
-        }
-      }
-      expect(swapBackX).not.toBeNull();
-      const measured = (swapForward?.x ?? 0) - (swapBackX ?? 0);
-      // Both crossings are at neighbour centres, so the reversal distance is
-      // exactly the source width. They are found by walking integer x against a
-      // strict inequality, so each lands up to 1px beyond its threshold and the
-      // measurement can only ever overshoot by the 2px of sampling granularity.
-      const derived = swapHysteresisPx(120);
-      expect(derived).toBe(120);
-      expect(measured).toBeGreaterThanOrEqual(derived);
-      expect(measured).toBeLessThanOrEqual(derived + 2);
-    });
-  });
-
   describe("monotonicity", () => {
     it("never decreases the index under a rightward sweep", () => {
       const geometry = geometryFor([191, 191, 191, 191], 0, null);
@@ -285,10 +235,11 @@ describe("header strip drag model", () => {
 
     it("settles a multi-tab jump deterministically in one resolution", () => {
       const geometry = geometryFor([191, 191, 191, 191], 0, null);
+      // Into the last tab's far quarter (from 716.25 of content).
       const jumped = resolve({
         geometry,
         contentOrigin: ORIGIN,
-        pointer: ORIGIN + 700,
+        pointer: ORIGIN + 740,
         previous: reorderAt(0),
       });
       expect(jumped.targetIndex).toBe(3);
@@ -408,194 +359,84 @@ describe("header strip drag model", () => {
     });
   });
 
-  describe("split disambiguation", () => {
-    it("mirrors the split and the reorder with the direction of approach", () => {
-      const widths = [100, 100, 100];
-      const targetCentre = ORIGIN + 150;
+  describe("the zones", () => {
+    // Three 100-wide tabs; the middle one spans 100..200 of content. From the
+    // left its near quarter is 100..125, its middle half 125..175 and its far
+    // quarter 175..200; from the right the quarters are the mirror.
+    const fromLeft = geometryFor([100, 100, 100], 0, null);
+    const fromRight = geometryFor([100, 100, 100], 2, null);
+    const at = (geometry: StripDragGeometry, centre: number) =>
+      resolveCentre(geometry, ORIGIN + centre, null);
 
-      const fromLeft = geometryFor(widths, 0, null);
-      const leftApproach = afterHold(fromLeft, targetCentre - 20, null);
-      expect(leftApproach.kind).toBe("merge");
-      expect(
-        leftApproach.kind === "merge" ? leftApproach.targetItemId : null,
-      ).toBe("item-1");
-      // Approaching from the left, the dragged tab takes the pair's left side.
-      expect(
-        leftApproach.kind === "merge" ? leftApproach.targetSide : null,
-      ).toBe("left");
-      expect(
-        resolve({
+    it("splits at once in a task's middle half, on the side it approaches from", () => {
+      for (const centre of [125, 150, 175]) {
+        expect(at(fromLeft, centre)).toEqual({
+          kind: "merge",
+          targetIndex: 0,
+          groupId: null,
+          targetItemId: "item-1",
+          targetSide: "left",
+        });
+        expect(at(fromRight, centre)).toEqual({
+          kind: "merge",
+          targetIndex: 2,
+          groupId: null,
+          targetItemId: "item-1",
+          targetSide: "right",
+        });
+      }
+    });
+
+    it("stays on the near side in a task's near quarter", () => {
+      expect(at(fromLeft, 124)).toEqual(reorderAt(0));
+      expect(at(fromRight, 176)).toEqual(reorderAt(2));
+    });
+
+    it("passes a task in its far quarter, opening the gap beyond it", () => {
+      expect(at(fromLeft, 176)).toEqual(reorderAt(1));
+      expect(at(fromRight, 124)).toEqual(reorderAt(1));
+    });
+
+    it("never splits on a keyboard drag, which passes a task at its centre", () => {
+      const keyboard = (centre: number) =>
+        resolveStripDragState({
           geometry: fromLeft,
           contentOrigin: ORIGIN,
-          pointer: pointerForCentre(fromLeft, targetCentre + 1),
-          previous: leftApproach,
-        }).kind,
-      ).toBe("reorder");
-
-      const fromRight = geometryFor(widths, 2, null);
-      const rightApproach = afterHold(fromRight, targetCentre + 20, null);
-      expect(rightApproach.kind).toBe("merge");
-      expect(
-        rightApproach.kind === "merge" ? rightApproach.targetItemId : null,
-      ).toBe("item-1");
-      // Approaching from the right, the dragged tab takes the pair's right side.
-      expect(
-        rightApproach.kind === "merge" ? rightApproach.targetSide : null,
-      ).toBe("right");
-      expect(
-        resolve({
-          geometry: fromRight,
-          contentOrigin: ORIGIN,
-          pointer: pointerForCentre(fromRight, targetCentre - 1),
-          previous: rightApproach,
-        }).kind,
-      ).toBe("reorder");
-    });
-
-    describe("the hold", () => {
-      const geometry = geometryFor([100, 100, 100], 0, null);
-      const middle = ORIGIN + 150 - 20;
-      const at = (centre: number, previous: StripDragState | null) => ({
-        geometry,
-        contentOrigin: ORIGIN,
-        pointer: pointerForCentre(geometry, centre),
-        previous,
-      });
-
-      it("is a move until the centre has rested in a task's middle half for the hold", () => {
-        const entered = resolveAt(at(middle, null), 0);
-        expect(entered.kind).toBe("reorder");
-        expect(entered.hold).toEqual({ itemId: "item-1", since: 0 });
-
-        const almost = resolveAt(at(middle, entered), SPLIT_HOLD_MS - 1);
-        expect(almost.kind).toBe("reorder");
-
-        const held = resolveAt(at(middle, almost), SPLIT_HOLD_MS);
-        expect(held.kind).toBe("merge");
-        expect(held.kind === "merge" ? held.targetItemId : null).toBe("item-1");
-      });
-
-      it("is a move however long the centre rests outside the middle half", () => {
-        // 30px from the centre of a 100px task: the outer quarter, which the
-        // whole-width zone this replaced would have split on.
-        const outer = ORIGIN + 150 - 30;
-        const entered = resolveAt(at(outer, null), 0);
-        const later = resolveAt(at(outer, entered), 10 * SPLIT_HOLD_MS);
-        for (const state of [entered, later]) {
-          expect(state.kind).toBe("reorder");
-          expect(state.hold).toBeNull();
-        }
-      });
-
-      it("reaches the zone's edge and not past it", () => {
-        const radius = 25;
-        const inside = afterHold(geometry, ORIGIN + 150 - radius, null);
-        const outside = afterHold(geometry, ORIGIN + 150 - radius - 1, null);
-        expect(inside.kind).toBe("merge");
-        expect(outside.kind).toBe("reorder");
-      });
-
-      it("disarms at once on leaving the middle, and a return starts the hold again", () => {
-        const armed = afterHold(geometry, middle, null);
-        expect(armed.kind).toBe("merge");
-
-        const left = resolveAt(at(ORIGIN + 150 - 40, armed), SPLIT_HOLD_MS);
-        expect(left.kind).toBe("reorder");
-        expect(left.hold).toBeNull();
-
-        const returned = resolveAt(at(middle, left), SPLIT_HOLD_MS + 100);
-        expect(returned.kind).toBe("reorder");
-        expect(returned.hold).toEqual({
-          itemId: "item-1",
-          since: SPLIT_HOLD_MS + 100,
-        });
-      });
-
-      it("never splits on a keyboard drag", () => {
-        const input = at(middle, null);
-        const entered = resolveStripDragState({
-          ...input,
-          now: 0,
+          pointer: pointerForCentre(fromLeft, ORIGIN + centre),
+          previous: null,
           canSplit: false,
         });
-        const later = resolveStripDragState({
-          ...input,
-          previous: entered,
-          now: 10 * SPLIT_HOLD_MS,
-          canSplit: false,
-        });
-        expect(later.kind).toBe("reorder");
-        expect(later.hold).toBeNull();
-      });
+      expect(keyboard(150)).toEqual(reorderAt(0));
+      expect(keyboard(151)).toEqual(reorderAt(1));
     });
 
-    it("keeps a split on the approaching half, then reorders past midpoint", () => {
-      const geometry = geometryFor([191, 191, 191], 0, null);
-      const centre = ORIGIN + 191 + 191 / 2;
-      const pointer = pointerForCentre(geometry, centre);
-      const merge: StripDragState = {
+    it("splits with a passed task again only once the centre is back in its middle", () => {
+      // Filtering by net travel once made a reversal dead. item-1, passed, is
+      // drawn at 0..100: its near quarter is 75..100, its middle 25..75, and the
+      // quarter that passes it back 0..25.
+      const passed = at(fromLeft, 176);
+      expect(resolveCentre(fromLeft, ORIGIN + 76, passed)).toEqual(
+        reorderAt(1),
+      );
+      expect(resolveCentre(fromLeft, ORIGIN + 75, passed)).toEqual({
         kind: "merge",
-        targetIndex: 0,
+        targetIndex: 1,
+        groupId: null,
         targetItemId: "item-1",
-        targetSide: "left",
-        hold: { itemId: "item-1", since: 0 },
-      };
-      const insideHalf = resolveAt(
-        {
-          geometry,
-          contentOrigin: ORIGIN,
-          pointer: pointer - 4,
-          previous: merge,
-        },
-        SPLIT_HOLD_MS,
-      );
-      expect(insideHalf.kind).toBe("merge");
-
-      const pastMidpoint = resolveAt(
-        {
-          geometry,
-          contentOrigin: ORIGIN,
-          pointer: pointer + 4,
-          previous: merge,
-        },
-        SPLIT_HOLD_MS,
-      );
-      expect(pastMidpoint.kind).toBe("reorder");
-    });
-
-    it("re-arms the split on a passed neighbour when reversing after a swap", () => {
-      // The direction-lock regression: filtering candidates by NET travel
-      // (targetIndex vs sourceIndex) made a reversal dead. Drag item-0 right
-      // past item-1 (swap), then bring the centre back into item-1's middle:
-      // item-1 now occupies the leading slot, the centre is visibly on it, and
-      // the split must arm once held - side "right", the approach side.
-      const geometry = geometryFor([100, 100, 100], 0, null);
-      const swapped = resolve({
-        geometry,
-        contentOrigin: ORIGIN,
-        pointer: pointerForCentre(geometry, ORIGIN + 151),
-        previous: null,
+        targetSide: "right",
       });
-      expect(swapped.kind).toBe("reorder");
-      expect(swapped.targetIndex).toBe(1);
-
-      // Provisional order is [1, 0, 2]: item-1's slot spans [0..100] with its
-      // centre at 50, so centre 65 is within its middle half.
-      const reversed = afterHold(geometry, ORIGIN + 65, swapped);
-      expect(reversed.kind).toBe("merge");
-      expect(reversed.kind === "merge" ? reversed.targetItemId : null).toBe(
-        "item-1",
-      );
-      expect(reversed.kind === "merge" ? reversed.targetSide : null).toBe(
-        "right",
+      expect(resolveCentre(fromLeft, ORIGIN + 24, passed)).toEqual(
+        reorderAt(0),
       );
     });
 
-    it("never merges into a split group - it reorders past it", () => {
+    it("never splits with a split pair, and passes it at its centre", () => {
       const geometry = geometryFor([191, 382, 191], 0, [true, false, true]);
-      const splitCentre = ORIGIN + 191 + 382 / 2;
-      const state = afterHold(geometry, splitCentre, null);
-      expect(state.kind).toBe("reorder");
+      const pairCentre = ORIGIN + 191 + 382 / 2;
+      expect(resolveCentre(geometry, pairCentre, null)).toEqual(reorderAt(0));
+      expect(resolveCentre(geometry, pairCentre + 1, null)).toEqual(
+        reorderAt(1),
+      );
     });
 
     it("follows the dragged tab's centre, so an edge grab cannot dead-zone a neighbour", () => {
@@ -611,40 +452,128 @@ describe("header strip drag model", () => {
       const edgeGrab: StripDragGeometry = { ...centreGrab, grabOffset: 95 };
 
       for (const geometry of [centreGrab, edgeGrab]) {
-        // Dragged tab's centre in the target's middle, on its near (right)
-        // side, held: split, with the dragged tab taking the pair's right
-        // side. For the edge grab the POINTER is still right of the target's
-        // slot here - that must not matter.
-        const nearHalf = afterHold(geometry, targetCentre + 20, null);
-        expect(nearHalf.kind).toBe("merge");
-        expect(nearHalf.kind === "merge" ? nearHalf.targetSide : null).toBe(
-          "right",
+        // Dragged tab's centre in the target's middle: split, with the dragged
+        // tab taking the pair's right side. For the edge grab the POINTER is
+        // still right of the target's slot here - that must not matter.
+        const middle = resolveCentre(geometry, targetCentre + 20, null);
+        expect(middle).toMatchObject({ kind: "merge", targetSide: "right" });
+        // Centre in the target's far quarter: it is passed.
+        expect(resolveCentre(geometry, targetCentre - 26, middle)).toEqual(
+          reorderAt(0),
         );
-        // Centre past the target's midpoint: the swap fires.
-        const pastMidpoint = resolveAt(
-          {
-            geometry,
-            contentOrigin: ORIGIN,
-            pointer: pointerForCentre(geometry, targetCentre - 1),
-            previous: nearHalf,
-          },
-          SPLIT_HOLD_MS,
-        );
-        expect(pastMidpoint.kind).toBe("reorder");
-        expect(pastMidpoint.targetIndex).toBe(0);
       }
     });
+  });
 
-    it("keeps the split zone reachable rather than shadowed by the swap", () => {
-      // The regression this guards: if the swap boundary sat AT the neighbour's
-      // centre, the zone could never be occupied and a split would be
-      // unreachable.
-      const geometry = geometryFor([191, 191, 191], 0, null);
-      const centre = ORIGIN + 191 + 191 / 2;
-      const state = afterHold(geometry, centre, null);
-      expect(state.kind).toBe("merge");
-      expect(state.targetIndex).toBe(0);
-    });
+  describe("the zones on mixed rows, in both strips", () => {
+    // The top bar's tabs of unequal widths; the sidebar's 52px two-line rows,
+    // 32px rows and a 66px split pair (which cannot be split with) a 2px gap
+    // apart; and the sidebar with a group block around the 32px row and the
+    // pair, its header and padding 24px above them and 4px below.
+    const sidebarWithBlock = (sourceIndex: number): StripDragGeometry => {
+      const plain = gappedGeometryFor(
+        [52, 32, 66, 52, 32],
+        sourceIndex,
+        [true, true, false, true, true],
+        2,
+      );
+      const starts = [0, 78, 112, 184, 238];
+      const built = plain.slots.map((slot, index) => ({
+        ...slot,
+        contentStart: starts[index] ?? 0,
+        advance:
+          index + 1 < starts.length
+            ? (starts[index + 1] ?? 0) - (starts[index] ?? 0)
+            : slot.extent,
+        groupId: index === 1 || index === 2 ? "g" : null,
+      }));
+      const source = built[sourceIndex];
+      return {
+        ...plain,
+        slots: built,
+        groups: [{ ...extentOf("g", 54, 182), rowGap: 2 }],
+        sourceInitialStart: ORIGIN + source.contentStart,
+      };
+    };
+    const strips: ReadonlyArray<{
+      readonly name: string;
+      readonly geometryFor: (sourceIndex: number) => StripDragGeometry;
+    }> = [
+      {
+        name: "the top bar",
+        geometryFor: (source) =>
+          geometryFor([191, 120, 240, 160], source, null),
+      },
+      {
+        name: "the sidebar",
+        geometryFor: (source) =>
+          gappedGeometryFor(
+            [52, 32, 66, 52, 32],
+            source,
+            [true, true, false, true, true],
+            2,
+          ),
+      },
+      { name: "the sidebar with a block", geometryFor: sidebarWithBlock },
+    ];
+
+    for (const strip of strips) {
+      const count = strip.geometryFor(0).slots.length;
+      for (let source = 0; source < count; source += 1) {
+        const geometry = strip.geometryFor(source);
+        const own = geometry.slots[source];
+        const ownCentre = ORIGIN + own.contentStart + own.extent / 2;
+        const last = geometry.slots[count - 1];
+        const end = ORIGIN + last.contentStart + last.extent;
+        const down = range(ownCentre, end + 40, 1).map((centre) =>
+          pointerForCentre(geometry, centre),
+        );
+        const up = range(ORIGIN - 40, ownCentre, 1)
+          .toReversed()
+          .map((centre) => pointerForCentre(geometry, centre));
+        const mergeable = (index: number) =>
+          index !== source && (geometry.slots[index]?.isMergeTarget ?? false);
+
+        it(`moves monotonically and never flickers in ${strip.name}, from row ${source}`, () => {
+          for (const [sweepOf, sign] of [
+            [down, 1],
+            [up, -1],
+          ] as const) {
+            const states = sweep(geometry, sweepOf);
+            for (let i = 1; i < states.length; i += 1) {
+              const step =
+                (states[i]?.targetIndex ?? 0) -
+                (states[i - 1]?.targetIndex ?? 0);
+              expect(step * sign).toBeGreaterThanOrEqual(0);
+            }
+            expect(flickers(states)).toBe(false);
+          }
+        });
+
+        it(`reaches the whole of every task's middle half in ${strip.name}, dragging down and up from row ${source}`, () => {
+          // Sampled every 1px, so a middle half of h px shows its split on
+          // about h samples, whichever way it is approached.
+          const shownOn = new Map<string, number>();
+          for (const state of [
+            ...sweep(geometry, down),
+            ...sweep(geometry, up),
+          ]) {
+            if (state.kind !== "merge") continue;
+            shownOn.set(shown(state), (shownOn.get(shown(state)) ?? 0) + 1);
+          }
+          const expected = geometry.slots.flatMap((slot, index) =>
+            mergeable(index) ? [`split ${slot.itemId}`] : [],
+          );
+          expect([...shownOn.keys()].sort()).toEqual(expected.sort());
+          for (const [index, slot] of geometry.slots.entries()) {
+            if (!mergeable(index)) continue;
+            expect(shownOn.get(`split ${slot.itemId}`)).toBeGreaterThanOrEqual(
+              slot.extent / 2 - 1,
+            );
+          }
+        });
+      }
+    }
   });
 
   describe("group membership", () => {
@@ -727,7 +656,11 @@ describe("header strip drag model", () => {
         groupId: "h",
         joinsGroup: true,
       });
-      expect(groupOf(dropAt(geometry, 160))).toBeNull();
+      // Past the next tab's far quarter (175): beside it, out of the header.
+      expect(dropAt(geometry, 180)).toMatchObject({
+        targetIndex: 1,
+        groupId: null,
+      });
     });
 
     it("measures the group in the strip's content box, so a scroll cannot move it", () => {
@@ -870,8 +803,7 @@ describe("header strip drag model", () => {
       // Neighbour 1 sits at contentStart 140, so its centre is ORIGIN + 200.
       // Ignoring the gap would put it at ORIGIN + 180 and every boundary with it.
       const centre = ORIGIN + 200;
-      const state = afterHold(geometry, centre, null);
-      expect(state.kind).toBe("merge");
+      expect(resolveCentre(geometry, centre, null).kind).toBe("merge");
     });
   });
 
@@ -998,10 +930,24 @@ describe("header strip drag model", () => {
     });
 
     it("gives a tile strip hysteresis of exactly the dragged tile's width", () => {
-      // D2.5: the derived gap is w_s alone, and "w_s" means the DRAGGED
-      // tile's measured width - tile widths are unequal.
-      expect(swapHysteresisPx(130)).toBe(130);
-      expect(swapHysteresisPx(192)).toBe(192);
+      // Both swaps are at the neighbour's centre, and after the swap that
+      // neighbour sits where the dragged tile was: the way back is the DRAGGED
+      // tile's width, not the mean of the two.
+      const geometry = geometryFor([120, 300, 200], 0, [false, false, false]);
+      const indexAt = (pointer: number, previous: StripDragState | null) =>
+        resolve({ geometry, contentOrigin: ORIGIN, pointer, previous })
+          .targetIndex;
+      const forward = range(ORIGIN, ORIGIN + 900, 1).find(
+        (pointer) => indexAt(pointer, null) === 1,
+      );
+      if (forward === undefined) throw new Error("never swapped");
+      const back = range(ORIGIN - 400, forward, 1)
+        .toReversed()
+        .find((pointer) => indexAt(pointer, reorderAt(1)) === 0);
+      if (back === undefined) throw new Error("never swapped back");
+      // Integer steps against strict thresholds overshoot each by up to 1px.
+      expect(forward - back).toBeGreaterThanOrEqual(120);
+      expect(forward - back).toBeLessThanOrEqual(122);
     });
 
     it("stays non-alternating on unequal tile widths", () => {

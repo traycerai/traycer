@@ -209,7 +209,6 @@ describe("the swap rule in a strip with groups", () => {
         contentOrigin: 0,
         // The grab offset is half the row, so the dragged centre is the pointer.
         pointer: centre,
-        now: 0,
         canSplit: false,
         previous,
       });
