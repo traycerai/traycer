@@ -15,6 +15,7 @@ import {
   type HistoryItem,
 } from "@/components/home/data/home-page.data";
 import { HistoryTaskRow } from "@/components/epics/history-task-row";
+import { useIsEpicDeleteInFlight } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
 import { EpicsListLoading } from "@/components/epics/epics-list-shared";
 import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
@@ -49,6 +50,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { cn } from "@/lib/utils";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -259,6 +261,9 @@ function CurrentTaskRow(props: {
 }): ReactNode {
   const openItem = useHistoryOpenItem({ onSelectEpic: null, onOpenItem: null });
   const item = props.item;
+  // Deleted from History while it is still listed here: the same in-progress
+  // row, and no open (the background open below is not behind `openItem`).
+  const isDeleting = useIsEpicDeleteInFlight(item.epicId);
   const worktrees = useCurrentTaskWorktrees(item);
   const isPhase = item.taskType === "phase";
   const isOpen = useEpicCanvasStore(
@@ -293,14 +298,20 @@ function CurrentTaskRow(props: {
           data-history-row-target=""
           aria-label={`Open task ${historyItemDisplayTitle(item)}`}
           aria-describedby={describedBy}
+          // A button, not a link: it has no destination for the browser to
+          // act on, and `disabled` would take it out of keyboard traversal.
+          aria-disabled={isDeleting || undefined}
           onClick={() => openItem(item)}
           onAuxClick={onMiddleClick(() => {
             // A phase has no background open, so it opens in place.
             if (isPhase) openItem(item);
-            else openHistoryItemInBackground(item, isOpen);
+            else if (!isDeleting) openHistoryItemInBackground(item, isOpen);
           })}
           onKeyDown={props.onRowKeyDown}
-          className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+          className={cn(
+            "absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+            isDeleting && "cursor-not-allowed",
+          )}
         />
       )}
       renameEditor={null}
@@ -330,6 +341,7 @@ function CurrentTaskRow(props: {
       showOpenBadge={false}
       isOpen={isOpen}
       worktrees={worktrees}
+      isDeleting={isDeleting}
     />
   );
 }

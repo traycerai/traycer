@@ -11,7 +11,12 @@ import {
   type ReactNode,
 } from "react";
 import { Link } from "@tanstack/react-router";
-import { usePendingDeleteEpicIds } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import {
+  historyRowDeletingAttributes,
+  historyRowDeletingLinkProps,
+} from "@/components/epics/history-row-deleting-attributes";
+import { HistoryRowDeletingIndicator } from "@/components/epics/history-row-deleting-indicator";
+import { useIsEpicDeleteInFlight } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { Check, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import {
   canDeleteHistoryItem,
@@ -127,10 +132,15 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   // rule or the class survives at whichever of them was left out.
   // And refused while its own deletion is still in flight: the confirm closes
   // at kickoff, so this row is back on screen before the host has answered.
-  const isDeleteInFlight = usePendingDeleteEpicIds().has(item.epicId);
+  // The row then shows the delete in progress and neither opens nor offers
+  // its tray, exactly as the desktop row does.
+  const isDeleteInFlight = useIsEpicDeleteInFlight(item.epicId);
   const canDelete =
     canDeleteHistoryItem(item, cloudAuthorized) && !isDeleteInFlight;
-  const canRename = canEditHistoryItemTitle(item, cloudAuthorized);
+  // Also what the organization control edits under, so a task being deleted
+  // offers neither.
+  const canRename =
+    canEditHistoryItemTitle(item, cloudAuthorized) && !isDeleteInFlight;
   // `null` for the same reason as the desktop row, and it dispatches through
   // that row's handler: History's local-home readings come from the window's
   // own host, so gate and dispatch name the same machine.
@@ -202,7 +212,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   // card's background, so a mounted tray leaves every future card state one
   // lost opacity away from putting a row's own actions on screen in a mode
   // that cannot use them.
-  const showTray = !selectionMode && actions.length > 0;
+  const showTray = !selectionMode && !isDeleteInFlight && actions.length > 0;
   const isTrayRevealed = isTrayOpen && showTray;
 
   const longPress = useLongPress({
@@ -218,7 +228,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
     actionCount: actions.length,
     isOpen: isTrayOpen,
     onOpenChange: setTrayOpen,
-    disabled: selectionMode || isRenaming,
+    disabled: selectionMode || isRenaming || isDeleteInFlight,
     onDragStart: longPress.cancel,
   });
 
@@ -270,6 +280,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
       swipe.close();
       return;
     }
+    if (isDeleteInFlight) return;
     onOpen(item);
   };
 
@@ -308,9 +319,11 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
           // `pan-y` hands the vertical axis back to the list and keeps the
           // horizontal one here, which is what lets the swipe recognizer read
           // the drag without ever cancelling a scroll.
+          {...historyRowDeletingAttributes(isDeleteInFlight)}
           className={mobileRowCardClassName({
             isRowSelected,
             isDragging: swipe.isDragging,
+            isDeleting: isDeleteInFlight,
           })}
           style={{ transform: `translate3d(-${swipe.offsetPx}px, 0, 0)` }}
           onPointerDown={handlePointerDown}
@@ -325,6 +338,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
             linkTabId={linkTabId}
             selectionMode={selectionMode}
             isRenaming={isRenaming}
+            isDeleting={isDeleteInFlight}
             onActivate={handleActivate}
           />
           {/* Text stays inert so row activation has one path. Organization
@@ -343,16 +357,45 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
             isRenaming={isRenaming}
             renameInputProps={renameInputProps}
           />
-          {!selectionMode ? (
-            <span className="relative z-10 shrink-0">
-              <HistoryOrganizationDropdown item={item} canEdit={canRename} />
-            </span>
-          ) : null}
+          <MobileRowTrailing
+            item={item}
+            canEdit={canRename}
+            displayTitle={displayTitle}
+            selectionMode={selectionMode}
+            isDeleting={isDeleteInFlight}
+          />
         </div>
       </div>
     </li>
   );
 });
+
+/**
+ * The card's trailing edge: the organization control at rest, the delete's
+ * progress while the task is being deleted, and nothing in selection mode.
+ */
+function MobileRowTrailing(props: {
+  readonly item: HistoryItem;
+  readonly canEdit: boolean;
+  readonly displayTitle: string;
+  readonly selectionMode: boolean;
+  readonly isDeleting: boolean;
+}): ReactNode {
+  if (props.isDeleting) {
+    return (
+      <HistoryRowDeletingIndicator
+        displayTitle={props.displayTitle}
+        className="relative z-10 inline-flex shrink-0 items-center text-muted-foreground"
+      />
+    );
+  }
+  if (props.selectionMode) return null;
+  return (
+    <span className="relative z-10 shrink-0">
+      <HistoryOrganizationDropdown item={props.item} canEdit={props.canEdit} />
+    </span>
+  );
+}
 
 /**
  * The card's own classes, kept out of the row body the way the desktop list
@@ -373,6 +416,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
 function mobileRowCardClassName(args: {
   readonly isRowSelected: boolean;
   readonly isDragging: boolean;
+  readonly isDeleting: boolean;
 }): string {
   return cn(
     "relative flex touch-pan-y items-center gap-2 rounded-md bg-background p-3 text-ui-sm",
@@ -380,6 +424,9 @@ function mobileRowCardClassName(args: {
     args.isRowSelected &&
       "bg-[color-mix(in_oklch,var(--accent)_40%,var(--background))] ring-1 ring-inset ring-primary/40",
     !args.isDragging && SETTLE_CLASS,
+    // Dims the CONTENT, never the card: the card's opaque background is what
+    // hides the tray parked behind it (see above).
+    args.isDeleting && "*:opacity-60",
   );
 }
 
@@ -479,6 +526,7 @@ function RowActivationOverlay(props: {
   readonly linkTabId: string;
   readonly selectionMode: boolean;
   readonly isRenaming: boolean;
+  readonly isDeleting: boolean;
   readonly onActivate: (event: ReactMouseEvent<HTMLElement>) => void;
 }): ReactNode {
   // An inline rename puts a real text field where the title was; an overlay
@@ -510,6 +558,7 @@ function RowActivationOverlay(props: {
       }}
       onClick={props.onActivate}
       aria-label={`Open task ${props.displayTitle}`}
+      {...historyRowDeletingLinkProps(props.isDeleting)}
       className={overlayClassName}
     />
   );
