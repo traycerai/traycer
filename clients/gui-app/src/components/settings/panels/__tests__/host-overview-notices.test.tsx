@@ -2,11 +2,12 @@
 // Status tab and the header's live update pill/phone strip. Three layers,
 // tested at the layer that actually decides the thing:
 //  - pure model (`host-overview-status-model.ts`): `inFlightUpdateKind`,
-//    `deriveHostOverviewVersionTag`, `describeHostOfflineNotice`;
+//    `describeHostOfflineNotice`;
 //  - standalone components, rendered with hand-built props rather than
 //    through the whole panel, for a mechanism a single component owns
-//    (the version card's in-flight button hiding, the destructive-styled
-//    force controls);
+//    (the answer card's quiet answers and in-flight hiding, Check now's
+//    in-flight hiding on the version list, the destructive-styled force
+//    controls);
 //  - the full panel, through the same harness `host-overview-tabs.test.tsx`
 //    uses, for a decision only the panel makes (the strip's placement and
 //    absence on every tab, the drain-gate/operation-card "one wait" rule,
@@ -52,7 +53,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import type { ComponentProps, ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   cleanup,
   fireEvent,
@@ -96,10 +97,8 @@ import {
   resetSettingsOpenIntentForTests,
 } from "@/stores/tabs/settings-open-intent-store";
 import {
-  deriveHostOverviewVersionTag,
   describeHostOfflineNotice,
   inFlightUpdateKind,
-  type HostOverviewVersionTag,
 } from "@/components/settings/panels/host-overview-status-model";
 import { describeLastSeenUpdateClause } from "@/components/home/host-update-operation-copy";
 import {
@@ -107,8 +106,14 @@ import {
   type FleetUpdateView,
   type FleetUpdateViewKind,
 } from "@/lib/host/fleet-update/fleet-update-view";
-import type { HostOverviewAnswerKind } from "@/components/settings/panels/host-overview-updates-state";
-import { HostOverviewVersionCard } from "@/components/settings/panels/host-overview-updates";
+import type { HostOverviewUpdatesSummary } from "@/components/settings/panels/host-overview-updates-state";
+import {
+  HostOverviewAnswerCard,
+  type HostOverviewVersionAnswer,
+} from "@/components/settings/panels/host-overview-updates";
+import { HostOverviewUpdatesTab } from "@/components/settings/panels/host-overview-updates-tab";
+import type { VersionPickerProps } from "@/components/settings/panels/host-overview-version-picker";
+import { describeCliFloorRemedy } from "@/components/settings/panels/host-overview-cli-floor-remedy";
 import { HostOverviewOperationCard } from "@/components/settings/panels/host-overview-operation-card";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
 import {
@@ -228,124 +233,15 @@ describe("inFlightUpdateKind", () => {
   it("returns null for an unknown view with no retained phase", () => {
     expect(inFlightUpdateKind(UNKNOWN_FLEET_UPDATE_VIEW)).toBeNull();
   });
-});
 
-describe("deriveHostOverviewVersionTag", () => {
-  function derive(input: {
-    readonly offline: boolean;
-    readonly unmanaged: boolean;
-    readonly view: FleetUpdateView | null;
-    readonly answerKind: HostOverviewAnswerKind | null;
-  }): HostOverviewVersionTag | null {
-    return deriveHostOverviewVersionTag(input);
-  }
-
-  it("wears Last reported when offline, over every other input", () => {
-    expect(
-      derive({
-        offline: true,
-        unmanaged: false,
-        view: view("downloading", {}),
-        answerKind: "available",
-      }),
-    ).toBe("last-reported");
-  });
-
-  it("wears no tag when updates are not manageable here", () => {
-    expect(
-      derive({
-        offline: false,
-        unmanaged: true,
-        view: null,
-        answerKind: "available",
-      }),
-    ).toBeNull();
-  });
-
-  it("wears no tag for every in-flight kind, whatever the answer would otherwise say — the notices strip's card is the one place that narrates it", () => {
-    for (const kind of IN_FLIGHT_KINDS) {
-      expect(
-        derive({
-          offline: false,
-          unmanaged: false,
-          view: view(kind, {}),
-          answerKind: "available",
-        }),
-      ).toBeNull();
-    }
-  });
-
-  it("wears no tag for a retained in-flight phase either, though the phase still counts as in flight", () => {
+  it("still counts a retained in-flight phase and a qualified park as in flight, so the answer card and Check now stay withheld", () => {
     const retained: FleetUpdateView = {
       ...UNKNOWN_FLEET_UPDATE_VIEW,
       lastKnownKind: "downloading",
     };
     const qualifiedPark = view("waiting-to-activate", { qualified: true });
     for (const demoted of [retained, qualifiedPark]) {
-      // Still in flight: the buttons stay hidden...
       expect(inFlightUpdateKind(demoted)).not.toBeNull();
-      // ...and the card makes no present-tense claim about it either.
-      expect(
-        derive({
-          offline: false,
-          unmanaged: false,
-          view: demoted,
-          answerKind: "available",
-        }),
-      ).toBeNull();
-    }
-  });
-
-  it("falls back to the answer's tag once nothing is in flight, restart-to-finish and needs-cli included, and to null with no answer", () => {
-    for (const [answer, tag] of [
-      ["latest", "latest"],
-      ["available", "available"],
-      ["stranded", "available"],
-      ["not-installable", null],
-      ["checking", "checking"],
-      ["unreachable", null],
-      ["check-failed", null],
-      ["restart-to-finish", "restart-to-finish"],
-      ["needs-cli", "needs-cli"],
-    ] as ReadonlyArray<
-      [HostOverviewAnswerKind, HostOverviewVersionTag | null]
-    >) {
-      expect(
-        derive({
-          offline: false,
-          unmanaged: false,
-          view: null,
-          answerKind: answer,
-        }),
-      ).toBe(tag);
-    }
-    expect(
-      derive({
-        offline: false,
-        unmanaged: false,
-        view: null,
-        answerKind: null,
-      }),
-    ).toBeNull();
-  });
-
-  it("wears no tag for a finished/failed/quiet view once nothing is in flight and the answer says so", () => {
-    for (const kind of [
-      "complete",
-      "failed",
-      "finalizing-record",
-      "verification-refused",
-      "unavailable",
-      "idle",
-    ] as const) {
-      expect(
-        derive({
-          offline: false,
-          unmanaged: false,
-          view: view(kind, {}),
-          answerKind: null,
-        }),
-      ).toBeNull();
     }
   });
 });
@@ -421,24 +317,31 @@ describe("describeHostOfflineNotice", () => {
 // SECTION B — standalone components
 // -----------------------------------------------------------------------------
 
-describe("<HostOverviewVersionCard/> hides Update now / Check now while in flight", () => {
-  function answerWithUpdatable(): NonNullable<
-    ComponentProps<typeof HostOverviewVersionCard>["answer"]
-  > {
+describe("<HostOverviewAnswerCard/> draws only an answer with something to say, and goes quiet while an update is in flight", () => {
+  function summaryFor(
+    overrides: Partial<HostOverviewUpdatesSummary>,
+  ): HostOverviewUpdatesSummary {
     return {
-      summary: {
-        hostName: "host-a",
-        description: "v1.6.0 is available.",
-        answerKind: "available",
-        updatableVersion: "1.6.0",
-        checking: false,
-        busy: false,
-        installing: false,
-        onCheck: vi.fn(),
-        onUpdateLatest: vi.fn(),
-        remedy: null,
-        failureDescription: null,
-      },
+      hostName: "host-a",
+      description: "v1.6.0 is available.",
+      answerKind: "available",
+      updatableVersion: "1.6.0",
+      checking: false,
+      busy: false,
+      installing: false,
+      onCheck: vi.fn(),
+      onUpdateLatest: vi.fn(),
+      remedy: null,
+      failureDescription: null,
+      ...overrides,
+    };
+  }
+
+  function answerWith(
+    overrides: Partial<HostOverviewUpdatesSummary>,
+  ): HostOverviewVersionAnswer {
+    return {
+      summary: summaryFor(overrides),
       degrade: null,
       desktopBridge: null,
       onInstallationHelp: vi.fn(),
@@ -446,30 +349,149 @@ describe("<HostOverviewVersionCard/> hides Update now / Check now while in fligh
     };
   }
 
-  it("shows Update now and Check now while nothing is in flight", () => {
+  function answerWithUpdatable(): HostOverviewVersionAnswer {
+    return answerWith({});
+  }
+
+  function pickerProps(): VersionPickerProps {
+    return {
+      rows: [],
+      storeFloorNotice: false,
+      totalCount: 0,
+      showAll: false,
+      onToggleShowAll: vi.fn(),
+      includePreReleases: false,
+      onIncludePreReleasesChange: vi.fn(),
+      includePreReleasesExplanation: null,
+      installingVersion: null,
+      disabled: false,
+      foregroundUpdateLine: null,
+      onInstall: vi.fn(),
+      awaitingFirstCheck: false,
+      checking: false,
+      onCheck: vi.fn(),
+      failureDescription: null,
+    };
+  }
+
+  /**
+   * The Updates tab as the panel composes it: the answer card and the version
+   * picker, both fed the SAME in-flight fact, which is what makes Update now
+   * (on the card) and Check now (on the picker's heading) go quiet together.
+   */
+  function renderTab(inFlight: boolean): void {
     render(
-      <HostOverviewVersionCard
+      <HostOverviewUpdatesTab
+        answerCard={{
+          version: "1.5.0",
+          answer: answerWithUpdatable(),
+          inFlight,
+        }}
+        autoUpdate={null}
+        versions={pickerProps()}
+        inFlight={inFlight}
+        versionFallback={null}
+      />,
+    );
+  }
+
+  it.each([["latest"], ["checking"]] as const)(
+    "draws nothing at all for the quiet %s answer",
+    (answerKind) => {
+      render(
+        <HostOverviewAnswerCard
+          version="1.5.0"
+          answer={answerWith({ answerKind, updatableVersion: null })}
+          inFlight={false}
+        />,
+      );
+      expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+      expect(screen.queryByTestId("host-overview-updates")).toBeNull();
+    },
+  );
+
+  it.each([
+    ["available", "Update available"],
+    ["needs-cli", "Needs newer CLI tools"],
+    ["restart-to-finish", "Restart to finish"],
+    ["stranded", "Newer version on another release line"],
+    ["not-installable", "Update unavailable for this host"],
+    ["unreachable", "Update check failed"],
+    ["check-failed", "Update check failed"],
+  ] as const)(
+    "draws a card for the %s answer, titled %s",
+    (answerKind, title) => {
+      render(
+        <HostOverviewAnswerCard
+          version="1.5.0"
+          answer={answerWith({ answerKind, updatableVersion: null })}
+          inFlight={false}
+        />,
+      );
+      const card = screen.getByTestId("host-overview-answer-card");
+      expect(card.getAttribute("data-answer")).toBe(answerKind);
+      expect(within(card).getByText(title)).not.toBeNull();
+    },
+  );
+
+  it("reads an available update as from → to, from the running version, with the plain sentence kept for a screen reader", () => {
+    render(
+      <HostOverviewAnswerCard
         version="1.5.0"
-        tag={null}
         answer={answerWithUpdatable()}
         inFlight={false}
       />,
     );
+    const sentence = screen.getByTestId("host-overview-updates");
+    expect(sentence.textContent).toContain("v1.5.0");
+    expect(sentence.textContent).toContain("v1.6.0");
+    expect(screen.getByText("v1.6.0 is available.")).not.toBeNull();
+  });
+
+  it("shows Update now and Check now while nothing is in flight", () => {
+    renderTab(false);
     expect(screen.getByTestId("host-overview-update-now")).not.toBeNull();
     expect(screen.getByTestId("host-overview-update-check")).not.toBeNull();
   });
 
-  it("hides both buttons the moment inFlight is true, though the same updatable version is on offer", () => {
+  it("hides both the moment inFlight is true, though the same updatable version is on offer", () => {
+    renderTab(true);
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
+    expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
+    // The list itself is not part of what goes quiet.
+    expect(screen.getByTestId("host-overview-version-picker")).not.toBeNull();
+  });
+
+  it("keeps the command-line-tools fix on screen while an update is in flight, and still withholds Update now", () => {
+    const remedy = describeCliFloorRemedy({
+      isLocalMachine: false,
+      platform: "darwin-arm64",
+      cliSource: "manual",
+      cliBinaryPath: "/home/u/.local/bin/traycer",
+      cliVersion: "1.2.0",
+      requiredCliVersion: "1.3.0",
+      desktopUpdate: null,
+      hostName: "host-a",
+    });
     render(
-      <HostOverviewVersionCard
+      <HostOverviewAnswerCard
         version="1.5.0"
-        tag={null}
-        answer={answerWithUpdatable()}
+        answer={answerWith({
+          answerKind: "needs-cli",
+          description: remedy.sentence,
+          remedy,
+        })}
         inFlight
       />,
     );
+    expect(
+      screen
+        .getByTestId("host-overview-answer-card")
+        .getAttribute("data-answer"),
+    ).toBe("needs-cli");
+    expect(screen.getByRole("button", { name: "Copy command" })).not.toBeNull();
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
-    expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
   });
 
   it("in-flight-ness itself is keyed on every one of the nine in-flight kinds (inFlightUpdateKind), restoring to null on complete and failed", () => {
@@ -1213,7 +1235,7 @@ describe("the offline notice: gated on unreachable-for-a-reason-other-than-resta
   });
 });
 
-describe("the auto-update row — no longer a caption on the version card; the switch sits directly below it on Updates", () => {
+describe("the auto-update row — no longer a caption on the version card; the switch sits directly below the answer card on Updates", () => {
   it("shows on for an auto-policy host, off for a manual one, once Updates is selected", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -1266,7 +1288,7 @@ describe("the auto-update row — no longer a caption on the version card; the s
     renderPanel();
     await selectHostOverviewTab("updates");
 
-    await screen.findByTestId("host-overview-version-card");
+    await screen.findByTestId("host-overview-version-picker");
     expect(screen.queryByTestId("host-auto-update-host-a")).toBeNull();
   });
 
@@ -1338,12 +1360,11 @@ describe("a stranded answer's sentence points at the version list below it, with
   });
 });
 
-describe("a refused/failed attempt line shows while an update is in flight, even with Update now/Check now withdrawn", () => {
-  it("shows host-overview-update-attempt-failed alongside a waiting-for-work in-flight card with both buttons absent", () => {
+describe("a refused/failed attempt line shows while an update is in flight, even with the answer and Update now withdrawn", () => {
+  it("shows host-overview-update-attempt-failed as a card of its own while the answer is withheld in flight, with Update now absent", () => {
     render(
-      <HostOverviewVersionCard
+      <HostOverviewAnswerCard
         version="1.5.0"
-        tag={null}
         answer={{
           summary: {
             hostName: "host-a",
@@ -1367,11 +1388,77 @@ describe("a refused/failed attempt line shows while an update is in flight, even
         inFlight
       />,
     );
+    // The answer ("v1.6.0 is available.") is withheld; only the failure draws.
+    expect(
+      screen
+        .getByTestId("host-overview-answer-card")
+        .getAttribute("data-answer"),
+    ).toBe("failed-attempt");
+    const failure = screen.getByTestId("host-overview-update-attempt-failed");
+    expect(failure.textContent).toBe(
+      "host-a refused the last Force update… request.",
+    );
+    expect(failure.getAttribute("role")).toBe("alert");
+    expect(screen.queryByTestId("host-overview-updates")).toBeNull();
+    expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
+  });
+
+  it("keeps the failure as a footer under a shown answer, and makes it the supporting line of a failed check", () => {
+    const base: HostOverviewUpdatesSummary = {
+      hostName: "host-a",
+      description: "v1.6.0 is available.",
+      answerKind: "available",
+      updatableVersion: "1.6.0",
+      checking: false,
+      busy: false,
+      installing: false,
+      onCheck: vi.fn(),
+      onUpdateLatest: vi.fn(),
+      remedy: null,
+      failureDescription: "host-a refused the last update.",
+    };
+    const answer = (
+      summary: HostOverviewUpdatesSummary,
+    ): HostOverviewVersionAnswer => ({
+      summary,
+      degrade: null,
+      desktopBridge: null,
+      onInstallationHelp: vi.fn(),
+      foregroundUpdateLine: null,
+    });
+    const shown = render(
+      <HostOverviewAnswerCard
+        version="1.5.0"
+        answer={answer(base)}
+        inFlight={false}
+      />,
+    );
     expect(
       screen.getByTestId("host-overview-update-attempt-failed").textContent,
-    ).toBe("host-a refused the last Force update… request.");
-    expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
-    expect(screen.queryByTestId("host-overview-update-check")).toBeNull();
+    ).toBe("host-a refused the last update.");
+    expect(screen.getByText("v1.6.0 is available.")).not.toBeNull();
+    shown.unmount();
+
+    render(
+      <HostOverviewAnswerCard
+        version="1.5.0"
+        answer={answer({
+          ...base,
+          answerKind: "check-failed",
+          description: "unused",
+          updatableVersion: null,
+          failureDescription: "Couldn't check for updates.",
+        })}
+        inFlight={false}
+      />,
+    );
+    // No footer: the failure IS the supporting line.
+    expect(
+      screen.queryByTestId("host-overview-update-attempt-failed"),
+    ).toBeNull();
+    expect(screen.getByTestId("host-overview-updates").textContent).toBe(
+      "Couldn't check for updates.",
+    );
   });
 });
 
@@ -1461,7 +1548,7 @@ describe("the bound activation offer's auto-open reaches a person who has moved 
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture, {});
     renderPanel();
-    // The version card (and its Update now button) lives on Updates now,
+    // The answer card (and its Update now button) lives on Updates now,
     // rather than on the page's default tab.
     await selectHostOverviewTab("updates");
 
@@ -1608,7 +1695,7 @@ describe("the staged-wait Force update… dialog dispatches through the same bus
 });
 
 describe("regression: activation debt does not narrate 'restart host to finish' twice", () => {
-  it("the notices strip's operation card carries the sentence; the Updates tab's version card shows the version with no tag and no restart-to-finish sentence of its own", async () => {
+  it("the notices strip's operation card carries the sentence; the Updates tab draws no answer card and no restart-to-finish sentence of its own", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -1646,14 +1733,14 @@ describe("regression: activation debt does not narrate 'restart host to finish' 
       "Update installed — restart host to finish",
     );
 
-    // The version card, on Updates, states only the running version: no tag,
+    // The Updates tab, once its version list has drawn, has no answer card
     // and no repeat of the sentence the strip above the tabs already said.
     await selectHostOverviewTab("updates");
-    const versionCard = await screen.findByTestId("host-overview-version-card");
+    await screen.findByTestId("host-overview-version-picker");
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
     expect(
-      within(versionCard).queryByTestId("host-overview-version-tag"),
-    ).toBeNull();
-    expect(versionCard.textContent).not.toContain("restart host to finish");
+      screen.getByTestId("host-overview-tab-panel-updates").textContent,
+    ).not.toContain("restart host to finish");
   });
 });
 

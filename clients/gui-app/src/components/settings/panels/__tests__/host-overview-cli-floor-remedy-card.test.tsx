@@ -18,7 +18,7 @@ import {
   type Mock,
 } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { HostOverviewVersionCard } from "@/components/settings/panels/host-overview-updates";
+import { HostOverviewAnswerCard } from "@/components/settings/panels/host-overview-updates";
 import {
   describeCliFloorRemedy,
   type CliFloorRemedy,
@@ -119,9 +119,8 @@ function regionElement(
 ): ReactElement {
   return (
     <TooltipProvider>
-      <HostOverviewVersionCard
+      <HostOverviewAnswerCard
         version="1.2.0"
-        tag={null}
         answer={{
           summary: summary(remedy),
           degrade: null,
@@ -162,7 +161,7 @@ afterEach(() => {
   useDesktopDialogStore.getState().close();
 });
 
-describe("HostOverviewVersionCard CLI floor remedy", () => {
+describe("HostOverviewAnswerCard CLI floor remedy", () => {
   beforeEach(() => {
     clipboardWriteText.mockClear();
     Object.defineProperty(navigator, "clipboard", {

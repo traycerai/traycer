@@ -1118,7 +1118,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
     // `updates.continueAttempt` are both `null` for this host, and this
     // legacy-facts park carries no `attemptId` at all, so
     // `deriveAttemptControl` returns `null` regardless. T2's notices strip
-    // carries the debt sentence while it is in-flight - the version card
+    // carries the debt sentence while it is in-flight - the answer card
     // withholds its own answer for any in-flight kind (see
     // host-overview-notices.test.tsx's duplication regression).
     await waitFor(() => {

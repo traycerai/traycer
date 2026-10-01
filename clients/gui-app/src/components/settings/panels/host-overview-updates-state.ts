@@ -973,7 +973,7 @@ export interface HostOverviewUpdatesSummary {
   readonly hostName: string;
   /** The update answer. Never a failure: that is `failureDescription`. */
   readonly description: string;
-  /** Which answer `description` gives; the version card's tag reads it. */
+  /** Which answer `description` gives; the answer card's look reads it. */
   readonly answerKind: HostOverviewAnswerKind;
   /** A refused or failed attempt, drawn as one line under the answer. */
   readonly failureDescription: string | null;
@@ -2106,9 +2106,9 @@ function handleBoundDispatchOutcome(input: {
 }
 
 /**
- * Which answer the update sentence gives, for the version card's tag. One
- * value per arm of {@link describeCheckState}, so the tag and the sentence
- * cannot describe two different states.
+ * Which answer the update sentence gives, for the answer card's look. One
+ * value per arm of {@link describeCheckState}, so the card's title and its
+ * sentence cannot describe two different states.
  */
 export type HostOverviewAnswerKind =
   | "restart-to-finish"
@@ -2132,7 +2132,7 @@ interface CheckStateAnswer {
  *
  * A failed or refused attempt is NOT one of its arms. It used to be the first,
  * and the region drew the same text again as the failed-attempt line under it,
- * so a failure read twice. The version card now states the answer and puts the
+ * so a failure read twice. The answer card now states the answer and puts the
  * failure on the one line under it (`failureDescription`), which clears on the
  * next try. The answer beside it is whatever is still true of the catalog.
  *
@@ -2179,7 +2179,7 @@ function describeCheckState(input: {
   // answers, and the sentence names the one action that resolves it. The
   // catalog is still compared against the INSTALLED version (see the hook's
   // `installedVersion`), so `updatableVersion` names only something newer than
-  // the bytes on disk; the version card hides Update now while the restart is
+  // the bytes on disk; the answer card hides Update now while the restart is
   // pending, and offers it once the update has finished.
   if (input.activationDebt !== null) {
     // Qualified when the record read behind it is not live: the debt was
@@ -2226,7 +2226,7 @@ function describeCheckState(input: {
     // Honest about BOTH halves: the newer version exists, and this host will
     // not take it on its own. Naming the installed version names the line, and
     // pointing at the version list is not decoration — those rows are enabled,
-    // and they are the only way across. The version card leads the Updates
+    // and they are the only way across. The answer card leads the Updates
     // tab, so the list is directly below the sentence.
     if (input.strandedOnLine !== null && input.installedVersion !== null) {
       return {

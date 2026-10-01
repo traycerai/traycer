@@ -1,7 +1,7 @@
 // T3 — Overview ▸ Updates tab: the single-row auto-update group, its work
 // while the host cannot be reached, the unreachable/not-manageable list
-// fallbacks, a refused install's two surfaces, and the no-list Check now
-// sharing Status's own check. See the `t3-updates-tab` ticket and the
+// fallbacks, a refused install's two surfaces, and Check now (on the version
+// list's heading) sharing the answer card's own check. See the `t3-updates-tab` ticket and the
 // `host-overview-tabs` core-flows artifact ("Updates", "When the host can't
 // answer", "What changes from today") for the behaviour each test pins.
 //
@@ -367,7 +367,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(screen.getByTestId("host-auto-update-host-a")).toBeTruthy();
   });
 
-  it("a transient refused install shows under the version list and under the Status answer, and every row unfreezes once it resolves", async () => {
+  it("a transient refused install shows under the version list and as the answer card's footer, and every row unfreezes once it resolves", async () => {
     let releaseInstall: () => void = () => {
       throw new Error("install gate was not initialized");
     };
@@ -447,9 +447,9 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
         screen.getByTestId("host-overview-version-install-refused").textContent,
       ).toContain("host-a's CLI can't downgrade to v1.5.0");
     });
-    // … and once under the version card's own answer, from the SAME
-    // failure — the version card leads this same Updates tab, directly
-    // above the list, so its content stays mounted right alongside it.
+    // … and once as the answer card's red footer, from the SAME failure — the
+    // answer card leads this same Updates tab, directly above the list, so it
+    // stays mounted right alongside it.
     expect(
       screen.getByTestId("host-overview-update-attempt-failed").textContent,
     ).toContain("host-a's CLI can't downgrade to v1.5.0");
@@ -469,7 +469,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     ).toBe("active");
   });
 
-  it("the no-list state's Check now runs the exact check the version card uses, refreshing both from one request", async () => {
+  it("Check now, with no list to show, runs the exact check the answer card uses, refreshing both from one request", async () => {
     let checkCalls = 0;
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
@@ -513,16 +513,21 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
       "This host didn't return a list of installable versions.",
     );
 
-    fireEvent.click(screen.getByTestId("host-overview-version-check"));
+    // The page's ONE Check now sits on the version list's heading, even with
+    // the list empty; the empty list carries no second copy of it.
+    const check = within(
+      screen.getByTestId("host-overview-version-picker"),
+    ).getByTestId("host-overview-update-check");
+    fireEvent.click(check);
 
-    // ONE new request — if the no-list state's Check now fired its own
-    // separate ask instead of Status's shared one, this would either stay at
-    // 1 (a dead button) or jump straight past 2 as two instances raced.
+    // ONE new request — if Check now fired its own separate ask instead of
+    // the page's shared one, this would either stay at 1 (a dead button) or
+    // jump straight past 2 as two instances raced.
     await waitFor(() => expect(checkCalls).toBe(2));
 
     // Both surfaces read the SAME answer from that one request: the list now
-    // has a row, and the version card's own answer sentence — leading this
-    // same Updates tab, not a separate Status tab — names the same version.
+    // has a row, and the answer card's own sentence — leading this same
+    // Updates tab — names the same version.
     await waitFor(() => {
       const rows = within(screen.getByTestId("host-version-rows"));
       expect(rows.getByText("v1.6.0")).toBeTruthy();
@@ -560,10 +565,10 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
 
     await selectHostOverviewTab("updates");
 
-    // Scoped to the Updates pane, and exactly ONE copy. The version card
-    // leads this tab and states the reason itself (`VersionCardAnswer`'s
-    // degrade note); the version list used to add the same sentence as its
-    // own fallback directly under it, which read as the same notice twice.
+    // Scoped to the Updates pane, and exactly ONE copy. The answer card
+    // leads this tab and states the reason itself (its degrade body); the
+    // version list used to add the same sentence as its own fallback directly
+    // under it, which read as the same notice twice.
     const updatesPane = within(
       screen.getByTestId("host-overview-tab-panel-updates"),
     );

@@ -646,8 +646,8 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
     // operation card that still carries a demoted-vs-live table is itself
     // withdrawn here by the `offline` gate above. The demotion mechanism
     // itself stays covered independent of this scenario — see
-    // `deriveHostOverviewVersionTag`'s and `inFlightUpdateKind`'s retained-view
-    // cases in `host-overview-notices.test.tsx`, and (c) above, where the
+    // `inFlightUpdateKind`'s retained-view cases in
+    // `host-overview-notices.test.tsx`, and (c) above, where the
     // scope stays usable and the operation card's own "Last seen: …" phrasing
     // is directly visible.
   });
