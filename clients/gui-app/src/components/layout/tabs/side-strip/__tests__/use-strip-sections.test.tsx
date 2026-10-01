@@ -444,7 +444,7 @@ describe("useStripSections", () => {
     // A collapsed group's member is listed, carrying its group.
     expect(entryOf(tabItemId(refOf(doneInGroup)))).toMatchObject({
       kind: "tabs",
-      group: { id: "group-1", name: "Later", color: "#8ab4f8", taskCount: 1 },
+      group: { id: "group-1", name: "Later", color: "#8ab4f8" },
     });
     expect(entryOf(tabItemId(refOf(idle)))).toMatchObject({ group: null });
     expect(rowsOf(tabItemId(refOf(doneInGroup)))).toEqual([

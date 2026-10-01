@@ -20,8 +20,11 @@ import type { RectLike } from "@/components/epic-canvas/dnd/dnd";
 import {
   laneSlotsOf,
   type StripDragGeometry,
+  type StripGroupExtent,
   type StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
+import { useTabsStore } from "@/stores/tabs/store";
+import { stripItemGroupId } from "@/stores/tabs/tab-groups";
 
 export const HEADER_STRIP_SCROLL_TEST_ID = "header-tab-strip-scroll";
 
@@ -57,7 +60,9 @@ export function readHeaderStripLayoutRect(
   axis: StripAxis,
 ): HeaderStripLayoutRect {
   const rect = element.getBoundingClientRect();
-  const frame = element.closest<HTMLElement>("[data-strip-item-id]");
+  const frame = element.closest<HTMLElement>(
+    "[data-strip-item-id], [data-strip-group-chip-frame]",
+  );
   const translate = frame === null ? 0 : readTranslate(frame, axis);
   return {
     start: axis.mainStart(rect) - translate,
@@ -119,6 +124,14 @@ export function readHeaderStripContentOrigin(axis: StripAxis): number | null {
   );
 }
 
+/** The tab group each strip item is in, read from the live tabs store. */
+function stripItemGroupIds(): ReadonlyMap<string, string | null> {
+  const { items, customizations } = useTabsStore.getState();
+  return new Map(
+    items.map((item) => [item.id, stripItemGroupId(item, customizations)]),
+  );
+}
+
 export function readHeaderStripSlots(
   axis: StripAxis,
 ): ReadonlyArray<StripSlot> {
@@ -126,12 +139,14 @@ export function readHeaderStripSlots(
   if (strip === null) return [];
   const origin =
     axis.mainStart(strip.getBoundingClientRect()) - axis.scrollOffset(strip);
+  const groupIds = stripItemGroupIds();
   const measured: Array<{
     readonly itemId: string;
     readonly extent: number;
     readonly contentStart: number;
     readonly isMergeTarget: boolean;
     readonly lane: string | null;
+    readonly groupId: string | null;
   }> = [];
   for (const child of strip.querySelectorAll<HTMLElement>(
     "[data-strip-item-id]",
@@ -145,6 +160,7 @@ export function readHeaderStripSlots(
       contentStart: rect.start - origin,
       isMergeTarget: child.dataset.stripItemMergeable !== "false",
       lane: child.dataset.stripLane ?? null,
+      groupId: groupIds.get(itemId) ?? null,
     });
   }
   // `order` reorders the flex row visually but not in the DOM, so at drag start
@@ -163,6 +179,75 @@ export function readHeaderStripSlots(
         ? sorted[index + 1].contentStart - slot.contentStart
         : slot.extent,
   }));
+}
+
+/** The main-axis gap a flex container lays its children out with, in px. */
+function mainAxisGap(element: HTMLElement, axis: StripAxis): number {
+  const style = getComputedStyle(element);
+  return (
+    Number.parseFloat(axis.id === "y" ? style.rowGap : style.columnGap) || 0
+  );
+}
+
+/**
+ * Whether a drag may not change a group's membership: an organization's group,
+ * the same ones the appearance menu will not add a tab to.
+ */
+function groupIsLocked(groupId: string): boolean {
+  const group = useTabsStore.getState().groups?.[groupId];
+  return Boolean(group?.organizationOwnerId);
+}
+
+/**
+ * Where each tab group is drawn. A sidebar block or rail column marks itself
+ * (`data-strip-group-extent`) and spans its header and rows. The top bar's
+ * group has no box of its own: its chip frame (`data-strip-group-chip-frame`,
+ * the chip and its margins) and its tabs, which follow the chip, are the
+ * extent, and a collapsed group's is its chip. A block's rect carries no drag
+ * displacement (only the fill and header inside it move); a chip frame's does,
+ * and it is removed, as a tab's is.
+ */
+export function readHeaderStripGroups(
+  axis: StripAxis,
+  slots: ReadonlyArray<StripSlot>,
+): ReadonlyArray<StripGroupExtent> {
+  const strip = stripElement();
+  if (strip === null) return [];
+  const origin =
+    axis.mainStart(strip.getBoundingClientRect()) - axis.scrollOffset(strip);
+  const extents: StripGroupExtent[] = [];
+  for (const block of strip.querySelectorAll<HTMLElement>(
+    "[data-strip-group-extent]",
+  )) {
+    const rect = block.getBoundingClientRect();
+    const groupId = block.dataset.stripGroupExtent ?? "";
+    extents.push({
+      groupId,
+      start: axis.mainStart(rect) - origin,
+      end: axis.mainEnd(rect) - origin,
+      lane: block.dataset.stripLane ?? null,
+      rowGap: mainAxisGap(block, axis),
+      locked: groupIsLocked(groupId),
+    });
+  }
+  for (const frame of strip.querySelectorAll<HTMLElement>(
+    "[data-strip-group-chip-frame]",
+  )) {
+    const groupId = frame.dataset.stripGroupChipFrame ?? "";
+    const rect = readHeaderStripLayoutRect(frame, axis);
+    const membersEnd = slots
+      .filter((slot) => slot.groupId === groupId)
+      .map((slot) => slot.contentStart + slot.extent);
+    extents.push({
+      groupId,
+      start: rect.start - origin,
+      end: Math.max(rect.end - origin, ...membersEnd),
+      lane: null,
+      rowGap: 0,
+      locked: groupIsLocked(groupId),
+    });
+  }
+  return extents;
 }
 
 /**
@@ -198,7 +283,8 @@ export function measureHeaderStripGeometry(input: {
   const { axis } = input;
   const strip = stripElement();
   if (strip === null) return null;
-  const slots = laneSlotsOf(readHeaderStripSlots(axis), input.stripItemId);
+  const stripSlots = readHeaderStripSlots(axis);
+  const slots = laneSlotsOf(stripSlots, input.stripItemId);
   const sourceIndex = slots.findIndex(
     (slot) => slot.itemId === input.stripItemId,
   );
@@ -208,6 +294,8 @@ export function measureHeaderStripGeometry(input: {
   const origin = axis.mainStart(stripRect) - axis.scrollOffset(strip);
   return {
     slots,
+    groups: readHeaderStripGroups(axis, stripSlots),
+    runGap: mainAxisGap(strip, axis),
     sourceIndex,
     grabOffset: input.pointer - (origin + source.contentStart),
     sourceInitialStart: origin + source.contentStart,

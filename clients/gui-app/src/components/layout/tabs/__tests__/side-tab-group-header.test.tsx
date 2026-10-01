@@ -161,7 +161,28 @@ describe("SideTabGroupHeader", () => {
     expect(screen.queryByTestId("side-tab-group-count")).toBeNull();
   });
 
-  it("leaves out the name of an unnamed group, keeping the count and chevron", () => {
+  it("shows the member count only while the group is collapsed", () => {
+    renderHeader({
+      group: seedGroup(false),
+      variant: "expanded",
+      memberEntities: [],
+      indicators: { epics: {}, chats: {} },
+      columnSide: null,
+    });
+    expect(screen.queryByTestId("side-tab-group-count")).toBeNull();
+    cleanup();
+
+    renderHeader({
+      group: seedGroup(true),
+      variant: "expanded",
+      memberEntities: [],
+      indicators: { epics: {}, chats: {} },
+      columnSide: null,
+    });
+    expect(screen.getByTestId("side-tab-group-count").textContent).toBe("3");
+  });
+
+  it("leaves out the name of an unnamed group, keeping the chevron", () => {
     const group: TabGroup = { name: "", color: "#8ab4f8", collapsed: false };
     const member: TabRef = { kind: "epic", id: "e-1" };
     useTabsStore.setState({
@@ -183,8 +204,7 @@ describe("SideTabGroupHeader", () => {
       columnSide: null,
     });
 
-    expect(header().textContent).toBe("3");
-    expect(screen.getByTestId("side-tab-group-count").textContent).toBe("3");
+    expect(header().textContent).toBe("");
     expect(screen.queryByTestId("side-tab-group-name")).toBeNull();
   });
 });

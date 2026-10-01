@@ -147,17 +147,32 @@ export const SIDE_TAB_DROP_LINE_SEAT_CLASS: Readonly<
 /**
  * A tab group's fill, in the expanded strip's block and the rail's column: its
  * colour (`--side-tab-group-color`) at 12% over the strip's ground (dark) or
- * 16% (light). The ground is the strip's own, so the fill tints whatever the
- * theme paints there (`SIDE_STRIP_GROUND_FILL_CLASS`).
+ * 16% (light), and 20% / 26% while a drop would join the group
+ * (`data-joining`). The ground is the strip's own, so the fill tints whatever
+ * the theme paints there (`SIDE_STRIP_GROUND_FILL_CLASS`).
  */
 const SIDE_TAB_GROUP_FILL_CLASS = cn(
-  "bg-[color-mix(in_srgb,var(--side-tab-group-color)_16%,var(--canvas))] md:bg-[color-mix(in_srgb,var(--side-tab-group-color)_16%,var(--shell-ground))]",
-  "dark:bg-[color-mix(in_srgb,var(--side-tab-group-color)_12%,var(--canvas))] dark:md:bg-[color-mix(in_srgb,var(--side-tab-group-color)_12%,var(--shell-ground))]",
+  "[--side-tab-group-strength:16%] dark:[--side-tab-group-strength:12%]",
+  // A drop that would join the group brightens it a step.
+  "data-[joining=true]:[--side-tab-group-strength:26%] dark:data-[joining=true]:[--side-tab-group-strength:20%]",
+  "bg-[color-mix(in_srgb,var(--side-tab-group-color)_var(--side-tab-group-strength),var(--canvas))] md:bg-[color-mix(in_srgb,var(--side-tab-group-color)_var(--side-tab-group-strength),var(--shell-ground))]",
+);
+/**
+ * The fill of a block or column while a drag lays the strip out around it: a
+ * layer over the group's own box, which the drag moves and resizes to where the
+ * group's tabs now are while the box keeps its place (the measured geometry
+ * must not move under the model). The box paints nothing meanwhile
+ * (`data-placed`). The caller gives the layer its radius.
+ */
+export const SIDE_TAB_GROUP_FILL_LAYER_CLASS = cn(
+  "pointer-events-none absolute inset-x-0 top-0",
+  SIDE_TAB_GROUP_FILL_CLASS,
 );
 /** A tab group in the expanded strip: one rounded block holding the header and the rows, 4px inside its edge. */
 export const SIDE_TAB_GROUP_BLOCK_CLASS = cn(
-  "flex flex-col gap-0.5 rounded-xl p-1 text-foreground",
+  "relative flex flex-col gap-0.5 rounded-xl p-1 text-foreground",
   SIDE_TAB_GROUP_FILL_CLASS,
+  "data-[placed=true]:bg-transparent",
 );
 /**
  * A tab group in the rail: one rounded column around its tiles, 4px inside its
@@ -167,8 +182,9 @@ export const SIDE_TAB_GROUP_BLOCK_CLASS = cn(
  * side padding, so it is a tile wide and keeps the tiles' 4px inset.
  */
 export const SIDE_TAB_GROUP_COLUMN_CLASS = cn(
-  "-mx-0.5 flex flex-col items-center gap-1 rounded-3xl p-1 [&_[data-side-split-pair]]:px-0",
+  "relative -mx-0.5 flex flex-col items-center gap-1 rounded-3xl p-1 [&_[data-side-split-pair]]:px-0",
   SIDE_TAB_GROUP_FILL_CLASS,
+  "data-[placed=true]:bg-transparent",
 );
 /** The Layered view's group header: a 28px row, its name on the rows' own title edge. */
 export const SIDE_TAB_GROUP_HEADER_CLASS = "h-7";

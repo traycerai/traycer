@@ -26,6 +26,7 @@ import {
 } from "@tanstack/react-router";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import { SPLIT_HOLD_MS } from "@/components/epic-canvas/dnd/strip-drag-model";
 import {
   ARTIFACT_TAB_DND_TYPE,
   getArtifactTabDragId,
@@ -50,6 +51,7 @@ import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import { tabRefKey } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
@@ -142,14 +144,32 @@ function StripRow(props: { readonly row: Row; readonly index: number }) {
   );
 }
 
-function VerticalStrip(props: { readonly edge: StripEdge }) {
+/** A group's block, which the drag model reads as the group's extent. */
+interface Block {
+  readonly groupId: string;
+  readonly top: number;
+  readonly height: number;
+}
+
+function VerticalStrip(props: {
+  readonly edge: StripEdge;
+  readonly rows: ReadonlyArray<Row>;
+  readonly blocks: ReadonlyArray<Block>;
+}) {
   return (
     <div
       data-testid={HEADER_STRIP_SCROLL_TEST_ID}
       data-strip-axis="y"
       data-strip-edge={props.edge}
     >
-      {ROWS.map((row, index) => (
+      {props.blocks.map((block) => (
+        <div
+          key={block.groupId}
+          data-testid={`block-${block.groupId}`}
+          data-strip-group-extent={block.groupId}
+        />
+      ))}
+      {props.rows.map((row, index) => (
         <StripRow key={row.stripItemId} row={row} index={index} />
       ))}
     </div>
@@ -207,10 +227,19 @@ function seedVerticalStrip(): void {
 async function mountVerticalStrip(
   edge: "left" | "right",
 ): Promise<RenderResult> {
+  return mountStrip(edge, ROWS, []);
+}
+
+/** The strip drawing `rows` (a collapsed group's tabs are not drawn) and `blocks`. */
+async function mountStrip(
+  edge: "left" | "right",
+  rows: ReadonlyArray<Row>,
+  blocks: ReadonlyArray<Block>,
+): Promise<RenderResult> {
   const router = withRouter(() => (
     <QueryClientProvider client={new QueryClient()}>
       <RootDndProvider>
-        <VerticalStrip edge={edge} />
+        <VerticalStrip edge={edge} rows={rows} blocks={blocks} />
       </RootDndProvider>
     </QueryClientProvider>
   ));
@@ -224,11 +253,17 @@ async function mountVerticalStrip(
     view.getByTestId(HEADER_STRIP_SCROLL_TEST_ID),
     "getBoundingClientRect",
   ).mockReturnValue(rect(bandStart, STRIP_TOP, STRIP_WIDTH, STRIP_HEIGHT));
-  for (const row of ROWS) {
+  for (const row of rows) {
     vi.spyOn(
       view.getByTestId(`row-${row.stripItemId}`),
       "getBoundingClientRect",
     ).mockReturnValue(rect(bandStart, row.top, STRIP_WIDTH, row.height));
+  }
+  for (const block of blocks) {
+    vi.spyOn(
+      view.getByTestId(`block-${block.groupId}`),
+      "getBoundingClientRect",
+    ).mockReturnValue(rect(bandStart, block.top, STRIP_WIDTH, block.height));
   }
   return view;
 }
@@ -302,6 +337,14 @@ function overlayTransform(): string | null {
   return overlays.length === 1 ? overlays[0].style.transform : null;
 }
 
+/**
+ * Takes over the clock the hold reads (`performance.now`) and its timer, after
+ * the strip has mounted on the real one.
+ */
+function takeOverHoldClock(): void {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+}
+
 function stripItemIds(): ReadonlyArray<string> {
   return useTabsStore.getState().items.map((item) => item.id);
 }
@@ -318,6 +361,7 @@ describe("RootDndProvider on a vertical strip", () => {
   afterEach(() => {
     cleanup();
     resetTabDetachHandler();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -342,6 +386,9 @@ describe("RootDndProvider on a vertical strip", () => {
         expect(store.headerStripDragState).toEqual({
           kind: "reorder",
           targetIndex: 1,
+          groupId: null,
+          joinsGroup: false,
+          hold: null,
         });
         expect(store.headerStripOffsets.get(ROW_B.stripItemId)).toBe(-34);
         expect(store.headerStripOffsets.get(ROW_A.stripItemId)).toBe(34);
@@ -369,40 +416,104 @@ describe("RootDndProvider on a vertical strip", () => {
         releaseAt(drag, inBand, 600);
       });
 
-      it("merges into a row's top half when approached from above", async () => {
-        const view = await mountVerticalStrip(edge);
-        const drag = pressAndActivate(view, ROW_A, inBand, 2);
-        // B spans 134..166; a dragged centre at 145 sits on its top half.
-        moveTo(drag, inBand, 145);
-        expect(useEpicDndStore.getState().headerStripDragState).toEqual({
-          kind: "merge",
-          targetIndex: 0,
-          targetItemId: ROW_B.stripItemId,
-          targetSide: "left",
-        });
-        expect(useEpicDndStore.getState().topLevelStripPairPreview).toEqual({
-          targetRef: B,
-          side: "left",
-        });
-        releaseAt(drag, inBand, 145);
-      });
+      describe("a row's middle half", () => {
+        const approaches = [
+          {
+            name: "from above",
+            dragged: ROW_A,
+            // B spans 134..166, its centre 150; 145 is in its middle half.
+            centre: 145,
+            targetIndex: 0,
+            target: ROW_B,
+            targetRef: B,
+            side: "left",
+          },
+          {
+            name: "from below",
+            dragged: ROW_B,
+            // A spans 100..132, its centre 116; 121 is in its middle half.
+            centre: 121,
+            targetIndex: 1,
+            target: ROW_A,
+            targetRef: A,
+            side: "right",
+          },
+        ] as const;
 
-      it("merges into a row's bottom half when approached from below", async () => {
-        const view = await mountVerticalStrip(edge);
-        const drag = pressAndActivate(view, ROW_B, inBand, 3);
-        // A spans 100..132; a dragged centre at 121 sits on its bottom half.
-        moveTo(drag, inBand, 121);
-        expect(useEpicDndStore.getState().headerStripDragState).toEqual({
-          kind: "merge",
-          targetIndex: 1,
-          targetItemId: ROW_A.stripItemId,
-          targetSide: "right",
+        for (const approach of approaches) {
+          it(`arms a split only once held there, approached ${approach.name}`, async () => {
+            const view = await mountVerticalStrip(edge);
+            takeOverHoldClock();
+            const drag = pressAndActivate(view, approach.dragged, inBand, 2);
+            moveTo(drag, inBand, approach.centre);
+            const store = useEpicDndStore.getState();
+            // Entered, not held: a move, with the hold under way.
+            expect(store.headerStripDragState).toMatchObject({
+              kind: "reorder",
+              targetIndex: approach.targetIndex,
+              hold: { itemId: approach.target.stripItemId },
+            });
+            expect(store.topLevelStripPairPreview).toBeNull();
+
+            // The pointer rests: no move arrives, the hold's own timer does.
+            act(() => {
+              vi.advanceTimersByTime(SPLIT_HOLD_MS);
+            });
+
+            expect(
+              useEpicDndStore.getState().headerStripDragState,
+            ).toMatchObject({
+              kind: "merge",
+              targetIndex: approach.targetIndex,
+              targetItemId: approach.target.stripItemId,
+              targetSide: approach.side,
+            });
+            expect(useEpicDndStore.getState().topLevelStripPairPreview).toEqual(
+              {
+                targetRef: approach.targetRef,
+                side: approach.side,
+              },
+            );
+            releaseAt(drag, inBand, approach.centre);
+          });
+        }
+
+        it("splits on a held release", async () => {
+          const view = await mountVerticalStrip(edge);
+          takeOverHoldClock();
+          const drag = pressAndActivate(view, ROW_A, inBand, 12);
+          moveTo(drag, inBand, 145);
+          act(() => {
+            vi.advanceTimersByTime(SPLIT_HOLD_MS);
+          });
+
+          releaseAt(drag, inBand, 145);
+
+          expect(useTabsStore.getState().items[0]).toMatchObject({
+            kind: "split",
+            left: { kind: "tab", ref: A },
+            right: { kind: "tab", ref: B },
+          });
         });
-        expect(useEpicDndStore.getState().topLevelStripPairPreview).toEqual({
-          targetRef: A,
-          side: "right",
+
+        it("splits nothing on a release in the middle before the hold completes", async () => {
+          const view = await mountVerticalStrip(edge);
+          takeOverHoldClock();
+          const drag = pressAndActivate(view, ROW_A, inBand, 14);
+          moveTo(drag, inBand, 145);
+          act(() => {
+            vi.advanceTimersByTime(SPLIT_HOLD_MS - 1);
+          });
+
+          releaseAt(drag, inBand, 145);
+
+          expect(stripItemIds()).toEqual([
+            ROW_A.stripItemId,
+            ROW_B.stripItemId,
+            SPLIT_ID,
+            ROW_C.stripItemId,
+          ]);
         });
-        releaseAt(drag, inBand, 121);
       });
 
       it("drags a split pair whole, displacing a neighbour by the pair's extent", async () => {
@@ -419,6 +530,9 @@ describe("RootDndProvider on a vertical strip", () => {
         expect(store.headerStripDragState).toEqual({
           kind: "reorder",
           targetIndex: 3,
+          groupId: null,
+          joinsGroup: false,
+          hold: null,
         });
         // C moves up by the pair's 66px plus the gap; the pair moves down by
         // C's advance, which as the last slot is its bare 32px extent.
@@ -441,6 +555,243 @@ describe("RootDndProvider on a vertical strip", () => {
       });
     });
   }
+
+  describe("a keyboard drag", () => {
+    it("never splits, though the dragged row rests in another row's middle", async () => {
+      const view = await mountVerticalStrip("left");
+      takeOverHoldClock();
+      const source = view.getByTestId(`row-${ROW_C.stripItemId}`);
+      source.focus();
+      act(() => {
+        fireEvent.keyDown(source, { code: "Space", key: " " });
+      });
+      // jsdom measures the drag overlay as nothing, so the keyboard's own moves
+      // carry no usable position; the pointer is what tells the strip where the
+      // dragged row is. A keyboard drag grabs the row at (0, 0), so its centre
+      // is the pointer's y plus the row's start and half its height: put it at
+      // 152, inside the middle half of B (centre 150), where a pointer drag
+      // arms a split once held.
+      const pointerY = 152 - ROW_C.top - ROW_C.height / 2;
+      act(() => {
+        fireEvent.pointerMove(source, { clientX: 120, clientY: pointerY });
+      });
+      act(() => {
+        vi.advanceTimersByTime(2 * SPLIT_HOLD_MS);
+      });
+
+      const store = useEpicDndStore.getState();
+      expect(store.headerStripDragState).toMatchObject({
+        kind: "reorder",
+        targetIndex: 2,
+        hold: null,
+      });
+      expect(store.topLevelStripPairPreview).toBeNull();
+      act(() => {
+        fireEvent.keyDown(document, { code: "Escape", key: "Escape" });
+      });
+    });
+  });
+
+  describe("group membership by drop position", () => {
+    const inBand = BAND.left.start + STRIP_WIDTH / 2;
+    /** The strip's rows stacked 100..268; the group block reaches 4px past its rows. */
+    function seedGroup(members: ReadonlyArray<TabRef>, collapsed: boolean) {
+      act(() => {
+        useTabsStore.setState({
+          groups: { g: { name: "Work", color: "#8ab4f8", collapsed } },
+          customizations: Object.fromEntries(
+            members.map((ref) => [
+              tabRefKey(ref),
+              { color: null, icon: null, groupId: "g" },
+            ]),
+          ),
+        });
+      });
+    }
+    const groupOf = (ref: TabRef): string | null =>
+      useTabsStore.getState().customizations?.[tabRefKey(ref)]?.groupId ?? null;
+    /** The group "g" as an organization's: the drag never changes who is in it. */
+    function seedOrganizationGroup(members: ReadonlyArray<TabRef>) {
+      seedGroup(members, false);
+      act(() => {
+        const group = useTabsStore.getState().groups?.g;
+        if (group === undefined) throw new Error("no group");
+        useTabsStore.setState({
+          groups: { g: { ...group, organizationOwnerId: "org" } },
+        });
+      });
+    }
+
+    it("never joins an organization's group, and goes past it whole", async () => {
+      seedOrganizationGroup([B, X, Y]);
+      const view = await mountStrip("left", ROWS, [
+        { groupId: "g", top: 130, height: 108 },
+      ]);
+      const drag = pressAndActivate(view, ROW_A, inBand, 25);
+      // Over the group's block, short of its centre: next to it, not in it.
+      moveTo(drag, inBand, 170);
+      expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+        groupId: null,
+        joinsGroup: false,
+      });
+      // Past the group's centre: both its rows are crossed at once.
+      moveTo(drag, inBand, 200);
+
+      releaseAt(drag, inBand, 200);
+
+      expect(groupOf(A)).toBeNull();
+      expect(stripItemIds()).toEqual([
+        ROW_B.stripItemId,
+        SPLIT_ID,
+        ROW_A.stripItemId,
+        ROW_C.stripItemId,
+      ]);
+    });
+
+    it("keeps a task in an organization's group, moving it to the run's nearest edge when it is dropped outside", async () => {
+      seedOrganizationGroup([B, X, Y]);
+      const view = await mountStrip("left", ROWS, [
+        { groupId: "g", top: 130, height: 108 },
+      ]);
+      const drag = pressAndActivate(view, ROW_B, inBand, 26);
+      // Below the block, past C: out of the group's run.
+      moveTo(drag, inBand, 300);
+
+      releaseAt(drag, inBand, 300);
+
+      expect(groupOf(B)).toBe("g");
+      expect(stripItemIds()).toEqual([
+        ROW_A.stripItemId,
+        SPLIT_ID,
+        ROW_B.stripItemId,
+        ROW_C.stripItemId,
+      ]);
+    });
+
+    it("joins a task dropped between a group's tasks", async () => {
+      seedGroup([B, X, Y], false);
+      const view = await mountStrip("left", ROWS, [
+        { groupId: "g", top: 130, height: 108 },
+      ]);
+      const drag = pressAndActivate(view, ROW_A, inBand, 20);
+      // Past B's centre (150), short of the pair's (201): between them.
+      moveTo(drag, inBand, 170);
+      expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+        kind: "reorder",
+        groupId: "g",
+        joinsGroup: true,
+      });
+
+      releaseAt(drag, inBand, 170);
+
+      expect(groupOf(A)).toBe("g");
+      expect(stripItemIds()).toEqual([
+        ROW_B.stripItemId,
+        ROW_A.stripItemId,
+        SPLIT_ID,
+        ROW_C.stripItemId,
+      ]);
+    });
+
+    it("moves a split pair into a group as one unit", async () => {
+      seedGroup([A], false);
+      const view = await mountStrip("left", ROWS, [
+        { groupId: "g", top: 96, height: 40 },
+      ]);
+      const drag = pressAndActivate(view, ROW_SPLIT, inBand, 24);
+      // Past A's centre (116) and short of B's (150), inside the block (to 136).
+      moveTo(drag, inBand, 130);
+
+      releaseAt(drag, inBand, 130);
+
+      expect(groupOf(X)).toBe("g");
+      expect(groupOf(Y)).toBe("g");
+      expect(stripItemIds()).toEqual([
+        ROW_A.stripItemId,
+        SPLIT_ID,
+        ROW_B.stripItemId,
+        ROW_C.stripItemId,
+      ]);
+    });
+
+    it("takes a task out of its group when it is dropped outside the group's block", async () => {
+      seedGroup([B, X, Y], false);
+      const view = await mountStrip("left", ROWS, [
+        { groupId: "g", top: 130, height: 108 },
+      ]);
+      const drag = pressAndActivate(view, ROW_B, inBand, 21);
+      // Past A's centre (116), above the block's top (130).
+      moveTo(drag, inBand, 112);
+      expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+        kind: "reorder",
+        groupId: null,
+        joinsGroup: false,
+      });
+
+      releaseAt(drag, inBand, 112);
+
+      expect(groupOf(B)).toBeNull();
+      expect(groupOf(X)).toBe("g");
+      expect(stripItemIds()).toEqual([
+        ROW_B.stripItemId,
+        ROW_A.stripItemId,
+        SPLIT_ID,
+        ROW_C.stripItemId,
+      ]);
+    });
+
+    it("removes a group whose last task is dropped out of it, without moving the task", async () => {
+      seedGroup([B], false);
+      const view = await mountStrip("left", ROWS, [
+        { groupId: "g", top: 130, height: 40 },
+      ]);
+      const drag = pressAndActivate(view, ROW_B, inBand, 22);
+      // Below the block's bottom (170), short of the pair's centre (201): the
+      // row keeps its place and leaves the group.
+      moveTo(drag, inBand, 190);
+
+      releaseAt(drag, inBand, 190);
+
+      expect(groupOf(B)).toBeNull();
+      expect(useTabsStore.getState().groups?.g).toBeUndefined();
+      expect(stripItemIds()).toEqual([
+        ROW_A.stripItemId,
+        ROW_B.stripItemId,
+        SPLIT_ID,
+        ROW_C.stripItemId,
+      ]);
+    });
+
+    it("joins a collapsed group as its first task when dropped on its header, leaving it collapsed", async () => {
+      seedGroup([B], true);
+      // The collapsed group draws its header (134..162) and none of its tasks.
+      const view = await mountStrip(
+        "left",
+        ROWS.filter((row) => row !== ROW_B),
+        [{ groupId: "g", top: 134, height: 28 }],
+      );
+      const drag = pressAndActivate(view, ROW_C, inBand, 23);
+      moveTo(drag, inBand, 148);
+      expect(useEpicDndStore.getState().headerStripDragState).toMatchObject({
+        kind: "reorder",
+        groupId: "g",
+        joinsGroup: true,
+      });
+      // No line: the group's tasks are not drawn to be inserted among.
+      expect(useEpicDndStore.getState().headerStripDropIndex).toBeNull();
+
+      releaseAt(drag, inBand, 148);
+
+      expect(groupOf(C)).toBe("g");
+      expect(useTabsStore.getState().groups?.g.collapsed).toBe(true);
+      expect(stripItemIds()).toEqual([
+        ROW_A.stripItemId,
+        ROW_C.stripItemId,
+        ROW_B.stripItemId,
+        SPLIT_ID,
+      ]);
+    });
+  });
 
   describe("tear-off", () => {
     const cases: ReadonlyArray<{

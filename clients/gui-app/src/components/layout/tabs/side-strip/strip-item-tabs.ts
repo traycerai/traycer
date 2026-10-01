@@ -14,8 +14,6 @@ export interface StripItemGroup {
   readonly id: string;
   readonly name: string;
   readonly color: string;
-  /** The group's tasks in the whole strip, a split's halves each; a block's "of N". */
-  readonly taskCount: number;
 }
 
 /** One strip item's tabs (two for a split pair) in strip order. */
@@ -49,12 +47,6 @@ export function stripItemTabsOf(
     );
     return itemTabs.length === 0 ? [] : [{ row, tabs: itemTabs }];
   });
-  const taskCounts = new Map<string, number>();
-  for (const { row, tabs: itemTabs } of items) {
-    if (row.group === null) continue;
-    const { groupId } = row.group;
-    taskCounts.set(groupId, (taskCounts.get(groupId) ?? 0) + itemTabs.length);
-  }
   return items.map(({ row, tabs: itemTabs }) => ({
     itemId: row.itemId,
     stripIndex: row.stripIndex,
@@ -65,7 +57,6 @@ export function stripItemTabsOf(
             id: row.group.groupId,
             name: row.group.group.name,
             color: row.group.group.color,
-            taskCount: taskCounts.get(row.group.groupId) ?? 0,
           },
     tabs: itemTabs,
   }));

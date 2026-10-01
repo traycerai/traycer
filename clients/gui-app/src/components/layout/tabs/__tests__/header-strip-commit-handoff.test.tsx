@@ -382,6 +382,45 @@ describe("header strip commit handoff", () => {
     }
   });
 
+  describe("an item that mounts in the commit", () => {
+    /** `a` and `b` at rest, then a commit that mounts `c` after them. */
+    function commitMounting(offsetX: number): void {
+      const at = (id: string, offset: number): ItemState => ({
+        id,
+        offsetX: offset,
+        opacity: 1,
+        registered: true,
+        tag: "div",
+      });
+      slots = slotsForOrder(["a", "b"]);
+      const view = render(
+        <Strip nodeEpoch={0} items={[at("a", 0), at("b", 0)]} />,
+      );
+      act(() => {
+        armHeaderStripCommitHandoff();
+        slots = slotsForOrder(["a", "b", "c"]);
+        view.rerender(
+          <Strip
+            nodeEpoch={0}
+            items={[at("a", 0), at("b", 0), at("c", offsetX)]}
+          />,
+        );
+      });
+    }
+
+    it("is not reported when it carries no displacement, as a tab dropped into a group's block mounts", () => {
+      // The block re-parents the tab, so React mounts it anew: it was never
+      // drawn at an old position and has no transform to unwind.
+      commitMounting(0);
+      expect(report.uncorrected).toEqual([]);
+    });
+
+    it("is reported when it arrives mid-displacement, since its position cannot be preserved", () => {
+      commitMounting(40);
+      expect(report.uncorrected).toEqual(["c"]);
+    });
+  });
+
   it("keeps correcting an item whose DOM node is replaced in place", () => {
     // Registry identity has to survive node churn WITHOUT a remount. Keyed by
     // the node captured at mount, a replaced element leaves a detached key

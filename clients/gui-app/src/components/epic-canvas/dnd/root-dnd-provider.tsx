@@ -120,6 +120,8 @@ import {
   overlayStartForPointer,
   remapGeometryToSlots,
   resolveStripDragState,
+  SPLIT_HOLD_MS,
+  stripLayoutFor,
   stripOffsetsFor,
   type MergeSide,
   type StripDragGeometry,
@@ -129,6 +131,7 @@ import {
   HEADER_STRIP_SCROLL_TEST_ID,
   measureHeaderStripGeometry,
   readHeaderStripContentOrigin,
+  readHeaderStripGroups,
   readHeaderStripItemRect,
   readHeaderStripSession,
   readHeaderStripSlots,
@@ -174,6 +177,13 @@ const HEADER_TAB_TEAR_OFF_RELEASE_PX = 16;
 /** Stable empty map so clearing offsets never churns store identity. */
 const EMPTY_HEADER_OFFSETS: ReadonlyMap<string, number> = new Map();
 
+/** No tab and no group's chrome displaced: the strip as it is drawn. */
+function clearHeaderStripLayout(): void {
+  const dndStore = useEpicDndStore.getState();
+  dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+  dndStore.headerStripGroupPlacementsChanged([]);
+}
+
 /**
  * The header-tab gesture in flight: the strip's 1-D geometry plus the axis it
  * runs along and the side its content lies on, read from the strip's own
@@ -184,6 +194,8 @@ interface HeaderStripDragSession extends HeaderStripDeclaration {
   readonly geometry: StripDragGeometry;
   readonly sourceRect: RectLike;
   readonly overlayOrigin: PointLike | null;
+  /** A keyboard drag never splits: it has no pointer to hold over a task. */
+  readonly canSplit: boolean;
 }
 
 /**
@@ -198,6 +210,54 @@ let activeHeaderStripSession: HeaderStripDragSession | null = null;
 
 /** Hysteresis latch for the header tear-off preview/commit boundary. */
 let headerTearOffActive = false;
+
+/**
+ * The timer that asks the strip model again once a hold in a task's middle has
+ * run its course. A pointer that rests sends no more moves, so without it the
+ * split would arm only on the next twitch.
+ */
+let splitHoldTimer: number | null = null;
+
+function clearSplitHoldTimer(): void {
+  if (splitHoldTimer === null) return;
+  window.clearTimeout(splitHoldTimer);
+  splitHoldTimer = null;
+}
+
+function armSplitHoldTimer(state: StripDragState): void {
+  clearSplitHoldTimer();
+  if (state.kind !== "reorder" || state.hold === null) return;
+  const remaining = SPLIT_HOLD_MS - (performance.now() - state.hold.since);
+  splitHoldTimer = window.setTimeout(replayHeaderStripHold, remaining);
+}
+
+/**
+ * Resolve the header strip again at the last pointer, if a hold is still what
+ * the strip last published. Any path that cleared the state (the tear-off
+ * preview, a fillable slot) has already ended the hold, so there is nothing to
+ * replay.
+ */
+function replayHeaderStripHold(): void {
+  splitHoldTimer = null;
+  const dndStore = useEpicDndStore.getState();
+  const state = dndStore.headerStripDragState;
+  const headerTab = dndStore.activeHeaderTab;
+  const point = currentReleasePointerPoint();
+  if (
+    state === null ||
+    state.kind !== "reorder" ||
+    state.hold === null ||
+    headerTab === null ||
+    point === null
+  ) {
+    return;
+  }
+  publishHeaderStripDragState({
+    headerTab,
+    session: activeHeaderStripSession,
+    point,
+  });
+}
 
 /**
  * Latest raw pointer, tracked independently of dnd-kit's render cycle.
@@ -291,6 +351,7 @@ function trackPointerDown(event: PointerEvent): void {
 function beginHeaderStripSession(
   stripItemId: string,
   grab: PointLike,
+  canSplit: boolean,
 ): HeaderStripDragSession | null {
   const declaration = readHeaderStripSession();
   if (declaration === null) return null;
@@ -303,7 +364,7 @@ function beginHeaderStripSession(
   });
   return geometry === null
     ? null
-    : { ...declaration, geometry, sourceRect, overlayOrigin: null };
+    : { ...declaration, geometry, sourceRect, overlayOrigin: null, canSplit };
 }
 
 /** The press position for a starting gesture, most reliable source first. */
@@ -583,6 +644,7 @@ function preserveSourceTileStripGap(): void {
   const geometry = remapGeometryToSlots(
     drag.geometry,
     readTileStripSlots(drag.groupId),
+    [],
   );
   if (geometry === null) {
     reportStripGeometryFailure("tile");
@@ -668,13 +730,15 @@ function updateTileStripPreview(
     const contentOrigin = readTileStripContentOriginX(groupId);
     if (contentOrigin === null) return rejectTileStripFrame(refs);
     const slots = readTileStripSlots(groupId);
-    const geometry = remapGeometryToSlots(drag.geometry, slots);
+    const geometry = remapGeometryToSlots(drag.geometry, slots, []);
     if (geometry === null) return rejectTileStripFrame(refs);
     activeTileDrag = { ...drag, geometry };
     const next = resolveStripDragState({
       geometry,
       contentOrigin,
       pointer: point.x,
+      now: performance.now(),
+      canSplit: false,
       previous: dndStore.headerStripDragState,
     });
     dndStore.headerStripDragStateChanged(next);
@@ -687,6 +751,7 @@ function updateTileStripPreview(
     const sourceGeometry = remapGeometryToSlots(
       drag.geometry,
       readTileStripSlots(drag.groupId),
+      [],
     );
     if (sourceGeometry === null) return rejectTileStripFrame(refs);
     activeTileDrag = { ...drag, geometry: sourceGeometry };
@@ -756,7 +821,7 @@ function updateHeaderTabSourcePreview(input: {
     dndStore.headerTearOffPreviewChanged(false);
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
@@ -774,7 +839,7 @@ function updateHeaderTabSourcePreview(input: {
     );
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
@@ -782,11 +847,36 @@ function updateHeaderTabSourcePreview(input: {
   if (point === null) {
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
   input.publishStripState(point);
+}
+
+/**
+ * Explicit per-item displacement, the same mechanism the tile strip uses. No
+ * layout projection means no projection can be left mid-flight. The strip is
+ * laid out as the drop would leave it - a split puts the tab beside the one it
+ * pairs with, in that tab's group - so a group's header and block move with its
+ * tabs.
+ */
+function publishHeaderStripLayout(
+  geometry: StripDragGeometry,
+  state: StripDragState,
+): void {
+  const dndStore = useEpicDndStore.getState();
+  const targetId = state.kind === "merge" ? state.targetItemId : null;
+  const layout = stripLayoutFor(
+    geometry,
+    state.targetIndex,
+    state.kind === "reorder"
+      ? state.groupId
+      : (geometry.slots.find((slot) => slot.itemId === targetId)?.groupId ??
+          null),
+  );
+  dndStore.headerStripOffsetsChanged(layout.offsets);
+  dndStore.headerStripGroupPlacementsChanged(layout.groups);
 }
 
 /**
@@ -800,12 +890,14 @@ function publishHeaderStripDragState(input: {
 }): void {
   const dndStore = useEpicDndStore.getState();
   const { headerTab, session } = input;
+  const slots = session === null ? [] : readHeaderStripSlots(session.axis);
   const geometry =
     session === null
       ? null
       : remapGeometryToSlots(
           session.geometry,
-          readHeaderStripSlots(session.axis),
+          slots,
+          readHeaderStripGroups(session.axis, slots),
         );
   activeHeaderStripSession =
     session === null || geometry === null ? null : { ...session, geometry };
@@ -813,9 +905,10 @@ function publishHeaderStripDragState(input: {
     session === null ? null : readHeaderStripContentOrigin(session.axis);
   if (session === null || geometry === null || contentOrigin === null) {
     reportStripGeometryFailure("header");
+    clearSplitHoldTimer();
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
@@ -823,22 +916,25 @@ function publishHeaderStripDragState(input: {
     geometry,
     contentOrigin,
     pointer: session.axis.pointerMain(input.point),
+    now: performance.now(),
+    canSplit: session.canSplit,
     previous: dndStore.headerStripDragState,
   });
   dndStore.headerStripDragStateChanged(next);
-  // Explicit per-item displacement, the same mechanism the tile strip uses.
-  // No layout projection means no projection can be left mid-flight.
-  dndStore.headerStripOffsetsChanged(
-    stripOffsetsFor(geometry, next.targetIndex),
-  );
+  armSplitHoldTimer(next);
+  publishHeaderStripLayout(geometry, next);
   // A merge shows the pair highlight and nothing else - an insertion line
   // beside a highlighted merge target advertises two different outcomes for
   // one release. Plain reorder shows the line at the settled model boundary,
-  // where the displacement gap is opening.
+  // where the displacement gap is opening. A drop that changes nothing, or
+  // that joins a collapsed group (whose tabs are not drawn to be inserted
+  // among), shows none.
   dndStore.headerStripDropIndexChanged(
-    next.kind !== "reorder" || next.targetIndex === geometry.sourceIndex
-      ? null
-      : insertionIndexForTarget(geometry.sourceIndex, next.targetIndex),
+    next.kind === "reorder" &&
+      stripDropChangesLayout(geometry, next) &&
+      !stripDropJoinsCollapsedGroup(geometry, next)
+      ? insertionIndexForTarget(geometry.sourceIndex, next.targetIndex)
+      : null,
   );
   const pairTarget =
     next.kind === "merge" ? resolveStripPairTarget(headerTab, next) : null;
@@ -846,6 +942,32 @@ function publishHeaderStripDragState(input: {
     next.kind !== "merge" || pairTarget === null
       ? null
       : { targetRef: pairTarget.targetRef, side: next.targetSide },
+  );
+}
+
+/**
+ * Whether releasing at `state` writes anything: the item moves, or its group
+ * changes.
+ */
+function stripDropChangesLayout(
+  geometry: StripDragGeometry,
+  state: Extract<StripDragState, { readonly kind: "reorder" }>,
+): boolean {
+  const sourceGroupId = geometry.slots[geometry.sourceIndex]?.groupId ?? null;
+  return (
+    state.targetIndex !== geometry.sourceIndex ||
+    state.groupId !== sourceGroupId
+  );
+}
+
+/** Whether the drop joins a group none of whose tabs are drawn (a collapsed one). */
+function stripDropJoinsCollapsedGroup(
+  geometry: StripDragGeometry,
+  state: Extract<StripDragState, { readonly kind: "reorder" }>,
+): boolean {
+  return (
+    state.groupId !== null &&
+    !geometry.slots.some((slot) => slot.groupId === state.groupId)
   );
 }
 
@@ -960,7 +1082,12 @@ function commitHeaderTabDrop(input: {
       return;
     }
   }
-  if (input.dragState.targetIndex === input.geometry.sourceIndex) return;
+  if (
+    input.dragState.kind !== "reorder" ||
+    !stripDropChangesLayout(input.geometry, input.dragState)
+  ) {
+    return;
+  }
   const targetIndex = layoutInsertionIndex(
     input.geometry,
     insertionIndexForTarget(
@@ -969,13 +1096,14 @@ function commitHeaderTabDrop(input: {
     ),
   );
   if (targetIndex === null) return;
-  // Arm BEFORE the reorder is written: the strip items re-base their transform
+  // Arm BEFORE the move is written: the strip items re-base their transform
   // against the new baseline in the layout effect of the render this causes, so
   // the flag has to be set by the time that render commits.
   armHeaderStripCommitHandoff();
-  tabCommandCoordinator.reorderStripItem({
+  tabCommandCoordinator.moveStripItem({
     itemId: headerTab.stripItemId,
     targetIndex,
+    groupId: input.dragState.groupId,
   });
 }
 
@@ -1423,6 +1551,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         const session = beginHeaderStripSession(
           headerTab.stripItemId,
           grabPoint(event.activatorEvent),
+          !isKeyboardEvent(event.activatorEvent),
         );
         activeHeaderStripSession = session;
         // The ghost enrichment (repo logo, notification badge) rides the
@@ -1538,6 +1667,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
     lastPointerDown = null;
     stripGeometryFailureReported = false;
     headerTearOffActive = false;
+    clearSplitHoldTimer();
     useEpicDndStore.getState().dragEnded();
   }, []);
 

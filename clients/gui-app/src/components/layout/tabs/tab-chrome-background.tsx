@@ -63,7 +63,9 @@ export function TabColorEdgeLine(props: { readonly color: string }) {
     <span
       aria-hidden
       data-testid="tab-color-edge-line"
-      className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.5px] bg-(--swatch)"
+      // A drop that would join the tab's group brightens it a step: the strip
+      // item's frame marks that (`data-group-joining`).
+      className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.5px] bg-(--swatch) transition-[height,box-shadow] duration-150 group-data-[group-joining=true]/joining:h-0.75 group-data-[group-joining=true]/joining:shadow-[0_0_8px_var(--swatch)]"
       style={{ "--swatch": props.color } as CSSProperties}
     />
   );

@@ -11,6 +11,7 @@ import {
   type DropIndicator,
   type SideStripHandlers,
 } from "./side-strip-item-input";
+import { blockDropEdge, rowDropSide, stripDropLine } from "../strip-drop-line";
 import { SideStripItem } from "./side-strip-item";
 import { SideTabGroupBlock } from "./side-tab-group-block";
 import { SideTabGroupColumn } from "./side-tab-group-column";
@@ -164,28 +165,6 @@ function StripSectionRows(props: {
   const tabEntries = group.entries.filter(
     (entry): entry is StripTabEntry => entry.kind === "tabs",
   );
-  // A tab dragged inside this section reorders among its tabs, so its drop
-  // index counts them and no other section shows a line. Any other drag (a tile
-  // dropped on the strip) lands by strip index.
-  const dropIndicatorOfEntry = (
-    entry: StripTabEntry,
-    position: number,
-  ): DropIndicator => {
-    if (draggedItemId === null) {
-      return dropIndicatorOf(
-        controller.dropIndicatorIndex,
-        entry.stripIndex,
-        controller.headerItemIds.length - 1,
-      );
-    }
-    return tabEntries.some((tab) => tab.itemId === draggedItemId)
-      ? dropIndicatorOf(
-          controller.dropIndicatorIndex,
-          position,
-          tabEntries.length - 1,
-        )
-      : null;
-  };
   // A folded section keeps the current task's row, so the person still sees
   // where they are; the header's count is still the whole section's. The rail
   // has no header to fold from, so it draws every tile.
@@ -198,6 +177,32 @@ function StripSectionRows(props: {
         entry.kind === "tabs" && entry.itemId === controller.activeItemId,
     );
   }
+  // A tab dragged inside this section reorders among the tabs it draws, so its
+  // drop index counts them and no other section shows a line. Any other drag (a
+  // tile dropped on the strip) lands by strip index.
+  const drawnTabs = shown.filter(
+    (entry): entry is StripTabEntry => entry.kind === "tabs",
+  );
+  const draggedPosition = drawnTabs.findIndex(
+    (tab) => tab.itemId === draggedItemId,
+  );
+  const dropLine =
+    draggedPosition < 0
+      ? null
+      : stripDropLine(
+          drawnTabs.map((tab) => tab.group?.id ?? null),
+          controller.dropIndicatorIndex,
+          controller.dropGroupId,
+          draggedPosition,
+        );
+  const dropIndicatorOfEntry = (entry: StripTabEntry): DropIndicator =>
+    draggedItemId === null
+      ? dropIndicatorOf(
+          controller.dropIndicatorIndex,
+          entry.stripIndex,
+          controller.headerItemIds.length - 1,
+        )
+      : rowDropSide(dropLine, drawnTabs.indexOf(entry));
   // A grouped task sits in its group's block or column, which carries the colour.
   const row = (entry: StripSectionEntry): ReactNode =>
     entry.kind === "tabs" ? (
@@ -208,7 +213,7 @@ function StripSectionRows(props: {
         offset={controller.offsets.get(entry.itemId) ?? 0}
         memberOffset={memberOffsets.get(entry.itemId) ?? 0}
         isActive={entry.itemId === controller.activeItemId}
-        dropIndicator={dropIndicatorOfEntry(entry, tabEntries.indexOf(entry))}
+        dropIndicator={dropIndicatorOfEntry(entry)}
         variant={variant}
         inBlock={entry.group !== null}
         lane={group.section}
@@ -228,14 +233,18 @@ function StripSectionRows(props: {
           count={sectionTaskCount(group)}
         />
       )}
-      {sectionSegmentsOf(shown, group).map((segment) => {
+      {sectionSegmentsOf(shown).map((segment) => {
         if (segment.kind === "entry") return row(segment.entry);
         const members = segment.entries.map((entry) => row(entry));
+        const dropEdge = blockDropEdge(dropLine, segment.group.id);
         return rail ? (
           <SideTabGroupColumn
             key={segment.key}
             groupId={segment.group.id}
             color={segment.group.color}
+            lane={group.section}
+            dropEdge={dropEdge}
+            header={null}
           >
             {members}
           </SideTabGroupColumn>
@@ -245,11 +254,12 @@ function StripSectionRows(props: {
             groupId={segment.group.id}
             color={segment.group.color}
             collapsed={null}
+            lane={group.section}
+            dropEdge={dropEdge}
             header={
               <SideTabGroupLabel
                 groupId={segment.group.id}
                 name={segment.group.name}
-                count={segment.count}
               />
             }
           >

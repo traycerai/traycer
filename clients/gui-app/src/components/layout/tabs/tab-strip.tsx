@@ -3,7 +3,9 @@ import { useLayoutSurface } from "@/components/layout-editor/use-layout-surface"
 import { HiddenTabsMenu } from "./hidden-tabs-menu";
 import { useHiddenHeaderTabs } from "./use-hidden-header-tabs";
 import { TabGroupChip } from "./tab-group-chip";
+import { TabGroupChipFrame } from "./tab-group-chip-frame";
 import { stripRowsOf, taskPinReadOf } from "./tab-strip-rows";
+import { stripDropLine, tabDropSide } from "./strip-drop-line";
 import {
   memo,
   Fragment,
@@ -65,6 +67,8 @@ function TabStripBody() {
     customizations,
     activeItemId,
     dropIndicatorIndex,
+    dropGroupId,
+    dragSourceItemId,
   } = controller;
   const allTabs = controller.tabs;
   const navigate = useNavigate();
@@ -91,6 +95,20 @@ function TabStripBody() {
     () => stripRowsOf(headerItemIds, layoutItems, groups, customizations),
     [headerItemIds, layoutItems, groups, customizations],
   );
+  // The drop's line, among the tabs that are drawn (a collapsed group's are
+  // not), which is how the drag model counts them.
+  const drawnRows = useMemo(() => rows.filter((row) => !row.hidden), [rows]);
+  const dropLine = useMemo(() => {
+    const sourceIndex = drawnRows.findIndex(
+      (row) => row.itemId === dragSourceItemId,
+    );
+    return stripDropLine(
+      drawnRows.map((row) => row.group?.groupId ?? null),
+      dropIndicatorIndex,
+      dropGroupId,
+      sourceIndex < 0 ? null : sourceIndex,
+    );
+  }, [drawnRows, dropIndicatorIndex, dropGroupId, dragSourceItemId]);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const travellerRef = useRef<HTMLSpanElement | null>(null);
   const setScrollExtras = useCallback(
@@ -226,11 +244,13 @@ function TabStripBody() {
                   {row.groupStart !== null ? (
                     <>
                       {renderGhost(`chip:${row.groupStart.groupId}`)}
-                      <TabGroupChip
-                        groupId={row.groupStart.groupId}
-                        group={row.groupStart.group}
-                        onClose={controller.onCloseGroup}
-                      />
+                      <TabGroupChipFrame groupId={row.groupStart.groupId}>
+                        <TabGroupChip
+                          groupId={row.groupStart.groupId}
+                          group={row.groupStart.group}
+                          onClose={controller.onCloseGroup}
+                        />
+                      </TabGroupChipFrame>
                     </>
                   ) : null}
                   {!row.hidden ? renderGhost(`item:${itemId}`) : null}
@@ -244,10 +264,13 @@ function TabStripBody() {
                       isNextActive={headerItemIds[index + 1] === activeItemId}
                       nextIsSplit={layoutItems[index + 1]?.kind === "split"}
                       isLastItem={index === headerItemIds.length - 1}
-                      showDropIndicatorBefore={dropIndicatorIndex === index}
+                      showDropIndicatorBefore={
+                        tabDropSide(dropLine, drawnRows.indexOf(row)) ===
+                        "before"
+                      }
                       showDropIndicatorAfter={
-                        dropIndicatorIndex === index + 1 &&
-                        index === headerItemIds.length - 1
+                        tabDropSide(dropLine, drawnRows.indexOf(row)) ===
+                        "after"
                       }
                       onClose={controller.onClose}
                       onCloseOtherTabs={controller.onCloseOtherTabs}

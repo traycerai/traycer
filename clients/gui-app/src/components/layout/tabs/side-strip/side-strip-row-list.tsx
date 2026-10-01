@@ -18,10 +18,8 @@ import {
   type StripRowGroupStart,
 } from "../tab-strip-rows";
 import { useStripScroller } from "../use-strip-scroller";
-import {
-  dropIndicatorOf,
-  type SideStripHandlers,
-} from "./side-strip-item-input";
+import type { SideStripHandlers } from "./side-strip-item-input";
+import { blockDropEdge, rowDropSide, stripDropLine } from "../strip-drop-line";
 import { SideStripItem } from "./side-strip-item";
 import { SideStripSections } from "./side-strip-sections";
 import { useSectionedStrip } from "./strip-agents-mode";
@@ -78,6 +76,8 @@ export function SideStripRowList(props: {
     customizations,
     activeItemId,
     dropIndicatorIndex,
+    dropGroupId,
+    dragSourceItemId,
     tabs,
   } = controller;
   const rows = useMemo(
@@ -96,7 +96,20 @@ export function SideStripRowList(props: {
     itemCount: headerItemIds.length,
     extraRef: setScroller,
   });
-  const lastIndex = headerItemIds.length - 1;
+  // The drop's line is placed among the rows that are drawn, which is how the
+  // drag model counts them: a collapsed group's rows are not.
+  const drawn = useMemo(() => rows.filter((row) => !row.hidden), [rows]);
+  const dropLine = useMemo(() => {
+    const sourceIndex = drawn.findIndex(
+      (row) => row.itemId === dragSourceItemId,
+    );
+    return stripDropLine(
+      drawn.map((row) => row.group?.groupId ?? null),
+      dropIndicatorIndex,
+      dropGroupId,
+      sourceIndex < 0 ? null : sourceIndex,
+    );
+  }, [drawn, dropIndicatorIndex, dropGroupId, dragSourceItemId]);
   const sectioned = useSectionedStrip();
   // Only the expanded list has section headers to stick, fold and scroll to,
   // and group blocks (the rail's groups are columns).
@@ -113,11 +126,7 @@ export function SideStripRowList(props: {
         offset={controller.offsets.get(row.itemId) ?? 0}
         memberOffset={row.memberOffset}
         isActive={row.itemId === activeItemId}
-        dropIndicator={dropIndicatorOf(
-          dropIndicatorIndex,
-          row.stripIndex,
-          lastIndex,
-        )}
+        dropIndicator={rowDropSide(dropLine, drawn.indexOf(row))}
         variant={variant}
         inBlock={row.group !== null}
         lane={null}
@@ -158,6 +167,7 @@ export function SideStripRowList(props: {
           if (segment.kind === "row") return item(segment.row);
           const { start, run } = segment;
           const members = run.rows.map((row) => item(row));
+          const dropEdge = blockDropEdge(dropLine, start.groupId);
           const header = (
             <SideTabGroupHeader
               groupId={start.groupId}
@@ -174,6 +184,8 @@ export function SideStripRowList(props: {
               groupId={start.groupId}
               color={start.group.color}
               collapsed={start.group.collapsed}
+              lane={null}
+              dropEdge={dropEdge}
               header={header}
             >
               {members}
@@ -183,8 +195,10 @@ export function SideStripRowList(props: {
               key={segment.key}
               groupId={start.groupId}
               color={start.group.color}
+              lane={null}
+              dropEdge={dropEdge}
+              header={header}
             >
-              {header}
               {members}
             </SideTabGroupColumn>
           );

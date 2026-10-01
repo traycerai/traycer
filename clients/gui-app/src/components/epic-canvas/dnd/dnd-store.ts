@@ -12,8 +12,10 @@ import { create } from "zustand";
 import type {
   MergeSide,
   StripDragState,
+  StripHold,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 import type { StripAxisId } from "@/components/epic-canvas/dnd/strip-axis";
+import type { StripGroupPlacement } from "@/components/epic-canvas/dnd/strip-group-layout";
 import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -157,6 +159,7 @@ const EMPTY_TILE_OFFSETS: ReadonlyMap<
 
 /** Stable empty map so a strip with no offsets never re-renders on identity. */
 const EMPTY_GROUP_OFFSETS: ReadonlyMap<string, number> = new Map();
+const EMPTY_PLACEMENTS: ReadonlyArray<StripGroupPlacement> = [];
 
 function tileOffsetsEqual(
   left: ReadonlyMap<string, ReadonlyMap<string, number>>,
@@ -195,13 +198,31 @@ function headerStripDragStateEqual(
 ): boolean {
   if (left === right) return true;
   if (left === null || right === null) return false;
-  if (left.kind !== right.kind || left.targetIndex !== right.targetIndex) {
-    return false;
+  if (left.targetIndex !== right.targetIndex) return false;
+  // The hold is state the NEXT resolve reads back, so it counts: a resolve that
+  // dropped it as "equal" would restart the hold on every frame.
+  if (!stripHoldEqual(left.hold, right.hold)) return false;
+  if (left.kind === "reorder") {
+    return (
+      right.kind === "reorder" &&
+      left.groupId === right.groupId &&
+      left.joinsGroup === right.joinsGroup
+    );
   }
-  if (left.kind === "reorder" || right.kind === "reorder") return true;
   return (
+    right.kind === "merge" &&
     left.targetItemId === right.targetItemId &&
     left.targetSide === right.targetSide
+  );
+}
+
+function stripHoldEqual(left: StripHold | null, right: StripHold | null) {
+  if (left === right) return true;
+  return (
+    left !== null &&
+    right !== null &&
+    left.itemId === right.itemId &&
+    left.since === right.since
   );
 }
 
@@ -217,6 +238,7 @@ function isDragStateIdle(state: EpicDndState): boolean {
   return (
     !state.headerTearOffPreview &&
     state.headerStripOffsets.size === 0 &&
+    state.headerStripGroupPlacements.length === 0 &&
     state.tileStripOffsets.size === 0 &&
     [
       state.activeSource,
@@ -291,6 +313,12 @@ interface EpicDndState {
    */
   readonly headerStripOffsets: ReadonlyMap<string, number>;
   /**
+   * Where each tab group's chrome (a block's fill and header, a chip) sits
+   * while a header drag is in flight, from the same layout the offsets come
+   * from. A group with no placement is where it is drawn.
+   */
+  readonly headerStripGroupPlacements: ReadonlyArray<StripGroupPlacement>;
+  /**
    * Per-tile x displacement while a tile drag is in flight, keyed by group then
    * tile id. Tile strips render an explicit transform from this rather than a
    * provisional CSS `order`; an absent group means every tile sits at x 0.
@@ -338,6 +366,9 @@ interface EpicDndState {
   readonly headerStripOffsetsChanged: (
     offsets: ReadonlyMap<string, number>,
   ) => void;
+  readonly headerStripGroupPlacementsChanged: (
+    placements: ReadonlyArray<StripGroupPlacement>,
+  ) => void;
   readonly tileSourceWidthChanged: (width: number | null) => void;
   readonly topLevelStripPairPreviewChanged: (
     preview: TopLevelStripPairPreview | null,
@@ -366,6 +397,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   headerStripSourceSize: null,
   headerStripAxis: null,
   headerStripOffsets: EMPTY_GROUP_OFFSETS,
+  headerStripGroupPlacements: EMPTY_PLACEMENTS,
   tileStripOffsets: EMPTY_TILE_OFFSETS,
   tileSourceWidth: null,
   topLevelStripPairPreview: null,
@@ -386,6 +418,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       headerStripSourceSize: null,
       headerStripAxis: null,
       headerStripOffsets: EMPTY_GROUP_OFFSETS,
+      headerStripGroupPlacements: EMPTY_PLACEMENTS,
       tileStripOffsets: EMPTY_TILE_OFFSETS,
       tileSourceWidth: null,
       topLevelStripPairPreview: null,
@@ -408,6 +441,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       headerStripSourceSize: size,
       headerStripAxis: axis,
       headerStripOffsets: EMPTY_GROUP_OFFSETS,
+      headerStripGroupPlacements: EMPTY_PLACEMENTS,
       tileStripOffsets: EMPTY_TILE_OFFSETS,
       tileSourceWidth: null,
       topLevelStripPairPreview: null,
@@ -442,6 +476,22 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       if (same) return;
     }
     set({ headerStripOffsets: offsets });
+  },
+  headerStripGroupPlacementsChanged: (placements) => {
+    const current = get().headerStripGroupPlacements;
+    const same =
+      current.length === placements.length &&
+      current.every((entry, index) => {
+        const next = placements[index];
+        return (
+          entry.groupId === next.groupId &&
+          entry.lane === next.lane &&
+          entry.offset === next.offset &&
+          entry.grow === next.grow &&
+          entry.visible === next.visible
+        );
+      });
+    if (!same) set({ headerStripGroupPlacements: placements });
   },
   tileSourceWidthChanged: (width) => {
     if (get().tileSourceWidth === width) return;
@@ -503,6 +553,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       headerStripSourceSize: null,
       headerStripAxis: null,
       headerStripOffsets: EMPTY_GROUP_OFFSETS,
+      headerStripGroupPlacements: EMPTY_PLACEMENTS,
       tileStripOffsets: EMPTY_TILE_OFFSETS,
       tileSourceWidth: null,
       topLevelStripPairPreview: null,
@@ -595,6 +646,42 @@ export function useTileStripOffsets(
 
 export function useHeaderStripDragState(): StripDragState | null {
   return useEpicDndStore((s) => s.headerStripDragState);
+}
+
+/** The group a strip drop under way would land in; null outside every group. */
+export function useHeaderStripDropGroupId(): string | null {
+  return useEpicDndStore((s) =>
+    s.headerStripDragState?.kind === "reorder"
+      ? s.headerStripDragState.groupId
+      : null,
+  );
+}
+
+/** Whether a strip drop under way would newly join this group. */
+export function useHeaderStripJoinsGroup(groupId: string): boolean {
+  return useEpicDndStore((s) => {
+    const state = s.headerStripDragState;
+    return (
+      state?.kind === "reorder" && state.joinsGroup && state.groupId === groupId
+    );
+  });
+}
+
+/**
+ * Where the group's chrome is drawn while a strip drag is in flight, in the
+ * lane (section) it is drawn in; null at rest, and for a group the layout does
+ * not move.
+ */
+export function useHeaderStripGroupPlacement(
+  groupId: string,
+  lane: string | null,
+): StripGroupPlacement | null {
+  return useEpicDndStore(
+    (s) =>
+      s.headerStripGroupPlacements.find(
+        (placement) => placement.groupId === groupId && placement.lane === lane,
+      ) ?? null,
+  );
 }
 
 /**

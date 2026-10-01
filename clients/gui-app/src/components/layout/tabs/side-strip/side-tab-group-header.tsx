@@ -58,7 +58,8 @@ export interface SideTabGroupHeaderProps {
 /**
  * A tab group's header in the vertical strip (S-19): expanded, the 28px top row
  * of the group's block (`SideTabGroupBlock`) with the name in the group's
- * colour, the member count and a chevron on hover; in the rail the first tile
+ * colour, the member count only while the group is collapsed, and a chevron on
+ * hover; in the rail the first tile
  * of the group's column (`SideTabGroupColumn`), 40x44, with the name's first
  * grapheme on a chip in the group colour. A click
  * collapses or expands the group; right-click, F2 and the context-menu keys
@@ -154,12 +155,14 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
                   {group.name}
                 </span>
               ) : null}
-              <span
-                data-testid="side-tab-group-count"
-                className={SIDE_TAB_GROUP_COUNT_CLASS}
-              >
-                {props.memberCount}
-              </span>
+              {group.collapsed ? (
+                <span
+                  data-testid="side-tab-group-count"
+                  className={SIDE_TAB_GROUP_COUNT_CLASS}
+                >
+                  {props.memberCount}
+                </span>
+              ) : null}
               <ChevronRight
                 aria-hidden
                 className={cn(

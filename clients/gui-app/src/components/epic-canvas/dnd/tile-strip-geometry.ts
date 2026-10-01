@@ -119,6 +119,7 @@ export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
         // model's merge branch unreachable here.
         isMergeTarget: false,
         lane: null,
+        groupId: null,
       },
     ];
   });
@@ -156,6 +157,9 @@ export function measureTileStripGeometry(input: {
   const originX = stripRect.left - el.scrollLeft;
   return {
     slots,
+    // Tile tabs are not grouped.
+    groups: [],
+    runGap: 0,
     sourceIndex,
     grabOffset: input.pointerX - (originX + source.contentStart),
     sourceInitialStart: originX + source.contentStart,

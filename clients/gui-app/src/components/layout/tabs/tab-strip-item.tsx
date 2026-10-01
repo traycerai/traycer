@@ -31,6 +31,7 @@ import type { HeaderTab } from "@/stores/tabs/types";
 import { tabRefKey } from "@/stores/tabs/layout";
 import { useConcealedForTravel } from "./strip-selection-travel";
 import { useStripEntrance } from "./use-strip-entrance";
+import { useStripItemJoining } from "./use-strip-item-joining";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
 const TITLE_INPUT_CLASS =
@@ -213,6 +214,7 @@ function HeaderTabMotionFrame(props: {
     offset: props.offsetX,
     transition,
   });
+  const groupJoining = useStripItemJoining(props.dnd?.stripItemId);
 
   return (
     <m.div
@@ -231,9 +233,10 @@ function HeaderTabMotionFrame(props: {
       transition={transition}
       data-strip-item-id={props.dnd?.stripItemId}
       data-strip-item-mergeable="true"
+      data-group-joining={groupJoining}
       // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
       // resolution harness.
-      className="relative flex w-56 min-w-[min(40vw,12rem)] group-data-[tab-layout=shrink]/strip:min-w-12 max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
+      className="group/joining relative flex w-56 min-w-[min(40vw,12rem)] group-data-[tab-layout=shrink]/strip:min-w-12 max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
       {props.children}
     </m.div>

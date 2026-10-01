@@ -28,6 +28,7 @@ import type { SplitSide } from "@/stores/tabs/layout";
 import { tabRefKey } from "@/stores/tabs/layout";
 import { useConcealedForTravel } from "./strip-selection-travel";
 import { useStripEntrance } from "./use-strip-entrance";
+import { useStripItemJoining } from "./use-strip-item-joining";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import {
@@ -121,6 +122,7 @@ export const SplitTabItem = memo(function SplitTabItem(
     offset: props.offsetX,
     transition,
   });
+  const groupJoining = useStripItemJoining(props.item.id);
   const setFrameRef = useCallback(
     (node: HTMLDivElement | null) => {
       frameRef.current = node;
@@ -152,6 +154,7 @@ export const SplitTabItem = memo(function SplitTabItem(
       // unambiguous one. Passing over it reorders.
       data-strip-item-id={props.item.id}
       data-strip-item-mergeable="false"
+      data-group-joining={groupJoining}
       role="group"
       aria-label="Split tab group"
       data-testid={`split-tab-group-${props.item.id}`}
@@ -160,7 +163,7 @@ export const SplitTabItem = memo(function SplitTabItem(
       // The extra width keeps that control from stealing either title's
       // share. Capped by viewport width (not just the rem ceiling) so the
       // frame stays fluid on narrow windows instead of pinning to 31rem.
-      className="relative flex w-[min(60vw,31rem)] min-w-[min(60vw,26.25rem)] group-data-[tab-layout=shrink]/strip:min-w-36 max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
+      className="group/joining relative flex w-[min(60vw,31rem)] min-w-[min(60vw,26.25rem)] group-data-[tab-layout=shrink]/strip:min-w-36 max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
     >
       <SplitTabLayout
         splitId={props.item.id}

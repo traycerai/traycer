@@ -1726,9 +1726,7 @@ describe("<SideTabStrip />", () => {
     expect(within(header).getByTestId("side-tab-group-name").textContent).toBe(
       "Work",
     );
-    expect(within(header).getByTestId("side-tab-group-count").textContent).toBe(
-      "3",
-    );
+    expect(within(header).queryByTestId("side-tab-group-count")).toBeNull();
     for (const id of ["e-one", "e-two", "e-three"]) {
       const row = within(block).getByTestId(`tab-epic-${id}`);
       expect(within(row).queryByTestId("side-tab-accent")).toBeNull();
@@ -2207,7 +2205,7 @@ describe("<SideTabStrip />", () => {
 
       const block = screen.getByTestId("side-tab-group-block-g");
       const label = within(block).getByTestId("side-tab-group-label-g");
-      expect(label.textContent).toBe("Work3");
+      expect(label.textContent).toBe("Work");
       expect(within(label).queryByRole("button")).toBeNull();
       expect(screen.queryByTestId("side-tab-group-header-g")).toBeNull();
       for (const row of within(block).getAllByRole("tab")) {
@@ -2226,7 +2224,7 @@ describe("<SideTabStrip />", () => {
       ).toHaveLength(2);
     });
 
-    it("gives a group whose tasks fall in two sections a block in each, counting 1 of 3 and 2 of 3", async () => {
+    it("gives a group whose tasks fall in two sections a block in each, named and uncounted", async () => {
       openGroupWithTabAndSplit();
       isWorking("e-one", "c-one");
       await renderStrip("/elsewhere", LEFT_STRIP);
@@ -2241,11 +2239,11 @@ describe("<SideTabStrip />", () => {
       const [working, idle] = screen.getAllByTestId("side-tab-group-block-g");
       expect(
         within(working).getByTestId("side-tab-group-label-g").textContent,
-      ).toBe("Work1 of 3");
+      ).toBe("Work");
       expect(within(working).getAllByRole("tab")).toHaveLength(1);
       expect(
         within(idle).getByTestId("side-tab-group-label-g").textContent,
-      ).toBe("Work2 of 3");
+      ).toBe("Work");
       expect(within(idle).getAllByRole("tab")).toHaveLength(2);
     });
 

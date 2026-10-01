@@ -76,7 +76,12 @@ export function stripItemGroupId(
     : (customizations?.[tabRefKey(ref)]?.groupId ?? null);
 }
 
-export function setLayoutTabGroup(
+/**
+ * Puts the tab, and its split partner, in the group or out of every group. The
+ * group's fold is left as it is, so a drop on a collapsed group's header joins
+ * without expanding it.
+ */
+export function assignLayoutTabGroup(
   layout: PersistedTabStripLayout,
   ref: TabRef,
   groupId: string | null,
@@ -98,13 +103,23 @@ export function setLayoutTabGroup(
         organizationOwnerId: group?.organizationOwnerId,
       };
   }
+  return { ...layout, customizations };
+}
+
+/** `assignLayoutTabGroup`, and the group opens: the tab was put there to be seen. */
+export function setLayoutTabGroup(
+  layout: PersistedTabStripLayout,
+  ref: TabRef,
+  groupId: string | null,
+): PersistedTabStripLayout {
+  const assigned = assignLayoutTabGroup(layout, ref, groupId);
+  const group = groupId === null ? undefined : assigned.groups?.[groupId];
+  if (assigned === layout || groupId === null || group === undefined) {
+    return assigned;
+  }
   return {
-    ...layout,
-    customizations,
-    groups:
-      groupId !== null && group !== undefined
-        ? { ...layout.groups, [groupId]: { ...group, collapsed: false } }
-        : layout.groups,
+    ...assigned,
+    groups: { ...assigned.groups, [groupId]: { ...group, collapsed: false } },
   };
 }
 

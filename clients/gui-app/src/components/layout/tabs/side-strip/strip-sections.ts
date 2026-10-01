@@ -182,18 +182,14 @@ export type SectionSegment =
       readonly key: string;
       readonly group: StripItemGroup;
       readonly entries: Array<StripTabEntry>;
-      /** The block header's count: "3", or "1 of 3" when the group has tasks in other sections. */
-      readonly count: string;
     };
 
 /**
  * The entries a section draws, each run of one group's tasks in a segment of
- * its own. The count is of the group's tasks in the whole section, a fold's
- * hidden ones included, so it reads as the section header's does.
+ * its own.
  */
 export function sectionSegmentsOf(
   shown: ReadonlyArray<StripSectionEntry>,
-  section: StripSectionGroup,
 ): ReadonlyArray<SectionSegment> {
   const segments: Array<SectionSegment> = [];
   for (const entry of shown) {
@@ -204,22 +200,11 @@ export function sectionSegmentsOf(
       last.entries.push(entry);
     } else {
       const { group } = entry;
-      const inSection = section.entries.reduce(
-        (count, each) =>
-          each.kind === "tabs" && each.group?.id === group.id
-            ? count + each.members.length
-            : count,
-        0,
-      );
       segments.push({
         kind: "group",
         key: entry.itemId,
         group,
         entries: [entry],
-        count:
-          inSection < group.taskCount
-            ? `${String(inSection)} of ${String(group.taskCount)}`
-            : String(group.taskCount),
       });
     }
   }

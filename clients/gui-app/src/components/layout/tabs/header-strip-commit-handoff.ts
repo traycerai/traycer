@@ -170,6 +170,23 @@ export interface HeaderStripHandoffReport {
 }
 
 /**
+ * An item's slot along `axis`, measured from the same origin for every item:
+ * its own layout offset plus those of the positioned ancestors it is measured
+ * against in turn. A tab in a group's block is offset within the block, which
+ * is itself offset in the strip, and a commit that moves the block moves the
+ * tab though its own offset does not change.
+ */
+function layoutBaselineOf(node: HTMLElement, axis: StripAxis): number {
+  let baseline = axis.layoutOffset(node);
+  let parent = node.offsetParent;
+  while (parent instanceof HTMLElement) {
+    baseline += axis.layoutOffset(parent);
+    parent = parent.offsetParent;
+  }
+  return baseline;
+}
+
+/**
  * Re-base every item whose baseline moved, then release the arm.
  *
  * Driven from the strip container's layout effect on EVERY strip layout pass:
@@ -204,12 +221,18 @@ export function runHeaderStripCommitHandoff(
       continue;
     }
     const previousBaseline = entry.lastBaseline;
-    const nextBaseline = axis.layoutOffset(node);
+    const nextBaseline = layoutBaselineOf(node, axis);
     entry.lastBaseline = nextBaseline;
     if (previousBaseline === null) {
       // No snapshot to preserve a position against. Harmless on a first layout
-      // pass; at a commit it means an item joined late and is reported.
-      if (armed) uncorrected.push(id);
+      // pass. At a commit it means an item joined late, which is reported - but
+      // not when it carries no displacement: a tab dropped into or out of a
+      // group, or the tabs of a group block it re-keyed, mount anew, and a
+      // frame that was never drawn at an old position and has no transform to
+      // unwind is already at its place.
+      if (armed && (entry.value.get() !== 0 || entry.target !== 0)) {
+        uncorrected.push(id);
+      }
       continue;
     }
     if (previousBaseline === nextBaseline) continue;
