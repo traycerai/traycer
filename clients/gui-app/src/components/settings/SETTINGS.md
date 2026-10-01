@@ -5496,9 +5496,15 @@ set-state-in-effect` forbids the effect form, and an effect would also
     now, the release-candidate checkbox and the error lane's own retry all
     leave the card already on screen in place (Check now spins and Update now
     is disabled for that span) instead of removing it and jumping the rows
-    under it. For the same reason `unreachable` is "settled in error with no
-    catalog" (`errorUpdateCount`), not bare `isError`, which drops the moment
-    a no-data retry starts. Otherwise the card is an icon tile, a title, the
+    under it. For the same reason `unreachable` is "the last settled word,
+    for this host, was a transport failure and nothing has answered since"
+    (`useCheckSettledUnreachable`), not bare `isError`. That drops in three
+    ways before anything answers: a no-data retry returns `status` to
+    `pending` (held by `errorUpdateCount`); the release-candidate checkbox
+    switches to a fresh query key whose count is zero; and the same switch
+    over a retained catalog shows the OLD key's catalog as placeholder with
+    no error (both held by the errored host id, which only data of the key's
+    own clears, and which a scoped-host swap stops matching). Otherwise the card is an icon tile, a title, the
     answer's own sentence, and the answer's one control on the right (stacked
     under the text at full width below the `@lg` container width). Tone and title come from `ANSWER_CARD_LOOK`,
     keyed by `answerKind`:

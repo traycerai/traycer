@@ -295,6 +295,13 @@ export function useHostOverviewUpdates(input: {
   // `isFetching`, not `isPending`: a forced Check now over an answer already in
   // hand leaves `isPending` false, and the button would never show it was busy.
   const checking = checkQuery.isFetching;
+  const checkUnreachable = useCheckSettledUnreachable({
+    hostId: input.hostId,
+    isError: checkQuery.isError,
+    hasData: checkQuery.data !== undefined,
+    isPlaceholderData: checkQuery.isPlaceholderData,
+    errorUpdateCount: checkQuery.errorUpdateCount,
+  });
 
   const runCheck = (): void => {
     storeFloor.clear();
@@ -529,11 +536,7 @@ export function useHostOverviewUpdates(input: {
   });
   const answer = describeCheckState({
     manifest,
-    unreachable: checkSettledUnreachable({
-      isError: checkQuery.isError,
-      hasData: checkQuery.data !== undefined,
-      errorUpdateCount: checkQuery.errorUpdateCount,
-    }),
+    unreachable: checkUnreachable,
     checkFailed: check.transient !== null,
     hostName,
     upToDate,
@@ -2125,22 +2128,53 @@ export type HostOverviewAnswerKind =
   | "available";
 
 /**
- * Whether the check's last word is a transport failure with no catalog since.
+ * Whether the check's last SETTLED word, for this host, is a transport
+ * failure with no answer since. It holds the `unreachable` answer through
+ * every ask that has not answered yet, so the card is not taken off the
+ * screen and put back for the span of one.
  *
- * NOT bare `isError`, which goes false the instant a retry starts with no
- * catalog behind it: TanStack returns `status` to `pending` whenever a fetch
- * begins without data, and the answer would fall through to the first load's
- * "checking" - which draws no card - for the span of every retry the error
- * lane makes. `errorUpdateCount` is the settle counter the reducer never
- * resets, so "no data, and it has settled in error" holds the answer until a
- * catalog actually arrives.
+ * Bare `isError` is not that. It is true only while the OBSERVED query sits
+ * in error, and it stops being true in three ways before anything answers:
+ *
+ * | The ask in flight                          | What the observer reads                            | What holds the answer |
+ * | ------------------------------------------ | -------------------------------------------------- | --------------------- |
+ * | A retry, with no catalog behind it         | `status` back to `pending`: no data, no error      | `errorUpdateCount`    |
+ * | A new key (the RC checkbox), none behind   | A fresh query: no data, no error, the count at 0   | the held host         |
+ * | A new key, a catalog retained behind it    | The OLD key's catalog as placeholder, and no error | the held host         |
+ *
+ * `errorUpdateCount` is the settle counter the reducer never resets, but it
+ * belongs to one query key, so it cannot see across the checkbox. The held
+ * host can: it is set when any key settles in error and cleared when a key
+ * ANSWERS with data of its own - a placeholder is the previous key's
+ * answer, not this one's, which is why `isPlaceholderData` counts as no
+ * data here.
+ *
+ * Keyed by host, not a bare flag, as the release-candidate override beside
+ * it is (`overrideHostId`): one machine's failed check must not put an error
+ * card on the next. Today the Settings page remounts this hook on a
+ * scoped-host swap, which already drops the hold; the key is what keeps the
+ * rule true without leaning on that.
  */
-function checkSettledUnreachable(query: {
+function useCheckSettledUnreachable(query: {
+  readonly hostId: string | null;
   readonly isError: boolean;
   readonly hasData: boolean;
+  readonly isPlaceholderData: boolean;
   readonly errorUpdateCount: number;
 }): boolean {
-  return query.isError || (!query.hasData && query.errorUpdateCount > 0);
+  const [erroredHostId, setErroredHostId] = useState<string | null>(null);
+  const hasOwnData = query.hasData && !query.isPlaceholderData;
+  const settledInError =
+    query.isError || (!hasOwnData && query.errorUpdateCount > 0);
+  const held = erroredHostId !== null && erroredHostId === query.hostId;
+  // Adjust-during-render, like the hook's other derived corrections. Each
+  // write is guarded by the value it would change, so neither can repeat.
+  if (settledInError && erroredHostId !== query.hostId) {
+    setErroredHostId(query.hostId);
+  } else if (hasOwnData && !query.isError && held) {
+    setErroredHostId(null);
+  }
+  return settledInError || (!hasOwnData && held);
 }
 
 interface CheckStateAnswer {

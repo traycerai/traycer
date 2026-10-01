@@ -998,4 +998,241 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab — a re-check leaves t
       ).toBeTruthy();
     });
   });
+
+  function includeReleaseCandidates(): HTMLElement {
+    return screen.getByRole("checkbox", { name: "Include release candidates" });
+  }
+
+  it("shape A: ticking Include release candidates over a failed check with no catalog keeps the unreachable card (same node), and a current answer then retires it", async () => {
+    // Pins: the unreachable card must survive a query-KEY change (the held
+    // host), not only a retry of the same key - the new key has no data, no
+    // error and a settle count of 0, so nothing on the observer says "failed".
+    const gate = makeGate();
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return Promise.reject(new Error("host unreachable"));
+          }
+          return gate.promise.then(() => okAnswer(["1.5.0"], true));
+        },
+      },
+    });
+    await openUpdatesTab(fixture);
+
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+    expect(checkCalls).toBe(1);
+    await waitFor(() => {
+      expect(includeReleaseCandidates().hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(includeReleaseCandidates());
+    await waitFor(() => expect(checkCalls).toBe(2));
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+
+    // The new key answers with the version the host already runs: latest,
+    // which is quiet, so the card goes away for the right reason.
+    gate.release();
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("host-version-rows")).getByText("v1.5.0"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("shape A, the held ask rejects too: the unreachable card is the same node throughout and still unreachable after", async () => {
+    // Pins: a key change whose own ask also fails never takes the card off
+    // screen - the same node, not a removal and a re-insertion.
+    const gate = makeGate();
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return Promise.reject(new Error("host unreachable"));
+          }
+          return gate.promise.then(() => {
+            throw new Error("host unreachable");
+          });
+        },
+      },
+    });
+    await openUpdatesTab(fixture);
+
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+    await waitFor(() => {
+      expect(includeReleaseCandidates().hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(includeReleaseCandidates());
+    await waitFor(() => expect(checkCalls).toBe(2));
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+
+    gate.release();
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(false);
+    });
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+  });
+
+  it("shape B: ticking Include release candidates over a failed re-check with a catalog retained keeps the unreachable card (same node) instead of describing the retained catalog", async () => {
+    // Pins: placeholder data (the previous key's catalog, kept by
+    // `keepPreviousData`) is NOT this key's data - without that the answer
+    // falls back to the retained catalog's `available` while the new ask is
+    // held. The first answer is `available` rather than current so the card
+    // is on screen throughout and its kind visibly changes.
+    const gate = makeGate();
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return Promise.resolve(okAnswer(["1.6.0"], false));
+          }
+          if (checkCalls === 2) {
+            return Promise.reject(new Error("host unreachable"));
+          }
+          return gate.promise.then(() => okAnswer(["1.6.0"], true));
+        },
+      },
+    });
+    await openUpdatesTab(fixture);
+
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("available");
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(false);
+    });
+
+    // Check now over the catalog; the re-check rejects: error over retained
+    // data, and the same card now says so.
+    fireEvent.click(checkNow());
+    await waitFor(() => expect(checkCalls).toBe(2));
+    await waitFor(() => {
+      expect(card.getAttribute("data-answer")).toBe("unreachable");
+    });
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    await waitFor(() => {
+      expect(includeReleaseCandidates().hasAttribute("disabled")).toBe(false);
+    });
+
+    // The key change: the old catalog is on screen as placeholder, the new
+    // key has no error of its own, and the third ask is held.
+    fireEvent.click(includeReleaseCandidates());
+    await waitFor(() => expect(checkCalls).toBe(3));
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+
+    // The new key answers with data of its own: the hold lifts and the card
+    // is the catalog's answer again, on the same node.
+    gate.release();
+    await waitFor(() => {
+      expect(card.getAttribute("data-answer")).toBe("available");
+    });
+    expect(screen.getByTestId("host-overview-answer-card")).toBe(card);
+  });
+
+  it("a scoped-host swap does not carry host A's unreachable card onto host B's first load", async () => {
+    // Pins: one machine's failed check never puts an error card on the next
+    // host - B's first load is quiet. (The panel remounts under
+    // `key={scopeKey}` on a swap, so this pins the user-visible rule rather
+    // than the hold's host key by itself.)
+    const gateB = makeGate();
+    let checksA = 0;
+    let checksB = 0;
+    const fixtureA = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checksA += 1;
+          return Promise.reject(new Error("host unreachable"));
+        },
+      },
+    });
+    const fixtureB = buildOverviewHostFixture({
+      hostId: "host-b",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checksB += 1;
+          return gateB.promise.then(() => okAnswer(["1.5.0"], false));
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    recordNegotiatedHostMethods("host-b", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixtureA.client);
+    scopeOverrides.current = scopeFrom(
+      "host-a",
+      fixtureA,
+      registryItemFor("host-a", "manual"),
+      {},
+    );
+    const panel = renderPanelPersistent();
+    await selectHostOverviewTab("updates");
+
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("unreachable");
+    expect(checksA).toBe(1);
+
+    hostBindingMock.current = bindingWith(fixtureB.client);
+    scopeOverrides.current = scopeFrom(
+      "host-b",
+      fixtureB,
+      registryItemFor("host-b", "manual"),
+      {},
+    );
+    panel.rerender();
+
+    // B's first check is in flight, held: Check now spinning is the sign.
+    await waitFor(() => expect(checksB).toBe(1));
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(true);
+    });
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    expect(
+      screen.getByTestId("host-overview-answer-live").childNodes,
+    ).toHaveLength(0);
+
+    gateB.release();
+    await waitFor(() => {
+      expect(checkNow().hasAttribute("disabled")).toBe(false);
+    });
+    expect(screen.queryByTestId("host-overview-answer-card")).toBeNull();
+    expect(checksA).toBe(1);
+  });
 });
