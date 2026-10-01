@@ -17,6 +17,11 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { HistoryRowLeadingIcon } from "@/components/epics/epics-list-shared";
 import { historyItemDisplayTitle } from "@/components/epics/history-item-title";
+import { historyRowDeletingAttributes } from "@/components/epics/history-row-deleting-attributes";
+import {
+  DELETE_IN_FLIGHT_TOOLTIP,
+  HistoryRowDeletingIndicator,
+} from "@/components/epics/history-row-deleting-indicator";
 import {
   historyPinControlLabel,
   historyPinUnavailableReason,
@@ -82,6 +87,13 @@ export interface HistoryTaskRowProps {
   readonly showOpenBadge: boolean;
   readonly isOpen: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  /**
+   * The task's deletion is in flight. The row then shows the delete in
+   * progress where its actions sit, and drops every action and menu: none of
+   * them means anything for a task about to be gone. The caller's interaction
+   * target still renders (it carries keyboard traversal) and refuses to open.
+   */
+  readonly isDeleting: boolean;
 }
 
 export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
@@ -129,16 +141,20 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
   const onRowBlur = useCallback(() => {
     setRowFocusSession(null);
   }, []);
+  const isDeleting = props.isDeleting;
+  const displayTitle = historyItemDisplayTitle(props.item);
   const rowCard = (
     <div
       data-testid="epics-list-row-card"
       data-selection-disabled={props.selectionDisabled ? "true" : undefined}
+      {...historyRowDeletingAttributes(isDeleting)}
       onPointerDown={rememberPointerPress}
       onFocus={onRowFocus}
       onBlur={onRowBlur}
       className={historyRowCardClassName({
         selectionDisabled: props.selectionDisabled,
         selectedForDelete: props.selectedForDelete,
+        isDeleting,
       })}
     >
       {props.renderInteractionTarget(rowDescribedBy)}
@@ -159,7 +175,7 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
                 />
               )}
               <span className="truncate font-medium text-foreground">
-                {historyItemDisplayTitle(props.item)}
+                {displayTitle}
               </span>
               <HistoryRowStatusSlot
                 id={importedDescriptionId}
@@ -177,7 +193,7 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
                   isOpen={props.isOpen}
                 />
               ) : null}
-              {props.onSetPinned === null ? null : (
+              {props.onSetPinned === null || isDeleting ? null : (
                 <HistoryPinControl
                   item={props.item}
                   isPending={props.isPinPending}
@@ -186,14 +202,17 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
                   onSetPinned={props.onSetPinned}
                 />
               )}
-              {props.renameControl}
+              {isDeleting ? null : props.renameControl}
             </span>
           )}
         </span>
         {props.organization === null ? null : (
           <OrganizationMetadata
             taskId={props.item.epicId}
-            canEdit={props.organization.canEdit}
+            canEdit={organizationCanEdit(
+              props.organization.canEdit,
+              isDeleting,
+            )}
             fallback={props.item.organization}
           />
         )}
@@ -205,8 +224,12 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
           provenance={historyRowProvenance(props.item)}
         />
       </div>
-      {props.sweepControl}
-      {props.deleteControl}
+      <HistoryRowTrailingControls
+        isDeleting={isDeleting}
+        displayTitle={displayTitle}
+        sweepControl={props.sweepControl}
+        deleteControl={props.deleteControl}
+      />
     </div>
   );
   return (
@@ -220,9 +243,10 @@ export function HistoryTaskRow(props: HistoryTaskRowProps): ReactNode {
           {props.selectionControl}
         </div>
       )}
-      {props.contextMenuItems === null &&
-      props.openInNewWindowControl === null &&
-      props.sweepMenuItem === null ? (
+      {isDeleting ||
+      (props.contextMenuItems === null &&
+        props.openInNewWindowControl === null &&
+        props.sweepMenuItem === null) ? (
         rowCard
       ) : (
         <ContextMenu>
@@ -448,13 +472,53 @@ function historyRowContentClassName(hasSweepControl: boolean): string {
   );
 }
 
+/** Organization edits go with the row's other actions while it is being deleted. */
+function organizationCanEdit(canEdit: boolean, isDeleting: boolean): boolean {
+  return canEdit && !isDeleting;
+}
+
+/**
+ * What sits at the row's trailing edge: its sweep and delete controls at rest,
+ * and the delete's progress in their place while the task is being deleted.
+ */
+function HistoryRowTrailingControls(props: {
+  readonly isDeleting: boolean;
+  readonly displayTitle: string;
+  readonly sweepControl: ReactNode;
+  readonly deleteControl: ReactNode;
+}): ReactNode {
+  if (!props.isDeleting) {
+    return (
+      <>
+        {props.sweepControl}
+        {props.deleteControl}
+      </>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="absolute right-2 top-1/2 inline-flex size-8 -translate-y-1/2 items-center justify-center text-muted-foreground">
+          <HistoryRowDeletingIndicator
+            displayTitle={props.displayTitle}
+            className="inline-flex items-center"
+          />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{DELETE_IN_FLIGHT_TOOLTIP}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function historyRowCardClassName(args: {
   readonly selectionDisabled: boolean;
   readonly selectedForDelete: boolean;
+  readonly isDeleting: boolean;
 }): string {
   return cn(
     "group relative min-w-0 flex-1 rounded-md transition-colors hover:bg-accent/40 active:press-scrim pointer-coarse:touch-chrome",
     args.selectionDisabled && "opacity-50",
     args.selectedForDelete && "bg-accent/40 ring-1 ring-inset ring-primary/40",
+    args.isDeleting && "opacity-60 hover:bg-transparent",
   );
 }
