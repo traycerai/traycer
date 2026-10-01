@@ -114,7 +114,7 @@ function ProfileCopyOperationBody(props: {
   ).profileName;
 
   const status = useProfileCopyStatusQuery(sourceHostId, operationId);
-  const start = useProfileCopyStartMutation(sourceHostId);
+  const start = useProfileCopyStartMutation(sourceHostId, "keep-handle");
   const cancel = useProfileCopyCancelMutation(sourceHostId, operationId);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const outcomes = status.data?.outcomes ?? null;

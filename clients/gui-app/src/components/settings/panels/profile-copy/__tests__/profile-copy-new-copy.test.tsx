@@ -837,6 +837,51 @@ describe("ProfileCopyNewCopy", () => {
     ]);
   });
 
+  it("still forgets the handle when the dialog closes before the start is refused", async () => {
+    const uuid = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const pending: { refuse: (() => void) | null } = { refuse: null };
+    const messenger = await startCopyToLinuxBox({
+      operationId: uuid,
+      answerStart: () =>
+        new Promise((_resolve, reject) => {
+          pending.refuse = () =>
+            reject(
+              rpcError("E_INVALID_ARGUMENT", "providers.profileCopy.start"),
+            );
+        }),
+    });
+    await waitFor(() =>
+      expect(
+        messenger.calls.some(
+          (call) => call.method === "providers.profileCopy.start",
+        ),
+      ).toBe(true),
+    );
+    expect(
+      useProfileCopyOperationsStore
+        .getState()
+        .handles.some((entry) => entry.operationId === uuid),
+    ).toBe(true);
+    act(() => {
+      useProfileCopyFlowStore.getState().close();
+    });
+    expect(screen.queryByRole("button", { name: /Copy to 1 device/ })).toBe(
+      null,
+    );
+    await act(async () => {
+      pending.refuse?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await waitFor(() =>
+      expect(
+        useProfileCopyOperationsStore
+          .getState()
+          .handles.some((entry) => entry.operationId === uuid),
+      ).toBe(false),
+    );
+    expect(useProfileCopyFlowStore.getState().view).toBe(null);
+  });
+
   it("does not read host options while the copy dialog is closed", () => {
     const queryClient = createAppQueryClient();
     render(

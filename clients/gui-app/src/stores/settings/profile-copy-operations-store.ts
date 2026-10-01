@@ -374,10 +374,20 @@ export const useProfileCopyOperationsStore =
           }
           // Not re-capped here: the view that read it may still be open on
           // it. The next start (or another window's write) drops it.
+          // Strictly after the read it replaces, even when the clock stepped
+          // back: the write merges against storage by this timestamp, and a
+          // lower one would keep the replaced flag there.
           set({
             handles: current.map((handle) =>
               handle.operationId === operationId
-                ? { ...handle, settled, settlementReadAt: Date.now() }
+                ? {
+                    ...handle,
+                    settled,
+                    settlementReadAt: Math.max(
+                      Date.now(),
+                      handle.settlementReadAt + 1,
+                    ),
+                  }
                 : handle,
             ),
           });

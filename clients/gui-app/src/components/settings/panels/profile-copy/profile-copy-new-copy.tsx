@@ -31,7 +31,6 @@ import {
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
-import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
 import { ProfileCopyBadge } from "./profile-copy-badge";
 import {
   profileCopyProviderLabel,
@@ -228,8 +227,7 @@ export function ProfileCopyNewCopy(props: {
   const { selected, preview, previewData, records, routableCount } = selection;
   const previewSettled = previewData !== null;
 
-  const start = useProfileCopyStartMutation(sourceHostId);
-  const removeHandle = useProfileCopyOperationsStore((state) => state.remove);
+  const start = useProfileCopyStartMutation(sourceHostId, "forget-handle");
   const openView = useProfileCopyFlowStore((state) => state.open);
   const closeFlow = useProfileCopyFlowStore((state) => state.close);
   const navigation = useProfileCopySettingsNavigation();
@@ -275,8 +273,8 @@ export function ProfileCopyNewCopy(props: {
         onError: (error) => {
           if (error.code === "E_INVALID_ARGUMENT") {
             // Refused outright - stale preview, a changed request, a missing
-            // profile, no capacity: nothing was created, so nothing to keep.
-            removeHandle(operationId);
+            // profile, no capacity: nothing was created. The start hook has
+            // already forgotten the handle; re-check the devices here.
             selection.noteStart("refused");
             void preview.refetch();
             return;

@@ -69,12 +69,25 @@ function forgetUnstartedOperation(request: StartRequest): void {
 }
 
 /**
+ * What a start refused outright (`E_INVALID_ARGUMENT`: nothing was created)
+ * does to its handle:
+ *
+ * - `forget-handle`: the new-copy dialog's first start. The handle was
+ *   recorded only so a LOST answer could be reopened; a refusal is an answer,
+ *   so keeping it would list a copy that never existed as one that may have.
+ * - `keep-handle`: the operation view's "Start again". The view is showing
+ *   that handle and explains the refusal on it, with "Remove from list".
+ */
+export type ProfileCopyStartRefusal = "forget-handle" | "keep-handle";
+
+/**
  * Starts an operation. The caller mints `operationId` BEFORE dispatch and
  * records the handle first, so a lost answer can be reopened and the same
  * request sent again: the source rejoins a start it already holds.
  */
 export function useProfileCopyStartMutation(
   sourceHostId: string,
+  refusal: ProfileCopyStartRefusal,
 ): UseMutationResult<StartResponse, HostRpcError, StartRequest> {
   const client = useHostClientForHostId(sourceHostId);
   const queryClient = useQueryClient();
@@ -101,6 +114,16 @@ export function useProfileCopyStartMutation(
           sourceProfileId: request.sourceProfileId,
           startedCount: response.outcomes.length,
         });
+      },
+      // Hook-level for the same reason: a refusal that arrives after the
+      // dialog closed must still forget the handle it was recorded under.
+      onError: (error, request) => {
+        if (
+          refusal === "forget-handle" &&
+          error.code === "E_INVALID_ARGUMENT"
+        ) {
+          useProfileCopyOperationsStore.getState().remove(request.operationId);
+        }
       },
     },
     mapVariables: (variables) => variables,

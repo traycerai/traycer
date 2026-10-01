@@ -554,6 +554,45 @@ describe("useProfileCopyOperationsStore", () => {
     expect(row).toMatchObject({ settlementReadAt: 2_000 });
   });
 
+  it("keeps a later unsettled read over this window's earlier settled one when the clock stepped back", async () => {
+    const target = "op-clock-stepped-back";
+    const now = vi.spyOn(Date, "now");
+    useProfileCopyOperationsStore
+      .getState()
+      .record(handle({ operationId: target, createdAt: 0 }));
+    for (let index = 0; index < PROFILE_COPY_MAX_HANDLES - 1; index += 1) {
+      useProfileCopyOperationsStore.getState().record(
+        handle({
+          operationId: `dddddddd-dddd-4ddd-8ddd-${String(index).padStart(12, "0")}`,
+          createdAt: 10 + index,
+          settled: true,
+          settlementReadAt: 500,
+        }),
+      );
+    }
+    now.mockReturnValue(2_000);
+    useProfileCopyOperationsStore.getState().markSettled(target, true);
+    await flushPersist();
+    // The clock steps back, then a retry's status read finds it moving again.
+    now.mockReturnValue(1_000);
+    useProfileCopyOperationsStore.getState().markSettled(target, false);
+    await flushPersist();
+    // A newer start pushes it past the cap: only a settled copy falls off.
+    useProfileCopyOperationsStore
+      .getState()
+      .record(handle({ operationId: "op-clock-newest", createdAt: 100 }));
+    await flushPersist();
+    now.mockRestore();
+
+    // A reload reads storage: the copy that is moving must still be listed.
+    await useProfileCopyOperationsStore.persist.rehydrate();
+    expect(
+      useProfileCopyOperationsStore
+        .getState()
+        .handles.find((entry) => entry.operationId === target),
+    ).toMatchObject({ settled: false });
+  });
+
   it("keeps a handle this window removed from another window's write after a storage event", async () => {
     const handleX = handle({ operationId: "op-storage-x", createdAt: 1 });
     const handleY = handle({ operationId: "op-storage-y", createdAt: 2 });
