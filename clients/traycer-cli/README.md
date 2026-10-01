@@ -89,9 +89,16 @@ Traycer-launched agent sessions receive environment variables such as `TRAYCER_A
 traycer agent list
 traycer agent inbox
 traycer agent send --to <agent-id> --message "Can you review this change?"
+traycer agent send --to <agent-id> --message-file ./prompt.txt
+printf '%s' "$PROMPT" | traycer agent send --to <agent-id> --stdin
 traycer workspace list
 traycer worktree create --workspace /path/to/repo --branch my-feature
 ```
+
+`agent send` requires exactly one prompt source: `--message`,
+`--message-file`, or `--stdin`.
+For sensitive prompts, prefer `--stdin` or `--message-file`: the legacy
+`--message` spelling remains visible in process argv and may enter shell history.
 
 These commands are mainly intended for Traycer-managed automation, but they are regular CLI commands and can be scripted when the host is running and the required IDs are supplied.
 
