@@ -4,6 +4,7 @@ import {
 } from "@/hooks/organization/organization-context";
 import { useQueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { findCachedTaskContext } from "@/lib/cloud-epic-tasks-query/cache";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -153,29 +154,23 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
 function EpicOrganizationMenu(props: {
   readonly tab: Extract<HeaderTab, { kind: "epic" }>;
 }) {
+  const epicId = props.tab.epicId;
   const organization = useOrganization();
-  const contexts = useEpicGetTaskContexts(
-    [props.tab.epicId],
-    organization?.userId ?? null,
-    { enabled: organization?.supported ?? false },
-  );
-  const task = contexts.tasksById.get(props.tab.epicId);
-  if (
-    organization?.supported &&
-    !contexts.localHomedTaskIds.has(props.tab.epicId)
-  ) {
-    if (task === undefined && contexts.error !== null)
+  const context = useTabTaskContext(epicId, organization);
+  const task = context.task;
+  if (organization?.supported && !context.localHomed) {
+    if (task === undefined && context.error !== null)
       return (
         <OrganizationContextRetryMenu
           organization={organization}
-          taskId={props.tab.epicId}
-          isFetching={contexts.isFetching}
+          taskId={epicId}
+          isFetching={context.isFetching}
         />
       );
     if (!task?.epic) return null;
     return (
       <TaskOrganizationMenu
-        taskId={props.tab.epicId}
+        taskId={epicId}
         title={props.tab.name}
         canEdit={
           task.epic.light?.createdBy === organization.userId ||
@@ -185,6 +180,44 @@ function EpicOrganizationMenu(props: {
     );
   }
   return <LocalTabAppearanceMenu tab={props.tab} />;
+}
+
+/**
+ * The tab's task context, which decides whether the menu offers task
+ * organization and whether the Labels window is editable.
+ *
+ * The tab strip already resolved every open tab's context when it mounted.
+ * Standing in with that answer until this tab's own lookup first answers puts
+ * the organization items in the menu the moment it opens, instead of after a
+ * round trip to the cloud. From then on only the own answer is read, even
+ * while it refreshes, so a task deleted since the strip's batch stays without
+ * its items.
+ */
+function useTabTaskContext(
+  epicId: string,
+  organization: OrganizationContextValue | null,
+) {
+  const userId = organization?.userId ?? null;
+  const queryClient = useQueryClient();
+  const contexts = useEpicGetTaskContexts([epicId], userId, {
+    enabled: organization?.supported ?? false,
+  });
+  // Only the host this tab's own lookup asks, as the retry item below keys it:
+  // another host's batch can disagree about whether the task is local-homed.
+  const hostId = organization?.client.getActiveHostId() ?? null;
+  const standIn =
+    userId === null || hostId === null || !contexts.isPending
+      ? null
+      : findCachedTaskContext(queryClient, { hostId, userId }, epicId);
+  const answered = contexts.tasksById.get(epicId);
+  return {
+    task: answered ?? standIn?.task,
+    localHomed:
+      contexts.localHomedTaskIds.has(epicId) ||
+      (answered === undefined && standIn?.localHomed === true),
+    error: contexts.error,
+    isFetching: contexts.isFetching,
+  };
 }
 function OrganizationContextRetryMenu(props: {
   readonly organization: OrganizationContextValue;
