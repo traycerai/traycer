@@ -93,9 +93,9 @@ An agent can create worktrees itself, for example when it splits work across [ch
 
 With **Ask first**, an agent that another agent started, in a chat nobody has open, can't reach you, so its request is refused and it reports back to the agent that started it. Open the agent's chat before it asks if you want to approve worktrees for it, or ask the coordinating agent to create them.
 
-With **Ask first** or **Never**, Claude Code agents also lose Claude Code's own worktree tool, so the setting isn't bypassed by it.
-
 The setting also covers `traycer worktree create` when an agent runs it in its own shell. There it is refused under **Never**, and under **Ask first** too, because the command has no way to ask you. Running the command yourself is unaffected.
+
+The setting covers the worktrees an agent asks Traycer for. It doesn't change the coding agent itself: a worktree feature built into the agent's own CLI (Claude Code's worktree tool, for example) and `git worktree add` in the agent's shell work as that CLI provides them. To turn those off, use the CLI's own settings.
 
 The setting applies from an agent's next request, including agents already running: one that was started before you chose **Ask first** or **Never** is asked or refused the next time it tries. After you switch away from **Never**, an agent that started under it may not be offered worktrees again until it restarts.
 
