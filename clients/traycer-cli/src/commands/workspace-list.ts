@@ -9,7 +9,12 @@ import {
   parseCanonicalHostResponse,
   toAgentCliError,
 } from "../internal/host-rpc";
+import {
+  agentWorktreeCreateOffered,
+  readAgentWorktreeCreatePolicy,
+} from "../agent-worktree-create";
 import { resolveEpicId } from "../internal/agent-context";
+import { readonlyEnv } from "../runner/runtime";
 import type { CommandFn } from "../runner/runner";
 
 /**
@@ -45,7 +50,13 @@ export function buildWorkspaceListCommand(opts: {
     );
     return {
       data: parsed,
-      human: formatWorkspaceListTable(parsed.rows),
+      human: formatWorkspaceListTable(
+        parsed.rows,
+        agentWorktreeCreateOffered(
+          readonlyEnv(),
+          readAgentWorktreeCreatePolicy,
+        ),
+      ),
       exitCode: 0,
     };
   };
@@ -71,12 +82,18 @@ const COLUMNS = [
  */
 export function formatWorkspaceListTable(
   rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
+  offersWorktreeCreate: boolean,
 ): string {
   if (rows.length === 0) {
+    // The hint names `traycer worktree create` only for a caller it will run
+    // for: an agent whose user turned agent-created worktrees off is refused
+    // there, so it is pointed at binding a folder that already exists.
     return [
       "No workspace folders are bound to this Task.",
       "",
-      "Create one with `traycer worktree create --workspace <path> --branch <name>`, then bind it with `traycer agent create --cwd <path>`.",
+      offersWorktreeCreate
+        ? "Create one with `traycer worktree create --workspace <path> --branch <name>`, then bind it with `traycer agent create --cwd <path>`."
+        : "Bind a folder that already exists with `traycer agent create --cwd <path>`.",
     ].join("\n");
   }
   const cells = rows.map((row) => [

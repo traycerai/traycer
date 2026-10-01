@@ -534,6 +534,14 @@ export function useHostMutation<
  * response-frame budget instead of the transport's default frame timeout,
  * which would misread that silence as a dead host. Dial and handshake keep
  * the transport defaults, so an unreachable host still fails fast.
+ *
+ * `signalFor` is the caller's cancellation of ONE wait, read per dispatch. A
+ * wait whose signal aborts detaches from its request, and a request nobody
+ * waits on any more is aborted (`HostRequestCoordinator.attachWaiter`), so a
+ * later wait for the same params is a request of its own rather than a share
+ * of that one's answer. `null` for a caller with nothing to cancel: its call
+ * stays on `requestWithResponseTimeout`, the entry point the local
+ * maintenance fallback client intercepts.
  */
 export function useHostMutationWithResponseTimeout<
   Registry extends VersionedRpcRegistry,
@@ -543,6 +551,9 @@ export function useHostMutationWithResponseTimeout<
 >(
   args: UseHostMutationOptions<Registry, Method, TContext, TVariables> & {
     readonly responseTimeoutMs: number;
+    readonly signalFor:
+      | ((variables: TVariables) => AbortSignal | undefined)
+      | null;
   },
 ): UseMutationResult<
   ResponseOfMethod<Registry, Method>,
@@ -569,11 +580,25 @@ export function useHostMutationWithResponseTimeout<
             hostClientUnavailableError(args.method),
           );
         }
-        const response = await client.requestWithResponseTimeout(
-          args.method,
-          args.mapVariables(variables),
-          args.responseTimeoutMs,
-        );
+        const signal =
+          args.signalFor === null ? undefined : args.signalFor(variables);
+        const response =
+          signal === undefined
+            ? await client.requestWithResponseTimeout(
+                args.method,
+                args.mapVariables(variables),
+                args.responseTimeoutMs,
+              )
+            : await client.requestWithOptions(
+                args.method,
+                args.mapVariables(variables),
+                {
+                  responseTimeoutMs: args.responseTimeoutMs,
+                  idempotencyKey: null,
+                  requiredHostMethodVersion: null,
+                  signal,
+                },
+              );
         args.onResponse?.(response, variables);
         return response;
       }),

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  TerminalSubscribeClientFrame,
+  TerminalSubscribeClientFrameV17,
   TerminalSubscribeServerFrame,
   TerminalSubscribeViewer,
 } from "@traycer/protocol/host/terminal/subscribe";
@@ -125,7 +125,9 @@ function emitData(
 
 function createHarness() {
   let callbacks: TerminalStreamCallbacks | null = null;
-  const sendAction = vi.fn((_frame: TerminalSubscribeClientFrame) => undefined);
+  const sendAction = vi.fn(
+    (_frame: TerminalSubscribeClientFrameV17) => undefined,
+  );
   const close = vi.fn();
   const handle = createTerminalSessionStore({
     scope: { kind: "epic", epicId: "epic-1" },
@@ -134,6 +136,7 @@ function createHarness() {
     rows: 24,
     reattachMode: "fresh",
     kind: "terminal",
+    viewer: "presentation",
     streamClientFactory: (streamArgs) => {
       callbacks = streamArgs.callbacks;
       return { sendAction, close };
@@ -284,6 +287,7 @@ describe("createTerminalSessionStore", () => {
       rows: 24,
       reattachMode: "fresh",
       kind: "terminal",
+      viewer: "presentation",
       streamClientFactory: (streamArgs) => {
         callbacks.push(streamArgs.callbacks);
         return { sendAction: () => undefined, close };
@@ -314,6 +318,7 @@ describe("createTerminalSessionStore", () => {
       rows: 24,
       reattachMode: "fresh",
       kind: "terminal",
+      viewer: "presentation",
       streamClientFactory: (streamArgs) => {
         attempts += 1;
         if (attempts > 1) throw new Error("subscription wiring failed");
@@ -982,7 +987,7 @@ describe("createTerminalSessionStore", () => {
   });
 
   describe("viewer intent (terminal.subscribe@1.6)", () => {
-    it("subscribes as presentation by default", () => {
+    it("opens its first stream as the presentation intent it was created with", () => {
       const viewers: TerminalSubscribeViewer[] = [];
       const handle = createTerminalSessionStore({
         scope: { kind: "epic", epicId: "epic-1" },
@@ -991,6 +996,7 @@ describe("createTerminalSessionStore", () => {
         rows: 24,
         reattachMode: "fresh",
         kind: "terminal-agent",
+        viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           viewers.push(streamArgs.viewer);
           return { sendAction: () => undefined, close: () => undefined };
@@ -1012,6 +1018,7 @@ describe("createTerminalSessionStore", () => {
         rows: 24,
         reattachMode: "fresh",
         kind: "terminal-agent",
+        viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           callbacks = streamArgs.callbacks;
           viewers.push(streamArgs.viewer);
@@ -1062,6 +1069,7 @@ describe("createTerminalSessionStore", () => {
         rows: 24,
         reattachMode: "fresh",
         kind: "terminal",
+        viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           viewers.push(streamArgs.viewer);
           return { sendAction: () => undefined, close: () => undefined };
@@ -1083,6 +1091,7 @@ describe("createTerminalSessionStore", () => {
         rows: 24,
         reattachMode: "fresh",
         kind: "terminal-agent",
+        viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           callbacks = streamArgs.callbacks;
           return {
@@ -1135,6 +1144,7 @@ describe("createTerminalSessionStore", () => {
         rows: 24,
         reattachMode: "fresh",
         kind: "terminal-agent",
+        viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           callbacks = streamArgs.callbacks;
           return {
@@ -1187,6 +1197,7 @@ describe("createTerminalSessionStore", () => {
         rows: 24,
         reattachMode: "fresh",
         kind: "terminal-agent",
+        viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           callbacks = streamArgs.callbacks;
           viewers.push(streamArgs.viewer);
@@ -1204,6 +1215,180 @@ describe("createTerminalSessionStore", () => {
       expect(viewers).toEqual(["presentation"]);
       expect(handle.store.getState().viewer).toBe("cache");
       handle.dispose();
+    });
+  });
+  describe("viewer intent restated on the live stream (terminal.subscribe@1.7)", () => {
+    function createViewerHarness(viewer: TerminalSubscribeViewer) {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const frames: TerminalSubscribeClientFrameV17[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const factory = vi.fn();
+      const close = vi.fn();
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        viewer,
+        streamClientFactory: (streamArgs) => {
+          factory();
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return {
+            sendAction: (frame) => {
+              frames.push(frame);
+            },
+            close: () => {
+              close();
+              // Production TerminalStreamClient.close() reports closed.
+              streamArgs.callbacks.onConnectionStatus("closed", {
+                kind: "caller",
+              });
+            },
+          };
+        },
+      });
+      return {
+        handle,
+        viewers,
+        frames,
+        factory,
+        close,
+        opened: (): TerminalStreamCallbacks => {
+          if (callbacks === null) throw new Error("Expected stream callbacks");
+          return callbacks;
+        },
+      };
+    }
+
+    function viewerFrame(
+      viewer: TerminalSubscribeViewer,
+    ): TerminalSubscribeClientFrameV17 {
+      return {
+        kind: "viewer",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        viewer,
+      };
+    }
+
+    it("opens its first stream as cache when created as cache, with no viewer frame", () => {
+      const harness = createViewerHarness("cache");
+
+      expect(harness.viewers).toEqual(["cache"]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.handle.store.getState().viewer).toBe("cache");
+      expect(harness.frames).toEqual([]);
+      harness.handle.dispose();
+    });
+
+    it("restates the intent as a viewer frame without closing or reopening the stream", () => {
+      const harness = createViewerHarness("presentation");
+      harness.opened().onConnectionStatus("open", null);
+      emitSnapshot(harness.opened(), snapshot(""));
+      expect(harness.handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "presentation",
+      });
+
+      harness.handle.store.getState().restateViewer("cache");
+
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+      expect(harness.handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "cache",
+      });
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.close).not.toHaveBeenCalled();
+      expect(harness.viewers).toEqual(["presentation"]);
+
+      harness.handle.store.getState().restateViewer("presentation");
+
+      expect(harness.frames).toEqual([
+        viewerFrame("cache"),
+        viewerFrame("presentation"),
+      ]);
+      expect(harness.handle.store.getState().viewer).toBe("presentation");
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.close).not.toHaveBeenCalled();
+      harness.handle.dispose();
+    });
+
+    it("hands the client the intent while the stream is not open yet", () => {
+      const harness = createViewerHarness("presentation");
+      expect(harness.handle.store.getState().connectionStatus).toBe(
+        "connecting",
+      );
+
+      harness.handle.store.getState().restateViewer("cache");
+
+      // The store does not gate on the connection: the client holds the frame
+      // and its next subscribe declares the intent.
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      harness.handle.dispose();
+    });
+
+    it("is a no-op when restating the current intent", () => {
+      const harness = createViewerHarness("presentation");
+      harness.opened().onConnectionStatus("open", null);
+      emitSnapshot(harness.opened(), snapshot(""));
+
+      harness.handle.store.getState().restateViewer("presentation");
+
+      expect(harness.frames).toEqual([]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.close).not.toHaveBeenCalled();
+      expect(harness.handle.store.getState().viewer).toBe("presentation");
+
+      harness.handle.store.getState().restateViewer("cache");
+      harness.handle.store.getState().restateViewer("cache");
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+      harness.handle.dispose();
+    });
+
+    it("records the intent but sends nothing once the session is already dead", () => {
+      const harness = createViewerHarness("presentation");
+      harness.opened().onConnectionStatus("closed", { kind: "caller" });
+      expect(harness.handle.store.getState().status).toBe("lost");
+
+      harness.handle.store.getState().restateViewer("cache");
+
+      expect(harness.handle.store.getState().viewer).toBe("cache");
+      expect(harness.frames).toEqual([]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      harness.handle.dispose();
+    });
+
+    it("still reopens on setViewer, and a reopen opens with the intent last stated", () => {
+      const harness = createViewerHarness("presentation");
+      harness.opened().onConnectionStatus("open", null);
+      emitSnapshot(harness.opened(), snapshot(""));
+
+      // Stated on the live stream: no reopen.
+      harness.handle.store.getState().restateViewer("cache");
+      expect(harness.viewers).toEqual(["presentation"]);
+
+      // A lease change goes through setViewer, which reopens with its value.
+      harness.handle.store.getState().setViewer("presentation");
+
+      expect(harness.factory).toHaveBeenCalledTimes(2);
+      expect(harness.close).toHaveBeenCalledTimes(1);
+      expect(harness.viewers).toEqual(["presentation", "presentation"]);
+      expect(harness.handle.store.getState().viewer).toBe("presentation");
+      // The reopened stream's open request carries the intent; no frame is
+      // sent for it.
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+
+      // setViewer to the intent already stated is the no-op it always was.
+      harness.handle.store.getState().restateViewer("cache");
+      harness.handle.store.getState().setViewer("cache");
+      expect(harness.factory).toHaveBeenCalledTimes(2);
+      harness.handle.dispose();
     });
   });
 });

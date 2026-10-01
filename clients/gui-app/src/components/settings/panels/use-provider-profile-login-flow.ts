@@ -6,6 +6,7 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
 import {
   providerProfileSchema,
   type ProviderCliState,
@@ -51,7 +52,7 @@ export type StartLoginMutation = UseMutationResult<
 export type AwaitLoginMutation = UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.awaitLogin">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.awaitLogin">,
+  AwaitLoginVariables,
   LoginMutationContext
 >;
 export type CancelLoginMutation = UseMutationResult<
@@ -492,6 +493,12 @@ export function useProviderProfileLoginFlow(
   // Latched at the press: later handshakes must not change the cancellation
   // policy of a start already sent anonymously to an older host.
   const holderIdRef = useRef<string | null>(null);
+  // The current attempt's wait for its login (`AwaitLoginVariables.signal`),
+  // and the profile that login is for as far as the attempt has learned it.
+  // Both belong to the release below: an attempt that gives up its claim on
+  // the host's login stops waiting for that login too.
+  const awaitAbortRef = useRef<AbortController | null>(null);
+  const attemptProfileRef = useRef<string | null>(null);
   // Two-sided settlement join for the current attempt (see `settleAttempt`'s
   // doc comment): `awaitLogin` and `submitLoginCode` can resolve in either
   // order, so each side latches its own verdict into one of these refs and
@@ -605,8 +612,15 @@ export function useProviderProfileLoginFlow(
     }
   }, [cancelLogin, oweRelease, providerId]);
 
+  // The one place an attempt gives up what it holds on the host: its claim on
+  // the login, and its wait for that login's end. The wait goes with the
+  // claim because the client shares one in-flight `providers.awaitLogin`
+  // between identical requests - left pending, this one would answer the
+  // next attempt for the same profile with the end of the login just
+  // released (`AwaitLoginVariables`).
   const cancelProfile = useCallback(
     (profileId: string | null): void => {
+      awaitAbortRef.current?.abort();
       // A holder can release a create attempt before its profile ID arrives.
       // Legacy create has no safe scope to cancel until the host names one;
       // legacy reauth's null profile is the ambient scope.
@@ -706,6 +720,23 @@ export function useProviderProfileLoginFlow(
     [cancelProfile, reportCancellation],
   );
 
+  // An attempt that ends without a sign-in holds nothing afterwards. The
+  // host's login can outlive the attempt's view of it - a wait that failed in
+  // transit, or was answered with another login's end - and the next press
+  // mints a holder of its own, so a claim left here would have no path to a
+  // release: Cancel would free the newer holder and the login would run on
+  // for this one until its deadline. A holder the host no longer knows is a
+  // no-op there, as a repeated cancel is. Holders only: an older host's
+  // release is a cancel of the whole scope, which would end a login another
+  // surface started.
+  const releaseEndedAttempt = useCallback((): void => {
+    if (holderIdRef.current === null) {
+      awaitAbortRef.current?.abort();
+      return;
+    }
+    cancelProfile(attemptProfileRef.current);
+  }, [cancelProfile]);
+
   // The blocker is classified from the REAL error at each call site (or an
   // explicit bounded value for error-less outcomes), never from the display
   // message - UI copy like "Sign-in did not…" would misclassify everything
@@ -716,6 +747,7 @@ export function useProviderProfileLoginFlow(
       blocker: AnalyticsBlocker,
       refusal: ProviderLoginRefusal | null,
     ): void => {
+      releaseEndedAttempt();
       // Flow-level failures otherwise surface only as inline dialog copy -
       // log them so a failed sign-in/switch is diagnosable from the desktop
       // log after the fact.
@@ -735,7 +767,7 @@ export function useProviderProfileLoginFlow(
       setState({ kind: "failed", message, refusal });
       onFailed(message);
     },
-    [mode, onFailed, providerId],
+    [mode, onFailed, providerId, releaseEndedAttempt],
   );
 
   /**
@@ -822,12 +854,22 @@ export function useProviderProfileLoginFlow(
         return;
       }
       if (ambient) {
+        // Quiet, but an attempt that ended without a sign-in all the same.
+        releaseEndedAttempt();
         setState({ kind: "start" });
         return;
       }
       fail(failureMessages.notFinished, "authentication", null);
     },
-    [existingProfileId, fail, failureMessages, mode, providerId, restart],
+    [
+      existingProfileId,
+      fail,
+      failureMessages,
+      mode,
+      providerId,
+      releaseEndedAttempt,
+      restart,
+    ],
   );
 
   const beginLogin = useCallback(
@@ -846,6 +888,9 @@ export function useProviderProfileLoginFlow(
       const thisAttemptId = attemptIdRef.current;
       const holderId = supportsLoginOwnership ? crypto.randomUUID() : null;
       holderIdRef.current = holderId;
+      const awaitAbort = new AbortController();
+      awaitAbortRef.current = awaitAbort;
+      attemptProfileRef.current = mode === "reauth" ? existingProfileId : null;
       cancelledRef.current = false;
       releaseInFlightRef.current = false;
       deferredReleaseRef.current = null;
@@ -913,6 +958,7 @@ export function useProviderProfileLoginFlow(
               profileId:
                 mode === "reauth" ? existingProfileId : answer.profileId,
             };
+            attemptProfileRef.current = liveLoginRef.current.profileId;
           }
           setState({
             kind: "starting",
@@ -932,6 +978,7 @@ export function useProviderProfileLoginFlow(
           // Create has no id until this response supplies one.
           const nextProfileId =
             mode === "reauth" ? existingProfileId : data.profileId;
+          attemptProfileRef.current = nextProfileId;
           // Ahead of the unmount check: a Cancel pressed while the pack was
           // downloading ends the flow at once (`cancel`), and the dialog can
           // be gone by the time the call already on its way answers - with a
@@ -1007,6 +1054,7 @@ export function useProviderProfileLoginFlow(
             attemptIdRef.current !== thisAttemptId ||
             cancelRequestedRef.current ||
             cancelledRef.current ||
+            awaitAbort.signal.aborted ||
             unmountedRef.current;
           const scheduleAuthPendingRepoll = (): boolean => {
             if (authPendingRepolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) {
@@ -1063,7 +1111,10 @@ export function useProviderProfileLoginFlow(
           };
           const awaitOnce = (): void => {
             awaitLogin.mutate(
-              { providerId, profileId: nextProfileId },
+              {
+                request: { providerId, profileId: nextProfileId },
+                signal: awaitAbort.signal,
+              },
               { onSuccess: handleAwaitSuccess, onError: handleAwaitError },
             );
           };

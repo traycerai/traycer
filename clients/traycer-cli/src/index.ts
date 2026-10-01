@@ -149,6 +149,11 @@ import {
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
+import {
+  agentWorktreeCreateOffered,
+  assertAgentWorktreeCreateAllowed,
+  readAgentWorktreeCreatePolicy,
+} from "./agent-worktree-create";
 import { writeStderr, writeStdout } from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
@@ -373,6 +378,14 @@ function withRunner(
       assertCommandAllowedOnSurface(
         commandPath,
         resolveAgentCliSurface(readonlyEnv()),
+      );
+      // The user's Agent worktrees setting, for `worktree create` typed inside
+      // an agent session. Here for the reason the check above is: hiding the
+      // command does not stop an agent that types it.
+      assertAgentWorktreeCreateAllowed(
+        commandPath,
+        readonlyEnv(),
+        readAgentWorktreeCreatePolicy,
       );
       return build(optsBag, positionals)(ctx);
     };
@@ -2780,6 +2793,13 @@ function registerWorktreeCommands(program: Command): void {
   const deleteHidden = {
     hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
   };
+  // Hidden for an agent session whose user turned agent-created worktrees off
+  // (Settings > Worktrees). Presentation only, like `deleteHidden`: the refusal
+  // is `assertAgentWorktreeCreateAllowed` in `withRunner`.
+  const worktreeCreateOffered = agentWorktreeCreateOffered(
+    readonlyEnv(),
+    readAgentWorktreeCreatePolicy,
+  );
   const worktree = program
     .command("worktree")
     .description(
@@ -2827,7 +2847,7 @@ function registerWorktreeCommands(program: Command): void {
 
   withRunner(
     worktree
-      .command("create")
+      .command("create", { hidden: !worktreeCreateOffered })
       .description("Create a Git worktree path without creating an agent")
       .requiredOption("--workspace <path>", "Source workspace path")
       .option(
@@ -2872,6 +2892,15 @@ function registerAgentCommands(
   const readonlyHidden = {
     hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
   };
+  // `--cwd` help points at `traycer worktree create` only for a caller that
+  // command will run for; see `registerWorktreeCommands`, which hides it on
+  // the same predicate.
+  const worktreeCreateCwdHint = agentWorktreeCreateOffered(
+    readonlyEnv(),
+    readAgentWorktreeCreatePolicy,
+  )
+    ? " Use this with a path returned by 'traycer worktree create'."
+    : "";
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
   // Deliberately spells out what OMITTING the option does: omission is its own
   // selection (the remembered last-used profile), not a synonym for 'ambient'.
@@ -2929,7 +2958,7 @@ function registerAgentCommands(
       .option("--profile <ambient|id>", profileHelp)
       .option(
         "--cwd <path>",
-        "Primary working directory for the child agent. Use this with a path returned by 'traycer worktree create'.",
+        `Primary working directory for the child agent.${worktreeCreateCwdHint}`,
       )
       .option(
         "--workspace-path <path>",
@@ -2995,7 +3024,7 @@ function registerAgentCommands(
       .option("--profile <ambient|id>", forkProfileHelp)
       .option(
         "--cwd <path>",
-        "Primary working directory for the forked agent. Use this with a path returned by 'traycer worktree create'. Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.",
+        `Primary working directory for the forked agent.${worktreeCreateCwdHint} Omit --cwd/--workspace-path/--workspace-entry entirely to inherit the source agent's workspace binding.`,
       )
       .option(
         "--workspace-path <path>",

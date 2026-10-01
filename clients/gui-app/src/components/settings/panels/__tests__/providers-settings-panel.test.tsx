@@ -80,9 +80,14 @@ type StartLoginMutate = (
   options: StartLoginOptions,
 ) => void;
 
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the attempt's own `AbortSignal`.
 type AwaitLoginVariables = {
-  readonly providerId: ProviderCliState["providerId"];
-  readonly profileId: string | null;
+  readonly request: {
+    readonly providerId: ProviderCliState["providerId"];
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
 };
 type AwaitLoginOptions = {
   readonly onSuccess: (data: unknown) => void;
@@ -4009,10 +4014,11 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
@@ -4602,10 +4608,11 @@ describe("<ProvidersSettingsPanel />", () => {
     // reads non-definitive with the probe still in flight (`authPending`).
     // That must resolve as "not settled yet" - never as a failed sign-in.
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "ambient",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
       awaitOptions.onSuccess(pendingAmbientAwaitResponse());
     });
@@ -4622,10 +4629,11 @@ describe("<ProvidersSettingsPanel />", () => {
     if (repollCall === undefined) {
       throw new Error("Expected re-poll await login call.");
     }
-    expect(repollCall[0]).toEqual({
+    expect(repollCall[0].request).toEqual({
       providerId: "codex",
       profileId: "ambient",
     });
+    expect(repollCall[0].signal).toBeInstanceOf(AbortSignal);
     act(() => {
       repollCall[1].onSuccess({
         codeRejected: false,
@@ -5698,10 +5706,11 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
       awaitOptions.onSuccess({
         state: {

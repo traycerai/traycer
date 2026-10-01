@@ -19,9 +19,15 @@ import type {
 // OAuth (browser login) and/or pasting a fresh credential into an env var. A
 // *rejected* credential never reaches the banner (it surfaces as a generic error
 // row); API-key-only providers (Cursor) have no capability and no banner.
+//
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the attempt's own `AbortSignal`.
 type AwaitLoginVariables = {
-  readonly providerId: string;
-  readonly profileId: string | null;
+  readonly request: {
+    readonly providerId: string;
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
 };
 // Mirrors `providers.cancelLogin`'s request fields the mocked hook forwards -
 // same rationale as `AwaitLoginVariables` above.
@@ -955,10 +961,13 @@ describe("<ProviderReauthBanner />", () => {
     // Spinner shows, and we await the host's completion edge instead of a
     // 2s `forceAuthRefresh` poll.
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
-    expect(mocks.awaitLoginMutate).toHaveBeenCalledWith(
-      { providerId: "claude-code", profileId: null },
-      expect.anything(),
-    );
+    const [awaitVariables, awaitOptions] = latestAwaitLoginCall();
+    expect(awaitVariables.request).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+    });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
+    expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
   it("does not show a code-paste field for a provider without the codePaste capability", async () => {

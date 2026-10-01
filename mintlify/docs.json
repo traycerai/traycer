@@ -267,7 +267,7 @@
   "footer": {
     "socials": {
       "x": "https://x.com/TraycerAI",
-      "github": "https://github.com/traycerai",
+      "github": "https://github.com/traycerai/traycer",
       "linkedin": "https://linkedin.com/company/traycer",
       "website": "https://traycer.ai",
       "discord": "https://traycer.ai/discord",
@@ -280,19 +280,14 @@
   "seo": {
     "indexing": "all",
     "metatags": {
-      "title": "Traycer Docs",
       "description": "Traycer docs for Tasks, agents, Chat and Terminal interfaces, artifacts, coding agents, models, storage, sync, and IDE extension workflows.",
       "keywords": "Traycer AI, Traycer, agents, Chat interface, Terminal interface, coding agents, chats, terminal agents, Codex, Claude Code, OpenCode, Cursor, artifacts, specs, tickets, stories, reviews",
       "author": "Traycer AI",
       "og:site_name": "Traycer AI Documentation",
       "og:url": "https://docs.traycer.ai",
       "og:type": "website",
-      "og:title": "Traycer Docs",
-      "og:description": "Learn Traycer: Tasks, agents, Chat and Terminal interfaces, artifacts, coding agents, models, storage, sync, and IDE extension workflows.",
       "twitter:site": "@TraycerAI",
-      "twitter:creator": "@TraycerAI",
-      "twitter:title": "Traycer Docs",
-      "twitter:description": "Learn Traycer: Tasks, artifacts, coding agents, and models."
+      "twitter:creator": "@TraycerAI"
     }
   }
 }

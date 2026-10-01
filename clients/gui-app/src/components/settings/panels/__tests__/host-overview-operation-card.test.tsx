@@ -115,6 +115,21 @@ const ALL_OVERVIEW_METHODS = [
   "diagnostics.logs.tail",
 ] as const;
 
+/**
+ * The header's health line, which is the page's ONE statement of the running
+ * version (`version` in `HostIdentityCard`). Anchoring on it proves a render
+ * derived from the `host.status` reply is on screen, on every tab: the
+ * registry copy this suite's fixtures carry is `1.4.2`, so a `v1.5.0` here
+ * can only have come from the RPC.
+ */
+function healthLineText(): string {
+  const line = screen.getByTestId("host-identity-health").closest("div");
+  if (line === null) {
+    throw new Error("expected the health word inside the health line");
+  }
+  return line.textContent;
+}
+
 function scopeFrom(
   hostId: string,
   fixture: OverviewHostFixture,
@@ -611,16 +626,10 @@ describe("HostOverviewOperationCard - the coarse updateProgress marker beside {k
     // the absence is asserted only after a render derived from the status
     // reply is on screen. (The fixture's own call counter is bypassed by an
     // overridden handler, and a counted call proves the request, not the
-    // render.) T2's version card now ALSO states the running version, so the
-    // header's health line is no longer the only element carrying it -
-    // anchor on the version card's own testid instead of the ambiguous text.
-    // The version card leads Updates now, not the page's default (Installation)
-    // tab, so this reads there.
-    await selectHostOverviewTab("updates");
+    // render.) The header's health line is the page's one statement of the
+    // running version, and it shows on every tab, so it is read there.
     await waitFor(() => {
-      expect(screen.getByTestId("host-overview-version").textContent).toBe(
-        "v1.5.0-live",
-      );
+      expect(healthLineText()).toContain("v1.5.0-live");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     expect(screen.queryByText(/Host is up to date/i)).toBeNull();
@@ -1133,7 +1142,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // The remedy sentence is the version card's own answer, on Updates; the
+    // The remedy sentence is the answer card's own answer, on Updates; the
     // operation card itself lives in the notices strip and is on screen on
     // every tab regardless.
     await selectHostOverviewTab("updates");
@@ -1201,10 +1210,10 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     const queryClient = renderPanel();
 
     await screen.findByTestId("host-overview-operation-card");
-    // T2's version card withholds its own answer sentence while an update is
-    // in flight (this park has neither a CLI-floor remedy nor activation
-    // debt to except it), so "This host is running the latest version." does
-    // not render here any more. The settled-render anchor is the check's
+    // The answer card withholds its own answer while an update is in flight
+    // (this park has neither a CLI-floor remedy nor activation debt to
+    // except it), and a current host's answer is quiet anyway, so no answer
+    // card renders here. The settled-render anchor is the check's
     // OWN answer landing in the cache — not merely REQUESTED
     // (`checkCalls > 0` can pass during the still-loading frame, before the
     // negative assertions below have anything to be negative ABOUT).
@@ -1271,7 +1280,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
-    // The failure line lands on the version card's own answer, on Updates;
+    // The failure line lands on the answer card's own answer, on Updates;
     // the force control that triggers it is the notices strip's operation
     // card, which is on screen on every tab regardless.
     await selectHostOverviewTab("updates");
@@ -1333,7 +1342,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     const queryClient = renderPanel();
-    // The failure line lands on the version card's own answer, on Updates.
+    // The failure line lands on the answer card's own answer, on Updates.
     await selectHostOverviewTab("updates");
 
     fireEvent.click(
@@ -1378,12 +1387,11 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // Wait for a render derived from the status/installation reply before
     // asserting absence, exactly as the sibling "no coarse marker" test above
     // does - otherwise the assertion would pass vacuously during the loading
-    // frame. T2's version card now ALSO carries the running version, so
-    // "1.5.0" is no longer unique on screen - anchor on the version card's
-    // own testid instead. The version card leads Updates, not the page's
-    // default (Installation) tab.
-    await selectHostOverviewTab("updates");
-    await screen.findByTestId("host-overview-version");
+    // frame. The header's health line carries the running version the status
+    // reply reported (the registry copy is `1.4.2`), on every tab.
+    await waitFor(() => {
+      expect(healthLineText()).toContain("v1.5.0");
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
   });
 
@@ -1458,8 +1466,8 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
     // this unusable-scope scenario — see the retained-bytes test above
     // (a genuine live-to-demoted transition on a scope that stays USABLE,
     // where the card is still on screen to show it) and the
-    // `deriveHostOverviewVersionTag`/`inFlightUpdateKind` retained-view cases
-    // in `host-overview-notices.test.tsx`.
+    // `inFlightUpdateKind` retained-view cases in
+    // `host-overview-notices.test.tsx`.
   });
 
   it("staged wait: an UNUSABLE scope keeps the sentence (qualified as retained) but withdraws Force update…", async () => {
@@ -1665,26 +1673,20 @@ describe("HostOverviewOperationCard — installation query keyed by running vers
     hostBindingMock.current = bindingWith(fixture.client);
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
-    await selectHostOverviewTab("updates");
 
-    // Baseline: install matches the running rc.2 - no debt. T2's version
-    // card also carries the running version now, so anchor on its own
-    // testid rather than the no-longer-unique text.
+    // Baseline: install matches the running rc.2 - no debt. The header's
+    // health line states the running version.
     await waitFor(() => {
-      expect(screen.getByTestId("host-overview-version").textContent).toBe(
-        "v1.3.0-rc.2",
-      );
+      expect(healthLineText()).toContain("v1.3.0-rc.2");
     });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // Advance past the 10s `host.status` poll: the host reports rc.3, and the
     // installation query re-keys onto a fresh, still-pending read. Anchor on
-    // the version card's own testid - the text is no longer unique on screen.
+    // the header's health line, which moves with the status reply.
     await vi.advanceTimersByTimeAsync(11_000);
     await waitFor(() => {
-      expect(screen.getByTestId("host-overview-version").textContent).toBe(
-        "v1.3.0-rc.3",
-      );
+      expect(healthLineText()).toContain("v1.3.0-rc.3");
     });
     // AT LEAST two, not exactly two: the installation query's own 10 s poll
     // and the status poll that re-keys it fire from the same tick, and their
@@ -2295,7 +2297,7 @@ describe("HostOverviewOperationCard — a work park under an unmet CLI floor", (
     // the remedy row is the observable that says the summary walk finished and
     // `updates.cliFloor` is populated, and until it is the card is legitimately
     // still showing the count. The remedy row and its "Show installation
-    // help" button are the version card's, on Updates.
+    // help" button are the answer card's, on Updates.
     await selectHostOverviewTab("updates");
     await screen.findByText(
       "Traycer couldn't determine how its command-line tools were installed on host-a.",
@@ -2824,12 +2826,11 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
     bindComplete("attempt-old-settings");
     renderPanel();
     // Wait for a render derived from the status reply before asserting
-    // absence, same as the sibling "no coarse marker" test above. T2's
-    // version card also carries the running version, so anchor on its own
-    // testid rather than the no-longer-unique text. The version card now
-    // leads the Updates tab, so visit it first.
-    await selectHostOverviewTab("updates");
-    await screen.findByTestId("host-overview-version");
+    // absence, same as the sibling "no coarse marker" test above: the
+    // header's health line carries the running version the reply reported.
+    await waitFor(() => {
+      expect(healthLineText()).toContain("v1.5.0");
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
 
     // A NEWER attempt id on the same host is not pre-dismissed.
@@ -2912,8 +2913,9 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
       .dismissLandingAttempt("attempt-failed-shared");
     bindFailed("attempt-failed-shared");
     const queryClient = renderPanel();
-    await selectHostOverviewTab("updates");
-    await screen.findByTestId("host-overview-version");
+    await waitFor(() => {
+      expect(healthLineText()).toContain("v1.5.0");
+    });
     expect(screen.queryByTestId("host-overview-operation-card")).toBeNull();
     await waitFor(() => {
       expect(queryClient.isFetching()).toBe(0);

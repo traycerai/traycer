@@ -191,7 +191,7 @@ export const HOST_FOREGROUND_UPDATE_READY_UNMANAGED =
 /**
  * What an update surface says in place of its Update now / Restart / Install
  * during a foreground run, or `null` when there is none. The home banner, the
- * Overview's version card, update card and version rows all read this one
+ * Overview's answer card, update card and version rows all read this one
  * picker, so they cannot disagree about which sentence is true: "stop it to
  * finish the update" holds only while this app finishes local updates - it
  * manages the local host (`applied.localHostCapability`) and is not leaving

@@ -32,6 +32,7 @@ import "../../../../../__tests__/test-browser-apis";
 
 import type { UseNavigateResult } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { domMax, LazyMotion } from "motion/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
@@ -154,11 +155,15 @@ vi.mock("@/hooks/home/use-history-query", () => ({
  */
 function renderDrawer(): void {
   render(
-    <LazyMotion features={domMax}>
-      <TestRouterProvider>
-        <MobileNavDrawer />
-      </TestRouterProvider>
-    </LazyMotion>,
+    // The drawer asks the mutation cache whether a tapped row's task is being
+    // deleted, so it mounts inside a client like the rest of the app.
+    <QueryClientProvider client={new QueryClient()}>
+      <LazyMotion features={domMax}>
+        <TestRouterProvider>
+          <MobileNavDrawer />
+        </TestRouterProvider>
+      </LazyMotion>
+    </QueryClientProvider>,
   );
 }
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentWorktreeCreatePolicy } from "@traycer/protocol/config/schema";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import {
   buildWorkspaceListCommand,
@@ -28,6 +29,21 @@ vi.mock("../../internal/host-rpc", async () => {
   return {
     ...actual,
     callHostRpc: vi.fn(),
+  };
+});
+
+// The user's Agent worktrees setting, as `buildWorkspaceListCommand` reads it.
+// Mocked so no test in this file reads the real `~/.traycer/cli/config.json`.
+const policyState = vi.hoisted<{ policy: AgentWorktreeCreatePolicy }>(() => ({
+  policy: "allow",
+}));
+
+vi.mock("../../agent-worktree-create", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agent-worktree-create")>();
+  return {
+    ...actual,
+    readAgentWorktreeCreatePolicy: () => policyState.policy,
   };
 });
 
@@ -64,9 +80,15 @@ function fakeCtx(): CommandContext {
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.TRAYCER_EPIC_ID = "epic_test";
+  // This suite runs inside a live Traycer agent session, which already has
+  // `TRAYCER_AGENT_ID` set: pin it to "" (a person) so the outcome does not
+  // depend on the session running it. Agent cases stub it explicitly.
+  vi.stubEnv("TRAYCER_AGENT_ID", "");
+  policyState.policy = "allow";
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.clearAllMocks();
   if (PREV_EPIC_ENV === undefined) delete process.env.TRAYCER_EPIC_ID;
@@ -97,12 +119,21 @@ function row(
 
 describe("formatWorkspaceListTable", () => {
   it("shows the empty-state message and create hint when there are no rows", () => {
-    const table = formatWorkspaceListTable([]);
+    const table = formatWorkspaceListTable([], true);
     expect(table).toContain("No workspace folders are bound to this Task.");
     expect(table).toContain(
       "traycer worktree create --workspace <path> --branch <name>",
     );
     expect(table).toContain("traycer agent create --cwd <path>");
+  });
+
+  it("points at binding an existing folder, not at worktree create, when worktree create is not offered", () => {
+    const table = formatWorkspaceListTable([], false);
+    expect(table).toContain("No workspace folders are bound to this Task.");
+    expect(table).toContain(
+      "Bind a folder that already exists with `traycer agent create --cwd <path>`.",
+    );
+    expect(table).not.toContain("worktree create");
   });
 
   it("renders a header row and correct cells for a local row and a worktree row", () => {
@@ -129,7 +160,7 @@ describe("formatWorkspaceListTable", () => {
       branch: "feature/x",
       sources: [],
     });
-    const table = formatWorkspaceListTable([localRow, worktreeRow]);
+    const table = formatWorkspaceListTable([localRow, worktreeRow], true);
     const lines = table.split("\n");
 
     expect(lines[0]).toContain("REPO");
@@ -158,9 +189,10 @@ describe("formatWorkspaceListTable", () => {
   });
 
   it("renders a dash for a null repoIdentifier and a null branch", () => {
-    const table = formatWorkspaceListTable([
-      row({ repoIdentifier: null, branch: null }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [row({ repoIdentifier: null, branch: null })],
+      true,
+    );
     const line = table.split("\n")[1];
     // Split on runs of 2+ spaces (the column separator) rather than
     // asserting `toContain("-")` on the whole line - a bare substring check
@@ -187,7 +219,7 @@ describe("formatWorkspaceListTable", () => {
   ] as const)(
     "renders disabledReason %j as %j in the STATE column",
     (disabledReason, label) => {
-      const table = formatWorkspaceListTable([row({ disabledReason })]);
+      const table = formatWorkspaceListTable([row({ disabledReason })], true);
       const line = table.split("\n")[1];
       expect(line).toContain(label);
     },
@@ -208,9 +240,10 @@ describe("formatWorkspaceListTable", () => {
   ] as const)(
     "REGRESSION: setupState %j with disabledReason: null renders %j (not masked by a null reason)",
     (setupState, label) => {
-      const table = formatWorkspaceListTable([
-        row({ setupState, disabledReason: null }),
-      ]);
+      const table = formatWorkspaceListTable(
+        [row({ setupState, disabledReason: null })],
+        true,
+      );
       const line = table.split("\n")[1];
       const cells = line.split(/\s{2,}/);
       expect(cells[4]).toBe(label); // STATE
@@ -218,49 +251,59 @@ describe("formatWorkspaceListTable", () => {
   );
 
   it("a legacy host's setup_failed reason on a mode: 'local' row is not blocking - it reports 'setup failed'", () => {
-    const table = formatWorkspaceListTable([
-      row({ mode: "local", disabledReason: "setup_failed" }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [row({ mode: "local", disabledReason: "setup_failed" })],
+      true,
+    );
     const line = table.split("\n")[1];
     const cells = line.split(/\s{2,}/);
     expect(cells[4]).toBe("setup failed"); // STATE
   });
 
   it("a legacy host's setup_failed reason on a mode: 'worktree' row with isGitRepo: false IS blocking - it reports 'missing on disk'", () => {
-    const table = formatWorkspaceListTable([
-      row({
-        mode: "worktree",
-        isGitRepo: false,
-        disabledReason: "setup_failed",
-        isGitResolvePending: false,
-      }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [
+        row({
+          mode: "worktree",
+          isGitRepo: false,
+          disabledReason: "setup_failed",
+          isGitResolvePending: false,
+        }),
+      ],
+      true,
+    );
     const line = table.split("\n")[1];
     const cells = line.split(/\s{2,}/);
     expect(cells[4]).toBe("missing on disk"); // STATE
   });
 
   it("a legacy host's setup_failed reason on a mode: 'worktree' row with isGitRepo: false reports 'checking' while resolve is pending", () => {
-    const table = formatWorkspaceListTable([
-      row({
-        mode: "worktree",
-        isGitRepo: false,
-        disabledReason: "setup_failed",
-        isGitResolvePending: true,
-      }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [
+        row({
+          mode: "worktree",
+          isGitRepo: false,
+          disabledReason: "setup_failed",
+          isGitResolvePending: true,
+        }),
+      ],
+      true,
+    );
     const line = table.split("\n")[1];
     const cells = line.split(/\s{2,}/);
     expect(cells[4]).toBe("checking"); // STATE
   });
 
   it("REGRESSION: a pending row's missing_worktree_path reason is not reported as 'missing on disk' - it renders 'checking' with GIT '?'", () => {
-    const table = formatWorkspaceListTable([
-      row({
-        isGitResolvePending: true,
-        disabledReason: "missing_worktree_path",
-      }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [
+        row({
+          isGitResolvePending: true,
+          disabledReason: "missing_worktree_path",
+        }),
+      ],
+      true,
+    );
     const line = table.split("\n")[1];
     const cells = line.split(/\s{2,}/);
     expect(cells[3]).toBe("?"); // GIT
@@ -269,9 +312,10 @@ describe("formatWorkspaceListTable", () => {
   });
 
   it("a pending row that is otherwise selectable reports STATE 'ready' but GIT stays '?'", () => {
-    const table = formatWorkspaceListTable([
-      row({ isGitResolvePending: true, disabledReason: null }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [row({ isGitResolvePending: true, disabledReason: null })],
+      true,
+    );
     const line = table.split("\n")[1];
     const cells = line.split(/\s{2,}/);
     expect(cells[3]).toBe("?"); // GIT
@@ -279,9 +323,10 @@ describe("formatWorkspaceListTable", () => {
   });
 
   it("a pending row with a resolved setup reason is NOT masked by the pending git marker", () => {
-    const table = formatWorkspaceListTable([
-      row({ isGitResolvePending: true, disabledReason: "setup_failed" }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [row({ isGitResolvePending: true, disabledReason: "setup_failed" })],
+      true,
+    );
     const line = table.split("\n")[1];
     const cells = line.split(/\s{2,}/);
     expect(cells[3]).toBe("?"); // GIT
@@ -289,13 +334,16 @@ describe("formatWorkspaceListTable", () => {
   });
 
   it("isGitResolvePending: false keeps the existing yes/no GIT rendering and reason-derived STATE, unchanged", () => {
-    const table = formatWorkspaceListTable([
-      row({
-        isGitResolvePending: false,
-        isGitRepo: false,
-        disabledReason: "missing_worktree_path",
-      }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [
+        row({
+          isGitResolvePending: false,
+          isGitRepo: false,
+          disabledReason: "missing_worktree_path",
+        }),
+      ],
+      true,
+    );
     const line = table.split("\n")[1];
     const cells = line.split(/\s{2,}/);
     expect(cells[3]).toBe("no"); // GIT
@@ -303,40 +351,43 @@ describe("formatWorkspaceListTable", () => {
   });
 
   it("aligns every non-final column to a consistent start offset across header and rows", () => {
-    const table = formatWorkspaceListTable([
-      row({
-        repoIdentifier: { owner: "acme", repo: "web" },
-        mode: "local",
-        branch: "main",
-        isGitRepo: true,
-        disabledReason: null,
-        sources: [
-          {
-            ownerKind: "chat",
-            ownerId: "c1",
-            workspacePath: "/x",
-            isPrimary: true,
-            mode: "local",
-          },
-        ],
-        runningDir: "/short",
-      }),
-      row({
-        repoIdentifier: { owner: "acme", repo: "a-much-longer-repo-name" },
-        mode: "worktree",
-        branch: "feature-x",
-        isGitRepo: false,
-        // A worktree row (isGitRepo: false) with a legacy `setup_failed`
-        // REASON is now blocking ("missing on disk") under the production
-        // fix - use the canonical `setupState` spelling instead, which
-        // `hasBlockingWorktreeSelectorReason` never inspects, so this row stays a plain
-        // "setup failed" STATE for the column-alignment check below.
-        disabledReason: null,
-        setupState: "failed",
-        sources: [],
-        runningDir: "/a/much/longer/directory/path",
-      }),
-    ]);
+    const table = formatWorkspaceListTable(
+      [
+        row({
+          repoIdentifier: { owner: "acme", repo: "web" },
+          mode: "local",
+          branch: "main",
+          isGitRepo: true,
+          disabledReason: null,
+          sources: [
+            {
+              ownerKind: "chat",
+              ownerId: "c1",
+              workspacePath: "/x",
+              isPrimary: true,
+              mode: "local",
+            },
+          ],
+          runningDir: "/short",
+        }),
+        row({
+          repoIdentifier: { owner: "acme", repo: "a-much-longer-repo-name" },
+          mode: "worktree",
+          branch: "feature-x",
+          isGitRepo: false,
+          // A worktree row (isGitRepo: false) with a legacy `setup_failed`
+          // REASON is now blocking ("missing on disk") under the production
+          // fix - use the canonical `setupState` spelling instead, which
+          // `hasBlockingWorktreeSelectorReason` never inspects, so this row stays a plain
+          // "setup failed" STATE for the column-alignment check below.
+          disabledReason: null,
+          setupState: "failed",
+          sources: [],
+          runningDir: "/a/much/longer/directory/path",
+        }),
+      ],
+      true,
+    );
     const [header, row1, row2] = table.split("\n");
 
     // Every non-final column's content begins at the same character offset
@@ -375,7 +426,7 @@ describe("formatWorkspaceListTable", () => {
   });
 
   it("includes the trailing hint lines", () => {
-    const table = formatWorkspaceListTable([row({})]);
+    const table = formatWorkspaceListTable([row({})], true);
     expect(table).toContain(
       "Run an agent in one with `traycer agent create --cwd <directory>`.",
     );
@@ -396,5 +447,46 @@ describe("buildWorkspaceListCommand", () => {
     });
     expect(result.data).toEqual(v12Response);
     expect(result.exitCode).toBe(0);
+  });
+
+  it("hints at worktree create in the empty state for a person, whatever the policy", async () => {
+    policyState.policy = "never";
+    rpcMock.mockResolvedValue({ rows: [], folderlessCwd: null });
+
+    const result = await buildWorkspaceListCommand({ epicId: null })(fakeCtx());
+
+    expect(result.human).toContain(
+      "traycer worktree create --workspace <path> --branch <name>",
+    );
+  });
+
+  it.each(["allow", "ask"] as const)(
+    "hints at worktree create in the empty state for an agent session under %s",
+    async (policy) => {
+      vi.stubEnv("TRAYCER_AGENT_ID", "agent-1");
+      policyState.policy = policy;
+      rpcMock.mockResolvedValue({ rows: [], folderlessCwd: null });
+
+      const result = await buildWorkspaceListCommand({ epicId: null })(
+        fakeCtx(),
+      );
+
+      expect(result.human).toContain(
+        "traycer worktree create --workspace <path> --branch <name>",
+      );
+    },
+  );
+
+  it("drops the worktree create hint in the empty state for an agent session under never", async () => {
+    vi.stubEnv("TRAYCER_AGENT_ID", "agent-1");
+    policyState.policy = "never";
+    rpcMock.mockResolvedValue({ rows: [], folderlessCwd: null });
+
+    const result = await buildWorkspaceListCommand({ epicId: null })(fakeCtx());
+
+    expect(result.human).toContain(
+      "Bind a folder that already exists with `traycer agent create --cwd <path>`.",
+    );
+    expect(result.human).not.toContain("worktree create");
   });
 });

@@ -20,7 +20,9 @@ vi.mock("sonner", () => ({
 import {
   deletedEpicSuccessToastMessage,
   emitEpicDeleteToast,
+  epicDeleteProgressToastMessage,
   pickNeighborAfterDeletingEpics,
+  worktreeCleanupProgressToastMessage,
   worktreeCleanupSummary,
 } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -189,6 +191,56 @@ describe("deletedEpicSuccessToastMessage", () => {
         "epic-b": "Release notes",
       }),
     ).toBe("2 epics deleted");
+  });
+});
+
+// The in-progress form of the success copy above: the progress toast and the
+// outcome that replaces it read as one sentence changing tense.
+describe("epicDeleteProgressToastMessage", () => {
+  it("names the epic when there is one and its title is known", () => {
+    expect(
+      epicDeleteProgressToastMessage(["epic-a"], {
+        "epic-a": "Customer onboarding",
+      }),
+    ).toBe('Deleting epic "Customer onboarding"…');
+  });
+
+  it("does not name an epic when its title is unknown", () => {
+    expect(epicDeleteProgressToastMessage(["epic-a"], {})).toBe(
+      "Deleting epic…",
+    );
+  });
+
+  it("treats a blank title as unknown rather than quoting nothing", () => {
+    expect(
+      epicDeleteProgressToastMessage(["epic-a"], { "epic-a": "   " }),
+    ).toBe("Deleting epic…");
+  });
+
+  it("trims the title it quotes", () => {
+    expect(
+      epicDeleteProgressToastMessage(["epic-a"], { "epic-a": "  Padded  " }),
+    ).toBe('Deleting epic "Padded"…');
+  });
+
+  it("counts a bulk delete instead of naming anyone, titles known or not", () => {
+    expect(
+      epicDeleteProgressToastMessage(["epic-a", "epic-b", "epic-c"], {
+        "epic-a": "Customer onboarding",
+      }),
+    ).toBe("Deleting 3 epics…");
+  });
+});
+
+describe("worktreeCleanupProgressToastMessage", () => {
+  it("is singular for one worktree", () => {
+    expect(worktreeCleanupProgressToastMessage(1)).toBe("Removing 1 worktree…");
+  });
+
+  it("is plural for several", () => {
+    expect(worktreeCleanupProgressToastMessage(3)).toBe(
+      "Removing 3 worktrees…",
+    );
   });
 });
 

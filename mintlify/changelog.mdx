@@ -5,6 +5,30 @@ description: "Track the latest updates and improvements to Traycer Desktop."
 rss: true
 ---
 
+<Update label="v1.4.2">
+Smoother startup and Start page panels, with fixes for provider sign-in and Host restarts.
+
+- **Startup** — audio setup no longer blocks the app while it opens.
+- **Start page** — the terminal panel slides open without resizing the page, and a collapsed panel no longer makes the page scroll sideways.
+- **Provider sign-in** — cancelling one sign-in attempt no longer cancels another attempt's login.
+- **macOS Host restart** — the app can register and restart the Host after its service was removed with `launchctl bootout`.
+- **Notifications** — a shell-output notification waiting for delivery now links to its chat.
+- **Codex** — setup guidance no longer suggests the removed `--full-auto` flag.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/desktop-v1.4.2).
+</Update>
+
+<Update label="v1.4.1">
+More reliable provider sign-in and clearer setup guidance.
+
+- **Provider sign-in** — sign-in waits while the Host prepares the provider CLI instead of ending early. Refusals and account-verification requests are shown so you can act on them.
+- **Models** — model names still match when a provider drops a tier marker from its model slug.
+- **Antigravity** — **Add custom path** is unavailable, with an explanation: the agent needs its managed ACP server rather than an installed `agy` CLI.
+- **macOS Host restart** — restarting recovers a Host whose service was removed with `launchctl bootout`.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/desktop-v1.4.1).
+</Update>
+
 <Update label="v1.4.0">
 Model routing, Auto mode, version history for artifacts, machines that work together, themes, labels, Antigravity, and a faster Host.
 

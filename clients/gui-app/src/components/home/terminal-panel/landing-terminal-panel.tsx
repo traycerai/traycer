@@ -2689,6 +2689,7 @@ function LandingTerminalPanelBody(props: {
                   landingPageId={props.landingPageId}
                   tab={tab}
                   active={tab.instanceId === visibleInstanceId}
+                  panelOpen={props.panelOpen}
                   createEnabled={Boolean(
                     props.availability === "supported" &&
                     props.panelOpen &&

@@ -295,6 +295,13 @@ export function useHostOverviewUpdates(input: {
   // `isFetching`, not `isPending`: a forced Check now over an answer already in
   // hand leaves `isPending` false, and the button would never show it was busy.
   const checking = checkQuery.isFetching;
+  const checkUnreachable = useCheckSettledUnreachable({
+    hostId: input.hostId,
+    isError: checkQuery.isError,
+    hasData: checkQuery.data !== undefined,
+    isPlaceholderData: checkQuery.isPlaceholderData,
+    errorUpdateCount: checkQuery.errorUpdateCount,
+  });
 
   const runCheck = (): void => {
     storeFloor.clear();
@@ -529,8 +536,7 @@ export function useHostOverviewUpdates(input: {
   });
   const answer = describeCheckState({
     manifest,
-    checking,
-    unreachable: checkQuery.isError,
+    unreachable: checkUnreachable,
     checkFailed: check.transient !== null,
     hostName,
     upToDate,
@@ -973,7 +979,7 @@ export interface HostOverviewUpdatesSummary {
   readonly hostName: string;
   /** The update answer. Never a failure: that is `failureDescription`. */
   readonly description: string;
-  /** Which answer `description` gives; the version card's tag reads it. */
+  /** Which answer `description` gives; the answer card's look reads it. */
   readonly answerKind: HostOverviewAnswerKind;
   /** A refused or failed attempt, drawn as one line under the answer. */
   readonly failureDescription: string | null;
@@ -2106,9 +2112,9 @@ function handleBoundDispatchOutcome(input: {
 }
 
 /**
- * Which answer the update sentence gives, for the version card's tag. One
- * value per arm of {@link describeCheckState}, so the tag and the sentence
- * cannot describe two different states.
+ * Which answer the update sentence gives, for the answer card's look. One
+ * value per arm of {@link describeCheckState}, so the card's title and its
+ * sentence cannot describe two different states.
  */
 export type HostOverviewAnswerKind =
   | "restart-to-finish"
@@ -2121,6 +2127,56 @@ export type HostOverviewAnswerKind =
   | "not-installable"
   | "available";
 
+/**
+ * Whether the check's last SETTLED word, for this host, is a transport
+ * failure with no answer since. It holds the `unreachable` answer through
+ * every ask that has not answered yet, so the card is not taken off the
+ * screen and put back for the span of one.
+ *
+ * Bare `isError` is not that. It is true only while the OBSERVED query sits
+ * in error, and it stops being true in three ways before anything answers:
+ *
+ * | The ask in flight                          | What the observer reads                            | What holds the answer |
+ * | ------------------------------------------ | -------------------------------------------------- | --------------------- |
+ * | A retry, with no catalog behind it         | `status` back to `pending`: no data, no error      | `errorUpdateCount`    |
+ * | A new key (the RC checkbox), none behind   | A fresh query: no data, no error, the count at 0   | the held host         |
+ * | A new key, a catalog retained behind it    | The OLD key's catalog as placeholder, and no error | the held host         |
+ *
+ * `errorUpdateCount` is the settle counter the reducer never resets, but it
+ * belongs to one query key, so it cannot see across the checkbox. The held
+ * host can: it is set when any key settles in error and cleared when a key
+ * ANSWERS with data of its own - a placeholder is the previous key's
+ * answer, not this one's, which is why `isPlaceholderData` counts as no
+ * data here.
+ *
+ * Keyed by host, not a bare flag, as the release-candidate override beside
+ * it is (`overrideHostId`): one machine's failed check must not put an error
+ * card on the next. Today the Settings page remounts this hook on a
+ * scoped-host swap, which already drops the hold; the key is what keeps the
+ * rule true without leaning on that.
+ */
+function useCheckSettledUnreachable(query: {
+  readonly hostId: string | null;
+  readonly isError: boolean;
+  readonly hasData: boolean;
+  readonly isPlaceholderData: boolean;
+  readonly errorUpdateCount: number;
+}): boolean {
+  const [erroredHostId, setErroredHostId] = useState<string | null>(null);
+  const hasOwnData = query.hasData && !query.isPlaceholderData;
+  const settledInError =
+    query.isError || (!hasOwnData && query.errorUpdateCount > 0);
+  const held = erroredHostId !== null && erroredHostId === query.hostId;
+  // Adjust-during-render, like the hook's other derived corrections. Each
+  // write is guarded by the value it would change, so neither can repeat.
+  if (settledInError && erroredHostId !== query.hostId) {
+    setErroredHostId(query.hostId);
+  } else if (hasOwnData && !query.isError && held) {
+    setErroredHostId(null);
+  }
+  return settledInError || (!hasOwnData && held);
+}
+
 interface CheckStateAnswer {
   readonly text: string;
   readonly kind: HostOverviewAnswerKind;
@@ -2132,7 +2188,7 @@ interface CheckStateAnswer {
  *
  * A failed or refused attempt is NOT one of its arms. It used to be the first,
  * and the region drew the same text again as the failed-attempt line under it,
- * so a failure read twice. The version card now states the answer and puts the
+ * so a failure read twice. The answer card now states the answer and puts the
  * failure on the one line under it (`failureDescription`), which clears on the
  * next try. The answer beside it is whatever is still true of the catalog.
  *
@@ -2142,8 +2198,10 @@ interface CheckStateAnswer {
  */
 function describeCheckState(input: {
   readonly manifest: HostAvailableManifest | null;
-  readonly checking: boolean;
-  /** The RPC itself failed — a transport fault, not an answer from the host. */
+  /**
+   * The RPC itself failed — a transport fault, not an answer from the host —
+   * and no catalog has arrived since. Held through the retry of that failure.
+   */
   readonly unreachable: boolean;
   /**
    * The host answered the check with a failure (`cli-failed`,
@@ -2170,16 +2228,20 @@ function describeCheckState(input: {
   readonly strandedOnLine: string | null;
   readonly installedVersion: string | null;
 }): CheckStateAnswer {
-  // Ordered so a stale answer never outranks what is happening NOW: a refetch
-  // keeps the previous manifest on screen, so "vX is available." would otherwise
-  // sit there unchanged while a re-check ran.
+  // A RE-CHECK IS NOT AN ANSWER. Only the first load, with nothing in hand,
+  // answers "checking"; a check over an answer already on screen leaves that
+  // answer standing until the new one settles. "Checking" draws no card, so
+  // an arm for every fetch took the card off the screen for the span of each
+  // re-check - Check now, the release-candidate checkbox, the error lane's
+  // own retry - and the rows under it jumped up and back. What says a check
+  // is running is Check now's spinner, with Update now disabled beside it.
   //
   // Debt outranks everything the CATALOG can say, including "checking": it is
   // a fact about this host's own disk, true whether or not the registry
   // answers, and the sentence names the one action that resolves it. The
   // catalog is still compared against the INSTALLED version (see the hook's
   // `installedVersion`), so `updatableVersion` names only something newer than
-  // the bytes on disk; the version card hides Update now while the restart is
+  // the bytes on disk; the answer card hides Update now while the restart is
   // pending, and offers it once the update has finished.
   if (input.activationDebt !== null) {
     // Qualified when the record read behind it is not live: the debt was
@@ -2196,9 +2258,6 @@ function describeCheckState(input: {
   // it when that check fails or returns a catalog that clears the refusal.
   if (input.remedy !== null) {
     return { text: input.remedy.sentence, kind: "needs-cli" };
-  }
-  if (input.checking) {
-    return { text: "Checking for updates…", kind: "checking" };
   }
   if (input.unreachable) {
     // Deliberately NOT a toast, which is what the imperative check's `onError`
@@ -2226,7 +2285,7 @@ function describeCheckState(input: {
     // Honest about BOTH halves: the newer version exists, and this host will
     // not take it on its own. Naming the installed version names the line, and
     // pointing at the version list is not decoration — those rows are enabled,
-    // and they are the only way across. The version card leads the Updates
+    // and they are the only way across. The answer card leads the Updates
     // tab, so the list is directly below the sentence.
     if (input.strandedOnLine !== null && input.installedVersion !== null) {
       return {
