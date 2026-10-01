@@ -367,6 +367,7 @@ function LegacyTerminalTileLive(
     instanceId,
     sessionKind: "terminal",
     preparePayload,
+    viewer: "presentation",
     // `adoptOnly`, not `enabled: false`: the create must never fire, but the
     // measure-grid wait still has to arm or a probe that never reports (a
     // stalled xterm chunk, a zero-sized container) strands the tile on

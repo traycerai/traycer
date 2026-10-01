@@ -131,6 +131,7 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         panelOpen
         createEnabled
         authorityEntry={null}
+        onScreen
       />,
     );
 
@@ -143,6 +144,7 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         panelOpen
         createEnabled
         authorityEntry={null}
+        onScreen
       />,
     );
     await waitFor(() =>
@@ -168,6 +170,7 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         panelOpen
         createEnabled
         authorityEntry={null}
+        onScreen
       />,
     );
     await waitFor(() =>

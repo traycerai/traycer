@@ -39,6 +39,7 @@ import type {
   TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
 import { useTerminalThemeHint } from "@/lib/terminal-theme-hint";
 // Last-resort opening grid when the measurement probe never reported (its
@@ -102,6 +103,11 @@ export interface UseTerminalTileBootstrapInput {
    * upstream prepare hook reports them via its own state.
    */
   readonly preparePayload: () => Promise<TerminalCreatePayload | null>;
+  /**
+   * Attachment intent, forwarded to {@link useTerminalSessionHandle}: a tile
+   * that stays mounted off screen passes `cache`, every other `presentation`.
+   */
+  readonly viewer: TerminalSubscribeViewer;
   /**
    * Gate the create effect (defaults to true). Tui-agent tiles set
    * this to false until the agent record is in projection.
@@ -438,7 +444,7 @@ export function useTerminalTileBootstrap(
     reattachMode,
     kind: input.sessionKind,
     enabled: sessionReady && gridReady,
-    viewer: "presentation",
+    viewer: input.viewer,
   });
 
   // The session store handle resolving marks the end of the bootstrap leg:

@@ -32,6 +32,7 @@ import {
   replacePlainTerminalSnapshot,
   setPlainTerminalStreamStatus,
   settlePlainTerminalSnapshot,
+  type PlainTerminalCapability,
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import {
@@ -98,6 +99,57 @@ vi.mock("@/lib/host/use-durable-stream-transport", () => ({
   useDurableStreamTransportFactory: () => stableOpenTransport,
 }));
 
+// The legacy and the provider sign-in tiles bootstrap through `terminal.list` /
+// `terminal.create`, not the plain-terminal authority. Both sessions are listed
+// as running, so neither tile ever dispatches a create and each goes straight
+// to opening its stream through the real session registry (the recording
+// factory below). Only these three seams are faked; the bootstrap hook itself,
+// the registry and the tiles are all real.
+const listedTerminals = vi.hoisted(() => {
+  const legacySessionId = "landing-viewer-legacy-term";
+  const signInSessionId = "landing-viewer-signin-term";
+  return {
+    legacySessionId,
+    signInSessionId,
+    list: {
+      data: {
+        sessions: [
+          {
+            sessionId: legacySessionId,
+            sessionKind: "terminal",
+            status: "running",
+          },
+          {
+            sessionId: signInSessionId,
+            sessionKind: "terminal",
+            status: "running",
+          },
+        ],
+      },
+      isFetching: false,
+      refetch: () => Promise.resolve({}),
+    },
+    create: {
+      isIdle: true,
+      isError: false,
+      isPending: false,
+      isSuccess: false,
+      error: null,
+      reset: () => undefined,
+      mutate: () => undefined,
+    },
+  };
+});
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: () => globalClientRef.value,
+}));
+vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
+  useTerminalList: () => listedTerminals.list,
+}));
+vi.mock("@/hooks/terminal/use-terminal-create-mutation", () => ({
+  useTerminalCreate: () => listedTerminals.create,
+}));
+
 const HOST_ID = "host-a";
 const PLAIN_SCOPE = { kind: "independent" } as const;
 const CAPABLE = {
@@ -113,6 +165,21 @@ const TAB: LandingTerminalTabRef = {
   cwd: "/work/repo",
   name: "shell",
   titleSource: "default",
+};
+
+/** Rendered by `LandingTerminalLegacyBootstrap` when the host is `legacy`. */
+const LEGACY_TAB: LandingTerminalTabRef = {
+  ...TAB,
+  instanceId: "inst-landing-viewer-legacy",
+  sessionId: listedTerminals.legacySessionId,
+};
+
+/** A host-created provider sign-in session: `LandingSignInTerminalTile`. */
+const SIGN_IN_TAB: LandingTerminalTabRef = {
+  ...TAB,
+  instanceId: "inst-landing-viewer-signin",
+  sessionId: listedTerminals.signInSessionId,
+  origin: "provider-login",
 };
 
 const RUNNING_TERMINAL: PlainTerminalProjection = {
@@ -219,6 +286,8 @@ const collectionQueryOptions = queryOptions<
 });
 
 function TileHarness(props: {
+  readonly tab: LandingTerminalTabRef;
+  readonly capability: PlainTerminalCapability;
   readonly panelOpen: boolean;
   readonly active: boolean;
 }): ReactNode {
@@ -237,7 +306,7 @@ function TileHarness(props: {
     authority: {
       hostId: HOST_ID,
       scope: PLAIN_SCOPE,
-      capability: CAPABLE,
+      capability: props.capability,
       collection: COLLECTION,
       terminals: [RUNNING_TERMINAL],
       coverage: COLLECTION.coverage,
@@ -250,7 +319,7 @@ function TileHarness(props: {
   return (
     <LandingTerminalTile
       landingPageId="landing-1"
-      tab={TAB}
+      tab={props.tab}
       active={props.active}
       panelOpen={props.panelOpen}
       createEnabled
@@ -281,7 +350,9 @@ describe("<LandingTerminalTile /> viewer intent", () => {
     vi.useRealTimers();
   });
 
-  function tileTree(args: {
+  function tileTreeFor(args: {
+    readonly tab: LandingTerminalTabRef;
+    readonly capability: PlainTerminalCapability;
     readonly panelOpen: boolean;
     readonly paneVisible: boolean;
     readonly active: boolean;
@@ -289,10 +360,23 @@ describe("<LandingTerminalTile /> viewer intent", () => {
     return (
       <QueryClientProvider client={queryClient}>
         <PaneVisibilityContext.Provider value={args.paneVisible}>
-          <TileHarness panelOpen={args.panelOpen} active={args.active} />
+          <TileHarness
+            tab={args.tab}
+            capability={args.capability}
+            panelOpen={args.panelOpen}
+            active={args.active}
+          />
         </PaneVisibilityContext.Provider>
       </QueryClientProvider>
     );
+  }
+
+  function tileTree(args: {
+    readonly panelOpen: boolean;
+    readonly paneVisible: boolean;
+    readonly active: boolean;
+  }): ReactNode {
+    return tileTreeFor({ ...args, tab: TAB, capability: CAPABLE });
   }
 
   /** The durable bootstrap enables its handle only after a grid or the timeout. */
@@ -428,5 +512,161 @@ describe("<LandingTerminalTile /> viewer intent", () => {
         viewer: "cache",
       },
     ]);
+  });
+
+  // The legacy bootstrap (`terminal.list` / `terminal.create`) and the provider
+  // sign-in tile used to pin every stream they opened as `presentation`, so a
+  // mounted-but-hidden one counted as a GUI viewer and sized the shared grid.
+  describe("a tile that bootstraps without the plain-terminal authority", () => {
+    const LEGACY: PlainTerminalCapability = { status: "legacy" };
+
+    function legacyTree(args: {
+      readonly panelOpen: boolean;
+      readonly paneVisible: boolean;
+      readonly active: boolean;
+    }): ReactNode {
+      return tileTreeFor({ ...args, tab: LEGACY_TAB, capability: LEGACY });
+    }
+
+    function signInTree(args: {
+      readonly panelOpen: boolean;
+      readonly paneVisible: boolean;
+      readonly active: boolean;
+    }): ReactNode {
+      return tileTreeFor({ ...args, tab: SIGN_IN_TAB, capability: CAPABLE });
+    }
+
+    it("a legacy terminal on screen opens one stream, as presentation", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      render(legacyTree({ panelOpen: true, paneVisible: true, active: true }));
+      await settleGridMeasure();
+
+      const streams = recorded.streams();
+      expect(streams).toHaveLength(1);
+      expect(streams[0].viewer).toBe("presentation");
+      expect(streams[0].closeCount).toBe(0);
+      expect(streams[0].frames).toEqual([]);
+    });
+
+    it("an inactive legacy terminal opens one stream, as cache", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      render(legacyTree({ panelOpen: true, paneVisible: true, active: false }));
+      await settleGridMeasure();
+
+      const streams = recorded.streams();
+      expect(streams).toHaveLength(1);
+      expect(streams[0].viewer).toBe("cache");
+      expect(streams[0].closeCount).toBe(0);
+      expect(streams[0].frames).toEqual([]);
+    });
+
+    it("a legacy terminal in a collapsed panel opens one stream, as cache", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      render(legacyTree({ panelOpen: false, paneVisible: true, active: true }));
+      await settleGridMeasure();
+
+      const streams = recorded.streams();
+      expect(streams).toHaveLength(1);
+      expect(streams[0].viewer).toBe("cache");
+      expect(streams[0].frames).toEqual([]);
+    });
+
+    it("a legacy terminal on a hidden Start Page opens one stream, as cache", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      render(legacyTree({ panelOpen: true, paneVisible: false, active: true }));
+      await settleGridMeasure();
+
+      const streams = recorded.streams();
+      expect(streams).toHaveLength(1);
+      expect(streams[0].viewer).toBe("cache");
+      expect(streams[0].frames).toEqual([]);
+    });
+
+    it("bringing a legacy terminal on screen restates presentation on the same stream", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      const rendered = render(
+        legacyTree({ panelOpen: true, paneVisible: true, active: false }),
+      );
+      await settleGridMeasure();
+      expect(recorded.streams()).toHaveLength(1);
+      const stream = recorded.streams()[0];
+      expect(stream.viewer).toBe("cache");
+
+      rendered.rerender(
+        legacyTree({ panelOpen: true, paneVisible: true, active: true }),
+      );
+
+      expect(recorded.streams()).toHaveLength(1);
+      expect(recorded.streams()[0]).toBe(stream);
+      expect(stream.closeCount).toBe(0);
+      expect(stream.frames).toEqual([
+        {
+          kind: "viewer",
+          hasBinaryPayload: false,
+          sessionId: LEGACY_TAB.sessionId,
+          viewer: "presentation",
+        },
+      ]);
+    });
+
+    it("a provider sign-in terminal on screen opens one stream, as presentation", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      render(signInTree({ panelOpen: true, paneVisible: true, active: true }));
+      await settleGridMeasure();
+
+      const streams = recorded.streams();
+      expect(streams).toHaveLength(1);
+      expect(streams[0].viewer).toBe("presentation");
+      expect(streams[0].closeCount).toBe(0);
+      expect(streams[0].frames).toEqual([]);
+    });
+
+    it("an inactive provider sign-in terminal opens one stream, as cache", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      render(signInTree({ panelOpen: true, paneVisible: true, active: false }));
+      await settleGridMeasure();
+
+      const streams = recorded.streams();
+      expect(streams).toHaveLength(1);
+      expect(streams[0].viewer).toBe("cache");
+      expect(streams[0].closeCount).toBe(0);
+      expect(streams[0].frames).toEqual([]);
+    });
+
+    it("a provider sign-in terminal on a hidden Start Page opens as cache, then restates presentation when shown", async () => {
+      const recorded = installRecordingStreamFactory();
+
+      const rendered = render(
+        signInTree({ panelOpen: true, paneVisible: false, active: true }),
+      );
+      await settleGridMeasure();
+      expect(recorded.streams()).toHaveLength(1);
+      const stream = recorded.streams()[0];
+      expect(stream.viewer).toBe("cache");
+      expect(stream.frames).toEqual([]);
+
+      rendered.rerender(
+        signInTree({ panelOpen: true, paneVisible: true, active: true }),
+      );
+
+      expect(recorded.streams()).toHaveLength(1);
+      expect(recorded.streams()[0]).toBe(stream);
+      expect(stream.closeCount).toBe(0);
+      expect(stream.frames).toEqual([
+        {
+          kind: "viewer",
+          hasBinaryPayload: false,
+          sessionId: SIGN_IN_TAB.sessionId,
+          viewer: "presentation",
+        },
+      ]);
+    });
   });
 });

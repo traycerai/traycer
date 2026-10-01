@@ -78,7 +78,7 @@ export interface LandingTerminalTileProps {
 }
 
 /** The tile's props plus the one fact only its wrapper can read. */
-interface LandingTerminalTileBodyProps extends LandingTerminalTileProps {
+export interface LandingTerminalTileBodyProps extends LandingTerminalTileProps {
   /**
    * This is the active tab of an open panel on the Start Page being shown. A
    * collapsed panel keeps its tiles mounted at full size, a retained page
@@ -147,7 +147,7 @@ function LandingTerminalTileBody(
 }
 
 export function LandingTerminalLegacyBootstrap(
-  props: LandingTerminalTileProps,
+  props: LandingTerminalTileBodyProps,
 ): ReactNode {
   const handleExitedTab = useRemoveExitedLandingTab(props.landingPageId);
   const rekeyTab = useLandingPanelStore((state) => state.rekeyTab);
@@ -185,6 +185,7 @@ export function LandingTerminalLegacyBootstrap(
     instanceId: props.tab.instanceId,
     sessionKind: "terminal",
     preparePayload,
+    viewer: props.onScreen ? "presentation" : "cache",
     enabled: props.createEnabled,
   });
 

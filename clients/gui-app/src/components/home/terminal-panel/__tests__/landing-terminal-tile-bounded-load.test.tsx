@@ -97,6 +97,7 @@ describe("<LandingTerminalTile /> S5 bounded pre-bootstrap wait", () => {
           panelOpen
           createEnabled={false}
           authorityEntry={null}
+          onScreen
         />,
       );
 

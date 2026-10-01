@@ -108,6 +108,7 @@ describe("<LandingTerminalTile /> exit focus hand-off", () => {
         panelOpen
         createEnabled={false}
         authorityEntry={null}
+        onScreen
       />,
     );
 
