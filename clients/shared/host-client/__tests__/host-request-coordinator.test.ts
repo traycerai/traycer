@@ -793,6 +793,10 @@ describe("a join request after the active job was aborted", () => {
       requestDomain,
       execute,
     );
+    // Queued behind the aborted call, not dispatched beside it: one raw call
+    // per key at a time still holds.
+    await flush();
+    expect(started).toHaveLength(1);
     executions[0].resolve({ value: "old" });
     await flush();
 
