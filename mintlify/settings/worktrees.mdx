@@ -89,11 +89,17 @@ An agent can create worktrees itself, for example when it splits work across [ch
 |---|---|
 | **Allow** (default) | The agent creates the worktree. |
 | **Ask first** | The agent's chat shows a question naming each repository and branch. **Allow** creates the worktree; **Don't allow**, or a typed answer, refuses it and passes your words to the agent. |
-| **Never** | The request is refused, and the agent keeps working in the workspace it was given. |
+| **Never** | Agents aren't offered worktree creation at all, and keep working in the workspace they were given. |
 
 With **Ask first**, an agent that another agent started, in a chat nobody has open, can't reach you, so its request is refused and it reports back to the agent that started it. Open the agent's chat before it asks if you want to approve worktrees for it, or ask the coordinating agent to create them.
 
-The setting applies from an agent's next request, including agents already running. It doesn't affect worktrees you create yourself, or agents started on a worktree that already exists. An agent can still run `git worktree add` in a shell; a refusal tells it not to.
+With **Ask first** or **Never**, Claude Code agents also lose Claude Code's own worktree tool, so the setting isn't bypassed by it.
+
+The setting also covers `traycer worktree create` when an agent runs it in its own shell. There it is refused under **Never**, and under **Ask first** too, because the command has no way to ask you. Running the command yourself is unaffected.
+
+The setting applies from an agent's next request, including agents already running: one that was started before you chose **Ask first** or **Never** is asked or refused the next time it tries. After you switch away from **Never**, an agent that started under it may not be offered worktrees again until it restarts.
+
+The setting doesn't affect worktrees you create yourself, or agents started on a worktree that already exists. An agent can still run `git worktree add` in a shell. Traycer tells agents when the setting is off or a request was refused, but it doesn't block the command.
 
 ## Automatic Cleanup
 
