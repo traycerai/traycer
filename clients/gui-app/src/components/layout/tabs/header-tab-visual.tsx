@@ -6,6 +6,7 @@ import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { SplitMemberChrome } from "./split-tab-chrome";
+import { usePublishTravelOutline } from "./strip-selection-travel";
 import { TabChromeBackground, TabColorEdgeLine } from "./tab-chrome-background";
 import { useHeaderTabTitle } from "./header-tab-presentation";
 import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
@@ -270,6 +271,9 @@ export function TabChrome(props: {
   /** The layout editor's own tab (L-87, L-163). See `borderColor` below. */
   readonly session: boolean;
 }) {
+  // While the traveller stands in for this box, it wears this box's colour.
+  const concealed = props.isActive && props.concealed && !props.session;
+  usePublishTravelOutline(concealed, props.color);
   if (!props.isActive) {
     return (
       <>
@@ -293,34 +297,41 @@ export function TabChrome(props: {
   // keeps its coloured box and never joins the sheet.
   const joined = props.joined && !props.session;
   return (
-    <TabChromeBackground
-      // ACTIVE, the editor's tab is the colour and wears none of it on its
-      // edge (L-163): the fill is the token at full strength and the stroke is
-      // the sheets' border, so the frame around the screen owns the only
-      // amber LINE while a session is live and this tab is the only amber
-      // OBJECT. A dilution cannot do that job: every share of the token over
-      // `--background` trades the tab reading as coloured against its own
-      // label staying legible on it, and the largest that clears 4.5:1 on all
-      // the built-in palettes is 4.5% - a tab indistinguishable from the strip
-      // it sits in. Nor can a stroke in the colour, because the frame's dotted
-      // run and the tab's top edge share a line to within a quarter of a pixel
-      // and read as one broken stroke.
-      // `layout-editor-contrast.test.ts` measures the label on this fill.
-      fill={
-        props.session
-          ? (props.color ?? "var(--color-background)")
-          : "var(--color-background)"
-      }
-      borderColor={
-        props.session
-          ? "var(--canvas-border)"
-          : (props.color ?? "var(--canvas-border)")
-      }
-      joined={joined}
-      className={cn(
-        "transition-opacity duration-300 ease-spring",
-        props.concealed && "invisible",
-      )}
-    />
+    <>
+      {/* Concealed, it keeps its colour line until the traveller lands, so a
+          group's line has no gap under the tab being travelled to. */}
+      {concealed ? (
+        <InactiveColorMark color={props.color} session={props.session} />
+      ) : null}
+      <TabChromeBackground
+        // ACTIVE, the editor's tab is the colour and wears none of it on its
+        // edge (L-163): the fill is the token at full strength and the stroke is
+        // the sheets' border, so the frame around the screen owns the only
+        // amber LINE while a session is live and this tab is the only amber
+        // OBJECT. A dilution cannot do that job: every share of the token over
+        // `--background` trades the tab reading as coloured against its own
+        // label staying legible on it, and the largest that clears 4.5:1 on all
+        // the built-in palettes is 4.5% - a tab indistinguishable from the strip
+        // it sits in. Nor can a stroke in the colour, because the frame's dotted
+        // run and the tab's top edge share a line to within a quarter of a pixel
+        // and read as one broken stroke.
+        // `layout-editor-contrast.test.ts` measures the label on this fill.
+        fill={
+          props.session
+            ? (props.color ?? "var(--color-background)")
+            : "var(--color-background)"
+        }
+        borderColor={
+          props.session
+            ? "var(--canvas-border)"
+            : (props.color ?? "var(--canvas-border)")
+        }
+        joined={joined}
+        className={cn(
+          "transition-opacity duration-300 ease-spring",
+          props.concealed && "invisible",
+        )}
+      />
+    </>
   );
 }
