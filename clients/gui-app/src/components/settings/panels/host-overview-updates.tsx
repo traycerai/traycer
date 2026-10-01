@@ -250,26 +250,13 @@ function resolveAnswerCard(props: {
     );
   }
 
-  // A check that settled with no catalog has no answer beyond "it failed", so
-  // the reason IS the supporting line rather than a footer repeating it.
-  const failureIsTheAnswer =
-    summary.answerKind === "check-failed" &&
-    summary.failureDescription !== null;
   return (
     <AnswerCardFrame
       look={look}
       kind={summary.answerKind}
       body={
         <>
-          <AnswerLine
-            summary={summary}
-            version={props.version}
-            text={
-              failureIsTheAnswer
-                ? summary.failureDescription
-                : summary.description
-            }
-          />
+          <AnswerLine summary={summary} version={props.version} />
           {summary.remedy === null &&
           summary.updatableVersion !== null &&
           props.answer.foregroundUpdateLine !== null ? (
@@ -286,7 +273,11 @@ function resolveAnswerCard(props: {
         </>
       }
       actions={answerCardActions(props.answer)}
-      footer={failureIsTheAnswer ? null : summary.failureDescription}
+      // The footer is the last ATTEMPT's failure, whichever attempt that was
+      // (`installFailure ?? check.transient`, or a store-format refusal), so
+      // it is never promoted to the answer: under "Update check failed" an
+      // earlier install's error would read as what the check reported.
+      footer={summary.failureDescription}
     />
   );
 }
@@ -299,7 +290,6 @@ function resolveAnswerCard(props: {
 function AnswerLine(props: {
   readonly summary: HostOverviewUpdatesSummary;
   readonly version: string | null;
-  readonly text: string;
 }): ReactNode {
   const { summary } = props;
   if (summary.answerKind === "available" && summary.updatableVersion !== null) {
@@ -320,7 +310,7 @@ function AnswerLine(props: {
             v{summary.updatableVersion}
           </span>
         </span>
-        <span className="sr-only">{props.text}</span>
+        <span className="sr-only">{summary.description}</span>
       </p>
     );
   }
@@ -329,7 +319,7 @@ function AnswerLine(props: {
       className="text-muted-foreground text-ui-sm"
       data-testid="host-overview-updates"
     >
-      {props.text}
+      {summary.description}
     </p>
   );
 }

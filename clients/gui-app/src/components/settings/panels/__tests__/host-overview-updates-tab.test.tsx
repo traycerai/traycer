@@ -562,6 +562,93 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     ).toBe("available");
   });
 
+  it("a failed check after a failed install keeps the card's line as the check's own sentence, with the install's failure only in the footer", async () => {
+    // Pins: the footer is the last ATTEMPT's failure (`installFailure ??
+    // check.transient`), so under "Update check failed" an earlier install's
+    // error must not become the line - it would read as what the check said.
+    let checkCalls = 0;
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: false,
+      hostVersion: "1.5.0",
+      overrideHandlers: {
+        "host.update.check": () => {
+          checkCalls += 1;
+          if (checkCalls === 1) {
+            return Promise.resolve(okAnswer(["1.6.0", "1.5.0"], false));
+          }
+          return Promise.resolve({ outcome: "invalid-output" as const });
+        },
+        // `reason: null` and no store floor: a bad ATTEMPT, which sets the
+        // page's `installFailure` (a reason would be a retained refusal,
+        // which Check now clears).
+        "host.update.install": () =>
+          Promise.resolve({
+            outcome: "cli-failed" as const,
+            reason: null,
+            storeFloor: null,
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = bindingWith(fixture.client);
+    scopeOverrides.current = scopeFrom(
+      "host-a",
+      fixture,
+      registryItemFor("host-a", "manual"),
+      {},
+    );
+    render(
+      panelElement(
+        new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        }),
+        makeRunnerHost(),
+      ),
+    );
+
+    await selectHostOverviewTab("updates");
+    const card = await screen.findByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("available");
+    fireEvent.click(await screen.findByTestId("host-overview-update-now"));
+    await waitFor(() => {
+      expect(
+        within(card).getByTestId("host-overview-update-attempt-failed")
+          .textContent,
+      ).toBe("host-a's Traycer CLI couldn't complete the request.");
+    });
+
+    // Now the check itself fails, with no catalog, and with a failure text
+    // of its own (`invalid-output`) that differs from the install's.
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("host-overview-update-check")
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+    fireEvent.click(screen.getByTestId("host-overview-update-check"));
+    await waitFor(() => expect(checkCalls).toBe(2));
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("host-overview-answer-card")
+          .getAttribute("data-answer"),
+      ).toBe("check-failed");
+    });
+
+    const failedCard = screen.getByTestId("host-overview-answer-card");
+    const line = screen.getByTestId("host-overview-updates");
+    expect(line.textContent).toBe("Couldn't check for updates on host-a.");
+    expect(line.textContent).not.toContain("couldn't complete");
+    // The footer still carries the last attempt's failure - the install's -
+    // and is a child of the card, not the line.
+    expect(
+      within(failedCard).getByTestId("host-overview-update-attempt-failed")
+        .textContent,
+    ).toBe("host-a's Traycer CLI couldn't complete the request.");
+  });
+
   it("Check now, with no list to show, runs the exact check the answer card uses, refreshing both from one request", async () => {
     let checkCalls = 0;
     const fixture = buildOverviewHostFixture({

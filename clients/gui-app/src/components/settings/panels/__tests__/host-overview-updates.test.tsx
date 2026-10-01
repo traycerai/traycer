@@ -3033,8 +3033,8 @@ describe("Overview updates — CLI floor remedy", () => {
 // nothing running. The settled cases below anchor on the query cache
 // reaching `status: "success"` for `host.update.check` (never on absent
 // text, which a still-loading frame would also satisfy), then read the
-// card, which names the failure as its one supporting line. The control is a
-// check that never settles, to pin the genuine first-load arm this fix must
+// card, which says the check failed on its line and carries the failure's
+// reason in the footer. The control is a check that never settles, to pin the genuine first-load arm this fix must
 // leave alone: a QUIET answer, so no card, with Check now spinning instead.
 describe("Overview updates — a settled first check with no catalog (T2 fixup 1)", () => {
   async function waitForCheckSettled(
@@ -3074,17 +3074,20 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
     expect(card.getAttribute("data-answer")).toBe("check-failed");
     expect(card.textContent).toContain("Update check failed");
     expect(card.textContent).not.toMatch(/Checking/);
-    // A check that settled with no catalog has no answer beyond "it failed",
-    // so the reason IS the card's one supporting line: said once, no footer.
+    // The card's line is the check's own sentence; the failure's reason is
+    // the red footer INSIDE that same card, said once.
     expect(screen.getByTestId("host-overview-updates").textContent).toBe(
+      "Couldn't check for updates on host-a.",
+    );
+    const footer = within(card).getByTestId(
+      "host-overview-update-attempt-failed",
+    );
+    expect(footer.textContent).toBe(
       "host-a's Traycer CLI answered in a format this app doesn't understand. It's probably a different version than this app expects.",
     );
     expect(
-      screen.queryByTestId("host-overview-update-attempt-failed"),
-    ).toBeNull();
-    expect(
-      screen.queryByText("Couldn't check for updates on host-a."),
-    ).toBeNull();
+      screen.getAllByTestId("host-overview-update-attempt-failed"),
+    ).toHaveLength(1);
     const checkNow = screen.getByTestId("host-overview-update-check");
     expect(checkNow.hasAttribute("disabled")).toBe(false);
   });
@@ -3112,14 +3115,17 @@ describe("Overview updates — a settled first check with no catalog (T2 fixup 1
     expect(card.textContent).toContain("Update check failed");
     expect(card.textContent).not.toMatch(/Checking/);
     expect(screen.getByTestId("host-overview-updates").textContent).toBe(
+      "Couldn't check for updates on host-a.",
+    );
+    const footer = within(card).getByTestId(
+      "host-overview-update-attempt-failed",
+    );
+    expect(footer.textContent).toBe(
       "host-a's Traycer CLI couldn't complete the request.",
     );
     expect(
-      screen.queryByTestId("host-overview-update-attempt-failed"),
-    ).toBeNull();
-    expect(
-      screen.queryByText("Couldn't check for updates on host-a."),
-    ).toBeNull();
+      screen.getAllByTestId("host-overview-update-attempt-failed"),
+    ).toHaveLength(1);
     const checkNow = screen.getByTestId("host-overview-update-check");
     expect(checkNow.hasAttribute("disabled")).toBe(false);
   });

@@ -5517,7 +5517,7 @@ set-state-in-effect` forbids the effect form, and an effect would also
     | `stranded`          | info    | Newer version on another release line | the stranded sentence                           | none                                                                                 |
     | `not-installable`   | neutral | Update unavailable for this host      | the not-installable sentence                    | none                                                                                 |
     | `unreachable`       | neutral | Update check failed                   | "Couldn't ask … which versions …"               | none                                                                                 |
-    | `check-failed`      | neutral | Update check failed                   | the failure reason                              | none                                                                                 |
+    | `check-failed`      | neutral | Update check failed                   | "Couldn't check for updates on …"               | none                                                                                 |
     | degrade             | neutral | Updates aren't managed here           | `describeOverviewDegrade`                       | none                                                                                 |
 
     The neutral tone is `bg-foreground/5`, never `bg-muted` (raised surface).
@@ -5561,10 +5561,14 @@ set-state-in-effect` forbids the effect form, and an effect would also
       park that counts as in flight, and its dialog closes on the refusal
       expecting this card to say why.
     - **A check that settled with no catalog** (the host's CLI failed, or
-      answered in a format this app can't read) is "Update check failed" with
-      the reason as its line, since "Couldn't check for updates on build-box."
-      would only restate the title. It never falls through to "Checking for
-      updates…", which is the first load's alone and draws no card.
+      answered in a format this app can't read) is "Update check failed" over
+      "Couldn't check for updates on build-box.", with the reason in the
+      footer like any other failure. The footer is never promoted to the
+      card's line: `failureDescription` is the last ATTEMPT's failure
+      (`installFailure ?? check.transient`, or a store-format refusal), so an
+      earlier install's error would read as what the check reported. It never
+      falls through to "Checking for updates…", which is the first load's
+      alone and draws no card.
     - **The stranded answer** ends "…Pick it from the versions below to
       move.", plain text: the version list it points at is on the same tab,
       under the card.

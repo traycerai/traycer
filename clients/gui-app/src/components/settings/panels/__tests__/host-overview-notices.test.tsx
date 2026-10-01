@@ -540,10 +540,11 @@ describe("<HostOverviewAnswerCard/> draws only an answer with something to say, 
       inFlight: false,
     },
     {
-      name: "check-failed, its failure as the supporting line",
+      name: "check-failed with a failure footer",
       answer: answerWith({
         answerKind: "check-failed",
         updatableVersion: null,
+        description: "Couldn't check for updates on host-a.",
         failureDescription:
           "host-a's Traycer CLI couldn't complete the request.",
       }),
@@ -1538,33 +1539,37 @@ describe("a refused/failed attempt line shows while an update is in flight, even
     expect(screen.queryByTestId("host-overview-update-now")).toBeNull();
   });
 
-  it("keeps the failure as a footer under a shown answer, and makes it the supporting line of a failed check", () => {
-    const base: HostOverviewUpdatesSummary = {
-      hostName: "host-a",
-      description: "v1.6.0 is available.",
-      answerKind: "available",
-      updatableVersion: "1.6.0",
-      checking: false,
-      busy: false,
-      installing: false,
-      onCheck: vi.fn(),
-      onUpdateLatest: vi.fn(),
-      remedy: null,
-      failureDescription: "host-a refused the last update.",
-    };
-    const answer = (
-      summary: HostOverviewUpdatesSummary,
-    ): HostOverviewVersionAnswer => ({
+  function failureAnswer(
+    summary: HostOverviewUpdatesSummary,
+  ): HostOverviewVersionAnswer {
+    return {
       summary,
       degrade: null,
       desktopBridge: null,
       onInstallationHelp: vi.fn(),
       foregroundUpdateLine: null,
-    });
+    };
+  }
+
+  const FAILURE_BASE: HostOverviewUpdatesSummary = {
+    hostName: "host-a",
+    description: "v1.6.0 is available.",
+    answerKind: "available",
+    updatableVersion: "1.6.0",
+    checking: false,
+    busy: false,
+    installing: false,
+    onCheck: vi.fn(),
+    onUpdateLatest: vi.fn(),
+    remedy: null,
+    failureDescription: "host-a refused the last update.",
+  };
+
+  it("keeps the failure as a footer inside the card, under a shown answer and under a failed check alike", () => {
     const shown = render(
       <HostOverviewAnswerCard
         version="1.5.0"
-        answer={answer(base)}
+        answer={failureAnswer(FAILURE_BASE)}
         inFlight={false}
       />,
     );
@@ -1577,23 +1582,58 @@ describe("a refused/failed attempt line shows while an update is in flight, even
     render(
       <HostOverviewAnswerCard
         version="1.5.0"
-        answer={answer({
-          ...base,
+        answer={failureAnswer({
+          ...FAILURE_BASE,
           answerKind: "check-failed",
-          description: "unused",
+          description: "Couldn't check for updates on host-a.",
           updatableVersion: null,
-          failureDescription: "Couldn't check for updates.",
+          failureDescription:
+            "host-a's Traycer CLI couldn't complete the request.",
         })}
         inFlight={false}
       />,
     );
-    // No footer: the failure IS the supporting line.
-    expect(
-      screen.queryByTestId("host-overview-update-attempt-failed"),
-    ).toBeNull();
+    // Uniform: the line is the answer's own sentence, and the failure is the
+    // footer inside the card - check-failed is no special case.
+    const card = screen.getByTestId("host-overview-answer-card");
+    expect(card.getAttribute("data-answer")).toBe("check-failed");
     expect(screen.getByTestId("host-overview-updates").textContent).toBe(
-      "Couldn't check for updates.",
+      "Couldn't check for updates on host-a.",
     );
+    expect(
+      within(card).getByTestId("host-overview-update-attempt-failed")
+        .textContent,
+    ).toBe("host-a's Traycer CLI couldn't complete the request.");
+  });
+
+  it("a failed check does not promote an earlier attempt's failure to its answer: the line is the check's own sentence and the install failure stays in the footer", () => {
+    // Pins: `failureDescription` is the last ATTEMPT's failure
+    // (`installFailure ?? check.transient`), so under "Update check failed"
+    // it must never become the line - an earlier install's error would read
+    // as what the check reported.
+    const installFailure = "host-a's CLI can't install v1.6.0.";
+    render(
+      <HostOverviewAnswerCard
+        version="1.5.0"
+        answer={failureAnswer({
+          ...FAILURE_BASE,
+          hostName: "build-box",
+          answerKind: "check-failed",
+          description: "Couldn't check for updates on build-box.",
+          updatableVersion: null,
+          failureDescription: installFailure,
+        })}
+        inFlight={false}
+      />,
+    );
+    const card = screen.getByTestId("host-overview-answer-card");
+    const line = screen.getByTestId("host-overview-updates");
+    expect(line.textContent).toBe("Couldn't check for updates on build-box.");
+    expect(line.textContent).not.toContain(installFailure);
+    expect(
+      within(card).getByTestId("host-overview-update-attempt-failed")
+        .textContent,
+    ).toBe(installFailure);
   });
 });
 
