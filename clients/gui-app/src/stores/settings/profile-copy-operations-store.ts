@@ -58,9 +58,21 @@ export interface ProfileCopyOperationHandle {
    * idempotent.
    */
   readonly cancelConfirmedAt: number | null;
+  /**
+   * The last `status` this window read had every row settled
+   * (`isOutcomeSettled`, or a destination that got no attempt). Follows each
+   * answer, so a retry clears it. Only a settled handle falls off past the
+   * cap: an unsettled one may be the only way back to its copy's status,
+   * retry or cancel - there is no list verb, and a source-local row has no
+   * destination draft to reopen it from.
+   */
+  readonly settled: boolean;
 }
 
-/** Newest first; older handles fall off. The host drops settled operations too. */
+/**
+ * Newest first. Past this many, settled handles fall off; unsettled ones stay
+ * until this window sees them settle or the user removes them.
+ */
 export const PROFILE_COPY_MAX_HANDLES = 20;
 
 interface ProfileCopyOperationsState {
@@ -68,6 +80,8 @@ interface ProfileCopyOperationsState {
   readonly record: (handle: ProfileCopyOperationHandle) => void;
   readonly acknowledgeStart: (operationId: string) => void;
   readonly markCancelConfirmed: (operationId: string, at: number) => void;
+  /** Records what the latest `status` answer said about settlement. */
+  readonly markSettled: (operationId: string, settled: boolean) => void;
   /** Forget a handle here. Never cancels anything on any device. */
   readonly remove: (operationId: string) => void;
 }
@@ -81,7 +95,9 @@ function newestFirst(
 ): readonly ProfileCopyOperationHandle[] {
   return [...handles]
     .sort((left, right) => right.createdAt - left.createdAt)
-    .slice(0, PROFILE_COPY_MAX_HANDLES);
+    .filter(
+      (handle, index) => index < PROFILE_COPY_MAX_HANDLES || !handle.settled,
+    );
 }
 
 function isString(value: unknown): value is string {
@@ -178,6 +194,8 @@ function parseHandle(value: unknown): ProfileCopyOperationHandle | null {
     startAcknowledged: record.startAcknowledged,
     cancelConfirmedAt:
       typeof cancelConfirmedAt === "number" ? cancelConfirmedAt : null,
+    // Absent on a handle an earlier build wrote: unknown, so kept.
+    settled: record.settled === true,
   };
 }
 
@@ -192,7 +210,10 @@ function persistedHandles(
   );
 }
 
-/** Two copies of one handle: acknowledgement and cancel are monotonic. */
+/**
+ * Two copies of one handle: acknowledgement and cancel are monotonic;
+ * `settled` is the writing window's, since it follows the latest read.
+ */
 function mergeHandle(
   left: ProfileCopyOperationHandle,
   right: ProfileCopyOperationHandle,
@@ -314,6 +335,27 @@ export const useProfileCopyOperationsStore =
               handle.operationId === operationId &&
               handle.cancelConfirmedAt === null
                 ? { ...handle, cancelConfirmedAt: at }
+                : handle,
+            ),
+          });
+        },
+        markSettled: (operationId, settled) => {
+          const current = get().handles;
+          if (
+            !current.some(
+              (handle) =>
+                handle.operationId === operationId &&
+                handle.settled !== settled,
+            )
+          ) {
+            return;
+          }
+          // Not re-capped here: the view that read it may still be open on
+          // it. The next start (or another window's write) drops it.
+          set({
+            handles: current.map((handle) =>
+              handle.operationId === operationId
+                ? { ...handle, settled }
                 : handle,
             ),
           });

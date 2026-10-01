@@ -37,6 +37,7 @@ const HANDLE_FIELDS = [
   "createdAt",
   "startAcknowledged",
   "cancelConfirmedAt",
+  "settled",
 ] as const;
 
 const PREVIEW_RECORD_FIELDS = [
@@ -65,6 +66,7 @@ function handle(
     createdAt: 1_000,
     startAcknowledged: false,
     cancelConfirmedAt: null,
+    settled: false,
     ...overrides,
   };
 }
@@ -104,12 +106,13 @@ describe("useProfileCopyOperationsStore", () => {
   beforeEach(resetStore);
   afterEach(resetStore);
 
-  it("records newest first and caps at 20", () => {
+  it("records newest first and caps settled history at 20", () => {
     for (let index = 0; index < 22; index += 1) {
       useProfileCopyOperationsStore.getState().record(
         handle({
           operationId: `aaaaaaaa-aaaa-4aaa-8aaa-${String(index).padStart(12, "0")}`,
           createdAt: index,
+          settled: true,
         }),
       );
     }
@@ -117,6 +120,66 @@ describe("useProfileCopyOperationsStore", () => {
     expect(handles).toHaveLength(PROFILE_COPY_MAX_HANDLES);
     expect(handles[0]?.createdAt).toBe(21);
     expect(handles[handles.length - 1]?.createdAt).toBe(2);
+  });
+
+  it("keeps an unsettled handle past the cap: it may be the only way back to its copy", () => {
+    useProfileCopyOperationsStore
+      .getState()
+      .record(handle({ operationId: "op-oldest-unsettled", createdAt: 0 }));
+    useProfileCopyOperationsStore.getState().record(
+      handle({
+        operationId: "op-oldest-settled",
+        createdAt: 1,
+        settled: true,
+      }),
+    );
+    for (let index = 0; index < PROFILE_COPY_MAX_HANDLES; index += 1) {
+      useProfileCopyOperationsStore.getState().record(
+        handle({
+          operationId: `bbbbbbbb-bbbb-4bbb-8bbb-${String(index).padStart(12, "0")}`,
+          createdAt: 10 + index,
+        }),
+      );
+    }
+    const ids = useProfileCopyOperationsStore
+      .getState()
+      .handles.map((entry) => entry.operationId);
+    expect(ids).toHaveLength(PROFILE_COPY_MAX_HANDLES + 1);
+    expect(ids).toContain("op-oldest-unsettled");
+    expect(ids).not.toContain("op-oldest-settled");
+
+    // Once this window sees it settle, it stays while its view may be open,
+    // and the next start lets it fall off.
+    useProfileCopyOperationsStore
+      .getState()
+      .markSettled("op-oldest-unsettled", true);
+    expect(
+      useProfileCopyOperationsStore
+        .getState()
+        .handles.map((entry) => entry.operationId),
+    ).toContain("op-oldest-unsettled");
+    useProfileCopyOperationsStore
+      .getState()
+      .record(handle({ operationId: "op-newest", createdAt: 100 }));
+    expect(
+      useProfileCopyOperationsStore
+        .getState()
+        .handles.map((entry) => entry.operationId),
+    ).not.toContain("op-oldest-unsettled");
+  });
+
+  it("markSettled follows the latest status answer: a retry unsettles it again", () => {
+    useProfileCopyOperationsStore
+      .getState()
+      .record(handle({ operationId: "op-a" }));
+    useProfileCopyOperationsStore.getState().markSettled("op-a", true);
+    expect(useProfileCopyOperationsStore.getState().handles[0]?.settled).toBe(
+      true,
+    );
+    useProfileCopyOperationsStore.getState().markSettled("op-a", false);
+    expect(useProfileCopyOperationsStore.getState().handles[0]?.settled).toBe(
+      false,
+    );
   });
 
   it("acknowledgeStart and markCancelConfirmed are monotonic", () => {

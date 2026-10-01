@@ -14,10 +14,8 @@ import {
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useProfileCopyPreviewQuery } from "@/hooks/providers/profile-copy/use-profile-copy-queries";
 import { useProfileCopyStartMutation } from "@/hooks/providers/profile-copy/use-profile-copy-operation-mutations";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   isRoutableDisposition,
-  profileCopyGuiProvider,
   profileCopyPreviewRecord,
   type ProfileCopyPreviewRecord,
   type ProfileCopyPreviewResponse,
@@ -270,11 +268,8 @@ export function ProfileCopyNewCopy(props: {
             void preview.refetch();
             return;
           }
-          Analytics.getInstance().track(AnalyticsEvent.ProfileCopyStarted, {
-            provider: profileCopyGuiProvider(provider),
-            source_kind: sourceProfileId === "ambient" ? "ambient" : "managed",
-            destination_count: routableCount,
-          });
+          // `ProfileCopyStarted` is the start hook's: it must count a start
+          // whose dialog closed before this answer arrived.
           openView({ kind: "operation", operationId });
         },
         onError: (error) => {

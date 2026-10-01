@@ -311,6 +311,9 @@ describe("host method poll policy table", () => {
         nextCursor: null,
       }),
     ).toBe(PROFILE_COPY_WAITING_POLL_LANE);
+    // A copy started on another device reaches this list with no push and no
+    // focus refetch, so an observed list keeps the slow lane even when every
+    // draft waits on a person, or when there is none yet.
     expect(
       incomingPoll.classify({
         drafts: [
@@ -318,7 +321,10 @@ describe("host method poll policy table", () => {
         ],
         nextCursor: null,
       }),
-    ).toBe(false);
+    ).toBe(PROFILE_COPY_WAITING_POLL_LANE);
+    expect(incomingPoll.classify({ drafts: [], nextCursor: null })).toBe(
+      PROFILE_COPY_WAITING_POLL_LANE,
+    );
 
     expect(statusPoll.initialErrorLane).toBe(
       PROFILE_COPY_INITIAL_ERROR_POLL_LANE,

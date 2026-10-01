@@ -46,6 +46,8 @@ export interface ProfileCopyDraftController {
   /** Another attempt's sign-in holds this window's one interactive slot. */
   readonly otherLoginHostId: string | null;
   readonly anyPending: boolean;
+  /** The "use it once ready" switch cannot be changed right now. */
+  readonly preferenceDisabled: boolean;
   readonly cancelPending: boolean;
   readonly runAction: (action: ProfileCopyDraftAction) => void;
   readonly actionPending: (action: ProfileCopyDraftAction) => boolean;
@@ -291,6 +293,14 @@ export function useProfileCopyDraftController(
     setPreferenceMutation.isPending ||
     cancelPending ||
     login.startPending;
+  // A preference write moves the draft's revision, and every sign-in control
+  // verb (submit code, keepalive, cancel) carries the revision the last login
+  // answer returned, so a write under a live sign-in leaves the next one
+  // stale and the host refuses it. The switch waits out a sign-in: this
+  // window's from the moment it starts (the draft read lags it), and one
+  // another window or device drives (the record says `signing-in`).
+  const preferenceDisabled =
+    anyPending || login.phase.kind !== "idle" || outcome.state === "signing-in";
   const actionDisabled = (action: ProfileCopyDraftAction): boolean => {
     if (action.kind === "open-profile") return targetProfileId === null;
     if (isProfileCopySignInAction(action) && otherLoginHostId !== null) {
@@ -305,6 +315,7 @@ export function useProfileCopyDraftController(
     pendingConfirm,
     otherLoginHostId,
     anyPending,
+    preferenceDisabled,
     cancelPending,
     runAction,
     actionPending,

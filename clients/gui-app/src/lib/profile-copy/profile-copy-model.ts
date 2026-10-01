@@ -332,16 +332,6 @@ export function profileCopyDraftPollActivity(
   return DRAFT_POLL_ACTIVITY[outcome.state];
 }
 
-export function profileCopyIncomingPollActivity(
-  drafts: readonly ProfileCopyIncomingDraft[],
-): ProfileCopyPollActivity {
-  return drafts.some(
-    (draft) => profileCopyDraftPollActivity(draft.outcome) !== "idle",
-  )
-    ? "waiting"
-    : "idle";
-}
-
 /** The preview facts kept with an operation handle, per destination. */
 export interface ProfileCopyPreviewRecord {
   readonly destinationHostId: string;

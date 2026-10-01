@@ -71,7 +71,7 @@ export function ProfileCopyFlowHost(): ReactNode {
       {view !== null ? (
         <DialogContent
           layout="banded"
-          className="flex max-h-[min(85dvh,44rem)] w-[min(92vw,34rem)] flex-col overflow-hidden sm:max-w-none"
+          className="flex max-h-[min(85dvh,44rem)] flex-col overflow-hidden sm:max-w-[min(34rem,var(--safe-area-width))]"
         >
           <ProfileCopyFlowBody key={session} view={view} />
         </DialogContent>

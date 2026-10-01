@@ -49,6 +49,7 @@ function sampleHandle(): ProfileCopyOperationHandle {
     createdAt: 1_000,
     startAcknowledged: true,
     cancelConfirmedAt: null,
+    settled: false,
   };
 }
 

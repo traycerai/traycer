@@ -123,6 +123,7 @@ function plantHandle(startAcknowledged: boolean): void {
     createdAt: 1_000,
     startAcknowledged,
     cancelConfirmedAt: null,
+    settled: false,
   });
 }
 
@@ -703,6 +704,93 @@ describe("ProfileCopyOperationView", () => {
         (call) => call[0] === AnalyticsEvent.ProfileCopyAttemptSettled,
       ),
     ).toHaveLength(1);
+  });
+
+  it("marks the handle settled only once every routable destination is settled, and unmarks it on a later read", async () => {
+    const queryClient = createAppQueryClient();
+    const piAttempt = profileCopyAttempt({
+      attemptId: ATTEMPT_TWO_ID,
+      destinationHostId: "pi-host",
+    });
+    let piState: "preparing" | "cancelled" = "preparing";
+    let statusReads = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "providers.list": () => ({
+          providers: [
+            claudeProviderState([managedProfile(SOURCE_PROFILE_ID, "Work")]),
+          ],
+          native: null,
+        }),
+        "providers.profileCopy.status": () => {
+          statusReads += 1;
+          return {
+            sourceHostId: SOURCE_HOST_ID,
+            operationId: OPERATION_ID,
+            outcomes: [
+              recordedOutcome({ state: "signed-in", reason: null }),
+              recordedOutcome({ state: piState, attempt: piAttempt }),
+            ],
+          };
+        },
+        "providers.profileCopy.draftStatus": () => ({
+          result: "current" as const,
+          outcome: recordedOutcome({ state: "signed-in", reason: null }),
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        harness.hosts.find((host) => host.hostId === hostId)?.entry ??
+        hostDirectoryEntry(hostId, hostId),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-op",
+      }),
+    );
+    harness.spine = spine;
+    plantHandle(true);
+    const settled = (): boolean | undefined =>
+      useProfileCopyOperationsStore.getState().handles[0]?.settled;
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyFlowHost />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      useProfileCopyFlowStore.getState().open({
+        kind: "operation",
+        operationId: OPERATION_ID,
+      });
+    });
+    await waitFor(() => expect(statusReads).toBeGreaterThan(0));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(settled()).toBe(false);
+
+    // The unavailable destination got no attempt; the other two settle.
+    piState = "cancelled";
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(settled()).toBe(true));
+
+    piState = "preparing";
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(settled()).toBe(false));
   });
 
   it("still offers Cancel copy and Retry after a FORBIDDEN cancel and a reopen", async () => {

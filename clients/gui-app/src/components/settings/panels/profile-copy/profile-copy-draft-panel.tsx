@@ -467,7 +467,7 @@ export function ProfileCopyDraftPanel(props: {
       {profileCopyPreferenceEditable(outcome) ? (
         <ProfileCopyDraftPreference
           checked={outcome.desiredEnabled}
-          disabled={controller.anyPending}
+          disabled={controller.preferenceDisabled}
           onChange={controller.setPreference}
         />
       ) : null}

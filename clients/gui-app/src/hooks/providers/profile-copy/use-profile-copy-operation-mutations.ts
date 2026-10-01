@@ -11,6 +11,7 @@ import {
   profileCopyStatusKey,
   writeProfileCopyOperation,
 } from "@/hooks/providers/profile-copy/profile-copy-cache";
+import { reportProfileCopyStarted } from "@/hooks/providers/profile-copy/profile-copy-observations";
 import { profileCopyMutationKeys } from "@/lib/query-keys";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
@@ -88,11 +89,18 @@ export function useProfileCopyStartMutation(
           return;
         }
         // Hook-level, not per-call: it must land even when the dialog that
-        // sent the start has closed before the answer arrived.
+        // sent the start has closed before the answer arrived - TanStack
+        // drops a `mutate(..., { onSuccess })` whose observer has unmounted.
         useProfileCopyOperationsStore
           .getState()
           .acknowledgeStart(response.operationId);
         writeProfileCopyOperation(queryClient, response);
+        reportProfileCopyStarted({
+          operationId: request.operationId,
+          providerId: request.providerId,
+          sourceProfileId: request.sourceProfileId,
+          startedCount: response.outcomes.length,
+        });
       },
     },
     mapVariables: (variables) => variables,

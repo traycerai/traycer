@@ -103,6 +103,9 @@ function ProfileCopyOperationBody(props: {
     (state) => state.markCancelConfirmed,
   );
   const removeHandle = useProfileCopyOperationsStore((state) => state.remove);
+  const markSettled = useProfileCopyOperationsStore(
+    (state) => state.markSettled,
+  );
 
   const profileName = useProfileCopySourceProfile(
     sourceHostId,
@@ -141,6 +144,19 @@ function ProfileCopyOperationBody(props: {
     handle.previewRecords,
     outcomes,
   );
+  // Recent copies lets a handle fall off past its cap only once a read found
+  // nothing left to move: every destination settled or never attempted.
+  const observedSettled =
+    outcomes === null
+      ? null
+      : rows.every(
+          (row) =>
+            row.kind === "preview-only" ||
+            (row.kind === "attempt" && isOutcomeSettled(row.outcome)),
+        );
+  useEffect(() => {
+    if (observedSettled !== null) markSettled(operationId, observedSettled);
+  }, [markSettled, observedSettled, operationId]);
   // Offered while anything is unsettled, whatever this window already sent:
   // the source treats a repeated cancel as the same cancel, and a cancel
   // whose answer was lost may never have reached it.

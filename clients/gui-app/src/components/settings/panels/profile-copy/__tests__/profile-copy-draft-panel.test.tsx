@@ -611,6 +611,146 @@ describe("ProfileCopyDraftPanel", () => {
     expect(screen.queryByText(/^Signed in$/)).toBeNull();
   });
 
+  it("holds the preference switch while this window's sign-in runs, so no write moves the revision its control verbs carry", async () => {
+    const queryClient = createAppQueryClient();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "providers.profileCopy.draftStatus": () => ({
+          result: "current" as const,
+          outcome: recordedOutcome({ state: "sign-in-required" }),
+        }),
+        "providers.profileCopy.login.start": () => ({
+          outcome: recordedOutcome({
+            state: "signing-in",
+            reason: null,
+            revision: 2,
+          }),
+          loginAttemptId: LOGIN_ATTEMPT_ID,
+          challenge: {
+            kind: "device-code" as const,
+            url: "https://example.invalid/device",
+            userCode: "WXYZ-1234",
+          },
+        }),
+        "providers.profileCopy.login.await": () => new Promise(() => undefined),
+        "providers.profileCopy.setPreference": (params) => ({
+          result: "current" as const,
+          outcome: recordedOutcome({
+            state: "signing-in",
+            desiredEnabled: params.desiredEnabled,
+            revision: 3,
+          }),
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        harness.hosts.find((host) => host.hostId === hostId)?.entry ??
+        hostDirectoryEntry(hostId, hostId),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-draft",
+      }),
+    );
+    harness.spine = spine;
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyDraftPanel
+            outcome={recordedOutcome({ state: "sign-in-required" })}
+            names={COPY_NAMES}
+            route="code-paste"
+            cancelRequested={false}
+            destinationIsLocal={false}
+            extraActions={null}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Sign in on Linux box/ }),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByRole("switch").hasAttribute("disabled")).toBe(false);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Sign in on Linux box/ }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Cancel copy to Linux box" }),
+      ).toBeTruthy(),
+    );
+    // The draft read still says sign-in-required: only this window's live
+    // sign-in holds the switch.
+    expect(screen.getByRole("switch").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("switch"));
+    expect(
+      messenger.calls.some(
+        (call) => call.method === "providers.profileCopy.setPreference",
+      ),
+    ).toBe(false);
+  });
+
+  it("holds the preference switch while another window's sign-in runs on the draft", async () => {
+    const queryClient = createAppQueryClient();
+    const signingIn = recordedOutcome({
+      state: "signing-in",
+      reason: null,
+      revision: 2,
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "providers.profileCopy.draftStatus": () => ({
+          result: "current" as const,
+          outcome: signingIn,
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        harness.hosts.find((host) => host.hostId === hostId)?.entry ??
+        hostDirectoryEntry(hostId, hostId),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-draft",
+      }),
+    );
+    harness.spine = spine;
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyDraftPanel
+            outcome={signingIn}
+            names={COPY_NAMES}
+            route="code-paste"
+            cancelRequested={false}
+            destinationIsLocal={false}
+            extraActions={null}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByRole("switch")).toBeTruthy());
+    expect(screen.getByRole("switch").hasAttribute("disabled")).toBe(true);
+  });
+
   it("keeps login.touch firing across panel re-renders every 30s", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const queryClient = createAppQueryClient();

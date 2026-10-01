@@ -3,7 +3,6 @@ import {
   isOutcomeSettled,
   profileCopyEntryEligible,
   profileCopyDraftPollActivity,
-  profileCopyIncomingPollActivity,
   profileCopyOperationRows,
   profileCopyOutcomesPollActivity,
   profileCopySourceRecovery,
@@ -25,7 +24,6 @@ import {
 import {
   DEST_HOST_ID,
   DEST_HOST_TWO_ID,
-  incomingDraft,
   previewRecord,
   profileCopyAttempt,
   profileCopyOutcome,
@@ -245,19 +243,6 @@ describe("poll-activity classifiers", () => {
       profileCopyDraftPollActivity(
         recordedOutcome({ state: "sign-in-required" }),
       ),
-    ).toBe("idle");
-  });
-
-  it("polls incoming on the waiting lane while any draft is transient", () => {
-    expect(
-      profileCopyIncomingPollActivity([
-        incomingDraft({ outcome: recordedOutcome({ state: "preparing" }) }),
-      ]),
-    ).toBe("waiting");
-    expect(
-      profileCopyIncomingPollActivity([
-        incomingDraft({ outcome: recordedOutcome({ state: "quarantined" }) }),
-      ]),
     ).toBe("idle");
   });
 });

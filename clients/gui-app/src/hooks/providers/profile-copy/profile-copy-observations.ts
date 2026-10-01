@@ -6,6 +6,7 @@ import {
   profileCopyAttemptKey,
   profileCopyGuiProvider,
   type ProfileCopyOutcome,
+  type ProfileCopyWireProvider,
 } from "@/lib/profile-copy/profile-copy-model";
 import { invalidateProfileCopyDestinationProviders } from "@/hooks/providers/profile-copy/profile-copy-cache";
 
@@ -16,6 +17,29 @@ import { invalidateProfileCopyDestinationProviders } from "@/hooks/providers/pro
 // user switch.
 const reportedSettled = new Set<string>();
 const refreshedPromotions = new Set<string>();
+const reportedStarts = new Set<string>();
+
+/**
+ * A start the source answered with at least one attempt, reported once per
+ * operation from the start hook's own `onSuccess`: the dialog that sent it may
+ * have closed before the answer arrived, and a "Start again" that rejoins a
+ * start already reported here is not counted twice. Enum-only: the operation
+ * id keys the memory and never reaches the event.
+ */
+export function reportProfileCopyStarted(input: {
+  readonly operationId: string;
+  readonly providerId: ProfileCopyWireProvider;
+  readonly sourceProfileId: string;
+  readonly startedCount: number;
+}): void {
+  if (reportedStarts.has(input.operationId)) return;
+  reportedStarts.add(input.operationId);
+  Analytics.getInstance().track(AnalyticsEvent.ProfileCopyStarted, {
+    provider: profileCopyGuiProvider(input.providerId),
+    source_kind: input.sourceProfileId === "ambient" ? "ambient" : "managed",
+    destination_count: input.startedCount,
+  });
+}
 
 /**
  * What a surface does the FIRST time it sees an outcome:
@@ -51,4 +75,5 @@ export function observeProfileCopyOutcome(
 export function clearProfileCopyObservations(): void {
   reportedSettled.clear();
   refreshedPromotions.clear();
+  reportedStarts.clear();
 }

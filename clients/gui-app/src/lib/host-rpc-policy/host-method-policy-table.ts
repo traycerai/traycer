@@ -14,7 +14,6 @@ import type {
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
 import {
   profileCopyDraftPollActivity,
-  profileCopyIncomingPollActivity,
   profileCopyOutcomesPollActivity,
   type ProfileCopyPollActivity,
 } from "@/lib/profile-copy/profile-copy-model";
@@ -1845,7 +1844,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // Inventory/preflight reads may coalesce; mutations must not be dropped.
   // Cross-method ordering and revision checks remain the host's responsibility.
   // The three state reads poll only while a Settings copy surface observes
-  // them, and only until every row they return is settled.
+  // them. `status` and `draftStatus` stop once every row they return is
+  // settled; `incoming` never does, because a copy started on another device
+  // arrives with no push and no focus refetch, so the slow lane is the only
+  // thing that lists it on a Providers screen already open here.
   "providers.profileCopy.preview": { ...LATEST_SCHEDULING, poll: null },
   "providers.profileCopy.status": {
     ...LATEST_SCHEDULING,
@@ -1863,9 +1865,7 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("providers.profileCopy.incoming", {
       classify: (data) =>
-        data === undefined
-          ? false
-          : profileCopyPollLane(profileCopyIncomingPollActivity(data.drafts)),
+        data === undefined ? false : PROFILE_COPY_WAITING_POLL_LANE,
       initialErrorLane: PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
       staleDataErrorLane: PROFILE_COPY_STALE_ERROR_POLL_LANE,
       resetLaneIds: NO_RESET_LANES,

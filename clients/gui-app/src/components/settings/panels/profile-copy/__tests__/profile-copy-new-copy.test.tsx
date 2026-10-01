@@ -15,13 +15,17 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProfileCopyFlowHost } from "@/components/settings/panels/profile-copy/profile-copy-flow-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { clearProfileCopyObservations } from "@/hooks/providers/profile-copy/profile-copy-observations";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
@@ -30,6 +34,8 @@ import {
   DEST_HOST_TWO_ID,
   hostDirectoryEntry,
   PREVIEW_REVISION,
+  profileCopyAttempt,
+  profileCopyOutcome,
   SCOPED_HOST_ID,
   SOURCE_HOST_ID,
   SOURCE_PROFILE_ID,
@@ -95,6 +101,7 @@ function resetStores(): void {
   });
   useProfileCopyOperationsStore.setState({ handles: [] });
   useSettingsHostScopeStore.getState().setScopedHostId(null);
+  clearProfileCopyObservations();
 }
 
 function rpcError(code: RpcErrorCode, method: string): HostRpcError {
@@ -644,6 +651,190 @@ describe("ProfileCopyNewCopy", () => {
         (call) => call[0] === AnalyticsEvent.ProfileCopyStarted,
       ),
     ).toBe(false);
+  });
+
+  type StartAnswer = ResponseOfMethod<
+    HostRpcRegistry,
+    "providers.profileCopy.start"
+  >;
+
+  /**
+   * Starts a copy to "Linux box" (with "Old Mac" selected but unroutable)
+   * through the real dialog, the source's `start` answered by `answerStart`.
+   */
+  async function startCopyToLinuxBox(input: {
+    readonly operationId: `${string}-${string}-${string}-${string}-${string}`;
+    readonly answerStart: () => Promise<StartAnswer>;
+  }): Promise<MockHostMessenger<HostRpcRegistry>> {
+    const queryClient = createAppQueryClient();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {
+        "providers.list": () => ({
+          providers: [
+            claudeProviderState([managedProfile(SOURCE_PROFILE_ID, "Work")]),
+          ],
+          native: null,
+        }),
+        "providers.profileCopy.preview": () => ({
+          source: {
+            sourceHostId: SOURCE_HOST_ID,
+            sourceProfileId: SOURCE_PROFILE_ID,
+            providerId: "claude" as const,
+          },
+          previewRevision: PREVIEW_REVISION,
+          destinations: [
+            previewDestination(DEST_HOST_ID, "automatic", null),
+            previewDestination(
+              DEST_HOST_TWO_ID,
+              "unavailable",
+              "adapter-not-admitted",
+            ),
+          ],
+        }),
+        "providers.profileCopy.start": input.answerStart,
+        "providers.profileCopy.status": () => ({
+          sourceHostId: SOURCE_HOST_ID,
+          operationId: input.operationId,
+          outcomes: [],
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        harness.hosts.find((host) => host.hostId === hostId)?.entry ??
+        hostDirectoryEntry(hostId, hostId),
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-copy",
+      }),
+    );
+    harness.spine = spine;
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(input.operationId);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ProfileCopyFlowHost />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      useProfileCopyFlowStore.getState().open({
+        kind: "new",
+        sourceHostId: SOURCE_HOST_ID,
+        providerId: "claude",
+        sourceProfileId: SOURCE_PROFILE_ID,
+      });
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Linux box/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Old Mac/ }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Copy to 1 device/ }),
+      ).toHaveProperty("disabled", false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Copy to 1 device/ }));
+    return messenger;
+  }
+
+  function startedAnswer(operationId: string): StartAnswer {
+    return {
+      sourceHostId: SOURCE_HOST_ID,
+      operationId,
+      outcomes: [
+        profileCopyOutcome({
+          attempt: profileCopyAttempt({ operationId }),
+        }),
+      ],
+    };
+  }
+
+  it("reports ProfileCopyStarted once, enum-only, when the start answers with an attempt", async () => {
+    const uuid = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    await startCopyToLinuxBox({
+      operationId: uuid,
+      answerStart: () => Promise.resolve(startedAnswer(uuid)),
+    });
+    await waitFor(() =>
+      expect(useProfileCopyFlowStore.getState().view?.kind).toBe("operation"),
+    );
+    const started = track.mock.calls.filter(
+      (call) => call[0] === AnalyticsEvent.ProfileCopyStarted,
+    );
+    expect(started).toEqual([
+      [
+        AnalyticsEvent.ProfileCopyStarted,
+        {
+          provider: "claude-code",
+          source_kind: "managed",
+          destination_count: 1,
+        },
+      ],
+    ]);
+  });
+
+  it("still reports ProfileCopyStarted when the dialog closes before the start answers", async () => {
+    const uuid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    const pending: { answer: (() => void) | null } = { answer: null };
+    const messenger = await startCopyToLinuxBox({
+      operationId: uuid,
+      answerStart: () =>
+        new Promise((resolve) => {
+          pending.answer = () => resolve(startedAnswer(uuid));
+        }),
+    });
+    await waitFor(() =>
+      expect(
+        messenger.calls.some(
+          (call) => call.method === "providers.profileCopy.start",
+        ),
+      ).toBe(true),
+    );
+    // Cancel is enabled while the start is pending: the user closes first.
+    act(() => {
+      useProfileCopyFlowStore.getState().close();
+    });
+    expect(screen.queryByRole("button", { name: /Copy to 1 device/ })).toBe(
+      null,
+    );
+    await act(async () => {
+      pending.answer?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await waitFor(() =>
+      expect(
+        useProfileCopyOperationsStore
+          .getState()
+          .handles.find((entry) => entry.operationId === uuid)
+          ?.startAcknowledged,
+      ).toBe(true),
+    );
+    expect(
+      track.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.ProfileCopyStarted,
+      ),
+    ).toEqual([
+      [
+        AnalyticsEvent.ProfileCopyStarted,
+        {
+          provider: "claude-code",
+          source_kind: "managed",
+          destination_count: 1,
+        },
+      ],
+    ]);
   });
 
   it("does not read host options while the copy dialog is closed", () => {
