@@ -126,10 +126,15 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
  * already running.
  *
  * Not in scope of that reasoning, and not gated today because the readonly
- * surface has never hidden them either: `comments set-status` and
- * `worktree create` are both agent-typed mutations that a readonly session can
- * still run. Whether the surface should cover them is a contract question for
- * the host, not something this table should decide unilaterally.
+ * surface has never hidden it either: `comments set-status` is an agent-typed
+ * mutation that a readonly session can still run. Whether the surface should
+ * cover it is a contract question for the host, not something this table
+ * should decide unilaterally.
+ *
+ * `worktree create` is not in the table for a different reason: what an agent
+ * may do there is the user's Agent worktrees setting, not the surface, and it
+ * is checked beside this table by `assertAgentWorktreeCreateAllowed`
+ * (`agent-worktree-create.ts`) on either surface.
  */
 export const MONITOR_SURFACE_NOTE =
   "traycer monitor is an explicit readonly-surface exception: refusing the delivery daemon would break inbox delivery rather than remove a capability";

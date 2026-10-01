@@ -1,8 +1,8 @@
 import {
   parkedActivationMatchesInstall,
+  supervisorRelaunchInstalledIdentityOf,
   type HostUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
-import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   readHostInstallRecord,
   type HostInstallRecord,
@@ -143,16 +143,15 @@ export async function parkedActivationRelaunchable(
     }
     throw err;
   }
+  // The supervisor's own mapping (`host/update-contender.ts`'s
+  // `readSupervisorRelaunchInstalledIdentity` uses it too), so this park
+  // comparison and the relaunch it predicts cannot disagree about the same
+  // install record. Only the READ is this module's, because a caller here must
+  // tell an unreadable record from an absent one.
   return parkedActivationMatchesInstall(
     record,
     installed === null
       ? null
-      : {
-          installedVersion: installed.version,
-          // The RECORD, never a rebuilt literal - compared byte-for-byte with
-          // the baseline `installGenerationOf` wrote at park time, exactly as
-          // the supervisor's reader does (`commands/host-start.ts`).
-          installGeneration: encodeInstallGeneration(installed),
-        },
+      : supervisorRelaunchInstalledIdentityOf(installed),
   );
 }

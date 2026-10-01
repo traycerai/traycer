@@ -80,9 +80,14 @@ type StartLoginMutate = (
   options: StartLoginOptions,
 ) => void;
 
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the attempt's own `AbortSignal`.
 type AwaitLoginVariables = {
-  readonly providerId: ProviderCliState["providerId"];
-  readonly profileId: string | null;
+  readonly request: {
+    readonly providerId: ProviderCliState["providerId"];
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
 };
 type AwaitLoginOptions = {
   readonly onSuccess: (data: unknown) => void;
@@ -147,6 +152,11 @@ type SetEnabledVariables = RequestOfMethod<
   "providers.setEnabled"
 >;
 type SetEnabledMutate = (variables: SetEnabledVariables) => void;
+
+type CancelLoginVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.cancelLogin"
+>;
 
 const providerMocks = vi.hoisted(() => ({
   listResult: {
@@ -447,6 +457,10 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
   const useProvidersCancelLogin = () => ({
     mutate: providerMocks.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      providerMocks.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
     isPending: providerMocks.cancelLoginPending,
   });
   return {
@@ -3353,6 +3367,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
   });
 
@@ -3977,6 +3992,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
     expect(typeof startOptions.onSuccess).toBe("function");
 
@@ -3990,10 +4006,11 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     expect(typeof awaitOptions.onSuccess).toBe("function");
   });
 
@@ -4564,6 +4581,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "ambient",
       createProfile: null,
+      holderId: null,
     });
     // From here on the re-poll's timer is the only thing being waited on -
     // drive it deterministically instead of sleeping out the real delay.
@@ -4582,10 +4600,11 @@ describe("<ProvidersSettingsPanel />", () => {
     // reads non-definitive with the probe still in flight (`authPending`).
     // That must resolve as "not settled yet" - never as a failed sign-in.
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "ambient",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
       awaitOptions.onSuccess(pendingAmbientAwaitResponse());
     });
@@ -4602,10 +4621,11 @@ describe("<ProvidersSettingsPanel />", () => {
     if (repollCall === undefined) {
       throw new Error("Expected re-poll await login call.");
     }
-    expect(repollCall[0]).toEqual({
+    expect(repollCall[0].request).toEqual({
       providerId: "codex",
       profileId: "ambient",
     });
+    expect(repollCall[0].signal).toBeInstanceOf(AbortSignal);
     act(() => {
       repollCall[1].onSuccess({
         codeRejected: false,
@@ -4690,6 +4710,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "ambient",
+      holderId: null,
     });
 
     act(() => {
@@ -5307,6 +5328,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-pending",
+      holderId: null,
     });
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -5385,6 +5407,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
     expect(screen.queryByText("Switching account")).toBeNull();
 
@@ -5507,6 +5530,7 @@ describe("<ProvidersSettingsPanel />", () => {
           providerId: "claude-code",
           profileId: "work-profile",
           createProfile: null,
+          holderId: null,
         },
         expect.anything(),
       );
@@ -5661,6 +5685,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
     await act(() => {
@@ -5673,10 +5698,11 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
-    expect(awaitVariables).toEqual({
+    expect(awaitVariables.request).toEqual({
       providerId: "codex",
       profileId: "managed-1",
     });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
     act(() => {
       awaitOptions.onSuccess({
         state: {
@@ -5729,6 +5755,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: "managed-1",
       createProfile: null,
+      holderId: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
@@ -5736,6 +5763,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
       profileId: "managed-1",
+      holderId: null,
     });
 
     await act(() => {
@@ -6353,6 +6381,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
@@ -6416,6 +6445,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "claude-code",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: true },
+      holderId: null,
     });
   });
 
@@ -6528,6 +6558,7 @@ describe("<ProvidersSettingsPanel />", () => {
       providerId: "codex",
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
+      holderId: null,
     });
   });
 
@@ -7129,6 +7160,7 @@ describe("<ProvidersSettingsPanel />", () => {
         label: "Work",
         shareSkillsAndPlugins: false,
       },
+      holderId: null,
     });
 
     const [, startOptions] = firstStartLoginCall();

@@ -84,15 +84,12 @@ const WCO_LEADING_INSET_FALLBACK = 82;
 /** `min(env(titlebar-area-x, 82px), 0.75rem)` while the inspector docks left. */
 const LEFT_DOCK_COLUMN_GUTTER = 12;
 /**
- * The rail tile, its monogram chip and the expanded row's leading tile and
- * badge: `SIDE_TAB_TILE_CLASS` (`h-11 w-10`), `MonogramChip` (`h-[22px]
- * w-[26px]`), `SIDE_TAB_LEADING_TILE_CLASS` and the badge's `size-2.5`, all in
- * `side-strip-tokens.ts` / `side-tab-row.tsx`. None is exported as a number.
+ * The rail tile and its monogram chip: `SIDE_TAB_TILE_CLASS` (`h-11 w-10`)
+ * and `MonogramChip` (`h-[22px] w-[26px]`), in `side-strip-tokens.ts` /
+ * `side-tab-row.tsx`. Neither is exported as a number.
  */
 const SIDE_TAB_TILE = { width: 40, height: 44 };
 const SIDE_TAB_MONOGRAM_CHIP = { width: 26, height: 22 };
-const SIDE_TAB_LEADING_TILE = { width: 20, height: 16 };
-const SIDE_TAB_BADGE = 10;
 /** A pixel is the session fill when every channel is this close to the painted token. */
 const SOLID_FILL_TOLERANCE = 12;
 
@@ -596,7 +593,7 @@ async function assertRail(
 interface TileRead {
   readonly rect: Rect;
   readonly chip: Rect | null;
-  readonly tint: string | null;
+  readonly accent: string | null;
   readonly active: string | null;
 }
 
@@ -611,7 +608,7 @@ const TILES_BY_MONOGRAM_PROBE = `(() => {
     return [(chip?.textContent ?? "").trim(), {
       rect: box(tile),
       chip: chip === null ? null : box(chip),
-      tint: tile.getAttribute("data-tint"),
+      accent: tile.querySelector('[data-testid="side-tab-accent"]')?.getAttribute("data-accent") ?? null,
       active: tile.getAttribute("data-active"),
     }];
   }));
@@ -643,11 +640,13 @@ function tileIsActive(monogram: string): string {
 const ACTIVE_FILL_FLOOR = 1.1;
 
 /**
- * The rail tile's two fills in both themes (D4, D11): the tint lives on the
- * chip (`data-tint` is `tab` for a coloured tab, `auto` for a task without
- * one), and the ACTIVE tile paints its own fill around the chip. Delta (a tab
- * colour) and Epsilon (none, so its own hue) are read inactive and then
- * active, on the tile's own fill beside the chip.
+ * The rail tile's two fills in both themes (D4, D11 - auto-tint retired,
+ * `side-tab-row.tsx`): the tint lives on the ring (`side-tab-accent`'s
+ * `data-accent`, `true` for a coloured tab, `false` for a task with none -
+ * auto-tint no longer reaches the row, so an uncoloured task draws no ring at
+ * all), and the ACTIVE tile paints its own fill around the chip. Delta (a tab
+ * colour) and Epsilon (none) are read inactive and then active, on the
+ * tile's own fill beside the chip.
  *
  * The point is on the tile's left edge at mid height, 3px in: straight fill,
  * clear of the chip (which starts 7px in) and of the corners. The driver read
@@ -670,8 +669,8 @@ async function assertTileFill(page: Page): Promise<void> {
     await activateEpicAndWait(page, "fixture-zeta", tileIsActive("ZS"));
     await moveTo(page, 1, 1);
     const cases = [
-      { monogram: "DM", epicId: "fixture-delta", tint: "tab" },
-      { monogram: "EC", epicId: "fixture-epsilon", tint: "auto" },
+      { monogram: "DM", epicId: "fixture-delta", accent: "true" },
+      { monogram: "EC", epicId: "fixture-epsilon", accent: "false" },
     ];
     const resting = await tilesByMonogram(page);
     for (const entry of cases) {
@@ -681,8 +680,8 @@ async function assertTileFill(page: Page): Promise<void> {
         continue;
       }
       violations.check(
-        tile.tint === entry.tint,
-        `${theme}: the "${entry.monogram}" tile is data-tint=${String(tile.tint)}, expected ${entry.tint} (D11)`,
+        tile.accent === entry.accent,
+        `${theme}: the "${entry.monogram}" tile's ring is data-accent=${String(tile.accent)}, expected ${entry.accent} (D11)`,
       );
       const point = {
         x: tile.rect.x + 3,
@@ -709,7 +708,7 @@ async function assertTileFill(page: Page): Promise<void> {
       const fillRatio = contrastRatio(ground, painted);
       const chipRatio = contrastRatio(chipPixel, ground);
       note(
-        `${theme}: "${entry.monogram}" (${String(tile.tint)}) ground ${rgbText(ground)} -> active ${rgbText(painted)} = ${fillRatio.toFixed(2)}:1 (its computed fill is ${computed}); chip ${rgbText(chipPixel)} against the ground ${chipRatio.toFixed(2)}:1`,
+        `${theme}: "${entry.monogram}" (accent ${String(tile.accent)}) ground ${rgbText(ground)} -> active ${rgbText(painted)} = ${fillRatio.toFixed(2)}:1 (its computed fill is ${computed}); chip ${rgbText(chipPixel)} against the ground ${chipRatio.toFixed(2)}:1`,
       );
       violations.check(
         active?.active === "true",
@@ -745,21 +744,21 @@ async function assertTileFill(page: Page): Promise<void> {
 const CHIP_DIFFERS_FLOOR = 1.05;
 
 /**
- * The row kit in the expanded strip, at rest (review-10): the 10px badge on a
- * 16px leading tile, drawn and not clipped; and the group line down the
+ * The group line in the expanded strip, at rest (review-10): down the
  * group's inline-start edge as ONE continuous line across its members,
  * including the split pair's rows inside the pair's padding.
+ *
+ * This used to also check the 10px status badge on a 16px leading tile, but
+ * that combination no longer exists: a monogram row (every task tab in this
+ * fixture, `side-tab-strip-seed.ts`) never gets a leading tile of its own any
+ * more - `LeadingSlot` in `side-tab-row.tsx` only builds one for a CUSTOM
+ * ICON, because a status badge on a tile that small read as a growth on the
+ * monogram's letters. Delta's seeded failure still shows - as the "Failed"
+ * chip in the row's trailing slot (`trailingStatus`), a different element
+ * with its own coverage - so there was nothing left here to measure.
  */
 async function assertRowKit(page: Page): Promise<void> {
   const kit = await page.evaluate<{
-    readonly scroller: Rect | null;
-    readonly badge: {
-      readonly rect: Rect;
-      readonly kind: string | null;
-      readonly color: string;
-    } | null;
-    readonly tile: Rect | null;
-    readonly title: Rect | null;
     readonly lines: ReadonlyArray<{
       readonly rect: Rect;
       readonly color: string;
@@ -767,87 +766,18 @@ async function assertRowKit(page: Page): Promise<void> {
     }>;
   }>(`(() => {
     const strip = document.querySelector('[data-testid="side-tab-strip"]');
-    const scroller = strip.querySelector('[data-testid="header-tab-strip-scroll"]');
     const rect = (node) => {
       const r = node.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     };
-    const badge = strip.querySelector('[data-side-tab="expanded"] [data-testid="side-tab-leading"] [data-testid="side-tab-rail-badge"]');
-    const tile = badge === null ? null : badge.closest('[data-testid="side-tab-leading"]').querySelector('[data-testid="side-tab-leading-tile"]');
-    const title = badge === null ? null : badge.closest('[data-side-tab]').querySelector('[data-testid="side-tab-title"]');
     const lines = [...strip.querySelectorAll('[data-testid="side-tab-group-line"]')].map((line) => ({
       rect: rect(line),
       color: getComputedStyle(line).backgroundColor,
       inPair: line.closest("[data-side-split-pair]") !== null,
     }));
-    return {
-      scroller: scroller === null ? null : rect(scroller),
-      badge: badge === null ? null : { rect: rect(badge), kind: badge.getAttribute("data-kind"), color: getComputedStyle(badge).backgroundColor },
-      tile: tile === null ? null : rect(tile),
-      title: title === null ? null : rect(title),
-      lines,
-    };
+    return { lines };
   })()`);
   const violations = violationLog();
-  if (kit.badge === null || kit.tile === null) {
-    violations.add(
-      "no status badge on an expanded row's leading tile (the seeded failure on Delta)",
-    );
-  } else {
-    note(
-      `badge ${String(kit.badge.kind)} ${boxText(kit.badge.rect)} on tile ${boxText(kit.tile)}`,
-    );
-    violations.check(
-      Math.abs(kit.tile.width - SIDE_TAB_LEADING_TILE.width) <= 0.5 &&
-        Math.abs(kit.tile.height - SIDE_TAB_LEADING_TILE.height) <= 0.5,
-      `the leading tile is ${kit.tile.width.toFixed(1)}x${kit.tile.height.toFixed(1)}, expected ${String(SIDE_TAB_LEADING_TILE.width)}x${String(SIDE_TAB_LEADING_TILE.height)} (S-35, R1)`,
-    );
-    violations.check(
-      Math.abs(kit.badge.rect.width - SIDE_TAB_BADGE) <= 0.5 &&
-        Math.abs(kit.badge.rect.height - SIDE_TAB_BADGE) <= 0.5,
-      `the badge is ${kit.badge.rect.width.toFixed(1)}x${kit.badge.rect.height.toFixed(1)}, expected ${String(SIDE_TAB_BADGE)}px (S-17)`,
-    );
-    // A8: the badge sits in the space reserved beside the tile, level with its
-    // top, so it never covers the monogram and its 2px ring never reaches the
-    // title.
-    const tileRight = kit.tile.x + kit.tile.width;
-    violations.check(
-      kit.badge.rect.x >= tileRight - 0.5,
-      `the badge starts at x=${kit.badge.rect.x.toFixed(1)}, over the leading tile that ends at x=${tileRight.toFixed(1)}, so it covers the monogram`,
-    );
-    violations.check(
-      Math.abs(kit.badge.rect.y - (kit.tile.y - 2)) <= 0.5,
-      `the badge's top is at y=${kit.badge.rect.y.toFixed(1)}, not 2px above the tile's top at y=${kit.tile.y.toFixed(1)}`,
-    );
-    if (kit.title === null) {
-      violations.add(
-        "the badged row has no title to measure the badge against",
-      );
-    } else {
-      violations.check(
-        kit.badge.rect.x + kit.badge.rect.width + 2 <= kit.title.x + 0.5,
-        `the badge's ring ends at x=${(kit.badge.rect.x + kit.badge.rect.width + 2).toFixed(1)}, past the title's start at x=${kit.title.x.toFixed(1)}`,
-      );
-    }
-    if (kit.scroller !== null) {
-      violations.check(
-        kit.badge.rect.y - 2 >= kit.scroller.y - 0.5,
-        `the badge's ring reaches y=${(kit.badge.rect.y - 2).toFixed(1)}, above the scroller's top at y=${kit.scroller.y.toFixed(1)}, so it is clipped`,
-      );
-    }
-    // MessageSquareX paints through the centre; count ink against the known
-    // ground because the badge is too small for an empty padding sample.
-    const expected = await resolveRgb(page, kit.badge.color);
-    const ink = await inkInside(page, kit.badge.rect, expected);
-    note(
-      `badge ink pixels: ${String(ink)} against its ground colour ${rgbText(expected)}`,
-    );
-    violations.check(
-      ink >= 4,
-      `the badge paints ${String(ink)} ink pixels inside its ${kit.badge.rect.width.toFixed(1)}x${kit.badge.rect.height.toFixed(1)} box, so its status glyph is not drawn`,
-    );
-  }
-
   const lines = kit.lines;
   violations.check(
     lines.length >= 3,
@@ -897,7 +827,7 @@ async function assertRowKit(page: Page): Promise<void> {
       `only ${(lit * 100).toFixed(1)}% of the group line's run from y=${top.toFixed(1)} to y=${bottom.toFixed(1)} is painted in the group colour, so it is not one continuous line`,
     );
   }
-  violations.assertNone("Row kit: the expanded row's badge and group line");
+  violations.assertNone("Row kit: the expanded row's group line");
 }
 
 /** A right strip sits left of a right-docked inspector, never under it (6.1). */
@@ -1017,7 +947,7 @@ test.describe("a frameless window (no window-controls overlay)", () => {
     await assertTileFill(page);
   });
 
-  test("the expanded row's status badge clears its tile and title, and the group line is one continuous line", async () => {
+  test("the expanded row's group line is one continuous line", async () => {
     const page = getPage();
     await configureCanvas(page, tabsAt("left", false));
     await moveTo(page, 1, 1);

@@ -112,6 +112,7 @@ function runBootstrap(props: {
         sessionId: "term-signin",
         instanceId: "inst-signin",
         sessionKind: "terminal",
+        viewer: "presentation",
         enabled: props.enabled,
         adoptOnly: props.adoptOnly,
         preparePayload: () =>

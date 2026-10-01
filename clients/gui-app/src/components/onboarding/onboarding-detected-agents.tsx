@@ -1,6 +1,8 @@
+import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import {
   type ProviderCliState,
   type ProviderId,
+  type ProviderLoginRefusal,
   type ProvidersAwaitLoginResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import { ExternalLink, Info } from "lucide-react";
@@ -25,6 +27,10 @@ import {
   providerSignInUnavailableHint,
   providerSupportsTerminalLogin,
 } from "@/components/providers/provider-signin-availability";
+import {
+  ProviderLoginRefusalAction,
+  ProviderLoginRefusalMessage,
+} from "@/components/providers/provider-login-refusal";
 import { CodePasteField } from "@/components/settings/panels/code-paste-field";
 import { SignInCopyIconButton } from "@/components/settings/panels/sign-in-copy-icon-button";
 import type { ProviderProfileLoginFlowCodePaste } from "@/components/settings/panels/use-provider-profile-login-flow";
@@ -698,9 +704,12 @@ function resolveStartRefusal(
 }
 
 function SignInToEnableAlerts(props: {
+  readonly providerId: ProviderId;
   readonly declined: boolean;
   readonly declinedMessage: string;
   readonly notAuthenticated: boolean;
+  /** Why the provider turned the completed sign-in away, when it said. */
+  readonly refusal: ProviderLoginRefusal | null;
 }): ReactNode {
   return (
     <>
@@ -709,7 +718,19 @@ function SignInToEnableAlerts(props: {
           {props.declinedMessage}
         </span>
       ) : null}
-      {props.notAuthenticated ? (
+      {props.notAuthenticated && props.refusal !== null ? (
+        <span
+          className="flex flex-col items-start gap-1.5 text-ui-xs text-destructive"
+          role="alert"
+        >
+          <ProviderLoginRefusalMessage
+            providerId={props.providerId}
+            refusal={props.refusal}
+          />
+          <ProviderLoginRefusalAction refusal={props.refusal} />
+        </span>
+      ) : null}
+      {props.notAuthenticated && props.refusal === null ? (
         <span className="text-ui-xs text-destructive" role="alert">
           Sign-in did not complete. This provider is still off.
         </span>
@@ -732,6 +753,7 @@ function SignInToEnableButton(props: {
   readonly onEnable: (providerId: ProviderId) => void;
 }) {
   const { state, enablementPending, isLocalHost, onEnable } = props;
+  const supportsLoginOwnership = useProvidersLoginOwnership();
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   const ensurePack = useProvidersEnsurePack();
@@ -863,11 +885,12 @@ function SignInToEnableButton(props: {
       startLogin.data ?? null,
     );
     setStartProgress({ kind: "opening" });
+    const holderId = supportsLoginOwnership ? crypto.randomUUID() : null;
     void startProviderLoginUntilSettled({
       // Ambient login, not a managed profile: onboarding has no profile
       // management surface, and the account a first sign-in creates is the
       // provider's own CLI login.
-      request: { providerId, profileId: null, createProfile: null },
+      request: { providerId, profileId: null, createProfile: null, holderId },
       startLogin: (request) => startLogin.mutateAsync(request),
       ensurePack: () => ensurePack.mutateAsync({ providerId }),
       retryPackFirst,
@@ -888,7 +911,7 @@ function SignInToEnableButton(props: {
           ? providerLoginAnswerHeldForNobody(result, state.loginCapability)
           : providerLoginAnswerStillStarting(result);
         if (heldForNobody) {
-          cancelLogin.mutate({ providerId, profileId: null });
+          cancelLogin.mutate({ providerId, profileId: null, holderId });
         }
         if (unmountedRef.current) return;
         setStartProgress(null);
@@ -957,7 +980,7 @@ function SignInToEnableButton(props: {
         };
         const awaitOnce = (): void => {
           awaitLogin.mutate(
-            { providerId, profileId: null },
+            { request: { providerId, profileId: null }, signal: undefined },
             {
               onSuccess: handleCompletion,
               // A failed await ends the attempt: the mutation's own
@@ -1031,9 +1054,11 @@ function SignInToEnableButton(props: {
           providerId={state.providerId}
         />
         <SignInToEnableAlerts
+          providerId={state.providerId}
           declined={declined}
           declinedMessage={declinedMessage}
           notAuthenticated={notAuthenticated}
+          refusal={awaitLogin.data?.refusal ?? null}
         />
         <Button
           type="button"

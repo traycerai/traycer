@@ -73,21 +73,56 @@
   ${else}
     DetailPrint "Traycer: removing the host autostart (Scheduled Task + launcher)"
 
-    ; Stop the instance the task currently owns. This is not a complete stop -
-    ; Task Scheduler does not job-object the tree, so a wrapper -> node child
-    ; can survive as an orphan until reboot (see `killHostProcessTree` in
-    ; windows.ts, which needs a pid-verified scan to do better). That orphan is
-    ; harmless here: it holds no handle on $INSTDIR, so it cannot block this
-    ; uninstall, and with the trigger deleted below it never comes back.
-    nsExec::ExecToLog 'schtasks /End /TN "${TRAYCER_WINDOWS_TASK_NAME}"'
-    Pop $R0
+    ; WHOSE TASK IS IT - asked before any of the three writes below, and each
+    ; one runs only on the answer. The task name is machine-global: every
+    ; Windows account that runs Traycer names the same task, but it belongs to
+    ; the account in its principal. An uninstaller elevated as an admin (a
+    ; per-machine install, or an admin removing it) holds, by the default task
+    ; DACL, the right to end and delete ANOTHER user's task - which would take
+    ; that user's host autostart away. So the task is ended and deleted only
+    ; when its principal is the account running this uninstaller (the CLI's
+    ; ownership gate, `windows-task-gate.ts`, is the same rule), and the folder
+    ; is emptied only when the task is gone or was that account's. Everything
+    ; else - the app, this account's launcher - is still removed.
+    ;
+    ; The probe, a PowerShell bounded by nsExec's /TIMEOUT (a stalled
+    ; Schedule.Service RPC or account lookup answers `timeout`, which is not 0
+    ; or 2), exits:
+    ;   0  the task is this account's        -> end it, delete it, folder
+    ;   2  there is no such task, or no such  -> folder only
+    ;      folder (0x80070002 / 0x80070003)
+    ;   3  the task is another user's        -> none of the three
+    ;   4  the task or its principal could    -> none of the three (fail closed:
+    ;      not be read (access denied too),      not provably this account's)
+    ;      or did not resolve to a SID
+    ; and anything else (nsExec's `error`, a killed PowerShell) is not 0 or 2,
+    ; so it too leaves the task alone. The principal is compared as a SID; a
+    ; principal that reads back as an account name is resolved to one first.
+    ; Nothing about either account is printed. `$R1` holds the answer: the
+    ; same code re-runs GetParameters into it right after this macro.
+    nsExec::ExecToLog /TIMEOUT=30000 `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect()}catch{exit 4};try{$$t=$$s.GetFolder('\').GetTask('${TRAYCER_WINDOWS_TASK_NAME}')}catch{$$e=$$_.Exception;if($$e.InnerException){$$e=$$e.InnerException};if(($$e.HResult -eq -2147024894) -or ($$e.HResult -eq -2147024893)){exit 2};exit 4};try{$$u=[string]$$t.Definition.Principal.UserId;if($$u -notmatch '^S-1-[0-9]+(-[0-9]+)+$$'){$$u=(New-Object System.Security.Principal.NTAccount($$u)).Translate([System.Security.Principal.SecurityIdentifier]).Value};$$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;if($$u -ieq $$me){exit 0};exit 3}catch{exit 4}"`
+    Pop $R1
 
-    ; Delete the logon trigger. THIS is the fix - it is what stops the host
-    ; coming back at every future logon.
-    nsExec::ExecToLog 'schtasks /Delete /TN "${TRAYCER_WINDOWS_TASK_NAME}" /F'
-    Pop $R0
+    ${if} $R1 == "0"
+      ; Stop the instance the task currently owns. This is not a complete stop -
+      ; Task Scheduler does not job-object the tree, so a wrapper -> node child
+      ; can survive as an orphan until reboot (see `killHostProcessTree` in
+      ; windows.ts, which needs a pid-verified scan to do better). That orphan is
+      ; harmless here: it holds no handle on $INSTDIR, so it cannot block this
+      ; uninstall, and with the trigger deleted below it never comes back.
+      nsExec::ExecToLog 'schtasks /End /TN "${TRAYCER_WINDOWS_TASK_NAME}"'
+      Pop $R0
 
-    ; Remove the launcher the task's action pointed at.
+      ; Delete the logon trigger. THIS is the fix - it is what stops the host
+      ; coming back at every future logon.
+      nsExec::ExecToLog 'schtasks /Delete /TN "${TRAYCER_WINDOWS_TASK_NAME}" /F'
+      Pop $R0
+    ${elseIf} $R1 != "2"
+      DetailPrint "Traycer: the host's Scheduled Task is owned by another user; leaving it in place"
+    ${endIf}
+
+    ; Remove the launcher this account's task pointed at. It lives under THIS
+    ; account's profile whoever owns the task, so it goes either way.
     Delete "${TRAYCER_HOST_LAUNCHER}"
 
     ; `schtasks /Delete` removes only the task; the `\Traycer` FOLDER it lived
@@ -107,8 +142,13 @@
     ;      leaves them both literal.
     ;
     ; Wrapped in try/catch because GetFolder throws when the folder is already
-    ; gone, which is a perfectly normal outcome here.
-    nsExec::ExecToLog `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect();$$f=$$s.GetFolder('\${TRAYCER_WINDOWS_TASK_FOLDER}');if((@($$f.GetTasks(1)).Count -eq 0) -and (@($$f.GetFolders(0)).Count -eq 0)){$$s.GetFolder('\').DeleteFolder('${TRAYCER_WINDOWS_TASK_FOLDER}',0)}}catch{}"`
-    Pop $R0
+    ; gone, which is a perfectly normal outcome here. Only after the task above
+    ; was this account's and is deleted, or was never there (the ownership
+    ; probe's 0 or 2): a folder still holding another user's task is theirs.
+    ${if} $R1 == "0"
+    ${orIf} $R1 == "2"
+      nsExec::ExecToLog `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect();$$f=$$s.GetFolder('\${TRAYCER_WINDOWS_TASK_FOLDER}');if((@($$f.GetTasks(1)).Count -eq 0) -and (@($$f.GetFolders(0)).Count -eq 0)){$$s.GetFolder('\').DeleteFolder('${TRAYCER_WINDOWS_TASK_FOLDER}',0)}}catch{}"`
+      Pop $R0
+    ${endIf}
   ${endIf}
 !macroend

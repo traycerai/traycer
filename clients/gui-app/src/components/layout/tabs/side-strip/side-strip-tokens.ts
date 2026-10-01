@@ -53,19 +53,13 @@ export const SIDE_TAB_ROW_CLASS = "h-8 rounded-lg px-2 gap-2";
  */
 export const SIDE_TAB_LEADING_CLASS = "size-4 me-2";
 /**
- * The leading slot when it holds a tile, by tile kind. An icon keeps the 16px
- * slot, so Home's glyph stands where Notifications' and All tasks' do. A monogram
- * takes 20px of the same 24px, the rail chip's shape (26x22) at row size, so
- * two letters stand clear of its edges; its badge then sits flush beside it,
- * its ring ending where the title starts.
+ * The leading slot when it holds a custom-icon tile: the 16px slot, so Home's
+ * glyph stands where Notifications' and All tasks' do. A monogram never takes
+ * this slot in the expanded row (see `LeadingSlot`) - only the collapsed
+ * rail's own tile (`MonogramChip`) still draws one.
  */
-export const SIDE_TAB_LEADING_TILE_SLOT_CLASS: Readonly<
-  Record<"icon" | "monogram", string>
-> = {
-  icon: "size-4 me-2",
-  monogram: "h-4 w-5 me-1",
-};
-/** A custom icon or monogram tile in that slot, the slot's own size. */
+export const SIDE_TAB_LEADING_TILE_SLOT_CLASS = "size-4 me-2";
+/** A custom icon tile in that slot, the slot's own size. */
 export const SIDE_TAB_LEADING_TILE_CLASS =
   "size-full rounded-sm text-[0.5625rem] font-semibold leading-none tracking-tight";
 export const SIDE_TAB_TITLE_CLASS = "text-[0.8125rem] leading-4";
@@ -73,6 +67,28 @@ export const SIDE_TAB_TRAILING_CLASS = "min-w-5 h-5";
 export const SIDE_TAB_ACTIVE_CLASS = "bg-foreground/8";
 export const SIDE_TAB_HOVER_CLASS = "hover:bg-foreground/5";
 export const SIDE_TAB_SESSION_ACTIVE_CLASS = "bg-warning-foreground";
+/**
+ * The per-tab colour accent (owner ruling, fix/layout-regression-and-improvements):
+ * an expanded row's 4px bar down its own leading edge, inside the row's own
+ * padding - never tinted, never auto-hashed (D11's `tabAutoTint` no longer
+ * reaches this mark). Always rendered, coloured through `--side-tab-accent`;
+ * a colourless tab sets it to `transparent`, so the mark reserves its space
+ * without inventing a colour. Distinct from the 2px group line (S-16), which
+ * sits *outside* the row in the list's gutter, so the two never merge into
+ * one mark even on the same row.
+ */
+export const SIDE_TAB_ACCENT_BAR_CLASS =
+  "pointer-events-none absolute inset-y-1.5 start-0 w-1 rounded-full bg-(--side-tab-accent)";
+/**
+ * The same accent, as a ring around the collapsed 40px tile (no room for a left
+ * bar there). `z-22` is one above the sheet-join bridge (`z-index: 21` in
+ * `index.css`): the ring is a shadow drawn 2px OUTSIDE the tile, so on the
+ * active, joined tile its right side lies inside the bridge's box, and at the
+ * bridge's level or below it was painted over - the ring read as a "C", cut
+ * off at the tile's edge.
+ */
+export const SIDE_TAB_TILE_ACCENT_RING_CLASS =
+  "pointer-events-none absolute inset-0 z-22 rounded-xl ring-2 ring-(--side-tab-accent)";
 /**
  * The group colour line down the group's inline-start edge, in the list's
  * inset outside the row fill: 2px wide, 6px before the row's box.

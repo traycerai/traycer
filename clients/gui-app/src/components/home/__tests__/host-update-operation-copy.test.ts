@@ -519,3 +519,40 @@ describe("describeUpdateOperation — verification-refused", () => {
     expect(copy.needsQualifiedMarker).toBe(false);
   });
 });
+
+describe("describeUpdateOperation — failed with the store-format floor code", () => {
+  const failedView = (
+    overrides: Partial<FleetUpdateView>,
+  ): FleetUpdateView => ({
+    ...UNKNOWN_FLEET_UPDATE_VIEW,
+    kind: "failed",
+    targetVersion: "2.1.0",
+    errorMessage: "raw CLI refusal; pass --accept-store-format-loss",
+    errorCode: null,
+    ...overrides,
+  });
+
+  it("says the update would install a host that cannot read this data and points at Settings › Host, without the raw CLI text", () => {
+    const copy = describeUpdateOperation({
+      view: failedView({ errorCode: "E_HOST_STORE_FORMAT_FLOOR" }),
+      hostName: "host-a",
+      cliFloorBlocked: false,
+    });
+    expect(copy.primary).toContain("Settings › Host");
+    expect(copy.primary).toMatch(/cannot read|unable to read|can't read/i);
+    expect(copy.primary).not.toContain("--accept-store-format-loss");
+    expect(copy.primary).not.toContain("raw CLI refusal");
+  });
+
+  it.each([
+    ["another code", "E_SOMETHING_ELSE"],
+    ["no code", null],
+  ])("keeps today's sentence for %s", (_name, errorCode) => {
+    const copy = describeUpdateOperation({
+      view: failedView({ errorCode, errorMessage: "disk on fire" }),
+      hostName: "host-a",
+      cliFloorBlocked: false,
+    });
+    expect(copy.primary).toBe("Update failed: disk on fire");
+  });
+});

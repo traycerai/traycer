@@ -16,6 +16,8 @@ import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
 import { makeBarrierGate } from "../../__tests__/support/barrier-gate";
 import { epochMicrosNow } from "../platforms/windows";
 import { atServiceSpawnEdge } from "../spawn-edge";
+import { reportServiceInstallKeptDisabled } from "../registration-repair";
+import { SERVICE_KEPT_DISABLED_WARNING } from "../registration-owner";
 
 const mocks = vi.hoisted(() => ({
   createServiceControllerMock: vi.fn(),
@@ -340,6 +342,37 @@ describe("service install lifecycle re-registration", () => {
       override: null,
       allowSelfInvocation: true,
     });
+  });
+
+  // R5 §49a: the bootstrap branch (`priorState === "not-installed"`,
+  // `options.bootstrap !== null` - `host install` on a machine read as not
+  // installed) registers through `registerService` directly, NOT through
+  // `withServiceInstallReport` as the existing-registration branch does
+  // (compare the "reloads an existing ... registration" tests below), so a
+  // controller whose `install` reports kept-disabled has nowhere for that
+  // report to land.
+  //
+  // RED today: `state.postSwapWarning` stays `null`.
+  it("49a: a controller that reports kept-disabled on the bootstrap install still sets postSwapWarning to SERVICE_KEPT_DISABLED_WARNING", async () => {
+    const harness = makeController("not-installed");
+    harness.install.mockImplementation(async () => {
+      await atServiceSpawnEdge();
+      reportServiceInstallKeptDisabled();
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(handle.state.postSwapAction).toBe("install");
+    expect(handle.state.postSwapWarning).toEqual(SERVICE_KEPT_DISABLED_WARNING);
+    expect(handle.state.postSwapError).toBeNull();
   });
 
   it("rechecks the mutation verifier at raw stop, start, and register actuators", async () => {
@@ -1849,5 +1882,63 @@ describe("restartAfterAbortedSwap (Desktop-managed: the stop route reports what 
     await handle.lifecycle.restartAfterAbortedSwap();
 
     expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+  });
+});
+
+// `createBytesOnlyInstallLifecycle`'s `restartAfterAbortedSwap` calls a
+// bare `controller.start(label)`, unlike `createServiceInstallLifecycle`'s
+// equivalent restore (`:366-380`), which wraps its start in
+// `runWithPublishedHostStartAdoption` so the controller's spawn-edge lease
+// can publish a host-start adoption proof. The bytes-only lifecycle has no
+// `setHostStartAdoptionPublisher` at all, so a Windows install that stops a
+// running host, aborts before the swap, and restarts it leaves no adoption
+// proof behind.
+describe("createBytesOnlyInstallLifecycle publishes host-start adoption on restartAfterAbortedSwap", () => {
+  it("Windows, a running host: setHostStartAdoptionPublisher is wired, and restartAfterAbortedSwap publishes before/at the restart's spawn edge", async () => {
+    const harness = makeController("running");
+    // The same edge probe the post-swap rows above use: "controller-entered"
+    // lands BEFORE the fake reaches its spawn edge, so it can precede
+    // "publish" only when the edge - not the call - publishes the proof.
+    const events: string[] = [];
+    harness.start.mockImplementation(async () => {
+      events.push("controller-entered");
+      await atServiceSpawnEdge();
+      events.push("start");
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const bytesOnly = createBytesOnlyInstallLifecycle(
+      harness.controller,
+      label,
+      NO_INSTALL_PHASE_HOOKS,
+    );
+
+    await withPlatformAsync("win32", () => bytesOnly.beforeSwap());
+    expect(harness.stop).toHaveBeenCalledTimes(1);
+
+    expect(bytesOnly.setHostStartAdoptionPublisher).not.toBeUndefined();
+    const setPublisher = bytesOnly.setHostStartAdoptionPublisher;
+    if (setPublisher === undefined) {
+      throw new Error(
+        "createBytesOnlyInstallLifecycle exposes no adoption publisher seam",
+      );
+    }
+    const lease = {
+      waitForSpawn: vi.fn(async () => undefined),
+      cancel: vi.fn(async () => undefined),
+    };
+    const publishSpy = vi.fn(async (serviceLabel: string) => {
+      expect(serviceLabel).toBe(label.id);
+      events.push("publish");
+      return lease;
+    });
+    setPublisher(publishSpy);
+
+    await withPlatformAsync("win32", () => bytesOnly.restartAfterAbortedSwap());
+
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    expect(publishSpy).toHaveBeenCalledWith(label.id);
+    expect(harness.start).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["controller-entered", "publish", "start"]);
+    expect(lease.waitForSpawn).toHaveBeenCalledTimes(1);
   });
 });

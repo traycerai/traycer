@@ -43,6 +43,10 @@ vi.mock("@/lib/host/runtime", async (importActual) => {
     useHostBinding: () => ({ hostClient: { id: "real-client" } }),
   };
 });
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
+}));
 
 import { ProviderReauthBanner } from "@/components/chat/composer/provider-reauth-banner";
 

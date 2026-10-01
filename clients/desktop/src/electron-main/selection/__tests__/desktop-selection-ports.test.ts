@@ -30,6 +30,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
@@ -1217,7 +1218,7 @@ describe("DesktopHostFleetSource", () => {
     expect(contaminatedAfterStaleSettled).toBe(false);
 
     // ANTI-VACUITY: sign in and drive a fresh local-host change. Wait on the
-    // observable (not flushIo) so the pipeline is proven under CI load.
+    // observable (not a fixed sleep) so the pipeline is proven under CI load.
     setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
     host.emitChange();
     await vi.waitFor(() => {
@@ -2032,6 +2033,8 @@ function buildControllerStatus(
     reachable: true,
     localAttempt: null,
     removedByUser: false,
+    lastEnsureFailure: null,
+    updateDeferral: null,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
 }
@@ -2259,6 +2262,7 @@ class FakeHostController implements IpcHostController {
         removedInstallDir: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
       },
     };
   }
@@ -2269,12 +2273,18 @@ class FakeHostController implements IpcHostController {
         removedHost: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
         removedLoginItem: false,
       },
     };
   }
   isPendingRevisionRefreshQuarantined(): boolean {
     return false;
+  }
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return { kind: "ok", value: { result: "current", appliesAt: null } };
   }
   onMutationProgress(
     _listener: (progress: MutationProgress) => void,
@@ -2363,7 +2373,7 @@ describe("createDesktopLocalHostEnsurePort", () => {
 
     // `failed` actually ran and concluded - the one arm allowed to arm the
     // engine's dead-lease cooldown.
-    controller.outcome = { kind: "failed", message: "boom" };
+    controller.outcome = { kind: "failed", message: "boom", errorCode: null };
     await expect(port.ensureReady()).resolves.toEqual({
       ok: false,
       reason: "failed",

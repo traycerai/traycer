@@ -108,6 +108,7 @@ const EMPTY_PRESENTATION: DefaultHostReadinessPresentation = {
   progress: null,
   lastProgress: null,
   provisioningError: null,
+  ensureFailure: null,
   provisioning: false,
   removed: false,
   hostBusy: false,
@@ -342,6 +343,75 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-retry")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Report issue" })).toBeTruthy();
     expect(openSettings.getAttribute("data-emphasis")).toBe("button");
+  });
+
+  // `HostControllerStatus.lastEnsureFailure`'s settled read, surfaced
+  // on `DefaultHostReadinessPresentation` as `ensureFailure`. Same post-latch
+  // ∅/local-lifecycle settled body as the test above, so the only variable is
+  // `ensureFailure` itself.
+  it("the settled ∅ narrator shows the ensure failure's own message verbatim", async () => {
+    const SENTENCE =
+      "the Traycer Host task is disabled in Task Scheduler; enable it or run `traycer host service install`";
+    hostStatus.data = BOOTSTRAP_MARKERS;
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        ensureFailure: { message: SENTENCE, code: null },
+      },
+      false,
+      new MockTraycerCli(),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    const messageEl = screen.queryByTestId("host-ensure-failure-message");
+    expect(messageEl).not.toBeNull();
+    expect(messageEl?.textContent).toBe(SENTENCE);
+    expect(messageEl?.className ?? "").toContain("line-clamp-4");
+    expect(messageEl?.className ?? "").toContain("select-text");
+  });
+
+  it("control: ensureFailure: null renders no message, and the attempt body is unchanged", async () => {
+    hostStatus.data = BOOTSTRAP_MARKERS;
+    applySnapshot({
+      attached: true,
+      effectiveHostId: null,
+      targetHostId: LOCAL_HOST_ID,
+      leases: [deadLease(LOCAL_HOST_ID, { reason: "offline" })],
+    });
+
+    renderHost(
+      {
+        ...EMPTY_PRESENTATION,
+        targetKind: "local",
+        localBootIntent: true,
+        canManageHost: true,
+        ensureFailure: null,
+      },
+      false,
+      new MockTraycerCli(),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("host-ensure-failure-message")).toBeNull();
+    // Today's attempt body, unchanged by the new field's absence.
+    expect(
+      screen.getByTestId("local-host-bootstrap-log-path").textContent,
+    ).toBe("/Users/me/.traycer/bootstrap.log");
+    expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
   });
 
   it("a REMOTE-only fleet: no local bootstrap body, no bootstrap log path", async () => {

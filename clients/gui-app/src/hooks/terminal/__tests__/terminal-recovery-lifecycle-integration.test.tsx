@@ -236,6 +236,7 @@ function BootstrapSubtree(props: BootstrapSubtreeProps): ReactNode {
     reattachMode,
     kind: props.kind,
     enabled: sessionReady,
+    viewer: "presentation",
   });
 
   const onHandle = props.onHandle;

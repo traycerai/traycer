@@ -19,6 +19,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
 import { PROVIDER_LOGIN_PACK_POLL_MS } from "@/components/providers/provider-login-start";
 import {
   useProviderProfileLoginFlow,
@@ -55,10 +56,6 @@ type CancelLoginRequest = RequestOfMethod<
 type CancelLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
->;
-type AwaitLoginRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
 >;
 type AwaitLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -188,7 +185,7 @@ function LoginFlowHarness(props: {
   const awaitLogin: AwaitLoginMutation = useMutation<
     AwaitLoginResponse,
     HostRpcError,
-    AwaitLoginRequest,
+    AwaitLoginVariables,
     { readonly hostId: string | null }
   >({
     // Never resolves: no case in this file drives the flow past `waiting`,
@@ -233,6 +230,7 @@ function LoginFlowHarness(props: {
   });
 
   const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership: false,
     mode: props.mode,
     providerId: PROVIDER_ID,
     existingProfileId: props.existingProfileId,
@@ -342,6 +340,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -390,6 +389,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -426,6 +426,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -468,6 +469,7 @@ describe("useProviderProfileLoginFlow - releasing a login the host is still hold
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: "p-new",
+      holderId: null,
     });
   });
 
@@ -647,6 +649,7 @@ describe("useProviderProfileLoginFlow - cancelling an ambient reauth while the p
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: null,
+      holderId: null,
     });
   });
 
@@ -658,6 +661,7 @@ describe("useProviderProfileLoginFlow - cancelling an ambient reauth while the p
     expect(cancelLoginImpl).toHaveBeenCalledWith({
       providerId: PROVIDER_ID,
       profileId: null,
+      holderId: null,
     });
   });
 });

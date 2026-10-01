@@ -5,18 +5,19 @@
 // so a single implementation backs both). This file re-exports the
 // desktop-facing names so every existing import path in this package
 // keeps working unchanged.
+//
+// Asynchronous probes only (plus the spawn-free existence check): Electron
+// main must never block its event loop on a `ps` / `tasklist` / PowerShell
+// spawn, so the shared module's synchronous probes are deliberately not
+// re-exported here.
 export {
   __parseElapsedSecondsForTest,
   __setAsyncProcessLivenessReaderForTest,
   __setAsyncProcessStartIdentityReaderForTest,
-  __setAsyncProcessStartTimeReaderForTest,
   computeProcessIdentityVerdict,
-  currentProcessIdentityToken,
   getPublishedProcessIdentityVerdict,
-  isProcessAlive,
-  readProcessStartIdentity,
-  readProcessStartTimeMs,
-  verifyProcessIdentity,
+  ownProcessStartIdentityAsync,
+  probeProcessExistenceWithoutSpawn,
   type ProcessIdentityToken,
   type ProcessIdentityVerdict,
   type ProcessLivenessVerdict,

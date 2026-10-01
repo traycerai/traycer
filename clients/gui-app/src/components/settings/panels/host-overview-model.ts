@@ -1,4 +1,5 @@
 import type { HostDoctorIssue } from "@traycer/protocol/host/maintenance/index";
+import { HOST_FOREGROUND_RESTART_REASON } from "@/lib/host/host-lifecycle-copy";
 
 /**
  * Pure helpers for the one Overview page local and remote hosts share.
@@ -45,11 +46,16 @@ export function customNameFromIdentityDraft(draft: string): string | null {
  *   - `externally-managed`  — updates are driven from outside this host entirely
  *     (the `TRAYCER_HOST_UPDATES=external` kill switch). Not a failure at all:
  *     the cloud pin is the supported control, so the UI degrades to it.
+ *   - `terminal-run`        — THIS machine's host was started by a person in a
+ *     terminal (`admittedAs === "foreground"`). The app never restarts a run
+ *     it did not start, so its restart controls say so; the person restarts
+ *     it where they started it.
  */
 export type OverviewDegradeReason =
   | "unsupported"
   | "cli-unavailable"
-  | "externally-managed";
+  | "externally-managed"
+  | "terminal-run";
 
 /**
  * Resolve a per-button capability from the tri-state method answer.
@@ -107,6 +113,8 @@ export function describeOverviewDegrade(
       // version list nor the auto-update switch below reaches it. An earlier
       // wording sent people to a version pin that this page no longer has.
       return `${hostName}'s updates are managed outside Traycer. Whatever deploys it decides its version — nothing here will change it.`;
+    case "terminal-run":
+      return HOST_FOREGROUND_RESTART_REASON;
   }
 }
 

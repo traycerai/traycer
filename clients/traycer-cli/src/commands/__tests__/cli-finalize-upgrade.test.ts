@@ -23,6 +23,12 @@ const mocks = vi.hoisted(() => ({
   // (lock span must fully enclose finalize+start) instead of only each
   // mock's own call count.
   callOrder: [] as string[],
+  // When set, the stub's start crosses the REAL service spawn edge, which is
+  // what publishes the adoption proof - so the proof's origin becomes
+  // observable in `publishedOrigins`. Off by default: every other case pins
+  // command-level wiring and never publishes.
+  crossSpawnEdge: false,
+  publishedOrigins: [] as string[],
 }));
 
 vi.mock("../cli-upgrade", () => ({
@@ -57,6 +63,11 @@ vi.mock("../../service", async (importOriginal) => {
         mocks.controllerCalls.push("start");
         mocks.callOrder.push("service-start");
         if (mocks.serviceStartThrows !== null) throw mocks.serviceStartThrows;
+        if (mocks.crossSpawnEdge) {
+          const { atServiceSpawnEdge } =
+            await import("../../service/spawn-edge");
+          await atServiceSpawnEdge();
+        }
       },
       restart: async () => {
         mocks.controllerCalls.push("restart");
@@ -72,10 +83,18 @@ vi.mock("../../service", async (importOriginal) => {
 // wiring, not the adoption handshake (that's `host-start-adoption.
 // test.ts`), so replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
-  publishHostStartAdoption: async () => ({
-    waitForSpawn: async () => undefined,
-    cancel: async () => undefined,
-  }),
+  publishHostStartAdoption: async (
+    _capability: unknown,
+    _contenderOptions: unknown,
+    _serviceLabel: string,
+    origin: string,
+  ) => {
+    mocks.publishedOrigins.push(origin);
+    return {
+      waitForSpawn: async () => undefined,
+      cancel: async () => undefined,
+    };
+  },
 }));
 
 vi.mock("../../store/cli-lock", async (importOriginal) => {
@@ -156,6 +175,8 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
     mocks.lockCalls = [];
     mocks.lockThrows = null;
     mocks.callOrder = [];
+    mocks.crossSpawnEdge = false;
+    mocks.publishedOrigins = [];
   });
 
   afterEach(() => {
@@ -210,15 +231,17 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   // executable invocation -> real staged->live rename -> service start) -
   // that's a genuine, currently-unclosed coverage gap, not a code bug the
   // review found. A real end-to-end run needs an actual Windows machine
-  // (PowerShell + a live OS service); this repo's CI has no Windows test
-  // job for traycer-cli (`.github/workflows/test.yml` runs only
-  // ubuntu-latest + a macOS job scoped to desktop packaging - the sole
-  // `windows-latest` runner anywhere in this monorepo's workflows belongs
-  // to `release-desktop.yml`, which packages/signs the Electron installer,
-  // not the CLI test suite). Adding a `skipIf(win32)`-inverted test here
-  // would never actually run in this environment and would be fake
-  // coverage, so this suite does NOT add one - per the fixup ticket's own
-  // instruction, this is recorded as an honest residual instead:
+  // (PowerShell + a live OS service); `test-windows-cli-exit` is a
+  // `windows-latest` job in `.github/workflows/test.yml` now, but it runs
+  // only the SEA build/smoke/exit-code checks, clients/shared's denied-read
+  // vitest file, and the finalize-helper launch test
+  // (`upgrade/__tests__/finalize-helper-launch.win32.test.ts`: the real
+  // PowerShell handoff that arms the helper). None of them touches the
+  // rename+service-start path this test is about. Adding a
+  // `skipIf(win32)`-inverted test here would still never actually run
+  // against that path in this environment and would be fake coverage, so
+  // this suite does NOT add one - per the fixup ticket's own instruction,
+  // this is recorded as an honest residual instead:
   //
   //   RESIDUAL: the real Windows rename+start path
   //   (`installer/install.ts`-analogous binary replace via
@@ -240,6 +263,26 @@ describe("cliFinalizeUpgradeCommand / runFinalizeUpgradeSwap", () => {
   // actually has (Linux/macOS) and would catch an orchestration or lock-
   // scope regression regardless of OS - it just can't stand in for a real
   // Windows PowerShell + Scheduled Task run.
+  it("publishes the service start's adoption proof as `maintenance`", async () => {
+    // Lifecycle modes: this start completes the restart whose stop
+    // released the CLI binary - a relaunch of a run that already existed -
+    // so it records `maintenance` in the proof the supervisor consumes.
+    mocks.finalizeResult = {
+      status: "finalised",
+      previousVersion: "1.4.0",
+      version: "1.5.0",
+      binaryPath: "/opt/traycer/cli/traycer",
+    };
+    mocks.crossSpawnEdge = true;
+
+    const { cliFinalizeUpgradeCommand } =
+      await import("../cli-finalize-upgrade");
+    await cliFinalizeUpgradeCommand(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual(["start"]);
+    expect(mocks.publishedOrigins).toEqual(["maintenance"]);
+  });
+
   it("orchestration: cli-lock spans the whole rename-then-service-start sequence in order, never released in between", async () => {
     mocks.finalizeResult = {
       status: "finalised",

@@ -2044,7 +2044,9 @@ function LandingTerminalPanelContents(
  *
  * Open and collapse slide the panel by its right margin, never its width: a
  * collapsed panel keeps its open width and a negative margin parks it past the
- * row's clipped edge. Animating the width instead walked the terminal inside
+ * row's clipped edge. That edge must be `overflow: clip` (`LandingDraftSurface`):
+ * a scrollable one lets a scroll-into-view inside the parked panel shift the
+ * whole page sideways. Animating the width instead walked the terminal inside
  * through every intermediate size, each one reached the shell as a PTY resize,
  * and a quick open/close burst of them left half-redrawn prompts stacked in
  * the scrollback. Holding the width means the shell sees no resize at all.
@@ -2687,6 +2689,7 @@ function LandingTerminalPanelBody(props: {
                   landingPageId={props.landingPageId}
                   tab={tab}
                   active={tab.instanceId === visibleInstanceId}
+                  panelOpen={props.panelOpen}
                   createEnabled={Boolean(
                     props.availability === "supported" &&
                     props.panelOpen &&

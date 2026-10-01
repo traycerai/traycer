@@ -201,6 +201,8 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
         workingAgents: 0,
         activeTerminalAgents: 0,
         busyTerminals: 0,
+        shells: null,
+        scheduledWakes: null,
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -225,6 +227,8 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
         workingAgents: 1,
         activeTerminalAgents: 0,
         busyTerminals: 0,
+        shells: null,
+        scheduledWakes: null,
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -334,6 +338,8 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
               workingAgents: 0,
               activeTerminalAgents: 0,
               busyTerminals: 2,
+              shells: null,
+              scheduledWakes: null,
             },
             updateOperation: null,
             updateTransaction: null,

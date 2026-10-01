@@ -583,13 +583,27 @@ function ScopedResourceMonitorPopover(props: {
     chord === null
       ? tooltipLabel
       : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
+
+  // A closed trigger keeps the stream only while it draws live readings: the
+  // status bar's segment, or the header button in a form that prints them
+  // (`readout`, `inline`). The glyph and the tile are a bare icon, and so is
+  // any form with every metric switched off - closed, they show nothing the
+  // stream feeds, so it opens with the panel and closes with it rather than
+  // ticking in the background for numbers nobody sees. The registry is
+  // lease-counted, so one trigger letting go leaves another's lease alone.
+  const streamWhileClosed =
+    views.length > 0 &&
+    (props.trigger.trigger === "custom" ||
+      props.trigger.form === "readout" ||
+      props.trigger.form === "inline");
+
   return (
     <>
       {/* Held out of the tree entirely under an unresolved pick, rather than
           mounted and ignored: this mount OPENS a stream, and one opened on the
           ambient host would be sampling processes on a machine nobody asked
           about — and would then have to be disowned by every reader below. */}
-      {props.streamBoundToScope ? (
+      {props.streamBoundToScope && (open || streamWhileClosed) ? (
         <GlobalResourcesStreamMount interactive={open} />
       ) : null}
       <Popover open={open} onOpenChange={setOpen}>

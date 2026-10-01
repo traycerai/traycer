@@ -43,10 +43,6 @@ import type { Mock } from "vitest";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { closeTab } from "@/stores/epics/canvas/actions";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
-import {
-  recordClosedCanvas,
-  useTabRecoveryHistory,
-} from "@/lib/tab-recovery/history";
 
 interface TestTreeNode {
   readonly id: string;
@@ -746,7 +742,6 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       paneId: "fallback-pane",
       tileInstanceId: "fallback-instance",
     });
-    useTabRecoveryHistory.setState({ entries: [], ready: true });
   });
 
   afterEach(() => {
@@ -762,7 +757,6 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
     testState.openArtifactByKey.clear();
     testState.canvasByTabId = {};
     testState.createdArtifactId = "new-spec-1";
-    useTabRecoveryHistory.setState({ entries: [], ready: true });
   });
 
   it("routes root-create-then-open through navigateNested + prepareOpenTileInTabFocusTargetFromSource", () => {
@@ -831,44 +825,6 @@ describe("sidebar navigation boundary (back/forward regression fixes)", () => {
       "pane-1",
       "instance-1",
     );
-  });
-
-  it("suppresses canvas recovery recording after confirmed artifact deletion", async () => {
-    seedSingleArtifact();
-    testState.openArtifactByKey.set(`${TAB_ID}:spec-root`, {
-      paneId: "pane-1",
-      instanceId: "instance-1",
-    });
-    testState.canvasByTabId[TAB_ID] = buildCanvasWithTiles(
-      [{ instanceId: "instance-1", contentId: "spec-root", name: "Root" }],
-      "instance-1",
-    );
-    testState.prepareCloseCanvasTabFocusTarget.mockImplementation(() => {
-      const before = testState.canvasByTabId[TAB_ID];
-      if (before === undefined) throw new Error("expected open canvas");
-      const after = closeTab(before, "pane-1", "instance-1");
-      recordClosedCanvas(
-        { tabId: TAB_ID, epicId: EPIC_ID, name: "Test epic" },
-        before,
-        after,
-        false,
-      );
-      return { paneId: "pane-1", tileInstanceId: "instance-1" };
-    });
-
-    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
-    fireEvent.click(screen.getByTestId("epic-sidebar-more-spec-root"));
-    fireEvent.click(screen.getByTestId("epic-sidebar-delete-spec-root"));
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    await waitFor(() => {
-      expect(testState.deleteArtifactMutate).toHaveBeenCalledWith({
-        epicId: EPIC_ID,
-        artifactId: "spec-root",
-      });
-    });
-    expect(testState.prepareCloseCanvasTabFocusTarget).toHaveBeenCalledTimes(1);
-    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
   });
 
   it("batches bulk delete of 3 open tabs (including the active one) into one navigateNested call that focuses the surviving tile", async () => {

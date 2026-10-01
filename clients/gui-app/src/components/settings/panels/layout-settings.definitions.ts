@@ -1,16 +1,19 @@
 import {
   alwaysAvailable,
+  isLayoutEditorAvailable,
   isMobileFooterRowAvailable,
   type SettingsAvailabilityContext,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
 /**
- * The tab strip's placement and the sidebar's side have no effect in the
- * installed mobile app, which always draws its own header and no sidebar, so
- * their rows are withheld there.
+ * Rows with no effect in the installed mobile app, which always draws its own
+ * header and no tab strip or sidebar: the tab strip's placement, view and
+ * overflow, the sidebar's side, the readings on agent rows (the phone's
+ * switcher lists draw none), and the reading width (a phone is narrower than
+ * even the Comfortable column).
  */
-function isSurfacePlacementRowAvailable(
+function isDesktopLayoutRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return !context.mobileApp;
@@ -48,7 +51,8 @@ export const LAYOUT = defineSettingsSection("layout", {
   /**
    * The page header's way into the canvas editor (L-15, L-33, H2), and the
    * coachmark target the "Appearance and layout" guide ends on (L-50). On no
-   * area, so a search result for it picks none.
+   * area, so a search result for it picks none. Withheld where the editor can
+   * never open, with the header action and the guide's step.
    */
   customizeEntry: {
     kind: "row",
@@ -60,7 +64,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     // copy said "where it lives", which read as "in your task".
     description:
       "Point at the app's own chrome in a sample workspace and change it there. The areas on this page are the same set of settings.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isLayoutEditorAvailable,
     keywords: [
       "customize",
       "edit",
@@ -110,7 +114,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     search: { anchor: "layout-tab-strip-placement" },
     label: "Placement",
     description: "Across the top, or as a vertical strip at either edge.",
-    availableWhen: isSurfacePlacementRowAvailable,
+    availableWhen: isDesktopLayoutRowAvailable,
     keywords: [
       "vertical tabs",
       "side tabs",
@@ -131,7 +135,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     label: "Side tab view",
     description:
       "Tabs and agents also lists the open task's active agents under its tab, with what each is doing or needs from you.",
-    availableWhen: isSurfacePlacementRowAvailable,
+    availableWhen: isDesktopLayoutRowAvailable,
     keywords: [
       "view",
       "activity",
@@ -153,7 +157,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     label: "Tab overflow",
     description:
       "Scroll keeps titles readable. Shrink to fit makes tabs narrower as you open more.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isDesktopLayoutRowAvailable,
     keywords: [
       "task tabs",
       "scroll",
@@ -183,7 +187,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     search: { anchor: "layout-sidebar-side" },
     label: "Side",
     description: "Which side of the task canvas the sidebar sits on.",
-    availableWhen: isSurfacePlacementRowAvailable,
+    availableWhen: isDesktopLayoutRowAvailable,
     keywords: ["sidebar", "left", "right", "side"],
   },
   /**
@@ -198,7 +202,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     label: "Readings on agent rows",
     description:
       "Shows the metrics chosen under Usage and resources > Resource monitor.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isDesktopLayoutRowAvailable,
     keywords: [
       "resource",
       "readings",
@@ -229,7 +233,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     search: { anchor: "layout-reading-width" },
     label: "Reading width",
     description: "Chat and artifacts. Wide suits a large monitor.",
-    availableWhen: alwaysAvailable,
+    availableWhen: isDesktopLayoutRowAvailable,
     keywords: [
       "width",
       "wide",

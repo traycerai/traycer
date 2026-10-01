@@ -261,7 +261,7 @@ async function renderOverviewSnapshot(options: {
   readonly effectiveName: string;
   readonly rowName: string;
   /** Different from the scope row's `version` (which defaults to `1.4.2`) so
-   *  a card that ever fell back to the row's stale version instead of the
+   *  a surface that ever fell back to the row's stale version instead of the
    *  RPC's current one would visibly show the wrong number. */
   readonly hostVersion: string;
 }): Promise<OverviewSemanticSnapshot> {
@@ -533,7 +533,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     expect(local.removalTestIds).toEqual([]);
   });
 
-  it("shows the RPC's hostVersion on the health line and the version card, and the registry version only in About this host's labelled row", async () => {
+  it("shows the RPC's hostVersion on the health line, and the registry version only in About this host's labelled row", async () => {
     // The reviewer's actual finding: both a `host.status.hostVersion` and the
     // registry row's `version` used to render as the host's version at once.
     // The registry says "1.4.2" here twice over — the scope row's `version`
@@ -543,9 +543,10 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
     // The account's figure has ONE sanctioned place now: Installation ▸ About
     // this host shows what the account last heard, labelled "Last reported
     // version" (a recorded product decision). Everywhere that states the
-    // version the host is RUNNING — the header's health line and the Updates
-    // tab's version card — must still say "1.5.0" and never "1.4.2", for both
-    // variants, and "1.4.2" must appear nowhere but that one labelled row.
+    // version the host is RUNNING — the header's health line, the page's ONE
+    // version (the Updates tab no longer has a version heading of its own) —
+    // must still say "1.5.0" and never "1.4.2", for both variants, and "1.4.2"
+    // must appear nowhere but that one labelled row, whichever tab it is on.
     const local = await renderOverviewSnapshot({
       hostId: "host-local",
       isLocalMachine: true,
@@ -615,10 +616,10 @@ function localOnlyNodes(root: HTMLElement): readonly Element[] {
 
 /**
  * The version invariant, read off the page currently rendered: the RPC's
- * `running` version on the header's health line and on the Updates tab's
- * version card, the registry's `reported` one on neither, and `reported`
- * exactly once on the whole page — as the value of About this host's "Last
- * reported version" row.
+ * `running` version on the header's health line, the registry's `reported` one
+ * not on it, and `reported` exactly once on the whole page (every tab is
+ * mounted, the Updates tab's answer card and version list included) — as the
+ * value of About this host's "Last reported version" row.
  */
 function expectRunningVersionOnly(versions: {
   readonly running: string;
@@ -633,13 +634,6 @@ function expectRunningVersionOnly(versions: {
   }
   expect(healthLine.textContent).toContain(`v${versions.running}`);
   expect(healthLine.textContent).not.toContain(versions.reported);
-
-  expect(screen.getByTestId("host-overview-version").textContent).toBe(
-    `v${versions.running}`,
-  );
-  expect(
-    screen.getByTestId("host-overview-version-card").textContent,
-  ).not.toContain(versions.reported);
 
   const aboutVersion = screen.getByTestId("host-overview-about-version");
   expect(aboutVersion.textContent).toBe(`v${versions.reported}`);

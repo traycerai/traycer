@@ -22,6 +22,7 @@ import type {
   TerminalSessionKind,
   TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
 
 const registry = new TerminalSessionRegistry();
 
@@ -80,6 +81,14 @@ export interface UseTerminalSessionHandleArgs {
   readonly kind: TerminalSessionKind;
   /** Set false until the host-side session is known to exist (post-create or post-list-hit). */
   readonly enabled: boolean;
+  /**
+   * Attachment intent while this tile holds its lease. `presentation` is a
+   * terminal someone can see, and the host sizes the shared grid from those
+   * only. `cache` is a tile that stays mounted off screen (a collapsed Start
+   * Page panel): its stream stays warm but its size constrains nobody. A
+   * change while the lease is held is restated on the live stream.
+   */
+  readonly viewer: TerminalSubscribeViewer;
 }
 
 export function useTerminalSessionHandle(
@@ -100,6 +109,7 @@ export function useTerminalSessionHandle(
     cols: args.cols,
     rows: args.rows,
     reattachMode: args.reattachMode,
+    viewer: args.viewer,
   });
 
   // Readiness gate: authenticated request context + dialable endpoint (or the
@@ -144,8 +154,9 @@ export function useTerminalSessionHandle(
       cols: args.cols,
       rows: args.rows,
       reattachMode: args.reattachMode,
+      viewer: args.viewer,
     };
-  }, [args.cols, args.rows, args.reattachMode]);
+  }, [args.cols, args.rows, args.reattachMode, args.viewer]);
 
   const scopeEpicId = args.scope.kind === "epic" ? args.scope.epicId : null;
   // Callers commonly construct a scope literal during render. Keep an
@@ -221,6 +232,11 @@ export function useTerminalSessionHandle(
       };
     };
 
+    // The tile's intent goes in with the acquire, to a fresh store and to a
+    // revived one alike, so a tile mounted off screen never holds a
+    // `presentation` attachment. Opening as one and retagging afterwards is
+    // not equivalent: an already-open remote session writes the subscribe at
+    // once, and the host sizes the grid from it before the retag arrives.
     const next = registry.acquire(
       args.instanceId,
       () => {
@@ -232,10 +248,12 @@ export function useTerminalSessionHandle(
           rows: creationConfig.rows,
           reattachMode: creationConfig.reattachMode,
           kind: args.kind,
+          viewer: creationConfig.viewer,
           streamClientFactory: factory,
         });
       },
       args.hostId,
+      creationConfigRef.current.viewer,
     );
     acquiredHandle = next;
     handleHostIds.set(next, args.hostId);
@@ -260,6 +278,15 @@ export function useTerminalSessionHandle(
     ownerIdentityKey,
     openTransport,
   ]);
+
+  // The tile coming on or going off screen while it keeps its lease: restated
+  // on the stream it already has, a no-op when unchanged. Not while disabled:
+  // `handle` still names the store this commit just released, and that one's
+  // intent now follows its lease.
+  useEffect(() => {
+    if (handle === null || !args.enabled) return;
+    handle.store.getState().restateViewer(args.viewer);
+  }, [handle, args.enabled, args.viewer]);
 
   useEffect(() => {
     if (handle === null) return;

@@ -748,3 +748,60 @@ describe("HostRequestCoordinator", () => {
     ).rejects.toMatchObject({ reason: "coordinator-disposed" });
   });
 });
+
+describe("a join request after the active job was aborted", () => {
+  it("gets a job of its own when the aborted raw call is still pending", async () => {
+    const coordinator = makeCoordinator();
+    const executions = [
+      deferred<{ value: string }>(),
+      deferred<{ value: string }>(),
+    ];
+    const started: HostRequestAuthority[] = [];
+    // A transport that cannot cancel a sent request: it never listens to the
+    // abort signal, so the first call stays pending after the abort.
+    const execute = (
+      capturedAuthority: HostRequestAuthority,
+    ): Promise<{ value: string }> => {
+      started.push(capturedAuthority);
+      return executions[started.length - 1].promise;
+    };
+    const requestAuthority = authority("host-a", "user-a");
+    const requestDomain = domain("join");
+    const controller = new AbortController();
+
+    const first = coordinator.request({
+      hostId: requestAuthority.endpoint.hostId,
+      userId: requestAuthority.bearer.identity.userId,
+      method: "join.await",
+      params: { session: "login" },
+      authority: requestAuthority,
+      authorityDomain: requestDomain,
+      signal: controller.signal,
+      execute,
+    });
+    controller.abort();
+
+    await expect(first).rejects.toBeInstanceOf(HostRequestControlFlowError);
+    await expect(first).rejects.toMatchObject({ reason: "waiter-cancelled" });
+    expect(started[0].abortSignal.aborted).toBe(true);
+
+    const second = submit(
+      coordinator,
+      "join.await",
+      { session: "login" },
+      requestAuthority,
+      requestDomain,
+      execute,
+    );
+    // Queued behind the aborted call, not dispatched beside it: one raw call
+    // per key at a time still holds.
+    await flush();
+    expect(started).toHaveLength(1);
+    executions[0].resolve({ value: "old" });
+    await flush();
+
+    expect(started).toHaveLength(2);
+    executions[1].resolve({ value: "new" });
+    await expect(second).resolves.toEqual({ value: "new" });
+  });
+});

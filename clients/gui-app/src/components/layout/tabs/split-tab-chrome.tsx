@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { usePublishSheetJoin } from "./sheet-join-context";
 import { cn } from "@/lib/utils";
-import { TabChromeBackground, TabColorMark } from "./tab-chrome-background";
+import { TabChromeBackground, TabColorEdgeLine } from "./tab-chrome-background";
 import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
 import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
 
@@ -26,7 +26,7 @@ interface SplitTabLayoutProps {
 export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
   const [node, setNode] = useState<HTMLSpanElement | null>(null);
   const inStrip = useWhollyInTabStrip(node, props.joined);
-  usePublishSheetJoin(props.joined && inStrip ? "canvas" : null);
+  usePublishSheetJoin(props.joined && inStrip ? "canvas" : null, null);
   return (
     <div className="relative flex w-full min-w-0 items-end">
       <div
@@ -150,7 +150,7 @@ export function SplitMemberChrome(props: {
           "transition-colors duration-150 ease-out group-hover/tab:bg-foreground/5",
         )}
       />
-      {props.color === null ? null : <TabColorMark color={props.color} />}
+      {props.color === null ? null : <TabColorEdgeLine color={props.color} />}
     </>
   );
 }

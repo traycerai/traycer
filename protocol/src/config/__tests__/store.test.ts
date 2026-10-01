@@ -47,12 +47,15 @@ import {
   readFeatureSettingsSync,
   readLogLevels,
   readLogLevelsSync,
+  readWorktreesConfig,
+  readWorktreesConfigSync,
   removeShell,
   resetShell,
   revertShellArgs,
   setEnvOverride,
   setAgentBrowserAccess,
   setAgentRolesEnabled,
+  setAgentWorktreeCreatePolicy,
   setLogLevels,
   setShell,
   writeCliConfig,
@@ -99,6 +102,7 @@ describe("cli config store", () => {
       logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
       features: { agentRoles: false, artifactVersioning: false },
       browser: { agentAccess: true },
+      worktrees: { agentCreate: "allow" as const },
     };
     await writeCliConfig(cfg);
     expect(await readCliConfig()).toEqual(cfg);
@@ -460,6 +464,7 @@ describe("cli config store", () => {
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
       features: { agentRoles: false, artifactVersioning: false },
       browser: { agentAccess: true },
+      worktrees: { agentCreate: "allow" },
     });
   });
 
@@ -481,6 +486,165 @@ describe("cli config store", () => {
     await expect(readCliConfig()).rejects.toThrow(
       /does not match the expected schema/,
     );
+  });
+});
+
+describe("agent worktree create policy", () => {
+  const BASE = {
+    version: 1,
+    shell: { path: null, args: null },
+    envOverrides: {},
+  };
+
+  it("reads allow from a pre-feature file", async () => {
+    await writeRaw(JSON.stringify(BASE));
+    expect(await readWorktreesConfig()).toEqual({ agentCreate: "allow" });
+    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+  });
+
+  it("reads allow for a worktrees block that omits agentCreate", async () => {
+    await writeRaw(JSON.stringify({ ...BASE, worktrees: {} }));
+    expect(await readWorktreesConfig()).toEqual({ agentCreate: "allow" });
+    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+  });
+
+  it("sync read fails OPEN to allow when the file is missing", () => {
+    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+  });
+
+  it("sync read fails OPEN to allow on malformed JSON", async () => {
+    // Agents could create worktrees before the policy existed, so a config we
+    // cannot read must not revoke it.
+    await writeRaw("{ not json");
+    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+  });
+
+  it("sync read fails OPEN to allow on an invalid agentCreate value", async () => {
+    for (const agentCreate of ["sometimes", "", 3, null, true]) {
+      await writeRaw(JSON.stringify({ ...BASE, worktrees: { agentCreate } }));
+      expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+    }
+  });
+
+  it("sync read fails OPEN to allow when the worktrees block is not an object", async () => {
+    for (const worktrees of ["never", 7, ["never"]]) {
+      await writeRaw(JSON.stringify({ ...BASE, worktrees }));
+      expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "sync read fails OPEN to allow when the config file is unreadable",
+    async () => {
+      await setAgentWorktreeCreatePolicy("never");
+      await chmod(cliConfigPath(), 0o000);
+      try {
+        expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+      } finally {
+        await chmod(cliConfigPath(), 0o600);
+      }
+    },
+  );
+
+  it("sync read honours an explicit never or ask beside an invalid browser block", async () => {
+    // Failing open is for a worktrees block we cannot read. A defect in an
+    // unrelated block must not re-grant a capability the user restricted.
+    for (const agentCreate of ["never", "ask"] as const) {
+      await writeRaw(
+        JSON.stringify({
+          ...BASE,
+          browser: { agentAccess: "no" },
+          worktrees: { agentCreate },
+        }),
+      );
+      expect(readWorktreesConfigSync()).toEqual({ agentCreate });
+    }
+  });
+
+  it("sync read honours an explicit never or ask beside an invalid version", async () => {
+    for (const agentCreate of ["never", "ask"] as const) {
+      await writeRaw(
+        JSON.stringify({
+          ...BASE,
+          version: 999,
+          worktrees: { agentCreate },
+        }),
+      );
+      expect(readWorktreesConfigSync()).toEqual({ agentCreate });
+    }
+  });
+
+  it("sync read honours an explicit never beside other unrelated defects", async () => {
+    await writeRaw(
+      JSON.stringify({
+        ...BASE,
+        logs: { cliLogLevel: "shouty" },
+        shell: { path: 1, args: null },
+        worktrees: { agentCreate: "never" },
+      }),
+    );
+    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "never" });
+  });
+
+  it("async read throws on a malformed file", async () => {
+    // The Settings chip shows an error rather than a false "Allow".
+    await writeRaw("{ not json");
+    await expect(readWorktreesConfig()).rejects.toThrow(/not valid JSON/);
+  });
+
+  it("async read throws on a malformed worktrees block", async () => {
+    await writeRaw(
+      JSON.stringify({ ...BASE, worktrees: { agentCreate: "sometimes" } }),
+    );
+    await expect(readWorktreesConfig()).rejects.toThrow(
+      /does not match the expected schema/,
+    );
+  });
+
+  it("sets the policy and round-trips it through both readers", async () => {
+    for (const agentCreate of ["ask", "never", "allow"] as const) {
+      await setAgentWorktreeCreatePolicy(agentCreate);
+      expect(await readWorktreesConfig()).toEqual({ agentCreate });
+      expect(readWorktreesConfigSync()).toEqual({ agentCreate });
+    }
+  });
+
+  it("sets the policy without changing shell, env, log, feature, or browser settings", async () => {
+    await setShell("/bin/fish", ["-l"]);
+    await setEnvOverride("FOO", "bar");
+    await setLogLevels("debug", "warn");
+    await setAgentRolesEnabled(true);
+    await setAgentBrowserAccess(false);
+
+    await setAgentWorktreeCreatePolicy("never");
+
+    expect(await readCliConfig()).toMatchObject({
+      shell: { path: "/bin/fish", args: ["-l"] },
+      envOverrides: { FOO: "bar" },
+      logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
+      features: { agentRoles: true },
+      browser: { agentAccess: false },
+      worktrees: { agentCreate: "never" },
+    });
+  });
+
+  it("other writers preserve the worktrees policy", async () => {
+    await setAgentWorktreeCreatePolicy("ask");
+    await setShell("/bin/fish", ["-l"]);
+    await setEnvOverride("FOO", "bar");
+    await setLogLevels("debug", "warn");
+    await setAgentBrowserAccess(false);
+    expect(await readWorktreesConfig()).toEqual({ agentCreate: "ask" });
+  });
+
+  it("preserves an unknown top-level block across a policy write", async () => {
+    await writeRaw(JSON.stringify({ ...BASE, futureBlock: { nested: true } }));
+    await setAgentWorktreeCreatePolicy("never");
+    const raw: unknown = JSON.parse(await readFile(cliConfigPath(), "utf8"));
+    expect(raw).toMatchObject({
+      worktrees: { agentCreate: "never" },
+      futureBlock: { nested: true },
+    });
   });
 });
 

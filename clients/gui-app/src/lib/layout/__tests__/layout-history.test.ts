@@ -115,6 +115,11 @@ describe("rebasing the entry snapshot on an external write", () => {
       own: { sideStripView: "activity" },
       theirs: { sidebarSide: "right" },
     },
+    {
+      name: "wide column width while taking the other writer's sidebar side",
+      own: { wideReadingWidthPx: 1600 },
+      theirs: { sidebarSide: "right" },
+    },
   ];
 
   it.each(ownVersusTheirs)("keeps the entry's own $name", ({ own, theirs }) => {

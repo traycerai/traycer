@@ -128,8 +128,10 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         landingPageId="landing-1"
         tab={TAB}
         active
+        panelOpen
         createEnabled
         authorityEntry={null}
+        onScreen
       />,
     );
 
@@ -139,8 +141,10 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         landingPageId="landing-1"
         tab={TAB}
         active
+        panelOpen
         createEnabled
         authorityEntry={null}
+        onScreen
       />,
     );
     await waitFor(() =>
@@ -163,8 +167,10 @@ describe("LandingTerminalErrorState retry pending UX", () => {
         landingPageId="landing-1"
         tab={TAB}
         active
+        panelOpen
         createEnabled
         authorityEntry={null}
+        onScreen
       />,
     );
     await waitFor(() =>

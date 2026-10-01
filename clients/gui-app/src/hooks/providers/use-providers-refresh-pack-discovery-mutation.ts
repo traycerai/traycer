@@ -79,6 +79,7 @@ export function useProvidersRefreshPackDiscoveryForClient(
     method: "providers.refreshPackDiscovery",
     mapVariables: (variables) => variables,
     responseTimeoutMs: PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS,
+    signalFor: null,
     options: {
       mutationKey: providersMutationKeys.refreshPackDiscovery(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null, panel }),

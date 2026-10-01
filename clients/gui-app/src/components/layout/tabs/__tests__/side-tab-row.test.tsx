@@ -25,9 +25,7 @@ import {
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_GROUP_LINE_CLASS,
   SIDE_TAB_GROUP_LINE_SEAT_CLASS,
-  SIDE_TAB_LEADING_BADGE_POSITION_CLASS,
   SIDE_TAB_LEADING_CLASS,
-  SIDE_TAB_LEADING_TILE_CLASS,
   SIDE_TAB_LEADING_TILE_SLOT_CLASS,
   SIDE_TAB_ROW_CLASS,
   SIDE_TAB_SESSION_ACTIVE_CLASS,
@@ -75,7 +73,6 @@ function baseProps(): SideTabRowProps {
     active: false,
     session: null,
     tint: null,
-    autoTint: null,
     groupLine: null,
     leading: <span data-testid="leading-glyph" />,
     tile: { kind: "monogram", text: "FL" },
@@ -321,6 +318,7 @@ describe("SideTabRow expanded paint", () => {
       .map((child) => child.getAttribute("data-testid"))
       .filter((id) => id !== null);
     expect(order).toEqual([
+      "side-tab-accent",
       "side-tab-leading",
       "side-tab-title",
       "side-tab-trailing",
@@ -357,48 +355,44 @@ describe("SideTabRow expanded paint", () => {
     expect(row.querySelector('[data-testid="side-tab-rail-badge"]')).toBeNull();
   });
 
-  it("shows a coloured tab's monogram on a tinted 20x16 tile with the corner badge", () => {
+  it("shows a coloured tab's status glyph, not a monogram tile - the colour lives on the accent bar alone", () => {
     const row = renderRow({ tint: "#3366ff", badge: "failed" });
     const leading = byTestId(row, "side-tab-leading");
-    expect(leading.dataset.leading).toBe("tile");
-    expect(hasClasses(leading, SIDE_TAB_LEADING_TILE_SLOT_CLASS.monogram)).toBe(
-      true,
-    );
-    expect(leading.querySelector('[data-testid="leading-glyph"]')).toBeNull();
-    const tile = byTestId(row, "side-tab-leading-tile");
-    expect(tile.textContent).toBe("FL");
-    expect(tile.dataset.tinted).toBe("true");
-    expect(hasClasses(tile, SIDE_TAB_LEADING_TILE_CLASS)).toBe(true);
-    expect(hasClasses(tile, SIDE_TAB_TINT_FILL_CLASS)).toBe(true);
-    expect(tile.style.getPropertyValue("--side-tab-tint")).toBe("#3366ff");
-    const badge = byTestId(leading, "side-tab-rail-badge");
-    expect(badge.dataset.kind).toBe("failed");
-    // The badge sits in reserved space beside the tile, not on it (finding
-    // 8): its positioned wrapper is a sibling of the chip, never inside it.
-    const badgeWrapper = badge.parentElement;
-    if (badgeWrapper === null) throw new Error("expected a badge wrapper");
+    // A monogram never forces a tile: on the small leading slot, a status
+    // badge would overlap its corner and read as a tiny growth on the
+    // letters. The plain glyph renders instead, same as an uncoloured tab -
+    // it is `props.leading` itself (the real status/notification icon in
+    // production) that carries the badge state, not a `CornerBadge` overlay.
+    expect(leading.dataset.leading).toBe("glyph");
     expect(
-      hasClasses(badgeWrapper, SIDE_TAB_LEADING_BADGE_POSITION_CLASS),
-    ).toBe(true);
-    expect(tile.contains(badgeWrapper)).toBe(false);
+      leading.querySelector('[data-testid="leading-glyph"]'),
+    ).not.toBeNull();
+    expect(
+      row.querySelector('[data-testid="side-tab-leading-tile"]'),
+    ).toBeNull();
+    expect(row.querySelector('[data-testid="side-tab-rail-badge"]')).toBeNull();
+    const accent = byTestId(row, "side-tab-accent");
+    expect(accent.dataset.accent).toBe("true");
+    expect(accent.style.getPropertyValue("--side-tab-accent")).toBe("#3366ff");
   });
 
-  it("shows a custom icon on its 16px tile, neutral when the tab has no colour", () => {
+  it("shows a custom icon on its 16px tile, always neutral", () => {
     const row = renderRow({
       tint: null,
       tile: { kind: "icon", icon: <span data-testid="custom-icon">🚀</span> },
       badge: "approval",
     });
     const leading = byTestId(row, "side-tab-leading");
-    expect(hasClasses(leading, SIDE_TAB_LEADING_TILE_SLOT_CLASS.icon)).toBe(
-      true,
-    );
+    expect(hasClasses(leading, SIDE_TAB_LEADING_TILE_SLOT_CLASS)).toBe(true);
     const tile = byTestId(row, "side-tab-leading-tile");
     expect(tile.querySelector('[data-testid="custom-icon"]')).not.toBeNull();
-    expect(tile.dataset.tinted).toBe("false");
     expect(hasClasses(tile, SIDE_TAB_COLORLESS_TILE_CLASS)).toBe(true);
-    expect(tile.style.getPropertyValue("--side-tab-tint")).toBe("");
     expect(byTestId(row, "side-tab-rail-badge").dataset.kind).toBe("approval");
+    const accent = byTestId(row, "side-tab-accent");
+    expect(accent.dataset.accent).toBe("false");
+    expect(accent.style.getPropertyValue("--side-tab-accent")).toBe(
+      "transparent",
+    );
   });
 
   it("fills the active row and not an inactive one", () => {
@@ -493,71 +487,54 @@ describe("SideTabRow collapsed", () => {
     expect(hasClasses(idle, SIDE_TAB_TILE_ACTIVE_CLASS)).toBe(false);
   });
 
-  it("tints the monogram chip with the tab colour, leaving the tile itself untinted", () => {
+  it("keeps the collapsed monogram chip neutral, the tab colour on the accent ring", () => {
     const row = renderRow({ variant: "collapsed", tint: "#22aa66" });
     expect(row.dataset.tileKind).toBe("monogram");
-    expect(row.dataset.tint).toBe("tab");
-    expect(row.dataset.tinted).toBe("true");
     expect(row.textContent).toBe("FL");
-    expect(hasClasses(row, SIDE_TAB_TINT_FILL_CLASS)).toBe(false);
-    expect(row.style.getPropertyValue("--side-tab-tint")).toBe("");
     const chip = byTestId(row, "side-tab-monogram-chip");
     expect(hasClasses(chip, SIDE_TAB_MONOGRAM_CHIP_CLASS)).toBe(true);
-    expect(hasClasses(chip, SIDE_TAB_TINT_FILL_CLASS)).toBe(true);
-    expect(chip.style.getPropertyValue("--side-tab-tint")).toBe("#22aa66");
+    expect(hasClasses(chip, SIDE_TAB_TINT_FILL_CLASS)).toBe(false);
+    expect(hasClasses(chip, SIDE_TAB_COLORLESS_TILE_CLASS)).toBe(true);
+    expect(chip.style.getPropertyValue("--side-tab-tint")).toBe("");
+    const accent = byTestId(row, "side-tab-accent");
+    expect(accent.dataset.accent).toBe("true");
+    expect(accent.style.getPropertyValue("--side-tab-accent")).toBe("#22aa66");
     expect(hasClasses(row, SIDE_TAB_ACTIVE_CLASS)).toBe(false);
   });
 
-  it("tints the chip with the auto tint when the tab has no explicit colour", () => {
-    const auto = "light-dark(oklch(0.6 0.13 125), oklch(0.72 0.12 125))";
-    const row = renderRow({ variant: "collapsed", tint: null, autoTint: auto });
-    expect(row.dataset.tint).toBe("auto");
-    expect(row.dataset.tinted).toBe("true");
-    const chip = byTestId(row, "side-tab-monogram-chip");
-    expect(chip.style.getPropertyValue("--side-tab-tint")).toBe(auto);
-  });
-
-  it("lets an explicit tab colour win over the auto tint", () => {
-    const auto = "light-dark(oklch(0.6 0.13 125), oklch(0.72 0.12 125))";
-    const row = renderRow({
-      variant: "collapsed",
-      tint: "#22aa66",
-      autoTint: auto,
-    });
-    expect(row.dataset.tint).toBe("tab");
-    expect(
-      byTestId(row, "side-tab-monogram-chip").style.getPropertyValue(
-        "--side-tab-tint",
-      ),
-    ).toBe("#22aa66");
-  });
-
-  it("gives a colourless tab the neutral tile", () => {
+  it("renders the accent ring transparent for a colourless tab, never a hashed colour", () => {
     const row = renderRow({
       variant: "collapsed",
       tint: null,
       tile: { kind: "icon", icon: <svg data-testid="custom-icon" /> },
     });
     expect(row.dataset.tileKind).toBe("icon");
-    expect(row.dataset.tint).toBe("none");
-    expect(row.dataset.tinted).toBe("false");
     const chip = byTestId(row, "side-tab-monogram-chip");
     expect(hasClasses(chip, SIDE_TAB_COLORLESS_TILE_CLASS)).toBe(true);
     expect(chip.style.getPropertyValue("--side-tab-tint")).toBe("");
     expect(row.querySelector('[data-testid="custom-icon"]')).not.toBeNull();
+    const accent = byTestId(row, "side-tab-accent");
+    expect(accent.dataset.accent).toBe("false");
+    expect(accent.style.getPropertyValue("--side-tab-accent")).toBe(
+      "transparent",
+    );
   });
 
-  it("shows a neutral tile with the muted spinner while the title generates, ignoring an available tint", () => {
+  it("shows a neutral tile and a transparent accent while the title generates, ignoring an available tint", () => {
     const row = renderRow({
       variant: "collapsed",
       tint: "#22aa66",
       tile: { kind: "generating" },
     });
     expect(row.dataset.tileKind).toBe("generating");
-    expect(row.dataset.tint).toBe("none");
     const chip = byTestId(row, "side-tab-monogram-chip");
     expect(hasClasses(chip, SIDE_TAB_COLORLESS_TILE_CLASS)).toBe(true);
     expect(hasClasses(chip, SIDE_TAB_TINT_FILL_CLASS)).toBe(false);
+    const accent = byTestId(row, "side-tab-accent");
+    expect(accent.dataset.accent).toBe("false");
+    expect(accent.style.getPropertyValue("--side-tab-accent")).toBe(
+      "transparent",
+    );
     const spinner = screen.getByTestId("side-tab-tile-generating");
     expect(spinner.classList.contains("text-muted-foreground")).toBe(true);
     expect(row.textContent).not.toContain("FL");

@@ -12,7 +12,12 @@ import {
 } from "../internal/host-rpc";
 import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
 import { parseCreateProfileSelection } from "../internal/profile-selection";
+import {
+  agentWorktreeCreateOffered,
+  readAgentWorktreeCreatePolicy,
+} from "../agent-worktree-create";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { readonlyEnv } from "../runner/runtime";
 import type { CommandFn } from "../runner/runner";
 
 /**
@@ -157,7 +162,11 @@ function requireAbsolutePath(rawPath: string, label: string): string {
   if (trimmed.length === 0 || !path.isAbsolute(trimmed)) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: `agent create: ${label} must be an absolute path. Use --cwd <worktree-path> for a path returned by traycer worktree create, or --workspace-entry <source-path>=<run-path> for an exact binding.`,
+      message: `agent create: ${label} must be an absolute path. ${
+        agentWorktreeCreateOffered(readonlyEnv(), readAgentWorktreeCreatePolicy)
+          ? "Use --cwd <worktree-path> for a path returned by traycer worktree create"
+          : "Use --cwd <path> for a folder that already exists"
+      }, or --workspace-entry <source-path>=<run-path> for an exact binding.`,
       details: { value: rawPath },
       exitCode: 1,
     });
