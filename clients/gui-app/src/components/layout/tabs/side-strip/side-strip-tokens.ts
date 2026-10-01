@@ -226,11 +226,13 @@ export const PIP_FILL: Readonly<Record<MeterPip, string>> = {
 /**
  * A task's nested agents in the Activity view (D9): a column under the task's
  * row with a 1px guide down its inline-start edge, the Agents panel tree's own
- * (`bg-border/70`). The guide sits on the task title's start edge (the row's
- * 8px padding). No elbows, no colour.
+ * (`bg-border/70`) in dark. In light that border all but vanishes on the
+ * strip's ground, so the guide is a foreground alpha there, a quiet ~1.4:1.
+ * The guide sits on the task title's start edge (the row's 8px padding). No
+ * elbows, no colour.
  */
 export const STRIP_AGENT_GROUP_CLASS =
-  "flex flex-col ms-2 border-s border-border/70";
+  "flex flex-col ms-2 border-s border-foreground/15 dark:border-border/70";
 /**
  * A nested agent row: 26px tall, 12px text, muted at rest, with the strip's
  * own hover tint. The 8px start padding sets the agent's glyph just inside the
