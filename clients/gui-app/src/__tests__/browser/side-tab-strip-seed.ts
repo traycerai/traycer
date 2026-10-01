@@ -1,5 +1,8 @@
 import type { HostNotificationsCloudFeedRowV11 } from "@traycer/protocol/host/notifications/contracts";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getOpenEpicRegistry,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection } from "@/stores/epics/open-epic/types";
@@ -510,6 +513,9 @@ function warmEpic(
     };
   }
   handle.store.setState({ chats: { allIds: Object.keys(byId), byId } });
+  // The serving host, as the session provider stamps it: the strip asks it,
+  // and the cloud feed, what each chat waits on.
+  handleHostIds.set(handle, "host-a");
   getOpenEpicRegistry().acquire(epicId, () => handle);
 }
 
@@ -534,6 +540,24 @@ export function seedSideStripPairAgents(): void {
     "local",
     "connected",
   );
+}
+
+/**
+ * Names the agent behind each waiting prompt, so its task can expand to it:
+ * the sections' CDP verification pass (an approval) and Copy agent (a reply),
+ * or on the pairs' boards React UI Performance Audit's Perf agent, waiting on
+ * an approval while Cookie Sync Performance works.
+ */
+export function seedSideStripWaitingAgents(pairs: boolean): void {
+  if (pairs) {
+    seedSideStripPairStatuses();
+    warmEpic("fixture-react", [["fixture-react-chat", "Perf agent"]]);
+    return;
+  }
+  warmEpic("fixture-staging", [
+    ["fixture-staging-chat", "CDP verification pass"],
+  ]);
+  warmEpic("fixture-onboarding", [["fixture-onboarding-chat", "Copy agent"]]);
 }
 
 // ── Movement and long lists ─────────────────────────────────────────────────

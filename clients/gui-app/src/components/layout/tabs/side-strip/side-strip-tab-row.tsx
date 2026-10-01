@@ -75,7 +75,7 @@ export function SideStripTabRow(props: {
   const groupDisclosure = props.group?.disclosure ?? null;
   const row = props.section;
   const half = props.shape !== "row";
-  const section = row === null ? null : sectionStyleOf(row, half);
+  const section = row === null ? null : sectionStyleOf(row, half, props.group);
   const status = taskStatusOf({
     row,
     tabId: tab.id,

@@ -54,6 +54,7 @@ import {
 } from "./side-strip-tokens";
 import { StripAgentGroup } from "./strip-agent-group";
 import { PairNeedsYouDetail } from "./strip-section-detail";
+import { needsYouLineOf } from "./strip-section-row";
 import { memberRowOf, type StripTaskRow } from "./strip-sections";
 import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
@@ -168,14 +169,15 @@ export function SideSplitItem(
   };
   const quickActionsTab = memberTab(item.left) ?? memberTab(item.right);
   const expanded = props.variant === "expanded";
+  // A half whose expanded agents below say all its requests drops off the line.
   const needsYou = [
-    { row: leftSection, title: leftLabel },
-    { row: rightSection, title: rightLabel },
-  ].flatMap((half) =>
-    half.row?.section === "needs-you"
-      ? [{ row: half.row, title: half.title }]
-      : [],
-  );
+    { row: leftSection, group: leftGroup, title: leftLabel },
+    { row: rightSection, group: rightGroup, title: rightLabel },
+  ].flatMap((half) => {
+    if (half.row?.section !== "needs-you") return [];
+    const line = needsYouLineOf(half.row, half.group);
+    return line === null ? [] : [{ row: line, title: half.title }];
+  });
   return (
     <m.div
       ref={setFrameRef}

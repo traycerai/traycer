@@ -21,7 +21,6 @@ import {
   STRIP_AGENT_FADE_IN_CLASS,
   STRIP_AGENT_GROUP_CLASS,
   STRIP_AGENT_ROW_CLASS,
-  STRIP_AGENT_VISIBLE_MAX,
 } from "./side-strip-tokens";
 import { useAgentOnScreen } from "./strip-agent-on-screen";
 import { StripAgentRow } from "./strip-agent-row";
@@ -67,13 +66,8 @@ function StripAgentGroupBody(props: {
   readonly caption: ReactNode | null;
 }): ReactNode {
   const { group } = props;
-  const [showAll, setShowAll] = useState(false);
   const activate = useNeedsYouActivation();
   const part = useLayoutSettingPart("sideStripView");
-  const shown = showAll
-    ? group.rows
-    : group.rows.slice(0, STRIP_AGENT_VISIBLE_MAX);
-  const more = group.rows.length - shown.length;
   const fade =
     group.disclosure?.animate === true ? STRIP_AGENT_FADE_IN_CLASS : undefined;
   return (
@@ -90,22 +84,20 @@ function StripAgentGroupBody(props: {
       className={STRIP_AGENT_GROUP_CLASS}
     >
       {props.caption}
-      {shown.map((row) => (
+      {group.rows.map((row) => (
         <div key={row.agent.id} className={fade}>
           <GroupRow group={group} row={row} onNeedsYou={activate} />
         </div>
       ))}
-      {more > 0 ? (
+      {group.more > 0 ? (
         <button
           type="button"
           data-testid="strip-agent-show-more"
-          onClick={() => {
-            setShowAll(true);
-          }}
+          onClick={group.showAll}
           className={cn(STRIP_AGENT_ROW_CLASS, fade)}
         >
           <span aria-hidden className="size-3.5 shrink-0" />
-          Show {more} more
+          Show {group.more} more
         </button>
       ) : null}
     </div>

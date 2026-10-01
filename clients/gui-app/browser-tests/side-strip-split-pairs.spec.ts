@@ -195,6 +195,33 @@ test("forms a pair in its target's place and separates it, with no row overlappe
   ]);
 });
 
+test("drops a pair's Needs you line once its waiting agent is drawn below, with no row overlapped on any frame", async ({
+  page,
+}) => {
+  await open(page, "&scene=sections&agents=waiting");
+  const pair = page.getByTestId("split-tab-group-split-current");
+  await expect(pair.getByTestId("side-tab-section-detail")).toBeVisible();
+  expect((await pair.boundingBox())?.height).toBeCloseTo(52, 0);
+
+  // React UI Performance Audit's Perf agent waits on an approval. The chevron
+  // takes its room on hover.
+  const react = page.getByTestId("tab-epic-fixture-react");
+  await react.hover();
+  await react.getByTestId("side-tab-disclosure").click();
+
+  const opening = await framesOver(page, 12);
+  expect(opening.map(overlaps)).not.toContain(true);
+  await expectSettled(page);
+  await expect(pair.getByTestId("side-tab-section-detail")).toHaveCount(0);
+  const row = await pair.boundingBox();
+  const agent = await page
+    .getByTestId("strip-agent-fixture-react-chat")
+    .boundingBox();
+  if (row === null || agent === null) throw new Error("no layout");
+  expect(row.height).toBeCloseTo(32, 0);
+  expect(agent.y).toBeGreaterThanOrEqual(row.y + row.height);
+});
+
 test.describe("the arrow keys", () => {
   const focusedTestId = (page: Page): Promise<string | null> =>
     page.evaluate(

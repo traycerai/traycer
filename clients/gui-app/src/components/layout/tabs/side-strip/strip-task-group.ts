@@ -8,6 +8,7 @@ import {
   type NeedsYouItem,
 } from "@/stores/notifications/needs-you-items";
 import type { HeaderTab } from "@/stores/tabs/types";
+import { STRIP_AGENT_VISIBLE_MAX } from "./side-strip-tokens";
 import { useStripAgentsMode } from "./strip-agents-mode";
 import { useStripTaskExpanded } from "./strip-disclosure";
 import { useStripTaskNeedsYou } from "./strip-needs-you-context";
@@ -43,9 +44,19 @@ export interface StripTaskGroup {
   readonly active: boolean;
   /** Ghosted: the layout editor pointing at Side tab view in Tabs only. */
   readonly ghost: boolean;
+  /** The rows drawn: five, then all of them once "Show N more" is taken. */
   readonly rows: ReadonlyArray<StripGroupRow>;
+  /** How many rows "Show N more" would add. */
+  readonly more: number;
+  readonly showAll: () => void;
   /** `null` for a task that cannot expand: a cold one, and the sample. */
   readonly disclosure: StripTaskDisclosure | null;
+  /**
+   * The prompts an expanded Needs you task's own second line still names: those
+   * no drawn row stands for, `[]` when its waiting agents below say them all.
+   * `null` when the line names them all: collapsed, or no waiting agent drawn.
+   */
+  readonly undrawnNeedsYou: ReadonlyArray<NeedsYouItem> | null;
 }
 
 /** The task row's DOM id, which its group is labelled by. */
@@ -67,7 +78,8 @@ export function stripAgentGroupId(tabId: string): string {
  * left without a row. A cold task has no names, so it nests its needs-you rows
  * alone and cannot expand. A task in the Activity view's Needs you section
  * (`row`) names its requests on its own second line, so it nests none: expanded
- * it shows all its agents, waiting ones first, and collapsed nothing. The
+ * it shows all its agents, waiting ones first, and collapsed nothing; the line
+ * then names only the requests no drawn agent says itself. The
  * layout editor's sample tab nests the sample agents, and under the sample
  * scene no real task nests anything.
  */
@@ -83,6 +95,7 @@ export function useStripTaskGroup(
   const needsYou = useStripTaskNeedsYou(epicId);
   const [expandedChoice, setExpanded] = useStripTaskExpanded(epicId, active);
   const [viaPointer, setViaPointer] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const motionEnabled = useMotionEnabled();
   const namedOnRow = row?.section === "needs-you";
   const expandable = warm && agents.length > 0;
@@ -134,8 +147,27 @@ export function useStripTaskGroup(
       ),
     ];
   }, [warm, namedOnRow, expanded, agents, needsYou]);
+  const shown = useMemo(
+    () => (showAll ? rows : rows.slice(0, STRIP_AGENT_VISIBLE_MAX)),
+    [showAll, rows],
+  );
+  // The line goes only for prompts whose waiting agent is drawn below.
+  const undrawnNeedsYou = useMemo(() => {
+    if (!namedOnRow) return null;
+    const drawn = new Set(
+      shown.flatMap((r) => (r.agent.status === "waiting" ? [r.agent.id] : [])),
+    );
+    if (drawn.size === 0) return null;
+    return needsYou.filter((item) => {
+      const chatId = needsYouItemChatId(item);
+      return chatId === null || !drawn.has(chatId);
+    });
+  }, [namedOnRow, shown, needsYou]);
   return useMemo((): StripTaskGroup | null => {
     if (tab === null || mode === null) return null;
+    const showAllRows = (): void => {
+      setShowAll(true);
+    };
     if (tab.kind === "sample-workspace") {
       return {
         tabId: tab.id,
@@ -147,7 +179,10 @@ export function useStripTaskGroup(
           notification: null,
           prompt: null,
         })),
+        more: 0,
+        showAll: showAllRows,
         disclosure: null,
+        undrawnNeedsYou: null,
       };
     }
     if (epicId === null || mode !== "live" || sample) return null;
@@ -157,7 +192,10 @@ export function useStripTaskGroup(
       epicId,
       active,
       ghost: false,
-      rows,
+      rows: shown,
+      more: rows.length - shown.length,
+      showAll: showAllRows,
+      undrawnNeedsYou,
       disclosure: expandable
         ? {
             expanded,
@@ -176,6 +214,8 @@ export function useStripTaskGroup(
     epicId,
     active,
     rows,
+    shown,
+    undrawnNeedsYou,
     expandable,
     expanded,
     animate,

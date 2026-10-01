@@ -29,6 +29,12 @@ const STRIP_SECTIONS: ReadonlyArray<StripSection> = [
   "idle",
 ];
 
+/** The one word a request asks of the person. */
+export const NEEDS_YOU_VERB: Readonly<Record<NeedsYouReason, string>> = {
+  approval: "Approve",
+  reply: "Reply",
+};
+
 /** How an unread task finished. */
 export type ReviewOutcome = "done" | "failed";
 
@@ -80,7 +86,7 @@ function oldestNeedsYouItem(
   );
 }
 
-function needsYouRowOf(
+export function needsYouRowOf(
   items: ReadonlyArray<NeedsYouItem>,
   fallback: NeedsYouReason,
 ): NeedsYouRow {

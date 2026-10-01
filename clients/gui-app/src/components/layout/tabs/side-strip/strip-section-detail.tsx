@@ -2,9 +2,12 @@ import type { ReactNode } from "react";
 import { Check, X } from "lucide-react";
 import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
-import type { NeedsYouReason } from "@/stores/notifications/needs-you-items";
 import { StripElapsedTime } from "./strip-elapsed-time";
-import type { NeedsYouRow, ToReviewRow } from "./strip-sections";
+import {
+  NEEDS_YOU_VERB,
+  type NeedsYouRow,
+  type ToReviewRow,
+} from "./strip-sections";
 
 /** Both lines' type: 12px, on the row's 16px line. */
 const DETAIL_CLASS = "flex min-w-0 items-center gap-1.5 text-ui-xs leading-4";
@@ -16,12 +19,6 @@ const DETAIL_CLASS = "flex min-w-0 items-center gap-1.5 text-ui-xs leading-4";
  * short words leave the fade over empty space.
  */
 const DETAIL_TEXT_CLASS = "header-tab-title-text min-w-0 flex-1";
-
-/** The one word a request asks of the person. */
-const NEEDS_YOU_VERB: Readonly<Record<NeedsYouReason, string>> = {
-  approval: "Approve",
-  reply: "Reply",
-};
 
 /** "Approve · agent" or "Reply · agent", with "+N" for the other requests. */
 export function NeedsYouDetail(props: {

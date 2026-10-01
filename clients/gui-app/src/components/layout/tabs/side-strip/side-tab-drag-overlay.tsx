@@ -313,7 +313,8 @@ function OverlayTabRow(props: {
         meterHidden: false,
         half,
       })}
-      section={row === null ? null : sectionStyleOf(row, half)}
+      // The dragged row travels without its agents, so it names their requests.
+      section={row === null ? null : sectionStyleOf(row, half, null)}
       disclosure={null}
       title={displayName}
       hoverCardBody={displayName}

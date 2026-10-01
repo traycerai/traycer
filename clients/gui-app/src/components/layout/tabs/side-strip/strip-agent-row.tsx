@@ -8,6 +8,7 @@ import {
   STRIP_AGENT_TRAILING_CLASS,
 } from "./side-strip-tokens";
 import { StripElapsedTime } from "./strip-elapsed-time";
+import { NEEDS_YOU_VERB } from "./strip-sections";
 import type { StripAgent, StripAgentStatus } from "./strip-task-agents";
 
 /** Each status's name, the row's accessible name after its title. */
@@ -17,6 +18,13 @@ const STATUS_LABEL: Readonly<Record<StripAgentStatus, string>> = {
   turn: "running",
   background: "background",
 };
+
+/** A waiting agent says what it asks, "Reply" or "Approve"; a pending fork just that it waits. */
+function labelOf(agent: StripAgent): string {
+  if (agent.kind === "approval") return NEEDS_YOU_VERB.approval;
+  if (agent.kind === "interview") return NEEDS_YOU_VERB.reply;
+  return STATUS_LABEL[agent.status];
+}
 
 function Trailing(props: { readonly agent: StripAgent }): ReactNode {
   const { agent } = props;
@@ -38,7 +46,7 @@ function Trailing(props: { readonly agent: StripAgent }): ReactNode {
         agent.status === "failed" && "text-destructive",
       )}
     >
-      {STATUS_LABEL[agent.status]}
+      {labelOf(agent)}
     </span>
   );
 }
@@ -58,7 +66,7 @@ export function StripAgentRow(props: {
 }): ReactNode {
   const { agent, onScreen, onHoverChange } = props;
   const title = displayTitle(agent.title ?? "", "agent");
-  const label = `${title}, ${STATUS_LABEL[agent.status]}`;
+  const label = `${title}, ${labelOf(agent)}`;
   return (
     <button
       type="button"

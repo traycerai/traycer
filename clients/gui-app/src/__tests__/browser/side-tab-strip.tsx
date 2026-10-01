@@ -42,6 +42,7 @@ import {
   seedSideStripPairs,
   seedSideStripSections,
   seedSideStripTabs,
+  seedSideStripWaitingAgents,
   type SeededSection,
 } from "./side-tab-strip-seed";
 import "@/lib/theme-applier";
@@ -89,6 +90,9 @@ import "@/index.css";
  *
  * `?tasks=pairs` is the split pairs' boards: a task, the current pair, a second
  * pair and Start Page, in either view.
+ *
+ * `&agents=waiting` names the agent behind each waiting prompt (sections and
+ * pairs), so a Needs you task can expand to the agent that asks.
  *
  * `&rail=1` collapses the strip to the rail, which in the sections scene runs
  * the same tasks as tiles in the same sections.
@@ -139,6 +143,8 @@ const IDLE_GROUP =
   new URLSearchParams(window.location.search).get("tasks") === "idle-group";
 const PAIRS =
   new URLSearchParams(window.location.search).get("tasks") === "pairs";
+const WAITING_AGENTS =
+  new URLSearchParams(window.location.search).get("agents") === "waiting";
 
 function seedScene(): void {
   if (SECTIONS_SCENE) {
@@ -347,6 +353,7 @@ installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 useSideTabStripStore.getState().resetWidth();
 useSideTabStripStore.getState().setCollapsed(RAIL);
 seedScene();
+if (WAITING_AGENTS) seedSideStripWaitingAgents(PAIRS);
 
 const container = document.getElementById("root");
 if (container !== null)

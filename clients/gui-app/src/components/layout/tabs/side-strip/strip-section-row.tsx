@@ -11,24 +11,47 @@ import { sideTabStatusOf } from "./side-tab-status";
 import { SideTabStatusGlyph } from "./side-tab-status-glyph";
 import { StripElapsedTime } from "./strip-elapsed-time";
 import { NeedsYouDetail, ToReviewDetail } from "./strip-section-detail";
-import type { NeedsYouRow, StripTaskRow, ToReviewRow } from "./strip-sections";
+import {
+  needsYouRowOf,
+  type NeedsYouRow,
+  type StripTaskRow,
+  type ToReviewRow,
+} from "./strip-sections";
+import type { StripTaskGroup } from "./strip-task-group";
+
+/**
+ * The Needs you line a task's row draws: its requests, less those its expanded
+ * agents below say themselves, or `null` when they say them all.
+ */
+export function needsYouLineOf(
+  row: NeedsYouRow,
+  group: StripTaskGroup | null,
+): NeedsYouRow | null {
+  const undrawn = group?.undrawnNeedsYou ?? null;
+  if (undrawn === null) return row;
+  return undrawn.length === 0 ? null : needsYouRowOf(undrawn, row.reason);
+}
 
 /**
  * How a section styles a row: a Needs you or To review row is a two-line row
  * with a bold title, a Working row one line of normal weight, an Idle row one
- * line of muted text. A split pair's half keeps the weight and draws no second
- * line: its pair's row carries that.
+ * line of muted text. An expanded Needs you row whose agents below say every
+ * request is one line too. A split pair's half keeps the weight and draws no
+ * second line: its pair's row carries that.
  */
 export function sectionStyleOf(
   row: StripTaskRow,
   half: boolean,
+  group: StripTaskGroup | null,
 ): SideRowSection {
   switch (row.section) {
-    case "needs-you":
+    case "needs-you": {
+      const line = half ? null : needsYouLineOf(row, group);
       return {
         title: "strong",
-        detail: half ? null : <NeedsYouDetail row={row} />,
+        detail: line === null ? null : <NeedsYouDetail row={line} />,
       };
+    }
     case "to-review":
       return {
         title: "strong",

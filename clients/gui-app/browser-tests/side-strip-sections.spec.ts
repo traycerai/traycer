@@ -43,6 +43,30 @@ test("draws Needs you and To review rows 52px tall and Working and Idle rows 32p
   }
 });
 
+test("draws an expanded Needs you task whose agent says the request as a 32px row, the agent right below it", async ({
+  page,
+}) => {
+  await page.goto(`${STRIP}&agents=waiting`);
+  await page.waitForFunction("window.__sideTabStripProbe?.ready === true");
+  await nextFrames(page, 4);
+  const staging = row(page, "staging");
+  expect((await boxOf(staging)).height).toBe(52);
+
+  // The chevron takes its room on hover.
+  await staging.hover();
+  await staging.getByTestId("side-tab-disclosure").click();
+
+  const agent = page.getByTestId("strip-agent-fixture-staging-chat");
+  await expect(agent).toBeVisible();
+  const rowBox = await boxOf(staging);
+  const agentBox = await boxOf(agent);
+  expect(rowBox.height).toBe(32);
+  expect(agentBox.y).toBeGreaterThanOrEqual(rowBox.y + rowBox.height);
+  expect((await boxOf(row(page, "onboarding"))).y).toBeGreaterThanOrEqual(
+    agentBox.y + agentBox.height,
+  );
+});
+
 test("colours only the Needs you header amber", async ({ page }) => {
   await openStrip(page);
 

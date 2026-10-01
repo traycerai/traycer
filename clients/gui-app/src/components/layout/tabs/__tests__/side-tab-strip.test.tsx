@@ -2349,7 +2349,7 @@ describe("<SideTabStrip />", () => {
       expect(screen.queryByTestId("side-tab-group-header-g")).toBeNull();
     });
 
-    it("nests no needs-you rows under a Needs you task and, expanded, lists all its agents with the waiting one first", async () => {
+    it("nests no needs-you rows under a Needs you task and, expanded, lists all its agents with the waiting one first, which then says the request in place of the task's line", async () => {
       openEpicTabs(["Alpha", "Gamma"]);
       warmEpic("e-gamma", [
         chatProjection("c-run", { title: "Runs", updatedAt: 1 }),
@@ -2374,6 +2374,9 @@ describe("<SideTabStrip />", () => {
 
       const row = screen.getByTestId("tab-epic-e-gamma");
       // Its second line names the request: nothing is nested under it.
+      expect(
+        within(row).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Approve · Waits");
       expect(screen.getByTestId("strip-agent-group").hidden).toBe(true);
       expect(screen.queryByTestId("strip-agent-c-wait")).toBeNull();
       expect(
@@ -2390,6 +2393,75 @@ describe("<SideTabStrip />", () => {
             .querySelectorAll('[data-testid^="strip-agent-"]'),
         ).map((node) => node.getAttribute("data-testid")),
       ).toEqual(["strip-agent-c-wait", "strip-agent-c-run"]);
+      // The waiting agent says what it asks, so the task's line goes.
+      expect(trailingWord("c-wait")).toBe("Approve");
+      expect(within(row).queryByTestId("side-tab-section-detail")).toBeNull();
+    });
+
+    /** What a nested agent row says after its name. */
+    function trailingWord(agentId: string): string | null | undefined {
+      return screen.getByTestId(`strip-agent-${agentId}`).lastElementChild
+        ?.textContent;
+    }
+
+    it("has an expanded task's waiting agent ask for a reply, with no line on the task", async () => {
+      openEpicTabs(["Alpha", "Gamma"]);
+      warmEpic("e-gamma", [chatProjection("c-ask", { title: "Asks" })]);
+      indicatorState.value = {
+        epics: { "e-gamma": { ...NO_FLAGS, pendingInterview: true } },
+        chats: { "c-ask": { ...NO_FLAGS, pendingInterview: true } },
+      };
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const row = screen.getByTestId("tab-epic-e-gamma");
+      expect(
+        within(row).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Reply");
+
+      fireEvent.click(within(row).getByTestId("side-tab-disclosure"));
+
+      expect(trailingWord("c-ask")).toBe("Reply");
+      expect(within(row).queryByTestId("side-tab-section-detail")).toBeNull();
+    });
+
+    it("keeps an expanded task's line for a request no agent below says, naming only that one", async () => {
+      openEpicTabs(["Alpha", "Gamma"]);
+      warmEpic("e-gamma", [chatProjection("c-wait", { title: "Waits" })]);
+      indicatorState.value = {
+        epics: { "e-gamma": { ...NO_FLAGS, pendingApproval: true } },
+        chats: { "c-wait": { ...NO_FLAGS, pendingApproval: true } },
+      };
+      seedPrompts([
+        {
+          id: "approval-wait",
+          epicId: "e-gamma",
+          chatId: "c-wait",
+          agentTitle: "Waits",
+          taskTitle: "Gamma",
+          minutesAgo: 5,
+        },
+        {
+          id: "approval-gone",
+          epicId: "e-gamma",
+          chatId: "c-gone",
+          agentTitle: "Gone agent",
+          taskTitle: "Gamma",
+          minutesAgo: 1,
+        },
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const row = screen.getByTestId("tab-epic-e-gamma");
+      expect(
+        within(row).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Approve · Waits+1");
+
+      fireEvent.click(within(row).getByTestId("side-tab-disclosure"));
+
+      expect(trailingWord("c-wait")).toBe("Approve");
+      expect(
+        within(row).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Approve · Gone agent");
     });
 
     it("keeps a two-line row's pending-fork glyph and time, then the chevron, then the close, at the trailing edge", async () => {
