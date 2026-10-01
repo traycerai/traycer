@@ -18,7 +18,7 @@ import {
   type Mock,
 } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { HostOverviewVersionCard } from "@/components/settings/panels/host-overview-updates";
+import { HostOverviewAnswerCard } from "@/components/settings/panels/host-overview-updates";
 import {
   describeCliFloorRemedy,
   type CliFloorRemedy,
@@ -119,9 +119,8 @@ function regionElement(
 ): ReactElement {
   return (
     <TooltipProvider>
-      <HostOverviewVersionCard
+      <HostOverviewAnswerCard
         version="1.2.0"
-        tag={null}
         answer={{
           summary: summary(remedy),
           degrade: null,
@@ -162,7 +161,7 @@ afterEach(() => {
   useDesktopDialogStore.getState().close();
 });
 
-describe("HostOverviewVersionCard CLI floor remedy", () => {
+describe("HostOverviewAnswerCard CLI floor remedy", () => {
   beforeEach(() => {
     clipboardWriteText.mockClear();
     Object.defineProperty(navigator, "clipboard", {
@@ -171,11 +170,13 @@ describe("HostOverviewVersionCard CLI floor remedy", () => {
     });
   });
 
-  it("renders the sentence in the status span and copies the recorded path command", () => {
+  it("renders the remedy sentence in the card's answer line and copies the recorded path command", () => {
     const remedy = manualRemedy("/home/u/.local/bin/traycer");
     renderRegion(remedy, null);
 
-    expect(screen.getByRole("status").textContent).toBe(remedy.sentence);
+    expect(screen.getByTestId("host-overview-updates").textContent).toBe(
+      remedy.sentence,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
     expect(clipboardWriteText).toHaveBeenCalledWith(
       "'/home/u/.local/bin/traycer' cli upgrade",
@@ -208,10 +209,12 @@ describe("HostOverviewVersionCard CLI floor remedy", () => {
     });
     renderRegion(remedy, null);
 
-    expect(screen.getByRole("status").textContent).toBe(remedy.sentence);
+    expect(screen.getByTestId("host-overview-updates").textContent).toBe(
+      remedy.sentence,
+    );
     // E09: removing the PowerShell/outside wording would make this visible
     // shell-guidance pin RED even if the copy payload remained unchanged.
-    expect(screen.getByRole("status").textContent).toContain(
+    expect(screen.getByTestId("host-overview-updates").textContent).toContain(
       "PowerShell window outside Traycer on that machine",
     );
     fireEvent.click(screen.getByRole("button", { name: "Copy commands" }));
@@ -365,7 +368,9 @@ describe("HostOverviewVersionCard CLI floor remedy", () => {
       });
       const rendered = renderRegion(remedy, bridge);
 
-      expect(screen.getByRole("status").textContent).toBe(failure.sentence);
+      expect(screen.getByTestId("host-overview-updates").textContent).toBe(
+        failure.sentence,
+      );
       expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
       expect(
         screen.getByRole("button", { name: "Show installation help" }),

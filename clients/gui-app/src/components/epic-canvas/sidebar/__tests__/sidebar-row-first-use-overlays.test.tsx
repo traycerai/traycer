@@ -26,7 +26,11 @@ import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { ArtifactTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
-import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import {
+  EpicSidebarCloudChatRow,
+  type CloudChatRowExpansion,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
 import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
@@ -287,6 +291,13 @@ const ART_B = "spec-b";
 const TITLE_ART_A = "Alpha ticket";
 const TOOLTIP_DELAY_MS = 150;
 /** Same summary the cloud-row suite already mounts. */
+/** A leaf row: no subagents beneath it, so no expansion state to consult. */
+const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
+const LEAF_EXPANSION: CloudChatRowExpansion = {
+  expandedIds: new Set<string>(),
+  toggleExpanded: () => undefined,
+};
+
 const CLOUD_CHAT: CloudChatSummary = {
   identity: {
     taskId: "d60781ca-e0d3-4318-bf2a-e03d8ce4e3a7",
@@ -684,6 +695,8 @@ function renderCloudRow(): HTMLElement {
         <TooltipProvider delayDuration={150}>
           <EpicSidebarCloudChatRow
             chat={CLOUD_CHAT}
+            childEntries={NO_CHILDREN}
+            expansion={LEAF_EXPANSION}
             tabId={TAB_ID}
             depth={0}
             selectionMode={false}

@@ -24,7 +24,7 @@ import {
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
+import { EpicResourcesFallbackMount } from "@/providers/resources-stream-mount";
 import {
   EpicSessionPresentationContext,
   type EpicSessionPresentation,
@@ -150,7 +150,10 @@ function EpicShellSessionBody(
   return (
     <SnapshotLoadingProvider value={snapshotContextValue}>
       {props.active ? <EpicConnectionToasts epicId={props.epicId} /> : null}
-      <ResourcesStreamMount epicId={props.epicId} />
+      {/* This epic's resource chips lease its stream themselves, so the pane
+          opens one only to feed an old host's global fallback while a global
+          monitor is up. */}
+      <EpicResourcesFallbackMount epicId={props.epicId} />
       {snapshotFetchError === null && !hasActiveHandoff ? (
         <ChatStreamPrewarm
           epicId={props.epicId}
