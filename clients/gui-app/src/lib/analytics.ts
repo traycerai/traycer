@@ -7,6 +7,12 @@ import {
 import { LAYOUT_VALUE_ENUM_MEMBERS } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
 import { isMobileApp } from "@/lib/mobile-app";
+import {
+  PROFILE_COPY_REASONS,
+  PROFILE_COPY_STATES,
+  type ProfileCopyReason,
+  type ProfileCopyState,
+} from "@/lib/profile-copy/profile-copy-model";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -305,6 +311,11 @@ export type AnalyticsProvider =
 
 export type AnalyticsRole = "editor" | "owner" | "viewer";
 
+/** A settled profile-copy attempt's wire `state`, verbatim. */
+export type AnalyticsProfileCopyState = ProfileCopyState;
+/** The wire `reason` enum verbatim, or `none` - never free text. */
+export type AnalyticsProfileCopyReason = ProfileCopyReason | "none";
+
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
   | "agentBrowserAccess"
@@ -425,6 +436,8 @@ export enum AnalyticsEvent {
   ProviderProfileLinkSucceeded = "provider_profile_link_succeeded",
   ProviderProfileLinkFailed = "provider_profile_link_failed",
   ProviderProfileLinkCancelled = "provider_profile_link_cancelled",
+  ProfileCopyStarted = "profile_copy_started",
+  ProfileCopyAttemptSettled = "profile_copy_attempt_settled",
   ProviderConfigurationChanged = "provider_configuration_changed",
   AccountContextChanged = "account_context_changed",
   SubscriptionRefreshed = "subscription_refreshed",
@@ -710,6 +723,19 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ProviderProfileLinkCancelled]: {
     readonly provider: AnalyticsProvider;
     readonly mode: "create" | "reauth";
+  };
+  /** Enum-only: no label, host id, operation id, account id or email. */
+  readonly [AnalyticsEvent.ProfileCopyStarted]: {
+    readonly provider: AnalyticsProvider;
+    /** Whether the source was a managed profile or the Terminal account. */
+    readonly source_kind: "managed" | "ambient";
+    readonly destination_count: number;
+  };
+  /** One per attempt per window, when it settles. Wire enums only. */
+  readonly [AnalyticsEvent.ProfileCopyAttemptSettled]: {
+    readonly provider: AnalyticsProvider;
+    readonly state: AnalyticsProfileCopyState;
+    readonly reason: AnalyticsProfileCopyReason;
   };
   readonly [AnalyticsEvent.ProviderConfigurationChanged]: {
     readonly operation: AnalyticsProviderOperation;
@@ -1666,6 +1692,14 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["provider", "mode", "blocker"],
   ),
   ...eventKeyEntries(
+    [AnalyticsEvent.ProfileCopyStarted],
+    ["provider", "destination_count", "source_kind"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.ProfileCopyAttemptSettled],
+    ["provider", "state", "reason"],
+  ),
+  ...eventKeyEntries(
     [AnalyticsEvent.ProviderConfigurationChanged],
     ["operation"],
   ),
@@ -2025,6 +2059,7 @@ const EXACT_PROPERTY_VALUES: {
   permission: new Set(["denied", "granted", "unavailable"]),
   pressure_tier: ANALYTICS_RESOURCE_PRESSURE_TIERS,
   provider: ANALYTICS_PROVIDERS,
+  source_kind: new Set(["managed", "ambient"]),
   region: ANALYTICS_LAYOUT_REGIONS,
   role: new Set(["editor", "owner", "viewer"]),
   session_duration_bucket: ANALYTICS_LAYOUT_DURATION_BUCKETS,
@@ -2112,6 +2147,18 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     [AnalyticsEvent.HostSetupStarted, AnalyticsEvent.HostSetupSucceeded],
     "reason",
     new Set(["launch", "recovery", "reinstall", "update"]),
+  ),
+  // The wire enums, exactly: anything else - free text, a label, an id - is
+  // not in the set, and an event carrying it is dropped whole.
+  ...eventValueEntries(
+    [AnalyticsEvent.ProfileCopyAttemptSettled],
+    "state",
+    new Set<string>(PROFILE_COPY_STATES),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ProfileCopyAttemptSettled],
+    "reason",
+    new Set<string>([...PROFILE_COPY_REASONS, "none"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.ApprovalDecided, AnalyticsEvent.FileEditApprovalDecided],
@@ -2341,6 +2388,7 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
   "attachment_count",
   "changed_count",
   "changed_from_default_count",
+  "destination_count",
   "failed_count",
   "file_count",
   "group_count",
