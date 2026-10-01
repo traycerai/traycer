@@ -34,7 +34,7 @@ export function CopyableApprovalField(props: {
       <div
         className={cn(
           "flex items-baseline justify-between gap-2 text-overline",
-          props.isHero ? "text-white/[0.55]" : "text-muted-foreground",
+          props.isHero ? "text-white/60" : "text-muted-foreground",
         )}
       >
         <span className="font-mono uppercase">{props.label}</span>

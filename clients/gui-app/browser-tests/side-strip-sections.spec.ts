@@ -185,6 +185,24 @@ test("signing in, keeps the device code's wait and its expiry apart in the strip
   expect(beside || below).toBe(true);
 });
 
+test("signing in at 192px, starts the wrapped wait and expiry lines in one column, icons and words", async ({
+  page,
+}) => {
+  await openStrip(page);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.evaluate("window.__sideTabStripProbe.setWidth(192)");
+  await nextFrames(page, 3);
+  const progress = page.getByTestId("signin-device-progress");
+  const spinner = await boxOf(page.getByTestId("signin-device-spinner"));
+  const clock = await boxOf(progress.locator("svg.lucide-clock"));
+  const waiting = await boxOf(progress.getByText("Waiting for approval"));
+  const expiry = await boxOf(progress.getByText(/^Expires in/));
+
+  expect(waiting.y + waiting.height).toBeLessThanOrEqual(expiry.y);
+  expect(spinner.x).toBe(clock.x);
+  expect(waiting.x).toBe(expiry.x);
+});
+
 test("signing in at 192px, keeps the device code on one line, clear of its copy button", async ({
   page,
 }) => {

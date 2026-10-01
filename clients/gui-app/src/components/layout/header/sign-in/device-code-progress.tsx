@@ -110,7 +110,7 @@ export function DeviceCodeProgress(props: {
             <div className="flex items-center gap-1">
               <AgentSpinningDots
                 variant="dots"
-                className="ml-0.5 shrink-0"
+                className="shrink-0"
                 testId="signin-device-spinner"
               />
               <span className="shrink-0">
