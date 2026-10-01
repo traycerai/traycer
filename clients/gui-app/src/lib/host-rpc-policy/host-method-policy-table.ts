@@ -2335,6 +2335,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "config.worktrees.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.worktrees.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Auto mode's two host-scoped settings. Both are get/set pairs over a host
   // config file, so they take the `config.logLevels.*` shape above: a bounded
   // read that may coalesce, and a write that may not.
