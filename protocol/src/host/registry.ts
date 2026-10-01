@@ -419,6 +419,8 @@ import {
   configShellResetV10,
   configShellRevertArgsV10,
   configShellSetV10,
+  configWorktreesGetV10,
+  configWorktreesSetV10,
 } from "@traycer/protocol/host/config/contracts";
 import {
   diagnosticsLogsListV10,
@@ -5471,6 +5473,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: configBrowserSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.worktrees.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configWorktreesGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "config.worktrees.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: configWorktreesSetV10,
           upgradeFromPreviousVersion: null,
         },
       },

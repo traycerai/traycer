@@ -183,9 +183,11 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { domMax, LazyMotion } from "motion/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TestRouterProvider } from "../../../../__tests__/with-test-router";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
+import { holdEpicBatchDelete } from "@/hooks/epic/__tests__/hold-epic-batch-delete";
 import {
   MobileDrawerHistoryGateProvider,
   MobileDrawerVisibleTilePaintReporter,
@@ -267,6 +269,12 @@ function backfillTask(overrides: {
   };
 }
 
+// The drawer asks the mutation cache whether a row's task is being deleted
+// (`useEpicDeleteInFlightReader`) when a row is tapped, so it mounts in a client.
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
+
 /**
  * Returns the Testing Library container, which is a direct child of the
  * document body and therefore stands in for "the rest of the app" when the
@@ -278,13 +286,15 @@ function backfillTask(overrides: {
  */
 function renderDrawer(): HTMLElement {
   const { container } = render(
-    <MobileDrawerHistoryGateProvider>
-      <LazyMotion features={domMax}>
-        <TestRouterProvider>
-          <MobileNavDrawer />
-        </TestRouterProvider>
-      </LazyMotion>
-    </MobileDrawerHistoryGateProvider>,
+    <QueryClientProvider client={queryClient}>
+      <MobileDrawerHistoryGateProvider>
+        <LazyMotion features={domMax}>
+          <TestRouterProvider>
+            <MobileNavDrawer />
+          </TestRouterProvider>
+        </LazyMotion>
+      </MobileDrawerHistoryGateProvider>
+    </QueryClientProvider>,
   );
   return container;
 }
@@ -297,25 +307,27 @@ function drawerWithVisibleTileReporter(props: {
   readonly paneVisible: boolean;
 }) {
   return (
-    <MobileDrawerHistoryGateProvider>
-      <LazyMotion features={domMax}>
-        <TestRouterProvider>
-          {props.metadataReady ? (
-            <span data-testid="epic-metadata-ready" />
-          ) : null}
-          <TabBodySelectedContext.Provider value={props.selected}>
-            <PaneVisibilityContext.Provider value={props.paneVisible}>
-              {props.selectedContentReporterMounted ? (
-                <MobileDrawerVisibleTilePaintReporter
-                  ready={props.selectedContentReady}
-                />
-              ) : null}
-              <MobileNavDrawer />
-            </PaneVisibilityContext.Provider>
-          </TabBodySelectedContext.Provider>
-        </TestRouterProvider>
-      </LazyMotion>
-    </MobileDrawerHistoryGateProvider>
+    <QueryClientProvider client={queryClient}>
+      <MobileDrawerHistoryGateProvider>
+        <LazyMotion features={domMax}>
+          <TestRouterProvider>
+            {props.metadataReady ? (
+              <span data-testid="epic-metadata-ready" />
+            ) : null}
+            <TabBodySelectedContext.Provider value={props.selected}>
+              <PaneVisibilityContext.Provider value={props.paneVisible}>
+                {props.selectedContentReporterMounted ? (
+                  <MobileDrawerVisibleTilePaintReporter
+                    ready={props.selectedContentReady}
+                  />
+                ) : null}
+                <MobileNavDrawer />
+              </PaneVisibilityContext.Provider>
+            </TabBodySelectedContext.Provider>
+          </TestRouterProvider>
+        </LazyMotion>
+      </MobileDrawerHistoryGateProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -350,6 +362,7 @@ describe("MobileNavDrawer", () => {
       },
     });
     useDesktopDialogStore.getState().close();
+    queryClient.clear();
   });
   afterEach(() => {
     cleanup();
@@ -1243,6 +1256,53 @@ describe("MobileNavDrawer", () => {
       const rows = await screen.findAllByTestId("mobile-nav-task-row");
 
       fireEvent.click(rows[0]);
+
+      expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+    });
+
+    // The drawer lists the same tasks History does, so a delete confirmed there
+    // and still running refuses the open here too: the drawer stays up and the
+    // first-task guide is not finished by a tap that opened nothing.
+    it("refuses to open a task whose deletion is in flight, and opens it again once that settles", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({ id: "b", title: "other", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      useFirstTaskGuideStore.getState().activate();
+      const held = holdEpicBatchDelete(queryClient, ["a"]);
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+      const rowA = rows.find((row) => row.textContent.includes("hello"));
+      if (rowA === undefined)
+        throw new Error("expected the deleting task's row");
+
+      fireEvent.click(rowA);
+
+      expect(useMobileNavStore.getState().open).toBe(true);
+      expect(useFirstTaskGuideStore.getState().status).toBe("active");
+
+      await act(async () => {
+        await held.settle();
+      });
+      fireEvent.click(rowA);
+
+      expect(useMobileNavStore.getState().open).toBe(false);
+      expect(useFirstTaskGuideStore.getState().status).toBe("finished");
+    });
+
+    it("opens a task other than the one being deleted", async () => {
+      testState.items = [
+        historyItem({ id: "a", title: "hello", updatedAtMs: NOW_MS - DAY_MS }),
+        historyItem({ id: "b", title: "other", updatedAtMs: NOW_MS - DAY_MS }),
+      ];
+      useFirstTaskGuideStore.getState().activate();
+      void holdEpicBatchDelete(queryClient, ["a"]);
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+      const rowB = rows.find((row) => row.textContent.includes("other"));
+      if (rowB === undefined) throw new Error("expected the other task's row");
+
+      fireEvent.click(rowB);
 
       expect(useFirstTaskGuideStore.getState().status).toBe("finished");
     });

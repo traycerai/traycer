@@ -310,6 +310,7 @@ export type AnalyticsSetting =
   | "agentBrowserAccess"
   | "agentOfficeDefaultView"
   | "agentTabSurfacing"
+  | "agentWorktreeCreate"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "codeFontFamily"
@@ -1379,6 +1380,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     agentBrowserAccess: true,
     agentOfficeDefaultView: true,
     agentTabSurfacing: true,
+    agentWorktreeCreate: true,
     allowPrereleaseUpdates: true,
     artifactIconColorMode: true,
     artifactIconColors: true,
