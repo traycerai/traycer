@@ -2341,10 +2341,12 @@ function registerHostLifecycleCommands(host: Command): void {
   const modeHelp = `
 Modes:
   background    Start the host when you log in. Keep work running after you quit Traycer Desktop.
-  linked        Start the host when you open Traycer Desktop. Quitting stops work on this host.
+  linked        Start the host when you open Traycer Desktop. Quitting stops the host and its work.
   ask           Start the host with Traycer Desktop. When you quit, ask whether to keep work running or stop it.
   stop-if-idle  Start the host with Traycer Desktop. When you quit, stop if nothing is running; otherwise, ask.
   none          Don't start a host on this machine. Use Traycer Desktop to connect to remote hosts instead.
+
+A host you started manually in a terminal keeps running when you quit Traycer Desktop.
 `;
   const lifecycle = host
     .command("lifecycle")
@@ -2366,7 +2368,7 @@ Modes:
     lifecycle
       .command("set")
       .description(
-        "Choose when the host starts and what happens when you quit Traycer Desktop. This command does not start or stop the host, even when you choose 'none'. The mode applies the next time the host starts automatically. Startup settings are also updated when needed so the host only starts at login in background mode.",
+        "Choose when the host starts and what happens when you quit Traycer Desktop. This command does not start or stop the host. Startup changes apply the next time the host starts automatically. If Traycer Desktop is already managing the host, its quit behavior also updates. Choosing 'none' leaves the running host alone; Traycer Desktop switches to remote hosts on its next launch. Login startup settings are updated when needed to match the mode.",
       )
       .argument("<mode>", "background | linked | ask | stop-if-idle | none")
       .addHelpText("after", modeHelp),

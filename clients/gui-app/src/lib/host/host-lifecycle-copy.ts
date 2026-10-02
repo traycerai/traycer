@@ -72,7 +72,7 @@ export function hostLifecycleOptionCopy(
       mode: "linked",
       label: "Stop the host with the app",
       description:
-        "The host starts when you open Traycer. Quitting stops agents, terminals and other work running on this host.",
+        "The host starts when you open Traycer and stops when you quit, ending work running on it. A host you started in a terminal keeps running.",
     },
     {
       mode: "none",
