@@ -34,10 +34,87 @@ import {
   protocolSurfaceSchema,
   type CompatException,
 } from "@traycer/protocol/framework/surface-compat";
-import type { UncheckedVersionedRpcRegistry } from "@traycer/protocol/framework/versioned-rpc-types";
-import type { UncheckedVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import type {
+  UncheckedMethodVersionRegistry,
+  UncheckedVersionedRpcRegistry,
+} from "@traycer/protocol/framework/versioned-rpc-types";
+import type {
+  UncheckedStreamMethodVersionRegistry,
+  UncheckedVersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 
 const EMPTY_STREAM: UncheckedVersionedStreamRpcRegistry = {};
+
+const NO_SCHEMA = z.never();
+
+function majorKeys(record: object): number[] {
+  return Object.keys(record).map(Number).filter(Number.isInteger);
+}
+
+function unaryWithoutSchemas(
+  registry: UncheckedVersionedRpcRegistry,
+): UncheckedVersionedRpcRegistry {
+  return Object.fromEntries(
+    Object.entries(registry).map(([method, methodRegistry]) => {
+      const lines: Record<number, UncheckedMethodVersionRegistry[number]> = {};
+      for (const major of majorKeys(methodRegistry)) {
+        const line = methodRegistry[major];
+        lines[major] = {
+          ...line,
+          versions: Object.fromEntries(
+            Object.entries(line.versions).map(([minor, entry]) => [
+              minor,
+              {
+                ...entry,
+                contract: {
+                  ...entry.contract,
+                  requestSchema: NO_SCHEMA,
+                  responseSchema: NO_SCHEMA,
+                },
+              },
+            ]),
+          ),
+        };
+      }
+      const degrade = methodRegistry.degrade;
+      return [method, degrade === undefined ? lines : { ...lines, degrade }];
+    }),
+  );
+}
+
+function streamWithoutSchemas(
+  registry: UncheckedVersionedStreamRpcRegistry,
+): UncheckedVersionedStreamRpcRegistry {
+  return Object.fromEntries(
+    Object.entries(registry).map(([method, methodRegistry]) => {
+      const lines: Record<
+        number,
+        UncheckedStreamMethodVersionRegistry[number]
+      > = {};
+      for (const major of majorKeys(methodRegistry)) {
+        const line = methodRegistry[major];
+        lines[major] = {
+          ...line,
+          versions: Object.fromEntries(
+            Object.entries(line.versions).map(([minor, entry]) => [
+              minor,
+              {
+                ...entry,
+                contract: {
+                  ...entry.contract,
+                  openRequestSchema: NO_SCHEMA,
+                  serverFrameSchema: NO_SCHEMA,
+                  clientFrameSchema: NO_SCHEMA,
+                },
+              },
+            ]),
+          ),
+        };
+      }
+      return [method, lines];
+    }),
+  );
+}
 
 function surfaceOfUnary(unary: UncheckedVersionedRpcRegistry) {
   return buildProtocolSurface({
@@ -125,11 +202,18 @@ function blockingOf(
 }
 
 describe("surface self-compatibility", () => {
+  // A surface compared with itself diffs every schema against an identical
+  // copy, so no schema finding is possible here; what can fail is the
+  // handshake graph (canonical versions, installed minors, bridges, floor and
+  // degrade placement). Converting the ~1,000 live schemas to JSON Schema is
+  // most of a second of CPU and timed this test out on a loaded CI run, so the
+  // graph is checked with the schemas stubbed. The real schemas are diffed by
+  // released-baseline-compat.test.ts and the protocol-compat workflow.
   it("the live host registries are compatible with their own surface", () => {
     const surface = buildProtocolSurface({
-      unary: hostRpcRegistry,
+      unary: unaryWithoutSchemas(hostRpcRegistry),
       unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
-      stream: hostStreamRpcRegistry,
+      stream: streamWithoutSchemas(hostStreamRpcRegistry),
     });
     const result = checkSurfaceCompatibility({
       mine: surface,

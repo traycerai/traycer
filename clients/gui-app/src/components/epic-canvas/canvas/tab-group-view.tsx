@@ -44,6 +44,7 @@ import {
   useIsActivePane,
   usePaneTabRefs,
 } from "@/stores/epics/canvas/store";
+import { PaneEmphasis } from "@/components/epic-canvas/canvas/pane-emphasis";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import {
   useEpicArtifact,
@@ -550,6 +551,7 @@ export const TabGroupView = memo(function TabGroupView(
               />
             </div>
           </div>
+          <PaneEmphasis activeInstanceId={activeTab?.instanceId ?? null} />
         </PaneFocusProbeContext.Provider>
       </PaneActivationFocusIntentContext.Provider>
     </div>
@@ -720,7 +722,7 @@ function resolveChatFallbackDecision(args: {
  *
  * The published-chat tile under the substitution already reads the owner's
  * reachability for its own footer, and draws the unreachable-owner banner
- * (offline or plan-restricted) from that same read - so for an unreachable
+ * from that same read - so for an unreachable
  * host the canvas draws nothing, or the reader gets the sentence twice with
  * two Clone buttons. Unreachability outranks a `CHAT_NOT_VISIBLE` terminate
  * on purpose: the terminate is a fact from an earlier moment, reachability is

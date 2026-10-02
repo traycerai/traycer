@@ -78,7 +78,6 @@ import {
   MAX_TERMINAL_STREAM_IDS,
   ATTACH_ACK_TIMEOUT_MS,
   NOISE_HANDSHAKE_TIMEOUT_MS,
-  PLAN_RESTRICTED_FATAL_CODE,
   SESSION_OPEN_ACK_TIMEOUT_MS,
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
@@ -318,7 +317,6 @@ export interface RemoteSessionEvidence {
     hostId: string,
     attemptId: string,
     transportKind: "remote-relay",
-    refusalDetail: "plan-restricted" | null,
   ): void;
   reportDialIndeterminate(
     hostId: string,
@@ -634,8 +632,7 @@ export interface IRemoteSession<
    * OR when it was closed by a caller (`close()` at refcount zero is a
    * lifecycle event, not a verdict). This is how a consumer reacting to
    * `onClosed` distinguishes "the host rejected this session for a reason
-   * that will repeat" (incompatible protocol, plan restriction, revoked
-   * credential) from "the cache retired an idle session" - the former is
+   * that will repeat" (incompatible protocol, revoked credential) from "the cache retired an idle session" - the former is
    * worth surfacing and NOT worth immediately redialing, the latter is
    * routine.
    */
@@ -1331,8 +1328,8 @@ export class RemoteSession<
    * when the session goes terminal (reject `HostTransportFailureError`).
    *
    * A CLOSED session is not-ready too, but it is never going to become ready:
-   * `close()` is terminal (a rejected credential, a plan restriction, an
-   * incompatible handshake, or the reconnect cap), and `start()` above only
+   * `close()` is terminal (a rejected credential, an incompatible
+   * handshake, or the reconnect cap), and `start()` above only
    * re-dials from `idle`. Waiting on one would park forever, and calling it
    * "retryable" would make `createRetryingMessenger` burn its whole budget on
    * a session that cannot answer. So a terminal session rejects immediately
@@ -1683,8 +1680,8 @@ export class RemoteSession<
   /**
    * The pre-send failure for a session that is not carrying frames. Retryable
    * while the session can still reach ready; a terminal one carries its
-   * verdict so the surface showing the failure can say WHY (plan restriction
-   * vs incompatible protocol vs revoked credential), not just "closed".
+   * verdict so the surface showing the failure can say WHY (incompatible
+   * protocol vs revoked credential), not just "closed".
    */
   private notReadyRejection(
     requestId: string,
@@ -2271,27 +2268,6 @@ export class RemoteSession<
 
     const provision = await this.options.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
-      return;
-    }
-    if (provision.kind === "plan-restricted") {
-      // Entitlement denial: the account's plan lacks remote connectivity.
-      // Backoff cannot fix a plan — go terminal so the caller surfaces the
-      // upsell instead of silently redialing forever. A later attempt (after
-      // an upgrade) builds a fresh session; the closed one is evicted from
-      // the session cache on the next acquire.
-      this.goTerminalFatal(planRestrictedFatalDetails());
-      // The SOLE provenance of `dead("plan-restricted")` (grant-client's
-      // `plan-restricted` arm). Reported AFTER the terminal teardown so the
-      // funnel has already retracted any announced session — a live session
-      // would otherwise suppress this refusal and the lease would settle
-      // `offline`, routing the ∅ modal to "retry" for a user whose only fix
-      // is an upgrade. Unlike every other mint failure this is a stable
-      // per-host entitlement verdict, not a fleet-correlated outage, which is
-      // why it counts as host evidence at all.
-      this.reportEvidenceOutcome(
-        this.dialAttemptId(generation),
-        "plan-restricted",
-      );
       return;
     }
     if (provision.kind === "unavailable") {
@@ -5134,20 +5110,6 @@ export class RemoteSession<
     ) {
       return;
     }
-    if (provision.kind === "plan-restricted") {
-      // Mid-session downgrade: end the session now rather than letting the
-      // relay's client-leg deadline kill it opaquely later.
-      this.goTerminalFatal(planRestrictedFatalDetails());
-      // The second provenance of `dead("plan-restricted")`, for a host that
-      // was already CONNECTED when the plan changed. Without it the lease
-      // settles `connecting` and the ∅ modal offers "retry" to a user whose
-      // only fix is an upgrade. Reported after the terminal teardown, which
-      // has already retracted this session's announcement - otherwise its own
-      // liveness would suppress the verdict. Its own attempt id: this
-      // generation's dial already reported success.
-      this.reportEvidenceOutcome(this.reauthAttemptId(), "plan-restricted");
-      return;
-    }
     if (provision.kind === "ok") {
       connection.relaySocket.sendReauth(provision.grant.grant);
     }
@@ -5545,12 +5507,6 @@ export class RemoteSession<
     return `${this.evidenceScope}#auth-${this.reauthEvidenceSeq}`;
   }
 
-  /** A mid-session re-auth verdict, distinct from its generation's dial. */
-  private reauthAttemptId(): string {
-    this.reauthEvidenceSeq += 1;
-    return `${this.evidenceScope}#reauth-${this.reauthEvidenceSeq}`;
-  }
-
   /**
    * The ONE place a dial outcome leaves this session. Written as a closed set
    * of outcomes rather than an error-classifying helper: the classification
@@ -5581,7 +5537,7 @@ export class RemoteSession<
 
   private reportEvidenceOutcome(
     attemptId: string,
-    outcome: "success" | "refusal" | "plan-restricted" | "indeterminate",
+    outcome: "success" | "refusal" | "indeterminate",
   ): void {
     const hostId = this.options.hostId;
     const evidence = this.options.evidence;
@@ -5596,12 +5552,7 @@ export class RemoteSession<
       evidence.reportDialIndeterminate(hostId, attemptId, "remote-relay");
       return;
     }
-    evidence.reportDialRefusal(
-      hostId,
-      attemptId,
-      "remote-relay",
-      outcome === "plan-restricted" ? "plan-restricted" : null,
-    );
+    evidence.reportDialRefusal(hostId, attemptId, "remote-relay");
   }
 
   private announceSession(sessionId: string): void {
@@ -6103,22 +6054,6 @@ function asHostRpcError(
     method,
     fatalDetails: null,
   });
-}
-
-/**
- * Fatal code for the attach-grant entitlement denial. UI layers key the
- * paid-plan upsell on this instead of a generic session failure. Free-string
- * `FatalErrorDetails.code` space, so no protocol change is involved.
- */
-export { PLAN_RESTRICTED_FATAL_CODE } from "./config";
-
-function planRestrictedFatalDetails(): FatalErrorDetails {
-  return {
-    code: PLAN_RESTRICTED_FATAL_CODE,
-    reason: "Remote host connectivity requires a paid plan",
-    incompatibleMethods: null,
-    upgradeGuidance: null,
-  };
 }
 
 function incompatibleStreamDetails(

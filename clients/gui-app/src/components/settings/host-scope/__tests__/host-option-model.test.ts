@@ -19,11 +19,11 @@ import {
  * vocabulary.
  *
  * What it used to do was answer a ROUTE question in STATUS words: `connectable`
- * decided whether to speak, and the word was `unreachable` or `requires
- * upgrade`. The incoherence that produced is the reason this file exists: a
- * registry-only host whose health line read "Reported reachable" carried the
- * word "unreachable" in the same row, because two layers were answering
- * different questions in one voice.
+ * decided whether to speak, and the word was `unreachable`. The incoherence
+ * that produced is the reason this file exists: a registry-only host whose
+ * health line read "Reported reachable" carried the word "unreachable" in the
+ * same row, because two layers were answering different questions in one
+ * voice.
  *
  * The split ruled for this pass: ROUTE decides interactivity
  * (`isHostOptionSelectable`), STATUS decides words (`hostOptionStatusWord`,
@@ -36,13 +36,11 @@ function option(overrides: {
   readonly state?: HostHealthState;
   readonly settingUp?: boolean;
   readonly connectable?: boolean;
-  readonly planRestricted?: boolean;
 }) {
   return hostScopeOptionFixture({
     hostId: "host-a",
     settingUp: overrides.settingUp ?? false,
     connectable: overrides.connectable ?? true,
-    planRestricted: overrides.planRestricted ?? false,
     health: {
       state: overrides.state ?? "online",
       label: "irrelevant to the word",
@@ -57,7 +55,6 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
   it.each([
     ["restarting", "restarting"],
     ["offline", "offline"],
-    ["local-only", "requires upgrade"],
     ["update-required", "update required"],
     ["removed", "removed"],
     ["stopped", "stopped"],
@@ -159,23 +156,6 @@ describe("hostOptionStatusWord — the row speaks the health vocabulary", () => 
           AVAILABLE_HOST_ROW_SURFACE_STATE,
         ),
       ).toBeNull();
-    }
-  });
-
-  /**
-   * `local-only` names the REMEDY, not the symptom. One word covering both
-   * this and `offline` is what sent free-tier users to debug a network fault
-   * over a billing limit — and it must not depend on the client-side
-   * `planRestricted` flag, which is only one of the two ways to learn it.
-   */
-  it("names the upgrade for local-only regardless of the client-side plan flag", () => {
-    for (const planRestricted of [true, false]) {
-      expect(
-        hostOptionStatusWord(
-          option({ state: "local-only", planRestricted }),
-          AVAILABLE_HOST_ROW_SURFACE_STATE,
-        ),
-      ).toBe("requires upgrade");
     }
   });
 });

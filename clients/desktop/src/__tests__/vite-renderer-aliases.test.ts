@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { promises as fs } from "node:fs";
+import { promises as fs, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,15 +50,20 @@ async function readText(filePath: string): Promise<string> {
   return fs.readFile(filePath, "utf8");
 }
 
-async function walkFiles(
-  root: string,
-  extensions: ReadonlySet<string>,
-): Promise<string[]> {
+/**
+ * Synchronous on purpose. The scan reads every gui-app source file (about
+ * 3,700 files, 34 MB), and awaiting each read one at a time put thousands of
+ * threadpool and event-loop round trips on the test's critical path. On a
+ * busy CI runner that alone took this test past its 5s budget. Read
+ * synchronously, the same bytes cost tens of milliseconds, with nothing to
+ * queue behind.
+ */
+function walkFiles(root: string, extensions: ReadonlySet<string>): string[] {
   const out: string[] = [];
   const stack: string[] = [root];
   while (stack.length > 0) {
     const current = stack.pop() as string;
-    const entries = await fs.readdir(current, { withFileTypes: true });
+    const entries = readdirSync(current, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.name === "node_modules" || entry.name === "dist") continue;
       const full = path.join(current, entry.name);
@@ -156,14 +161,14 @@ describe("vite renderer alias coverage", () => {
       "vite.renderer.config.ts resolve.alias block parsed to zero entries - parser is broken.",
     ).toBeGreaterThan(0);
 
-    const sources = await walkFiles(
+    const sources = walkFiles(
       path.join(GUI_APP_ROOT, "src"),
       new Set([".ts", ".tsx"]),
     );
     const unaliased = new Map<string, string[]>();
     for (const source of sources) {
       if (source.includes(`${path.sep}__tests__${path.sep}`)) continue;
-      const contents = await readText(source);
+      const contents = readFileSync(source, "utf8");
       for (const specifier of extractImportSpecifiers(contents)) {
         if (!crossesWorkspaceBoundary(specifier)) continue;
         if (findMatchingAlias(specifier, aliasKeys) !== null) continue;

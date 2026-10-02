@@ -196,14 +196,7 @@ export function TerminalTile(props: TerminalTileProps) {
   // permanent dead tile because its presence lease changed.
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // The reason gates the notification, not just the copy. "Terminal closed"
-    // is a claim that a session ENDED, and for `plan-restricted` that is very
-    // likely false: the host is running and the PTY with it, this client simply
-    // has no remote route to it on this plan. Firing it here put a permanent,
-    // persisted "closed" entry in the feed for a terminal an upgrade would hand
-    // straight back.
-    if (reachability.unavailability === "plan-restricted") return;
-    // So does the BASIS, for the same reason one level up. Since F4 this
+    // The BASIS gates the notification, not just the copy. Since F4 this
     // verdict also arrives from a starting host that overran its budget, and
     // that is the UI's patience expiring, not proof the PTY died - the tile
     // stops waiting (it must), but writing "permanently closed" into the feed
@@ -228,7 +221,6 @@ export function TerminalTile(props: TerminalTileProps) {
   }, [
     reachability.status,
     reachability.hostLabel,
-    reachability.unavailability,
     reachability.basis,
     epicId,
     hostId,
@@ -243,7 +235,6 @@ export function TerminalTile(props: TerminalTileProps) {
         reason="host-unreachable"
         hostLabel={reachability.hostLabel}
         ownerKind="terminal"
-        unavailability={reachability.unavailability}
         onClose={closeCanvasTile}
         testId={`terminal-tile-${props.tileId}`}
       />

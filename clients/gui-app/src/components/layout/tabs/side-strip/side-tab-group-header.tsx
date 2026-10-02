@@ -1,28 +1,18 @@
-import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import {
   useContext,
-  useId,
-  useState,
   type CSSProperties,
-  type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
 } from "react";
 import { ChevronRight } from "lucide-react";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
-import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabGroup } from "@/stores/tabs/tab-groups";
-import { TabGroupEditor } from "../tab-group-editor";
+import { GroupEditorAnchor } from "../group-editor-anchor";
 import { railBadgeOf, worstRailBadge } from "./rail-badge-kind";
 import type { SideTabRowVariant } from "./side-tab-row";
 import { firstGraphemes } from "../tab-monogram";
@@ -33,10 +23,9 @@ import {
 } from "../tab-identity";
 import { SideTabRailBadge } from "./side-tab-rail-badge";
 import {
-  SIDE_TAB_BADGE_POSITION_CLASS,
   SIDE_TAB_GROUP_COUNT_CLASS,
   SIDE_TAB_GROUP_HEADER_CLASS,
-  SIDE_TAB_GROUP_PILL_CLASS,
+  SIDE_TAB_GROUP_NAME_CLASS,
   SIDE_TAB_HOVER_CLASS,
   SIDE_TAB_METER_CLASS,
   SIDE_TAB_RAIL_BADGE_POSITION_CLASS,
@@ -57,18 +46,18 @@ export interface SideTabGroupHeaderProps {
 }
 
 /**
- * A tab group in the vertical strip (S-19): a 28px row with the colour pill,
- * the name, the member count and a chevron on hover, or in the rail a 40x44
- * tile with the name's first grapheme on a chip in the group colour. A click collapses or expands the group;
- * right-click and the context-menu keys open the shared group editor. A
- * collapsed group carries its members' worst notification badge (S-30).
+ * A tab group's header in the vertical strip (S-19): expanded, the 28px top row
+ * of the group's block (`SideTabGroupBlock`) with the name in the group's
+ * colour, the member count only while the group is collapsed, and a chevron on
+ * hover; in the rail the first tile
+ * of the group's column (`SideTabGroupColumn`), 40x44, with the name's first
+ * grapheme on a chip in the group colour. A click
+ * collapses or expands the group; right-click, F2 and the context-menu keys
+ * open the shared group editor. A collapsed group carries its members' worst
+ * notification badge (S-30), at the trailing edge of its header.
  */
 export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
   const { groupId, group } = props;
-  const placement = useColumnOverlayPlacement("row");
-  const [editing, setEditing] = useState(false);
-  // The editor can open over the strip's drag spacer (S-44).
-  useTitleBarDragSuppression(`group-editor:${useId()}`, editing);
   const label = `${group.name || "Unnamed group"}: ${group.collapsed ? "expand" : "collapse"} group`;
   const toggle = (event: MouseEvent<HTMLButtonElement>): void => {
     event.preventDefault();
@@ -76,116 +65,95 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
       .getState()
       .updateGroup(groupId, { collapsed: !group.collapsed });
   };
-  const openEditor = (event: MouseEvent<HTMLButtonElement>): void => {
-    event.preventDefault();
-    setEditing(true);
-  };
-  const openEditorFromKeys = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (
-      event.key === "F2" ||
-      event.key === "ContextMenu" ||
-      (event.shiftKey && event.key === "F10")
-    ) {
-      event.preventDefault();
-      setEditing(true);
-    }
-  };
-  const swatch = { "--side-tab-group-color": group.color } as CSSProperties;
   return (
-    <Popover open={editing} onOpenChange={setEditing}>
-      <PopoverAnchor asChild>
-        <button
-          type="button"
-          aria-label={label}
-          aria-expanded={!group.collapsed}
-          data-testid={`side-tab-group-header-${groupId}`}
-          data-collapsed={group.collapsed}
-          onClick={toggle}
-          onContextMenu={openEditor}
-          onKeyDown={openEditorFromKeys}
-          className={cn(
-            "group/side-group relative flex shrink-0 items-center outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
-            props.variant === "collapsed"
-              ? cn(
-                  SIDE_TAB_TILE_CLASS,
-                  SIDE_TAB_TILE_HOVER_CLASS,
-                  "justify-center self-center text-muted-foreground hover:text-foreground",
-                )
-              : cn(
-                  SIDE_TAB_ROW_CLASS,
-                  SIDE_TAB_GROUP_HEADER_CLASS,
-                  SIDE_TAB_HOVER_CLASS,
-                  "text-muted-foreground hover:text-foreground",
-                ),
-          )}
-          style={
-            props.variant === "collapsed"
-              ? ({ "--side-tab-tint": group.color } as CSSProperties)
-              : undefined
-          }
-        >
-          {props.variant === "collapsed" ? (
-            <>
+    <GroupEditorAnchor
+      groupId={groupId}
+      group={group}
+      onClose={props.onClose}
+      opensOnEnter={false}
+    >
+      <button
+        type="button"
+        aria-label={label}
+        aria-expanded={!group.collapsed}
+        data-testid={`side-tab-group-header-${groupId}`}
+        data-collapsed={group.collapsed}
+        onClick={toggle}
+        className={cn(
+          "group/side-group relative flex shrink-0 items-center outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]",
+          props.variant === "collapsed"
+            ? cn(
+                SIDE_TAB_TILE_CLASS,
+                SIDE_TAB_TILE_HOVER_CLASS,
+                "justify-center self-center text-muted-foreground hover:text-foreground",
+              )
+            : cn(
+                SIDE_TAB_ROW_CLASS,
+                SIDE_TAB_GROUP_HEADER_CLASS,
+                SIDE_TAB_HOVER_CLASS,
+                "text-muted-foreground hover:text-foreground",
+              ),
+        )}
+        style={
+          props.variant === "collapsed"
+            ? ({ "--side-tab-tint": group.color } as CSSProperties)
+            : undefined
+        }
+      >
+        {props.variant === "collapsed" ? (
+          <>
+            <span
+              aria-hidden
+              className={cn(
+                SIDE_TAB_MONOGRAM_CHIP_CLASS,
+                SIDE_TAB_TINT_FILL_CLASS,
+                SIDE_TAB_MONOGRAM_CLASS,
+                "flex items-center justify-center",
+              )}
+            >
+              {firstGrapheme(group.name)}
+            </span>
+            {/* The meter's footprint, so the chip lines up with the task tiles'. */}
+            <span aria-hidden className={SIDE_TAB_METER_CLASS.tile} />
+          </>
+        ) : (
+          <>
+            {group.name ? (
               <span
-                aria-hidden
+                data-testid="side-tab-group-name"
                 className={cn(
-                  SIDE_TAB_MONOGRAM_CHIP_CLASS,
-                  SIDE_TAB_TINT_FILL_CLASS,
-                  SIDE_TAB_MONOGRAM_CLASS,
-                  "flex items-center justify-center",
+                  SIDE_TAB_GROUP_NAME_CLASS,
+                  "min-w-0 truncate text-ui-xs",
                 )}
               >
-                {firstGrapheme(group.name)}
+                {group.name}
               </span>
-              {/* The meter's footprint, so the chip lines up with the task tiles'. */}
-              <span aria-hidden className={SIDE_TAB_METER_CLASS.tile} />
-            </>
-          ) : (
-            <>
-              {group.name ? (
-                <span
-                  className={cn(SIDE_TAB_GROUP_PILL_CLASS, "min-w-0 truncate")}
-                  style={swatch}
-                >
-                  {group.name}
-                </span>
-              ) : null}
+            ) : null}
+            {group.collapsed ? (
               <span
                 data-testid="side-tab-group-count"
                 className={SIDE_TAB_GROUP_COUNT_CLASS}
               >
                 {props.memberCount}
               </span>
-              <ChevronRight
-                aria-hidden
-                className={cn(
-                  "ml-auto size-3 opacity-0 transition-opacity group-hover/side-group:opacity-100 group-focus-visible/side-group:opacity-100",
-                  !group.collapsed && "rotate-90",
-                )}
-              />
-            </>
-          )}
-          {group.collapsed ? (
-            <CollapsedGroupBadge
-              memberEntities={props.memberEntities}
-              size={props.variant === "collapsed" ? "tile" : "leading"}
+            ) : null}
+            <ChevronRight
+              aria-hidden
+              className={cn(
+                "ml-auto size-3 opacity-0 transition-opacity group-hover/side-group:opacity-100 group-focus-visible/side-group:opacity-100",
+                !group.collapsed && "rotate-90",
+              )}
             />
-          ) : null}
-        </button>
-      </PopoverAnchor>
-      <PopoverContent
-        side={placement?.side}
-        align={placement?.align ?? "start"}
-        className="w-fit max-w-xs"
-      >
-        <TabGroupEditor
-          groupId={groupId}
-          group={group}
-          onClose={props.onClose}
-          onDone={() => setEditing(false)}
-        />
-      </PopoverContent>
-    </Popover>
+          </>
+        )}
+        {group.collapsed ? (
+          <CollapsedGroupBadge
+            memberEntities={props.memberEntities}
+            size={props.variant === "collapsed" ? "tile" : "leading"}
+          />
+        ) : null}
+      </button>
+    </GroupEditorAnchor>
   );
 }
 
@@ -209,20 +177,21 @@ function CollapsedGroupBadge(props: {
     ),
   );
   if (badge === null) return null;
+  const mark = (
+    <SideTabRailBadge
+      kind={badge}
+      size={props.size}
+      testId="side-tab-group-badge"
+    />
+  );
+  // A header's badge is its trailing status, in the row; a tile's is cut into
+  // the tile's corner.
+  if (props.size === "leading") return mark;
   return (
     <span
-      className={cn(
-        props.size === "tile"
-          ? SIDE_TAB_RAIL_BADGE_POSITION_CLASS
-          : SIDE_TAB_BADGE_POSITION_CLASS,
-        "pointer-events-none",
-      )}
+      className={cn(SIDE_TAB_RAIL_BADGE_POSITION_CLASS, "pointer-events-none")}
     >
-      <SideTabRailBadge
-        kind={badge}
-        size={props.size}
-        testId="side-tab-group-badge"
-      />
+      {mark}
     </span>
   );
 }

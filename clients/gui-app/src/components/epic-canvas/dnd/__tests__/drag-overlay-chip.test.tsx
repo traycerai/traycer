@@ -1090,7 +1090,6 @@ describe("<EpicRootDragOverlayContent />", () => {
           epicId: EPIC_ID,
           hostId: "test-host",
           userId: null,
-          onRetryTransport: () => {},
           onWakeTransport: () => {},
           runtime: INERT_RUNTIME,
           accounting: createRecordingAccountingPort().port,

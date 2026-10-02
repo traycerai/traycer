@@ -198,7 +198,7 @@ describe("useBoundedHostLoad", () => {
         {
           hostId: "host-1",
           status: "dead",
-          dead: { reason: "plan-restricted" },
+          dead: { reason: "offline" },
         },
       ],
       selectionRevision: 1,
@@ -213,7 +213,7 @@ describe("useBoundedHostLoad", () => {
     // `leases[0]` would answer `loading` off the OTHER host's ready lease.
     expect(result.current).toEqual({
       kind: "dead",
-      dead: { reason: "plan-restricted" },
+      dead: { reason: "offline" },
       hostLabel: "Work laptop",
     });
   });

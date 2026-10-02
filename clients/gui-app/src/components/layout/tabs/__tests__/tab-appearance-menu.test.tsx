@@ -33,6 +33,7 @@ import {
   type ListTaskLight,
   type TaskContextResolution,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { OrganizationView } from "@traycer/protocol/host/organization/contracts";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -40,6 +41,7 @@ import {
 } from "@/components/ui/context-menu";
 import { TabAppearanceMenu } from "../tab-appearance-menu";
 import { TabGroupChip } from "../tab-group-chip";
+import { useGroupEditorStore } from "@/stores/tabs/group-editor-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { OrganizationContextValue } from "@/hooks/organization/organization-context";
@@ -69,8 +71,10 @@ const organizationState = vi.hoisted((): OrganizationFixtureState => ({
   organization: null,
   loadTaskContext: vi.fn<() => Promise<GetTaskContextsResponse>>(),
 }));
-vi.mock("@/hooks/organization/organization-context", () => ({
+vi.mock("@/hooks/organization/organization-context", async (load) => ({
+  ...(await load<typeof import("@/hooks/organization/organization-context")>()),
   useOrganization: () => organizationState.organization,
+  useOrganizationTasks: () => organizationState.organization,
 }));
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: (
@@ -124,9 +128,25 @@ const TAB: HeaderTab = {
   canOpenInNewWindow: false,
 };
 
-function renderMenu(): void {
+/** The group of the anchor "Edit group…" asked to open, if it asked. */
+function requestedGroup(): string | null {
+  const { anchors, requestedAnchorId } = useGroupEditorStore.getState();
+  return requestedAnchorId === null
+    ? null
+    : (anchors[requestedAnchorId] ?? null);
+}
+
+/** The menu, beside the "existing" group's chip when it has one to open its editor on. */
+function renderMenu(withGroupChip: boolean): void {
   render(
     <QueryClientProvider client={queryClient}>
+      {withGroupChip ? (
+        <TabGroupChip
+          groupId="existing"
+          group={{ name: "Existing", color: "#81c995", collapsed: false }}
+          onClose={() => undefined}
+        />
+      ) : null}
       <ContextMenu open>
         <ContextMenuTrigger>Open</ContextMenuTrigger>
         <ContextMenuContent>
@@ -156,12 +176,14 @@ vi.spyOn(organizationClient, "getRequestContextUserId").mockReturnValue(
   "user-1",
 );
 
-function organizationFixture(): OrganizationContextValue {
+function organizationFixture(
+  view: OrganizationView | undefined,
+): OrganizationContextValue {
   return {
     client: organizationClient,
     supported: true,
     userId: "user-1",
-    view: undefined,
+    view,
     register: () => () => undefined,
     command: () => Promise.resolve(undefined),
     refresh: () => Promise.resolve(undefined),
@@ -209,6 +231,7 @@ function taskContextsResponse(resolutions: {
 describe("tab appearance and grouping controls", () => {
   beforeEach(() => {
     useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useGroupEditorStore.setState({ anchorId: null, requestedAnchorId: null });
     useTabsStore.setState({
       items: [
         {
@@ -237,7 +260,7 @@ describe("tab appearance and grouping controls", () => {
   });
 
   it("shows retry for task-context errors and restores authorized controls after recovery", async () => {
-    organizationState.organization = organizationFixture();
+    organizationState.organization = organizationFixture(undefined);
     let resolveRecovery: (response: GetTaskContextsResponse) => void = () =>
       undefined;
     const recovery = new Promise<GetTaskContextsResponse>((resolve) => {
@@ -247,7 +270,7 @@ describe("tab appearance and grouping controls", () => {
       .mockRejectedValueOnce(new Error("task context failed"))
       .mockImplementationOnce(() => recovery);
     const refetchQueries = vi.spyOn(queryClient, "refetchQueries");
-    renderMenu();
+    renderMenu(false);
 
     const retry = await screen.findByRole("menuitem", {
       name: /Couldn't load task organization\. Retry/i,
@@ -287,7 +310,7 @@ describe("tab appearance and grouping controls", () => {
 
     beforeEach(() => {
       activeHostId.mockReturnValue("host-1");
-      organizationState.organization = organizationFixture();
+      organizationState.organization = organizationFixture(undefined);
       // This tab's own lookup never answers, so whatever the menu shows comes
       // from the other batch.
       organizationState.loadTaskContext.mockReturnValue(
@@ -300,7 +323,7 @@ describe("tab appearance and grouping controls", () => {
         stripBatchKey("user-1"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
-      renderMenu();
+      renderMenu(false);
 
       expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
       expect(
@@ -321,7 +344,7 @@ describe("tab appearance and grouping controls", () => {
           localHomed: ["epic-a"],
         }),
       );
-      renderMenu();
+      renderMenu(false);
 
       expect(screen.getByText("Tab appearance")).toBeTruthy();
       expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
@@ -338,7 +361,7 @@ describe("tab appearance and grouping controls", () => {
         answerOwnLookup = resolve;
       });
       organizationState.loadTaskContext.mockReturnValue(ownLookup);
-      renderMenu();
+      renderMenu(false);
       expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
 
       await act(async () => {
@@ -371,7 +394,7 @@ describe("tab appearance and grouping controls", () => {
           answerOwnLookup = resolve;
         });
         organizationState.loadTaskContext.mockReturnValue(ownLookup);
-        renderMenu();
+        renderMenu(false);
         expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
 
         await act(async () => {
@@ -413,7 +436,7 @@ describe("tab appearance and grouping controls", () => {
           .mockReturnValue(
             new Promise<GetTaskContextsResponse>(() => undefined),
           );
-        renderMenu();
+        renderMenu(false);
         await waitFor(() =>
           expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull(),
         );
@@ -450,7 +473,7 @@ describe("tab appearance and grouping controls", () => {
         stripBatchKey("user-1"),
         taskContextsResponse({ found: ["epic-b"], localHomed: [] }),
       );
-      renderMenu();
+      renderMenu(false);
 
       expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
       expect(screen.queryByText("Tab appearance")).toBeNull();
@@ -461,7 +484,7 @@ describe("tab appearance and grouping controls", () => {
         stripBatchKey("user-2"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
-      renderMenu();
+      renderMenu(false);
 
       expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
       expect(screen.queryByText("Tab appearance")).toBeNull();
@@ -474,7 +497,7 @@ describe("tab appearance and grouping controls", () => {
         stripBatchKeyOnHost("host-2", "user-1"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
-      renderMenu();
+      renderMenu(false);
 
       expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
       expect(
@@ -499,7 +522,7 @@ describe("tab appearance and grouping controls", () => {
         stripBatchKeyOnHost("host-1", "user-1"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
-      renderMenu();
+      renderMenu(false);
 
       expect(screen.getByRole("menuitem", { name: "Labels" })).toBeTruthy();
       expect(screen.queryByText("Tab appearance")).toBeNull();
@@ -511,7 +534,7 @@ describe("tab appearance and grouping controls", () => {
         stripBatchKey("user-1"),
         taskContextsResponse({ found: ["epic-a", "epic-b"], localHomed: [] }),
       );
-      renderMenu();
+      renderMenu(false);
 
       expect(screen.queryByRole("menuitem", { name: "Labels" })).toBeNull();
       expect(screen.queryByText("Tab appearance")).toBeNull();
@@ -519,7 +542,7 @@ describe("tab appearance and grouping controls", () => {
   });
 
   it("shows the appearance submenu and stores a color and manual icon", () => {
-    renderMenu();
+    renderMenu(false);
     fireEvent.click(screen.getByText("Tab appearance"));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Blue" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Tab icon" }), {
@@ -531,7 +554,7 @@ describe("tab appearance and grouping controls", () => {
   });
 
   it("stores a custom tab color from the appearance submenu", () => {
-    renderMenu();
+    renderMenu(false);
     fireEvent.click(screen.getByText("Tab appearance"));
     fireEvent.change(screen.getByLabelText("Custom tab color"), {
       target: { value: "#123456" },
@@ -542,28 +565,116 @@ describe("tab appearance and grouping controls", () => {
     );
   });
 
-  it("keeps a group's color unchanged when editing personal tab appearance", () => {
+  it("shows a grouped tab's group colour on disabled swatches, with the group's name and a way to edit it, and keeps the icon editable", () => {
+    useTabsStore.setState({
+      customizations: {
+        "epic:tab-a": { color: "#fdd663", icon: null, groupId: "existing" },
+      },
+    });
+    renderMenu(true);
+    fireEvent.click(screen.getByText("Tab appearance"));
+
+    const green = screen.getByRole("menuitemradio", { name: "Green" });
+    expect(green.getAttribute("aria-checked")).toBe("true");
+    expect(
+      screen
+        .getAllByRole("menuitemradio")
+        .every((swatch) => swatch.matches(":disabled")),
+    ).toBe(true);
+    expect(
+      screen.getByText("Follows the group Existing. Change it on the group."),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Tab icon" }).matches(":disabled"),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit group…" }));
+
+    // The menu only asks: the strip opens it once the menu has closed.
+    expect(requestedGroup()).toBe("existing");
+    expect(useGroupEditorStore.getState().anchorId).toBeNull();
+  });
+
+  it("locks an organized task's swatches to its group's colour, keeping its own cloud colour, and offers Edit group", async () => {
+    const view: OrganizationView = {
+      catalog: [],
+      groups: {
+        version: "0",
+        groups: [
+          {
+            groupId: "existing",
+            name: "Existing",
+            color: "#81c995",
+            position: 0,
+          },
+        ],
+        memberships: [{ taskId: "epic-a", groupId: "existing", position: 0 }],
+      },
+      appearances: [
+        { taskId: "epic-a", version: "0", color: "#fdd663", icon: "AB" },
+      ],
+      taskLabels: {},
+      ready: true,
+      authenticationRequired: false,
+      pending: [],
+      failures: [],
+    };
+    const organization = organizationFixture(view);
+    const command = vi.spyOn(organization, "command");
+    organizationState.organization = organization;
+    organizationState.loadTaskContext.mockResolvedValue(
+      taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+    );
+    renderMenu(true);
+
+    fireEvent.click(await screen.findByText("Task appearance"));
+
+    const green = screen.getByRole("button", { name: "Green" });
+    expect(green.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen
+        .getAllByRole("button", {
+          name: /^(Default|Gray|Blue|Red|Yellow|Green|Pink|Purple|Cyan|Orange)$/,
+        })
+        .every((swatch) => swatch.matches(":disabled")),
+    ).toBe(true);
+    expect(
+      screen.getByText("Follows the group Existing. Change it on the group."),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Icon").matches(":disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit group…" }));
+    expect(requestedGroup()).toBe("existing");
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("offers no Edit group while the group has no header or chip to open its editor on", () => {
     useTabsStore.setState({
       customizations: {
         "epic:tab-a": { color: null, icon: null, groupId: "existing" },
       },
     });
-    renderMenu();
+    renderMenu(false);
     fireEvent.click(screen.getByText("Tab appearance"));
-    fireEvent.change(screen.getByLabelText("Custom tab color"), {
-      target: { value: "#123456" },
-    });
 
+    expect(
+      screen.getByText("Follows the group Existing. Change it on the group."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Edit group…" })).toBeNull();
+  });
+
+  it("offers an ungrouped tab its own colours", () => {
+    renderMenu(false);
+    fireEvent.click(screen.getByText("Tab appearance"));
+
+    expect(screen.queryByText(/Follows the group/)).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Edit group…" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Blue" }));
     expect(useTabsStore.getState().customizations?.["epic:tab-a"]?.color).toBe(
-      "#123456",
+      "#8ab4f8",
     );
-    const groups = useTabsStore.getState().groups;
-    if (groups === undefined) throw new Error("Expected the existing group");
-    expect(groups.existing.color).toBe("#81c995");
   });
 
   it("creates a group and supports removing the tab from it", () => {
-    renderMenu();
+    renderMenu(false);
     fireEvent.click(screen.getByText("Add tab to group"));
     fireEvent.click(screen.getByText("New group"));
     const groupId =
@@ -576,7 +687,7 @@ describe("tab appearance and grouping controls", () => {
   });
 
   it("adds a tab to an existing group", () => {
-    renderMenu();
+    renderMenu(false);
     fireEvent.click(screen.getByText("Add tab to group"));
     fireEvent.click(screen.getByText("Existing"));
     expect(
@@ -619,6 +730,23 @@ describe("tab appearance and grouping controls", () => {
     fireEvent.contextMenu(chip);
     fireEvent.click(screen.getByRole("button", { name: "Close group" }));
     expect(close).toHaveBeenCalledWith("group");
+  });
+
+  it("closes a group's editor with its chip, so the chip does not come back with it open", () => {
+    const group = { name: "Alpha", color: "#8ab4f8", collapsed: false };
+    const chip = (
+      <TabGroupChip groupId="group" group={group} onClose={() => undefined} />
+    );
+    const view = render(chip);
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: /Alpha: collapse group/ }),
+    );
+    expect(screen.getByRole("textbox", { name: "Group name" })).toBeTruthy();
+
+    view.unmount();
+    render(chip);
+
+    expect(screen.queryByRole("textbox", { name: "Group name" })).toBeNull();
   });
 
   it("stores a custom color from the group color picker", () => {

@@ -1,5 +1,9 @@
 import { useAccountActivityCoverage } from "@/hooks/agent/use-account-activity-coverage";
-import { agentActivityTiers } from "@/lib/agent-activity";
+import {
+  agentActivityTiers,
+  type AgentActivityCoverage,
+  type EpicAgentActivity,
+} from "@/lib/agent-activity";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import type { SideTabLiveAgents } from "./agent-meter";
 
@@ -18,8 +22,17 @@ export const NO_LIVE_AGENTS: SideTabLiveAgents = {
  * not a task.
  */
 export function useSideTabLiveAgents(epicId: string | null): SideTabLiveAgents {
-  const activity = useEpicAgentActivity(epicId);
-  const coverage = useAccountActivityCoverage();
+  return sideTabLiveAgentsOf(
+    useEpicAgentActivity(epicId),
+    useAccountActivityCoverage(),
+  );
+}
+
+/** {@link useSideTabLiveAgents} over an activity the caller already read. */
+export function sideTabLiveAgentsOf(
+  activity: EpicAgentActivity,
+  coverage: AgentActivityCoverage,
+): SideTabLiveAgents {
   let turn = 0;
   for (const tier of agentActivityTiers(activity).values()) {
     if (tier === "turn") turn += 1;

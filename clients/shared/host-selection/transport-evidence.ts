@@ -21,11 +21,6 @@
  * remote host at once and fail the whole fleet over, which is the false-Offline
  * class invariant 5 exists to prevent.
  *
- * The one entitlement exception is `plan-restricted`, which stays a refusal: it
- * is a stable PER-HOST verdict rather than a transient fleet-correlated
- * outage, it is the sole provenance of `dead("plan-restricted")`, and it is
- * what routes the ∅ modal to "upgrade" instead of "retry".
- *
  * That rule is enforced structurally, not by review: this interface exposes
  * positive outcomes only. There is no "classify this error" entry point, so
  * `isConfirmedTransportRefusal` (the PRE-DIAL directory gate that folds cloud
@@ -67,16 +62,11 @@ export interface TransportEvidenceReporter {
     attemptId: string,
     transportKind: SelectionTransportKind,
   ): void;
-  /**
-   * A dial the HOST's transport plane terminally refused. `refusalDetail` is
-   * `"plan-restricted"` only when this attempt's own error carried the
-   * entitlement denial - see the module header.
-   */
+  /** A dial the HOST's transport plane terminally refused. */
   reportDialRefusal(
     hostId: string,
     attemptId: string,
     transportKind: SelectionTransportKind,
-    refusalDetail: "plan-restricted" | null,
   ): void;
   /** A dial that ran out of time without an answer. Death evidence. */
   reportDialTimeout(
@@ -387,14 +377,8 @@ export class TransportEvidenceRelay implements TransportEvidenceReporter {
     hostId: string,
     attemptId: string,
     transportKind: SelectionTransportKind,
-    refusalDetail: "plan-restricted" | null,
   ): void {
-    this.target?.reportDialRefusal(
-      hostId,
-      attemptId,
-      transportKind,
-      refusalDetail,
-    );
+    this.target?.reportDialRefusal(hostId, attemptId, transportKind);
   }
 
   reportDialTimeout(

@@ -44,7 +44,6 @@ function entry(overrides: Partial<HostDirectoryEntry>): HostDirectoryEntry {
 function remoteEntryWithConnectivity(
   hostId: string,
   connectivity: "unknown" | "connectable" | "offline",
-  planAllowsRemote: boolean,
 ): HostDirectoryEntry {
   const listItem: HostListItem = {
     hostId,
@@ -66,7 +65,6 @@ function remoteEntryWithConnectivity(
   return hostListItemToDirectoryEntry(
     listItem,
     "wss://relay.example.test/attach",
-    planAllowsRemote,
   );
 }
 
@@ -174,38 +172,12 @@ describe("useHostReachability - starting-deadline basis", () => {
   // never regress into a death claim off a single unreadable liveness probe.
   it("reports reachable, never a death claim, for indeterminate connectivity", () => {
     list.value = {
-      data: [remoteEntryWithConnectivity("host-a", "unknown", true)],
+      data: [remoteEntryWithConnectivity("host-a", "unknown")],
       fetchStatus: "idle",
     };
     const { result } = renderHook(() => useHostReachability("host-a"));
     expect(result.current.status).toBe("reachable");
     expect(result.current.unavailability).toBeNull();
-  });
-  /**
-   * The REASON, not just the verdict. `plan-restricted` and `offline` are both
-   * "this client cannot open a session", so a swap between them keeps every
-   * status assertion green while telling the reader the wrong thing: that a
-   * machine which is running perfectly well is off, and that the remedy is a
-   * restart rather than an upgrade. That is not hypothetical - it is the
-   * defect that made every plan-restricted host read as "offline" for months,
-   * and the reason `dead-tile-banner.tsx` carries a five-arm copy table and
-   * `tile-host-load-copy.ts` keys its table on the contract's own union.
-   *
-   * A wrong CONSTANT rather than a wrong verdict, and the narrowest thing in
-   * this suite - which is exactly why nothing else here would catch it.
-   * P4.3's lease-derivation sweep rewrites these surfaces, so this pin is what
-   * stops the swap being re-introduced silently.
-   */
-  it("carries plan-restricted as its own reason, never collapsed to offline", () => {
-    list.value = {
-      data: [remoteEntryWithConnectivity("host-a", "connectable", false)],
-      fetchStatus: "idle",
-    };
-    const { result } = renderHook(() => useHostReachability("host-a"));
-    expect(result.current.status).toBe("unreachable");
-    expect(result.current.unavailability).toBe("plan-restricted");
-    expect(result.current.unavailability).not.toBe("offline");
-    expect(result.current.basis).toBe("directory");
   });
 });
 
@@ -251,7 +223,7 @@ describe("useHostReachability - an expected restart holds the wait", () => {
 
   it("reads a remote host's directory offline as host-starting inside an episode", () => {
     list.value = {
-      data: [remoteEntryWithConnectivity("host-a", "offline", true)],
+      data: [remoteEntryWithConnectivity("host-a", "offline")],
       fetchStatus: "idle",
     };
     publishLease("restarting-expected");
@@ -266,7 +238,7 @@ describe("useHostReachability - an expected restart holds the wait", () => {
 
   it("still reads the same remote offline as unreachable with no episode", () => {
     list.value = {
-      data: [remoteEntryWithConnectivity("host-a", "offline", true)],
+      data: [remoteEntryWithConnectivity("host-a", "offline")],
       fetchStatus: "idle",
     };
     const { result } = renderHook(() => useHostReachability("host-a"));
@@ -309,16 +281,5 @@ describe("useHostReachability - an expected restart holds the wait", () => {
       unavailability: "offline",
       basis: "starting-deadline",
     });
-  });
-
-  it("leaves plan-restricted unreachable while the lease vouches", () => {
-    list.value = {
-      data: [remoteEntryWithConnectivity("host-a", "connectable", false)],
-      fetchStatus: "idle",
-    };
-    publishLease("restarting-expected");
-    const { result } = renderHook(() => useHostReachability("host-a"));
-    expect(result.current.status).toBe("unreachable");
-    expect(result.current.unavailability).toBe("plan-restricted");
   });
 });

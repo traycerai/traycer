@@ -28,7 +28,6 @@ import {
   SidebarWidthResizeHandle,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
-import { StripLiveAgentsPortal } from "@/components/epic-canvas/sidebar/strip-live-agents";
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
 import { EpicSurfaceSheets } from "@/components/epic-tabs/epic-surface";
@@ -54,7 +53,6 @@ import {
 } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { SampleWorkspaceBody } from "@/components/sample-workspace/sample-workspace-body";
-import { SampleStripLiveAgents } from "@/components/sample-workspace/sample-strip-live-agents";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import type { AgentActivityByEpic } from "@traycer/protocol/host/agent/activity";
@@ -1204,7 +1202,6 @@ function SampleRouteSheet(): ReactNode {
         </span>
       </div>
       <SampleWorkspaceBody />
-      <SampleStripLiveAgents tabId="sample-workspace" />
     </div>
   );
 }
@@ -1218,6 +1215,8 @@ const EPIC_SURFACE_AGENTS: ReadonlyArray<TreeNode> = [
   chatNode("fixture-agent-tests", "fixture-agent-plan", "Write the tests"),
   chatNode("fixture-agent-index", null, "Rebuild the index"),
 ];
+
+const EPIC_SURFACE_AGENT_UPDATED_AT = Date.now() - 6 * 60_000;
 
 function chatNode(
   id: string,
@@ -1245,9 +1244,10 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 /**
- * Epsilon's session: a real open-epic store with its agents in the tree, so
- * the REAL `StripLiveAgentsPortal` reads a session exactly as the epic surface
- * hands it one. Built only for the `surface=epic` windows.
+ * Epsilon's session: a real open-epic store with its agents in the tree, which
+ * the `warm` variant also registers, so the strip's task group reads a session
+ * exactly as it does for a task this window has mounted. Built only for the
+ * `surface=epic` windows.
  */
 function openEpicSurfaceSession() {
   const handle = openStoreForTest({
@@ -1276,7 +1276,8 @@ function openEpicSurfaceSession() {
         title: node.title,
         parentId: node.parentId,
         createdAt: 1,
-        updatedAt: 1,
+        // Six minutes ago, so a running agent's row reads "6m", not an epoch.
+        updatedAt: EPIC_SURFACE_AGENT_UPDATED_AT,
         userId: null,
         hostId: "test-local-host",
         isTitleEditedByUser: false,
@@ -1468,10 +1469,6 @@ function EpicSurfaceStandIn(): ReactNode {
     // `TopLevelTabHost`'s own box: the plane's coordinate origin.
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-clip">
       <EpicSessionContext value={EPIC_SURFACE_SESSION}>
-        <StripLiveAgentsPortal
-          epicId={EPIC_SURFACE_ID}
-          tabId={EPIC_SURFACE_ID}
-        />
         <EpicSurfaceSheets
           tabId={EPIC_SURFACE_ID}
           sidebarSide={sidebarSide}

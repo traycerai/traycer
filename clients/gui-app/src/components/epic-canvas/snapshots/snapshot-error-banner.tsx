@@ -6,10 +6,7 @@ import { useLocalStoreRebindMutation } from "@/hooks/local-store/use-local-store
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { useEpicRequestFreshSnapshot } from "@/lib/epic-selectors";
-import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
 import { getClientAppVersion } from "@/lib/app-version";
 import { describeVersionSkew } from "@/lib/host/version-skew-copy";
 import { useServerClockSkew } from "@/lib/clock/use-server-clock-skew";
@@ -81,9 +78,6 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
           <LocalStoreRepair error={props.error} />
         ) : null}
         <div className="flex flex-wrap justify-center gap-2">
-          {props.error.code === "ENTITLEMENT_REQUIRED" ? (
-            <UpgradeButton />
-          ) : null}
           <Button
             type="button"
             size="sm"
@@ -206,31 +200,6 @@ function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
         }}
       />
     </>
-  );
-}
-
-function UpgradeButton() {
-  const billingUrl = usePlatformBillingUrl();
-  const { isPending, openLink } = useOpenLinkWithPending();
-  return (
-    <Button
-      type="button"
-      size="sm"
-      data-testid="snapshot-error-upgrade"
-      disabled={isPending}
-      onClick={() => {
-        void openLink(billingUrl, "auth", null);
-      }}
-    >
-      Upgrade
-      {isPending ? (
-        <AgentSpinningDots
-          className="size-3"
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
-    </Button>
   );
 }
 

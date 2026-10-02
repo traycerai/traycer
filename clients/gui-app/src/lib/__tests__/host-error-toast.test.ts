@@ -621,8 +621,8 @@ describe("transport-class causes never reach a reportable toast", () => {
       requestId: `req-${method}`,
       method,
       fatalDetails: {
-        code: "PLAN_RESTRICTED",
-        reason: "Remote host connectivity requires a paid plan",
+        code: "UNAUTHORIZED",
+        reason: "Host access was revoked",
         incompatibleMethods: null,
         upgradeGuidance: null,
       },
@@ -631,7 +631,7 @@ describe("transport-class causes never reach a reportable toast", () => {
 
   it("keeps FATAL handling for a transport-class failure carrying a terminal verdict", () => {
     // The mirror image of the mistake this whole branch exists to fix. A
-    // session closed by plan restriction, protocol incompatibility or revoked
+    // session closed by protocol incompatibility or revoked
     // access settles its parked requests as `HostTransportFailureError` - so
     // classifying on the class alone renders a FATAL as transport, promising a
     // reconnect that is not scheduled and burying the one thing the user could
@@ -650,7 +650,7 @@ describe("transport-class causes never reach a reportable toast", () => {
     // the wire `code` is the generic `RPC_ERROR`, so routing on it alone would
     // land there.
     expect(vi.mocked(toast.error).mock.calls[0][0]).toBe(
-      "Remote host connectivity requires a paid plan",
+      "Host access was revoked",
     );
     // And it deposits the durable row, whose detail carries the remediation -
     // the condition outlives the toast because, unlike a blip, it will not
@@ -658,7 +658,7 @@ describe("transport-class causes never reach a reportable toast", () => {
     const state = useAppLocalNotificationsStore.getState();
     expect(state.orderedIds).toHaveLength(1);
     expect(state.byId[state.orderedIds[0]]).toMatchObject({
-      detail: "Remote host connectivity requires a paid plan",
+      detail: "Host access was revoked",
     });
   });
 

@@ -17,7 +17,6 @@ export function hostOption(
     isLocalMachine,
     isActive: false,
     connectable: true,
-    planRestricted: false,
     settingUp: false,
     registered: true,
     platform: "linux",

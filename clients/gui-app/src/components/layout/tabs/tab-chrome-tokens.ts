@@ -80,3 +80,14 @@ export function useHeaderTabDisplacementTransition(): Transition {
     ? { duration: 0 }
     : { ...HEADER_TAB_REORDER_TRANSITION, opacity: { duration: 0 } };
 }
+
+/**
+ * Transition for the drag overlay fading out while a split preview shows and
+ * back in when the drop is a move again: the displacement's own tween, so the
+ * overlay leaves as the strip settles, and instant under reduced motion.
+ */
+export function useHeaderTabOverlayFadeTransition(): Transition {
+  return useReducedMotion() === true
+    ? { duration: 0 }
+    : HEADER_TAB_REORDER_TRANSITION;
+}

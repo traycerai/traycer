@@ -54,9 +54,8 @@ export function namesHostOutsideSurface(input: {
  * At one usable host the question has one answer, so there is no question:
  * the single-host install must see byte-for-byte the behaviour it has today,
  * which is why this is a hard `> 1` on the DIALABLE fleet rather than on the
- * account's host count. A host that cannot be dialled (offline, or a remote
- * host this plan does not include) cannot serve a proof or a sweep, so it
- * never turns a one-answer question into two.
+ * account's host count. A host that cannot be dialled (offline) cannot serve
+ * a proof or a sweep, so it never turns a one-answer question into two.
  */
 export function sweepNeedsHostPicker(
   connectableHostIds: readonly string[],

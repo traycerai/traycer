@@ -12,6 +12,7 @@ import {
   type StripAxis,
 } from "@/components/epic-canvas/dnd/strip-axis";
 import { runHeaderStripCommitHandoff } from "./header-strip-commit-handoff";
+import { readTranslate } from "./header-strip-geometry";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   HEADER_TAB_TRAILING_SLOT_DROP_ID,
@@ -152,5 +153,7 @@ export function revealSelectedMember(
   axis: StripAxis,
 ): void {
   const member = selectedStripMember(scroller);
-  if (member !== null) revealMemberAlongAxis(scroller, member, axis);
+  if (member !== null) {
+    revealMemberAlongAxis(scroller, member, axis, readTranslate(member, axis));
+  }
 }

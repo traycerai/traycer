@@ -6,6 +6,7 @@ import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { SplitMemberChrome } from "./split-tab-chrome";
+import { usePublishTravelOutline } from "./strip-selection-travel";
 import { TabChromeBackground, TabColorEdgeLine } from "./tab-chrome-background";
 import { useHeaderTabTitle } from "./header-tab-presentation";
 import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
@@ -61,6 +62,12 @@ interface HeaderTabVisualProps {
    * pointer.
    */
   readonly enabled: boolean;
+  /**
+   * While a drop over this tab would split with it: what the tab draws in
+   * place of its icon and title, the pair it will become (`SplitPairPreview`).
+   * The tab's own box stays, joined when the tab is the active one.
+   */
+  readonly pairPreview: ReactNode | null;
 }
 
 /** Shared tab paint; activation, drag registration and controls belong to callers. */
@@ -88,77 +95,79 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
       {sessionColor === null ? null : (
         <SessionTabMark color={sessionColor} isActive={props.isActive} />
       )}
-      <span
-        className={cn(
-          "relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none group-data-[tab-layout=shrink]/strip:overflow-hidden",
-          sessionColor !== null && props.isActive && SESSION_TAB_LABEL_CLASS,
-        )}
-      >
-        <TabLeadingIcon
-          icon={props.tab.icon}
-          identity={props.appearance}
-          titleGenerationPending={titleGenerationPending}
-          activityStatus={activityStatus}
-          indicatorState={props.indicatorState}
-          tabId={props.tab.id}
-        />
-        {props.titleControl ?? (
-          <span
-            className="header-tab-label relative flex min-w-0 flex-1 items-center gap-1.5 text-left"
-            data-leader-visible={props.leaderVisible}
-          >
-            <HoverCard
-              trigger={
-                <span className="block min-w-0 flex-1">
-                  <span
-                    data-testid={`tab-title-${props.tab.kind}-${props.tab.id}`}
-                    className="header-tab-title block"
-                  >
-                    <span className="header-tab-title-text">
-                      {props.displayName}
+      {props.pairPreview ?? (
+        <span
+          className={cn(
+            "relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none group-data-[tab-layout=shrink]/strip:overflow-hidden",
+            sessionColor !== null && props.isActive && SESSION_TAB_LABEL_CLASS,
+          )}
+        >
+          <TabLeadingIcon
+            icon={props.tab.icon}
+            identity={props.appearance}
+            titleGenerationPending={titleGenerationPending}
+            activityStatus={activityStatus}
+            indicatorState={props.indicatorState}
+            tabId={props.tab.id}
+          />
+          {props.titleControl ?? (
+            <span
+              className="header-tab-label relative flex min-w-0 flex-1 items-center gap-1.5 text-left"
+              data-leader-visible={props.leaderVisible}
+            >
+              <HoverCard
+                trigger={
+                  <span className="block min-w-0 flex-1">
+                    <span
+                      data-testid={`tab-title-${props.tab.kind}-${props.tab.id}`}
+                      className="header-tab-title block"
+                    >
+                      <span className="header-tab-title-text">
+                        {props.displayName}
+                      </span>
                     </span>
                   </span>
-                </span>
-              }
-              content={
-                props.tab.kind === "sample-workspace" ? (
-                  // A mode, not a task: no agents, so no "Idle" (matches the
-                  // side strip's own sample-workspace body, F2).
-                  <div
-                    data-testid="side-tab-hover-card-body"
-                    className="flex flex-col gap-2"
-                  >
-                    <div className="text-ui-sm font-medium text-foreground">
-                      {props.displayName}
+                }
+                content={
+                  props.tab.kind === "sample-workspace" ? (
+                    // A mode, not a task: no agents, so no "Idle" (matches the
+                    // side strip's own sample-workspace body, F2).
+                    <div
+                      data-testid="side-tab-hover-card-body"
+                      className="flex flex-col gap-2"
+                    >
+                      <div className="text-ui-sm font-medium text-foreground">
+                        {props.displayName}
+                      </div>
+                      <div className="text-muted-foreground">
+                        Sample workspace
+                      </div>
                     </div>
-                    <div className="text-muted-foreground">
-                      Sample workspace
-                    </div>
-                  </div>
-                ) : (
-                  <SideTabHoverCardBody
-                    title={props.displayName}
-                    epicId={epicId}
-                    badge={badge}
-                    agents={agents}
-                  />
-                )
-              }
-              appearance="preview"
-              semantics={{ role: "tooltip" }}
-              side="bottom"
-              align="center"
-              sideOffset={4}
-              enabled={props.enabled}
-              open={null}
-              onOpenChange={null}
-              testId="header-tab-hover-card"
-              className="w-[min(90vw,18rem)] p-3 text-ui-xs"
-            />
-            {props.trailingControl}
-          </span>
-        )}
-      </span>
+                  ) : (
+                    <SideTabHoverCardBody
+                      title={props.displayName}
+                      epicId={epicId}
+                      badge={badge}
+                      agents={agents}
+                    />
+                  )
+                }
+                appearance="preview"
+                semantics={{ role: "tooltip" }}
+                side="bottom"
+                align="center"
+                sideOffset={4}
+                enabled={props.enabled}
+                open={null}
+                onOpenChange={null}
+                testId="header-tab-hover-card"
+                className="w-[min(90vw,18rem)] p-3 text-ui-xs"
+              />
+              {props.trailingControl}
+            </span>
+          )}
+        </span>
+      )}
     </>
   );
 }
@@ -226,6 +235,7 @@ export function HeaderTabPreview(props: {
       // A drag ghost / split-preview visual, never a real tab: no hover
       // card, it would only fight the drag overlay for the pointer.
       enabled={false}
+      pairPreview={null}
     />
   );
 }
@@ -270,6 +280,9 @@ export function TabChrome(props: {
   /** The layout editor's own tab (L-87, L-163). See `borderColor` below. */
   readonly session: boolean;
 }) {
+  // While the traveller stands in for this box, it wears this box's colour.
+  const concealed = props.isActive && props.concealed && !props.session;
+  usePublishTravelOutline(concealed, props.color);
   if (!props.isActive) {
     return (
       <>
@@ -293,34 +306,41 @@ export function TabChrome(props: {
   // keeps its coloured box and never joins the sheet.
   const joined = props.joined && !props.session;
   return (
-    <TabChromeBackground
-      // ACTIVE, the editor's tab is the colour and wears none of it on its
-      // edge (L-163): the fill is the token at full strength and the stroke is
-      // the sheets' border, so the frame around the screen owns the only
-      // amber LINE while a session is live and this tab is the only amber
-      // OBJECT. A dilution cannot do that job: every share of the token over
-      // `--background` trades the tab reading as coloured against its own
-      // label staying legible on it, and the largest that clears 4.5:1 on all
-      // the built-in palettes is 4.5% - a tab indistinguishable from the strip
-      // it sits in. Nor can a stroke in the colour, because the frame's dotted
-      // run and the tab's top edge share a line to within a quarter of a pixel
-      // and read as one broken stroke.
-      // `layout-editor-contrast.test.ts` measures the label on this fill.
-      fill={
-        props.session
-          ? (props.color ?? "var(--color-background)")
-          : "var(--color-background)"
-      }
-      borderColor={
-        props.session
-          ? "var(--canvas-border)"
-          : (props.color ?? "var(--canvas-border)")
-      }
-      joined={joined}
-      className={cn(
-        "transition-opacity duration-300 ease-spring",
-        props.concealed && "invisible",
-      )}
-    />
+    <>
+      {/* Concealed, it keeps its colour line until the traveller lands, so a
+          group's line has no gap under the tab being travelled to. */}
+      {concealed ? (
+        <InactiveColorMark color={props.color} session={props.session} />
+      ) : null}
+      <TabChromeBackground
+        // ACTIVE, the editor's tab is the colour and wears none of it on its
+        // edge (L-163): the fill is the token at full strength and the stroke is
+        // the sheets' border, so the frame around the screen owns the only
+        // amber LINE while a session is live and this tab is the only amber
+        // OBJECT. A dilution cannot do that job: every share of the token over
+        // `--background` trades the tab reading as coloured against its own
+        // label staying legible on it, and the largest that clears 4.5:1 on all
+        // the built-in palettes is 4.5% - a tab indistinguishable from the strip
+        // it sits in. Nor can a stroke in the colour, because the frame's dotted
+        // run and the tab's top edge share a line to within a quarter of a pixel
+        // and read as one broken stroke.
+        // `layout-editor-contrast.test.ts` measures the label on this fill.
+        fill={
+          props.session
+            ? (props.color ?? "var(--color-background)")
+            : "var(--color-background)"
+        }
+        borderColor={
+          props.session
+            ? "var(--canvas-border)"
+            : (props.color ?? "var(--canvas-border)")
+        }
+        joined={joined}
+        className={cn(
+          "transition-opacity duration-300 ease-spring",
+          props.concealed && "invisible",
+        )}
+      />
+    </>
   );
 }

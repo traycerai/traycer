@@ -252,6 +252,54 @@
   animation: side-strip-waiting-pulse 600ms ease-out 2;
 }
 
+/* A pane taking focus from the Activity strip: its neutral ring fades in and
+   out once. Opacity only, so the ring's own geometry never moves. The
+   component adds this class only while motion is enabled; without it the ring
+   just shows, and the component takes it away after 600ms. */
+@keyframes pane-focus-flash {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.pane-focus-flash {
+  animation: pane-focus-flash 400ms ease-out both;
+}
+
+/* The pending card an activation scrolled to: a warning ring that fades over
+   600ms. The component takes the class away 600ms after the card is shown, so
+   with no motion (the OS query or the app's own switch), where the ring does
+   not fade, it shows for exactly that long and then goes away. */
+@keyframes pending-card-highlight {
+  from {
+    box-shadow: inset 0 0 0 2px
+      color-mix(in srgb, var(--color-warning) 80%, transparent);
+  }
+  to {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
+}
+
+.pending-card-highlight {
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--color-warning) 80%, transparent);
+  animation: pending-card-highlight 600ms ease-out forwards;
+}
+
+:root[data-reduce-panel-motion] .pending-card-highlight {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pending-card-highlight {
+    animation: none;
+  }
+}
+
 /* The sheet join: the active task tab (top), row, tile or split pair (side)
    runs into its task's surface, so the tab and everything the task owns read
    as one shape. The joined element takes the fill of the pane it meets and

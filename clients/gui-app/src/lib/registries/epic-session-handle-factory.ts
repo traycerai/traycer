@@ -23,7 +23,6 @@ import {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { attachPlanRestrictedReprobe } from "@/lib/host/owned-durable-stream-client";
 import {
   getEpicRuntimeWorkerFactory,
   handleHostIds,
@@ -140,16 +139,9 @@ export interface EpicSessionHandleSpec {
    */
   readonly adoptLegacyPersistKey: (userId: string) => void;
   /**
-   * This session's transport reached its plan-restricted reprobe deadline.
-   * The owner-level backoff ladder stays with the caller; this is the denial
-   * it schedules against, carrying the handle that observed it as the ladder's
-   * owner.
-   */
-  readonly onPlanRestrictedDenial: (owner: OpenEpicStoreHandle) => void;
-  /**
    * A loaded replica on an open transport - the only evidence that a previous
-   * plan denial ended. A construction or a transient `connecting` projection
-   * does not reach here.
+   * construction failure ended. A construction or a transient `connecting`
+   * projection does not reach here.
    */
   readonly markHealthy: () => void;
   /**
@@ -158,11 +150,6 @@ export interface EpicSessionHandleSpec {
    * owns the presentation carrying the Retry affordance.
    */
   readonly onRuntimeFatal: () => void;
-  /**
-   * The store asked for a transport rebuild after a plan denial. Marked dead
-   * here for the same reason as the fatal above; the caller owns the retry.
-   */
-  readonly onRetryTransport: () => void;
 }
 
 /**
@@ -223,26 +210,10 @@ export function createEpicSessionHandle(
   let pendingTransportCloseTrigger: EpicSessionTransportCloseTrigger | null =
     null;
   let detachSessionHealthy: (() => void) | null = null;
-  // Filled once the handle exists, because the recovery IS the handle's
-  // `retryTransport`. Held in a slot rather than passed in because the
-  // subscription has to be live before then: the negative-cache adoption path
-  // can hand back an ALREADY-closed client, and `onClosed` does not retro-fire,
-  // so a deadline that landed during construction would be lost if this
-  // attached afterwards.
-  let reprobeHandle: OpenEpicStoreHandle | null = null;
   // The handle this run stamped into `handleStreamClients`, so the close below
-  // can un-stamp it. A slot for the same reason `reprobeHandle` is one: the
-  // close is composed before the handle exists, and a construction that throws
-  // must leave no entry behind.
+  // can un-stamp it. Held in a slot because the close is composed before the
+  // handle exists, and a construction that throws must leave no entry behind.
   let streamStampedHandle: OpenEpicStoreHandle | null = null;
-  const detachReprobe = attachPlanRestrictedReprobe(wsStreamClient, () => {
-    const deniedHandle = reprobeHandle;
-    if (deniedHandle === null) return;
-    // Capture this exact owner. If its replacement is denied before a delayed
-    // rung fires, the ladder replaces this callback with the newer handle's
-    // rather than calling through a mutable slot.
-    spec.onPlanRestrictedDenial(deniedHandle);
-  });
   const closeSessionTransport = (
     fallbackTrigger: EpicSessionTransportCloseTrigger,
   ): void => {
@@ -259,9 +230,6 @@ export function createEpicSessionHandle(
     ) {
       handleStreamClients.delete(streamStampedHandle);
     }
-    // Before `transport.close()`, so the timer cannot outlive the socket it
-    // exists to rebuild.
-    detachReprobe();
     detachSessionHealthy?.();
     detachSessionHealthy = null;
     // The transport owns ordering: it tears down wake/endpoint wiring before
@@ -492,25 +460,6 @@ export function createEpicSessionHandle(
       // whether the activity plane speaks for this session.
       hostId,
       accounting,
-      // The rebuild half of the plan-denial reprobe. The store decides WHETHER
-      // (it owns the dirtiness that makes a rebuild lossy here); this decides
-      // HOW, because the transport is this module's.
-      //
-      // Retiring and re-acquiring rather than reconnecting: the closed client
-      // cannot acquire the negative cache's controlled fresh session, which is
-      // the whole reason the deadline exists. Marking the handle dead is what
-      // lets the acquire pass RETIRE it - without it that pass sees the same
-      // target host and re-presents this same closed handle as `ready`, which
-      // is the failure mode the worker-fatal path above records for the user's
-      // own Retry.
-      //
-      // No presentation is written here. A clean session rebuilding after a
-      // deadline the user never saw should not flash a failure at them; the
-      // acquire pass presents `establishing` on its own.
-      onRetryTransport: () => {
-        liveness.dead = true;
-        spec.onRetryTransport();
-      },
       // THIS session's socket, never the app-wide one. Every surface owns its
       // own transport - a chat opens one per session, and this opener holds the
       // epic's - so a wake resolved from anywhere else would collapse the
@@ -584,9 +533,9 @@ export function createEpicSessionHandle(
       if (!state.snapshotLoaded || state.hostTransportStatus !== "open") {
         return;
       }
-      // Only a loaded replica on an open transport proves that a previous plan
-      // denial ended. A construction or a transient `connecting` projection
-      // must not reset the ladder.
+      // Only a loaded replica on an open transport proves that a previous
+      // construction failure ended. A construction or a transient `connecting`
+      // projection must not reset the ladder.
       spec.markHealthy();
     };
     detachSessionHealthy = created.store.subscribe(noteSessionHealth);
@@ -629,11 +578,6 @@ export function createEpicSessionHandle(
     // neither re-runs this factory. Removed by `closeSessionTransport`.
     handleStreamClients.set(handle, wsStreamClient);
     streamStampedHandle = handle;
-    // Armed now that there is something to rebuild. `retryTransport` is the
-    // handle's, not `created`'s: the wrapper is what owns this session's
-    // transport close, and a reprobe that rebuilt the inner store would leave
-    // the socket behind.
-    reprobeHandle = handle;
     // The same cell the fatal relay above writes, so a death that happened
     // before this line is already recorded on the handle the moment it exists.
     trackEpicSessionHandleLiveness(handle, liveness);

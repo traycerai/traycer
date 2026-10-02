@@ -460,6 +460,27 @@ describe("layout reducers preserve invariants", () => {
       expect(next.items.some((item) => item.kind === "tab")).toBe(true);
     });
 
+    it("puts a pair made on a destination in that tab's place, and any other pair in the earlier tab's", () => {
+      // A dragged first tab dropped on the last one: the pair is where the
+      // last one was, whichever side the dragged tab takes.
+      const base = withTabs([EPIC_A, EPIC_B, DRAFT_A]);
+      const order = (targetRef: TabRef | undefined) =>
+        pairLayoutRefs(
+          base,
+          {
+            ...(targetRef === undefined ? {} : { targetRef }),
+            left: EPIC_A,
+            right: DRAFT_A,
+            splitId: "split-1",
+            leftRatio: 0.5,
+          },
+          allowAllSplits,
+        ).items.map((item) => item.id);
+      expect(order(DRAFT_A)).toEqual([tabItemId(EPIC_B), "split-1"]);
+      expect(order(EPIC_A)).toEqual(["split-1", tabItemId(EPIC_B)]);
+      expect(order(undefined)).toEqual(["split-1", tabItemId(EPIC_B)]);
+    });
+
     it("rejects same-ref, missing refs, and descriptor-ineligible refs (inv 5, 7)", () => {
       const base = withTabs([EPIC_A, EPIC_B]);
       expect(

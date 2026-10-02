@@ -22,7 +22,6 @@ import { createAttachGrantProvider } from "./grant-client";
 import { decodeHostPublicKey } from "./noise-channel";
 import {
   acquireRemoteSession,
-  planRestrictedReprobeAt,
   type RemoteSessionIdentity,
 } from "./active-remote-sessions";
 
@@ -279,9 +278,7 @@ export function createRemoteHostTransport<
   return {
     session,
     messenger: new RemoteHostMessenger(session),
-    streamClient: new RemoteStreamClient(session, () =>
-      planRestrictedReprobeAt(identity),
-    ),
+    streamClient: new RemoteStreamClient(session),
   };
 }
 

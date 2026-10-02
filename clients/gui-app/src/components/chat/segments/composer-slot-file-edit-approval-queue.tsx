@@ -4,7 +4,7 @@ import type { ChatFileEditApprovalState } from "@traycer/protocol/host/agent/gui
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  PENDING_CARD_HIGHLIGHT_CLASSNAME,
   useRestartHighlightPulse,
 } from "@/components/chat/chat-navigation-highlight";
 import {
@@ -165,7 +165,7 @@ function FileEditApprovalRow(props: FileEditApprovalRowProps) {
       }
       className={cn(
         "flex min-w-0 flex-col gap-1.5 rounded-md py-2 first:pt-0 last:pb-0 transition-[background-color,box-shadow] duration-300",
-        props.navigationHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+        props.navigationHighlighted && PENDING_CARD_HIGHLIGHT_CLASSNAME,
       )}
     >
       <div className="flex flex-wrap items-center gap-2">

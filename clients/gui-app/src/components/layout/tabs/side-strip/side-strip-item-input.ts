@@ -7,9 +7,21 @@ import type {
   StripTabItemInput,
 } from "../use-strip-tab-item";
 import type { SideTabRowVariant } from "./side-tab-row";
+import type { StripSection, StripTabMember } from "./strip-sections";
 
 /** Where a drop would land relative to one row. */
 export type DropIndicator = "before" | "after" | null;
+
+/** The insertion line on the row it lands before, or after the last row. */
+export function dropIndicatorOf(
+  dropIndex: number | null,
+  stripIndex: number,
+  lastIndex: number,
+): DropIndicator {
+  if (dropIndex === stripIndex) return "before";
+  if (dropIndex === stripIndex + 1 && stripIndex === lastIndex) return "after";
+  return null;
+}
 
 /** The controller's per-tab handlers and pin reads every row takes. */
 export interface SideStripHandlers {
@@ -40,7 +52,15 @@ export interface SideStripItemProps {
   readonly isActive: boolean;
   readonly dropIndicator: DropIndicator;
   readonly variant: SideTabRowVariant;
-  readonly groupLine: string | null;
+  /** The item sits in its group's block or column, which carries the group's colour. */
+  readonly inBlock: boolean;
+  /**
+   * The Activity view's section this item is in, which is also the lane it
+   * drags in: a drop outside it is never offered. `null` in the Layered view.
+   */
+  readonly lane: StripSection | null;
+  /** What each of the item's tabs draws in that section; `null` in the Layered view. */
+  readonly members: ReadonlyArray<StripTabMember> | null;
   readonly handlers: SideStripHandlers;
 }
 

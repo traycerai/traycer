@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
+  ChevronRight,
   ChevronsUpDown,
   History,
   House,
@@ -21,8 +22,8 @@ import {
   depictRegion,
 } from "@/components/layout-editor/region-depiction";
 import { PanelTaskHeaderBody } from "@/components/epic-canvas/sidebar/panel-task-header-body";
-import { LIVE_AGENTS_LIST_CLASS } from "@/components/epic-canvas/sidebar/live-agent-row";
 import { SampleLiveAgentItems } from "@/components/sample-workspace/sample-strip-live-agents";
+import { SAMPLE_NEEDS_YOU_ROW } from "@/components/sample-workspace/sample-workspace-scene";
 import {
   barClusterRegions,
   liveAgentsInStrip,
@@ -42,6 +43,14 @@ import {
   type SideTabLiveAgents,
 } from "@/components/layout/tabs/side-strip/agent-meter";
 import { NO_LIVE_AGENTS } from "@/components/layout/tabs/side-strip/side-tab-live-agents";
+import {
+  sectionStyleOf,
+  twoLineStatusOf,
+} from "@/components/layout/tabs/side-strip/strip-section-row";
+import {
+  STRIP_SECTION_LABEL,
+  type StripSection,
+} from "@/components/layout/tabs/side-strip/strip-sections";
 import { MonogramChip } from "@/components/layout/tabs/monogram-chip";
 import { tabAutoTint } from "@/components/layout/tabs/tab-identity";
 import {
@@ -52,13 +61,17 @@ import {
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_STRIP_RAIL_DIVIDER_CLASS,
   SIDE_STRIP_RAIL_NAV_CLASS,
+  SIDE_STRIP_SECTION_HEADER_CLASS,
   SIDE_STRIP_SECTION_LABEL_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_LEADING_CLASS,
   SIDE_TAB_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_TRAILING_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
   SIDE_TAB_TILE_CLASS,
   SIDE_TAB_TITLE_CLASS,
+  STRIP_AGENT_GROUP_CLASS,
 } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import type {
   RailRegionId,
@@ -430,9 +443,10 @@ function AppFrameHomeTile(): ReactNode {
 }
 
 /**
- * The expanded strip's task rows, with the active task's live agents under its
- * row in the Activity view (D9): the strip draws them, and so does each Side
- * tab view picture, without the sheet join a lone picture has no sheet for.
+ * The expanded strip's task rows. The Activity view draws them in its
+ * sections, the active task's live agents under its row (D9), as the strip
+ * does; each Side tab view picture draws them without the sheet join a lone
+ * picture has no sheet for.
  */
 export function AppFrameStripTaskRows(props: {
   readonly liveAgents: boolean;
@@ -443,39 +457,126 @@ export function AppFrameStripTaskRows(props: {
   const tasks = props.startAtActive
     ? APP_FRAME_TABS.slice(APP_FRAME_TABS.indexOf(APP_FRAME_ACTIVE_TASK))
     : APP_FRAME_TABS;
+  if (props.liveAgents) {
+    return <AppFrameSectionedRows tasks={tasks} joined={props.joined} />;
+  }
   return tasks.map((task) => (
-    <Fragment key={task.id}>
-      <AppFrameTaskRow task={task} joined={props.joined} />
-      {task.active && props.liveAgents ? <AppFrameLiveAgents /> : null}
-    </Fragment>
+    <AppFrameTaskRow
+      key={task.id}
+      task={task}
+      joined={props.joined}
+      section={null}
+    />
   ));
 }
 
+/** The picture's tasks in the section a task in its state is in. */
+const APP_FRAME_SECTIONS: ReadonlyArray<StripSection> = [
+  "needs-you",
+  "working",
+  "idle",
+];
+
+function appFrameSectionOf(task: AppFrameTask): StripSection {
+  if (task.active) return "needs-you";
+  return task.agents.turn + task.agents.background > 0 ? "working" : "idle";
+}
+
+/** The Activity view's sections as the strip draws them: a header over each one's rows. */
+function AppFrameSectionedRows(props: {
+  readonly tasks: ReadonlyArray<AppFrameTask>;
+  readonly joined: SheetJoin | null;
+}): ReactNode {
+  return APP_FRAME_SECTIONS.flatMap((section) => {
+    const inSection = props.tasks.filter(
+      (task) => appFrameSectionOf(task) === section,
+    );
+    if (inSection.length === 0) return [];
+    return [
+      <Fragment key={section}>
+        <span
+          className={cn(
+            SIDE_STRIP_SECTION_HEADER_CLASS,
+            section === "needs-you"
+              ? "text-warning-foreground"
+              : "text-muted-foreground",
+          )}
+        >
+          <ChevronRight aria-hidden className="size-3 shrink-0 rotate-90" />
+          <span className="min-w-0 flex-1 truncate">
+            {STRIP_SECTION_LABEL[section]}
+          </span>
+          <span className="tabular-nums">{inSection.length}</span>
+        </span>
+        {inSection.map((task) => (
+          <Fragment key={task.id}>
+            <AppFrameTaskRow
+              task={task}
+              joined={props.joined}
+              section={section}
+            />
+            {task.active ? <AppFrameLiveAgents /> : null}
+          </Fragment>
+        ))}
+      </Fragment>,
+    ];
+  });
+}
+
 /**
- * An expanded task row: the empty 16px leading slot of an uncoloured, idle
- * task, the title, and the meter while more than one agent is live.
+ * An expanded task row: the title, flush to the row's padding, and the meter
+ * while more than one agent is live. In the Activity view (`section` set) it
+ * has that section's height and weight, and the Needs you row is the two-line
+ * one the strip draws for a task waiting on a reply.
  */
 function AppFrameTaskRow(props: {
   readonly task: AppFrameTask;
   readonly joined: SheetJoin | null;
+  readonly section: StripSection | null;
 }): ReactNode {
-  const { task } = props;
+  const { task, section } = props;
+  const twoLine = section === "needs-you";
+  const meter =
+    task.agents.turn + task.agents.background > 1 ? (
+      <SideTabMeter agents={task.agents} attention={null} size="row" />
+    ) : null;
   return (
     <span
       {...joinedAttribute(task.active ? props.joined : null)}
       className={cn(
-        "flex items-center text-muted-foreground",
+        "flex items-center",
         SIDE_TAB_ROW_CLASS,
+        twoLine && SIDE_TAB_TWO_LINE_ROW_CLASS,
+        section === null || section === "idle"
+          ? "text-muted-foreground"
+          : "text-foreground",
         task.active && cn("text-foreground", SIDE_TAB_ACTIVE_CLASS),
       )}
     >
-      <span aria-hidden className={cn(SIDE_TAB_LEADING_CLASS, "shrink-0")} />
-      <span className={cn(SIDE_TAB_TITLE_CLASS, "min-w-0 flex-1 truncate")}>
-        {task.label}
-      </span>
-      {task.agents.turn + task.agents.background > 1 ? (
-        <SideTabMeter agents={task.agents} attention={null} size="row" />
-      ) : null}
+      {twoLine ? (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className={cn(SIDE_TAB_TITLE_CLASS, "truncate font-semibold")}>
+            {task.label}
+          </span>
+          {sectionStyleOf(SAMPLE_NEEDS_YOU_ROW, false, null).detail}
+        </span>
+      ) : (
+        <span className={cn(SIDE_TAB_TITLE_CLASS, "min-w-0 flex-1 truncate")}>
+          {task.label}
+        </span>
+      )}
+      {twoLine ? (
+        <span
+          className={cn(
+            "flex shrink-0 items-center",
+            SIDE_TAB_TWO_LINE_TRAILING_CLASS,
+          )}
+        >
+          {twoLineStatusOf(SAMPLE_NEEDS_YOU_ROW, null)?.node}
+        </span>
+      ) : (
+        meter
+      )}
     </span>
   );
 }
@@ -514,10 +615,10 @@ export function AppFramePanelTaskHeader(): ReactNode {
   );
 }
 
-/** The active task's live agents under its row, as the Activity view lists them (D9). */
+/** The active task's live agents under its row, as the Activity view nests them (D9). */
 function AppFrameLiveAgents(): ReactNode {
   return (
-    <ul data-testid="app-frame-live-agents" className={LIVE_AGENTS_LIST_CLASS}>
+    <ul data-testid="app-frame-live-agents" className={STRIP_AGENT_GROUP_CLASS}>
       <SampleLiveAgentItems />
     </ul>
   );

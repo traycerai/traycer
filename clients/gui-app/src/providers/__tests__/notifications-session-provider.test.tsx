@@ -2424,7 +2424,7 @@ describe("<NotificationsSessionProvider />", () => {
     ).toBeDefined();
     expect(screen.getByTestId("notifications-quiet-dot")).not.toBeNull();
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
 
     // (2) Disconnect → summary unknown, rows preserved. The bell SAYS so now:
     // a sibling of the flipped `notifications-bell.test.tsx` assertion, this
@@ -2442,7 +2442,7 @@ describe("<NotificationsSessionProvider />", () => {
       screen.getByTestId("notifications-unknown-indicator"),
     ).not.toBeNull();
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Notifications, status unavailable" }),
     ).not.toBeNull();
@@ -2492,6 +2492,8 @@ describe("<NotificationsSessionProvider />", () => {
     expect(
       useHostNotificationsStore.getState().byId["reconnected-prompt"],
     ).toBeDefined();
+    // Known again: the unknown dot gives way to the exact count. The amber
+    // count is the tab strip's Needs you tasks, and none is mounted here.
     expect(
       screen.getByTestId("notifications-attention-badge").textContent,
     ).toBe("1");

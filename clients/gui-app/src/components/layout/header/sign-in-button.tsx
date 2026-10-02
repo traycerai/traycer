@@ -47,6 +47,8 @@ function SignInActions(props: {
    */
   readonly offersDifferentAccount: boolean;
   readonly deviceProgress: DeviceFlowProgress | null;
+  /** Whether the device-code panel draws its own frame (not in a popover). */
+  readonly framed: boolean;
 }) {
   // Computed here rather than inline: `RetrySignInButton` reads this as "show
   // yourself", and a link claim is an attempt `signIn()` must not replace.
@@ -56,6 +58,7 @@ function SignInActions(props: {
       <DeviceCodeProgress
         progress={props.deviceProgress}
         isHero={props.isHero}
+        framed={props.framed}
       />
     );
   }
@@ -147,6 +150,7 @@ export function SignInButton(props: SignInButtonProps) {
         canRetry={canRetry}
         offersDifferentAccount={lastError === AUTH_ERROR_ACCOUNT_UNAVAILABLE}
         deviceProgress={deviceProgress}
+        framed={props.layout !== "popover"}
       />
     </div>
   );

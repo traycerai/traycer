@@ -118,6 +118,8 @@ export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
         // merge target. This - not the zero band width - is what makes the
         // model's merge branch unreachable here.
         isMergeTarget: false,
+        lane: null,
+        groupId: null,
       },
     ];
   });
@@ -155,6 +157,9 @@ export function measureTileStripGeometry(input: {
   const originX = stripRect.left - el.scrollLeft;
   return {
     slots,
+    // Tile tabs are not grouped.
+    groups: [],
+    runGap: 0,
     sourceIndex,
     grabOffset: input.pointerX - (originX + source.contentStart),
     sourceInitialStart: originX + source.contentStart,

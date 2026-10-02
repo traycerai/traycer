@@ -72,7 +72,6 @@ function createHandle(state: FakeState): OpenEpicStoreHandle {
     dispose: () => {},
     detachTransport: () => {},
     requestFreshSnapshot: () => {},
-    retryTransport: () => {},
     wakeTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],

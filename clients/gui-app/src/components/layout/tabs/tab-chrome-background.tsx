@@ -57,13 +57,21 @@ export function TabChromeBackground(props: {
  * coloured tab - lone, group member or split member - because the dash is what
  * the owner reported as the regression on a lone tab. Adjacent group members'
  * lines also sit flush, which is what still reads a group as one unit.
+ *
+ * It lies on the sheets' top border, 3px under the tab's frame (the frame
+ * sits 2px up in the 40px header, and the border is 1px), which is where the
+ * joined active tab's outline turns out into its feet. Along the frame's own
+ * bottom it floated 3px over the feet, so a group's line broke at its active
+ * tab. The strip's scroller reaches down that far so as not to clip it.
  */
 export function TabColorEdgeLine(props: { readonly color: string }) {
   return (
     <span
       aria-hidden
       data-testid="tab-color-edge-line"
-      className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.5px] bg-(--swatch)"
+      // A drop that would join the tab's group brightens it a step: the strip
+      // item's frame marks that (`data-group-joining`).
+      className="pointer-events-none absolute inset-x-0 -bottom-0.75 h-[1.5px] bg-(--swatch) transition-[height,box-shadow] duration-150 group-data-[group-joining=true]/joining:h-0.75 group-data-[group-joining=true]/joining:shadow-[0_0_8px_var(--swatch)]"
       style={{ "--swatch": props.color } as CSSProperties}
     />
   );

@@ -16,7 +16,9 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
-import type { TreeNode } from "@/stores/epics/open-epic/types";
+import type { ChatProjection, TreeNode } from "@/stores/epics/open-epic/types";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { __setAgentActivityStateForTests } from "@/stores/agent-activity-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -350,7 +352,11 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
   close: () => undefined,
 });
 
-/** Epsilon's session: a real open-epic store with its agents in the tree. */
+/**
+ * Epsilon's session: a real open-epic store with its agents in the tree and as
+ * chats, registered so the strip names them, with the activity plane saying
+ * they are working, so the Activity view nests them under Epsilon's row.
+ */
 export function openEpicSession(): OpenedStoreForTest {
   const handle = openStoreForTest({
     epicId: EPIC_SURFACE_ID,
@@ -370,6 +376,30 @@ export function openEpicSession(): OpenedStoreForTest {
     else (childrenByParent[node.parentId] ??= []).push(node.id);
   }
   handle.store.setState({ tree: { rootIds, childrenByParent, nodeById } });
+  const chats: Record<string, ChatProjection> = {};
+  for (const node of EPIC_SURFACE_AGENTS) {
+    chats[node.id] = {
+      id: node.id,
+      title: node.title,
+      parentId: node.parentId,
+      createdAt: 1,
+      updatedAt: 1,
+      userId: null,
+      hostId: HARNESS_LOCAL_HOST.hostId,
+      isTitleEditedByUser: false,
+      docResident: false,
+      archivedAt: null,
+      settings: null,
+    };
+  }
+  handle.store.setState({ chats: { allIds: Object.keys(chats), byId: chats } });
+  __getOpenEpicRegistryForTests().acquire(EPIC_SURFACE_ID, () => handle);
+  const working = EPIC_SURFACE_AGENTS.map((node) => node.id);
+  __setAgentActivityStateForTests(
+    { [EPIC_SURFACE_ID]: { working, turn: working.slice(0, 2) } },
+    "local",
+    "connected",
+  );
   return handle;
 }
 

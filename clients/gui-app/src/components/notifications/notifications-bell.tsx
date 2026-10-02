@@ -17,6 +17,7 @@ import {
   notificationBellAccessibleLabel,
   type NotificationBellState,
 } from "@/stores/notifications/merged-notifications";
+import { useNeedsYouTaskCount } from "@/stores/notifications/needs-you-task-count-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 
 /**
@@ -31,8 +32,10 @@ const BADGE_PRESENT = { opacity: 1, scale: 1 } as const;
 const BADGE_TRANSITION = { duration: 0.14, ease: "easeOut" } as const;
 
 /**
- * Top-level notifications trigger in the app header. Shows an unread-count
- * badge and opens the `NotificationsPopover` on click. Native toast/chime
+ * Top-level notifications trigger in the app header. Shows the Needs you task
+ * count as an amber badge, as the sidebar's Notifications row does, or with no
+ * task waiting the red count of what needs attention, and opens
+ * the `NotificationsPopover` on click. Native toast/chime
  * emission is owned by `NotificationEmissionController` so all sources share
  * the same hold/coalescing/focus policy.
  *
@@ -62,7 +65,16 @@ export function NotificationsBell() {
   const badgeInitial = motionEnabled ? BADGE_HIDDEN : false;
   const badgeExit = motionEnabled ? BADGE_HIDDEN : undefined;
 
-  const ariaLabel = notificationBellAccessibleLabel(bellState);
+  // Amber is the sidebar's Needs you task count, so that number means one
+  // thing wherever it is drawn. With no task waiting, what still needs
+  // attention (a failure, an app-local transport error) keeps its red count,
+  // so no failure goes unshown.
+  const needsYouCount = useNeedsYouTaskCount();
+  const mark = bellMarkOf(bellState, needsYouCount);
+  const ariaLabel =
+    mark === "needsYou"
+      ? needsYouBellLabel(needsYouCount, bellState)
+      : notificationBellAccessibleLabel(bellState);
   const bellTooltip = (state: NotificationBellState): string => {
     // The path forward the hollow `unknown` dot needs. Without it this is the
     // bare gray dot with no explanation that got `unknown` suppressed into
@@ -107,7 +119,25 @@ export function NotificationsBell() {
               aria-hidden
             />
             <AnimatePresence initial={false}>
-              {bellState.kind === "attention" ? (
+              {mark === "needsYou" ? (
+                <m.span
+                  key="needs-you-badge"
+                  data-testid="notifications-needs-you-badge"
+                  aria-hidden
+                  initial={badgeInitial}
+                  animate={BADGE_PRESENT}
+                  exit={badgeExit}
+                  transition={BADGE_TRANSITION}
+                  className="absolute -right-1 -top-1 flex h-4 min-w-4 origin-bottom-left items-center justify-center rounded-md bg-warning px-1 text-overline font-semibold leading-none text-black tabular-nums shadow-sm ring-2 ring-background"
+                >
+                  <RollingNumber
+                    value={needsYouCount}
+                    className={undefined}
+                    testId="notifications-needs-you-count"
+                  />
+                </m.span>
+              ) : null}
+              {mark === "attention" && bellState.kind === "attention" ? (
                 <m.span
                   key="attention-badge"
                   data-testid="notifications-attention-badge"
@@ -126,7 +156,7 @@ export function NotificationsBell() {
                 </m.span>
               ) : null}
             </AnimatePresence>
-            {bellState.kind === "quietDot" && (
+            {mark === "quietDot" && (
               <span
                 data-testid="notifications-quiet-dot"
                 aria-hidden
@@ -147,7 +177,7 @@ export function NotificationsBell() {
               above carries the reason so the state is not a bare gray
               dot with no path forward - the objection that kept it hidden.
             */}
-            {bellState.kind === "unknown" && (
+            {mark === "unknown" && (
               <span
                 data-testid="notifications-unknown-indicator"
                 aria-hidden
@@ -168,4 +198,36 @@ export function NotificationsBell() {
       </PopoverContent>
     </Popover>
   );
+}
+
+/** The one mark the bell wears. */
+type BellMark = "needsYou" | "attention" | "unknown" | "quietDot" | null;
+
+/**
+ * The amber Needs you count while a task needs the person; else the red count
+ * of what needs attention, failures among it; else the hollow `unknown` dot;
+ * else the quiet dot for anything unread.
+ */
+function bellMarkOf(state: NotificationBellState, needsYou: number): BellMark {
+  if (needsYou > 0) return "needsYou";
+  switch (state.kind) {
+    case "attention":
+      return "attention";
+    case "unknown":
+      return "unknown";
+    case "quietDot":
+      return "quietDot";
+    case "clear":
+      return null;
+  }
+}
+
+function needsYouBellLabel(
+  needsYou: number,
+  state: NotificationBellState,
+): string {
+  const tasks = needsYou === 1 ? "1 task needs" : `${needsYou} tasks need`;
+  return state.kind === "unknown"
+    ? `Notifications, ${tasks} you, status unavailable`
+    : `Notifications, ${tasks} you`;
 }
