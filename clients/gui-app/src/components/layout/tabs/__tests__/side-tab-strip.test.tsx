@@ -29,6 +29,10 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
+import {
+  useLandingPaneAnchorStore,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { SampleSceneContext } from "@/components/sample-workspace/sample-scene-context";
 import { useStripDisclosureStore } from "@/components/layout/tabs/side-strip/strip-disclosure";
@@ -85,11 +89,6 @@ import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import {
-  DEFAULT_LANDING_PANEL_LAYOUT,
-  useLandingPanelStore,
-  type LandingPanelLayout,
-} from "@/stores/home/landing-panel-store";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
@@ -452,7 +451,10 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useLandingPanelStore.getState().resetForTests();
+  useLandingPaneAnchorStore.setState(
+    useLandingPaneAnchorStore.getInitialState(),
+    true,
+  );
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useSideTabStripStore.setState({
     widthPx: 240,
@@ -3561,57 +3563,61 @@ describe("<SideTabStrip />", () => {
       },
     );
 
-    // A draft paints `--background` until its terminal panel is open. The
+    // A draft paints `--background` until its terminal panel is rendered. The
     // panel is canvas and docks on the right, so a right strip meets it; a
-    // maximized panel covers the page, so either strip does.
+    // panel that covers the page is met by either strip. What it renders is
+    // what it publishes, and a page whose panel is not rendered publishes
+    // nothing.
     it.each([
       {
         edge: "left",
-        state: "closed",
-        layout: DEFAULT_LANDING_PANEL_LAYOUT,
+        state: "not rendered",
+        coverage: null,
         pane: "surface",
       },
       {
         edge: "left",
-        state: "open and docked",
-        layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+        state: "docked",
+        coverage: "docked",
         pane: "surface",
       },
       {
         edge: "left",
-        state: "open and maximized",
-        layout: {
-          ...DEFAULT_LANDING_PANEL_LAYOUT,
-          panelOpen: true,
-          maximized: true,
-        },
+        state: "full",
+        coverage: "full",
         pane: "canvas",
       },
       {
         edge: "right",
-        state: "closed",
-        layout: DEFAULT_LANDING_PANEL_LAYOUT,
+        state: "not rendered",
+        coverage: null,
         pane: "surface",
       },
       {
         edge: "right",
-        state: "open and docked",
-        layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+        state: "docked",
+        coverage: "docked",
+        pane: "canvas",
+      },
+      {
+        edge: "right",
+        state: "full",
+        coverage: "full",
         pane: "canvas",
       },
     ] satisfies ReadonlyArray<{
       readonly edge: EdgeSide;
       readonly state: string;
-      readonly layout: LandingPanelLayout;
+      readonly coverage: LandingPanelCoverage | null;
       readonly pane: "surface" | "canvas";
     }>)(
       "joins an active draft row on the $edge strip to the $pane pane while its terminal panel is $state",
-      async ({ edge, layout, pane }) => {
+      async ({ edge, coverage, pane }) => {
         const draftId = openDraftTab();
         act(() => {
-          useLandingPanelStore.setState({
-            layoutsByLandingPageId: { [draftId]: layout },
-          });
+          useLandingPaneAnchorStore
+            .getState()
+            .setPanelCoverage(draftId, coverage);
         });
         await renderStrip("/elsewhere", { ...LEFT_STRIP, edge });
 

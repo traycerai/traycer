@@ -1,11 +1,9 @@
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import {
-  landingPanelLayoutFor,
-  useLandingPanelStore,
-  type LandingPanelLayout,
-  type LandingPanelStoreState,
-} from "@/stores/home/landing-panel-store";
-import { flattenStripItemRefs, type StripItem } from "@/stores/tabs/layout";
+  useLandingPaneAnchorStore,
+  type LandingPaneAnchorState,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import type { TabRef } from "@/stores/tabs/types";
 import type { HeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import type { SheetJoinPane } from "./side-strip/side-tab-join";
@@ -13,37 +11,54 @@ import type { SheetJoinPane } from "./side-strip/side-tab-join";
 /** The edge of its surface a tab joins: the top strip's, or a side strip's. */
 export type JoinEdge = "top" | EdgeSide;
 
-/** What the rule reads of the start page's panel: where each draft's sits. */
-export type LandingPanelLayouts = Pick<
-  LandingPanelStoreState,
-  "layoutsByLandingPageId" | "fallbackLayout"
->;
+/**
+ * What the rule reads of the start page's panel: what the panel RENDERS on
+ * each draft, as the panel publishes it. Never the stored layout, which stays
+ * open and maximized for a page that shows no panel at all.
+ */
+export type LandingPanelCoverages = LandingPaneAnchorState["panelCoverage"];
 
 /**
  * The pane a surface shows along `edge`, which is the fill a tab joining it
- * there takes: what the surface PAINTS at that edge, read per kind.
+ * there takes: the ground the surface's BODY paints at that edge, read per
+ * kind.
  *
- * - A task's top row (its status row and the head of its panel) is
- *   `--background`. Beside a side strip it shows its canvas, unless its panel
- *   is on that side: `useSideTabJoin` names the panel or its rail then.
- * - A draft paints `--background`, under its terminal panel where that is
- *   open (`draftJoinPane`).
+ * - A task's body (its shell, whose status row is its top) is `--background`.
+ *   Beside a side strip it shows its canvas, unless its panel is on that
+ *   side: `useSideTabJoin` names the panel or its rail then.
+ * - A draft paints `--background`, under its terminal panel where one is
+ *   rendered (`draftJoinPane`).
  * - Settings paints `--background`, with its rail (the sidebar's fill) down
  *   its left edge.
  * - Home and History paint nothing of their own and show their sheet's canvas.
  * - The session tab never joins; its arm keeps the switch total, so a new
  *   kind has to say what its surface paints.
+ *
+ * A side strip runs the whole length of the edge it joins, so a panel on that
+ * side is what every row meets and the rule can name it. The top strip does
+ * not: a panel that reaches the top edge (the task's sidebar, Settings' rail,
+ * a docked terminal panel) is under only the tabs that happen to sit over it,
+ * and a tab can straddle its edge. One fill cannot be both grounds and the
+ * rule does not know where along the strip a tab is, so a top tab joins in the
+ * body's ground wherever it sits. The palettes this app ships keep the sidebar
+ * on the background, and the ones it derives or imports paint the canvas as
+ * the background, so over such a panel the tab is the colour it was before
+ * this rule.
+ *
+ * The rule names the ground of a surface that has settled. One that is still
+ * loading, has failed or is migrating can paint another ground for as long as
+ * that lasts, and the join does not follow it there; it never did.
  */
 export function surfaceJoinPane(
   tab: TabRef,
   edge: JoinEdge,
-  landing: LandingPanelLayouts,
+  landing: LandingPanelCoverages,
 ): SheetJoinPane {
   switch (tab.kind) {
     case "epic":
       return edge === "top" ? "surface" : "canvas";
     case "draft":
-      return draftJoinPane(landingPanelLayoutFor(landing, tab.id), edge);
+      return draftJoinPane(landing.get(tab.id) ?? null, edge);
     case "settings":
       return edge === "left" ? "panel" : "surface";
     case "home":
@@ -54,17 +69,18 @@ export function surfaceJoinPane(
 }
 
 /**
- * The start page's terminal panel is canvas and docks on the right: open, it
- * is what a right-hand strip meets, and maximized it covers the whole page.
- * Docked, it is under only the top tabs that sit over it, which still join in
- * the page's own ground.
+ * The start page's terminal panel is canvas and docks on the right: rendered,
+ * it is what a right-hand strip meets, and covering the page it is what every
+ * edge meets. `coverage` is `null` for a page that shows no panel. Canvas is
+ * the panel's ground from md, which is where a tab joins; the phone overlay
+ * is `--background` and has no join to match.
  */
 function draftJoinPane(
-  layout: LandingPanelLayout,
+  coverage: LandingPanelCoverage | null,
   edge: JoinEdge,
 ): SheetJoinPane {
-  if (!layout.panelOpen) return "surface";
-  return layout.maximized || edge === "right" ? "canvas" : "surface";
+  if (coverage === null) return "surface";
+  return coverage === "full" || edge === "right" ? "canvas" : "surface";
 }
 
 /**
@@ -76,7 +92,7 @@ function draftJoinPane(
  */
 export function splitPairJoinPane(
   members: ReadonlyArray<TabRef>,
-  landing: LandingPanelLayouts,
+  landing: LandingPanelCoverages,
 ): SheetJoinPane {
   return members.some(
     (member) => surfaceJoinPane(member, "top", landing) === "surface",
@@ -88,7 +104,7 @@ export function splitPairJoinPane(
 /** The pair's pane from the strip's own projection of it, which holds the tabs. */
 export function headerSplitJoinPane(
   item: Extract<HeaderStripItem, { readonly kind: "split" }>,
-  landing: LandingPanelLayouts,
+  landing: LandingPanelCoverages,
 ): SheetJoinPane {
   return splitPairJoinPane(
     [item.left, item.right].flatMap((member) =>
@@ -98,30 +114,45 @@ export function headerSplitJoinPane(
   );
 }
 
-/** The pane a top strip item joins. An item that is gone was a task's. */
-export function stripItemJoinPane(
-  item: StripItem | undefined,
-  landing: LandingPanelLayouts,
+/**
+ * The pane a top strip item joins, from the strip's own projection of it. The
+ * sliding selection box reads it for the item it flies to, which composes the
+ * two rules that item's resting box and drag overlay read, so all three wear
+ * one fill.
+ */
+export function headerItemJoinPane(
+  item: HeaderStripItem,
+  landing: LandingPanelCoverages,
 ): SheetJoinPane {
-  if (item === undefined) return "surface";
   return item.kind === "split"
-    ? splitPairJoinPane(flattenStripItemRefs(item), landing)
-    : surfaceJoinPane(item.ref, "top", landing);
+    ? headerSplitJoinPane(item, landing)
+    : surfaceJoinPane(item.tab, "top", landing);
 }
 
-/** `surfaceJoinPane`, following the start page's panel; `null` for no tab. */
+/** `surfaceJoinPane`, following what the start page's panel renders; `null` for no tab. */
 export function useSurfaceJoinPane(
   tab: TabRef | null,
   edge: JoinEdge,
 ): SheetJoinPane | null {
-  return useLandingPanelStore((state) =>
-    tab === null ? null : surfaceJoinPane(tab, edge, state),
+  return useLandingPaneAnchorStore((state) =>
+    tab === null ? null : surfaceJoinPane(tab, edge, state.panelCoverage),
   );
 }
 
-/** `headerSplitJoinPane`, following the start page's panel. */
+/** `headerItemJoinPane`, following what the panel renders; `null` for no item. */
+export function useHeaderItemJoinPane(
+  item: HeaderStripItem | null,
+): SheetJoinPane | null {
+  return useLandingPaneAnchorStore((state) =>
+    item === null ? null : headerItemJoinPane(item, state.panelCoverage),
+  );
+}
+
+/** `headerSplitJoinPane`, following what the start page's panel renders. */
 export function useHeaderSplitJoinPane(
   item: Extract<HeaderStripItem, { readonly kind: "split" }>,
 ): SheetJoinPane {
-  return useLandingPanelStore((state) => headerSplitJoinPane(item, state));
+  return useLandingPaneAnchorStore((state) =>
+    headerSplitJoinPane(item, state.panelCoverage),
+  );
 }

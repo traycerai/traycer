@@ -1,9 +1,11 @@
 import type { CSSProperties, Ref } from "react";
 import { usePublishSheetJoin } from "./sheet-join-context";
+import { useHeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import {
+  useTravelDestinationId,
   useTravelOutline,
-  useTravellingJoinPane,
 } from "./strip-selection-travel";
+import { useHeaderItemJoinPane } from "./surface-join-pane";
 
 /**
  * The stand-in selected box that slides between tabs; see
@@ -15,7 +17,13 @@ export function StripSelectionTraveller({
 }: {
   readonly ref: Ref<HTMLSpanElement>;
 }) {
-  const pane = useTravellingJoinPane();
+  // The destination's pane, read live through the rule its own box reads, so
+  // the two wear one fill for the whole slide and swap without a change.
+  const destinationId = useTravelDestinationId();
+  const destination = useHeaderStripItem(destinationId ?? "");
+  const pane = useHeaderItemJoinPane(
+    destinationId === null ? null : destination,
+  );
   // The destination's outline colour, so the traveller and its bridge are
   // the box they stand in for (`TabChromeBackground`), never the sheets'
   // border under a coloured tab.

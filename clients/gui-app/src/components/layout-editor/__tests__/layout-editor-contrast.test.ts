@@ -586,10 +586,7 @@ describe("layout-editor.css is read, not assumed", () => {
         isActive: true,
         // The pane `HeaderTabVisual` hands an active session tab; `TabChrome`
         // withholds it, because the editor's own tab never joins the sheet.
-        joined: surfaceJoinPane(SESSION_TAB, "top", {
-          layoutsByLandingPageId: {},
-          fallbackLayout: null,
-        }),
+        joined: surfaceJoinPane(SESSION_TAB, "top", new Map()),
         concealed: false,
         color,
         session: true,

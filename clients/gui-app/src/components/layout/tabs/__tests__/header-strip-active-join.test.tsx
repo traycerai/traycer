@@ -46,12 +46,11 @@ import type { SheetJoinPane } from "@/components/layout/tabs/side-strip/side-tab
 import { EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE } from "@/components/epic-canvas/dnd/epic-canvas-pointer-sensor";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
-  DEFAULT_LANDING_PANEL_LAYOUT,
-  useLandingPanelStore,
-  type LandingPanelLayout,
-} from "@/stores/home/landing-panel-store";
+  useLandingPaneAnchorStore,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import type { SplitSide } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
@@ -304,7 +303,10 @@ describe("top strip drag overlay: active/inactive chrome and sheet join", () => 
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-    useLandingPanelStore.getState().resetForTests();
+    useLandingPaneAnchorStore.setState(
+      useLandingPaneAnchorStore.getInitialState(),
+      true,
+    );
   });
 
   it("keeps an inactive dragged tab's inactive appearance on the overlay - no chrome box, no join", async () => {
@@ -443,34 +445,31 @@ describe("top strip drag overlay: active/inactive chrome and sheet join", () => 
   );
 
   // A draft paints `--background` under its terminal panel, which is canvas:
-  // maximized, it covers the draft's whole page, so the pair meets canvas only
-  // when its other member is History (or an empty slot). The overlay reads the
-  // panel's recorded layout for that draft.
+  // full, it covers the draft's whole page, so the pair meets canvas only when
+  // its other member is History (or an empty slot). The overlay reads what the
+  // panel publishes for that draft, so a page whose panel is not rendered (no
+  // entry) is the surface whatever its stored layout says.
   const DRAFT_PANEL_CASES: ReadonlyArray<{
     readonly panel: string;
-    readonly layout: LandingPanelLayout;
+    readonly coverage: LandingPanelCoverage | null;
     readonly pane: SheetJoinPane;
     readonly pointerId: number;
   }> = [
     {
-      panel: "closed",
-      layout: DEFAULT_LANDING_PANEL_LAYOUT,
+      panel: "not rendered",
+      coverage: null,
       pane: "surface",
       pointerId: 9,
     },
     {
-      panel: "open and docked",
-      layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+      panel: "docked",
+      coverage: "docked",
       pane: "surface",
       pointerId: 10,
     },
     {
-      panel: "open and maximized",
-      layout: {
-        ...DEFAULT_LANDING_PANEL_LAYOUT,
-        panelOpen: true,
-        maximized: true,
-      },
+      panel: "full",
+      coverage: "full",
       pane: "canvas",
       pointerId: 11,
     },
@@ -478,13 +477,13 @@ describe("top strip drag overlay: active/inactive chrome and sheet join", () => 
 
   it.each(DRAFT_PANEL_CASES)(
     "joins the active dragged pair of a draft and History in the $pane pane while the draft's terminal panel is $panel",
-    async ({ layout, pane, pointerId }) => {
+    async ({ coverage, pane, pointerId }) => {
       const draftId = useLandingDraftStore.getState().createDraft(null);
       const draft: TabRef = { kind: "draft", id: draftId };
       act(() => {
-        useLandingPanelStore.setState({
-          layoutsByLandingPageId: { [draftId]: layout },
-        });
+        useLandingPaneAnchorStore
+          .getState()
+          .setPanelCoverage(draftId, coverage);
       });
       seedActiveSplit({ kind: "tab", ref: draft }, HISTORY_SIDE);
       await mountTopStrip(

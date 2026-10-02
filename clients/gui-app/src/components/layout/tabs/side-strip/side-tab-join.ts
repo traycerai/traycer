@@ -45,7 +45,8 @@ export function useSideTabJoin(
   const joins = edge !== null && active && tab?.kind !== "sample-workspace";
   const inList = useWhollyInTabStrip(node, joins);
   // What the surface paints along the strip's edge. A member that holds no
-  // tab (an empty split side) keeps the canvas.
+  // tab (an empty split side) keeps the canvas fill it always had: the slot
+  // chooser there paints none of the panes.
   const surfacePane = useSurfaceJoinPane(joins ? tab : null, edge ?? "left");
   const pane =
     joins && inList

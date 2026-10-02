@@ -20,12 +20,11 @@ import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
-  DEFAULT_LANDING_PANEL_LAYOUT,
-  useLandingPanelStore,
-  type LandingPanelLayout,
-} from "@/stores/home/landing-panel-store";
+  useLandingPaneAnchorStore,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   __resetAppLocalNotificationsStoreForTests,
@@ -354,23 +353,17 @@ function seedActiveSplit(left: SplitSide, right: SplitSide): void {
   });
 }
 
-const DRAFT_PANEL_DOCKED: LandingPanelLayout = {
-  ...DEFAULT_LANDING_PANEL_LAYOUT,
-  panelOpen: true,
-};
-
-const DRAFT_PANEL_MAXIMIZED: LandingPanelLayout = {
-  ...DEFAULT_LANDING_PANEL_LAYOUT,
-  panelOpen: true,
-  maximized: true,
-};
-
-/** Records where the start page `draftId`'s terminal panel sits, as the panel does. */
-function recordDraftPanel(draftId: string, layout: LandingPanelLayout): void {
+/**
+ * Publishes what the start page `draftId`'s terminal panel renders, as the
+ * panel does: `null` is a page that shows no panel (closed, or its target
+ * cannot serve one).
+ */
+function publishDraftPanel(
+  draftId: string,
+  coverage: LandingPanelCoverage | null,
+): void {
   act(() => {
-    useLandingPanelStore.setState({
-      layoutsByLandingPageId: { [draftId]: layout },
-    });
+    useLandingPaneAnchorStore.getState().setPanelCoverage(draftId, coverage);
   });
 }
 
@@ -607,7 +600,10 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useLandingPanelStore.getState().resetForTests();
+  useLandingPaneAnchorStore.setState(
+    useLandingPaneAnchorStore.getInitialState(),
+    true,
+  );
   useEpicDndStore.getState().dragEnded();
   useTabsStore.setState({
     stripOrder: [],
@@ -1443,11 +1439,11 @@ describe("<TabStrip />", () => {
     );
 
     // A draft paints `--background` along its top edge, under its terminal
-    // panel. The top row of a docked panel is still that ground; maximized, the
+    // panel. The top row of a docked panel is still that ground; full, the
     // panel (canvas) covers the whole page, so the tab joins the canvas. The
-    // pane follows the panel's state live, so recording a layout under an
+    // pane follows what the panel publishes live, so a change under an
     // already-joined tab moves the box and the bridge with it.
-    it("joins the active draft tab and the bridge to the surface pane, and to the canvas pane while its terminal panel is open and maximized", async () => {
+    it("joins the active draft tab and the bridge to the surface pane, and to the canvas pane while its terminal panel renders full", async () => {
       seedTwoEpicTabs();
       const draftId = useLandingDraftStore.getState().createDraft(null);
       const router = buildRouter("/epics/e-a/e-a");
@@ -1464,24 +1460,24 @@ describe("<TabStrip />", () => {
       expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
       expect(topBridgePane()).toBe("surface");
 
-      recordDraftPanel(draftId, DRAFT_PANEL_DOCKED);
+      publishDraftPanel(draftId, "docked");
       expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
       expect(topBridgePane()).toBe("surface");
 
-      recordDraftPanel(draftId, DRAFT_PANEL_MAXIMIZED);
+      publishDraftPanel(draftId, "full");
       expect(draftBox().getAttribute("data-sheet-joined")).toBe("top");
       expect(draftBox().getAttribute("data-join-pane")).toBe("canvas");
       expect(topBridgePane()).toBe("canvas");
 
-      recordDraftPanel(draftId, DEFAULT_LANDING_PANEL_LAYOUT);
+      publishDraftPanel(draftId, null);
       expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
       expect(topBridgePane()).toBe("surface");
     });
 
     // The pair reads the same panel through `useHeaderSplitJoinPane`: a draft
-    // whose maximized panel covers its page leaves History's canvas the only
-    // ground the pair meets.
-    it("joins the active pair of a draft and History to the canvas pane while the draft's terminal panel is maximized", async () => {
+    // whose full panel covers its page leaves History's canvas the only ground
+    // the pair meets.
+    it("joins the active pair of a draft and History to the canvas pane while the draft's terminal panel renders full", async () => {
       const draftId = useLandingDraftStore.getState().createDraft(null);
       seedActiveSplit(
         { kind: "tab", ref: { kind: "draft", id: draftId } },
@@ -1495,12 +1491,16 @@ describe("<TabStrip />", () => {
       expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
       expect(topBridgePane()).toBe("surface");
 
-      recordDraftPanel(draftId, DRAFT_PANEL_DOCKED);
+      publishDraftPanel(draftId, "docked");
       expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
 
-      recordDraftPanel(draftId, DRAFT_PANEL_MAXIMIZED);
+      publishDraftPanel(draftId, "full");
       expect(pairBox().getAttribute("data-join-pane")).toBe("canvas");
       expect(topBridgePane()).toBe("canvas");
+
+      publishDraftPanel(draftId, null);
+      expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
     });
 
     it("keeps the active tab joined while another tab is dragged", async () => {

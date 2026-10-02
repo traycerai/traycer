@@ -10,8 +10,9 @@
  * strip meets the content pane instead. A non-epic tab never reads the
  * sidebar: it takes what its own surface paints along the strip's edge
  * (`surfaceJoinPane`). A draft paints `--background` ("surface") until its
- * terminal panel is open, which is canvas on the right (and everywhere once
- * maximized). Settings paints `--background` with its rail, the sidebar's
+ * terminal panel RENDERS, which is canvas on the right (and everywhere once it
+ * covers the page): the row reads what the panel publishes, never the stored
+ * layout. Settings paints `--background` with its rail, the sidebar's
  * fill, down its left edge: "panel" on the left strip, "surface" on the right.
  * Home and History paint nothing and show the sheet's canvas.
  */
@@ -31,10 +32,9 @@ import {
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
 import {
-  DEFAULT_LANDING_PANEL_LAYOUT,
-  useLandingPanelStore,
-  type LandingPanelLayout,
-} from "@/stores/home/landing-panel-store";
+  useLandingPaneAnchorStore,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { SheetJoinBridge, SheetJoinScope } from "../../sheet-join";
 import {
@@ -165,34 +165,32 @@ const NON_EPIC_PANES_BY_EDGE = EDGES.flatMap((edge) =>
 );
 
 /**
- * What a draft's row meets by the state of its terminal panel: the panel is
- * canvas, on the right edge when docked and everywhere once maximized.
+ * What a draft's row meets by what its terminal panel renders: the panel is
+ * canvas, on the right edge when docked and everywhere once it covers the
+ * page. `coverage` is what the panel publishes; `null` is no entry, a page
+ * that shows no panel.
  */
 const DRAFT_PANEL_CASES: ReadonlyArray<{
   readonly state: string;
-  readonly layout: LandingPanelLayout;
+  readonly coverage: LandingPanelCoverage | null;
   readonly left: SheetJoinPane;
   readonly right: SheetJoinPane;
 }> = [
   {
-    state: "closed",
-    layout: DEFAULT_LANDING_PANEL_LAYOUT,
+    state: "not rendered",
+    coverage: null,
     left: "surface",
     right: "surface",
   },
   {
-    state: "open and docked",
-    layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+    state: "docked",
+    coverage: "docked",
     left: "surface",
     right: "canvas",
   },
   {
-    state: "open and maximized",
-    layout: {
-      ...DEFAULT_LANDING_PANEL_LAYOUT,
-      panelOpen: true,
-      maximized: true,
-    },
+    state: "full",
+    coverage: "full",
     left: "canvas",
     right: "canvas",
   },
@@ -202,10 +200,20 @@ const DRAFT_PANEL_BY_EDGE = EDGES.flatMap((edge) =>
   DRAFT_PANEL_CASES.map((row) => ({
     edge,
     state: row.state,
-    layout: row.layout,
+    coverage: row.coverage,
     pane: row[edge],
   })),
 );
+
+/** Publishes what the draft's terminal panel renders, as the panel does. */
+function publishCoverage(
+  draftId: string,
+  coverage: LandingPanelCoverage | null,
+): void {
+  act(() => {
+    useLandingPaneAnchorStore.getState().setPanelCoverage(draftId, coverage);
+  });
+}
 
 /** The hook's own caller: a CHILD of the edge provider, as a real row is. */
 function Row(props: {
@@ -259,7 +267,10 @@ function resetStores(): void {
     mainCollapsedByTabId: {},
     sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
   });
-  useLandingPanelStore.getState().resetForTests();
+  useLandingPaneAnchorStore.setState(
+    useLandingPaneAnchorStore.getInitialState(),
+    true,
+  );
   activeObserverCallbacks = [];
 }
 
@@ -389,17 +400,14 @@ describe("useSideTabJoin", () => {
       expect(bridge().getAttribute("data-join-pane")).toBe("surface");
     });
 
-    // The pane follows the draft's terminal panel: the panel is canvas, docked
-    // on the right and over the whole page once maximized. The store is read
-    // reactively, so opening the panel under an already-joined row moves it.
+    // The pane follows what the draft's terminal panel renders: the panel is
+    // canvas, docked on the right and over the whole page once it covers it.
+    // The published coverage is read reactively, so a panel that renders under
+    // an already-joined row moves it.
     it.each(DRAFT_PANEL_BY_EDGE)(
       "a draft row on the $edge strip joins the $pane pane while its panel is $state",
-      ({ edge, layout, pane }) => {
-        act(() => {
-          useLandingPanelStore.setState({
-            layoutsByLandingPageId: { [DRAFT_TAB.id]: layout },
-          });
-        });
+      ({ edge, coverage, pane }) => {
+        publishCoverage(DRAFT_TAB.id, coverage);
 
         render(<Harness edge={edge} tab={DRAFT_TAB} />);
 
@@ -409,34 +417,36 @@ describe("useSideTabJoin", () => {
       },
     );
 
-    it("a draft row on the right strip follows its panel opening and closing", () => {
+    it("a draft row on the right strip follows its panel docking and retracting", () => {
       render(<Harness edge="right" tab={DRAFT_TAB} />);
       expect(joinedPane()).toBe("surface");
 
-      act(() => {
-        useLandingPanelStore.getState().setPanelOpen(DRAFT_TAB.id, true);
-      });
+      publishCoverage(DRAFT_TAB.id, "docked");
       expect(joinedPane()).toBe("canvas");
       expect(bridge().getAttribute("data-join-pane")).toBe("canvas");
 
-      act(() => {
-        useLandingPanelStore.getState().setPanelOpen(DRAFT_TAB.id, false);
-      });
+      publishCoverage(DRAFT_TAB.id, null);
+      expect(joinedPane()).toBe("surface");
+      expect(bridge().getAttribute("data-join-pane")).toBe("surface");
+    });
+
+    it("a draft row on the left strip follows its panel going full and retracting", () => {
+      render(<Harness edge="left" tab={DRAFT_TAB} />);
+      expect(joinedPane()).toBe("surface");
+
+      publishCoverage(DRAFT_TAB.id, "docked");
+      expect(joinedPane()).toBe("surface");
+
+      publishCoverage(DRAFT_TAB.id, "full");
+      expect(joinedPane()).toBe("canvas");
+      expect(bridge().getAttribute("data-join-pane")).toBe("canvas");
+
+      publishCoverage(DRAFT_TAB.id, null);
       expect(joinedPane()).toBe("surface");
     });
 
-    it("a draft row is not moved by another draft's open panel", () => {
-      act(() => {
-        useLandingPanelStore.setState({
-          layoutsByLandingPageId: {
-            "d-other": {
-              ...DEFAULT_LANDING_PANEL_LAYOUT,
-              panelOpen: true,
-              maximized: true,
-            },
-          },
-        });
-      });
+    it("a draft row is not moved by another draft's rendered panel", () => {
+      publishCoverage("d-other", "full");
 
       render(<Harness edge="right" tab={DRAFT_TAB} />);
 

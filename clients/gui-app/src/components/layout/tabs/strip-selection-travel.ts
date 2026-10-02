@@ -2,7 +2,6 @@ import { useReducedMotion } from "motion/react";
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import { create } from "zustand";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
-import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { cssEscape } from "@/lib/dom/css-escape";
 import {
   flattenStripItemRefs,
@@ -14,8 +13,6 @@ import {
   takeReopenGlow,
 } from "@/stores/tabs/strip-motion";
 import { playJoinGlow, stopJoinGlow } from "./join-glow";
-import type { SheetJoinPane } from "./side-strip/side-tab-join";
-import { stripItemJoinPane } from "./surface-join-pane";
 
 /**
  * The selected tab's sheet slides from the tab you left to the tab you chose.
@@ -52,11 +49,6 @@ interface TravelState {
   /** The strip item whose own selected box is hidden while the traveller flies to it. */
   readonly concealedItemId: string | null;
   /**
-   * The pane that item joins, so the traveller wears the fill its box will
-   * and the two swap on landing without a change of colour. `null` at rest.
-   */
-  readonly pane: SheetJoinPane | null;
-  /**
    * The colour that hidden box draws its outline in, which the traveller
    * wears from its first frame; `null` for the sheets' own border.
    */
@@ -65,7 +57,6 @@ interface TravelState {
 
 const useStripTravelStore = create<TravelState>()(() => ({
   concealedItemId: null,
-  pane: null,
   outline: null,
 }));
 
@@ -98,9 +89,13 @@ export function useConcealedForTravel(stripItemId: string | null): boolean {
   );
 }
 
-/** The pane the traveller's destination joins, or `null` while nothing slides. */
-export function useTravellingJoinPane(): SheetJoinPane | null {
-  return useStripTravelStore((state) => state.pane);
+/**
+ * The strip item the traveller is flying to, or `null` while nothing slides.
+ * The traveller reads that item's pane live (`useHeaderItemJoinPane`), the
+ * same way the box it stands in for does, so the two never differ.
+ */
+export function useTravelDestinationId(): string | null {
+  return useStripTravelStore((state) => state.concealedItemId);
 }
 
 interface BoxRect {
@@ -247,7 +242,7 @@ function flightBox(flight: Flight, height: BoxRect): BoxRect {
 
 function land(flight: Flight | null, owesGlow: boolean): void {
   if (flight !== null) cancelAnimationFrame(flight.frame);
-  useStripTravelStore.setState({ concealedItemId: null, pane: null });
+  useStripTravelStore.setState({ concealedItemId: null });
   if (owesGlow) playJoinGlow();
 }
 
@@ -437,10 +432,7 @@ export function useSelectionTravel(input: {
       land(flight, owesGlow);
       return;
     }
-    useStripTravelStore.setState({
-      concealedItemId: route.itemId,
-      pane: stripItemJoinPane(destination, useLandingPanelStore.getState()),
-    });
+    useStripTravelStore.setState({ concealedItemId: route.itemId });
     if (flight !== null) {
       // Retarget mid-flight, keeping the momentum the eye is following.
       flight.itemId = route.itemId;
