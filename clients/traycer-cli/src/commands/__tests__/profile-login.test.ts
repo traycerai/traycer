@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
   providerCliStateSchema,
@@ -20,6 +28,7 @@ import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext, CommandResult } from "../../runner/runner";
 import {
   buildProfileLoginCommand,
+  PROCESS_PROFILE_LOGIN_IO,
   type ProfileLoginIo,
   type ProfileLoginTarget,
 } from "../profile-login";
@@ -254,6 +263,10 @@ interface Scenario {
   awaitLogin: (
     dispatch: HostRpcDispatch,
   ) => Promise<ProvidersAwaitLoginResponse>;
+  /** What `providers.submitLoginCode` answers; the pasted-code path rides the dispatch seam. */
+  submitLoginCode: (
+    dispatch: HostRpcDispatch,
+  ) => Promise<{ outcome: "accepted" | "noActiveLogin" }>;
 }
 
 const NO_PROFILES: ListSpec = {
@@ -274,6 +287,7 @@ function defaultScenario(): Scenario {
     startAnswers: [startAnswer({ profileId: "prof_new" })],
     awaitLogin: () =>
       Promise.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) })),
+    submitLoginCode: () => Promise.resolve({ outcome: "accepted" }),
   };
 }
 
@@ -316,10 +330,8 @@ function listCalls(): DispatchCall[] {
   return callsTo("providers.list");
 }
 
-function submitCalls(): (typeof rpcMock.mock.calls)[number][] {
-  return rpcMock.mock.calls.filter(
-    (call) => call[0] === "providers.submitLoginCode",
-  );
+function submitCalls(): DispatchCall[] {
+  return callsTo("providers.submitLoginCode");
 }
 
 const START_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
@@ -349,6 +361,7 @@ const LIST_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: null,
   signal: null,
+  failFast: false,
 };
 
 const AWAIT_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
@@ -356,6 +369,7 @@ const AWAIT_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
   version: { major: 2, minor: 1 },
 };
 
+/** The release after Ctrl+C is best effort and the user is waiting: one attempt, no redial. */
 const CANCEL_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: {
@@ -363,7 +377,23 @@ const CANCEL_DISPATCH: HostRpcDispatch = {
     version: { major: 1, minor: 2 },
   },
   signal: null,
+  failFast: true,
 };
+
+/** How long a release may hold the command once the sign-in has ended. */
+const RELEASE_WAIT_MS = 3_000;
+
+/**
+ * The release carries its own abort signal, so it can abandon a cancel the
+ * host never answers: everything but the signal is the fixed floor, and the
+ * signal is checked as an `AbortSignal`, not by value.
+ */
+function expectCancelDispatch(dispatch: HostRpcDispatch): void {
+  expect(dispatch).toEqual({
+    ...CANCEL_DISPATCH,
+    signal: expect.any(AbortSignal),
+  });
+}
 
 const RENAME_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
@@ -372,6 +402,7 @@ const RENAME_DISPATCH: HostRpcDispatch = {
     version: { major: 2, minor: 1 },
   },
   signal: null,
+  failFast: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -499,8 +530,6 @@ beforeEach(() => {
   listReads = 0;
   rpcMock.mockImplementation((method) => {
     switch (method) {
-      case "providers.submitLoginCode":
-        return Promise.resolve({ outcome: "accepted" });
       case "providers.touchLogin":
         return Promise.resolve({ extended: true });
       case "providers.ensurePack":
@@ -521,6 +550,8 @@ beforeEach(() => {
         return scenario.awaitLogin(dispatch);
       case "providers.cancelLogin":
         return Promise.resolve({ cancelled: true });
+      case "providers.submitLoginCode":
+        return scenario.submitLoginCode(dispatch);
       case "providers.setEnabled":
         return Promise.resolve({ state: mutationState(signedInState([])) });
       default:
@@ -1201,7 +1232,7 @@ describe("profile login (ambient)", () => {
     );
 
     expect(callsTo("providers.awaitLogin")).toHaveLength(2);
-    expect(fake.wait).toHaveBeenCalledWith(2_000);
+    expect(fake.wait).toHaveBeenCalledWith(2_000, expect.any(AbortSignal));
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual(
       expect.objectContaining({ status: "signed-in" }),
@@ -1263,7 +1294,7 @@ describe("start answers", () => {
       expectStartDispatch(start[2]);
     }
     expect(fake.wait).toHaveBeenCalledTimes(1);
-    expect(fake.wait).toHaveBeenCalledWith(2_000);
+    expect(fake.wait).toHaveBeenCalledWith(2_000, expect.any(AbortSignal));
     expect(ctx.progress).toHaveBeenCalledWith(
       expect.objectContaining({ stage: "provider-setup", percent: 40 }),
     );
@@ -1396,6 +1427,61 @@ describe("start answers", () => {
       expect.objectContaining({ status: "not-started" }),
     );
     expect(result.human).toContain("did not install (network)");
+    expect(result.human).toMatch(/Try again\.$/);
+    expect(result.human).not.toContain("Settings");
+  });
+
+  async function runUnretryablePackFailure(
+    reason: string,
+  ): Promise<CommandResult> {
+    scenario.startAnswers = [
+      startAnswer({
+        started: false,
+        url: null,
+        pack: { percent: null, reason, retryAtMs: null },
+      }),
+    ];
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(ensurePackCalls()).toHaveLength(0);
+    expect(callsTo("providers.startLogin")).toHaveLength(1);
+    expect(callsTo("providers.awaitLogin")).toHaveLength(0);
+    expect(result.exitCode).toBe(1);
+    return result;
+  }
+
+  it.each(["unrepairable", "local-storage-mismatch"])(
+    "does not ask for a pack retry, and says running the command again will not fix it, when the setup failed with %s",
+    async (reason) => {
+      const message = `The provider's first-time setup did not install (${reason}), and running this command again will not fix it. Install the provider's CLI yourself and select it in Settings > Providers in the Traycer app.`;
+
+      const result = await runUnretryablePackFailure(reason);
+
+      expect(result.data).toEqual(
+        expect.objectContaining({ status: "not-started", message }),
+      );
+      expect(result.human).toBe(message);
+      expect(result.human).not.toMatch(/Try again\.$/);
+    },
+  );
+
+  it("does not ask for a pack retry, and names the host restart, when the registry's signing keys could not be verified", async () => {
+    const message =
+      "The provider's first-time setup is unavailable: this host could not verify the provider registry's signing keys. The host re-checks periodically; 'traycer host restart' checks straight away.";
+
+    const result = await runUnretryablePackFailure("trust-unavailable");
+
+    expect(result.data).toEqual(
+      expect.objectContaining({ status: "not-started", message }),
+    );
+    expect(result.human).toBe(message);
+    expect(result.human).not.toContain("did not install");
+    expect(result.human).not.toMatch(/Try again\.$/);
   });
 
   it("starts again even when the pack retry request itself fails", async () => {
@@ -1453,6 +1539,27 @@ describe("start answers", () => {
   });
 });
 
+describe("the release's bounded wait", () => {
+  it("aborts the signal it gave io.wait once a prompt cancel has ended the release", async () => {
+    scenario.startAnswers = [startAnswer({ profileId: null })];
+    const fake = makeIo(false);
+    // The wait never ends on its own, so only the abort can free its timer.
+    fake.wait.mockImplementation(() => new Promise<void>(() => undefined));
+
+    const result = await runLogin(create("Work"), fake, makeCtx(false, false));
+
+    expect(result.data).toEqual(
+      expect.objectContaining({ status: "not-started" }),
+    );
+    expect(callsTo("providers.cancelLogin")).toHaveLength(1);
+    expect(fake.wait).toHaveBeenCalledTimes(1);
+    const [waitMs, waitSignal] = fake.wait.mock.calls[0] ?? [];
+    expect(waitMs).toBe(RELEASE_WAIT_MS);
+    expect(waitSignal).toBeInstanceOf(AbortSignal);
+    expect(waitSignal?.aborted).toBe(true);
+  });
+});
+
 describe("a call that fails partway", () => {
   it("releases its claim with the holder id and floor when the start itself rejects, then rethrows", async () => {
     const failure = new Error("start timed out");
@@ -1472,7 +1579,7 @@ describe("a call that fails partway", () => {
       profileId: null,
       holderId: HOLDER_ID,
     });
-    expect(cancelDispatch).toEqual(CANCEL_DISPATCH);
+    expectCancelDispatch(cancelDispatch);
     expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
   });
 });
@@ -1519,7 +1626,7 @@ describe("a create's profile id from a still-starting answer", () => {
       profileId: "prof_new",
       holderId: HOLDER_ID,
     });
-    expect(cancelDispatch).toEqual(CANCEL_DISPATCH);
+    expectCancelDispatch(cancelDispatch);
   });
 });
 
@@ -1565,8 +1672,11 @@ describe("interrupt", () => {
       profileId: "prof_new",
       holderId: HOLDER_ID,
     });
-    expect(cancelDispatch).toEqual(CANCEL_DISPATCH);
-    expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
+    expectCancelDispatch(cancelDispatch);
+    // The release after Ctrl+C is fail-fast; every other dispatch is not.
+    expect(cancelDispatch.failFast).toBe(true);
+    expect(awaitDispatch.failFast).toBe(false);
+    expect(fake.stopInterrupt).toHaveBeenCalled();
   });
 
   it("cancels, rather than throws, when Ctrl+C aborts a start that is still in flight", async () => {
@@ -1616,8 +1726,8 @@ describe("interrupt", () => {
       profileId: null,
       holderId: HOLDER_ID,
     });
-    expect(cancelDispatch).toEqual(CANCEL_DISPATCH);
-    expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
+    expectCancelDispatch(cancelDispatch);
+    expect(fake.stopInterrupt).toHaveBeenCalled();
   });
 
   it("swallows a failing cancel", async () => {
@@ -1651,6 +1761,113 @@ describe("interrupt", () => {
     const result = await run;
 
     expect(result.exitCode).toBe(130);
+  });
+
+  /**
+   * The wait on the host rejects once Ctrl+C aborts it, and the release's
+   * `providers.cancelLogin` answers only when the returned deferred does.
+   */
+  function holdCancelLogin(): Deferred<{ cancelled: boolean }> {
+    const release = deferred<{ cancelled: boolean }>();
+    scenario.awaitLogin = (dispatch) =>
+      new Promise((_resolve, reject) => {
+        const signal = dispatch.signal;
+        if (signal === null) return;
+        signal.addEventListener("abort", () => {
+          reject(new Error("aborted"));
+        });
+      });
+    dispatchMock.mockImplementation((method, _params, dispatch) => {
+      switch (method) {
+        case "providers.list":
+          return nextListAnswer();
+        case "providers.startLogin":
+          return Promise.resolve(nextStartAnswer());
+        case "providers.awaitLogin":
+          return scenario.awaitLogin(dispatch);
+        case "providers.cancelLogin":
+          return release.promise;
+        default:
+          return Promise.reject(new Error(`unexpected dispatch ${method}`));
+      }
+    });
+    return release;
+  }
+
+  it("stops listening for Ctrl+C at the first interrupt, while the release is still pending", async () => {
+    const cancel = holdCancelLogin();
+    const fake = makeIo(false);
+    // The release is bounded by io.wait; keep that bound open so only the
+    // cancel's own answer can end it.
+    const bound = deferred<void>();
+    fake.wait.mockImplementation(() => bound.promise);
+
+    const run = runLogin(create("Work"), fake, makeCtx(false, false));
+    await vi.waitFor(() => {
+      expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    });
+    expect(fake.stopInterrupt).not.toHaveBeenCalled();
+    const handler = fake.interruptHandlers[0];
+    if (handler === undefined)
+      throw new Error("no interrupt handler registered");
+    handler();
+    await vi.waitFor(() => {
+      expect(callsTo("providers.cancelLogin")).toHaveLength(1);
+    });
+
+    // The cancel has been sent and nothing has answered it: the listener is
+    // already gone, so a second Ctrl+C reaches the default handler.
+    expect(fake.stopInterrupt).toHaveBeenCalled();
+
+    cancel.resolve({ cancelled: true });
+    const result = await run;
+    expect(result.exitCode).toBe(130);
+  });
+
+  it("abandons a release the host never answers once the release wait is up", async () => {
+    holdCancelLogin();
+    const fake = makeIo(false);
+    const bound = deferred<void>();
+    fake.wait.mockImplementation(() => bound.promise);
+
+    let settled = false;
+    const run = runLogin(create("Work"), fake, makeCtx(false, false)).then(
+      (value) => {
+        settled = true;
+        return value;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    });
+    fake.interruptHandlers[0]?.();
+    await vi.waitFor(() => {
+      expect(callsTo("providers.cancelLogin")).toHaveLength(1);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    // Neither the cancel nor the wait has ended, so the command is still
+    // holding on the release, with its cancel not yet abandoned.
+    expect(fake.wait).toHaveBeenCalledWith(
+      RELEASE_WAIT_MS,
+      expect.any(AbortSignal),
+    );
+    expect(settled).toBe(false);
+    const [, , cancelDispatch] = onlyCallTo("providers.cancelLogin");
+    expectCancelDispatch(cancelDispatch);
+    expect(cancelDispatch.signal?.aborted).toBe(false);
+
+    bound.resolve();
+    const result = await run;
+
+    expect(result.exitCode).toBe(130);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "cancelled",
+    });
+    expect(cancelDispatch.signal?.aborted).toBe(true);
   });
 });
 
@@ -1802,6 +2019,10 @@ describe("code paste", () => {
       profileId: "prof_new",
       code: "code-123",
     });
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      "providers.submitLoginCode",
+      expect.anything(),
+    );
     expect(vi.mocked(ctx.output.humanRequired).mock.calls[0]?.[0]).toContain(
       "paste it here",
     );
@@ -1815,14 +2036,8 @@ describe("code paste", () => {
 
   it("tells the user when the sign-in is no longer running", async () => {
     scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
-    rpcMock.mockImplementation((method) => {
-      switch (method) {
-        case "providers.submitLoginCode":
-          return Promise.resolve({ outcome: "noActiveLogin" });
-        default:
-          return Promise.reject(new Error(`unexpected rpc ${method}`));
-      }
-    });
+    scenario.submitLoginCode = () =>
+      Promise.resolve({ outcome: "noActiveLogin" });
     const settled = deferred<ProvidersAwaitLoginResponse>();
     scenario.awaitLogin = () => settled.promise;
     const fake = makeIo(true);
@@ -1841,6 +2056,148 @@ describe("code paste", () => {
 
     settled.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) }));
     await run;
+  });
+
+  it("sends the code on a dispatch whose signal is aborted once the command has returned", async () => {
+    scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
+    const settled = deferred<ProvidersAwaitLoginResponse>();
+    scenario.awaitLogin = () => settled.promise;
+    const fake = makeIo(true);
+    const ctx = makeCtx(false, false);
+
+    const run = runLogin(create("Work"), fake, ctx);
+    await vi.waitFor(() => {
+      expect(fake.lineSinks).toHaveLength(1);
+    });
+    fake.lineSinks[0]?.("code-123");
+    await vi.waitFor(() => {
+      expect(submitCalls()).toHaveLength(1);
+    });
+    const [, , submitDispatch] = onlyCallTo("providers.submitLoginCode");
+    const submitSignal = submitDispatch.signal;
+    expect(submitSignal).toBeInstanceOf(AbortSignal);
+    expect(submitSignal?.aborted).toBe(false);
+    expect(submitDispatch.failFast).toBe(false);
+    expect(submitDispatch.responseTimeoutMs).toBeNull();
+    expect(submitDispatch.requiredHostMethodVersion).toBeNull();
+
+    settled.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) }));
+    await run;
+
+    expect(fake.stopReading).toHaveBeenCalledTimes(1);
+    expect(submitSignal?.aborted).toBe(true);
+  });
+
+  it("prints nothing when a submit resolves only after the sign-in has settled", async () => {
+    scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
+    const late = deferred<{ outcome: "accepted" | "noActiveLogin" }>();
+    scenario.submitLoginCode = () => late.promise;
+    const settled = deferred<ProvidersAwaitLoginResponse>();
+    scenario.awaitLogin = () => settled.promise;
+    const fake = makeIo(true);
+    const ctx = makeCtx(false, false);
+
+    const run = runLogin(create("Work"), fake, ctx);
+    await vi.waitFor(() => {
+      expect(fake.lineSinks).toHaveLength(1);
+    });
+    fake.lineSinks[0]?.("code-123");
+    await vi.waitFor(() => {
+      expect(submitCalls()).toHaveLength(1);
+    });
+
+    settled.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) }));
+    const result = await run;
+    expect(result.exitCode).toBe(0);
+    const printedBefore = vi.mocked(ctx.output.humanRequired).mock.calls.length;
+
+    late.resolve({ outcome: "accepted" });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const printed = vi
+      .mocked(ctx.output.humanRequired)
+      .mock.calls.map((call) => call[0]);
+    expect(printed).toHaveLength(printedBefore);
+    expect(printed.some((line) => line.includes("Code sent"))).toBe(false);
+    expect(printed.some((line) => line.includes("Could not send"))).toBe(false);
+  });
+
+  it("prints nothing when a submit fails only after the sign-in has settled", async () => {
+    scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
+    let rejectLate: (reason: Error) => void = () => undefined;
+    scenario.submitLoginCode = () =>
+      new Promise((_resolve, reject) => {
+        rejectLate = reject;
+      });
+    const settled = deferred<ProvidersAwaitLoginResponse>();
+    scenario.awaitLogin = () => settled.promise;
+    const fake = makeIo(true);
+    const ctx = makeCtx(false, false);
+
+    const run = runLogin(create("Work"), fake, ctx);
+    await vi.waitFor(() => {
+      expect(fake.lineSinks).toHaveLength(1);
+    });
+    fake.lineSinks[0]?.("code-123");
+    await vi.waitFor(() => {
+      expect(submitCalls()).toHaveLength(1);
+    });
+
+    settled.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) }));
+    await run;
+    const printedBefore = vi.mocked(ctx.output.humanRequired).mock.calls.length;
+
+    rejectLate(new Error("aborted"));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const printed = vi
+      .mocked(ctx.output.humanRequired)
+      .mock.calls.map((call) => call[0]);
+    expect(printed).toHaveLength(printedBefore);
+    expect(printed.some((line) => line.includes("Could not send"))).toBe(false);
+  });
+
+  it("stops reading stdin as soon as the wait settles, before the outcome is worked out", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      codePaste: true,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    // The echo leaves the profile out, so the outcome reads providers.list a
+    // second time: the first call the command makes after the wait settles.
+    scenario.laterListReads = listState({
+      ...NO_PROFILES,
+      codePaste: true,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.awaitLogin = () =>
+      Promise.resolve(awaitResult({ state: signedInState([]) }));
+    const fake = makeIo(true);
+
+    const result = await runLogin(
+      existing("prof_work"),
+      fake,
+      makeCtx(false, false),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(listCalls()).toHaveLength(2);
+    expect(fake.stopReading).toHaveBeenCalledTimes(1);
+    const stopOrder = fake.stopReading.mock.invocationCallOrder[0];
+    const listIndexes = dispatchMock.mock.calls.flatMap((call, index) =>
+      call[0] === "providers.list" ? [index] : [],
+    );
+    const fallbackOrder =
+      dispatchMock.mock.invocationCallOrder[listIndexes[1] ?? -1];
+    if (stopOrder === undefined || fallbackOrder === undefined) {
+      throw new Error("unreachable: the stop and the fallback read both ran");
+    }
+    expect(stopOrder).toBeLessThan(fallbackOrder);
   });
 
   it("prints the paste hint only when a reader was returned", async () => {
@@ -1875,5 +2232,55 @@ describe("code paste", () => {
     expect(
       vi.mocked(ctx.output.humanRequired).mock.calls[0]?.[0],
     ).not.toContain("paste it here");
+  });
+});
+
+describe("PROCESS_PROFILE_LOGIN_IO.wait", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resolves once the time is up", async () => {
+    const done = vi.fn();
+    const waited = PROCESS_PROFILE_LOGIN_IO.wait(
+      1_000,
+      new AbortController().signal,
+    ).then(done);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(done).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await waited;
+
+    expect(done).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("resolves at once and leaves no pending timer when the signal aborts", async () => {
+    const abort = new AbortController();
+    const done = vi.fn();
+    const waited = PROCESS_PROFILE_LOGIN_IO.wait(60_000, abort.signal).then(
+      done,
+    );
+    expect(vi.getTimerCount()).toBe(1);
+
+    abort.abort();
+    await waited;
+
+    expect(done).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("resolves at once for a signal that is already aborted, without starting a timer", async () => {
+    const abort = new AbortController();
+    abort.abort();
+
+    await PROCESS_PROFILE_LOGIN_IO.wait(60_000, abort.signal);
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

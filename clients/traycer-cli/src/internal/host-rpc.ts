@@ -175,18 +175,26 @@ export interface HostRpcDispatch {
   readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
   /** Aborts the call (Ctrl+C during a long-poll), or null to let it run. */
   readonly signal: AbortSignal | null;
+  /**
+   * One attempt, with no transport retry, for a best-effort call made while
+   * the user is waiting to leave (a release after Ctrl+C): the retrying
+   * policy can spend a dial timeout per attempt against a wedged host. The
+   * single re-authentication on UNAUTHORIZED still happens.
+   */
+  readonly failFast: boolean;
 }
 
 export const PLAIN_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: null,
   signal: null,
+  failFast: false,
 };
 
 /**
  * Like {@link callHostRpc}, for the calls that need one of the
- * {@link HostRpcDispatch} controls. Same credentials, endpoint discovery and
- * retry policy.
+ * {@link HostRpcDispatch} controls. Same credentials and endpoint discovery,
+ * and the same retry policy unless the dispatch asks to fail fast.
  */
 export async function callHostRpcWithDispatch<
   Method extends keyof HostRpcRegistry & string,
@@ -199,7 +207,7 @@ export async function callHostRpcWithDispatch<
   logger.debug("Host RPC requested", {
     environment: config.environment,
     method,
-    retryPolicy: "default",
+    retryPolicy: dispatch.failFast ? "fast-fail" : "default",
   });
   const auth = await resolveHostAuth();
   if (auth === null) {
@@ -220,7 +228,9 @@ export async function callHostRpcWithDispatch<
     params,
     endpoint,
     auth,
-    DEFAULT_TRANSPORT_RETRY_POLICY,
+    dispatch.failFast
+      ? NO_RETRY_TRANSPORT_POLICY
+      : DEFAULT_TRANSPORT_RETRY_POLICY,
     dispatch,
   );
 }

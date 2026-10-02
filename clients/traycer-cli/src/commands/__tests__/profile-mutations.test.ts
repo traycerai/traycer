@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   providerMutationCliStateSchemaV21,
   type ProviderMutationCliStateV21,
@@ -28,6 +28,15 @@ vi.mock("../../logger", () => ({
   errorFromUnknown: (value: unknown) =>
     value instanceof Error ? value : new Error(String(value)),
   noopLogger: loggerMock,
+}));
+
+const promptMock = vi.hoisted(() => ({
+  question: vi.fn<(query: string) => Promise<string>>(),
+  close: vi.fn<() => void>(),
+}));
+
+vi.mock("node:readline/promises", () => ({
+  createInterface: () => promptMock,
 }));
 
 vi.mock("../../internal/host-rpc", async () => {
@@ -92,12 +101,14 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
     version: { major: 2, minor: 1 },
   },
   signal: null,
+  failFast: false,
 };
 
 const PLAIN_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: null,
   signal: null,
+  failFast: false,
 };
 
 async function failureOf(run: Promise<unknown>): Promise<CliError> {
@@ -400,6 +411,67 @@ describe("traycer profile remove", () => {
     expect(result.human).toBe(
       "Removed claude (Claude Code) profile prof_work.",
     );
+  });
+
+  describe("at the prompt", () => {
+    const stdinTtyBefore = Object.getOwnPropertyDescriptor(
+      process.stdin,
+      "isTTY",
+    );
+
+    function removeAtPrompt(): Promise<unknown> {
+      return buildProfileRemoveCommand({
+        provider: "claude",
+        profile: "prof_work",
+        yes: false,
+      })(makeCtx(false, false));
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(process.stdin, "isTTY", {
+        value: true,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    afterEach(() => {
+      if (stdinTtyBefore === undefined) {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      } else {
+        Object.defineProperty(process.stdin, "isTTY", stdinTtyBefore);
+      }
+    });
+
+    it("treats a rejected question (Ctrl+C or a closed stdin) as no, and removes nothing", async () => {
+      promptMock.question.mockRejectedValue(new Error("readline was closed"));
+
+      const error = await failureOf(removeAtPrompt());
+
+      expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+      expect(error.message).toBe("traycer: profile not removed.");
+      expect(promptMock.close).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("treats an answer other than yes as no, and removes nothing", async () => {
+      promptMock.question.mockResolvedValue("n");
+
+      const error = await failureOf(removeAtPrompt());
+
+      expect(error.message).toBe("traycer: profile not removed.");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("removes the profile on a yes", async () => {
+      promptMock.question.mockResolvedValue("y");
+
+      await removeAtPrompt();
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock.mock.calls[0]?.[0]).toBe("providers.setEnabled");
+      expect(promptMock.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("validates the provider before anything else", async () => {

@@ -32,6 +32,7 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
     version: { major: 2, minor: 1 },
   },
   signal: null,
+  failFast: false,
 };
 
 async function applyProfileAction(
@@ -164,10 +165,13 @@ async function confirmRemoval(
     input: process.stdin,
     output: process.stderr,
   });
+  // Ctrl+C (or a closed stdin) at the prompt rejects the question. That is
+  // the person declining, the same as answering "no", not a failure.
   const answer = await prompt
     .question(
       `Remove ${describeProvider(providerId)} profile ${printable(profileId)} and its stored sign-in? [y/N] `,
     )
+    .catch(() => "")
     .finally(() => prompt.close());
   if (!/^y(es)?$/i.test(answer.trim())) {
     throw cliError({

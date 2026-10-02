@@ -45,6 +45,7 @@ const LIST_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: null,
   signal: null,
+  failFast: false,
 };
 
 function makeCtx(): CommandContext {

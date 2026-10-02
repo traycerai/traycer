@@ -27,6 +27,7 @@ import {
   printable,
   readProviderStates,
 } from "../internal/profile-target";
+import { providerPackReasonRetryable } from "../../../shared/providers/provider-pack-retry";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -70,7 +71,11 @@ export interface ProfileLoginIo {
   /** Whether stdin is a terminal a person can type into. */
   readonly stdinIsTerminal: () => boolean;
   readonly openUrl: (url: string) => void;
-  readonly wait: (ms: number) => Promise<void>;
+  /**
+   * Resolves after `ms`, or as soon as `signal` aborts. Aborting also clears
+   * the timer, so a wait that lost a race does not hold the process open.
+   */
+  readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
   /** Calls `handler` on Ctrl+C until the returned function is called. */
   readonly onInterrupt: (handler: () => void) => () => void;
   /**
@@ -87,7 +92,22 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
   newHolderId: () => randomUUID(),
   stdinIsTerminal: () => process.stdin.isTTY === true,
   openUrl: openInBrowser,
-  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  wait: (ms, signal) =>
+    new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", stop);
+        resolve();
+      }, ms);
+      const stop = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      signal.addEventListener("abort", stop, { once: true });
+    }),
   onInterrupt: (handler) => {
     process.on("SIGINT", handler);
     return () => process.off("SIGINT", handler);
@@ -116,6 +136,7 @@ const AWAIT_LOGIN_DISPATCH: HostRpcDispatch = {
     version: { major: 2, minor: 1 },
   },
   signal: null,
+  failFast: false,
 };
 
 /**
@@ -137,6 +158,7 @@ const START_LOGIN_DISPATCH: HostRpcDispatch = {
     version: { major: 1, minor: 4 },
   },
   signal: null,
+  failFast: false,
 };
 const CANCEL_LOGIN_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
@@ -145,7 +167,12 @@ const CANCEL_LOGIN_DISPATCH: HostRpcDispatch = {
     version: { major: 1, minor: 2 },
   },
   signal: null,
+  // One attempt: a retry would spend the release's whole bound on a host
+  // that already failed to answer once.
+  failFast: true,
 };
+/** How long a release may hold the command after the sign-in has ended. */
+const RELEASE_WAIT_MS = 3_000;
 /** Gap between two asks while the provider's pack downloads. */
 const PACK_POLL_MS = 2_000;
 /** How often the host may answer "still starting" before this side gives up. */
@@ -292,17 +319,29 @@ async function runLogin(
 ): Promise<LoginOutcome> {
   const holderId = io.newHolderId();
   const abort = new AbortController();
-  const interrupt = (): void => abort.abort();
+  // The first Ctrl+C cancels this sign-in; it also stops listening, so a
+  // second one ends the process at once rather than waiting on the release.
+  const interrupt = (): void => {
+    abort.abort();
+    stopListening();
+  };
   const stopListening = io.onInterrupt(interrupt);
   // The profile a login on the host is held under: the caller's own for an
   // existing row, the host-minted one for a create once an answer names it.
   let heldProfileId = target.profileId;
+  // Best effort and bounded: the person is waiting to leave, and a release
+  // that does not land in time leaves the login to the host's own deadline.
   const release = async (): Promise<void> => {
-    await callHostRpcWithDispatch(
-      "providers.cancelLogin",
-      { providerId, profileId: heldProfileId, holderId },
-      CANCEL_LOGIN_DISPATCH,
-    ).catch(() => undefined);
+    const bound = new AbortController();
+    await Promise.race([
+      callHostRpcWithDispatch(
+        "providers.cancelLogin",
+        { providerId, profileId: heldProfileId, holderId },
+        { ...CANCEL_LOGIN_DISPATCH, signal: bound.signal },
+      ).catch(() => undefined),
+      io.wait(RELEASE_WAIT_MS, bound.signal),
+    ]);
+    bound.abort();
   };
   try {
     const answer = await startUntilSettled(
@@ -362,7 +401,7 @@ async function runLogin(
         providerId,
         heldProfileId,
         abort.signal,
-      );
+      ).finally(() => stopPaste?.());
       if (result === null) {
         await release();
         return { status: "cancelled" };
@@ -370,7 +409,6 @@ async function runLogin(
       return await outcomeOf(providerId, target, heldProfileId, result);
     } finally {
       if (keepalive !== null) clearInterval(keepalive);
-      stopPaste?.();
     }
   } catch (error) {
     // A call failed partway: the start timed out after the host had begun
@@ -422,16 +460,19 @@ async function startUntilSettled(
     if (
       answer.pending === null &&
       !answer.started &&
-      (answer.pack?.reason ?? null) !== null &&
+      answer.pack !== null &&
+      answer.pack.reason !== null &&
+      providerPackReasonRetryable(answer.pack.reason) &&
       !packRetried &&
       !signal.aborted
     ) {
       // The provider's setup failed earlier, and asking for the sign-in
       // again would return the same cached failure until the host next
-      // retries by itself, if it does. `providers.ensurePack` is how a person
-      // asks for a retry now, and one is present: this command refuses to run
-      // without one. Once, and best effort: a failure no retry can move is
-      // refused by the host, and the next answer reports the pack either way.
+      // retries by itself. `providers.ensurePack` is how a person asks for a
+      // retry now, and one is present: this command refuses to run without
+      // one. Only for a failure a retry can move (the same allow-list the
+      // GUI's retry button uses), once, and best effort: the next answer
+      // reports the pack either way.
       packRetried = true;
       await callHostRpc("providers.ensurePack", {
         providerId: request.providerId,
@@ -453,7 +494,7 @@ async function startUntilSettled(
       totalBytes: null,
       workUnits: null,
     });
-    await io.wait(PACK_POLL_MS);
+    await io.wait(PACK_POLL_MS, signal);
     if (signal.aborted) return answer;
   }
 }
@@ -476,7 +517,18 @@ function notStartedMessage(
     return "The provider took too long to start its sign-in. Try again.";
   }
   if (answer.pack !== null && answer.pack.reason !== null) {
-    return `The provider's first-time setup did not install (${printable(answer.pack.reason)}). Try again.`;
+    const reason = printable(answer.pack.reason);
+    if (providerPackReasonRetryable(answer.pack.reason)) {
+      return `The provider's first-time setup did not install (${reason}). Try again.`;
+    }
+    // The host could not verify the provider registry's keys. It re-checks
+    // on its own, and a restart re-checks at once, as the GUI says.
+    if (answer.pack.reason === "trust-unavailable") {
+      return "The provider's first-time setup is unavailable: this host could not verify the provider registry's signing keys. The host re-checks periodically; 'traycer host restart' checks straight away.";
+    }
+    // A defective release, or storage that keeps corrupting the download:
+    // running the command again cannot move either.
+    return `The provider's first-time setup did not install (${reason}), and running this command again will not fix it. Install the provider's CLI yourself and select it in Settings > Providers in the Traycer app.`;
   }
   return NOT_STARTED;
 }
@@ -546,15 +598,20 @@ function acceptPastedCode(
   profileId: string | null,
   interrupt: () => void,
 ): (() => void) | null {
-  return io.readLines((line) => {
+  // A submission can still be in flight when the wait settles: the host
+  // answers the two calls in either order. Stopping the reader aborts it, so
+  // nothing is printed after the outcome and no call keeps the process alive.
+  const submissions = new AbortController();
+  const stopReading = io.readLines((line) => {
     const code = line.trim();
     if (code.length === 0) return;
-    void callHostRpc("providers.submitLoginCode", {
-      providerId,
-      profileId,
-      code,
-    }).then(
+    void callHostRpcWithDispatch(
+      "providers.submitLoginCode",
+      { providerId, profileId, code },
+      { ...PLAIN_DISPATCH, signal: submissions.signal },
+    ).then(
       (response) => {
+        if (submissions.signal.aborted) return;
         ctx.output.humanRequired(
           response.outcome === "accepted"
             ? "Code sent. Checking it..."
@@ -562,10 +619,16 @@ function acceptPastedCode(
         );
       },
       () => {
+        if (submissions.signal.aborted) return;
         ctx.output.humanRequired("Could not send the code. Paste it again.");
       },
     );
   }, interrupt);
+  if (stopReading === null) return null;
+  return () => {
+    stopReading();
+    submissions.abort();
+  };
 }
 
 /**
@@ -604,7 +667,7 @@ async function awaitUntilSettled(
       !isProviderAmbientAuthenticated(result.state) &&
       !isProviderAmbientSignedOut(result.state);
     if (!pending || repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return result;
-    await io.wait(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+    await io.wait(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS, signal);
     if (signal.aborted) return null;
   }
 }

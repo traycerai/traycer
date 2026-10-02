@@ -145,6 +145,7 @@ describe("readProviderStates", () => {
         responseTimeoutMs: null,
         requiredHostMethodVersion: null,
         signal: null,
+        failFast: false,
       },
     );
   });
