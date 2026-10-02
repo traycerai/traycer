@@ -4,6 +4,7 @@ import {
   type HostNotificationEntryV22,
   type HostNotificationsCloudFeedRowV11,
 } from "@traycer/protocol/host/notifications/contracts";
+import { agentLabelUnder } from "@/lib/display-title";
 import {
   useRegisteredEpicLiveAgents,
   useRegisteredEpicTitles,
@@ -152,7 +153,8 @@ export function withLiveTitles(
 ): NeedsYouItem {
   const taskTitle = liveTask ?? item.taskTitle;
   const name = liveAgent === null ? item.agentTitle : liveAgent.title;
-  const agentTitle = name === taskTitle ? null : name;
+  // The line sits right under its task's title: it names no main agent at all.
+  const agentTitle = agentLabelUnder(taskTitle, name).main ? null : name;
   return taskTitle === item.taskTitle && agentTitle === item.agentTitle
     ? item
     : { ...item, taskTitle, agentTitle };

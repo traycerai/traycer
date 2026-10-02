@@ -32,6 +32,7 @@ function shownAfterGlyph(since: number): ReadonlyArray<string | null> {
   render(
     <StripAgentRow
       agent={runningAgent(since)}
+      taskTitle={null}
       onScreen={false}
       onClick={undefined}
       onHoverChange={undefined}

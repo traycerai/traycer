@@ -116,6 +116,7 @@ function GroupRow(props: {
     return (
       <StripAgentRow
         agent={row.agent}
+        taskTitle={group.taskTitle}
         onScreen={false}
         onClick={() => {
           onNeedsYou(notification);
@@ -128,6 +129,7 @@ function GroupRow(props: {
     return (
       <StripAgentRow
         agent={row.agent}
+        taskTitle={group.taskTitle}
         onScreen={false}
         onClick={undefined}
         onHoverChange={undefined}
@@ -137,6 +139,7 @@ function GroupRow(props: {
   return (
     <OpenAgentRow
       epicId={group.epicId}
+      taskTitle={group.taskTitle}
       tabId={group.tabId}
       active={group.active}
       agent={row.agent}
@@ -162,6 +165,7 @@ function GroupRow(props: {
  */
 function OpenAgentRow(props: {
   readonly epicId: string;
+  readonly taskTitle: string | null;
   readonly tabId: string;
   readonly active: boolean;
   readonly agent: StripAgent;
@@ -202,6 +206,7 @@ function OpenAgentRow(props: {
   return (
     <StripAgentRow
       agent={agent}
+      taskTitle={props.taskTitle}
       onScreen={onScreen !== null}
       onHoverChange={setHovering}
       onClick={() => {

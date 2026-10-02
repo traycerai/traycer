@@ -35,6 +35,7 @@ import { useStripDisclosureStore } from "@/components/layout/tabs/side-strip/str
 import {
   chatProjection,
   coolAllEpics,
+  titleWarmEpic,
   warmEpic,
 } from "@/components/layout/tabs/side-strip/__tests__/warm-epic-fixture";
 import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
@@ -1126,9 +1127,11 @@ describe("<SideTabStrip />", () => {
     it("toggles another task's agents from its chevron without activating the task, on Enter as on a click, the rows taking the meter's place and giving it back", async () => {
       openEpicTabs(["Alpha", "Beta"]);
       warmEpic("e-beta", [
-        chatProjection("b-run", { title: "B runs" }),
+        // The task's title was taken from its first agent's.
+        chatProjection("b-run", { title: "Beta" }),
         chatProjection("b-run-2", { title: "B runs too" }),
       ]);
+      titleWarmEpic("e-beta", "Beta");
       busy("e-beta", ["b-run", "b-run-2"]);
       await renderStrip("/elsewhere", LEFT_STRIP);
 
@@ -1150,7 +1153,11 @@ describe("<SideTabStrip />", () => {
       expect(beta.getAttribute("aria-expanded")).toBe("true");
       expect(beta.getAttribute("aria-selected")).toBe("false");
       expect(screen.getByTestId("strip-agent-group").hidden).toBe(false);
-      expect(screen.getByTestId("strip-agent-b-run")).toBeTruthy();
+      // The agent named like its task does not repeat the row above it.
+      // The name is the row's second child, after the glyph.
+      const name = screen.getByTestId("strip-agent-b-run").children[1];
+      expect(name.textContent).toBe("Main agent");
+      expect(name.className).toContain("text-muted-foreground");
       // The rows show each agent's state, so the task row shows none: not the
       // meter, and not the running glyph in its place.
       expect(within(beta).queryByTestId("side-tab-meter")).toBeNull();

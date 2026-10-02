@@ -69,6 +69,15 @@ export function warmEpic(
   });
 }
 
+/** Gives a task `warmEpic` registered its live title, as its session holds it. */
+export function titleWarmEpic(epicId: string, title: string): void {
+  const handle = handles.find((opened) => opened.epicId === epicId);
+  if (handle === undefined) throw new Error(`${epicId} is not warm`);
+  act(() => {
+    handle.store.setState((state) => ({ epic: { ...state.epic, title } }));
+  });
+}
+
 /** Drops every session `warmEpic` registered. */
 export function coolAllEpics(): void {
   __getOpenEpicRegistryForTests().disposeAll();

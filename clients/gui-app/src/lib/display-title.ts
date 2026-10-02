@@ -122,6 +122,22 @@ export function displayTitle(title: string, kind: DisplayTitleKind): string {
 }
 
 /**
+ * How a row under a task names one of its agents. An agent named like its
+ * task (the usual main agent, whose title the task's was taken from) reads
+ * "Main agent" and is drawn muted (`main`), so the row never repeats the name
+ * of the row above it; any other agent reads its title, or "Untitled agent".
+ */
+export function agentLabelUnder(
+  taskTitle: string | null,
+  agentTitle: string | null,
+): { readonly text: string; readonly main: boolean } {
+  if (agentTitle !== null && agentTitle === taskTitle) {
+    return { text: "Main agent", main: true };
+  }
+  return { text: displayTitle(agentTitle ?? "", "agent"), main: false };
+}
+
+/**
  * Source-aware epic title: the raw title when non-empty, else a slice of the
  * epic's `initialUserPrompt` (via `createEpicName`) when that yields a
  * non-empty result, else "Untitled task".
