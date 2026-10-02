@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { PLAN_RESTRICTED_REPROBE_MS } from "../../host-transport/remote/config";
 import {
   SELECTION_AUTHORITY_CONTRACT_VERSION,
   type AuthorityIdentitySource,
@@ -88,7 +87,6 @@ function dialOutcome(
 function dialRefusal(
   hostId: string,
   attemptId: string,
-  refusalDetail: "plan-restricted" | null,
   at: number,
 ): SelectionEvidenceReport {
   return {
@@ -96,7 +94,6 @@ function dialRefusal(
     hostId,
     attemptId,
     outcome: "confirmed-refusal",
-    refusalDetail,
     transportKind: "remote-relay",
     at,
   };
@@ -360,7 +357,7 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("H", `attempt-${i}`, null, i),
+        dialRefusal("H", `attempt-${i}`, i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
@@ -437,7 +434,7 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
       engine.ingestEvidence(
         "A",
         attachA2.incarnationId,
-        dialRefusal("H", `refusal-${i}`, null, i),
+        dialRefusal("H", `refusal-${i}`, i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("ready");
@@ -485,7 +482,7 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
       engine.ingestEvidence(
         "B",
         attachB.incarnationId,
-        dialRefusal("H", `early-${i}`, null, i),
+        dialRefusal("H", `early-${i}`, i),
       );
     }
     clock.advance(ATTACH_HANDOVER_CEILING_MS - 1);
@@ -497,7 +494,7 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
       engine.ingestEvidence(
         "B",
         attachB.incarnationId,
-        dialRefusal("H", `late-${i}`, null, 100 + i),
+        dialRefusal("H", `late-${i}`, 100 + i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
@@ -541,7 +538,7 @@ describe("SelectionAuthorityEngineImpl - SEAM: late attach and handover races", 
       engine.ingestEvidence(
         "B",
         attachB.incarnationId,
-        dialRefusal("H", `refusal-${i}`, null, i),
+        dialRefusal("H", `refusal-${i}`, i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("ready");
@@ -607,12 +604,12 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     twoWindow.engine.ingestEvidence(
       "A",
       attachA.incarnationId,
-      dialRefusal("H", "a1", null, 0),
+      dialRefusal("H", "a1", 0),
     );
     twoWindow.engine.ingestEvidence(
       "B",
       attachB.incarnationId,
-      dialRefusal("H", "b1", null, 0),
+      dialRefusal("H", "b1", 0),
     );
     expect(findLease(twoWindow.engine.snapshot().leases, "H")?.status).not.toBe(
       "dead",
@@ -621,7 +618,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     twoWindow.engine.ingestEvidence(
       "A",
       attachA.incarnationId,
-      dialRefusal("H", "a2", null, 0),
+      dialRefusal("H", "a2", 0),
     );
     expect(findLease(twoWindow.engine.snapshot().leases, "H")?.status).toBe(
       "dead",
@@ -643,7 +640,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     oneWindow.engine.ingestEvidence(
       "C",
       attachC.incarnationId,
-      dialRefusal("H", "c1", null, 0),
+      dialRefusal("H", "c1", 0),
     );
     expect(findLease(oneWindow.engine.snapshot().leases, "H")?.status).not.toBe(
       "dead",
@@ -651,7 +648,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     oneWindow.engine.ingestEvidence(
       "C",
       attachC.incarnationId,
-      dialRefusal("H", "c2", null, 0),
+      dialRefusal("H", "c2", 0),
     );
     expect(findLease(oneWindow.engine.snapshot().leases, "H")?.status).not.toBe(
       "dead",
@@ -659,7 +656,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     oneWindow.engine.ingestEvidence(
       "C",
       attachC.incarnationId,
-      dialRefusal("H", "c3", null, 0),
+      dialRefusal("H", "c3", 0),
     );
     expect(findLease(oneWindow.engine.snapshot().leases, "H")?.status).toBe(
       "dead",
@@ -687,7 +684,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("H", "dup", null, i),
+        dialRefusal("H", "dup", i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
@@ -698,12 +695,12 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     engine.ingestEvidence(
       "A",
       attachA2.incarnationId,
-      dialRefusal("H", "dup", null, 0),
+      dialRefusal("H", "dup", 0),
     );
     engine.ingestEvidence(
       "A",
       attachA2.incarnationId,
-      dialRefusal("H", "other", null, 0),
+      dialRefusal("H", "other", 0),
     );
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
 
@@ -730,12 +727,12 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     engine.ingestEvidence(
       "A",
       attachA.incarnationId,
-      dialRefusal("H", "r1", null, 0),
+      dialRefusal("H", "r1", 0),
     );
     engine.ingestEvidence(
       "A",
       attachA.incarnationId,
-      dialRefusal("H", "r2", null, 0),
+      dialRefusal("H", "r2", 0),
     );
     engine.ingestEvidence(
       "A",
@@ -780,7 +777,7 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("H", `suppressed-${i}`, null, i),
+        dialRefusal("H", `suppressed-${i}`, i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("ready");
@@ -795,132 +792,25 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
     engine.ingestEvidence(
       "A",
       attachA.incarnationId,
-      dialRefusal("H", "fresh-1", null, 0),
+      dialRefusal("H", "fresh-1", 0),
     );
     engine.ingestEvidence(
       "A",
       attachA.incarnationId,
-      dialRefusal("H", "fresh-2", null, 0),
+      dialRefusal("H", "fresh-2", 0),
     );
     expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
     engine.ingestEvidence(
       "A",
       attachA.incarnationId,
-      dialRefusal("H", "fresh-3", null, 0),
+      dialRefusal("H", "fresh-3", 0),
     );
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
 
     authority.dispose();
   });
 
-  it("plan-restricted provenance is sticky until proof of life; ordinary refusals still derive offline", () => {
-    const clock = createFakeAuthorityClock(0);
-    const authority = createTestAuthority({
-      initialFleet: {
-        identityGeneration: 0,
-        localHostId: null,
-        hosts: [
-          fleetHost("H1", "remote"),
-          fleetHost("H2", "remote"),
-          fleetHost("H3", "remote"),
-          fleetHost("H4", "remote"),
-        ],
-      },
-      initialIdentityKey: "acct-1",
-      clock,
-    });
-    const { engine } = authority;
-
-    const seqA = engine.allocateAttachSeq("A");
-    const attachA = engine.attach("A", attachRequest(seqA, []));
-    if (!attachA.ok) throw new Error("expected attach to succeed");
-
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      dialRefusal("H1", "plan-1", "plan-restricted", 0),
-    );
-    // An entitlement refusal is deterministic, unlike a reachability failure:
-    // one observed verdict is conclusive and avoids manufacturing two more
-    // network attempts merely to make the UI publish the known reason.
-    expect(findLease(engine.snapshot().leases, "H1")?.dead).toEqual({
-      reason: "plan-restricted",
-    });
-
-    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
-      engine.ingestEvidence(
-        "A",
-        attachA.incarnationId,
-        dialRefusal("H2", `off-${i}`, null, i),
-      );
-    }
-    expect(findLease(engine.snapshot().leases, "H2")?.dead).toEqual({
-      reason: "offline",
-    });
-
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      dialRefusal("H3", "mix-1", "plan-restricted", 0),
-    );
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      dialRefusal("H3", "mix-2", "plan-restricted", 0),
-    );
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      dialRefusal("H3", "mix-3", null, 0),
-    );
-    expect(findLease(engine.snapshot().leases, "H3")?.dead).toEqual({
-      reason: "plan-restricted",
-    });
-
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      sessionEvidence("H4", "live", "established", 0),
-    );
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      dialRefusal("H4", "denied-while-live", "plan-restricted", 0),
-    );
-    expect(findLease(engine.snapshot().leases, "H4")?.status).toBe("ready");
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      sessionEvidence("H4", "live", "lost", 1),
-    );
-    expect(findLease(engine.snapshot().leases, "H4")?.dead).toEqual({
-      reason: "plan-restricted",
-    });
-
-    // The authority owns the matching deadline too. Once it expires, the
-    // lease becomes selectable again so the cache's now-empty slot can receive
-    // the one controlled policy probe even when no tab remained mounted.
-    clock.advance(PLAN_RESTRICTED_REPROBE_MS);
-    expect(findLease(engine.snapshot().leases, "H1")?.status).toBe(
-      "connecting",
-    );
-    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
-      "connecting",
-    );
-
-    engine.ingestEvidence(
-      "A",
-      attachA.incarnationId,
-      dialOutcome("H3", "recovered", "success", 1),
-    );
-    expect(findLease(engine.snapshot().leases, "H3")?.status).toBe(
-      "connecting",
-    );
-
-    authority.dispose();
-  });
-
-  it("refreshes the reprobe deadline when a new physical session is denied", () => {
+  it("a confirmed-refusal streak derives a dead lease whose reason is offline", () => {
     const clock = createFakeAuthorityClock(0);
     const authority = createTestAuthority({
       initialFleet: {
@@ -932,31 +822,21 @@ describe("SelectionAuthorityEngineImpl - death aggregation", () => {
       clock,
     });
     const { engine } = authority;
-    const seq = engine.allocateAttachSeq("A");
-    const attachment = engine.attach("A", attachRequest(seq, []));
-    if (!attachment.ok) throw new Error("expected attach to succeed");
 
-    engine.ingestEvidence(
-      "A",
-      attachment.incarnationId,
-      dialRefusal("H", "first-identity", "plan-restricted", 0),
-    );
-    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
-    engine.ingestEvidence(
-      "A",
-      attachment.incarnationId,
-      dialRefusal("H", "new-physical-identity", "plan-restricted", 1),
-    );
+    const seqA = engine.allocateAttachSeq("A");
+    const attachA = engine.attach("A", attachRequest(seqA, []));
+    if (!attachA.ok) throw new Error("expected attach to succeed");
 
-    // The first deadline has elapsed, but the latest authenticated refusal
-    // owns a complete window of its own.
-    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
+    for (let i = 0; i < CONFIRMED_DEATH_REFUSAL_STREAK; i += 1) {
+      engine.ingestEvidence(
+        "A",
+        attachA.incarnationId,
+        dialRefusal("H", `off-${i}`, i),
+      );
+    }
     expect(findLease(engine.snapshot().leases, "H")?.dead).toEqual({
-      reason: "plan-restricted",
+      reason: "offline",
     });
-
-    clock.advance(PLAN_RESTRICTED_REPROBE_MS / 2);
-    expect(findLease(engine.snapshot().leases, "H")?.status).toBe("connecting");
 
     authority.dispose();
   });
@@ -1063,7 +943,7 @@ describe("SelectionAuthorityEngineImpl - SEAM: cloud-DTO flip has no channel to 
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("H", `d-${i}`, null, i),
+        dialRefusal("H", `d-${i}`, i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe("dead");
@@ -1355,7 +1235,7 @@ describe("SelectionAuthorityEngineImpl - bounded per-incarnation state", () => {
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("H", "duplicated", null, i),
+        dialRefusal("H", "duplicated", i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
@@ -1394,7 +1274,7 @@ describe("SelectionAuthorityEngineImpl - restart-intent episodes", () => {
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("H", `during-${i}`, null, i),
+        dialRefusal("H", `during-${i}`, i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H")?.status).toBe(
@@ -1797,11 +1677,6 @@ describe("isUsableForSelection", () => {
       status: "dead",
       dead: { reason: "offline" },
     };
-    const deadPlanRestricted: HostLeaseSnapshot = {
-      hostId: "h",
-      status: "dead",
-      dead: { reason: "plan-restricted" },
-    };
     const deadRemoved: HostLeaseSnapshot = {
       hostId: "h",
       status: "dead",
@@ -1818,7 +1693,6 @@ describe("isUsableForSelection", () => {
     expect(isUsableForSelection(degraded)).toBe(true);
     expect(isUsableForSelection(restarting)).toBe(false);
     expect(isUsableForSelection(deadOffline)).toBe(false);
-    expect(isUsableForSelection(deadPlanRestricted)).toBe(false);
     expect(isUsableForSelection(deadRemoved)).toBe(false);
     expect(isUsableForSelection(deadIncompatible)).toBe(false);
   });
@@ -1868,7 +1742,7 @@ describe("SelectionAuthorityEngineImpl - identity transitions", () => {
       engine.ingestEvidence(
         "A",
         oldIncarnation,
-        dialRefusal("H2", `dead-${i}`, null, i),
+        dialRefusal("H2", `dead-${i}`, i),
       );
     }
     expect(findLease(engine.snapshot().leases, "H2")?.status).toBe("dead");
@@ -1907,7 +1781,7 @@ describe("SelectionAuthorityEngineImpl - identity transitions", () => {
     engine.ingestEvidence(
       "A",
       oldIncarnation,
-      dialRefusal("H", "post-transition", null, 0),
+      dialRefusal("H", "post-transition", 0),
     );
     expect(findLease(engine.snapshot().leases, "H")?.status).not.toBe("dead");
     expect(await engine.activate("A", oldIncarnation, "H")).toEqual({
@@ -2020,7 +1894,7 @@ describe("SelectionAuthorityEngineImpl - revision discipline", () => {
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("L", `d-${i}`, null, i),
+        dialRefusal("L", `d-${i}`, i),
       );
     }
     engine.ingestEvidence(
@@ -2076,7 +1950,7 @@ describe("SelectionAuthorityEngineImpl - realistic redial cadence", () => {
       engine.ingestEvidence(
         "A",
         attachA.incarnationId,
-        dialRefusal("H", `redial-${elapsed}`, null, clock.now()),
+        dialRefusal("H", `redial-${elapsed}`, clock.now()),
       );
     }
 
@@ -3034,7 +2908,7 @@ function killHostWithRefusals(
     engine.ingestEvidence(
       reporterId,
       incarnationId,
-      dialRefusal(hostId, `${hostId}-kill-${i}`, null, i),
+      dialRefusal(hostId, `${hostId}-kill-${i}`, i),
     );
   }
 }
@@ -4973,9 +4847,9 @@ describe("selection authority dial-evidence instrumentation", () => {
     const { engine } = authority;
 
     // 1. counted
-    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", null, 0));
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", 0));
     // 2. dropped-duplicate-attempt (same attempt id)
-    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", null, 1));
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a1", 1));
     // 3. inert-indeterminate
     engine.ingestEvidence(
       "A",
@@ -4994,13 +4868,9 @@ describe("selection authority dial-evidence instrumentation", () => {
       incarnationId,
       sessionEvidence("H", "s1", "established", 4),
     );
-    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a4", null, 5));
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a4", 5));
     // 6. dropped-outside-fleet
-    engine.ingestEvidence(
-      "A",
-      incarnationId,
-      dialRefusal("GONE", "a5", null, 6),
-    );
+    engine.ingestEvidence("A", incarnationId, dialRefusal("GONE", "a5", 6));
 
     expect(
       dialLogs(log.records).map((record) => record.detail.disposition),
@@ -5024,7 +4894,7 @@ describe("selection authority dial-evidence instrumentation", () => {
       authority.engine.ingestEvidence(
         "A",
         incarnationId,
-        dialRefusal("H", `attempt-${i}`, null, i),
+        dialRefusal("H", `attempt-${i}`, i),
       );
     }
 
@@ -5065,7 +4935,7 @@ describe("selection authority dial-evidence instrumentation", () => {
       engine.ingestEvidence(
         "A",
         incarnationId,
-        dialRefusal("H", `attempt-${i}`, null, i),
+        dialRefusal("H", `attempt-${i}`, i),
       );
     }
 
@@ -5102,7 +4972,7 @@ describe("selection authority dial-evidence instrumentation", () => {
       engine.ingestEvidence(
         "A",
         incarnationId,
-        dialRefusal("H", `attempt-${i}`, null, i),
+        dialRefusal("H", `attempt-${i}`, i),
       );
     }
 
@@ -5123,7 +4993,7 @@ describe("selection authority dial-evidence instrumentation", () => {
       engine.ingestEvidence(
         "A",
         incarnationId,
-        dialRefusal("H", `attempt-${i}`, null, i),
+        dialRefusal("H", `attempt-${i}`, i),
       );
     }
 
@@ -5170,7 +5040,7 @@ describe("selection authority dial-evidence instrumentation", () => {
     );
     // With the session live every later refusal is suppressed, so this is the
     // first report after the recovery and must not complete the old episode.
-    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a3", null, 3));
+    engine.ingestEvidence("A", incarnationId, dialRefusal("H", "a3", 3));
 
     expect(stallWarnings(log.records)).toHaveLength(0);
 
@@ -5197,7 +5067,7 @@ describe("selection authority dial-evidence instrumentation", () => {
         engine.ingestEvidence(
           "A",
           incarnationId,
-          dialRefusal("H", `attempt-${seq}`, null, seq),
+          dialRefusal("H", `attempt-${seq}`, seq),
         );
       }
       seq += 1;

@@ -37,8 +37,8 @@ interface HostTransportSnapshot {
   readonly websocketUrl: string | null;
   readonly version: string | null;
   /**
-   * The directory has positively refused this route (confirmed `offline`, or
-   * `plan-restricted`) — the same gate the transport dials on, so a binding is
+   * The directory has positively refused this route (confirmed `offline`) —
+   * the same gate the transport dials on, so a binding is
    * torn down exactly when a re-dial would be refused and not one flip sooner.
    */
   readonly refused: boolean;

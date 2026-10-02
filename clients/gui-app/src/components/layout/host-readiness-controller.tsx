@@ -652,7 +652,7 @@ function AttachPendingCard(props: {
   const localHostExpected = useRunnerHostOrNull()?.hasLocalHost ?? false;
   const discoveryConcluded = useHostDiscoveryConcluded();
   // The fleet, because the predicate refuses to wait over an ACTIONABLE ∅ - an
-  // incompatible or plan-restricted lease the user could act on now. Read here
+  // incompatible lease the user could act on now. Read here
   // rather than passed down: this card is the predicate's second reader, and
   // the two must be answering it from the same inputs.
   const leases = useHostLeases();

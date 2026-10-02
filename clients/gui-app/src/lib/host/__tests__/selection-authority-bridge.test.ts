@@ -167,7 +167,6 @@ function killHost(engine: SelectionAuthorityEngineImpl, hostId: string): void {
       hostId,
       attemptId: `kill-${i}`,
       outcome: "confirmed-refusal",
-      refusalDetail: null,
       transportKind: "remote-relay",
       at: i,
     });

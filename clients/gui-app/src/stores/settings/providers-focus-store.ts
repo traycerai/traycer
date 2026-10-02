@@ -14,8 +14,8 @@ interface ProvidersFocusState {
    * one-shot switch trigger and is cleared the moment the scope applies it.
    *
    * Splitting the two was necessary (see `clearFocusHostId`) but, on its own,
-   * threw the association away: an intent whose target is unreachable or
-   * plan-gated never reaches the rail that consumes the remainder, so the
+   * threw the association away: an intent whose target is unreachable
+   * never reaches the rail that consumes the remainder, so the
    * harness / profile / `startSignIn` sat armed and HOSTLESS. Selecting any
    * other reachable host then let ITS rail consume them — opening an
    * automatic sign-in on the wrong machine whenever the profile id happened

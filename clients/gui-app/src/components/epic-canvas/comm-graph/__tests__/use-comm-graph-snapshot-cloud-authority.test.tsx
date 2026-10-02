@@ -833,8 +833,6 @@ function directoryEntry(
     version: null,
     publicKey: "public-key-a",
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",

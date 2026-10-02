@@ -370,11 +370,9 @@ interface ResolvedRetry {
 /**
  * Which recovery this state actually has, and whether it has one at all.
  *
- * `plan-restricted` gets NO retry, deliberately: the hosts are healthy and
- * running on their own machines, and a Retry there is a button that can only
- * ever fail while implying the failure is transient. The upgrade action is the
- * whole answer. `update-host` likewise - retrying a version disagreement just
- * re-reads the same versions.
+ * `update-host` gets NO retry, deliberately: retrying a version disagreement
+ * just re-reads the same versions, so a Retry there is a button that can only
+ * ever fail while implying the failure is transient.
  *
  * For `offline` the answer depends on whose machine this is. When the app
  * manages this machine's host, re-running the install/start is a real recovery
@@ -413,7 +411,7 @@ function resolveUpdateHost(
   if (variant.kind !== "update-host") return null;
   // `canManageHost` asks "is the TARGET this machine"; the card asks "which
   // host is incompatible". Arm 1 of `deriveNoHostVariant` makes those the same
-  // host, arm 3 does not - so `canManageHost` alone is a guard argued against
+  // host, arm 2 does not - so `canManageHost` alone is a guard argued against
   // only the population it can see. Without this line the button offers to
   // update the host the card names and re-provisions THIS machine instead.
   //
@@ -432,8 +430,8 @@ function resolveUpdateHost(
 /**
  * The boot body, or null when this state has none.
  *
- * Only the `offline` variant gets one: a plan gate and a version mismatch are
- * both about a host that is up and answering, so a bootstrap log and a
+ * Only the `offline` variant gets one: a version mismatch is
+ * about a host that is up and answering, so a bootstrap log and a
  * "Configure shell…" button would be diagnostics for a failure that did not
  * happen.
  *

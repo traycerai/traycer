@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createPlanRestrictedSessionRebuildBackoff,
-  PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS,
-  PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
-} from "../plan-restricted-session-rebuild-backoff";
+  createSessionRebuildBackoff,
+  SESSION_REBUILD_INITIAL_BACKOFF_MS,
+  SESSION_REBUILD_MAX_BACKOFF_MS,
+} from "../session-rebuild-backoff";
 
-describe("createPlanRestrictedSessionRebuildBackoff", () => {
+describe("createSessionRebuildBackoff", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -13,7 +13,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
   it("runs immediately, then follows the 1m/2m/4m/8m ladder and caps at 15m", () => {
     vi.useFakeTimers();
     const rebuild = vi.fn();
-    const backoff = createPlanRestrictedSessionRebuildBackoff();
+    const backoff = createSessionRebuildBackoff();
     function newOwner(): object {
       return {};
     }
@@ -22,12 +22,12 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     expect(rebuild).toHaveBeenCalledTimes(1);
 
     const delays = [
-      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS,
-      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS * 2,
-      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS * 4,
-      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS * 8,
-      PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
-      PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
+      SESSION_REBUILD_INITIAL_BACKOFF_MS,
+      SESSION_REBUILD_INITIAL_BACKOFF_MS * 2,
+      SESSION_REBUILD_INITIAL_BACKOFF_MS * 4,
+      SESSION_REBUILD_INITIAL_BACKOFF_MS * 8,
+      SESSION_REBUILD_MAX_BACKOFF_MS,
+      SESSION_REBUILD_MAX_BACKOFF_MS,
     ];
     for (const [index, delay] of delays.entries()) {
       backoff.request(newOwner(), rebuild);
@@ -42,7 +42,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
   it("markHealthy cancels a pending request and resets its ladder", () => {
     vi.useFakeTimers();
     const rebuild = vi.fn();
-    const backoff = createPlanRestrictedSessionRebuildBackoff();
+    const backoff = createSessionRebuildBackoff();
     const immediateOwner = {};
     const pendingOwner = {};
     const resetOwner = {};
@@ -53,7 +53,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     expect(vi.getTimerCount()).toBe(1);
 
     backoff.markHealthy();
-    vi.advanceTimersByTime(PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS);
+    vi.advanceTimersByTime(SESSION_REBUILD_MAX_BACKOFF_MS);
     expect(rebuild).toHaveBeenCalledTimes(1);
 
     backoff.request(resetOwner, rebuild);
@@ -66,7 +66,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     const newRebuild = vi.fn();
     const oldOwner = {};
     const newOwner = {};
-    const backoff = createPlanRestrictedSessionRebuildBackoff();
+    const backoff = createSessionRebuildBackoff();
 
     backoff.request(oldOwner, oldRebuild);
     expect(oldRebuild).toHaveBeenCalledTimes(1);
@@ -77,9 +77,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
 
     backoff.request(newOwner, newRebuild);
     expect(vi.getTimerCount()).toBe(1);
-    vi.advanceTimersByTime(
-      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS - 1,
-    );
+    vi.advanceTimersByTime(SESSION_REBUILD_INITIAL_BACKOFF_MS - 1);
     expect(newRebuild).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
@@ -97,16 +95,14 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     const secondOwner = {};
     const thirdOwner = {};
     const fourthOwner = {};
-    const backoff = createPlanRestrictedSessionRebuildBackoff();
+    const backoff = createSessionRebuildBackoff();
 
     backoff.request(firstOwner, firstRebuild);
     backoff.request(secondOwner, secondRebuild);
     backoff.request(thirdOwner, thirdRebuild);
 
     expect(vi.getTimerCount()).toBe(1);
-    vi.advanceTimersByTime(
-      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS - 1,
-    );
+    vi.advanceTimersByTime(SESSION_REBUILD_INITIAL_BACKOFF_MS - 1);
     expect(secondRebuild).not.toHaveBeenCalled();
     expect(thirdRebuild).not.toHaveBeenCalled();
 
@@ -116,9 +112,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     expect(thirdRebuild).toHaveBeenCalledTimes(1);
 
     backoff.request(fourthOwner, fourthRebuild);
-    vi.advanceTimersByTime(
-      PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS * 2 - 1,
-    );
+    vi.advanceTimersByTime(SESSION_REBUILD_INITIAL_BACKOFF_MS * 2 - 1);
     expect(fourthRebuild).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(fourthRebuild).toHaveBeenCalledTimes(1);
@@ -127,7 +121,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
   it("cancel cancels a pending request and resets the next request to immediate", () => {
     vi.useFakeTimers();
     const rebuild = vi.fn();
-    const backoff = createPlanRestrictedSessionRebuildBackoff();
+    const backoff = createSessionRebuildBackoff();
     const immediateOwner = {};
     const pendingOwner = {};
     const resetOwner = {};
@@ -136,7 +130,7 @@ describe("createPlanRestrictedSessionRebuildBackoff", () => {
     backoff.request(pendingOwner, rebuild);
     expect(vi.getTimerCount()).toBe(1);
     backoff.cancel();
-    vi.advanceTimersByTime(PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS);
+    vi.advanceTimersByTime(SESSION_REBUILD_MAX_BACKOFF_MS);
     expect(rebuild).toHaveBeenCalledTimes(1);
 
     backoff.request(resetOwner, rebuild);

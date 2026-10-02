@@ -7,7 +7,6 @@ const NOUN = tileLoadNoun("agent");
 
 const DEAD_REASONS: readonly HostLeaseDeadState[] = [
   { reason: "offline" },
-  { reason: "plan-restricted" },
   { reason: "removed" },
   {
     reason: "incompatible",
@@ -77,10 +76,6 @@ describe("tileHostLoadMessage", () => {
         case "offline":
           expect(message).toContain("is offline");
           expect(message).toContain("will load once that host is back");
-          break;
-        case "plan-restricted":
-          expect(message).toContain("local only on your current plan");
-          expect(message).toContain("Upgrade");
           break;
         case "removed":
           expect(message).toContain("was removed from your account");

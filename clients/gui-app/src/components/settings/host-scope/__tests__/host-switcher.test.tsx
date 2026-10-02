@@ -162,34 +162,28 @@ describe("<HostSwitcher /> empty vs failed", () => {
     expect(onRetryLists).toHaveBeenCalledTimes(1);
   });
 
-  it("labels a plan-gated host 'requires upgrade', not 'unreachable'", () => {
-    // Same `connectable: false`, different fact: one is fixed by an upgrade,
-    // the other maybe by waiting. One word covering both sent people
-    // debugging their network over a billing limit.
-    //
-    // The row's word comes from `health.state` now, not from `connectable` /
-    // `planRestricted` — those decide whether the row can be PICKED, which is
-    // a route question, while the word is a status question (P4.3's ruling D).
-    // So the fixture has to say what the host's health IS, and the route flags
-    // stay because pick legality is still theirs to decide. `unreachable` is
-    // no longer a row word at all, which makes the second assertion below
-    // stronger than it was rather than weaker.
+  it("labels a host with no route by its health word 'offline', not 'unreachable'", () => {
+    // The row's word comes from `health.state`, not from `connectable` — that
+    // decides whether the row can be PICKED, which is a route question, while
+    // the word is a status question (P4.3's ruling D). So the fixture has to
+    // say what the host's health IS, and the route flag stays because pick
+    // legality is still its to decide. `unreachable` is no longer a row word
+    // at all, which makes the second assertion below stronger than it was
+    // rather than weaker.
     render(
       <HostSwitcher
         refusalByHostId={NO_HOST_OPTION_REFUSALS}
         inertExceptHostId={null}
         hosts={[
           hostScopeOptionFixture({
-            hostId: "host-gated",
+            hostId: "host-down",
             name: "Office Linux",
             isLocalMachine: false,
             connectable: false,
-            planRestricted: true,
             health: {
-              state: "local-only",
-              label: "Local only",
-              detail:
-                "Not reachable from here — remote access needs a paid plan.",
+              state: "offline",
+              label: "Offline",
+              detail: null,
               tone: "idle",
               live: false,
             },
@@ -212,7 +206,7 @@ describe("<HostSwitcher /> empty vs failed", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Settings host: none selected" }),
     );
-    expect(screen.getByText("requires upgrade")).not.toBeNull();
+    expect(screen.getByText("offline")).not.toBeNull();
     expect(screen.queryByText("unreachable")).toBeNull();
   });
 });

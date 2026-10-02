@@ -125,7 +125,6 @@ import {
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
-  HOST_LIFECYCLE_NONE_PLAN_REASON,
   HOST_LIFECYCLE_PENDING_RESTART_APP,
   HOST_LIFECYCLE_PENDING_RESTART_HOST,
   HOST_LIFECYCLE_SUPERSEDED_DESCRIPTION,
@@ -246,7 +245,7 @@ function makeQueryClient(): QueryClient {
 
 function renderSection(runnerHost: IRunnerHost | null): void {
   // The card's home is Settings > General, so it renders admitted; the
-  // signed-out gate has its own file (host-lifecycle-none-plan-gate-signed-out).
+  // signed-out gate has its own file (host-lifecycle-none-signed-out).
   useAuthStore.getState().setSignedIn(
     {
       userId: "user-1",
@@ -286,7 +285,7 @@ function radioDisabled(label: string): boolean {
  * the mocked `IHostLifecycleHost.get()` promise resolves, so
  * `findByTestId("host-lifecycle-options")` alone - the element exists from
  * the first render - is not proof the card is ready to interact with. Wait
- * for `background`, the one option never plan-gated, to come off group
+ * for `background`, the one option sign-in never holds, to come off group
  * disablement instead.
  */
 async function waitForReady(): Promise<void> {
@@ -711,23 +710,12 @@ describe("<HostLifecycleSettingsSection /> - restart-host line with a foreground
   });
 });
 
-describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating", () => {
-  it("disables 'none' with the plan reason on a FREE subscription", async () => {
-    useAuthStore.getState().setSubscriptionStatus("FREE");
-    const fixture = buildLifecycleHost(view({}), () =>
-      Promise.resolve({ kind: "applied", view: view({}) }),
-    );
-    renderSection(createFakeRunnerHost({ hostLifecycle: fixture.host }));
-
-    await waitForReady();
-    expect(radioDisabled(OPTION_COPY[4].label)).toBe(true);
-    expect(
-      screen.getByTestId("host-lifecycle-none-plan-reason").textContent,
-    ).toBe(HOST_LIFECYCLE_NONE_PLAN_REASON);
-  });
-
-  it.each([null, "PRO"] as const)(
-    "does NOT disable 'none' when subscriptionStatus is %s",
+describe("<HostLifecycleSettingsSection /> - the 'none' option and the subscription", () => {
+  // Remote hosts are available on every plan, so the only thing that holds
+  // `none` is being signed out (the sibling `host-lifecycle-none-signed-out`
+  // file). `renderSection` signs in, so every case here is admitted.
+  it.each([null, "PENDING", "FREE", "PRO"] as const)(
+    "does NOT disable 'none' for a signed-in account whose subscriptionStatus is %s",
     async (status) => {
       useAuthStore.getState().setSubscriptionStatus(status);
       const fixture = buildLifecycleHost(view({}), () =>
@@ -738,24 +726,10 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and plan gating",
       await waitForReady();
       expect(radioDisabled(OPTION_COPY[4].label)).toBe(false);
       expect(
-        screen.queryByTestId("host-lifecycle-none-plan-reason"),
+        screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
       ).toBeNull();
     },
   );
-
-  it("does NOT disable 'none' on a FREE plan when desired.mode is already none", async () => {
-    useAuthStore.getState().setSubscriptionStatus("FREE");
-    const fixture = buildLifecycleHost(
-      view({
-        desired: { mode: "none", rev: 1, updatedBy: null, updatedAt: null },
-      }),
-      () => Promise.resolve({ kind: "applied", view: view({}) }),
-    );
-    renderSection(createFakeRunnerHost({ hostLifecycle: fixture.host }));
-
-    await waitForReady();
-    expect(radioDisabled(OPTION_COPY[4].label)).toBe(false);
-  });
 
   it("picking 'none' while managed opens the stop-only confirm dialog with no Keep, no Remember, and 'Stop host' label", async () => {
     hostBindingMock.current = { directory: { getLocalEntry: () => null } };
@@ -1467,7 +1441,7 @@ describe("<HostLifecycleSettingsSection /> - another Windows user's task", () =>
     }
     expect(
       screen
-        .getAllByTestId("host-lifecycle-none-plan-reason")
+        .getAllByTestId("host-lifecycle-none-signed-out-reason")
         .map((el) => el.textContent),
     ).toEqual(
       OPTION_COPY.filter((o) => o.mode !== "linked" && o.mode !== "none").map(

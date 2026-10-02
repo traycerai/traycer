@@ -635,10 +635,6 @@ describe("arm 3: the host is gone", () => {
       `Host "${LABEL}" is offline, so this agent can't be loaded. It will load once that host is back.`,
     ],
     [
-      { hostId: "host-1", status: "dead", dead: { reason: "plan-restricted" } },
-      `Host "${LABEL}" is local only on your current plan, so this agent can't be reached from here. Upgrade to use that host remotely, or open it on that machine.`,
-    ],
-    [
       { hostId: "host-1", status: "dead", dead: { reason: "removed" } },
       `Host "${LABEL}" was removed from your account, so this agent can't be loaded.`,
     ],
@@ -1037,14 +1033,14 @@ describe("chatPreContentReport", () => {
         lease: {
           hostId: "host-1",
           status: "dead",
-          dead: { reason: "plan-restricted" },
+          dead: { reason: "removed" },
         },
         reachabilityStatus: "unreachable",
       }),
       61_000,
     );
     expect(report.message).toBe(
-      "stage=host-gone evidence=no-handle attempts=0 elapsedS=61 stream=none lease=dead:plan-restricted strip=offline",
+      "stage=host-gone evidence=no-handle attempts=0 elapsedS=61 stream=none lease=dead:removed strip=offline",
     );
     expect(report.code).toBeNull();
   });

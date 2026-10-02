@@ -247,7 +247,7 @@ export class ResourcesStreamClient {
     reason: StreamCloseReason | null,
   ): ResourcesScopeSupport | null {
     if (status === "closed") {
-      // Every other close - caller teardown, an auth rejection, a plan gate -
+      // Every other close - caller teardown, an auth rejection -
       // is about this attempt, not about what the host can serve. Holding the
       // previous verdict is what keeps a terminal incompatible close STANDING:
       // it is disposed, so nothing follows it that could clear the notice.

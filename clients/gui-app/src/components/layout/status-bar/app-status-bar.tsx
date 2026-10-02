@@ -404,8 +404,8 @@ function menuProviders(
  * Same three states and same remedies as the popovers' notice, at one line:
  * `vanished` needs the pick dropped, `unreachable` needs the machine back, and
  * `connecting` needs a moment — which is why it alone offers no button. A
- * strip is not the place to explain a plan restriction or a host version, so
- * those keep landing in the popover, where there is room for the sentence.
+ * strip is not the place to explain a host version, so
+ * that keeps landing in the popover, where there is room for the sentence.
  *
  * It is passive chrome for the layout editor (4.2): it takes the slot the
  * usage segments would occupy and is not a region of its own.

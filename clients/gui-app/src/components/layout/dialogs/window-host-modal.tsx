@@ -4,15 +4,9 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HostBootCard } from "@/components/centered-card";
 import { BELOW_APP_HEADER_TOP_CLASS } from "@/components/layout/header/app-header-height";
-import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
-import {
-  PLAN_RESTRICTED_MOBILE_DETAIL,
-  PLAN_RESTRICTED_MOBILE_TITLE,
-} from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { usePressStartActivation } from "@/lib/host/press-start-activation";
@@ -310,9 +304,6 @@ function NarrationActions(
         props.align === "center" ? "justify-center" : "justify-end",
       )}
     >
-      {props.variant.kind === "plan-restricted" ? (
-        <PlanRestrictedUpgradeAction />
-      ) : null}
       {/* The app updater IS the remedy here, and it is unconditional: this
           variant only exists because the host stated, in structured terms,
           that this app is the outdated leg. There is deliberately no
@@ -408,9 +399,8 @@ function WindowHostModalBody(props: {
 
 /**
  * The lane's own words, for a TITLED face that has no boot body but whose
- * controller is demonstrably doing something: the plan-restricted arm, or a
- * settled ∅ on a fleet this machine is not part of, while this machine's lane
- * still runs underneath.
+ * controller is demonstrably doing something: a settled ∅ on a fleet this
+ * machine is not part of, while this machine's lane still runs underneath.
  *
  * "Traycer can't reach any host" beside a silent screen reads as a dead end
  * even while an install is streaming underneath; this is the line that says
@@ -539,9 +529,8 @@ interface WindowHostModalCopy {
  * One wording per state, and the report family chosen with it.
  *
  * The report codes are distinct on purpose: collapsing "this app can't reach
- * any host", "this account's plan excludes them" and "the versions disagree"
- * into one title is what sends triage after a network outage that is not
- * happening.
+ * any host" and "the versions disagree" into one title is what sends triage
+ * after a network outage that is not happening.
  *
  * CODE LINEAGE, for anyone grepping an old report: `HOST_NONE_USABLE` and
  * `HOST_COLD_START_FAILED` are the successors to the retired
@@ -550,41 +539,13 @@ interface WindowHostModalCopy {
  * fact this redesign retires, and the new pair branches on CAUSE, which is the
  * lease vocabulary every status surface now derives from. Two codes before,
  * two codes after: "nothing can serve this window" versus "nothing has served
- * it yet". `HOST_PLAN_RESTRICTED` and `HOST_INCOMPATIBLE` are unchanged in
- * meaning and simply reached from here now.
+ * it yet". `HOST_INCOMPATIBLE` is unchanged in meaning and simply reached from
+ * here now.
  */
 function modalCopy(
   variant: WindowNarrationVariant,
   cause: WindowNarrationCause,
 ): WindowHostModalCopy {
-  if (variant.kind === "plan-restricted") {
-    // The installed mobile app may neither name the plan nor tell the reader
-    // to upgrade (App Store guideline 3.1.1); `PlanRestrictedUpgradeAction`
-    // withholds the button beside this, so the words have to stand alone. The
-    // report fields are diagnostics, not copy, and stay as they are.
-    //
-    // The HOST-NEUTRAL heading, unlike the scope gate's and the resource
-    // monitor's: this variant is the "every lease on the account is
-    // plan-restricted" arm (`window-narration.ts`), so it carries no one host
-    // to name and the desktop copy is plural too.
-    if (isMobileApp()) {
-      return {
-        title: PLAN_RESTRICTED_MOBILE_TITLE,
-        description: PLAN_RESTRICTED_MOBILE_DETAIL,
-        reportTitle: "No host available on this plan",
-        reportMessage: "Every host on this account is plan-restricted.",
-        reportCode: "HOST_PLAN_RESTRICTED",
-      };
-    }
-    return {
-      title: "Your plan doesn't include remote hosts",
-      description:
-        "The hosts on this account are remote, and this plan can't attach to them. Upgrade to connect, or set up Traycer on this machine.",
-      reportTitle: "No host available on this plan",
-      reportMessage: "Every host on this account is plan-restricted.",
-      reportCode: "HOST_PLAN_RESTRICTED",
-    };
-  }
   if (variant.kind === "update-client") {
     const { requirement } = variant;
     return {

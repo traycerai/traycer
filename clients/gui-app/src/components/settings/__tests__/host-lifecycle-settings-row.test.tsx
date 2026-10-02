@@ -96,7 +96,7 @@ import { HostLifecycleSettingsRow } from "@/components/settings/host-lifecycle-s
 import { buildOverviewManagement } from "@/components/settings/panels/__tests__/host-overview-test-support";
 import type { HostLifecycleSetInput } from "@/hooks/runner/use-runner-host-lifecycle-set-mutation";
 import {
-  HOST_LIFECYCLE_NONE_PLAN_REASON,
+  HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON,
   HOST_LIFECYCLE_PENDING_RESTART_HOST,
   HOST_LIFECYCLE_TASK_NOT_OWNED_REASON,
   hostLifecycleCardSubtitle,
@@ -387,20 +387,41 @@ describe("<HostLifecycleSettingsRow />", () => {
     expect(fixture.setMock).not.toHaveBeenCalled();
   });
 
-  it("disables none with the plan reason on an unpaid plan", async () => {
-    useAuthStore.getState().setSubscriptionStatus("FREE");
+  // Remote hosts are available on every plan, so the subscription never holds
+  // `none`: only a signed-out session does, and the reason says so.
+  it.each([null, "PENDING", "FREE", "PRO"] as const)(
+    "leaves none selectable with subscriptionStatus=%s",
+    async (subscriptionStatus) => {
+      const fixture = buildLifecycleHost(view({}), () =>
+        Promise.resolve({ kind: "applied", view: view({}) }),
+      );
+      renderRow(createFakeRunnerHost({ hostLifecycle: fixture.host }));
+      useAuthStore.getState().setSubscriptionStatus(subscriptionStatus);
+
+      await waitForReady();
+      openSelect(screen.getByTestId("host-lifecycle-select"));
+      const none = await screen.findByTestId("host-lifecycle-option-none");
+      expect(none.getAttribute("aria-disabled")).not.toBe("true");
+      expect(
+        screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
+      ).toBeNull();
+    },
+  );
+
+  it("disables none with the signed-out reason while signed out", async () => {
     const fixture = buildLifecycleHost(view({}), () =>
       Promise.resolve({ kind: "applied", view: view({}) }),
     );
     renderRow(createFakeRunnerHost({ hostLifecycle: fixture.host }));
+    useAuthStore.getState().setSignedOut();
 
     await waitForReady();
     openSelect(screen.getByTestId("host-lifecycle-select"));
     const none = await screen.findByTestId("host-lifecycle-option-none");
     expect(none.getAttribute("aria-disabled")).toBe("true");
     expect(
-      screen.getByTestId("host-lifecycle-none-plan-reason").textContent,
-    ).toBe(HOST_LIFECYCLE_NONE_PLAN_REASON);
+      screen.getByTestId("host-lifecycle-none-signed-out-reason").textContent,
+    ).toBe(HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON);
     expect(none.textContent).toContain(OPTION_COPY[4].label);
     expect(none.textContent).toContain(OPTION_COPY[4].description);
   });
@@ -485,7 +506,7 @@ describe("<HostLifecycleSettingsRow />", () => {
     expect(background.getAttribute("aria-disabled")).toBe("true");
     expect(
       screen
-        .getAllByTestId("host-lifecycle-none-plan-reason")
+        .getAllByTestId("host-lifecycle-none-signed-out-reason")
         .map((el) => el.textContent),
     ).toEqual(
       OPTION_COPY.filter(

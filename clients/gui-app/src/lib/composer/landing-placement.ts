@@ -1,6 +1,5 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
@@ -211,9 +210,6 @@ function unavailableLandingTargetMessage(
 ): string {
   if (activeHost.websocketUrl === null) {
     return `${hostLabel} is starting. Wait for it to come up and send again.`;
-  }
-  if (hostUnavailability(activeHost) === "plan-restricted") {
-    return `${hostLabel} isn't available on your plan.`;
   }
   return `${hostLabel} is offline. Wait for it to come up and send again.`;
 }

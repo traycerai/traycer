@@ -52,7 +52,6 @@ const BASE = {
   hasLiveSession: false,
   lease: null,
   authorityAttached: false,
-  planAllowsRemote: true,
   nowMs: NOW_MS,
 };
 
@@ -205,24 +204,7 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
     expect(health.tone).toBe("idle");
   });
 
-  it("maps a plan-gated connectable host to Local only, and never Offline", () => {
-    const health = deriveHostHealth({
-      ...BASE,
-      item: registryItem("connectable"),
-      planAllowsRemote: false,
-      isLocalMachine: false,
-      service: undefined,
-    });
-
-    expect(health.state).toBe("local-only");
-    expect(health.label).toBe("Local only");
-    expect(health.label).not.toBe("Offline");
-    expect(health.live).toBe(false);
-    // Not a fault: idle tone, not warn.
-    expect(health.tone).toBe("idle");
-  });
-
-  it("maps a plan-gated offline host with a recent credential check-in to Local only", () => {
+  it("maps an offline host with a recent check-in to Offline — there is no Local only state", () => {
     const item = registryItem("offline");
     const health = deriveHostHealth({
       ...BASE,
@@ -233,13 +215,27 @@ describe("deriveHostHealth — connectivity mapping for a remote row", () => {
           lastSeenAt: new Date(NOW_MS - 20 * 60 * 1000).toISOString(),
         },
       },
-      planAllowsRemote: false,
       isLocalMachine: false,
       service: undefined,
     });
 
-    expect(health.state).toBe("local-only");
-    expect(health.label).toBe("Local only");
+    expect(health.state).toBe("offline");
+    expect(health.label).toBe("Offline");
+    expect(health.live).toBe(false);
+  });
+
+  it("maps the retired local-only wire value to Status unknown, and never Offline", () => {
+    const health = deriveHostHealth({
+      ...BASE,
+      item: registryItem("local-only"),
+      isLocalMachine: false,
+      service: undefined,
+    });
+
+    expect(health.state).toBe("unknown");
+    expect(health.label).toBe("Status unknown");
+    expect(health.label).not.toBe("Offline");
+    expect(health.live).toBe(false);
   });
 
   it("maps unknown to Status unknown, and never Offline", () => {

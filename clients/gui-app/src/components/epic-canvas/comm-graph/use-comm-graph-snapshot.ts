@@ -86,7 +86,7 @@ export function useCommGraphSnapshot(
   // never becomes row identity or changes the source of history.
   // Relay dialability depends on the pull-only session cache, so the
   // directory query alone cannot see a session dying or appearing under an
-  // `offline`/plan-restricted entry. This subscription re-renders on a readiness
+  // `offline` entry. This subscription re-renders on a readiness
   // flip, which recomputes the two memos below and reconciles the new relay
   // set and readiness keys into the cloud manager as one update.
   const directoryHostIdsForReadiness = useMemo(
@@ -155,7 +155,7 @@ export function useCommGraphSnapshot(
                 // Derivation, not the coarse bit. This arm runs only when the
                 // transport refuses the entry, so the coarse bit is constant
                 // here and carries no information; the REASON does. A relay
-                // that goes `plan-restricted` → confirmed `offline` must clear
+                // that goes `indeterminate` → confirmed `offline` must clear
                 // the dial/compatibility verdict it retained under the other
                 // reason, and comparing the coarse bit would not notice.
                 hostUnavailability(entry) ?? "",

@@ -9,7 +9,6 @@ import {
   type RemoteHostDirectoryEntry,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { createRemoteHostTransport } from "@traycer-clients/shared/host-transport/remote/index";
-import { planRestrictedReprobeAtFromClosedReason } from "@traycer-clients/shared/host-transport/remote/config";
 import type { HostStatusDTO } from "@traycer/protocol/host/host-status";
 import {
   hostRpcRegistry,
@@ -436,8 +435,8 @@ export function useHostStreamClientBindingFor(
   // Same rebuild pacing the app-wide `HostStreamProvider` runs, and needed here
   // MORE than there: that provider follows the active host, while this hook
   // dials whichever machine its caller names - a per-tab binding, or a host
-  // somebody picked out of a list and whose selection PERSISTS. An older host,
-  // an incompatible protocol or a plan restriction closes every fresh dial the
+  // somebody picked out of a list and whose selection PERSISTS. An older host
+  // or an incompatible protocol closes every fresh dial the
   // same way, and without backoff that is a mint/dial/handshake loop running
   // for as long as the selection stands, with nothing on screen to explain it.
   // Same engine, same reason as the app-wide provider: the policy is the
@@ -502,12 +501,6 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
-            recentHostCheckIn: false,
-            // Same reason `transportDialability` is written coarsely above:
-            // the plan gate ran upstream against the real directory entry, and
-            // re-asserting a refusal here would contradict a dial this effect
-            // has already been cleared to make.
-            planAllowsRemote: true,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,
@@ -644,19 +637,6 @@ export function useHostStreamClientBindingFor(
     };
     const rebuild = (): void => {
       if (teardownInProgressRef.current) return;
-      const planRestrictedReprobeAt = planRestrictedReprobeAtFromClosedReason(
-        client.getClosedReason(),
-      );
-      if (planRestrictedReprobeAt !== null) {
-        backoffTimer = window.setTimeout(
-          () => {
-            backoffTimer = null;
-            setRebuildNonce((nonce) => nonce + 1);
-          },
-          Math.max(0, planRestrictedReprobeAt - Date.now()),
-        );
-        return;
-      }
       const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
       appLogger.warn(
         "[stream] transient host stream client closed underneath its binding - rebuilding",
