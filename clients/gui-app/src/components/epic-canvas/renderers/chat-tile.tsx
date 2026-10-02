@@ -975,7 +975,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // Held here because both halves of the tile follow it - the transcript draws
   // the view, and the lower dock stops offering the PARENT chat's composer,
   // model and running work as though they were that subagent's.
-  const subagentDrillIn = useSubagentDrillIn();
+  const subagentDrillIn = useSubagentDrillIn(view.snapshotLoaded);
   const subagentDockView = useSubagentDockView(
     subagentDrillIn,
     view.messages,

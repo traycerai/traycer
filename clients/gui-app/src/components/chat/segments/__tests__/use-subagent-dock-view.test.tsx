@@ -1,9 +1,10 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
 import {
   useSubagentDockView,
+  useSubagentDrillIn,
   type SubagentDrillIn,
 } from "@/components/chat/segments/subagent-open-as-chat";
 import type {
@@ -189,5 +190,43 @@ describe("useSubagentDockView", () => {
 
     expect(result.current).not.toBe(before);
     expect(result.current?.name).toBe("Mendel the second");
+  });
+});
+
+describe("useSubagentDrillIn", () => {
+  function renderDrillIn(transcriptLoaded: boolean) {
+    return renderHook(
+      (props: { readonly loaded: boolean }) => useSubagentDrillIn(props.loaded),
+      { initialProps: { loaded: transcriptLoaded } },
+    );
+  }
+
+  it("opens and closes a card while the transcript is loaded", () => {
+    const { result } = renderDrillIn(true);
+    expect(result.current.openId).toBeNull();
+
+    act(() => {
+      result.current.open("card-1");
+    });
+    expect(result.current.openId).toBe("card-1");
+
+    act(() => {
+      result.current.close();
+    });
+    expect(result.current.openId).toBeNull();
+  });
+
+  it("closes the open view when the transcript stops being loaded, and stays closed when it returns", () => {
+    const { result, rerender } = renderDrillIn(true);
+    act(() => {
+      result.current.open("card-1");
+    });
+    expect(result.current.openId).toBe("card-1");
+
+    rerender({ loaded: false });
+    expect(result.current.openId).toBeNull();
+
+    rerender({ loaded: true });
+    expect(result.current.openId).toBeNull();
   });
 });

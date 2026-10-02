@@ -4,7 +4,12 @@
 // what the card actually renders (the previous duplication did exactly that).
 
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
-import { dedupeByTaskId } from "@/lib/chat/background-item-tree";
+import {
+  backgroundSectionCounts,
+  buildBackgroundTree,
+  buildRememberedBackgroundNodes,
+  dedupeByTaskId,
+} from "@/lib/chat/background-item-tree";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -94,18 +99,21 @@ export function subagentCardName(card: SubagentSegment): string {
 }
 
 /**
- * How many of the chat's running background items belong to `card`: work the
- * subagent started, at any depth. The card's own item is not one of them -
- * that row is the subagent itself.
+ * How much running background work belongs to `card`: what the subagent
+ * started, at any depth. The card's own item is not part of it - that row is
+ * the subagent itself.
  *
- * Two signals, because no harness fills in both. An item is the card's when
- * its block is drawn inside the card's conversation (Codex reports every item
- * as a root, so the transcript is the only place its owner is written), or
- * when its `parentTaskId` chain reaches one that is, or reaches the card (a
- * nested Claude agent's own work, which need not have a row here).
+ * Two signals decide ownership, because no harness fills in both. An item is
+ * the card's when its block is drawn inside the card's conversation (Codex
+ * reports every item as a root, so the transcript is the only place its owner
+ * is written), or when its `parentTaskId` chain reaches one that is, or
+ * reaches the card (a nested Claude agent's own work, which need not have a
+ * row here).
  *
- * Running work only, as the Background panel's own header counts it: a
- * scheduled wake or cron job is waiting, not running.
+ * Counted by the Background header's own function over the owned items alone,
+ * so the unit is the header's: one per group with something running in it. An
+ * agent and the commands under it are one, and a scheduled wake or cron job
+ * is waiting, not running.
  */
 export function subagentOwnedBackgroundItemCount(
   card: SubagentSegment,
@@ -130,9 +138,24 @@ export function subagentOwnedBackgroundItemCount(
     }
     return false;
   };
-  return deduped.filter(
-    (item) => item.kind !== "wakeup" && item.kind !== "cron" && owned(item),
-  ).length;
+  const ownedItems = deduped.filter(owned);
+  const ownedTaskIds = new Set(ownedItems.map((item) => item.taskId));
+  // A parent outside the owned set is the card itself or an ancestor of it:
+  // for this count the item is a root, not a member of that parent's group.
+  const rooted = ownedItems.map((item) =>
+    item.parentTaskId === null || ownedTaskIds.has(item.parentTaskId)
+      ? item
+      : { ...item, parentTaskId: null },
+  );
+  return backgroundSectionCounts({
+    tree: buildBackgroundTree(
+      rooted,
+      buildRememberedBackgroundNodes(rooted, new Map()),
+    ),
+    runningManagedCommandIds: [],
+    heldManagedCommandIds: [],
+    portForwardCount: 0,
+  }).runningCount;
 }
 
 function collectChildBlockIds(

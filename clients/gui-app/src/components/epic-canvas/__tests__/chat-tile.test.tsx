@@ -1013,6 +1013,58 @@ function foldedTurnRecord(messageId: string, timestamp: number): Message {
   };
 }
 
+const SUBAGENT_BLOCK_ID = "subagent-block-1";
+
+/** An assistant turn holding one subagent card with a conversation of its own. */
+function subagentAssistantMessage(): Message {
+  return {
+    role: "assistant",
+    messageId: "subagent-msg",
+    startedAt: 1,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude",
+      displayName: "Claude",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "subagent",
+        blockId: SUBAGENT_BLOCK_ID,
+        agentType: null,
+        name: "Mendel",
+        task: "Investigate the lifecycle.",
+        progressUpdates: [],
+        result: null,
+        status: "completed",
+        timestamp: 2,
+        startedAt: 2,
+        spawnToolCallId: null,
+        stopped: false,
+        workflowMeta: null,
+      },
+      {
+        type: "text",
+        blockId: "subagent-child-text",
+        parentBlockId: SUBAGENT_BLOCK_ID,
+        text: "Words only the subagent said.",
+        status: "completed",
+        timestamp: 3,
+        providerNotice: null,
+      },
+    ],
+    timestamp: 3,
+    turnId: "turn-subagent",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    envCredentialVar: null,
+    imageResolutions: [],
+  };
+}
+
 function planAssistantMessage(): Message {
   return {
     role: "assistant",
@@ -5249,6 +5301,45 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
     expect(retryFromUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a subagent's conversation over the transcript with a notice naming it, and Back to chat returns", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), subagentAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+    await settleLegendList();
+
+    expect(screen.queryByTestId("subagent-view-notice")).toBeNull();
+    expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
+
+    const openControl = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-subagent-open-as-chat]"),
+    ).find(
+      (element) => element.dataset.subagentOpenAsChat === SUBAGENT_BLOCK_ID,
+    );
+    if (openControl === undefined) {
+      throw new Error("expected the subagent card's open-as-chat control");
+    }
+    fireEvent.click(openControl);
+
+    expect(screen.getByTestId("subagent-chat-view")).not.toBeNull();
+    expect(screen.getByTestId("subagent-view-notice").textContent).toContain(
+      "You're viewing Mendel's conversation.",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to chat" }));
+
+    expect(screen.queryByTestId("subagent-view-notice")).toBeNull();
+    expect(screen.queryByTestId("subagent-chat-view")).toBeNull();
   });
 
   describe("turn-completed announcement title", () => {

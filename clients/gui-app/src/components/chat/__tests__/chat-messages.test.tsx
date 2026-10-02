@@ -101,7 +101,7 @@ import {
 function ChatMessagesWithDrillIn(
   props: Omit<ComponentProps<typeof ChatMessages>, "subagentDrillIn">,
 ): ReactElement {
-  const subagentDrillIn = useSubagentDrillIn();
+  const subagentDrillIn = useSubagentDrillIn(true);
   return <ChatMessages {...props} subagentDrillIn={subagentDrillIn} />;
 }
 

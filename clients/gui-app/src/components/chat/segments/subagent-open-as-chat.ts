@@ -56,9 +56,15 @@ export interface SubagentDrillIn {
  * transcript, if any. Component state on purpose - a drill-in is transient
  * and belongs to this mount, never to the persisted tile tree. Held by the
  * tile rather than the transcript because the lower dock reads it too.
+ *
+ * It still ends with the transcript: `transcriptLoaded` going false closes it,
+ * as unmounting the transcript did while the state lived there. A view left
+ * open across a reload would mount already open when the snapshot returns,
+ * and take focus on a reconnect nobody asked for.
  */
-export function useSubagentDrillIn(): SubagentDrillIn {
+export function useSubagentDrillIn(transcriptLoaded: boolean): SubagentDrillIn {
   const [openId, setOpenId] = useState<string | null>(null);
+  if (!transcriptLoaded && openId !== null) setOpenId(null);
   const open = useCallback<OpenSubagentAsChat>((subagentId) => {
     setOpenId(subagentId);
   }, []);

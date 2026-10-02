@@ -22,6 +22,8 @@ interface QuoteSelectionPopoverProps {
   readonly taskId: string;
   readonly snapshot: QuoteSelectionSnapshot;
   readonly onDismiss: () => void;
+  /** Called once the quote is in the chat's draft, before the dismissal. */
+  readonly onQuoted: () => void;
   /** The scrollable transcript container: the popover is clipped to its bounds
    *  and rides the visible portion of a selection that scrolls past its start. */
   readonly boundaryRef: RefObject<HTMLElement | null>;
@@ -45,8 +47,14 @@ interface QuoteSelectionPopoverProps {
  * focus mutation in the feature.
  */
 export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
-  const { taskId, snapshot, onDismiss, boundaryRef, bottomOverlayInsetPx } =
-    props;
+  const {
+    taskId,
+    snapshot,
+    onDismiss,
+    onQuoted,
+    boundaryRef,
+    bottomOverlayInsetPx,
+  } = props;
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const paneFocused = usePaneFocused();
 
@@ -134,6 +142,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
       }),
     );
     clearBrowserSelection();
+    onQuoted();
     onDismiss();
   };
 

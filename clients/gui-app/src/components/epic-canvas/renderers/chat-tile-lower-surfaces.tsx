@@ -114,8 +114,9 @@ export interface ChatLowerInteractionSurfacesProps {
    * context, its workspace, its queue, its running work, and a composer that
    * messages it. Under a subagent's conversation all of that reads as the
    * subagent's, and none of it is - a message typed there went to the parent
-   * and queued behind its running turn. So the dock and the composer give
-   * way to one notice saying whose conversation this is and how to get back.
+   * and queued behind its running turn. So the dock and the composer are
+   * hidden behind one notice saying whose conversation this is and how to get
+   * back.
    * Approvals and interview questions stay: one of them may be what the
    * subagent on screen is blocked on.
    */
@@ -612,7 +613,14 @@ export function ChatLowerInteractionSurfaces(
           model={composerModel}
           layout={approvalLayout}
         />
-        {dockShown ? (
+        {/* Hidden, never unmounted, under a subagent's conversation (see
+            `subagentView`): the dock holds state a remount would lose - which
+            panel is open, where it is scrolled, the Background rows' own
+            memory of their parents. */}
+        <div
+          className={cn(dockShown ? "contents" : "hidden")}
+          inert={!dockShown}
+        >
           <ChatLowerDock
             snapshotLoaded={props.runtime.snapshotLoaded}
             epicId={props.epicId}
@@ -653,7 +661,7 @@ export function ChatLowerInteractionSurfaces(
             onBackgroundItemsStopAll={props.queue.onStopAllBackgroundItems}
             onBackgroundSessionStop={props.queue.onStopBackgroundSession}
           />
-        ) : null}
+        </div>
         <ChatComposerRegion model={composerModel} layout={composerLayout} />
         <StopChildrenDialog
           open={stopConfirmation?.kind === "children"}
@@ -814,24 +822,28 @@ function ComposerSurface(props: {
       </>
     );
   }
-  if (model.subagentView !== null) {
-    return (
-      <>
-        {escapeHatch}
-        <ComposerSlotShell topSpacing={belowSpacing} bottomSpacing="normal">
-          <SubagentViewNotice view={model.subagentView} />
-        </ComposerSlotShell>
-      </>
-    );
-  }
+  const composerShown = model.subagentView === null;
   return (
     <>
       {escapeHatch}
-      <LiveChatComposer
-        model={model}
-        topSpacing={belowSpacing}
-        hasPendingApprovals={model.hasPendingApprovals}
-      />
+      {model.subagentView === null ? null : (
+        <ComposerSlotShell topSpacing={belowSpacing} bottomSpacing="normal">
+          <SubagentViewNotice view={model.subagentView} />
+        </ComposerSlotShell>
+      )}
+      {/* Hidden, never unmounted, under a subagent's conversation: a
+          remounted editor takes focus when it mounts, which on the way back
+          would pull it off the control the view returns it to. */}
+      <div
+        className={cn(composerShown ? "contents" : "hidden")}
+        inert={!composerShown}
+      >
+        <LiveChatComposer
+          model={model}
+          topSpacing={belowSpacing}
+          hasPendingApprovals={model.hasPendingApprovals}
+        />
+      </div>
     </>
   );
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  BackgroundItem,
+  CronBackgroundItem,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import { subagentOwnedBackgroundItemCount } from "@/components/chat/segments/subagent-display";
 import type {
   SubagentChildSegment,
@@ -56,6 +59,39 @@ function command(
   };
 }
 
+function wakeup(
+  taskId: string,
+  blockId: string,
+  parentTaskId: string | null,
+): BackgroundItem {
+  return {
+    taskId,
+    title: `Wake ${taskId}`,
+    blockId,
+    parentTaskId,
+    kind: "wakeup",
+    scheduledFor: 1,
+  };
+}
+
+function cron(
+  taskId: string,
+  blockId: string,
+  parentTaskId: string | null,
+): CronBackgroundItem {
+  return {
+    taskId,
+    title: `Cron ${taskId}`,
+    blockId,
+    parentTaskId,
+    kind: "cron",
+    schedule: "*/5 * * * *",
+    humanSchedule: "Every 5 minutes",
+    prompt: "check",
+    recurring: true,
+  };
+}
+
 /**
  * `parent` holds a text block and a nested card `child`, which holds its own
  * text block - so there is a direct child id and a grandchild id to point
@@ -105,6 +141,76 @@ describe("subagentOwnedBackgroundItemCount", () => {
     expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
   });
 
+  describe("groups, as the Background header counts them", () => {
+    it("counts two unrelated owned root items as two", () => {
+      const items = [
+        command("task-1", "child-text", null),
+        command("task-2", "grandchild-text", null),
+      ];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(2);
+    });
+
+    it("counts an owned parent and its owned child as one group", () => {
+      const items = [
+        command("task-owned", "child-text", null),
+        command("task-spawned", "no-such-block", "task-owned"),
+      ];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
+    });
+
+    it("counts a parent -> mid -> leaf chain, all owned, as one group", () => {
+      const items = [
+        command("task-parent-owned", "child-text", null),
+        command("task-mid", "grandchild-text", "task-parent-owned"),
+        command("task-leaf", "no-such-block", "task-mid"),
+      ];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
+    });
+
+    it("counts two direct children of the card's own item as two, and not the card's item", () => {
+      const items = [
+        command("task-parent", "parent", null),
+        command("task-a", "no-such-block", "task-parent"),
+        command("task-b", "no-such-block-either", "task-parent"),
+      ];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(2);
+    });
+
+    it("counts a lone owned wake as zero", () => {
+      const items = [wakeup("task-wake", "child-text", null)];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(0);
+    });
+
+    it("counts a lone owned cron job as zero", () => {
+      const items = [cron("task-cron", "child-text", null)];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(0);
+    });
+
+    it("counts a wake and a running command, as separate roots, as one", () => {
+      const items = [
+        wakeup("task-wake", "child-text", null),
+        command("task-1", "grandchild-text", null),
+      ];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
+    });
+
+    it("counts a wake under a running owned command as that one group", () => {
+      const items = [
+        command("task-1", "child-text", null),
+        wakeup("task-wake", "no-such-block", "task-1"),
+      ];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
+    });
+
+    it("counts a group of only a wake and a cron job as zero", () => {
+      const items = [
+        wakeup("task-wake", "child-text", null),
+        cron("task-cron", "no-such-block", "task-wake"),
+      ];
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(0);
+    });
+  });
+
   describe("parentTaskId chain", () => {
     it("counts an item with no matching block whose parent is the card's own item", () => {
       const items = [
@@ -114,23 +220,24 @@ describe("subagentOwnedBackgroundItemCount", () => {
       expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
     });
 
-    it("counts an item two levels down the chain from the card's own item", () => {
+    it("counts an item two levels down the chain from the card's own item as one group with its parent", () => {
       const items = [
         command("task-parent", "parent", null),
         command("task-mid", "no-such-block", "task-parent"),
         command("task-leaf", "no-such-block-either", "task-mid"),
       ];
-      // The mid item and the leaf under it are both the subagent's work; the
-      // card's own item is not.
-      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(2);
+      // The mid item and the leaf under it are both the subagent's work, and
+      // one group (the leaf hangs under the mid); the card's own item is not
+      // part of it.
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
     });
 
-    it("counts an item whose parent's block is drawn inside the card", () => {
+    it("counts an item whose parent's block is drawn inside the card as one group with that parent", () => {
       const items = [
         command("task-owned", "grandchild-text", null),
         command("task-spawned", "no-such-block", "task-owned"),
       ];
-      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(2);
+      expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
     });
 
     it("does not count an item whose parent is an unrelated root item", () => {
@@ -162,15 +269,10 @@ describe("subagentOwnedBackgroundItemCount", () => {
   });
 
   it("does not count a scheduled wake the card owns: it is waiting, not running", () => {
-    const wake: BackgroundItem = {
-      taskId: "task-wake",
-      title: "wake",
-      blockId: "child-text",
-      parentTaskId: null,
-      kind: "wakeup",
-      scheduledFor: 1,
-    };
-    const items = [wake, command("task-1", "child-text", null)];
+    const items = [
+      wakeup("task-wake", "child-text", null),
+      command("task-1", "child-text", null),
+    ];
     expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
   });
 

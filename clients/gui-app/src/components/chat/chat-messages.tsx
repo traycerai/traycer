@@ -4196,6 +4196,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   taskId={taskId}
                   snapshot={quoteSelection.snapshot}
                   onDismiss={quoteSelection.dismiss}
+                  // A quote goes into THIS chat's draft, and under an
+                  // open-as-chat view the composer holding it is hidden. So a
+                  // quote taken there returns to the chat, as a terminal quote
+                  // reveals the chat it was added to.
+                  onQuoted={closeSubagentDrillIn}
                   boundaryRef={transcriptContainerRef}
                   bottomOverlayInsetPx={endInset}
                 />
