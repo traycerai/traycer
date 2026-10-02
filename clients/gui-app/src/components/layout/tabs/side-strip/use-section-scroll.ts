@@ -6,7 +6,10 @@ export interface SectionScroll {
   readonly moreBelow: boolean;
   /** The Needs you header has scrolled out of view, above the top edge. */
   readonly needsYouAbove: boolean;
-  /** The section whose header row is stuck on the top edge, in view; `null` at rest. */
+  /**
+   * The section whose header row is in front on the top edge: the one stuck
+   * there, or the next one once it starts to push that one out. `null` at rest.
+   */
   readonly stuck: string | null;
 }
 
@@ -22,8 +25,8 @@ const AT_REST: SectionScroll = {
  * header has reached the top and covers it. That is read from where the next
  * header sits in the flow, the end of the row before it, never from where it
  * sticks, so nothing drawn in a stuck header can move the answer. The header
- * in view on the top edge is the last one stuck there, since each covers the
- * one before. Re-read on scroll, on a resize and whenever the rows change,
+ * in front on the top edge is the last one stuck there, since each covers the
+ * one before, or the next one from the moment it overlaps that. Re-read on scroll, on a resize and whenever the rows change,
  * since either can move a row across an edge without a scroll; the state only
  * changes where an edge is crossed.
  */
@@ -37,9 +40,19 @@ export function useSectionScroll(scroller: HTMLElement | null): SectionScroll {
       );
       const top = scroller.getBoundingClientRect().top + 0.5;
       const needsYouEnd = rows.at(1)?.previousElementSibling ?? null;
-      const stuck = rows.findLast(
+      const stuckAt = rows.findLastIndex(
         (row) => row.getBoundingClientRect().top <= top,
       );
+      // The next header takes over the moment it starts to slide over the
+      // stuck one, so the row in front is never one being covered.
+      const incoming = rows.at(stuckAt + 1);
+      const stuck =
+        stuckAt >= 0 &&
+        incoming !== undefined &&
+        incoming.getBoundingClientRect().top <
+          rows[stuckAt].getBoundingClientRect().bottom - 0.5
+          ? incoming
+          : rows.at(stuckAt);
       const next: SectionScroll = {
         moreBelow:
           scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop >

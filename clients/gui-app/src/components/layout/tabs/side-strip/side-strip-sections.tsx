@@ -112,7 +112,8 @@ export function SideStripSections(props: {
           group.entries.some((entry) => entry.kind === "tabs"),
         )
       : sections;
-  // The chip rides in the header stuck on the top edge.
+  // The chip rides in the header in front on the top edge, never in one
+  // being pushed out from under it.
   const chip =
     needsYouAbove && scroller !== null && needsYou !== undefined ? (
       <StripNeedsYouChip

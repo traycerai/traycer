@@ -251,6 +251,46 @@ test.describe("over a list that overflows", () => {
     });
   }
 
+  for (const width of [240, 192]) {
+    test(`at ${String(width)}px, never draws the chip partly covered while the next header pushes its row out`, async ({
+      page,
+    }) => {
+      await openStrip(page);
+      await page.evaluate(
+        `window.__sideTabStripProbe.setWidth(${String(width)})`,
+      );
+      await nextFrames(page, 3);
+      // To review stuck, Working sliding up over it, then Working stuck.
+      let seen = 0;
+      for (let at = 200; at <= 340; at += 4) {
+        await scrollTo(page, at);
+        const chipBox = await chip(page).boundingBox();
+        if (chipBox === null) continue;
+        seen += 1;
+        // Each edge of the chip, inside its rounded corners, hits the chip
+        // itself: no row is over any part of it.
+        const middleX = chipBox.x + chipBox.width / 2;
+        const middleY = chipBox.y + chipBox.height / 2;
+        const corners = [
+          [middleX, chipBox.y + 1],
+          [middleX, chipBox.y + chipBox.height - 1],
+          [chipBox.x + 1, middleY],
+          [chipBox.x + chipBox.width - 1, middleY],
+        ];
+        const whole = await chip(page).evaluate(
+          (node, points) =>
+            points.every(([x, y]) => {
+              const hit = document.elementFromPoint(x, y);
+              return hit !== null && node.contains(hit);
+            }),
+          corners,
+        );
+        expect(whole, `chip covered at scrollTop ${String(at)}`).toBe(true);
+      }
+      expect(seen).toBeGreaterThan(0);
+    });
+  }
+
   test("takes the chip's click back to Needs you and puts focus on its header", async ({
     page,
   }) => {
