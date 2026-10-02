@@ -50,7 +50,8 @@ export function SideSplitIcon(props: {
 /**
  * A split pair in the vertical strip, as paint only. Expanded, it is one row:
  * the split icon, then its two halves side by side, each a tab of its own,
- * and the second line under them when a half needs the person. In the rail it
+ * and the second line under them when a half needs the person or is to
+ * review. In the rail it
  * is the icon over the two halves' tiles in one container.
  */
 export function SideSplitRow(props: SideSplitRowProps): ReactNode {

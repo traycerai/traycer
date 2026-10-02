@@ -6,6 +6,7 @@ import { StripElapsedTime } from "./strip-elapsed-time";
 import {
   NEEDS_YOU_VERB,
   type NeedsYouRow,
+  type ReviewOutcome,
   type ToReviewRow,
 } from "./strip-sections";
 
@@ -44,32 +45,28 @@ export function NeedsYouDetail(props: {
   );
 }
 
-/** A half of a split pair that needs the person, and its task's title. */
-export interface PairNeedsYouHalf {
-  readonly row: NeedsYouRow;
-  readonly title: string;
-}
-
 /**
- * A split pair's second line: "Approve · task · agent" for the half that has
- * waited longest (the left one on a tie), ending in "· +1 more" when the other
- * half needs the person too. `null` when neither does.
+ * A split pair's second line when a half needs the person: "Approve · agent"
+ * for the half that has waited longest (the left one on a tie), then "· +1
+ * more" when the other half needs the person too, then that wait. The half is
+ * not named: its own amber glyph, just above, says which it is. `null` when
+ * neither half needs the person.
  */
 export function PairNeedsYouDetail(props: {
-  readonly halves: ReadonlyArray<PairNeedsYouHalf>;
+  readonly halves: ReadonlyArray<NeedsYouRow>;
   readonly className: string;
 }): ReactNode {
-  const first = props.halves.reduce<PairNeedsYouHalf | null>(
-    (oldest, half) =>
-      oldest === null || waitedLonger(half.row, oldest.row) ? half : oldest,
+  const first = props.halves.reduce<NeedsYouRow | null>(
+    (oldest, row) =>
+      oldest === null || waitedLonger(row, oldest) ? row : oldest,
     null,
   );
   if (first === null) return null;
-  const { row } = first;
   const words = [
-    NEEDS_YOU_VERB[row.reason],
-    first.title,
-    ...(row.agentTitle === null ? [] : [displayTitle(row.agentTitle, "agent")]),
+    NEEDS_YOU_VERB[first.reason],
+    ...(first.agentTitle === null
+      ? []
+      : [displayTitle(first.agentTitle, "agent")]),
   ];
   return (
     <span
@@ -81,7 +78,53 @@ export function PairNeedsYouDetail(props: {
       {props.halves.length > 1 ? (
         <span className="shrink-0">· +1 more</span>
       ) : null}
+      <PairDetailTime since={first.createdAt} needsYou />
     </span>
+  );
+}
+
+/**
+ * A finished split pair's second line, as a single To review row's: "Done" or
+ * "Failed" and when. A failure leads, since it is the one to look at first:
+ * with one half failed and the other done, the line is the failure's.
+ */
+export function PairToReviewDetail(props: {
+  readonly halves: ReadonlyArray<ToReviewRow>;
+  readonly className: string;
+}): ReactNode {
+  const failed = props.halves.filter((row) => row.outcome === "failed");
+  const leading = failed.length > 0 ? failed : props.halves;
+  const first = leading.at(0);
+  if (first === undefined) return null;
+  const times = leading.flatMap((row) => (row.at === null ? [] : [row.at]));
+  return (
+    <ToReviewLine outcome={first.outcome} className={props.className}>
+      <PairDetailTime
+        since={times.length === 0 ? null : Math.max(...times)}
+        needsYou={false}
+      />
+    </ToReviewLine>
+  );
+}
+
+/**
+ * A pair's time, at the end of its second line: its halves fill the title's
+ * line, where a single row puts it. Toned as a single row's.
+ */
+function PairDetailTime(props: {
+  readonly since: number | null;
+  readonly needsYou: boolean;
+}): ReactNode {
+  if (props.since === null) return null;
+  return (
+    <StripElapsedTime
+      since={props.since}
+      className={cn(
+        "ms-auto shrink-0 tabular-nums",
+        props.needsYou ? "text-warning-foreground/70" : "text-muted-foreground",
+      )}
+      testId="side-tab-section-time"
+    />
   );
 }
 
@@ -98,11 +141,24 @@ function waitedLonger(a: NeedsYouRow, b: NeedsYouRow): boolean {
 export function ToReviewDetail(props: {
   readonly row: ToReviewRow;
 }): ReactNode {
-  const done = props.row.outcome === "done";
+  return (
+    <ToReviewLine outcome={props.row.outcome} className={undefined}>
+      {null}
+    </ToReviewLine>
+  );
+}
+
+function ToReviewLine(props: {
+  readonly outcome: ReviewOutcome;
+  readonly className: string | undefined;
+  /** What follows the words: a pair's time. */
+  readonly children: ReactNode;
+}): ReactNode {
+  const done = props.outcome === "done";
   return (
     <span
       data-testid="side-tab-section-detail"
-      className={cn(DETAIL_CLASS, "text-muted-foreground")}
+      className={cn(DETAIL_CLASS, "text-muted-foreground", props.className)}
     >
       {done ? (
         <Check
@@ -113,6 +169,7 @@ export function ToReviewDetail(props: {
         <X aria-hidden className="size-3 shrink-0 text-destructive" />
       )}
       <span className={DETAIL_TEXT_CLASS}>{done ? "Done" : "Failed"}</span>
+      {props.children}
     </span>
   );
 }

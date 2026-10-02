@@ -53,9 +53,14 @@ import {
   SIDE_SPLIT_HALF_EMPTY_CLASS,
 } from "./side-strip-tokens";
 import { StripAgentGroup } from "./strip-agent-group";
-import { PairNeedsYouDetail } from "./strip-section-detail";
+import { PairNeedsYouDetail, PairToReviewDetail } from "./strip-section-detail";
 import { needsYouLineOf } from "./strip-section-row";
-import { memberRowOf, type StripTaskRow } from "./strip-sections";
+import {
+  memberRowOf,
+  type NeedsYouRow,
+  type StripTaskRow,
+  type ToReviewRow,
+} from "./strip-sections";
 import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
 import {
@@ -70,8 +75,9 @@ import { NO_LIVE_AGENTS } from "./side-tab-live-agents";
  * A split pair: one reorder frame (the split's drop slot, never a merge target)
  * around one row of the split icon and two halves, each a tab of its own. The
  * icon is the top bar's split actions button. In the Activity view the row
- * draws the needs-you line of its halves, and each half's agents follow it,
- * the left half's first, under a caption naming that half.
+ * draws its halves' Needs you or To review line, and each half's agents
+ * follow it, the left half's first, under a caption naming that half when
+ * both halves list agents.
  */
 export function SideSplitItem(
   props: SideStripItemProps & {
@@ -169,15 +175,21 @@ export function SideSplitItem(
   };
   const quickActionsTab = memberTab(item.left) ?? memberTab(item.right);
   const expanded = props.variant === "expanded";
+  const halves = [
+    { row: leftSection, group: leftGroup },
+    { row: rightSection, group: rightGroup },
+  ];
   // A half whose expanded agents below say all its requests drops off the line.
-  const needsYou = [
-    { row: leftSection, group: leftGroup, title: leftLabel },
-    { row: rightSection, group: rightGroup, title: rightLabel },
-  ].flatMap((half) => {
+  const needsYou = halves.flatMap((half) => {
     if (half.row?.section !== "needs-you") return [];
     const line = needsYouLineOf(half.row, half.group);
-    return line === null ? [] : [{ row: line, title: half.title }];
+    return line === null ? [] : [line];
   });
+  const toReview = halves.flatMap((half) =>
+    half.row?.section === "to-review" ? [half.row] : [],
+  );
+  // A caption tells two halves' agents apart; one half's need no name.
+  const captioned = halves.every((half) => (half.group?.rows.length ?? 0) > 0);
   return (
     <m.div
       ref={setFrameRef}
@@ -215,11 +227,8 @@ export function SideSplitItem(
         left={member("left")}
         right={member("right")}
         detail={
-          expanded && needsYou.length > 0 ? (
-            <PairNeedsYouDetail
-              halves={needsYou}
-              className={SIDE_SPLIT_DETAIL_INSET_CLASS}
-            />
+          expanded ? (
+            <PairDetail needsYou={needsYou} toReview={toReview} />
           ) : null
         }
       />
@@ -228,27 +237,58 @@ export function SideSplitItem(
           <StripAgentGroup
             group={leftGroup}
             caption={
-              <SplitHalfCaption
-                splitId={item.id}
-                side="left"
-                title={leftLabel}
-              />
+              captioned ? (
+                <SplitHalfCaption
+                  splitId={item.id}
+                  side="left"
+                  title={leftLabel}
+                />
+              ) : null
             }
           />
           <StripAgentGroup
             group={rightGroup}
             caption={
-              <SplitHalfCaption
-                splitId={item.id}
-                side="right"
-                title={rightLabel}
-              />
+              captioned ? (
+                <SplitHalfCaption
+                  splitId={item.id}
+                  side="right"
+                  title={rightLabel}
+                />
+              ) : null
             }
           />
         </>
       ) : null}
     </m.div>
   );
+}
+
+/**
+ * The pair's second line in the Activity view: its Needs you line while a half
+ * needs the person, else its To review line while a half is unread, else none.
+ */
+function PairDetail(props: {
+  readonly needsYou: ReadonlyArray<NeedsYouRow>;
+  readonly toReview: ReadonlyArray<ToReviewRow>;
+}): ReactNode {
+  if (props.needsYou.length > 0) {
+    return (
+      <PairNeedsYouDetail
+        halves={props.needsYou}
+        className={SIDE_SPLIT_DETAIL_INSET_CLASS}
+      />
+    );
+  }
+  if (props.toReview.length > 0) {
+    return (
+      <PairToReviewDetail
+        halves={props.toReview}
+        className={SIDE_SPLIT_DETAIL_INSET_CLASS}
+      />
+    );
+  }
+  return null;
 }
 
 function memberTab(member: HeaderStripMember): HeaderTab | null {

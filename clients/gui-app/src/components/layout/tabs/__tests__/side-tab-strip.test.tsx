@@ -1571,6 +1571,38 @@ describe("<SideTabStrip />", () => {
       expect(follows(leftAgent, rightCaption)).toBe(true);
       expect(follows(rightCaption, rightAgent)).toBe(true);
     });
+
+    it("names no half over its agents when only one half lists any", async () => {
+      openSplitPair("left");
+      warmEpic("e-alpha", [chatProjection("s-left", { title: "Left agent" })]);
+      __setAgentActivityStateForTests(
+        { "e-alpha": { working: ["s-left"], turn: ["s-left"] } },
+        "local",
+        "connected",
+      );
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      expect(screen.getByTestId("strip-agent-s-left")).toBeTruthy();
+      expect(screen.queryByTestId("split-half-caption-left")).toBeNull();
+      expect(screen.queryByTestId("split-half-caption-right")).toBeNull();
+    });
+
+    it("gives a finished pair the To review line a single task has, its failure leading", async () => {
+      openSplitPair("left");
+      indicatorState.value = {
+        epics: {
+          "e-alpha": { ...NO_FLAGS, unreadDone: true },
+          "e-beta": { ...NO_FLAGS, unreadFailure: true },
+        },
+        chats: {},
+      };
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      const pair = screen.getByTestId("split-tab-group-split-a");
+      expect(
+        within(pair).getByTestId("side-tab-section-detail").textContent,
+      ).toBe("Failed");
+    });
   });
 
   it("shows the waiting chip on a row whose agent waits for a reply", async () => {
