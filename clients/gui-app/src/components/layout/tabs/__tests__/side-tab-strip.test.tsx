@@ -2136,7 +2136,8 @@ describe("<SideTabStrip />", () => {
           "side-tab-section-detail",
         )?.textContent ?? null;
       expect(secondLine("e-gamma")).toBe("Approve · Deploy agent");
-      expect(secondLine("e-delta")).toBe("Done · ready to review");
+      // The header says "to review"; the line says only how it ended.
+      expect(secondLine("e-delta")).toBe("Done");
       expect(secondLine("e-epsilon")).toBe("Failed");
       expect(secondLine("e-beta")).toBeNull();
       expect(secondLine("e-alpha")).toBeNull();
@@ -2971,7 +2972,7 @@ describe("<SideTabStrip />", () => {
         ).toBe("2m");
         close("e-gamma");
 
-        expect(secondLine(cardOf("e-delta"))).toBe("Done · ready to review");
+        expect(secondLine(cardOf("e-delta"))).toBe("Done");
         close("e-delta");
         expect(secondLine(cardOf("e-epsilon"))).toBe("Failed");
         close("e-epsilon");

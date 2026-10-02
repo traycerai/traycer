@@ -91,7 +91,10 @@ function waitedLonger(a: NeedsYouRow, b: NeedsYouRow): boolean {
   return b.createdAt === null || a.createdAt < b.createdAt;
 }
 
-/** A green check and "Done · ready to review", or a red cross and "Failed". */
+/**
+ * A green check and "Done", or a red cross and "Failed": the section's header
+ * already says it is to review.
+ */
 export function ToReviewDetail(props: {
   readonly row: ToReviewRow;
 }): ReactNode {
@@ -109,9 +112,7 @@ export function ToReviewDetail(props: {
       ) : (
         <X aria-hidden className="size-3 shrink-0 text-destructive" />
       )}
-      <span className={DETAIL_TEXT_CLASS}>
-        {done ? "Done · ready to review" : "Failed"}
-      </span>
+      <span className={DETAIL_TEXT_CLASS}>{done ? "Done" : "Failed"}</span>
     </span>
   );
 }
