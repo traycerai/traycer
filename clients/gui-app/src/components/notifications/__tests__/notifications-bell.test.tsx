@@ -298,6 +298,7 @@ function pressNotificationsChord(): void {
 
 function expectNoBellIndicators(): void {
   expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
+  expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
   expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
   expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
 }
@@ -471,7 +472,7 @@ describe("NotificationsBell", () => {
     expect(document.activeElement).not.toBe(heading);
   });
 
-  it("draws the Needs you task count in amber, and attention with no task waiting as the quiet dot", () => {
+  it("draws the Needs you task count in amber, and with no task waiting the failures' red count", () => {
     const runnerHost = createRunnerHost();
     mountBell(runnerHost, undefined);
 
@@ -514,13 +515,17 @@ describe("NotificationsBell", () => {
       });
     });
 
-    // 150 to attend to, failures among them, and no task waiting on the
-    // person: amber would claim one is, so it is the quiet dot.
+    // 150 to attend to, the app's own transport failures among them, and no
+    // task waiting on the person: the failures keep their red count, exact
+    // and uncapped; amber would claim a task is waiting.
+    const failures = screen.getByTestId("notifications-attention-badge");
+    expect(failures.textContent).toBe("150");
+    expect(failures.classList.contains("bg-destructive")).toBe(true);
     expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
-    expect(screen.getByTestId("notifications-quiet-dot")).not.toBeNull();
+    expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, unread activity");
+    ).toBe("Notifications, 150 notifications need attention");
 
     act(() => {
       useNeedsYouTaskCountStore.setState({ count: 2 });
@@ -529,6 +534,7 @@ describe("NotificationsBell", () => {
     const badge = screen.getByTestId("notifications-needs-you-badge");
     expect(badge.textContent).toBe("2");
     expect(badge.classList.contains("bg-warning")).toBe(true);
+    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(

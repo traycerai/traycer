@@ -33,7 +33,8 @@ const BADGE_TRANSITION = { duration: 0.14, ease: "easeOut" } as const;
 
 /**
  * Top-level notifications trigger in the app header. Shows the Needs you task
- * count as an amber badge, as the sidebar's Notifications row does, and opens
+ * count as an amber badge, as the sidebar's Notifications row does, or with no
+ * task waiting the red count of what needs attention, and opens
  * the `NotificationsPopover` on click. Native toast/chime
  * emission is owned by `NotificationEmissionController` so all sources share
  * the same hold/coalescing/focus policy.
@@ -64,17 +65,16 @@ export function NotificationsBell() {
   const badgeInitial = motionEnabled ? BADGE_HIDDEN : false;
   const badgeExit = motionEnabled ? BADGE_HIDDEN : undefined;
 
-  // The badge is the sidebar's Needs you task count, in its amber, so the
-  // number means one thing wherever it is drawn. Anything else unread,
-  // failures included, is the quiet dot; the tabs show which task failed.
+  // Amber is the sidebar's Needs you task count, so that number means one
+  // thing wherever it is drawn. With no task waiting, what still needs
+  // attention (a failure, an app-local transport error) keeps its red count,
+  // so no failure goes unshown.
   const needsYouCount = useNeedsYouTaskCount();
   const mark = bellMarkOf(bellState, needsYouCount);
   const ariaLabel =
-    needsYouCount > 0
+    mark === "needsYou"
       ? needsYouBellLabel(needsYouCount, bellState)
-      : notificationBellAccessibleLabel(
-          mark === "quietDot" ? QUIET_DOT_STATE : bellState,
-        );
+      : notificationBellAccessibleLabel(bellState);
   const bellTooltip = (state: NotificationBellState): string => {
     // The path forward the hollow `unknown` dot needs. Without it this is the
     // bare gray dot with no explanation that got `unknown` suppressed into
@@ -137,6 +137,24 @@ export function NotificationsBell() {
                   />
                 </m.span>
               ) : null}
+              {mark === "attention" && bellState.kind === "attention" ? (
+                <m.span
+                  key="attention-badge"
+                  data-testid="notifications-attention-badge"
+                  aria-hidden
+                  initial={badgeInitial}
+                  animate={BADGE_PRESENT}
+                  exit={badgeExit}
+                  transition={BADGE_TRANSITION}
+                  className="absolute -right-1 -top-1 flex h-4 min-w-4 origin-bottom-left items-center justify-center rounded-md bg-destructive px-1 text-overline font-semibold leading-none text-destructive-foreground tabular-nums shadow-sm ring-2 ring-background"
+                >
+                  <RollingNumber
+                    value={bellState.count}
+                    className={undefined}
+                    testId="notifications-attention-count"
+                  />
+                </m.span>
+              ) : null}
             </AnimatePresence>
             {mark === "quietDot" && (
               <span
@@ -183,27 +201,26 @@ export function NotificationsBell() {
 }
 
 /** The one mark the bell wears. */
-type BellMark = "needsYou" | "unknown" | "quietDot" | null;
+type BellMark = "needsYou" | "attention" | "unknown" | "quietDot" | null;
 
 /**
- * The Needs you count while a task needs the person, which also says there is
- * something to see; else the hollow `unknown` dot; else the quiet dot for
- * anything unread.
+ * The amber Needs you count while a task needs the person; else the red count
+ * of what needs attention, failures among it; else the hollow `unknown` dot;
+ * else the quiet dot for anything unread.
  */
 function bellMarkOf(state: NotificationBellState, needsYou: number): BellMark {
   if (needsYou > 0) return "needsYou";
   switch (state.kind) {
+    case "attention":
+      return "attention";
     case "unknown":
       return "unknown";
-    case "attention":
     case "quietDot":
       return "quietDot";
     case "clear":
       return null;
   }
 }
-
-const QUIET_DOT_STATE: NotificationBellState = { kind: "quietDot" };
 
 function needsYouBellLabel(
   needsYou: number,

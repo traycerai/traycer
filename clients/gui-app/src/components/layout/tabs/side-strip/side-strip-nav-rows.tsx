@@ -216,12 +216,16 @@ function InboxNavRow(props: {
   // Tasks, as the Needs you header counts them; the drawer lists requests.
   const needsYouCount = useNeedsYouTaskCount();
   const unreadCount = useMergedNotificationUnreadCount();
-  // Amber is Needs you in both views: while a task needs the person the pill
-  // is the Needs you task count. With none, the Layered view shows the unread
-  // total in the muted pill; the Activity view's To review says that instead.
+  // The Activity view's To review lists what else there is, so its pill is
+  // the Needs you count alone; the Layered view's says the rest as the bell
+  // does.
   const needsYouOnly = useLiveAgentsInStrip();
-  let pillCount = needsYouCount;
-  if (needsYouCount === 0 && !needsYouOnly) pillCount = unreadCount;
+  const pill = inboxPillOf({
+    needsYou: needsYouCount,
+    attention: bellState.kind === "attention" ? bellState.count : 0,
+    unread: unreadCount,
+    needsYouOnly,
+  });
   // The bell's `unknown`: a summary is unavailable, so zero counts are not a
   // claim that nothing is waiting (see `useNotificationBellState`).
   const unavailable = bellState.kind === "unknown";
@@ -241,6 +245,7 @@ function InboxNavRow(props: {
             active={open}
             aria-label={inboxAccessibleLabel(
               needsYouCount,
+              pill?.tone === "attention" ? pill.count : 0,
               unreadCount,
               unavailable,
             )}
@@ -270,24 +275,23 @@ function InboxNavRow(props: {
                 >
                   Notifications
                 </span>
-                {/* One count: amber, the Needs you task count; muted, the
-                    unread total. */}
-                {pillCount > 0 ? (
+                {pill === null ? null : (
                   <Badge
-                    variant={needsYouCount > 0 ? "warning" : "muted"}
+                    variant={INBOX_PILL_VARIANT[pill.tone]}
                     size="sm"
                     aria-hidden
                     data-testid="side-strip-inbox-count"
-                    data-needs-you={needsYouCount > 0}
+                    data-tone={pill.tone}
+                    data-needs-you={pill.tone === "needs-you"}
                   >
-                    <span className="tabular-nums">{pillCount}</span>
+                    <span className="tabular-nums">{pill.count}</span>
                   </Badge>
-                ) : null}
+                )}
                 {/* Only where no count is drawn, as on the tile: a zero with
                     no summary behind it is the claim the dot exists to
                     qualify. Beside a count it said nothing the tooltip and
                     the row's name do not. */}
-                {unavailable && pillCount === 0 ? (
+                {unavailable && pill === null ? (
                   <span
                     aria-hidden
                     data-testid="side-strip-inbox-unknown-indicator"
@@ -340,6 +344,31 @@ function InboxNavRow(props: {
 }
 
 const NO_SHELL_STYLE = {};
+
+/** What the Notifications pill's one count says, which its colour names. */
+type InboxPillTone = "needs-you" | "attention" | "unread";
+
+const INBOX_PILL_VARIANT: Readonly<
+  Record<InboxPillTone, "warning" | "destructive" | "muted">
+> = { "needs-you": "warning", attention: "destructive", unread: "muted" };
+
+/**
+ * The Notifications row's one count, as the header's bell picks its mark:
+ * amber, the Needs you task count, while a task needs the person; else red,
+ * what needs attention, failures among it; else muted, the unread total. The
+ * Activity view shows the amber count alone. `null` with nothing to count.
+ */
+function inboxPillOf(input: {
+  readonly needsYou: number;
+  readonly attention: number;
+  readonly unread: number;
+  readonly needsYouOnly: boolean;
+}): { readonly tone: InboxPillTone; readonly count: number } | null {
+  if (input.needsYou > 0) return { tone: "needs-you", count: input.needsYou };
+  if (input.needsYouOnly) return null;
+  if (input.attention > 0) return { tone: "attention", count: input.attention };
+  return input.unread > 0 ? { tone: "unread", count: input.unread } : null;
+}
 
 /**
  * The collapsed Notifications tile's corner: the needs-you count, else the
@@ -394,11 +423,13 @@ function inboxTooltip(unavailable: boolean, chord: ChordString | null): string {
 
 function inboxAccessibleLabel(
   needsYou: number,
+  attention: number,
   unread: number,
   unavailable: boolean,
 ): string {
   const parts = [
     needsYou > 0 ? `${needsYou} need you` : null,
+    attention > 0 ? `${attention} need attention` : null,
     unread > 0 ? `${unread} unread` : null,
     unavailable ? "status unavailable" : null,
   ].filter((part): part is string => part !== null);

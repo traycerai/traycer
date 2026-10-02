@@ -309,6 +309,28 @@ describe("SideStripNavRows", () => {
     expect(needsYou.dataset.needsYou).toBe("true");
   });
 
+  it("Layered view: with no task waiting, failures keep a red count over the unread total", async () => {
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+
+    // Two failures to attend to, five unread, nothing waiting on the person.
+    act(() => {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: { unreadCount: 5, attentionCount: 2 },
+      });
+    });
+
+    const pill = screen.getByTestId("side-strip-inbox-count");
+    expect(pill.textContent).toBe("2");
+    expect(pill.dataset.tone).toBe("attention");
+    expect(pill.dataset.needsYou).toBe("false");
+    expect(
+      screen.getByTestId("side-strip-inbox").getAttribute("aria-label"),
+    ).toBe("Notifications, 2 need attention, 5 unread");
+  });
+
   it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {
     activateActivityView();
     renderStrip("left");

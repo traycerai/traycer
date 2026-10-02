@@ -2492,13 +2492,16 @@ describe("<NotificationsSessionProvider />", () => {
     expect(
       useHostNotificationsStore.getState().byId["reconnected-prompt"],
     ).toBeDefined();
-    // Known again: the unknown dot gives way to what the summary says. The
-    // amber count is the tab strip's Needs you tasks, and none is mounted.
+    // Known again: the unknown dot gives way to the exact count. The amber
+    // count is the tab strip's Needs you tasks, and none is mounted here.
+    expect(
+      screen.getByTestId("notifications-attention-badge").textContent,
+    ).toBe("1");
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
-    expect(screen.getByTestId("notifications-quiet-dot")).not.toBeNull();
+    expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, unread activity");
+    ).toBe("Notifications, 1 notification needs attention");
   });
 
   it("preserves all non-host sources and host rows across disconnect and reconnect", async () => {
