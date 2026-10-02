@@ -208,7 +208,7 @@ function OverlayMember(props: {
       session={null}
       tint={null}
       inBlock={false}
-      titleIcon={<Plus className="size-3.5 me-1.5" />}
+      titleIcon={unavailable ? null : <Plus className="size-3.5 me-1" />}
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}

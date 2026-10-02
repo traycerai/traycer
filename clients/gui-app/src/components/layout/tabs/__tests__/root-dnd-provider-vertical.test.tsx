@@ -763,6 +763,27 @@ describe("RootDndProvider on a vertical strip", () => {
       expect(groupOf(B)).toBeNull();
     });
 
+    it("takes the last open task of an organization's group out with the menu's command, though the move removes the emptied group", async () => {
+      seedOrganizationGroup([B], [B]);
+      const command = vi.fn(() => Promise.resolve());
+      const view = await mountStrip(
+        "left",
+        ROWS,
+        [{ groupId: "g", top: 130, height: 40 }],
+        organizationOf(command),
+      );
+      const drag = pressAndActivate(view, ROW_B, inBand, 29);
+      moveTo(drag, inBand, 106);
+
+      releaseAt(drag, inBand, 106);
+
+      expect(useTabsStore.getState().groups?.g).toBeUndefined();
+      expect(command).toHaveBeenCalledExactlyOnceWith({
+        kind: "groups",
+        operations: [{ operation: "removeTask", taskId: "row-b-epic" }],
+      });
+    });
+
     it("joins a task dropped between a group's tasks", async () => {
       seedGroup([B, X, Y], false);
       const view = await mountStrip(

@@ -41,11 +41,11 @@ export function SideTabGroupBlock(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const blockRef = useRef<HTMLDivElement | null>(null);
-  useGroupNameColor(blockRef, props.color);
   const joining = useHeaderStripJoinsGroup(props.groupId);
   const chrome = useGroupChromeMotion(
     useHeaderStripGroupPlacement(props.groupId, props.lane),
   );
+  useGroupNameColor(blockRef, props.color, chrome.placed);
   const hidden = chrome.visible ? 1 : 0;
   const scope = useId();
   return (

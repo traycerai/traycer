@@ -104,6 +104,34 @@ test("reads the group's name at 4.5:1 again after the theme changes", async ({
   expect(await nameContrast(block, name)).toBeGreaterThanOrEqual(4.5);
 });
 
+test("reads the group's name at 4.5:1 once a drag that outlasted a theme change ends", async ({
+  page,
+}) => {
+  await openStrip(page, LAYERED, "dark");
+  const block = page.getByTestId("side-tab-group-block-fixture-group");
+  const name = block.getByTestId("side-tab-group-name");
+  const setPlacements = (placements: string) =>
+    page.evaluate(`(async () => {
+      const { useEpicDndStore } = await import("/src/components/epic-canvas/dnd/dnd-store.ts");
+      useEpicDndStore.getState().headerStripGroupPlacementsChanged(${placements});
+    })()`);
+
+  // The block paints no fill of its own while a drag has placed it, only the
+  // layer beside it does, so the theme change has no fill to read the name on.
+  await setPlacements(
+    `[{ groupId: "fixture-group", lane: null, offset: 0, grow: 0, visible: true }]`,
+  );
+  await expect(block).toHaveAttribute("data-placed", "true");
+  await page.emulateMedia({ colorScheme: "light" });
+  await nextFrames(page, 4);
+  await setPlacements("[]");
+  await expect(block).toHaveAttribute("data-placed", "false");
+
+  await expect
+    .poll(async () => nameContrast(block, name))
+    .toBeGreaterThanOrEqual(4.5);
+});
+
 test("draws the Activity view's group label as a 20px line in 11px medium text", async ({
   page,
 }) => {

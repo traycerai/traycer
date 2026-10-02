@@ -1079,15 +1079,28 @@ function commitHeaderTabDrop(input: {
   // against the new baseline in the layout effect of the render this causes, so
   // the flag has to be set by the time that render commits.
   armHeaderStripCommitHandoff();
+  // Read before the move: it repairs the layout, which drops a group left with
+  // no tab, and an organization's group emptied by this very drop is still the
+  // one the task is leaving.
+  const leavesOrganization = isOrganizationGroup(
+    input.geometry.slots[input.geometry.sourceIndex]?.groupId ?? null,
+  );
   tabCommandCoordinator.moveStripItem({
     itemId: headerTab.stripItemId,
     targetIndex,
     groupId: input.dragState.groupId,
   });
   saveOrganizationGroupMove(input.organization, headerTab.stripItemId, {
-    from: input.geometry.slots[input.geometry.sourceIndex]?.groupId ?? null,
+    leavesOrganization,
     to: input.dragState.groupId,
   });
+}
+
+function isOrganizationGroup(groupId: string | null): groupId is string {
+  return (
+    groupId !== null &&
+    Boolean(useTabsStore.getState().groups?.[groupId]?.organizationOwnerId)
+  );
 }
 
 /**
@@ -1098,12 +1111,18 @@ function commitHeaderTabDrop(input: {
 function saveOrganizationGroupMove(
   organization: OrganizationContextValue | null,
   stripItemId: string,
-  groups: { readonly from: string | null; readonly to: string | null },
+  groups: DroppedGroups,
 ): void {
   const view = organization?.supported ? organization.view : undefined;
   if (organization === null || view === undefined) return;
   const action = organizationGroupAction(view, stripItemId, groups);
   if (action !== null) void organization.command(action).catch(() => undefined);
+}
+
+/** The groups a drop changed: whether it left an organization's, and the one it landed in. */
+interface DroppedGroups {
+  readonly leavesOrganization: boolean;
+  readonly to: string | null;
 }
 
 /**
@@ -1115,11 +1134,9 @@ function saveOrganizationGroupMove(
 function organizationGroupAction(
   view: OrganizationView,
   stripItemId: string,
-  groups: { readonly from: string | null; readonly to: string | null },
+  groups: DroppedGroups,
 ): OrganizationAction | null {
   const state = useTabsStore.getState();
-  const isOrganizations = (groupId: string | null): groupId is string =>
-    groupId !== null && Boolean(state.groups?.[groupId]?.organizationOwnerId);
   const taskIdsOf = (item: StripItem): ReadonlyArray<string> =>
     flattenStripItemRefs(item).flatMap((ref) => {
       const epicId =
@@ -1132,8 +1149,8 @@ function organizationGroupAction(
   const taskIds = moved === undefined ? [] : taskIdsOf(moved);
   if (taskIds.length === 0) return null;
   const { to } = groups;
-  if (!isOrganizations(to)) {
-    return isOrganizations(groups.from)
+  if (!isOrganizationGroup(to)) {
+    return groups.leavesOrganization
       ? {
           kind: "groups",
           operations: taskIds.map((taskId) => ({

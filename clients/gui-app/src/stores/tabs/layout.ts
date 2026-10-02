@@ -597,8 +597,14 @@ export function moveStripItem(
   let insertion =
     layout.items.indexOf(item) < requested ? requested - 1 : requested;
   const interior = groupOf(insertion - 1);
-  if (args.groupId !== null && layout.groups?.[args.groupId]?.collapsed) {
-    insertion = Math.max(runStart(args.groupId), 0);
+  // The head of a collapsed group's run; none when the dragged item is the
+  // group's only tab, which keeps the place it was dropped at.
+  const collapsedStart =
+    args.groupId !== null && layout.groups?.[args.groupId]?.collapsed
+      ? runStart(args.groupId)
+      : -1;
+  if (collapsedStart >= 0) {
+    insertion = collapsedStart;
   } else if (
     interior !== null &&
     interior === groupOf(insertion) &&

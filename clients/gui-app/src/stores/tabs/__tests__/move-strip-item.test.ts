@@ -86,6 +86,25 @@ describe("moveStripItem", () => {
     expect(moved.groups?.h.collapsed).toBe(true);
   });
 
+  it("keeps the place a collapsed group's only tab is dropped at, in its own group", () => {
+    const layout: PersistedTabStripLayout = {
+      ...layoutWith(true),
+      items: ["l", "m", "x"].map(item),
+      customizations: {
+        [tabRefKey(ref("m"))]: { color: null, icon: null, groupId: "h" },
+      },
+    };
+
+    const moved = moveStripItem(layout, {
+      itemId: tabItemId(ref("m")),
+      targetIndex: 3,
+      groupId: "h",
+    });
+
+    expect(order(moved)).toEqual(["l", "x", "m"]);
+    expect(groupOf(moved, "m")).toBe("h");
+  });
+
   it("is the layout it was given when the drop changes nothing", () => {
     const layout = layoutWith(false);
 

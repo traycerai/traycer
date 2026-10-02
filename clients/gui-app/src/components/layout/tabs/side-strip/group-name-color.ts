@@ -39,15 +39,19 @@ function readableGroupName(
  * on the strip's ground (`md` swaps the canvas for the shell ground), so it is
  * read again when the theme changes and when the block resizes. Until it is
  * set, and where the fill does not resolve, the name keeps the group's colour.
+ * While a drag has `placed` the block, it paints no fill of its own (a layer
+ * beside it does), so there is nothing to read: the name stays as it was and
+ * is read again when the block paints.
  */
 export function useGroupNameColor(
   blockRef: RefObject<HTMLElement | null>,
   groupColor: string,
+  placed: boolean,
 ): void {
   const themeRevision = useThemeRevision();
   useLayoutEffect(() => {
     const block = blockRef.current;
-    if (block === null) return undefined;
+    if (block === null || placed) return undefined;
     const apply = (): void => {
       const painted = getComputedStyle(block);
       const name = readableGroupName(
@@ -64,5 +68,5 @@ export function useGroupNameColor(
     return () => {
       observer.disconnect();
     };
-  }, [blockRef, groupColor, themeRevision]);
+  }, [blockRef, groupColor, placed, themeRevision]);
 }

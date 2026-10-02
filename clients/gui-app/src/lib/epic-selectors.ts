@@ -1512,7 +1512,7 @@ export function useRegisteredEpicLiveAgents(
   const registry = getOpenEpicRegistry();
   const encodedAgents = useSyncExternalStore(
     (listener) =>
-      subscribeRegisteredEpics(
+      subscribeToRegisteredEpics(
         registry,
         refs.map((ref) => ref.epicId),
         listener,
@@ -1532,7 +1532,7 @@ export function useRegisteredEpicTitles(
 ): readonly (string | null)[] {
   const registry = getOpenEpicRegistry();
   const encodedTitles = useSyncExternalStore(
-    (listener) => subscribeRegisteredEpics(registry, epicIds, listener),
+    (listener) => subscribeToRegisteredEpics(registry, epicIds, listener),
     () =>
       JSON.stringify(
         epicIds.map((epicId) => liveEpicTitleFromHandle(registry.peek(epicId))),
@@ -1547,43 +1547,6 @@ export function useRegisteredEpicTitles(
         )
       : [];
   }, [encodedTitles]);
-}
-
-/**
- * Subscribes `listener` to the registry and to every mounted epic among
- * `epicIds`, following epics as they mount and unmount.
- */
-function subscribeRegisteredEpics(
-  registry: OpenEpicSessionRegistry,
-  epicIds: readonly string[],
-  listener: () => void,
-): () => void {
-  const unsubscribeByHandle = new Map<object, () => void>();
-  const reconcileHandleSubscriptions = () => {
-    const currentHandles = new Set<object>();
-    for (const epicId of epicIds) {
-      const handle = registry.peek(epicId);
-      if (handle === null || currentHandles.has(handle)) continue;
-      currentHandles.add(handle);
-      if (!unsubscribeByHandle.has(handle)) {
-        unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
-      }
-    }
-    for (const [handle, unsubscribe] of unsubscribeByHandle) {
-      if (currentHandles.has(handle)) continue;
-      unsubscribe();
-      unsubscribeByHandle.delete(handle);
-    }
-  };
-  reconcileHandleSubscriptions();
-  const unsubscribeRegistry = registry.subscribe(() => {
-    reconcileHandleSubscriptions();
-    listener();
-  });
-  return () => {
-    unsubscribeRegistry();
-    for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
-  };
 }
 
 /**
@@ -1787,9 +1750,9 @@ function decodeAgentSessionCounts(
 
 /**
  * Subscribes to the registry and to every currently-registered epic among
- * `epicIds`, re-reconciling as sessions come and go. Shared by the two
- * cross-epic readers here, which differ only in what they read out of the
- * stores they are watching.
+ * `epicIds`, re-reconciling as sessions come and go. Shared by the cross-epic
+ * readers here, which differ only in what they read out of the stores they are
+ * watching.
  */
 function subscribeToRegisteredEpics(
   registry: OpenEpicSessionRegistry,
