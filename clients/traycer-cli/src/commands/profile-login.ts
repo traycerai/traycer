@@ -26,7 +26,7 @@ import {
   parseProviderArgument,
   printable,
 } from "../internal/profile-target";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 import type {
   CommandContext,
   CommandFn,
@@ -185,8 +185,9 @@ export function buildProfileLoginCommand(
   return async (ctx) => {
     const providerId = parseProviderArgument(opts.provider);
     const target = resolveTarget(opts.target);
+    assertPersonPresent(ctx);
     const state = await readProviderState(providerId);
-    assertInteractive(ctx, io, state);
+    assertCanTakeCode(io, state);
     if (
       target.profileId !== null &&
       !state.profiles.some((p) => p.profileId === target.profileId)
@@ -228,25 +229,33 @@ function resolveTarget(target: ProfileLoginTarget): ResolvedTarget {
 }
 
 /**
- * A sign-in needs a person: someone has to open the link, and for a provider
- * that hands back a code, type it in. A caller that cannot is refused before
- * the host is asked to start anything, so no login child is left running that
- * nobody can finish.
- *
- * The stdin check applies only to a paste-code provider. With stdin redirected
- * its code could never be submitted and the command would wait out the host's
- * whole deadline; a device-code sign-in reads nothing from stdin and works
- * fine without one.
+ * A sign-in needs a person: someone has to open the link. `--json` and CI
+ * have nobody, whatever the provider, so they are refused before the host is
+ * asked anything - the refusal then reads the same whether or not a host is
+ * running.
  */
-function assertInteractive(
-  ctx: CommandContext,
-  io: ProfileLoginIo,
-  state: ProviderCliState,
-): void {
-  const canTakeCode =
-    !declares(state.loginCapability?.codePaste) || io.stdinIsTerminal();
-  if (!ctx.runtime.json && !ctx.runtime.nonInteractive && canTakeCode) return;
-  throw cliError({
+function assertPersonPresent(ctx: CommandContext): void {
+  if (!ctx.runtime.json && !ctx.runtime.nonInteractive) return;
+  throw notInteractive();
+}
+
+/**
+ * A paste-code provider also needs a stdin the person can type the code into.
+ * With stdin redirected the code could never be submitted and the command
+ * would wait out the host's whole deadline, so it is refused before the host
+ * is asked to start anything. A device-code sign-in reads nothing from stdin
+ * and works without one, which is why this waits for the provider's
+ * capability instead of joining the check above.
+ */
+function assertCanTakeCode(io: ProfileLoginIo, state: ProviderCliState): void {
+  if (!declares(state.loginCapability?.codePaste) || io.stdinIsTerminal()) {
+    return;
+  }
+  throw notInteractive();
+}
+
+function notInteractive(): CliError {
+  return cliError({
     code: CLI_ERROR_CODES.INVALID_ARGUMENT,
     message:
       "traycer: signing a profile in needs a person at a terminal - run this in an interactive terminal, without --json and outside CI.",
@@ -364,11 +373,18 @@ async function runLogin(
     }
   } catch (error) {
     // A call failed partway: the start timed out after the host had begun
-    // it, or the host went away mid-wait. Nobody is waiting for this login
-    // any more, so give up the claim on it rather than leave it for the
-    // host's own deadline. Releasing a claim the host never recorded is a
-    // no-op there.
+    // it, the host went away mid-wait, or Ctrl+C aborted a start that was
+    // still in flight - whose answer, and any login it reports, this command
+    // will now never see. Nobody is waiting for this login any more, so give
+    // up the claim on it rather than leave it for the host's own deadline.
+    // The host remembers a released holder, so a start still on its way in
+    // finds the claim gone and spawns nothing.
+    //
+    // Read before the release, which is itself a call that can take a while:
+    // a Ctrl+C pressed during it must not turn a real error into "cancelled".
+    const interrupted = abort.signal.aborted;
     await release();
+    if (interrupted) return { status: "cancelled" };
     throw error;
   } finally {
     stopListening();
@@ -379,7 +395,8 @@ async function runLogin(
  * Asks the host to start the sign-in until its answer is final. A host still
  * fetching the provider's pack, or whose login child has not printed its link
  * yet, answers `pending`, and the same request asked again attaches to that
- * work rather than starting another.
+ * work rather than starting another. A provider setup that had failed is asked
+ * to retry once before the answer is taken as final.
  */
 async function startUntilSettled(
   ctx: CommandContext,
@@ -389,15 +406,37 @@ async function startUntilSettled(
   onAnswer: (answer: StartLoginAnswer) => void,
 ): Promise<StartLoginAnswer> {
   let stillStarting = 0;
+  let packRetried = false;
   for (;;) {
     const answer = await toAgentCliError(
       callHostRpcWithDispatch(
         "providers.startLogin",
         request,
-        START_LOGIN_DISPATCH,
+        // The host can hold this call for most of its response budget, so
+        // Ctrl+C aborts it instead of waiting for the answer.
+        { ...START_LOGIN_DISPATCH, signal },
       ),
     );
     onAnswer(answer);
+    if (
+      answer.pending === null &&
+      !answer.started &&
+      (answer.pack?.reason ?? null) !== null &&
+      !packRetried &&
+      !signal.aborted
+    ) {
+      // The provider's setup failed earlier, and asking for the sign-in
+      // again would return the same cached failure until the host next
+      // retries by itself, if it does. `providers.ensurePack` is how a person
+      // asks for a retry now, and one is present: this command refuses to run
+      // without one. Once, and best effort: a failure no retry can move is
+      // refused by the host, and the next answer reports the pack either way.
+      packRetried = true;
+      await callHostRpc("providers.ensurePack", {
+        providerId: request.providerId,
+      }).catch(() => undefined);
+      continue;
+    }
     if (answer.pending === null || signal.aborted) return answer;
     if (answer.pending === "starting") {
       stillStarting += 1;

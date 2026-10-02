@@ -72,7 +72,12 @@ vi.mock("../../runner/runner", async (importOriginal) => {
           quiet: false,
           noProgress: false,
           noBootstrap: false,
-          nonInteractive: true,
+          // Interactive, so `profile add` / `profile login` reach their
+          // body: under CI or `--json` they refuse before any host call,
+          // which would fail the full-surface "reaches the body" assertion
+          // for the wrong reason. No gated command prompts before its first
+          // host call, so nothing here waits on stdin.
+          nonInteractive: false,
           environment: "production",
           logger: {
             debug: () => undefined,
@@ -239,8 +244,9 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
   "profile rename": ["claude", "profile-1", "Work"],
   "profile enable": ["claude", "profile-1"],
   "profile disable": ["claude", "profile-1"],
-  // `--yes`: without it the removal stops at its confirmation, which this
-  // non-interactive context cannot answer, before any host call.
+  // `--yes`: without it the removal stops at its confirmation before any
+  // host call - refused where stdin is not a terminal, and waiting on a
+  // person where it is.
   "profile remove": ["claude", "profile-1", "--yes"],
 };
 

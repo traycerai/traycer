@@ -146,6 +146,7 @@ interface StartSpec {
   readonly pack: {
     readonly percent: number | null;
     readonly reason: string | null;
+    readonly retryAtMs: number | null;
   } | null;
 }
 
@@ -297,14 +298,28 @@ function submitCalls(): (typeof rpcMock.mock.calls)[number][] {
   );
 }
 
-const START_DISPATCH: HostRpcDispatch = {
-  responseTimeoutMs: 30_000,
-  requiredHostMethodVersion: {
-    method: "providers.startLogin",
-    version: { major: 1, minor: 4 },
-  },
-  signal: null,
+const START_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
+  method: "providers.startLogin",
+  version: { major: 1, minor: 4 },
 };
+
+const START_RESPONSE_TIMEOUT_MS = 30_000;
+
+/**
+ * The start ask carries the command's abort signal so Ctrl+C can cut it
+ * short, so the signal is checked as an `AbortSignal`, not by value.
+ */
+function expectStartDispatch(dispatch: HostRpcDispatch): void {
+  expect(dispatch.requiredHostMethodVersion).toEqual(START_DISPATCH_FLOOR);
+  expect(dispatch.responseTimeoutMs).toBe(START_RESPONSE_TIMEOUT_MS);
+  expect(dispatch.signal).toBeInstanceOf(AbortSignal);
+}
+
+function ensurePackCalls(): (typeof rpcMock.mock.calls)[number][] {
+  return rpcMock.mock.calls.filter(
+    (call) => call[0] === "providers.ensurePack",
+  );
+}
 
 const AWAIT_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
   method: "providers.awaitLogin",
@@ -470,6 +485,8 @@ beforeEach(() => {
         return Promise.resolve({ outcome: "accepted" });
       case "providers.touchLogin":
         return Promise.resolve({ extended: true });
+      case "providers.ensurePack":
+        return Promise.resolve({ managedInstallState: null });
       default:
         return Promise.reject(new Error(`unexpected rpc ${method}`));
     }
@@ -507,7 +524,7 @@ describe("profile add (create)", () => {
       profileId: null,
       createProfile: { label: "Work", shareSkillsAndPlugins: false },
     });
-    expect(startDispatch).toEqual(START_DISPATCH);
+    expectStartDispatch(startDispatch);
 
     const [, awaitParams, awaitDispatch] = onlyCallTo("providers.awaitLogin");
     expect(awaitParams).toEqual({
@@ -1114,7 +1131,7 @@ describe("start answers", () => {
         started: false,
         url: null,
         pending: "pack_preparing",
-        pack: { percent: 40, reason: null },
+        pack: { percent: 40, reason: null, retryAtMs: null },
       }),
       startAnswer({ started: false, url: null, pending: "starting" }),
       startAnswer({ profileId: "prof_new" }),
@@ -1130,7 +1147,7 @@ describe("start answers", () => {
     if (first === undefined) throw new Error("unreachable");
     for (const start of starts) {
       expect(start[1]).toEqual(first[1]);
-      expect(start[2]).toEqual(START_DISPATCH);
+      expectStartDispatch(start[2]);
     }
     expect(fake.wait).toHaveBeenCalledTimes(1);
     expect(fake.wait).toHaveBeenCalledWith(2_000);
@@ -1201,7 +1218,7 @@ describe("start answers", () => {
       startAnswer({
         started: false,
         url: null,
-        pack: { percent: null, reason: "network" },
+        pack: { percent: null, reason: "network", retryAtMs: 1_000 },
       }),
     ];
 
@@ -1214,6 +1231,95 @@ describe("start answers", () => {
     expect(result.exitCode).toBe(1);
     expect(result.human).toContain("did not install (network)");
     expect(callsTo("providers.awaitLogin")).toHaveLength(0);
+  });
+
+  it("asks for a pack retry once and starts again when the setup failed earlier", async () => {
+    scenario.startAnswers = [
+      startAnswer({
+        started: false,
+        url: null,
+        pack: { percent: null, reason: "network", retryAtMs: 1_000 },
+      }),
+      startAnswer({ profileId: "prof_new" }),
+    ];
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    const ensures = ensurePackCalls();
+    expect(ensures).toHaveLength(1);
+    expect(ensures[0]?.[1]).toEqual({ providerId: "claude-code" });
+    expect(callsTo("providers.startLogin")).toHaveLength(2);
+    expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual(
+      expect.objectContaining({ status: "signed-in" }),
+    );
+  });
+
+  it("does not ask for a second pack retry when the setup fails again", async () => {
+    scenario.startAnswers = [
+      startAnswer({
+        started: false,
+        url: null,
+        pack: { percent: null, reason: "network", retryAtMs: 1_000 },
+      }),
+    ];
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(ensurePackCalls()).toHaveLength(1);
+    expect(callsTo("providers.startLogin")).toHaveLength(2);
+    expect(callsTo("providers.awaitLogin")).toHaveLength(0);
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual(
+      expect.objectContaining({ status: "not-started" }),
+    );
+    expect(result.human).toContain("did not install (network)");
+  });
+
+  it("starts again even when the pack retry request itself fails", async () => {
+    scenario.startAnswers = [
+      startAnswer({
+        started: false,
+        url: null,
+        pack: { percent: null, reason: "network", retryAtMs: 1_000 },
+      }),
+      startAnswer({ profileId: "prof_new" }),
+    ];
+    rpcMock.mockImplementation((method) => {
+      switch (method) {
+        case "providers.list":
+          return Promise.resolve({
+            providers: [scenario.listState],
+            native: null,
+          });
+        case "providers.ensurePack":
+          return Promise.reject(new Error("host refused the retry"));
+        default:
+          return Promise.reject(new Error(`unexpected rpc ${method}`));
+      }
+    });
+
+    const result = await runLogin(
+      create("Work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(ensurePackCalls()).toHaveLength(1);
+    expect(callsTo("providers.startLogin")).toHaveLength(2);
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual(
+      expect.objectContaining({ status: "signed-in" }),
+    );
   });
 
   it("releases a started create the host gave no profile id for", async () => {
@@ -1353,6 +1459,55 @@ describe("interrupt", () => {
     expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
   });
 
+  it("cancels, rather than throws, when Ctrl+C aborts a start that is still in flight", async () => {
+    dispatchMock.mockImplementation((method, _params, dispatch) => {
+      switch (method) {
+        case "providers.startLogin":
+          return new Promise((_resolve, reject) => {
+            const signal = dispatch.signal;
+            if (signal === null) return;
+            signal.addEventListener("abort", () => {
+              reject(new Error("the start was aborted"));
+            });
+          });
+        case "providers.cancelLogin":
+          return Promise.resolve({ cancelled: true });
+        default:
+          return Promise.reject(new Error(`unexpected dispatch ${method}`));
+      }
+    });
+    const fake = makeIo(false);
+
+    const run = runLogin(create("Work"), fake, makeCtx(false, false));
+    await vi.waitFor(() => {
+      expect(callsTo("providers.startLogin")).toHaveLength(1);
+    });
+    const handler = fake.interruptHandlers[0];
+    if (handler === undefined)
+      throw new Error("no interrupt handler registered");
+    handler();
+    const result = await run;
+
+    expect(result.exitCode).toBe(130);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "cancelled",
+    });
+    expect(callsTo("providers.awaitLogin")).toHaveLength(0);
+    const [, , startDispatch] = onlyCallTo("providers.startLogin");
+    expect(startDispatch.signal?.aborted).toBe(true);
+    const [, cancelParams, cancelDispatch] = onlyCallTo(
+      "providers.cancelLogin",
+    );
+    expect(cancelParams).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      holderId: HOLDER_ID,
+    });
+    expect(cancelDispatch).toEqual(CANCEL_DISPATCH);
+    expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
+  });
+
   it("swallows a failing cancel", async () => {
     scenario.awaitLogin = (dispatch) =>
       new Promise((_resolve, reject) => {
@@ -1392,6 +1547,7 @@ describe("a sign-in needs a person", () => {
     );
 
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect(listCalls()).toHaveLength(0);
     expect(callsTo("providers.startLogin")).toHaveLength(0);
   });
 
@@ -1401,6 +1557,7 @@ describe("a sign-in needs a person", () => {
     );
 
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect(listCalls()).toHaveLength(0);
     expect(callsTo("providers.startLogin")).toHaveLength(0);
   });
 
@@ -1415,6 +1572,9 @@ describe("a sign-in needs a person", () => {
 
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(error.message).toContain("interactive terminal");
+    // Unlike --json, this needs the provider's capability, so the host is
+    // read first.
+    expect(listCalls()).toHaveLength(1);
     expect(callsTo("providers.startLogin")).toHaveLength(0);
     expect(callsTo("providers.cancelLogin")).toHaveLength(0);
   });
