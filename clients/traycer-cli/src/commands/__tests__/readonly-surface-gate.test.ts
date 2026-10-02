@@ -234,6 +234,14 @@ const REQUIRED_ARGS: Readonly<Record<string, readonly string[]>> = {
     "11111111-1111-4111-8111-111111111111",
   ],
   "worktree delete": ["--path", "/tmp/some-worktree"],
+  "profile add": ["claude"],
+  "profile login": ["claude", "ambient"],
+  "profile rename": ["claude", "profile-1", "Work"],
+  "profile enable": ["claude", "profile-1"],
+  "profile disable": ["claude", "profile-1"],
+  // `--yes`: without it the removal stops at its confirmation, which this
+  // non-interactive context cannot answer, before any host call.
+  "profile remove": ["claude", "profile-1", "--yes"],
 };
 
 // Reads that stay runnable on the readonly surface: hidden from `--help`

@@ -71,6 +71,9 @@ export function resolveAgentCliSurface(
  *
  * `traycer monitor` is deliberately absent; see `MONITOR_SURFACE_NOTE`.
  */
+const PROFILE_CHANGE_REFUSAL =
+  "this session can list provider profiles but cannot change them - use Settings ▸ Providers, or run this from a full-surface session.";
+
 export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
   "agent create":
     "this session can inspect agents but cannot create or change them.",
@@ -88,6 +91,12 @@ export const READONLY_REFUSED_COMMANDS: Readonly<Record<string, string>> = {
     "this session can list role claims but cannot release one.",
   "worktree delete":
     "remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
+  "profile add": PROFILE_CHANGE_REFUSAL,
+  "profile login": PROFILE_CHANGE_REFUSAL,
+  "profile rename": PROFILE_CHANGE_REFUSAL,
+  "profile enable": PROFILE_CHANGE_REFUSAL,
+  "profile disable": PROFILE_CHANGE_REFUSAL,
+  "profile remove": PROFILE_CHANGE_REFUSAL,
 };
 
 /**
