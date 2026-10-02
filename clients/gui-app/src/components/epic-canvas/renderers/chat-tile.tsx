@@ -158,6 +158,11 @@ import {
   useChatTranscriptJumpStore,
 } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import {
+  useSubagentDockView,
+  useSubagentDrillIn,
+  type SubagentDrillIn,
+} from "@/components/chat/segments/subagent-open-as-chat";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
   transcriptShowsSetupCard,
@@ -966,6 +971,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
+  // Open-as-chat: one subagent card's conversation drawn over the transcript.
+  // Held here because both halves of the tile follow it - the transcript draws
+  // the view, and the lower dock stops offering the PARENT chat's composer,
+  // model and running work as though they were that subagent's.
+  const subagentDrillIn = useSubagentDrillIn();
+  const subagentDockView = useSubagentDockView(
+    subagentDrillIn,
+    view.messages,
+    view.lower.backgroundItems,
+  );
   const pendingComposerInterviewBlockId =
     view.lower.interview.pending?.blockId ?? null;
   // The composer + queue/pinned/agents/background dock now overlays the
@@ -1540,6 +1555,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                   composerOverlayHeight={
                     lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
                   }
+                  subagentDrillIn={subagentDrillIn}
                 />
               </TranscriptQueuePauseReasonSupportContext>
               {/*
@@ -1606,6 +1622,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                           view.lower.backgroundSessionStopPending
                         }
                         onBackgroundItemClick={scrollToBackgroundItem}
+                        subagentView={subagentDockView}
                       />
                     </SurfaceActivityProvider>
                   </div>
@@ -3800,6 +3817,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly planActions: ChatPlanActionsContextValue;
   /** Measured height of the overlaid composer/queue/pinned/agents dock. */
   readonly composerOverlayHeight: number;
+  /** See `ChatMessagesProps.subagentDrillIn`. */
+  readonly subagentDrillIn: SubagentDrillIn;
 }
 
 function ContextUsageChipForChat(props: {
@@ -3912,6 +3931,7 @@ function ChatSessionMessagesSurface(
                 visible={props.surfaceVisible}
                 systemOverlayActive={props.systemOverlayActive}
                 composerOverlayHeight={props.composerOverlayHeight}
+                subagentDrillIn={props.subagentDrillIn}
               />
             </ChatMarkdownLinkProvider>
           </ThinkingTokensSourceContext.Provider>

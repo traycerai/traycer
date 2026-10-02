@@ -652,5 +652,6 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     backgroundStopAllPending: false,
     backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
+    subagentView: null,
   };
 }

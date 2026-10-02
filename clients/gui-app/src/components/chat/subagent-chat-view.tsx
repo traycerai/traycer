@@ -17,6 +17,7 @@ import {
 } from "@/components/chat/chat-find";
 import {
   cleanSubagentNotificationText,
+  subagentCardName,
   subagentCardPath,
   subagentHasChildText,
 } from "@/components/chat/segments/subagent-display";
@@ -52,6 +53,11 @@ interface SubagentChatViewProps {
  * the task the parent handed over, then the conversation drawn by the same
  * `SubagentConversation` the card uses. It covers the transcript rather than
  * replacing it, so the transcript keeps its scroll position and window.
+ *
+ * Read-only all the way down: no harness takes a message for a subagent, so
+ * the tile swaps the parent chat's composer and dock for a notice while this
+ * is open (`useSubagentDockView`). Left in place they read as this
+ * subagent's - its model, its running work, a box that messages it.
  *
  * Reads the card from the rendered messages on every render, so a running
  * subagent keeps streaming here exactly as it does in its card.
@@ -89,13 +95,13 @@ export function SubagentChatView(props: SubagentChatViewProps) {
       aria-label={
         card === null
           ? "Subagent conversation"
-          : `${cardName(card)} conversation`
+          : `${subagentCardName(card)} conversation`
       }
       // Focus lands here only when there is no card heading to take it.
       tabIndex={-1}
-      // z-10 with the tile's composer dock and after the transcript's own
-      // z-10 chrome (the scroll pill) in tree order: the view covers the
-      // transcript and the dock stays on top of it, still usable.
+      // z-10 with the tile's lower dock and after the transcript's own z-10
+      // chrome (the scroll pill) in tree order: the view covers the
+      // transcript and the dock's read-only notice stays on top of it.
       className="absolute inset-0 z-10 flex flex-col bg-canvas outline-none"
     >
       <SubagentChatBreadcrumb path={path ?? []} drillIn={drillIn} />
@@ -239,10 +245,6 @@ function steppedBackFocusTarget(
   return leftId === undefined ? null : queryOpenAsChatControl(view, leftId);
 }
 
-function cardName(card: SubagentSegment): string {
-  return cleanSubagentNotificationText(card.name) ?? "Subagent";
-}
-
 function SubagentChatBreadcrumb(props: {
   readonly path: ReadonlyArray<SubagentSegment>;
   readonly drillIn: SubagentDrillIn;
@@ -278,7 +280,7 @@ function SubagentChatBreadcrumb(props: {
               aria-current={current ? "page" : undefined}
               onClick={() => drillIn.open(card.id)}
             >
-              {cardName(card)}
+              {subagentCardName(card)}
             </Button>
           </Fragment>
         );
@@ -311,7 +313,7 @@ function SubagentChatBody(props: {
           tabIndex={-1}
           className="m-0 min-w-0 truncate font-mono text-code-sm font-medium text-foreground/90 outline-none"
         >
-          {cardName(card)}
+          {subagentCardName(card)}
         </h2>
         {agentType !== null ? (
           <Badge variant="secondary" className="shrink-0 capitalize">

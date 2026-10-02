@@ -3,6 +3,8 @@
 // Keeping a single source means what the projection indexes can't drift from
 // what the card actually renders (the previous duplication did exactly that).
 
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import { dedupeByTaskId } from "@/lib/chat/background-item-tree";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -84,6 +86,63 @@ function subagentCardPathIn(
     if (below !== null) return [segment, ...below];
   }
   return null;
+}
+
+/** The name a card is called by wherever it stands for a whole conversation. */
+export function subagentCardName(card: SubagentSegment): string {
+  return cleanSubagentNotificationText(card.name) ?? "Subagent";
+}
+
+/**
+ * How many of the chat's running background items belong to `card`: work the
+ * subagent started, at any depth. The card's own item is not one of them -
+ * that row is the subagent itself.
+ *
+ * Two signals, because no harness fills in both. An item is the card's when
+ * its block is drawn inside the card's conversation (Codex reports every item
+ * as a root, so the transcript is the only place its owner is written), or
+ * when its `parentTaskId` chain reaches one that is, or reaches the card (a
+ * nested Claude agent's own work, which need not have a row here).
+ *
+ * Running work only, as the Background panel's own header counts it: a
+ * scheduled wake or cron job is waiting, not running.
+ */
+export function subagentOwnedBackgroundItemCount(
+  card: SubagentSegment,
+  items: ReadonlyArray<BackgroundItem>,
+): number {
+  const ownedBlockIds = new Set<string>();
+  collectChildBlockIds(card.children, ownedBlockIds);
+  const deduped = dedupeByTaskId(items);
+  const itemByTaskId = new Map(deduped.map((item) => [item.taskId, item]));
+  const owned = (item: BackgroundItem): boolean => {
+    if (ownedBlockIds.has(item.blockId)) return true;
+    const visited = new Set<string>([item.taskId]);
+    let parentTaskId = item.parentTaskId;
+    while (parentTaskId !== null && !visited.has(parentTaskId)) {
+      const parent = itemByTaskId.get(parentTaskId);
+      if (parent === undefined) return false;
+      if (parent.blockId === card.id || ownedBlockIds.has(parent.blockId)) {
+        return true;
+      }
+      visited.add(parentTaskId);
+      parentTaskId = parent.parentTaskId;
+    }
+    return false;
+  };
+  return deduped.filter(
+    (item) => item.kind !== "wakeup" && item.kind !== "cron" && owned(item),
+  ).length;
+}
+
+function collectChildBlockIds(
+  children: ReadonlyArray<SubagentChildSegment>,
+  into: Set<string>,
+): void {
+  for (const child of children) {
+    into.add(child.id);
+    if (child.kind === "subagent") collectChildBlockIds(child.children, into);
+  }
 }
 
 /**

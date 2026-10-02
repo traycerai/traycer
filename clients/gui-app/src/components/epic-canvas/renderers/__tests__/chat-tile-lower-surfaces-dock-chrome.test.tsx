@@ -445,6 +445,7 @@ function surfacesProps(patch: {
     backgroundStopAllPending: false,
     backgroundSessionStopPending: false,
     onBackgroundItemClick: () => undefined,
+    subagentView: null,
   };
 }
 

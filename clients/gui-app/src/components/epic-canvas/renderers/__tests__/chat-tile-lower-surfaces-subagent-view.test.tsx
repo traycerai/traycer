@@ -1,9 +1,8 @@
 /**
- * Escape hatch for the composer deadlock: the host reports a pending interview,
- * the transcript renders no answer card for it (the block is settled or
- * missing), and every send is rejected with `DETACHED_INTERVIEW_PENDING`. The
- * only way out from inside the chat is dismissing the stuck block, so these
- * pin that the affordance appears and actually dispatches local `interviewSkip`.
+ * While a subagent's conversation covers the transcript the lower surface
+ * stops presenting the PARENT chat's composer and dock: a notice says whose
+ * conversation this is and offers the way back. Pending approvals and an
+ * interview question stay, since the subagent on screen may be waiting on one.
  */
 import {
   cleanup,
@@ -15,6 +14,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { domAnimation, LazyMotion } from "motion/react";
 import type { ReactElement } from "react";
 import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  BackgroundItem,
+  ChatQueuedPromptItem,
+  ChatRunSettings,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
 vi.mock("@/components/chat/composer/chat-composer", () => ({
   ChatComposer: () => <div data-testid="composer-stub" />,
@@ -40,7 +45,7 @@ import {
   type ChatLowerInteractionSurfacesProps,
   type ChatLowerInterviewState,
 } from "@/components/epic-canvas/renderers/chat-tile-lower-surfaces";
-import { UNANSWERABLE_INTERVIEW_DISMISS_REASON } from "@/components/chat/segments/pending-interview/unanswerable-interview-notice";
+import type { SubagentDockView } from "@/components/chat/segments/subagent-open-as-chat";
 import type { PendingInterviewView } from "@/components/epic-canvas/renderers/chat-tile-types";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
@@ -189,150 +194,164 @@ function interviewState(
   };
 }
 
-function dismissButton(): HTMLButtonElement {
-  return screen.getByRole<HTMLButtonElement>("button", {
-    name: "Dismiss question",
-  });
+const SETTINGS: ChatRunSettings = {
+  harnessId: "codex",
+  model: "codex-test",
+  permissionMode: "supervised",
+  reasoningEffort: "medium",
+  serviceTier: null,
+  agentMode: "epic",
+  profileId: null,
+};
+
+const QUEUE_CONTENT: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph", content: [{ type: "text", text: "Next" }] }],
+};
+
+const QUEUED_PROMPT: ChatQueuedPromptItem = {
+  kind: "prompt",
+  queueItemId: "queued-1",
+  messageId: "queued-1-message",
+  message: { kind: "user", content: QUEUE_CONTENT, browserAnnotations: [] },
+  sender: { type: "user", userId: "owner-1" },
+  settings: SETTINGS,
+  accountContext: { type: "PERSONAL" },
+  sentFromHostId: null,
+  delivery: "next_turn",
+  status: "pending",
+  targetTurnId: null,
+  steerRequest: null,
+  fallbackReason: null,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+const RUNNING_COMMAND: BackgroundItem = {
+  taskId: "task-1",
+  kind: "command",
+  title: "Command task-1",
+  blockId: "task-1-block",
+  parentTaskId: null,
+  scheduledFor: null,
+  individualStopUnavailable: null,
+};
+
+/** Props that would draw the dock and a composer if `subagentView` were null. */
+function dockWorthyProps(
+  subagentView: SubagentDockView | null,
+): ChatLowerInteractionSurfacesProps {
+  const base = props(interviewState({}), true);
+  return {
+    ...base,
+    queue: {
+      ...base.queue,
+      value: { status: "idle", items: [QUEUED_PROMPT] },
+    },
+    backgroundItems: [RUNNING_COMMAND],
+    subagentView,
+  };
 }
 
-describe("unanswerable interview escape hatch", () => {
+function view(
+  name: string | null,
+  runningCount: number,
+  close: () => void,
+): SubagentDockView {
+  return { name, runningCount, close };
+}
+
+function noticeText(): string {
+  return screen.getByTestId("subagent-view-notice").textContent;
+}
+
+describe("subagent view lower surface", () => {
   afterEach(cleanup);
 
-  it("shows no notice when every host-pending interview has a card", () => {
-    render(
-      <ChatLowerInteractionSurfaces {...props(interviewState({}), true)} />,
-    );
+  it("control: without a subagent view the composer and dock are drawn", () => {
+    render(<ChatLowerInteractionSurfaces {...dockWorthyProps(null)} />);
 
-    expect(screen.queryByTestId("unanswerable-interview-notice")).toBeNull();
     expect(screen.queryByTestId("composer-stub")).not.toBeNull();
+    expect(screen.queryByTestId("dock-stub")).not.toBeNull();
+    expect(screen.queryByTestId("subagent-view-notice")).toBeNull();
   });
 
-  it("skips the stuck block when the composer is deadlocked", async () => {
+  it("replaces the composer and dock with a notice naming the subagent", () => {
+    render(
+      <ChatLowerInteractionSurfaces
+        {...dockWorthyProps(view("Mendel", 0, () => undefined))}
+      />,
+    );
+
+    expect(noticeText()).toContain(
+      "You're viewing Mendel's conversation. Subagents can't take messages.",
+    );
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+    expect(screen.queryByTestId("dock-stub")).toBeNull();
+    expect(screen.queryByText(/running/)).toBeNull();
+  });
+
+  it("shows how many of the subagent's background items are running", () => {
+    render(
+      <ChatLowerInteractionSurfaces
+        {...dockWorthyProps(view("Mendel", 2, () => undefined))}
+      />,
+    );
+
+    expect(screen.queryByText("2 running")).not.toBeNull();
+  });
+
+  it("uses the generic sentence when the subagent has no name", () => {
+    render(
+      <ChatLowerInteractionSurfaces
+        {...dockWorthyProps(view(null, 0, () => undefined))}
+      />,
+    );
+
+    expect(noticeText()).toContain(
+      "You're viewing a subagent's conversation. Subagents can't take messages.",
+    );
+  });
+
+  it("closes the subagent view from Back to chat", async () => {
     const user = userEvent.setup();
-    const onSkip = vi.fn<(blockId: string, reason: string) => string | null>(
-      () => "action-1",
-    );
+    const close = vi.fn<() => void>();
     render(
       <ChatLowerInteractionSurfaces
-        {...props(
-          interviewState({
-            unanswerable: [{ blockId: "settled-block", requestedAt: 10 }],
-            onSkip,
-          }),
-          true,
-        )}
+        {...dockWorthyProps(view("Mendel", 0, close))}
       />,
     );
 
-    expect(
-      screen.queryByTestId("unanswerable-interview-notice"),
-    ).not.toBeNull();
-    await user.click(dismissButton());
+    await user.click(screen.getByRole("button", { name: "Back to chat" }));
 
-    expect(onSkip.mock.calls).toEqual([
-      ["settled-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON, undefined],
-    ]);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("clears every stuck block in one dismissal, oldest first", async () => {
-    const user = userEvent.setup();
-    const onSkip = vi.fn<(blockId: string, reason: string) => string | null>(
-      () => "action-1",
-    );
+  it("still draws a pending interview card, which stands in the composer's slot", () => {
+    const base = dockWorthyProps(view("Mendel", 0, () => undefined));
     render(
       <ChatLowerInteractionSurfaces
-        {...props(
-          interviewState({
-            unanswerable: [
-              { blockId: "older-block", requestedAt: 10 },
-              { blockId: "newer-block", requestedAt: 20 },
-            ],
-            onSkip,
-          }),
-          true,
-        )}
+        {...base}
+        interview={interviewState({ pending: ANSWERABLE_CARD })}
       />,
     );
 
-    // Leaving even one behind keeps the host's send gate closed, so the single
-    // button has to settle all of them.
-    await user.click(
-      screen.getByRole("button", { name: "Dismiss 2 questions" }),
-    );
-
-    expect(onSkip.mock.calls).toEqual([
-      ["older-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON, undefined],
-      ["newer-block", UNANSWERABLE_INTERVIEW_DISMISS_REASON, undefined],
-    ]);
-  });
-
-  it("keeps the composer reachable beneath the notice", () => {
-    render(
-      <ChatLowerInteractionSurfaces
-        {...props(
-          interviewState({
-            unanswerable: [{ blockId: "settled-block", requestedAt: 10 }],
-          }),
-          true,
-        )}
-      />,
-    );
-
-    // Only `detached` waits gate sends host-side and the renderer cannot see
-    // that flag, so the notice must not take the composer away.
-    expect(screen.queryByTestId("composer-stub")).not.toBeNull();
-  });
-
-  it("shows the notice alongside an answerable card so neither hides the other", () => {
-    render(
-      <ChatLowerInteractionSurfaces
-        {...props(
-          interviewState({
-            pending: ANSWERABLE_CARD,
-            unanswerable: [{ blockId: "settled-block", requestedAt: 10 }],
-          }),
-          true,
-        )}
-      />,
-    );
-
-    expect(
-      screen.queryByTestId("unanswerable-interview-notice"),
-    ).not.toBeNull();
     expect(screen.queryByTestId("interview-card")).not.toBeNull();
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+    expect(screen.queryByTestId("dock-stub")).toBeNull();
   });
 
-  it("disables dismissal while one is already in flight", () => {
+  it("shows a viewer the notice and nothing that could take a message", () => {
+    const base = dockWorthyProps(view("Mendel", 1, () => undefined));
     render(
       <ChatLowerInteractionSurfaces
-        {...props(
-          interviewState({
-            unanswerable: [{ blockId: "settled-block", requestedAt: 10 }],
-            unanswerableBusy: true,
-          }),
-          true,
-        )}
+        {...base}
+        access={{ isViewer: true, canAct: false, readOnlyNotice: null }}
       />,
     );
 
-    expect(dismissButton().disabled).toBe(true);
-  });
-
-  it("still explains the deadlock but cannot dismiss while the chat cannot act", () => {
-    render(
-      <ChatLowerInteractionSurfaces
-        {...props(
-          interviewState({
-            unanswerable: [{ blockId: "settled-block", requestedAt: 10 }],
-          }),
-          false,
-        )}
-      />,
-    );
-
-    expect(
-      screen.queryByTestId("unanswerable-interview-notice"),
-    ).not.toBeNull();
-    expect(dismissButton().disabled).toBe(true);
+    expect(noticeText()).toContain("You're viewing Mendel's conversation.");
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
+    expect(screen.queryByTestId("dock-stub")).toBeNull();
   });
 });
