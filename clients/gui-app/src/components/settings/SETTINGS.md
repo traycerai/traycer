@@ -97,7 +97,9 @@ is on screen (`settings-master-detail-area.ts`):
 - **A setup guide step** picks the area that holds its target
   (`useSettingsGuideArea`), found through the `data-settings-area` each area's
   panel carries. Without it the coachmark has no visible target and the guide
-  has no card to continue from.
+  has no card to continue from. An armed reveal for a row of the page outranks
+  it: a guide stays active while Settings is closed, so the page can mount
+  with both, and the reveal is what the person asked for a moment ago.
 - **A link from outside Settings** to something that is not in the first area
   arms the same reveal a search result does, with the group's anchor (the
   start page's "Customize start page" button).

@@ -268,6 +268,69 @@ describe("<AppearanceSettingsPanel /> rail", () => {
 
       expectArea("Themes");
     });
+
+    it("lets a same-section Start page reveal win over a Themes guide step on mount", () => {
+      // Both effects run after mount, guide declared after the reveal hook,
+      // so without the skip the guide's setArea would run last and leave
+      // Themes selected.
+      useOnboardingStore.getState().startSetup("appearance");
+      useSettingsSearchStore
+        .getState()
+        .requestReveal("appearance", APPEARANCE.definitions.startPage.anchor);
+      renderPanel(queryClient);
+
+      expectArea("Start page");
+    });
+
+    it("lets a same-section row reveal win over a Fonts and text guide step on mount", () => {
+      useOnboardingStore.getState().startSetup("appearance");
+      useOnboardingStore.getState().advanceSetup();
+      useOnboardingStore.getState().advanceSetup();
+      useSettingsSearchStore
+        .getState()
+        .requestReveal(
+          "appearance",
+          APPEARANCE.definitions.terminalFont.anchor,
+        );
+      renderPanel(queryClient);
+
+      expectArea("Terminal");
+    });
+
+    it("still picks the guide's area when the armed reveal is a page result", () => {
+      useOnboardingStore.getState().startSetup("appearance");
+      useOnboardingStore.getState().advanceSetup();
+      useSettingsSearchStore.getState().requestReveal("appearance", null);
+      renderPanel(queryClient);
+
+      expectArea("Start page");
+    });
+
+    it("still picks the guide's area when the armed reveal is for another section", () => {
+      useOnboardingStore.getState().startSetup("appearance");
+      useOnboardingStore.getState().advanceSetup();
+      useSettingsSearchStore
+        .getState()
+        .requestReveal("layout", APPEARANCE.definitions.startPage.anchor);
+      renderPanel(queryClient);
+
+      expectArea("Start page");
+    });
+
+    it("does not give the area back to the guide once the reveal is spent", () => {
+      useOnboardingStore.getState().startSetup("appearance");
+      useSettingsSearchStore
+        .getState()
+        .requestReveal("appearance", APPEARANCE.definitions.startPage.anchor);
+      renderPanel(queryClient);
+      expectArea("Start page");
+
+      act(() => {
+        useSettingsSearchStore.getState().clearReveal();
+      });
+
+      expectArea("Start page");
+    });
   });
 });
 

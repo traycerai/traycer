@@ -65,6 +65,13 @@ export function settingsAreaPanelProps(area: string): {
  *
  * Runs when the step changes, not when the area does: a person who picks
  * another area mid-step is left there, and the card returns with the area.
+ *
+ * A reveal that is armed for a row of this page outranks the step. A guide
+ * stays active while Settings is closed, so the page can mount with both: a
+ * step left on one area, and a search result or a link that has just asked
+ * for another. The person asked for that one a moment ago; the guide was
+ * left behind. Read from the store rather than subscribed to, so the step
+ * does not take the area back once the reveal is spent.
  * `areaForId` is an effect dependency, so pass a module-level function.
  */
 export function useSettingsGuideArea<Area extends string>(
@@ -80,6 +87,9 @@ export function useSettingsGuideArea<Area extends string>(
       : null;
   useEffect(() => {
     if (selector === null) return;
+    const reveal = useSettingsSearchStore.getState().pendingReveal;
+    if (reveal !== null && reveal.section === section && reveal.anchor !== null)
+      return;
     const id = root.current
       ?.querySelector(selector)
       ?.closest("[data-settings-area]")
@@ -87,7 +97,7 @@ export function useSettingsGuideArea<Area extends string>(
     if (id === null || id === undefined) return;
     const target = areaForId(id);
     if (target !== null) setArea(target);
-  }, [selector, root, areaForId, setArea]);
+  }, [selector, section, root, areaForId, setArea]);
 }
 
 /**

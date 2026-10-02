@@ -224,4 +224,55 @@ describe("useSettingsGuideArea", () => {
 
     expect(setArea).not.toHaveBeenCalled();
   });
+
+  it("does not call setArea when a same-section reveal with an anchor is armed", () => {
+    const setArea = vi.fn<(area: "themes" | "startPage") => void>();
+    useOnboardingStore.getState().startSetup("appearance");
+    useSettingsSearchStore
+      .getState()
+      .requestReveal("appearance", "appearance-start-page");
+    render(
+      <GuideHarness
+        setArea={setArea}
+        themeModeInsideArea
+        themeAreaId="themes"
+      />,
+    );
+
+    expect(setArea).not.toHaveBeenCalled();
+  });
+
+  it("still calls setArea when the armed reveal is a page result", () => {
+    const setArea = vi.fn<(area: "themes" | "startPage") => void>();
+    useOnboardingStore.getState().startSetup("appearance");
+    useSettingsSearchStore.getState().requestReveal("appearance", null);
+    render(
+      <GuideHarness
+        setArea={setArea}
+        themeModeInsideArea
+        themeAreaId="themes"
+      />,
+    );
+
+    expect(setArea).toHaveBeenCalledTimes(1);
+    expect(setArea).toHaveBeenCalledWith("themes");
+  });
+
+  it("still calls setArea when the armed reveal is for another section", () => {
+    const setArea = vi.fn<(area: "themes" | "startPage") => void>();
+    useOnboardingStore.getState().startSetup("appearance");
+    useSettingsSearchStore
+      .getState()
+      .requestReveal("layout", "appearance-start-page");
+    render(
+      <GuideHarness
+        setArea={setArea}
+        themeModeInsideArea
+        themeAreaId="themes"
+      />,
+    );
+
+    expect(setArea).toHaveBeenCalledTimes(1);
+    expect(setArea).toHaveBeenCalledWith("themes");
+  });
 });
