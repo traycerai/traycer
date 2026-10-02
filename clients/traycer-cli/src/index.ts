@@ -2368,7 +2368,7 @@ A host you started manually in a terminal keeps running when you quit Traycer De
     lifecycle
       .command("set")
       .description(
-        "Choose when the host starts and what happens when you quit Traycer Desktop. This command does not start or stop the host. Startup changes apply the next time the host starts automatically. If Traycer Desktop is already managing the host, its quit behavior also updates. Choosing 'none' leaves the running host alone; Traycer Desktop switches to remote hosts on its next launch. Login startup settings are updated when needed to match the mode.",
+        "Choose when the host starts and what happens when you quit Traycer Desktop. This command does not start or stop the host. Startup changes apply the next time the host starts automatically. Quit behavior can update while Traycer Desktop is open, but a quit already in progress keeps your earlier choice. Some running hosts need a restart to apply the mode. Choosing 'none' leaves the running host alone; Traycer Desktop switches to remote hosts on its next launch. Login startup settings are updated when needed to match the mode.",
       )
       .argument("<mode>", "background | linked | ask | stop-if-idle | none")
       .addHelpText("after", modeHelp),
