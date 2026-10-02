@@ -177,7 +177,7 @@ export interface HostRpcDispatch {
   readonly signal: AbortSignal | null;
 }
 
-const PLAIN_DISPATCH: HostRpcDispatch = {
+export const PLAIN_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: null,
   signal: null,

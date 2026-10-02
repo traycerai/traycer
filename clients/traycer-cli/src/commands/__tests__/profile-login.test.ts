@@ -228,7 +228,16 @@ function rowOf(profile: ProfileSpec, label: string): object {
 // ---------------------------------------------------------------------------
 
 interface Scenario {
+  /** What the first `providers.list` read answers (the command's own pre-flight). */
   listState: ProviderCliState;
+  /**
+   * What every later `providers.list` read answers: the command's re-read when
+   * the sign-in's echo lacks the profile it needs. Null keeps `listState`; an
+   * Error makes that read fail.
+   */
+  laterListReads: ProviderCliState | Error | null;
+  /** When set, `providers.startLogin` rejects with it instead of answering. */
+  startFailure: Error | null;
   startAnswers: readonly ProvidersStartLoginResponseV13[];
   awaitLogin: (
     dispatch: HostRpcDispatch,
@@ -243,10 +252,13 @@ const NO_PROFILES: ListSpec = {
 
 let scenario: Scenario;
 let startIndex = 0;
+let listReads = 0;
 
 function defaultScenario(): Scenario {
   return {
     listState: listState(NO_PROFILES),
+    laterListReads: null,
+    startFailure: null,
     startAnswers: [startAnswer({ profileId: "prof_new" })],
     awaitLogin: () =>
       Promise.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) })),
@@ -275,6 +287,10 @@ function onlyCallTo(method: string): DispatchCall {
   return call;
 }
 
+function listCalls(): (typeof rpcMock.mock.calls)[number][] {
+  return rpcMock.mock.calls.filter((call) => call[0] === "providers.list");
+}
+
 function submitCalls(): (typeof rpcMock.mock.calls)[number][] {
   return rpcMock.mock.calls.filter(
     (call) => call[0] === "providers.submitLoginCode",
@@ -282,7 +298,7 @@ function submitCalls(): (typeof rpcMock.mock.calls)[number][] {
 }
 
 const START_DISPATCH: HostRpcDispatch = {
-  responseTimeoutMs: null,
+  responseTimeoutMs: 30_000,
   requiredHostMethodVersion: {
     method: "providers.startLogin",
     version: { major: 1, minor: 4 },
@@ -426,13 +442,21 @@ beforeEach(() => {
   vi.clearAllMocks();
   scenario = defaultScenario();
   startIndex = 0;
+  listReads = 0;
   rpcMock.mockImplementation((method) => {
     switch (method) {
-      case "providers.list":
-        return Promise.resolve({
-          providers: [scenario.listState],
-          native: null,
-        });
+      case "providers.list": {
+        listReads += 1;
+        const later = scenario.laterListReads;
+        if (listReads === 1 || later === null) {
+          return Promise.resolve({
+            providers: [scenario.listState],
+            native: null,
+          });
+        }
+        if (later instanceof Error) return Promise.reject(later);
+        return Promise.resolve({ providers: [later], native: null });
+      }
       case "providers.submitLoginCode":
         return Promise.resolve({ outcome: "accepted" });
       case "providers.touchLogin":
@@ -444,7 +468,9 @@ beforeEach(() => {
   dispatchMock.mockImplementation((method, _params, dispatch) => {
     switch (method) {
       case "providers.startLogin":
-        return Promise.resolve(nextStartAnswer());
+        return scenario.startFailure === null
+          ? Promise.resolve(nextStartAnswer())
+          : Promise.reject(scenario.startFailure);
       case "providers.awaitLogin":
         return scenario.awaitLogin(dispatch);
       case "providers.cancelLogin":
@@ -612,6 +638,37 @@ describe("profile add (create)", () => {
     expect(callsTo("providers.setEnabled")).toHaveLength(0);
   });
 
+  it("reports an existing profile the echo leaves out, read from providers.list", async () => {
+    // `prof_work` is a disabled profile: the host omits it from the echo, so
+    // only the second providers.list read can name it.
+    scenario.laterListReads = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([]),
+          existingProfileId: "prof_work",
+        }),
+      );
+
+    const result = await runLogin(
+      create("Dup"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(listCalls()).toHaveLength(2);
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "already-exists",
+      profile: rowOf(WORK_PROFILE, "Work"),
+    });
+    expect(callsTo("providers.setEnabled")).toHaveLength(0);
+  });
+
   it("is not signed in when the new profile's row is not authenticated", async () => {
     scenario.awaitLogin = () =>
       Promise.resolve(
@@ -743,7 +800,10 @@ describe("profile login (existing)", () => {
     );
   });
 
-  it("reads a null state as not-completed", async () => {
+  it("reads a null state as not-completed without consulting providers.list", async () => {
+    // The profile was already signed in before this attempt, so its listed
+    // row says authenticated. A null state means this sign-in did not
+    // complete, and that stale row must not be read as its success.
     scenario.listState = listState({
       ...NO_PROFILES,
       profiles: [WORK_PROFILE],
@@ -763,6 +823,89 @@ describe("profile login (existing)", () => {
       status: "not-completed",
     });
     expect(result.human).toBe("The sign-in did not complete.");
+    expect(listCalls()).toHaveLength(1);
+  });
+
+  it("reads the row from providers.list when the await echo leaves it out and it is authenticated", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [{ ...WORK_PROFILE, authStatus: "unauthenticated" }],
+    });
+    scenario.laterListReads = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    // The host leaves a disabled profile out of the echo.
+    scenario.awaitLogin = () =>
+      Promise.resolve(awaitResult({ state: signedInState([]) }));
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(listCalls()).toHaveLength(2);
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: rowOf(WORK_PROFILE, "Work"),
+      created: false,
+    });
+    expect(callsTo("providers.cancelLogin")).toHaveLength(0);
+  });
+
+  it("is not completed when the echo leaves the row out and providers.list shows it unauthenticated", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.laterListReads = listState({
+      ...NO_PROFILES,
+      profiles: [{ ...WORK_PROFILE, authStatus: "unauthenticated" }],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(awaitResult({ state: signedInState([]) }));
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(listCalls()).toHaveLength(2);
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "not-completed",
+    });
+  });
+
+  it("is not completed, and does not throw, when the fallback providers.list read fails", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.laterListReads = new Error("host went away");
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(awaitResult({ state: signedInState([]) }));
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(listCalls()).toHaveLength(2);
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "not-completed",
+    });
   });
 
   it("reports a provider refusal with its reason and link", async () => {
@@ -888,6 +1031,34 @@ describe("profile login (ambient)", () => {
     expect(result.data).toEqual(
       expect.objectContaining({ status: "signed-in" }),
     );
+  });
+});
+
+describe("profile login (ambient) code rejection", () => {
+  it("returns a rejected code at once, without asking again for a pending verdict", async () => {
+    scenario.startAnswers = [startAnswer({ profileId: null })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: { auth: "unknown", authPending: true, profiles: [] },
+          codeRejected: true,
+        }),
+      );
+    const fake = makeIo(false);
+
+    const result = await runLogin(
+      existing("ambient"),
+      fake,
+      makeCtx(false, false),
+    );
+
+    expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    expect(fake.wait).not.toHaveBeenCalled();
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "code-rejected",
+    });
   });
 });
 
@@ -1020,6 +1191,30 @@ describe("start answers", () => {
       profileId: null,
       holderId: HOLDER_ID,
     });
+  });
+});
+
+describe("a call that fails partway", () => {
+  it("releases its claim with the holder id and floor when the start itself rejects, then rethrows", async () => {
+    const failure = new Error("start timed out");
+    scenario.startFailure = failure;
+    const fake = makeIo(false);
+
+    await expect(
+      runLogin(create("Work"), fake, makeCtx(false, false)),
+    ).rejects.toBe(failure);
+
+    expect(callsTo("providers.awaitLogin")).toHaveLength(0);
+    const [, cancelParams, cancelDispatch] = onlyCallTo(
+      "providers.cancelLogin",
+    );
+    expect(cancelParams).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      holderId: HOLDER_ID,
+    });
+    expect(cancelDispatch).toEqual(CANCEL_DISPATCH);
+    expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1261,6 +1456,27 @@ describe("code paste", () => {
 
     settled.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) }));
     await run;
+  });
+
+  it("prints the paste hint only when a reader was returned", async () => {
+    scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
+    const withoutTerminal = makeCtx(false, false);
+    const withTerminal = makeCtx(false, false);
+
+    const noReader = makeIo(false);
+    await runLogin(create("Work"), noReader, withoutTerminal);
+    startIndex = 0;
+    const reader = makeIo(true);
+    await runLogin(create("Work"), reader, withTerminal);
+
+    expect(noReader.readLines).toHaveBeenCalledTimes(1);
+    expect(reader.readLines).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(withoutTerminal.output.humanRequired).mock.calls[0]?.[0],
+    ).not.toContain("paste it here");
+    expect(
+      vi.mocked(withTerminal.output.humanRequired).mock.calls[0]?.[0],
+    ).toContain("paste it here");
   });
 
   it("does not read stdin when the provider takes no pasted code", async () => {

@@ -15,6 +15,7 @@ import { openInBrowser } from "../auth/login-flow";
 import {
   callHostRpc,
   callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
   toAgentCliError,
   type HostRpcDispatch,
 } from "../internal/host-rpc";
@@ -83,8 +84,9 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
     if (process.stdin.isTTY !== true) return null;
     const lines = createInterface({ input: process.stdin });
     lines.on("line", onLine);
-    // With a readline interface on a TTY, Ctrl+C arrives here and not as a
-    // process signal.
+    // Ctrl+C reaches the process handler while this interface has no output
+    // stream; were it ever given one, readline would take the key itself and
+    // report it here instead.
     lines.on("SIGINT", onInterrupt);
     return () => lines.close();
   },
@@ -97,8 +99,13 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
  * `cancelLogin@1.2`; below either the field is stripped and the cancel widens
  * to everyone's login, so both calls name their floor.
  */
+const START_LOGIN_RESPONSE_TIMEOUT_MS = 30_000;
 const START_LOGIN_DISPATCH: HostRpcDispatch = {
-  responseTimeoutMs: null,
+  // The host holds this call while the login child comes up, for up to 25s
+  // of the 30s it assumes a client waits, before it answers "still starting".
+  // The transport's 15s default would abandon a start the host was about to
+  // answer.
+  responseTimeoutMs: START_LOGIN_RESPONSE_TIMEOUT_MS,
   requiredHostMethodVersion: {
     method: "providers.startLogin",
     version: { major: 1, minor: 4 },
@@ -113,12 +120,6 @@ const CANCEL_LOGIN_DISPATCH: HostRpcDispatch = {
   },
   signal: null,
 };
-const PLAIN_DISPATCH: HostRpcDispatch = {
-  responseTimeoutMs: null,
-  requiredHostMethodVersion: null,
-  signal: null,
-};
-
 /** Gap between two asks while the provider's pack downloads. */
 const PACK_POLL_MS = 2_000;
 /** How often the host may answer "still starting" before this side gives up. */
@@ -295,11 +296,11 @@ async function runLogin(
       if (holdsLogin) await release();
       return { status: "not-started", message: notStarted };
     }
-    announce(ctx, io, state, answer);
     const acceptsPastedCode = declares(state.loginCapability?.codePaste);
     const stopPaste = acceptsPastedCode
       ? acceptPastedCode(ctx, io, providerId, heldProfileId, interrupt)
       : null;
+    announce(ctx, io, state, answer, stopPaste !== null);
     const keepalive = !acceptsPastedCode
       ? null
       : setInterval(() => {
@@ -320,16 +321,18 @@ async function runLogin(
         return { status: "cancelled" };
       }
       return await outcomeOf(providerId, target, heldProfileId, result);
-    } catch (error) {
-      // The wait itself failed (the host went away mid-sign-in). Nobody is
-      // waiting for this login any more, so give up the claim on it rather
-      // than leave it for the host's own deadline.
-      await release();
-      throw error;
     } finally {
       if (keepalive !== null) clearInterval(keepalive);
       stopPaste?.();
     }
+  } catch (error) {
+    // A call failed partway: the start timed out after the host had begun
+    // it, or the host went away mid-wait. Nobody is waiting for this login
+    // any more, so give up the claim on it rather than leave it for the
+    // host's own deadline. Releasing a claim the host never recorded is a
+    // no-op there.
+    await release();
+    throw error;
   } finally {
     stopListening();
   }
@@ -418,6 +421,7 @@ function announce(
   io: ProfileLoginIo,
   state: ProviderCliState,
   answer: StartLoginAnswer,
+  readingPastedCode: boolean,
 ): void {
   // The link is the host's relay of what a provider CLI printed. Only an
   // http(s) one is shown as a link to open or handed to the OS opener.
@@ -431,7 +435,7 @@ function announce(
   if (answer.userCode !== null) {
     lines.push("and enter the code:", `  ${answer.userCode}`);
   }
-  if (declares(state.loginCapability?.codePaste)) {
+  if (readingPastedCode) {
     lines.push(
       "",
       "If the browser shows a code instead of finishing, paste it here and press Enter.",
@@ -507,6 +511,7 @@ async function awaitUntilSettled(
     if (signal.aborted) return null;
     const pending =
       profileId === null &&
+      !result.codeRejected &&
       result.state !== null &&
       result.state.authPending &&
       result.state.auth.status !== "authenticated" &&
@@ -526,14 +531,15 @@ async function outcomeOf(
   if (result.refusal !== null) {
     return { status: "refused", refusal: result.refusal };
   }
-  const profiles = result.state?.profiles ?? [];
+  const echoed = (result.state?.profiles ?? []).map(summarizeProfile);
   if (result.existingProfileId !== null) {
-    const existing = profiles.find(
-      (p) => p.profileId === result.existingProfileId,
+    const existing = await findProfileRow(
+      providerId,
+      echoed,
+      result.existingProfileId,
     );
-    if (existing !== undefined) {
-      return { status: "already-exists", profile: summarizeProfile(existing) };
-    }
+    if (existing !== null)
+      return { status: "already-exists", profile: existing };
   }
   // Presence is not success: a row stays listed while signed out, so the row
   // (or, for ambient, the provider's own verdict) must say authenticated.
@@ -542,11 +548,14 @@ async function outcomeOf(
       ? { status: "signed-in", profile: null, created: false }
       : failedOutcome(result);
   }
-  const profile = profiles.find((p) => p.profileId === heldProfileId);
-  if (profile === undefined || profile.auth.status !== "authenticated") {
+  // A null state is the host saying the sign-in did not complete. The row is
+  // not looked up elsewhere then: a profile that was already signed in would
+  // still list as authenticated and read as this sign-in's success.
+  if (result.state === null) return failedOutcome(result);
+  const row = await findProfileRow(providerId, echoed, heldProfileId);
+  if (row === null || row.authStatus !== "authenticated") {
     return failedOutcome(result);
   }
-  const row = summarizeProfile(profile);
   if (target.create === null) {
     return { status: "signed-in", profile: row, created: false };
   }
@@ -555,6 +564,28 @@ async function outcomeOf(
     profile: await nameNewProfile(providerId, row, target.create.label),
     created: true,
   };
+}
+
+/**
+ * The row for `profileId`, from the sign-in's own echo when it is there. The
+ * echo leaves out a profile that is switched off, so a disabled profile that
+ * just signed in (or already holds the account) is read from `providers.list`,
+ * which lists every row. Null when neither has it.
+ */
+async function findProfileRow(
+  providerId: ProviderId,
+  echoed: readonly ProfileListRow[],
+  profileId: string,
+): Promise<ProfileListRow | null> {
+  const fromEcho = echoed.find((row) => row.profileId === profileId);
+  if (fromEcho !== undefined) return fromEcho;
+  try {
+    const state = await readProviderState(providerId);
+    const listed = state.profiles.find((p) => p.profileId === profileId);
+    return listed === undefined ? null : summarizeProfile(listed);
+  } catch {
+    return null;
+  }
 }
 
 function failedOutcome(result: AwaitLoginResult): LoginOutcome {

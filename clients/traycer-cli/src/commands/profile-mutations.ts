@@ -5,6 +5,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
   toAgentCliError,
   type HostRpcDispatch,
 } from "../internal/host-rpc";
@@ -29,12 +30,6 @@ const PROFILE_ACTION_DISPATCH: HostRpcDispatch = {
     method: "providers.setEnabled",
     version: { major: 2, minor: 1 },
   },
-  signal: null,
-};
-
-const PLAIN_DISPATCH: HostRpcDispatch = {
-  responseTimeoutMs: null,
-  requiredHostMethodVersion: null,
   signal: null,
 };
 

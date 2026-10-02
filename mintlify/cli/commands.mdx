@@ -187,7 +187,7 @@ A profile is an account a provider runs under. The provider's own CLI login is t
 | --- | --- |
 | `traycer profile list` | List every provider that has profiles, with each profile's ID, name, account, whether it is enabled and signed in, and its last known usage-limit status. |
 | `traycer profile list <provider>` | List one provider's profiles. |
-| `traycer profile add <provider>` | Create a managed profile and sign it in. The CLI prints a sign-in URL, and a code where the provider uses one, opens the page in your browser when it can, and waits until the sign-in finishes. The profile is named after the account's email. |
+| `traycer profile add <provider>` | Create a managed profile and sign it in. The CLI prints a sign-in URL, and a code where the provider uses one, opens the page in your browser when it can, and waits until the sign-in finishes. The profile is named after the part of the account's email before the `@`. |
 | `traycer profile add <provider> --label <name>` | Create the profile with a name of your own, up to 64 characters. |
 | `traycer profile login <provider> <profile>` | Sign an existing profile in again. |
 | `traycer profile rename <provider> <profile> <label>` | Rename a profile. |
