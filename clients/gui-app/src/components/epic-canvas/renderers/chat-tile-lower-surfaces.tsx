@@ -114,9 +114,9 @@ export interface ChatLowerInteractionSurfacesProps {
    * context, its workspace, its queue, its running work, and a composer that
    * messages it. Under a subagent's conversation all of that reads as the
    * subagent's, and none of it is - a message typed there went to the parent
-   * and queued behind its running turn. So the dock and the composer are
-   * hidden behind one notice saying whose conversation this is and how to get
-   * back.
+   * and queued behind its running turn. So one notice stands in for both,
+   * saying whose conversation this is and how to get back: the dock is hidden
+   * and the composer is not mounted.
    * Approvals and interview questions stay: one of them may be what the
    * subagent on screen is blocked on.
    */
@@ -822,28 +822,29 @@ function ComposerSurface(props: {
       </>
     );
   }
-  const composerShown = model.subagentView === null;
-  return (
-    <>
-      {escapeHatch}
-      {model.subagentView === null ? null : (
+  // Unmounted under a subagent's conversation, not hidden: a composer that is
+  // merely out of sight is still this tile's active one, so the dictation and
+  // model-picker chords, the palette's composer commands and its portalled
+  // banners all go on acting on the parent chat from behind the notice.
+  // Unmounting is the path a pending interview already takes above.
+  if (model.subagentView !== null) {
+    return (
+      <>
+        {escapeHatch}
         <ComposerSlotShell topSpacing={belowSpacing} bottomSpacing="normal">
           <SubagentViewNotice view={model.subagentView} />
         </ComposerSlotShell>
-      )}
-      {/* Hidden, never unmounted, under a subagent's conversation: a
-          remounted editor takes focus when it mounts, which on the way back
-          would pull it off the control the view returns it to. */}
-      <div
-        className={cn(composerShown ? "contents" : "hidden")}
-        inert={!composerShown}
-      >
-        <LiveChatComposer
-          model={model}
-          topSpacing={belowSpacing}
-          hasPendingApprovals={model.hasPendingApprovals}
-        />
-      </div>
+      </>
+    );
+  }
+  return (
+    <>
+      {escapeHatch}
+      <LiveChatComposer
+        model={model}
+        topSpacing={belowSpacing}
+        hasPendingApprovals={model.hasPendingApprovals}
+      />
     </>
   );
 }

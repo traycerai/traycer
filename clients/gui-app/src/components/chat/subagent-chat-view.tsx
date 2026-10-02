@@ -185,6 +185,9 @@ interface DrillInFocusArgs extends DrillInFocusStep {
  *     showing, on the card that leads back down to where the reader was;
  *   - out (Escape at the top, the back control): the control in the
  *     transcript that opened the view, however deep the reader went since.
+ *     In an active tile the composer then takes focus as it mounts again, as
+ *     it does after an interview is answered; the control keeps it wherever
+ *     the composer does not ask for it.
  * Runs after commit, so every control it looks for is the one now mounted.
  */
 function useDrillInFocus(args: DrillInFocusArgs): void {

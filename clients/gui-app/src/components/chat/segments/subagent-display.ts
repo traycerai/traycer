@@ -140,10 +140,14 @@ export function subagentOwnedBackgroundItemCount(
   };
   const ownedItems = deduped.filter(owned);
   const ownedTaskIds = new Set(ownedItems.map((item) => item.taskId));
-  // A parent outside the owned set is the card itself or an ancestor of it:
-  // for this count the item is a root, not a member of that parent's group.
+  // A listed parent outside the owned set is the card itself or an ancestor of
+  // it: for this count the item is a root, not a member of that parent's
+  // group. A parent that has left the list keeps its children grouped, as the
+  // header groups them under the row it remembers.
   const rooted = ownedItems.map((item) =>
-    item.parentTaskId === null || ownedTaskIds.has(item.parentTaskId)
+    item.parentTaskId === null ||
+    ownedTaskIds.has(item.parentTaskId) ||
+    !itemByTaskId.has(item.parentTaskId)
       ? item
       : { ...item, parentTaskId: null },
   );

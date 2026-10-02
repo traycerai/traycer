@@ -1,10 +1,12 @@
 /**
  * While a subagent's conversation covers the transcript the lower surface
  * stops presenting the PARENT chat's composer and dock: a notice says whose
- * conversation this is and offers the way back. The composer and dock stay
- * MOUNTED (their state survives the round trip) but sit inside an inert,
- * `hidden` wrapper. Pending approvals and an interview question stay drawn,
- * since the subagent on screen may be waiting on one.
+ * conversation this is and offers the way back. The composer is NOT mounted
+ * (a hidden one is still the tile's active composer: its chords and banners
+ * keep acting on the parent chat). The dock stays MOUNTED, so its state
+ * survives the round trip, inside an inert, `hidden` wrapper. Pending
+ * approvals and an interview question stay drawn, since the subagent on
+ * screen may be waiting on one.
  */
 import {
   cleanup,
@@ -312,7 +314,7 @@ describe("subagent view lower surface", () => {
     expect(screen.queryByTestId("subagent-view-notice")).toBeNull();
   });
 
-  it("draws a notice naming the subagent and keeps the composer and dock mounted but hidden", () => {
+  it("draws a notice naming the subagent, unmounts the composer and keeps the dock mounted but hidden", () => {
     render(
       <ChatLowerInteractionSurfaces
         {...dockWorthyProps(view("Mendel", 0, () => undefined))}
@@ -322,18 +324,18 @@ describe("subagent view lower surface", () => {
     expect(noticeText()).toContain(
       "You're viewing Mendel's conversation. Subagents can't take messages.",
     );
-    expectMountedButHidden("composer-stub");
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
     expectMountedButHidden("dock-stub");
     // The notice itself is not inside the hidden wrapper.
     expectMountedAndInteractive("subagent-view-notice");
     expect(screen.queryByText(/running/)).toBeNull();
   });
 
-  it("keeps the same composer and dock elements across opening and closing the view", () => {
+  it("keeps the same dock element across opening the view, and unmounts the composer", () => {
     const { rerender } = render(
       <ChatLowerInteractionSurfaces {...dockWorthyProps(null)} />,
     );
-    const composerBefore = screen.getByTestId("composer-stub");
+    expect(screen.queryByTestId("composer-stub")).not.toBeNull();
     const dockBefore = screen.getByTestId("dock-stub");
 
     rerender(
@@ -348,9 +350,8 @@ describe("subagent view lower surface", () => {
       </TabHostProvider>,
     );
 
-    expect(screen.getByTestId("composer-stub")).toBe(composerBefore);
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
     expect(screen.getByTestId("dock-stub")).toBe(dockBefore);
-    expect(composerBefore.closest("[inert]")).not.toBeNull();
     expect(dockBefore.closest("[inert]")).not.toBeNull();
   });
 
@@ -436,7 +437,7 @@ describe("subagent view lower surface", () => {
 
     expectMountedAndInteractive("approval-row");
     expect(noticeText()).toContain("You're viewing Mendel's conversation.");
-    expectMountedButHidden("composer-stub");
+    expect(screen.queryByTestId("composer-stub")).toBeNull();
     expectMountedButHidden("dock-stub");
   });
 });

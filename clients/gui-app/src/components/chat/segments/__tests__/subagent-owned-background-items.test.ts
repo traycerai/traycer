@@ -276,6 +276,14 @@ describe("subagentOwnedBackgroundItemCount", () => {
     expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
   });
 
+  it("groups two owned commands under a parent that has left the list, as the header does", () => {
+    const items = [
+      command("task-1", "child-text", "task-finished-parent"),
+      command("task-2", "grandchild-text", "task-finished-parent"),
+    ];
+    expect(subagentOwnedBackgroundItemCount(nestedCard(), items)).toBe(1);
+  });
+
   it("counts two items with the same taskId once", () => {
     const items = [
       command("task-1", "child-text", null),
