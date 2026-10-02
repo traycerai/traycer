@@ -39,6 +39,8 @@ export default defineConfig({
     ],
   },
   test: {
+    // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
+    clearMocks: false,
     // Anchored to the package directory so siblings whose names merely
     // CONTAIN "zod" (`zod-to-json-schema`, `@hookform/resolvers/zod`) are
     // not dragged in. Full rationale for the workaround itself lives in
