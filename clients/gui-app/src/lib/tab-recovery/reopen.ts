@@ -1,11 +1,10 @@
 import { prepareSavedDraft } from "./saved-draft";
-import { restoreClosedCanvas } from "./restore-canvas";
 import { toast } from "sonner";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import { findPaneById, collectPanes } from "@/stores/epics/canvas/tile-tree";
+import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
   draftTabIntent,
   existingEpicTabIntentWithNestedFocus,
@@ -113,7 +112,7 @@ function headerIsOpen(item: ClosedHeaderTab): boolean {
   );
 }
 async function restoreHeader(
-  entry: Extract<TabRecoveryEntry, { kind: "header" }>,
+  entry: TabRecoveryEntry,
   router: KeybindingRouter,
 ): Promise<RestoreOutcome> {
   const generation = recoveryHistoryGeneration();
@@ -123,7 +122,7 @@ async function restoreHeader(
       .getState()
       .entries.find((candidate) => candidate.id === entry.id);
     return (
-      current?.kind === "header" &&
+      current !== undefined &&
       current.items.some(
         (candidate) => headerKey(candidate) === headerKey(item),
       )
@@ -149,7 +148,7 @@ async function restoreHeader(
   const current = useTabRecoveryHistory
     .getState()
     .entries.find((candidate) => candidate.id === entry.id);
-  if (current?.kind !== "header") return { restored: false, retained: false };
+  if (current === undefined) return { restored: false, retained: false };
   const keys = new Set(current.items.map(headerKey));
   const items = prepared
     .filter((item) => keys.has(headerKey(item)) && !headerIsOpen(item))
@@ -193,137 +192,6 @@ async function restoreHeader(
   }
   return { restored: items.length > 0, retained: retained.length > 0 };
 }
-/** cmdk remounts must not transfer ownership to an empty sibling pane. */
-function releasePaneOpenerFocus(tabId: string, focus: boolean): () => void {
-  if (typeof document === "undefined") return () => undefined;
-  const element = document.activeElement;
-  if (!(element instanceof HTMLElement)) return () => undefined;
-  const opener = element.closest('[data-testid="pane-opener"]');
-  if (opener === null) return () => undefined;
-  const paneId = opener.getAttribute("data-group-id");
-  // cmdk focuses its own input on mount whenever ANY cmdk input held focus.
-  // A restored split remounts empty siblings, even when they are inactive.
-  element.blur();
-  return () => {
-    if (focus) return;
-    window.requestAnimationFrame(() => {
-      // Bulk recovery preserves keyboard focus too. A remounted active opener
-      // handles its own autofocus; restore a surviving input only while no
-      // later user action has moved focus or changed the active pane.
-      if (
-        element.isConnected &&
-        document.activeElement === document.body &&
-        useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId ===
-          paneId
-      )
-        element.focus({ preventScroll: true });
-    });
-  };
-}
-interface CanvasRecoveryTargets {
-  readonly instanceIds: readonly string[];
-  readonly paneIds: readonly string[];
-}
-
-function canvasRecoveryTargets(
-  entry: Extract<TabRecoveryEntry, { kind: "canvas" }>,
-): CanvasRecoveryTargets | null {
-  const state = useEpicCanvasStore.getState();
-  // View ids are globally unique. A moved view is not a new close and must
-  // never be claimed by recovery in its former owner.
-  const liveIds = new Set(
-    Object.values(state.canvasByTabId).flatMap((canvas) =>
-      canvas === undefined
-        ? []
-        : collectPanes(canvas.root).flatMap((pane) => pane.tabInstanceIds),
-    ),
-  );
-  const instanceIds = entry.instanceIds.filter((id) => {
-    const tile = entry.before.tilesByInstanceId[id];
-    return (
-      !liveIds.has(id) &&
-      tile !== undefined &&
-      tileIsRecoverable(tile, entry.tab)
-    );
-  });
-  const paneIds = (entry.paneIds ?? []).filter(
-    (id) =>
-      !Object.values(state.canvasByTabId).some(
-        (canvas) =>
-          canvas !== undefined && findPaneById(canvas.root, id) !== null,
-      ),
-  );
-  if (instanceIds.length === 0) {
-    if (paneIds.length === 0) return null;
-    const current = state.canvasByTabId[entry.tab.tabId] ?? entry.after;
-    if (
-      restoreClosedCanvas(current, entry.before, entry.after, {
-        instanceIds,
-        paneIds,
-        focus: false,
-      }) === current
-    )
-      return null;
-  }
-  return { instanceIds, paneIds };
-}
-
-function restoreCanvas(
-  entry: Extract<TabRecoveryEntry, { kind: "canvas" }>,
-  router: KeybindingRouter,
-): boolean {
-  const state = useEpicCanvasStore.getState();
-  const targets = canvasRecoveryTargets(entry);
-  if (targets === null) return false;
-  const { instanceIds, paneIds } = targets;
-  if (!state.openTabOrder.includes(entry.tab.tabId)) {
-    withoutTabRecovery(() =>
-      tabCommandCoordinator.restoreClosedHeaderTabs(
-        [
-          {
-            kind: "epic",
-            tab: entry.tab,
-            canvas: cleanCanvas(
-              state.canvasByTabId[entry.tab.tabId] ?? entry.after,
-              entry.tab,
-            ),
-            index: state.openTabOrder.length,
-          },
-        ],
-        activeDraftId(router),
-      ),
-    );
-  }
-  const sameTask =
-    router.getPathname() === `/epics/${entry.tab.epicId}/${entry.tab.tabId}`;
-  const focus = !entry.bulk || !sameTask;
-  const restore = () => {
-    const restoreOpenerFocus = releasePaneOpenerFocus(entry.tab.tabId, focus);
-    useEpicCanvasStore.getState().restoreCanvasForRecovery(entry.tab.tabId, {
-      before: entry.before,
-      after: entry.after,
-      instanceIds,
-      paneIds,
-      focus,
-    });
-    restoreOpenerFocus();
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[entry.tab.tabId];
-    const pane =
-      canvas === undefined
-        ? null
-        : findPaneById(canvas.root, canvas.activePaneId ?? "");
-    return pane === null
-      ? null
-      : { paneId: pane.id, tileInstanceId: pane.activeTabId ?? undefined };
-  };
-  if (focus && sameTask && router.navigateNestedFocus !== undefined)
-    router.navigateNestedFocus(entry.tab.epicId, entry.tab.tabId, restore);
-  else {
-    restore();
-    if (focus) activateEpic(router, entry.tab.epicId, entry.tab.tabId);
-  }
-  return true;
-}
 export async function reopenClosedTab(router: KeybindingRouter): Promise<void> {
   if (reopening || !useTabRecoveryHistory.getState().ready) return;
   reopening = true;
@@ -332,10 +200,7 @@ export async function reopenClosedTab(router: KeybindingRouter): Promise<void> {
     for (;;) {
       const entry = useTabRecoveryHistory.getState().entries.at(-1);
       if (entry === undefined) return;
-      const outcome =
-        entry.kind === "header"
-          ? await restoreHeader(entry, router)
-          : { restored: restoreCanvas(entry, router), retained: false };
+      const outcome = await restoreHeader(entry, router);
       if (generation !== recoveryHistoryGeneration()) return;
       if (!outcome.retained) removeRecoveryEntry(entry.id);
       if (outcome.restored || outcome.retained) return;

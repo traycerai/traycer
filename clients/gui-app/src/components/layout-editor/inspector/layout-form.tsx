@@ -338,9 +338,12 @@ export function LayoutAreaLevel(props: {
  */
 function hoverRowUnder(event: PointerEvent<HTMLDivElement>): void {
   if (!(event.target instanceof Element)) return;
-  const id = event.target
-    .closest("[data-sortable-id]")
-    ?.getAttribute("data-sortable-id");
+  const owner = event.target.closest(
+    "[data-sortable-id], [data-region-section]",
+  );
+  const id =
+    owner?.getAttribute("data-sortable-id") ??
+    owner?.getAttribute("data-region-section");
   const region = LAYOUT_REGION_LIST.find((entry) => entry.id === id);
   const store = useLayoutEditorStore.getState();
   store.setHovered(region?.id ?? null);

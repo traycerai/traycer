@@ -451,7 +451,6 @@ type RecordedEvidenceCall =
       readonly hostId: string;
       readonly attemptId: string;
       readonly transportKind: SelectionTransportKind;
-      readonly refusalDetail: "plan-restricted" | null;
     }
   | {
       readonly method: "reportDialTimeout";
@@ -532,14 +531,12 @@ class RecordingEvidence implements TransportEvidenceReporter {
     hostId: string,
     attemptId: string,
     transportKind: SelectionTransportKind,
-    refusalDetail: "plan-restricted" | null,
   ): void {
     this.calls.push({
       method: "reportDialRefusal",
       hostId,
       attemptId,
       transportKind,
-      refusalDetail,
     });
   }
 

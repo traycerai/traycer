@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 
+// The real-browser regressions are NOT run from here: they are Playwright
+// specs (`browser-tests/`, `bun run test:browser`) and CI runs them in their
+// own workflow (`.github/workflows/browser-regressions.yml`).
+
 const testArgs = process.argv.slice(2);
 
 /**
@@ -74,7 +78,7 @@ function runVitest(configPath: string, filePath: string | undefined): number {
   // because the child never got to print one. Surface the signal explicitly
   // and return 128+n, the shell convention, so the next occurrence is
   // self-identifying instead of ambiguous. Do not exit here: a red main
-  // suite used to skip the follow-up config and the browser regressions.
+  // suite used to skip the follow-up config.
   if (result.signal !== null) {
     const signalExit = SIGNAL_EXIT_CODES[result.signal] ?? 1;
     console.error(
@@ -99,17 +103,6 @@ function readShardValue(args: string[]): string | undefined {
 
 const shard = readShardValue(testArgs);
 const runsFirstShard = shard === undefined || shard.split("/", 1)[0] === "1";
-const shardValueArgs = new Set<string>(
-  shard !== undefined && testArgs.includes("--shard") ? [shard] : [],
-);
-const runsWholeSuite = !testArgs.some(
-  (arg) => !arg.startsWith("-") && !shardValueArgs.has(arg),
-);
-// The env var keeps its original name because CI sets it by that name
-// (`test.yml`); it now gates every browser regression, not just the diff-edit
-// one. Renaming it would be a workflow change riding inside an unrelated fix.
-const runsBrowserRegressions =
-  runsWholeSuite && process.env.RUN_DIFF_EDIT_BROWSER_REGRESSION === "1";
 
 function firstFailure(current: number, next: number): number {
   return current !== 0 ? current : next;
@@ -132,169 +125,5 @@ if (runsFirstShard) {
       "src/hooks/terminal/__tests__/use-epic-terminal-durable-create.test.tsx",
     ),
   );
-  if (runsBrowserRegressions) {
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/diff-edit-browser-regression.mjs"),
-    );
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/pierre-tree-zoom-browser-regression.mjs"),
-    );
-    // Same gate, same reason: the claim is "after Cancel the window is usable
-    // again", and jsdom has no hit testing, so only a real layout engine can
-    // tell a released modal from a modal that merely stopped being asserted
-    // about. Runs behind the same env flag rather than a second one - a browser
-    // check nobody enables is a coverage gap wearing a test's name.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/quit-intercept-cancel-browser.mjs"),
-    );
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/destructive-dialog-focus-browser.mjs"),
-    );
-    // Same gate again, and the strongest case for it in this list: the boot
-    // card's escape hatch is lost to an INPUT-DISPATCH rule - a press whose
-    // element is removed before release emits no click at all - and jsdom
-    // dispatches `click` directly, so every jsdom test of that button passes
-    // on the broken build. Ablated before wiring: reverting the button to
-    // `onClick` turns this red (0 activations) while its ordinary-click
-    // premise stays green.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/boot-escape-hatch-press-browser.mjs"),
-    );
-    // Same gate: the toast close button's touch visibility is a MEDIA-QUERY
-    // question and jsdom evaluates none, so a jsdom test sees identical class
-    // names on a phone and a desktop. Ablated before wiring: an unscoped
-    // hide, a missing hit area and a missing mobile-app offset each turn it
-    // red.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/toast-close-button-touch-browser.mjs"),
-    );
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/docx-preview-browser-regression.mjs"),
-    );
-    // Same gate: whether the sign-in page is legible is a question about
-    // rendered colours under a given theme preset, and jsdom has no cascade
-    // and no pixels. Ablated before wiring: without the page's dark palette
-    // scope, "Enter code manually" reads 1.04:1 under every light preset.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/sign-in-theme-contrast-browser.mjs"),
-    );
-    // A CSS duration accidentally applied to transition-property: all sends
-    // Floating UI surfaces from the viewport corner on mount and re-anchor;
-    // only a real browser can measure that layout and style interpolation.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/panel-motion-position-browser.mjs"),
-    );
-    // Same gate: whether the status bar's usage cluster overflows and
-    // scrolls at a real width, which edge its fade lands on, and whether the
-    // resource readout beside it stays whole are all layout - jsdom reports
-    // every box as 0px wide and cannot see what a mask class does.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/status-bar-usage-scroll-browser.mjs"),
-    );
-    // The layout editor's parity rule (P2, L-11, L-53) is a claim about
-    // RESOLVED styles and laid-out rects - whether two pictures of the same
-    // region look the same, whether a preset card is a scaled app frame
-    // rather than a reflowed one, and where Chrome's anchor positioning
-    // actually paints the hover chip. jsdom has no cascade, no layout and no
-    // anchor positioning, so none of the four is decidable without a browser.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/layout-editor-browser.mjs"),
-    );
-    // Same gate: the message queue is never a pill (G1-G2) - it sits directly
-    // on the composer with no gap, the pill row above it, and every one-line
-    // row holds the dock's one row metric (L-171, L-172). All of that is laid
-    // out geometry plus real key input, none of which jsdom has. Ablated
-    // before wiring: HEAD's Compact queue pill fails 14 checks, and an
-    // unbudgeted row toolbar or an unfloated provenance badge fails the metric.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/composer-queue-dock-browser.mjs"),
-    );
-    // Same gate: hover-card timing (G8) is pointer events, focus modality,
-    // portals and frames, none of which jsdom has. Ablated before wiring:
-    // the Radix cards failed 22 of 26 scenario runs, when the driver still ran
-    // each in both themes (hand-off ~510ms, a card that opens after a
-    // click-and-leave, a blink on click, a card under the menu).
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/hover-card-browser.mjs"),
-    );
-    // Same gate: Settings ▸ Layout beside the live app column (G6, G7). An
-    // area's body scrolls under a pinned rail and header, the page fits a
-    // desktop and a phone width with the rail or the select the breakpoint
-    // draws, a short pane's rail scrolls under a real wheel, the Radix select
-    // and a row's ↺ work by real pointer and key, the header's readings leave
-    // the tabs room, and every setting visibly changes the app column. Layout,
-    // media queries, hit testing and real input: none of it is jsdom's.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/layout-settings-browser.mjs"),
-    );
-    // Same gate: the sheet join's concave corners are pseudo-element offsets
-    // resolved against an anchored bridge's padding box and painted arcs.
-    // jsdom has no anchor positioning, no used-value offsets and no pixels.
-    // Ablated before wiring: arcs 1px short of the bridge's inner edge fail
-    // the offsets suite, and the hard-stop gradient arcs fail the corners
-    // suite's anti-aliasing check at DPR 1 and 2.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/sheet-join-geometry-browser.mjs"),
-    );
-    // Same gate: whether a non-overflowing tab strip's scroller has ANY
-    // vertical scroll range, and whether a real mouse wheel over it wobbles
-    // the active tab's row by a pixel, are both layout questions - jsdom
-    // reports scrollHeight/clientHeight as 0 and has no native scroll-on-
-    // wheel action behind its synthetic wheel event, which is exactly the
-    // mechanism the bug lived in. Ablated before wiring: reverting the tab
-    // item's height back to a fixed h-9 turns both the vertical-range and
-    // the wheel-wobble checks red while the horizontal-overflow-scrolls
-    // checks stay green.
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/canvas-tab-strip-overflow-browser.mjs"),
-    );
-    // The CDP client every driver above talks over: a command in flight when
-    // Chrome dies must reject rather than hang, since each driver is spawned
-    // with no timeout and a hang holds the CI job until its own limit. Needs a
-    // real DevTools socket to die under it. Ablated before wiring: removing
-    // the client's close/error handlers leaves the command pending (red).
-    exitCode = firstFailure(
-      exitCode,
-      runBrowserRegression("scripts/cdp-client-browser.mjs"),
-    );
-    // NOT here, deliberately, and each for its own reason:
-    // - `scripts/window-host-modal-alignment-browser.mjs` measures the
-    //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
-    //   `HostBootCard` superseded when the boot card became a CENTRED surface
-    //   (`local-host-loading.tsx`: "the card is centred now"). Run against the
-    //   current component it reports the centring as a 58px misalignment. It
-    //   is a manual instrument for the left-aligned arrangement it was written
-    //   for, not a gate on the current one; re-base it before wiring it here.
-    // - `scripts/toast-over-modal-hittest.mjs` prints hit-test figures and
-    //   asserts nothing, so a gate on it would be a gate on a number nobody
-    //   reads - run it by hand.
-  }
 }
 process.exit(exitCode);
-
-function runBrowserRegression(scriptPath: string): number {
-  const result = spawnSync(process.execPath, [scriptPath], {
-    stdio: "inherit",
-  });
-  if (result.error !== undefined) throw result.error;
-  if (result.signal !== null) {
-    return SIGNAL_EXIT_CODES[result.signal] ?? 1;
-  }
-  return result.status ?? 1;
-}

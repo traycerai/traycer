@@ -50,7 +50,7 @@ import {
   ChatScrollToBlockContext,
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
-import { CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
+import { PENDING_CARD_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
 import {
   ChatPlanActionsContext,
   type ChatPlanActionsContextValue,
@@ -63,6 +63,10 @@ import {
   WorkingVerbContext,
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
+import {
+  ThinkingTokensSourceContext,
+  type ThinkingTokensSource,
+} from "@/components/chat/thinking-tokens-source";
 import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
@@ -101,6 +105,7 @@ import type {
   ChatComposerSideChatInput,
   ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
+import { suggestionOfferableWhilePending } from "@/components/chat/composer/prompt-suggestion";
 import {
   sideChatPlacementForTile,
   startSideChat,
@@ -204,7 +209,6 @@ import {
   ChatHostStartingBanner,
   type ChatDeadTileBannerReason,
 } from "./dead-tile-banner";
-import { unreachableHostBannerReason } from "./unreachable-host-banner-reason";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -316,6 +320,7 @@ import {
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
 import { ChatTilePreContent } from "./chat-tile-runtime-gate";
+import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import type { ChatLoadWait, ChatTilePreContentFrame } from "./chat-pre-content";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
@@ -591,7 +596,7 @@ function ChatTileForChat(props: ChatTileProps) {
           chatId={node.id}
           sourceHostId={tabHostId}
           hostLabel={reachability.hostLabel}
-          reason={unreachableHostBannerReason(reachability.unavailability)}
+          reason="host-offline"
           // This mount's body is a load state or a cached live session -
           // never a published copy the banner could truthfully point at.
           showsPublishedCopy={false}
@@ -846,35 +851,30 @@ function useComposerNavigationHighlight(): {
     readonly id: string;
     readonly generation: number;
   } | null>(null);
-  const timeoutRef = useRef<number | null>(null);
+  // The ring's time runs only while the card can paint: a jump can land while
+  // this tile is kept mounted under `display:none` and shown a moment later,
+  // and the CSS animation only starts then too.
+  const paneVisible = usePaneVisible();
+  const tabSelected = useTabBodySelected();
+  const shown = paneVisible && tabSelected;
+  useEffect(() => {
+    if (composerHighlight === null || !shown) return;
+    const timer = window.setTimeout(() => {
+      setComposerHighlight(null);
+    }, PENDING_CARD_HIGHLIGHT_DURATION_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [composerHighlight, shown]);
   const clearComposerHighlight = useCallback((): void => {
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
     setComposerHighlight(null);
   }, []);
   const highlightComposerBlock = useCallback((blockId: string): void => {
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-    }
     setComposerHighlight((current) => ({
       id: blockId,
       generation: (current?.generation ?? 0) + 1,
     }));
-    timeoutRef.current = window.setTimeout(() => {
-      timeoutRef.current = null;
-      setComposerHighlight(null);
-    }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
   }, []);
-  useEffect(
-    () => () => {
-      if (timeoutRef.current !== null) {
-        window.clearTimeout(timeoutRef.current);
-      }
-    },
-    [],
-  );
   return {
     blockId: composerHighlight?.id ?? null,
     generation: composerHighlight?.generation ?? 0,
@@ -1507,6 +1507,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
               >
                 <ChatSessionMessagesSurface
                   snapshotLoaded={view.snapshotLoaded}
+                  thinkingTokensSource={view.handle.store}
                   connectionStatus={view.connectionStatus}
                   fatalClose={view.fatalClose}
                   preSnapshotRetries={view.preSnapshotRetries}
@@ -1855,6 +1856,9 @@ function useChatTileSessionViewModel(
       // ride this slice rather than earning a second subscription path.
       pendingFallback: s.pendingFallback,
       pendingReturn: s.pendingReturn,
+      // Changes a handful of times per turn at most (set after a turn, cleared
+      // on the next send), so it rides this slice too.
+      suggestedPrompt: s.suggestedPrompt,
       pendingBackgroundStops: s.pendingBackgroundStops,
       pendingBackgroundStopAll: s.pendingBackgroundStopAll,
       pendingBackgroundSessionStop: s.pendingBackgroundSessionStop,
@@ -3532,6 +3536,10 @@ function useChatTileSessionViewModel(
       onSettingsChange: handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      suggestedPrompt: suggestionOfferableWhilePending(
+        state.suggestedPrompt,
+        state.pendingActions,
+      ),
     }),
     [
       state.currentComposerSettings,
@@ -3547,6 +3555,8 @@ function useChatTileSessionViewModel(
       handleComposerSettingsChange,
       workspaceControls,
       workspaceAvailability,
+      state.suggestedPrompt,
+      state.pendingActions,
     ],
   );
 
@@ -3736,6 +3746,12 @@ function useChatTileSessionViewModel(
 
 interface ChatSessionMessagesSurfaceProps {
   readonly snapshotLoaded: boolean;
+  /**
+   * The chat session store, handed to the streaming "Thinking" label so it can
+   * subscribe to the thinking-token estimate on its own - see
+   * `ThinkingTokensSourceContext` for why a source and not the number.
+   */
+  readonly thinkingTokensSource: ThinkingTokensSource;
   readonly connectionStatus: StreamConnectionStatus;
   readonly fatalClose: FatalErrorDetails | null;
   /** Failed pre-snapshot attempts; see `ChatTilePreContent`. */
@@ -3865,35 +3881,40 @@ function ChatSessionMessagesSurface(
   );
   return (
     <ChatRestoreProvider value={props.restoreContext}>
+      <MobileDrawerVisibleTilePaintReporter ready />
       <ChatPlanActionsContext.Provider value={props.planActions}>
         <WorkingVerbContext.Provider value={workingVerb}>
-          <ChatMarkdownLinkProvider
-            tabId={props.viewTabId}
-            workspaceRoots={props.workspaceRoots}
+          <ThinkingTokensSourceContext.Provider
+            value={props.thinkingTokensSource}
           >
-            <ChatMessages
-              taskTitle={props.taskTitle}
-              taskId={props.node.id}
-              epicId={props.epicId}
-              hostId={props.tabHostId}
-              messages={props.messages}
-              transcriptWindow={props.transcriptWindow}
-              onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
-              onFindReadOrdinalChange={props.onFindReadOrdinalChange}
-              baselineEpoch={props.baselineEpoch}
-              hydrationSequence={props.hydrationSequence}
-              coldRewrittenMessageIds={props.coldRewrittenMessageIds}
-              backgroundItems={props.backgroundItems}
-              scrollRequest={props.scrollRequest}
-              onScrollRequestSettled={props.onScrollRequestSettled}
-              getMessageActions={props.getMessageActions}
-              nextStepActions={props.nextStepActions}
-              instanceId={props.node.instanceId}
-              visible={props.surfaceVisible}
-              systemOverlayActive={props.systemOverlayActive}
-              composerOverlayHeight={props.composerOverlayHeight}
-            />
-          </ChatMarkdownLinkProvider>
+            <ChatMarkdownLinkProvider
+              tabId={props.viewTabId}
+              workspaceRoots={props.workspaceRoots}
+            >
+              <ChatMessages
+                taskTitle={props.taskTitle}
+                taskId={props.node.id}
+                epicId={props.epicId}
+                hostId={props.tabHostId}
+                messages={props.messages}
+                transcriptWindow={props.transcriptWindow}
+                onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
+                onFindReadOrdinalChange={props.onFindReadOrdinalChange}
+                baselineEpoch={props.baselineEpoch}
+                hydrationSequence={props.hydrationSequence}
+                coldRewrittenMessageIds={props.coldRewrittenMessageIds}
+                backgroundItems={props.backgroundItems}
+                scrollRequest={props.scrollRequest}
+                onScrollRequestSettled={props.onScrollRequestSettled}
+                getMessageActions={props.getMessageActions}
+                nextStepActions={props.nextStepActions}
+                instanceId={props.node.instanceId}
+                visible={props.surfaceVisible}
+                systemOverlayActive={props.systemOverlayActive}
+                composerOverlayHeight={props.composerOverlayHeight}
+              />
+            </ChatMarkdownLinkProvider>
+          </ThinkingTokensSourceContext.Provider>
         </WorkingVerbContext.Provider>
       </ChatPlanActionsContext.Provider>
     </ChatRestoreProvider>

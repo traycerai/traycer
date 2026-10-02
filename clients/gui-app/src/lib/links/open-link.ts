@@ -66,9 +66,7 @@ export interface OpenLinkWithPending {
  * alone.
  */
 export function useOpenLinkWithPending(): OpenLinkWithPending {
-  const target = useLinkTarget();
-  const openBrowserUrl = useOpenBrowserUrl();
-  const { isPending, mutateAsync } = useOpenExternalLink();
+  const { openWebUrlIn, openInOsBrowser, isPending } = useLinkOpeners();
 
   const openLink = useCallback(
     (
@@ -76,16 +74,6 @@ export function useOpenLinkWithPending(): OpenLinkWithPending {
       kind: LinkKind,
       event: LinkClickEvent | null,
     ): Promise<void> => {
-      // Most callers fire and forget, so an unhandled rejection would be the
-      // NORMAL case. The handler is attached to THIS promise rather than a
-      // derived copy, so a caller that awaits still sees the failure - which
-      // is what keeps the report-issue publish flow on its preview screen
-      // instead of advancing to the confirmation (L1).
-      const openExternalLink = (href: string): Promise<void> => {
-        const done = mutateAsync(href);
-        void done.catch(() => undefined);
-        return done;
-      };
       const trimmed = url.trim();
       const parsed = parseHttpUrl(trimmed);
       if (
@@ -96,11 +84,10 @@ export function useOpenLinkWithPending(): OpenLinkWithPending {
         useSettingsStore.getState().addBrowserDevOrigin(parsed.origin);
       }
       if (parsed === null || !isConfigurableLinkKind(kind)) {
-        return openExternalLink(trimmed);
+        return openInOsBrowser(trimmed);
       }
-      const webUrl = parsed.href;
       if (event?.ctrlKey === true || event?.metaKey === true) {
-        return openExternalLink(webUrl);
+        return openInOsBrowser(parsed.href);
       }
       const mode = linkOpenModeForKind(
         useSettingsStore.getState().linkOpen,
@@ -109,29 +96,129 @@ export function useOpenLinkWithPending(): OpenLinkWithPending {
       // `alt` is consumed here and does NOT also invert tile placement (A3).
       const inApp =
         event?.altKey === true ? mode === "external" : mode === "in-app";
-      if (!inApp) {
-        return openExternalLink(webUrl);
+      return openWebUrlIn(
+        parsed.href,
+        inApp ? "in-app" : "external",
+        modifiersOf(event),
+      );
+    },
+    [openInOsBrowser, openWebUrlIn],
+  );
+
+  return { isPending, openLink };
+}
+
+/** Where a link the user aimed explicitly should open. */
+export type LinkDestination = "in-app" | "external";
+
+export interface OpenLinkIn {
+  /**
+   * Opens `url` where the user asked, skipping the per-kind setting and the
+   * click modifiers - for a gesture that already names its destination, like
+   * a link's right-click menu. A non-http(s) URL always goes to the OS.
+   */
+  readonly openLinkIn: (url: string, destination: LinkDestination) => void;
+  /**
+   * False where no canvas is behind the surface, so an in-app open would land
+   * in the OS browser anyway and offering it as a separate choice would lie.
+   */
+  readonly canOpenInApp: boolean;
+}
+
+export function useOpenLinkIn(): OpenLinkIn {
+  const { openWebUrlIn, openInOsBrowser, canOpenInApp } = useLinkOpeners();
+
+  const openLinkIn = useCallback(
+    (url: string, destination: LinkDestination): void => {
+      const trimmed = url.trim();
+      const parsed = parseHttpUrl(trimmed);
+      if (parsed === null) {
+        void openInOsBrowser(trimmed);
+        return;
       }
+      void openWebUrlIn(parsed.href, destination, NO_MODIFIERS);
+    },
+    [openInOsBrowser, openWebUrlIn],
+  );
+
+  return { openLinkIn, canOpenInApp };
+}
+
+const NO_MODIFIERS: TileOpenModifiers = {
+  shift: false,
+  alt: false,
+  middle: false,
+};
+
+interface LinkOpeners {
+  /** Hands `href` to the OS browser; rejects when the handoff fails (L1). */
+  readonly openInOsBrowser: (href: string) => Promise<void>;
+  /** Opens an already-parsed http(s) URL at a decided destination. */
+  readonly openWebUrlIn: (
+    webUrl: string,
+    destination: LinkDestination,
+    modifiers: TileOpenModifiers,
+  ) => Promise<void>;
+  readonly canOpenInApp: boolean;
+  readonly isPending: boolean;
+}
+
+/**
+ * The two ends every link open reaches once its destination is decided,
+ * shared by the setting-driven click path and the explicit menu path so both
+ * land a link the same way.
+ */
+function useLinkOpeners(): LinkOpeners {
+  const target = useLinkTarget();
+  const openBrowserUrl = useOpenBrowserUrl();
+  const { isPending, mutateAsync } = useOpenExternalLink();
+
+  // Most callers fire and forget, so an unhandled rejection would be the
+  // NORMAL case. The handler is attached to THIS promise rather than a
+  // derived copy, so a caller that awaits still sees the failure - which is
+  // what keeps the report-issue publish flow on its preview screen instead of
+  // advancing to the confirmation (L1).
+  const openInOsBrowser = useCallback(
+    (href: string): Promise<void> => {
+      const done = mutateAsync(href);
+      void done.catch(() => undefined);
+      return done;
+    },
+    [mutateAsync],
+  );
+
+  const openWebUrlIn = useCallback(
+    (
+      webUrl: string,
+      destination: LinkDestination,
+      modifiers: TileOpenModifiers,
+    ): Promise<void> => {
+      if (destination === "external") return openInOsBrowser(webUrl);
       if (target === null) {
         // No epic behind this surface at all, so there is no canvas an in-app
         // tab could land on. This is not the A5 failure case (that one toasts
         // in `useOpenBrowserUrl`): nothing was attempted and nothing failed,
         // the surface simply has no in-app destination. Ticket 08 shrinks this
         // set by mounting `LinkTargetProvider` on the surfaces that do.
-        return openExternalLink(webUrl);
+        return openInOsBrowser(webUrl);
       }
       openBrowserUrl({
         url: webUrl,
-        modifiers: modifiersOf(event),
+        modifiers,
         epicId: target.epicId,
         viewTabId: target.viewTabId,
       });
       return Promise.resolve();
     },
-    [mutateAsync, openBrowserUrl, target],
+    [openBrowserUrl, openInOsBrowser, target],
   );
 
-  return { isPending, openLink };
+  return {
+    openInOsBrowser,
+    openWebUrlIn,
+    canOpenInApp: target !== null,
+    isPending,
+  };
 }
 
 function modifiersOf(event: LinkClickEvent | null): TileOpenModifiers {

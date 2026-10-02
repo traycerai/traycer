@@ -53,7 +53,7 @@ describe("<Toaster />", () => {
     // pointer nothing overrides sonner's always-visible default - except for the
     // back toasts of a collapsed stack, which sonner has already made
     // invisible. The real media query is exercised in
-    // `scripts/toast-close-button-touch-browser.mjs`.
+    // `browser-tests/toast-close-button-touch.spec.ts`.
     const hides = closeButtonTokens().filter((token) =>
       /(^|:)(opacity-0|pointer-events-none)$/.test(token),
     );

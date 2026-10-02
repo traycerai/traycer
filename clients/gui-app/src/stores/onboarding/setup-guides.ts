@@ -45,6 +45,14 @@ export interface SetupGuideStep {
    * nothing is written.
    */
   readonly litChrome?: true;
+  /**
+   * The step points at the layout editor's door, so it is left out wherever
+   * the editor can never open (`isLayoutEditorAvailable`). Only a guide's LAST
+   * step may carry it: the step before it becomes the last, and Done there
+   * completes the guide, so the stored progress keeps one meaning in every
+   * shell.
+   */
+  readonly requiresLayoutEditor?: true;
 }
 
 export interface SetupGuide {
@@ -127,6 +135,7 @@ const SETUP_GUIDES = {
         content:
           "The app dims around what you can change. The editor opens on a sample workspace, so your own task is left alone.",
         litChrome: true,
+        requiresLayoutEditor: true,
       },
     ],
   },
@@ -173,6 +182,20 @@ export function setupGuide(id: SetupGuideId): SetupGuide {
 /** How many steps a guide has - also the progress value that means complete. */
 export function setupGuideLength(id: SetupGuideId): number {
   return setupGuide(id).steps.length;
+}
+
+/**
+ * The steps a shell actually walks: a step that points at the layout editor's
+ * door is left out where the editor can never open. The one place that rule is
+ * written - the guide card and the checklist's "Step n of total" both read it.
+ */
+export function setupGuideStepsFor(
+  id: SetupGuideId,
+  shell: { readonly layoutEditor: boolean },
+): ReadonlyArray<SetupGuideStep> {
+  return setupGuide(id).steps.filter(
+    (step) => shell.layoutEditor || step.requiresLayoutEditor !== true,
+  );
 }
 
 /** Where a guide's step lives, so a resume lands on the right section. */

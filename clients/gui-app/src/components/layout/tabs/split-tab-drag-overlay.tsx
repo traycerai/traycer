@@ -6,6 +6,7 @@ import type {
   HeaderStripMember,
 } from "@/stores/tabs/use-header-tabs";
 import { SplitFocusIcon, SplitTabLayout } from "./split-tab-chrome";
+import { useHeaderSplitJoinPane } from "./surface-join-pane";
 import {
   headerTabClassName,
   splitFillableMemberClassName,
@@ -29,6 +30,7 @@ interface SplitTabDragOverlayProps {
 
 export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
   const { item } = props;
+  const joinPane = useHeaderSplitJoinPane(item);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const geometryRef = useRef<{
     memberWidth: number | null;
@@ -78,7 +80,7 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
         <SplitTabLayout
           splitId={item.id}
           selectedSide={props.isActive ? item.focusedSide : null}
-          joined={props.isActive}
+          joined={props.isActive ? joinPane : null}
           control={
             <span
               className={cn(
@@ -91,6 +93,7 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
               <SplitFocusIcon
                 splitId={item.id}
                 focusedSide={item.focusedSide}
+                size="size-5"
               />
             </span>
           }

@@ -18,6 +18,7 @@ import {
   HeaderTabVisual,
   TabChrome,
 } from "@/components/layout/tabs/header-tab-visual";
+import { surfaceJoinPane } from "@/components/layout/tabs/surface-join-pane";
 import { sampleWorkspaceTabModule } from "@/stores/tabs/kinds/sample-workspace";
 import { tabAppearance } from "@/stores/tabs/types";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
@@ -396,9 +397,12 @@ function sessionTabVisualProps(isActive: boolean) {
     chrome: "own" as const,
     isActive,
     joined: isActive,
+    concealed: false,
     titleControl: null,
     trailingControl: null,
     leaderVisible: false,
+    enabled: true,
+    pairPreview: null,
   };
 }
 
@@ -580,7 +584,10 @@ describe("layout-editor.css is read, not assumed", () => {
     render(
       createElement(TabChrome, {
         isActive: true,
-        joined: true,
+        // The pane `HeaderTabVisual` hands an active session tab; `TabChrome`
+        // withholds it, because the editor's own tab never joins the sheet.
+        joined: surfaceJoinPane(SESSION_TAB, "top", new Map()),
+        concealed: false,
         color,
         session: true,
       }),
@@ -610,7 +617,7 @@ describe("layout-editor.css is read, not assumed", () => {
       document.querySelectorAll('[data-layout-session-tab="filled"]'),
     ).toHaveLength(1);
     expect(screen.getAllByTestId("tab-chrome-box")).toHaveLength(1);
-    expect(screen.queryByTestId("tab-color-mark")).toBeNull();
+    expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
 
     // The marker survives in both states, because the dim exemption reads it
     // and a tab the user clicked away from still has to stay lit.

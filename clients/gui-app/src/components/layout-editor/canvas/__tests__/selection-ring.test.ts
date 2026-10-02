@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSelectionRing,
+  insideWindow,
   type SelectionRingController,
 } from "@/components/layout-editor/canvas/selection-ring";
 
@@ -213,5 +214,96 @@ describe("the one shared ring", () => {
     expect(
       document.querySelectorAll("[data-layout-selection-ring]"),
     ).toHaveLength(0);
+  });
+});
+
+describe("insideWindow", () => {
+  // `RING_BLEED` in selection-ring.ts: the room the ring's halo needs outside
+  // the box it frames. The constant is private, so the literal is written here.
+  const RING_BLEED = 6;
+  const WINDOW_WIDTH = 1000;
+  const WINDOW_HEIGHT = 700;
+  const originalWidth = window.innerWidth;
+  const originalHeight = window.innerHeight;
+
+  function setWindowSize(width: number, height: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: width,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      writable: true,
+      value: height,
+    });
+  }
+
+  beforeEach(() => {
+    setWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+  });
+
+  afterEach(() => {
+    setWindowSize(originalWidth, originalHeight);
+  });
+
+  it("shrinks a box on the window's last row to end RING_BLEED px inside the bottom edge", () => {
+    // Flush with the bottom edge: it ends on the window's last pixel row.
+    const box = { x: 100, y: WINDOW_HEIGHT - 22, width: 300, height: 22 };
+
+    const clamped = insideWindow(box);
+
+    expect(clamped.y + clamped.height).toBe(WINDOW_HEIGHT - RING_BLEED);
+    // Shrunk, not moved: the edge the ring frames stays on the element's own.
+    expect(clamped.y).toBe(box.y);
+    expect(clamped.height).toBe(22 - RING_BLEED);
+  });
+
+  it("shrinks a box on the window's last column to end RING_BLEED px inside the right edge", () => {
+    const box = { x: WINDOW_WIDTH - 200, y: 100, width: 200, height: 40 };
+
+    const clamped = insideWindow(box);
+
+    expect(clamped.x + clamped.width).toBe(WINDOW_WIDTH - RING_BLEED);
+    expect(clamped.x).toBe(box.x);
+    expect(clamped.width).toBe(200 - RING_BLEED);
+  });
+
+  it("starts a box touching the top and left edges RING_BLEED px inside them", () => {
+    const box = { x: 0, y: 0, width: 300, height: 100 };
+
+    const clamped = insideWindow(box);
+
+    expect(clamped.x).toBe(RING_BLEED);
+    expect(clamped.y).toBe(RING_BLEED);
+    // The far edges stay where they were: only the near side was shrunk.
+    expect(clamped.x + clamped.width).toBe(300);
+    expect(clamped.y + clamped.height).toBe(100);
+  });
+
+  it("returns a box that is wholly inside the window unchanged", () => {
+    const box = { x: 100, y: 120, width: 300, height: 80 };
+
+    expect(insideWindow(box)).toEqual(box);
+  });
+
+  it("keeps the true box of a region that has left the window entirely", () => {
+    // One region beyond each edge. Each would collapse to a zero or negative
+    // extent under the clamp, which draws a bar against the edge instead of
+    // leaving with the region, so the true box comes back.
+    const above = { x: 100, y: -400, width: 200, height: 30 };
+    const below = { x: 100, y: WINDOW_HEIGHT + 100, width: 200, height: 30 };
+    const beforeLeft = { x: -500, y: 100, width: 200, height: 30 };
+    const afterRight = {
+      x: WINDOW_WIDTH + 100,
+      y: 100,
+      width: 200,
+      height: 30,
+    };
+
+    expect(insideWindow(above)).toEqual(above);
+    expect(insideWindow(below)).toEqual(below);
+    expect(insideWindow(beforeLeft)).toEqual(beforeLeft);
+    expect(insideWindow(afterRight)).toEqual(afterRight);
   });
 });

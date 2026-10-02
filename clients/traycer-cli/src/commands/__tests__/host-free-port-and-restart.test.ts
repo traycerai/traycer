@@ -30,6 +30,12 @@ const mocks = vi.hoisted(() => ({
     holderPid: null,
   } as KillConflictingPortOwnerResult,
   killThrows: null as Error | null,
+  // When set, the stub's restart crosses the REAL service spawn edge, which
+  // is what publishes the adoption proof - so the proof's origin becomes
+  // observable in `publishedOrigins`. Off by default: every other case pins
+  // command-level wiring and never publishes.
+  crossSpawnEdge: false,
+  publishedOrigins: [] as string[],
 }));
 
 vi.mock("../../service", async (importOriginal) => {
@@ -53,6 +59,11 @@ vi.mock("../../service", async (importOriginal) => {
       },
       restart: async () => {
         mocks.controllerCalls.push("restart");
+        if (mocks.crossSpawnEdge) {
+          const { atServiceSpawnEdge } =
+            await import("../../service/spawn-edge");
+          await atServiceSpawnEdge();
+        }
       },
       hostStartAdoptionLabel: async (label: { id: string }) => label.id,
     }),
@@ -65,10 +76,18 @@ vi.mock("../../service", async (importOriginal) => {
 // wiring, not the adoption handshake (that's `host-start-adoption.
 // test.ts`), so replace it with an immediately-satisfied lease.
 vi.mock("../../host/host-start-adoption", () => ({
-  publishHostStartAdoption: async () => ({
-    waitForSpawn: async () => undefined,
-    cancel: async () => undefined,
-  }),
+  publishHostStartAdoption: async (
+    _capability: unknown,
+    _contenderOptions: unknown,
+    _serviceLabel: string,
+    origin: string,
+  ) => {
+    mocks.publishedOrigins.push(origin);
+    return {
+      waitForSpawn: async () => undefined,
+      cancel: async () => undefined,
+    };
+  },
 }));
 
 vi.mock("../../host/free-port-kill", () => ({
@@ -178,7 +197,7 @@ async function writeInstallRecordForAttestation(): Promise<HostInstallRecord> {
 }
 
 describe("buildHostFreePortAndRestartCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     workHome = mkdtempSync(
       join(tmpdir(), "traycer-host-free-port-and-restart-cmd-test-"),
     );
@@ -189,6 +208,12 @@ describe("buildHostFreePortAndRestartCommand", () => {
     // module cache so each test (and its dynamic import below) sees its
     // own tmp HOME, matching `host-restart.test.ts`'s identical pattern.
     vi.resetModules();
+    // HOME-safety guard: prove the redirect actually took before any test
+    // can touch a real path under it.
+    const { hostHomeDir } = await import("../../store/paths");
+    expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
+    mocks.crossSpawnEdge = false;
+    mocks.publishedOrigins = [];
   });
 
   afterEach(() => {
@@ -216,6 +241,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: null,
       port: null,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 
@@ -227,6 +253,30 @@ describe("buildHostFreePortAndRestartCommand", () => {
       killed: false,
       release: null,
     });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("publishes the restart's adoption proof as `maintenance`, whoever asked for it", async () => {
+    // Lifecycle modes: the restart leg brings back a run that already
+    // existed, so it records `maintenance` in the proof the supervisor
+    // consumes - `--lifecycle-origin` is accepted on this command and inert.
+    mocks.controllerCalls = [];
+    mocks.lockCalls = [];
+    mocks.killCalls = [];
+    mocks.crossSpawnEdge = true;
+
+    const { buildHostFreePortAndRestartCommand } =
+      await import("../host-free-port-and-restart");
+    const command = buildHostFreePortAndRestartCommand({
+      pid: null,
+      port: null,
+      deferIfParked: false,
+      lifecycleOrigin: "terminal",
+    });
+    const result = await command(fakeCtx());
+
+    expect(mocks.controllerCalls).toEqual(["restart"]);
+    expect(mocks.publishedOrigins).toEqual(["maintenance"]);
     expect(result.exitCode).toBe(0);
   });
 
@@ -248,6 +298,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: 51820,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const result = await command(fakeCtx());
 
@@ -279,6 +330,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: null,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_INVALID_ARGUMENT",
@@ -301,6 +353,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: 51820,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_INVALID_ARGUMENT",
@@ -332,6 +385,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: 51820,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_HOST_PORT_KILL_FAILED",
@@ -356,6 +410,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: 51820,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_HOST_PORT_STILL_HELD",
@@ -382,6 +437,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: 51820,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const rejection = await command(fakeCtx()).then(
       () => null,
@@ -416,6 +472,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: 51820,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     const rejection = await command(fakeCtx()).then(
       () => null,
@@ -448,6 +505,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       pid: 4242,
       port: 51820,
       deferIfParked: false,
+      lifecycleOrigin: "terminal",
     });
     await expect(command(fakeCtx())).rejects.toMatchObject({
       code: "E_HOST_PORT_RELEASE_UNVERIFIED",
@@ -478,6 +536,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: null,
         port: null,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -507,6 +566,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: null,
         port: null,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -556,6 +616,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: 4242,
         port: 51820,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -589,6 +650,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: null,
         port: null,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -634,6 +696,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: null,
         port: null,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -669,6 +732,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: null,
         port: null,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -712,6 +776,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: null,
         port: null,
         deferIfParked: true,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 
@@ -748,6 +813,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
         pid: null,
         port: null,
         deferIfParked: false,
+        lifecycleOrigin: "terminal",
       });
       const result = await command(fakeCtx());
 

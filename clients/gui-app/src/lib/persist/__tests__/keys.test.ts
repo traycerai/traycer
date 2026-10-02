@@ -15,6 +15,7 @@ import {
   lastLocalHostIdKey,
   interviewDraftKey,
   surfaceHostSelectionKey,
+  profileCopyOperationsKey,
   interviewDraftKeyPrefix,
   landingTerminalsKey,
   openEpicKey,
@@ -177,6 +178,13 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(surfaceHostSelectionKey("a@b.com")).toBe(
       "traycer-gui-app:surface-host-selection:a@b.com",
+    );
+    // Source: src/stores/settings/profile-copy-operations-store.ts
+    expect(profileCopyOperationsKey(null)).toBe(
+      "traycer-gui-app:profile-copy-operations:anon",
+    );
+    expect(profileCopyOperationsKey("a@b.com")).toBe(
+      "traycer-gui-app:profile-copy-operations:a@b.com",
     );
     // Source: src/stores/epics/open-epic/store.ts (local
     // `persistKey(epicId, userId)` emits `…:open-epic:{userBucket}:{epicId}`).

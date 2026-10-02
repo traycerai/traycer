@@ -1,5 +1,5 @@
-import type { ComponentPropsWithRef, ReactNode } from "react";
-import { ChevronsUpDown } from "lucide-react";
+import { useState, type ComponentPropsWithRef, type ReactNode } from "react";
+import { ChevronsUpDown, LogIn } from "lucide-react";
 import type { HostLeaseStatus } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { UserMenu, UserMenuAvatar } from "@/components/auth/user-menu";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
@@ -8,21 +8,33 @@ import {
   HeaderUsageRegion,
 } from "@/components/layout/header/header-actions";
 import { useRegionGhost } from "@/components/layout-editor/use-layout-region";
-import { useBarPlacements, useRegionShown } from "@/lib/layout-overrides";
-import { barClusterRegionsAt } from "@/lib/layout/layout-arrangement";
+import { useStripReadingRegions } from "@/components/layout/header/use-strip-reading-regions";
+import { useRegionDensity, useRegionShown } from "@/lib/layout-overrides";
+import type { BarRegionId } from "@/lib/layout/layout-arrangement";
+import { resolveReadingDensity } from "@/lib/layout/reading-density";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useAuthSignInMutation } from "@/hooks/auth/use-auth-sign-in-mutation";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostLease } from "@/hooks/host/use-host-lease";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SideTabRowVariant } from "./side-tab-row";
+import { NavRowButton } from "./side-strip-nav-rows";
 import {
   SIDE_STRIP_ACCOUNT_ROW_CLASS,
   SIDE_STRIP_FOOT_CLASS,
   SIDE_STRIP_HOST_DOT_CLASS,
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_TAB_HOVER_CLASS,
+  SIDE_TAB_LEADING_CLASS,
 } from "./side-strip-tokens";
 
 /**
@@ -43,7 +55,11 @@ export function SideStripFoot(props: {
       className={cn(
         SIDE_STRIP_FOOT_CLASS,
         "flex shrink-0 flex-col [-webkit-app-region:no-drag]",
-        collapsed ? "items-center" : "items-stretch",
+        // Expanded, the strip's width is the sign-in panel's `signin`
+        // container: narrow, the panel tightens so the device code keeps one
+        // line. Collapsed, the panel is in a popover sized by its content,
+        // which a container would collapse.
+        collapsed ? "items-center" : "@container/signin items-stretch",
       )}
     >
       <AppUpdateHeaderButton layout={collapsed ? "icon" : "row"} />
@@ -54,44 +70,73 @@ export function SideStripFoot(props: {
 }
 
 /**
- * The header-hosted readings (usage, then resources, in the header's own
- * left-then-right order) as ONE row above the account row (F6): each an equal
- * share of the width, so two split it in half and one takes all of it.
- * Collapsed, they stack as rail-wide tiles. The regions stay mounted while
- * Hidden (the editor's ghost needs its host), so the row hides itself when
- * none of them draws.
+ * The strip-hosted readings (usage first, then resources) above the account
+ * row. Compact ones share one row of equal-width tiles, so two split it in half
+ * and one takes all of it; Detailed ones are full-width blocks below, the
+ * resource block under a hairline when usage is Detailed too. Collapsed, they
+ * stack as rail-wide tiles whatever the density. The regions stay mounted while
+ * Hidden (the editor's ghost needs its host), so the row hides itself when none
+ * of them draws.
  */
 function SideStripReadings(props: { readonly collapsed: boolean }): ReactNode {
-  const placements = useBarPlacements();
-  const regions = [
-    ...barClusterRegionsAt(placements, "header", "left"),
-    ...barClusterRegionsAt(placements, "header", "right"),
-  ];
+  const regions = useStripReadingRegions();
   const drawn = {
     usageLimits: useRegionDrawn("usageLimits"),
     resourceMonitor: useRegionDrawn("resourceMonitor"),
   };
+  const placement = props.collapsed ? "side-strip-collapsed" : "side-strip";
+  const detailed = {
+    usageLimits:
+      resolveReadingDensity(useRegionDensity("usageLimits"), placement) ===
+      "detailed",
+    resourceMonitor:
+      resolveReadingDensity(useRegionDensity("resourceMonitor"), placement) ===
+      "detailed",
+  };
   const empty = !regions.some((region) => drawn[region]);
-  // A 40px rail tile has no room for a reading, so it keeps the glyph.
-  const form = props.collapsed ? "tile" : "readout";
+  const region = (id: BarRegionId): ReactNode =>
+    id === "usageLimits" ? (
+      <HeaderUsageRegion key={id} placement={placement} />
+    ) : (
+      <HeaderResourceRegion key={id} placement={placement} />
+    );
+  const compactRegions = regions.filter((id) => !detailed[id]);
+  const detailedRegions = regions.filter((id) => detailed[id]);
   return (
     <div
       data-testid="side-strip-readings"
       className={cn(
-        "gap-2",
-        props.collapsed
-          ? "flex w-10 flex-col"
-          : "grid auto-cols-fr grid-flow-col",
+        "flex gap-2",
+        props.collapsed ? "w-10 flex-col" : "flex-col",
         empty && "hidden",
       )}
     >
-      {regions.map((region) =>
-        region === "usageLimits" ? (
-          <HeaderUsageRegion key={region} form={form} />
-        ) : (
-          <HeaderResourceRegion key={region} form={form} />
-        ),
+      {compactRegions.length === 0 ? null : (
+        <div
+          data-testid="side-strip-readings-tiles"
+          className={cn(
+            "gap-2",
+            props.collapsed
+              ? "flex flex-col"
+              : "grid auto-cols-fr grid-flow-col",
+          )}
+        >
+          {compactRegions.map(region)}
+        </div>
       )}
+      {detailedRegions.map((id, index) => (
+        <div
+          key={id}
+          data-testid={`side-strip-readings-${id}`}
+          className={cn(
+            "flex",
+            (index > 0 || compactRegions.length > 0) &&
+              "border-t border-border/50 pt-2",
+          )}
+        >
+          {region(id)}
+        </div>
+      ))}
     </div>
   );
 }
@@ -109,7 +154,11 @@ function SideStripAccount(props: {
   const profile = useAuthStore((state) => state.profile);
   const isSignedIn = useAuthStore((state) => state.status === "signed-in");
   if (!isSignedIn || profile === null) {
-    return <SignInButton layout="compact" />;
+    return props.variant === "collapsed" ? (
+      <RailSignIn />
+    ) : (
+      <SignInButton layout="compact" />
+    );
   }
   const avatarUrl = profile.avatarUrl ?? null;
   return (
@@ -127,6 +176,50 @@ function SideStripAccount(props: {
         />
       }
     />
+  );
+}
+
+/**
+ * Signed out in the rail: a nav tile where the strip has its "Sign in" button,
+ * which is wider than the rail. A click starts the sign-in, as the button does,
+ * and opens the strip's sign-in controls beside the rail, so the device code,
+ * the progress and any error show there.
+ */
+function RailSignIn(): ReactNode {
+  const placement = useColumnOverlayPlacement("foot");
+  const [open, setOpen] = useState(false);
+  const signIn = useAuthSignInMutation();
+  const signingIn = useAuthStore((state) => state.status === "signing-in");
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <TooltipWrapper
+        label={open ? null : "Sign in"}
+        side={placement?.side ?? "right"}
+        sideOffset={6}
+        align={placement?.align}
+      >
+        <PopoverTrigger asChild>
+          <NavRowButton
+            variant="collapsed"
+            active={open}
+            aria-label="Sign in"
+            data-testid="side-strip-sign-in-tile"
+            onClick={() => {
+              if (!signingIn && !signIn.isPending) signIn.mutate();
+            }}
+          >
+            <LogIn className={cn(SIDE_TAB_LEADING_CLASS, "me-0 shrink-0")} />
+          </NavRowButton>
+        </PopoverTrigger>
+      </TooltipWrapper>
+      <PopoverContent
+        side={placement?.side}
+        align={placement?.align ?? "end"}
+        className="w-fit max-w-xs"
+      >
+        <SignInButton layout="popover" />
+      </PopoverContent>
+    </Popover>
   );
 }
 

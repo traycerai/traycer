@@ -51,7 +51,6 @@ export type WindowNarrationCause = "no-usable-host" | "cold-start";
  */
 export type WindowNarrationVariant =
   | { readonly kind: "offline" }
-  | { readonly kind: "plan-restricted" }
   | {
       readonly kind: "update-host";
       readonly hostId: string;
@@ -204,11 +203,11 @@ export interface WindowNarrationInput {
  *    states for itself. A wait hides whatever it covers for as long as it
  *    lasts, and `offline` is the one variant with nothing to hide - the boot
  *    surface carries the same story, and no action is being withheld.
- *    `update-host` and `plan-restricted` are the opposite: a version fix or an
- *    upgrade the user could walk NOW, derived from leases the authority has
- *    already concluded are dead. The lease list and the directory's answer come
- *    from two independent reads, so a fleet CAN be known while discovery is
- *    still pending - that is exactly when suppressing them would bite.
+ *    `update-host` is the opposite: a version fix the user could walk NOW,
+ *    derived from leases the authority has already concluded are dead. The
+ *    lease list and the directory's answer come from two independent reads, so
+ *    a fleet CAN be known while discovery is still pending - that is exactly
+ *    when suppressing it would bite.
  *
  * Asking `deriveNoHostVariant` rather than enumerating dead reasons is the same
  * decision the grace below documents: a new variant becomes actionable by
@@ -256,30 +255,18 @@ export function findLease(
 }
 
 /**
- * The variant precedence (C4, and the ticket's three acceptance bullets).
+ * The variant precedence (C4).
  *
  * Ordered, total, and deterministic:
  *
  *  1. The TARGET host is dead because it is incompatible -> `update-host` on
  *     it. Target-first so the card names the machine the user was actually
  *     trying to use, rather than whichever incompatible row sorts first.
- *  2. Every lease is dead AND every reason is `plan-restricted` ->
- *     `plan-restricted`. "Every" is the point: this is the arm that must offer
- *     an upgrade and NO dead-retry affordances, and retrying is the right
- *     answer the moment one host is merely offline.
- *  3. Some OTHER lease is dead because it is incompatible -> `update-host` on
+ *  2. Some OTHER lease is dead because it is incompatible -> `update-host` on
  *     it. Reached when the target is fine-but-unusable for another reason
  *     while an incompatible host is the recoverable one.
- *  4. Otherwise -> `offline`, the retryable arm.
- *
- * The mixed-fleet consequence is deliberate: a plan-restricted target beside a
- * merely-incompatible host falls through 2 (not ALL plan-restricted) into 3,
- * which prefers the path a user can walk without paying.
- *
- * An empty lease list answers `offline`, never `plan-restricted` - rule 2
- * requires at least one lease, because "every member of nothing is
- * plan-restricted" is vacuously true and would put an upgrade CTA in front of
- * a user whose fleet simply has not loaded.
+ *  3. Otherwise -> `offline`, the retryable arm. An empty lease list lands
+ *     here too.
  */
 export function deriveNoHostVariant(
   leases: readonly HostLeaseSnapshot[],
@@ -289,15 +276,9 @@ export function deriveNoHostVariant(
   if (target !== null && target.dead?.reason === "incompatible") {
     return incompatibleVariant(target.hostId, target.dead.detail, true);
   }
-  const allPlanRestricted =
-    leases.length > 0 &&
-    leases.every((lease) => lease.dead?.reason === "plan-restricted");
-  if (allPlanRestricted) {
-    return { kind: "plan-restricted" };
-  }
   for (const lease of leases) {
     if (lease.dead?.reason === "incompatible") {
-      // Arm 3: the target is unusable for some other reason and THIS is
+      // Arm 2: the target is unusable for some other reason and THIS is
       // merely the recoverable incompatible one. A different machine from
       // the one this window's lifecycle affordances act on.
       return incompatibleVariant(lease.hostId, lease.dead.detail, false);
@@ -406,14 +387,13 @@ export function deriveWindowNarration(
     // is available" with Retry and Report issue at every boot:
     //
     //  - the attach snapshot arriving before the fleet's first publish
-    //    (empty lease list - the same vacuity `deriveNoHostVariant` refuses
-    //    to read as plan-restricted), and
+    //    (empty lease list), and
     //  - the launch reconcile cycling the local host (`restarting-expected`
     //    is unusable, and at cold start there is no incumbent to hold).
     //
     // A DEAD lease is a conclusion, so any dead lease disqualifies the grace
-    // and the ∅ scan below runs - which is also what keeps `update-host` and
-    // `plan-restricted` reachable at first launch: both derive from dead
+    // and the ∅ scan below runs - which is also what keeps `update-host`
+    // reachable at first launch: it derives from dead
     // leases. After the window has served once, ∅ is always the verdict arm;
     // the grace is strictly a launch statement.
     //
@@ -451,17 +431,15 @@ export function deriveWindowNarration(
     // `LOCAL_HOST_SLOW_START_THRESHOLD_MS` and adding Report issue once the
     // install settles in failure - and "Starting Traycer…" is the truer
     // sentence while the boot is genuinely running. `update-host` is the
-    // opposite: a version fix the user could walk NOW (arm 3 of the scan - an
+    // opposite: a version fix the user could walk NOW (arm 2 of the scan - an
     // incompatible OTHER host while the target cycles), and a local restart is
     // not a reason to withhold it for a quarter of an hour.
     //
     // Asking `deriveNoHostVariant` rather than enumerating dead reasons is
-    // deliberate. `plan-restricted` happens to be unreachable in this
-    // population today (its arm needs EVERY lease dead, and a
-    // `restarting-expected` target is not), so an enumeration written against
-    // what is reachable now would be a rule that quietly stops matching when
-    // that precedence moves. Deferring to the scan itself makes a new variant
-    // actionable by default, which is the safe direction to be wrong in.
+    // deliberate: an enumeration written against what is reachable now would
+    // be a rule that quietly stops matching when that precedence moves.
+    // Deferring to the scan itself makes a new variant actionable by default,
+    // which is the safe direction to be wrong in.
     const targetLease = findLease(input.leases, input.targetHostId);
     const noHostVariant = deriveNoHostVariant(input.leases, input.targetHostId);
     const localTargetRestarting =

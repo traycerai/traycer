@@ -16,6 +16,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { useDraggable } from "@dnd-kit/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -34,6 +35,7 @@ import {
   getArtifactTabDragId,
   type EpicCanvasArtifactTabDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { SheetJoinBridge } from "@/components/layout/tabs/sheet-join";
 import { SideStripRowList } from "@/components/layout/tabs/side-strip/side-strip-row-list";
 import { resetTabDetachHandler } from "@/components/layout/tabs/tab-detach-channel";
 import { useTabStripController } from "@/components/layout/tabs/tab-strip-controller";
@@ -155,6 +157,13 @@ function joinedElements(): ReadonlyArray<Element> {
   return [...document.querySelectorAll("[data-sheet-joined]")];
 }
 
+/** The strip's one bridge: active while any joined row or overlay publishes. */
+function joinBridge(): Element {
+  const bridge = document.querySelector('[data-sheet-join-bridge="left"]');
+  if (bridge === null) throw new Error("Expected the join bridge");
+  return bridge;
+}
+
 /** A minimal non-header draggable: a canvas tile tab, like a real tear-off source. */
 function CanvasTabSource(props: {
   readonly data: EpicCanvasArtifactTabDragData;
@@ -224,6 +233,8 @@ function SideStripHost(props: {
         data-testid="side-overlay-host"
         className="contents"
       />
+      {/* In `RootDndProvider`'s join scope, like the real strip's bridge. */}
+      <SheetJoinBridge edge="left" />
       {controller.dialogs}
     </ColumnEdgeContext.Provider>
   );
@@ -345,8 +356,24 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
     // The source row itself is still in the DOM (opacity-0), and it is the
     // one actually being dragged - it relinquishes the join.
     expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
+    // Once the source has un-joined and the overlay joined, the bridge is
+    // active and carries the overlay's pane.
+    expect(joinBridge().hasAttribute("data-join-active")).toBe(true);
+    expect(joinBridge().getAttribute("data-join-pane")).toBe(
+      overlayRow?.getAttribute("data-join-pane"),
+    );
 
     releaseAt(drag, 16 + EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE + 1);
+
+    // The overlay's cleanup hands the bridge back to the source row: once the
+    // drop settles the row is joined again and the bridge names its pane.
+    await waitFor(() => {
+      expect(alpha.hasAttribute("data-sheet-joined")).toBe(true);
+    });
+    expect(joinBridge().hasAttribute("data-join-active")).toBe(true);
+    expect(joinBridge().getAttribute("data-join-pane")).toBe(
+      alpha.getAttribute("data-join-pane"),
+    );
   });
 
   it("auto-activates an inactive dragged lone row and keeps exactly one joined row at every step", async () => {
@@ -356,6 +383,7 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
 
     // Before drag: ALPHA is the sole active tab and the sole join.
     expect(joinedElements()).toEqual([alpha]);
+    expect(joinBridge().hasAttribute("data-join-active")).toBe(true);
 
     const drag = pressAndActivate(beta, 6);
 
@@ -373,6 +401,9 @@ describe("side strip: sheet join and the header-overlay portal under a real drag
     expect(joinedElements()).toEqual([overlayRow]);
     expect(beta.hasAttribute("data-sheet-joined")).toBe(false);
     expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
+    // After ALPHA, BETA's source and BETA's overlay have settled, the bridge
+    // is active for the overlay's join.
+    expect(joinBridge().hasAttribute("data-join-active")).toBe(true);
 
     releaseAt(drag, 16 + EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE + 1);
   });

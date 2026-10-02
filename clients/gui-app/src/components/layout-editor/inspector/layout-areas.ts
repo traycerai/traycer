@@ -56,7 +56,8 @@ const AREA_DESCRIPTIONS: Readonly<Record<SurfaceGroupId, string>> = {
   sidebar: "Which side the sidebar takes, and the panels on its rail.",
   chat: "How a conversation reads, and what sits beside it.",
   composer: "What sits above the message box, and on its toolbar.",
-  statusBar: "Usage limits and the resource monitor, and which bar draws each.",
+  statusBar:
+    "Usage limits and the resource monitor: where each sits and how much it shows.",
 };
 
 /** The five areas that are surfaces of the app, in reading order. */

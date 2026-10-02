@@ -3,12 +3,7 @@ import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-q
 import { memo, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import * as m from "motion/react-m";
-import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   getHeaderStripItemSlotDropId,
@@ -17,7 +12,8 @@ import {
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { useStripItemDisplacement } from "./use-strip-item-displacement";
 import { cn } from "@/lib/utils";
-import { SplitTabLayout, SplitFocusIcon } from "./split-tab-chrome";
+import { SplitTabLayout } from "./split-tab-chrome";
+import { SplitQuickActions } from "./split-quick-actions";
 import { SplitFillableMemberVisual } from "./header-tab-visual";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type {
@@ -25,6 +21,11 @@ import type {
   HeaderStripMember,
 } from "@/stores/tabs/use-header-tabs";
 import type { SplitSide } from "@/stores/tabs/layout";
+import { tabRefKey } from "@/stores/tabs/layout";
+import { useConcealedForTravel } from "./strip-selection-travel";
+import { useHeaderSplitJoinPane } from "./surface-join-pane";
+import { useStripEntrance } from "./use-strip-entrance";
+import { useStripItemJoining } from "./use-strip-item-joining";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import {
@@ -34,12 +35,8 @@ import {
 import {
   useHeaderTabDisplacementTransition,
   splitFillableMemberClassName,
-  SPLIT_TAB_CONTROL_CLASS,
 } from "@/components/layout/tabs/tab-chrome-tokens";
-import {
-  SplitQuickActionsMenuContent,
-  SplitSlotMenuContent,
-} from "@/components/layout/tabs/tab-strip-context-menu";
+import { SplitSlotMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
 
 export interface SplitTabItemProps {
   readonly item: Extract<HeaderStripItem, { readonly kind: "split" }>;
@@ -100,7 +97,10 @@ export const SplitTabItem = memo(function SplitTabItem(
       state.activeHeaderTab !== null &&
       state.activeHeaderTab.stripItemId === props.item.id,
   );
-  const joined = props.isActive && !isDragging;
+  // While the selection slides here, the traveller draws the joined box.
+  const concealed = useConcealedForTravel(props.item.id);
+  const joinPane = useHeaderSplitJoinPane(props.item);
+  const joined = props.isActive && !isDragging && !concealed ? joinPane : null;
   const quickActionsTab =
     memberTab(props.item.left) ?? memberTab(props.item.right);
 
@@ -116,12 +116,21 @@ export const SplitTabItem = memo(function SplitTabItem(
     offset: props.offsetX,
     transition,
   });
+  const groupJoining = useStripItemJoining(props.item.id);
   const setFrameRef = useCallback(
     (node: HTMLDivElement | null) => {
       frameRef.current = node;
       setNodeRef(node);
     },
     [setNodeRef],
+  );
+  // A reopened split comes back through either of its tabs' marks.
+  useStripEntrance(
+    frameRef,
+    [memberTab(props.item.left), memberTab(props.item.right)]
+      .flatMap((tab) => (tab === null ? [] : [tabRefKey(tab)]))
+      .join(" "),
+    "tab",
   );
   return (
     <m.div
@@ -139,6 +148,7 @@ export const SplitTabItem = memo(function SplitTabItem(
       // unambiguous one. Passing over it reorders.
       data-strip-item-id={props.item.id}
       data-strip-item-mergeable="false"
+      data-group-joining={groupJoining}
       role="group"
       aria-label="Split tab group"
       data-testid={`split-tab-group-${props.item.id}`}
@@ -147,7 +157,7 @@ export const SplitTabItem = memo(function SplitTabItem(
       // The extra width keeps that control from stealing either title's
       // share. Capped by viewport width (not just the rem ceiling) so the
       // frame stays fluid on narrow windows instead of pinning to 31rem.
-      className="relative flex w-[min(60vw,31rem)] min-w-[min(60vw,26.25rem)] group-data-[tab-layout=shrink]/strip:min-w-36 max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
+      className="group/joining relative flex w-[min(60vw,31rem)] min-w-[min(60vw,26.25rem)] group-data-[tab-layout=shrink]/strip:min-w-36 max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
     >
       <SplitTabLayout
         splitId={props.item.id}
@@ -160,6 +170,7 @@ export const SplitTabItem = memo(function SplitTabItem(
               tab={quickActionsTab}
               focusedSide={props.item.focusedSide}
               engaged={props.isActive}
+              placement="top-bar"
               onSplitCommand={props.onSplitCommand}
             />
           )
@@ -224,41 +235,6 @@ export const SplitTabItem = memo(function SplitTabItem(
     </m.div>
   );
 });
-
-function SplitQuickActions(props: {
-  readonly splitId: string;
-  readonly tab: HeaderTab;
-  readonly focusedSide: "left" | "right";
-  readonly engaged: boolean;
-  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-}): ReactNode {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant={props.engaged ? "info-ghost" : "muted"}
-          aria-label={`Split view actions, ${props.focusedSide} view focused`}
-          data-testid={`split-quick-actions-${props.splitId}`}
-          className={cn(
-            SPLIT_TAB_CONTROL_CLASS,
-            "[-webkit-app-region:no-drag]",
-          )}
-        >
-          <SplitFocusIcon
-            splitId={props.splitId}
-            focusedSide={props.focusedSide}
-          />
-        </Button>
-      </DropdownMenuTrigger>
-      <SplitQuickActionsMenuContent
-        tab={props.tab}
-        onSplitCommand={props.onSplitCommand}
-      />
-    </DropdownMenu>
-  );
-}
 
 function memberTab(member: HeaderStripMember): HeaderTab | null {
   return member.kind === "tab" ? member.tab : null;

@@ -75,14 +75,6 @@ function fireReadinessChanged(): void {
 
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
-const PLAN_ALLOWS_REMOTE = true;
-const PLAN_GATED = false;
-
 const RELAY_BASE_URL = "wss://relay.example.test/attach";
 
 function listItem(
@@ -125,20 +117,6 @@ function directoryEntry(
   return hostListItemToDirectoryEntry(
     listItem(hostId, connectivity, lastSeenAt),
     RELAY_BASE_URL,
-    PLAN_ALLOWS_REMOTE,
-  );
-}
-
-/** The same projection for an account whose plan has no remote hosts. */
-function planGatedEntry(
-  hostId: string,
-  connectivity: HostConnectivity,
-  lastSeenAt: string,
-): HostDirectoryEntry {
-  return hostListItemToDirectoryEntry(
-    listItem(hostId, connectivity, lastSeenAt),
-    RELAY_BASE_URL,
-    PLAN_GATED,
   );
 }
 
@@ -204,53 +182,6 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
     const { result } = renderHook(() => useHostReachability("host-offline"), {
       wrapper: wrapper(queryClient),
     });
-
-    await waitFor(() => {
-      expect(result.current.status).toBe("unreachable");
-    });
-    expect(result.current.unavailability).toBe("offline");
-  });
-
-  it("reports unreachable with unavailability: 'plan-restricted' for a LIVE host on a free-tier plan", async () => {
-    const entry = planGatedEntry(
-      "host-plan-gated",
-      "connectable",
-      STALE_LAST_SEEN,
-    );
-    directoryRef.value = makeDirectory([entry]).directory;
-    const queryClient = makeQueryClient();
-
-    const { result } = renderHook(
-      () => useHostReachability("host-plan-gated"),
-      { wrapper: wrapper(queryClient) },
-    );
-
-    await waitFor(() => {
-      expect(result.current.status).toBe("unreachable");
-    });
-    // NOT "offline": the plan gate is a billing fact, not an outage, and a
-    // consumer that collapsed this into "offline" would send a free-tier user
-    // to restart a machine that is working fine.
-    expect(result.current.unavailability).toBe("plan-restricted");
-  });
-
-  it("reports unreachable with unavailability: 'offline' for a free-tier host the cloud says is OFFLINE", async () => {
-    // The fix this split exists for. The wire used to say `local-only` for
-    // every host on an unpaid plan, so this tile rendered upgrade copy written
-    // for a machine that was alive - and the dead-tile banner, failover and
-    // the clone CTA could never fire for a free-tier user at all.
-    const entry = planGatedEntry(
-      "host-plan-gated-dead",
-      "offline",
-      STALE_LAST_SEEN,
-    );
-    directoryRef.value = makeDirectory([entry]).directory;
-    const queryClient = makeQueryClient();
-
-    const { result } = renderHook(
-      () => useHostReachability("host-plan-gated-dead"),
-      { wrapper: wrapper(queryClient) },
-    );
 
     await waitFor(() => {
       expect(result.current.status).toBe("unreachable");

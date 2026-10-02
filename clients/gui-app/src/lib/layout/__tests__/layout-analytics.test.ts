@@ -155,7 +155,7 @@ describe("layoutSnapshotProperties (L-46, L-54, L-55)", () => {
     const properties = layoutSnapshotProperties(snapshot);
 
     expect(properties.base_preset).toBe("compact");
-    expect(properties.layout_usage_limits_bar).toBe("false");
+    expect(properties.layout_usage_limits_reset).toBe("false");
     expect(properties.layout_mic_shown).toBe("hidden");
     expect(properties.changed_from_default_count).toBeGreaterThan(0);
   });
@@ -236,7 +236,7 @@ describe("the layout payloads survive the analytics sanitizer", () => {
           pinnedFields: ["cacheRead"],
           compactButton: "hidden",
         },
-        usageLimits: { amount: "remaining", bar: false, word: true },
+        usageLimits: { amount: "remaining", density: "compact" },
         resourceMonitor: { memory: true, cpu: false },
       },
       arrangement: {
@@ -490,7 +490,9 @@ describe("the session change summary", () => {
     const entry = DEFAULT_LAYOUT_SNAPSHOT;
     const exit: LayoutSnapshot = {
       ...DEFAULT_LAYOUT_SNAPSHOT,
-      overrides: { usageLimits: { bar: false, percent: false, word: false } },
+      overrides: {
+        usageLimits: { density: "compact", reset: false, amount: "remaining" },
+      },
     };
 
     const summary = layoutEditorSessionChangeSummary(entry, exit);

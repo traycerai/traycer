@@ -6,6 +6,8 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import {
   DEFAULT_WORKTREE_BRANCH_PREFIX,
@@ -260,31 +262,43 @@ describe("WorktreeBranchPrefixSection", () => {
     expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("traycer/");
   });
 
-  it("grows the card with an additive error row rather than replacing the strip", () => {
-    render(<WorktreeBranchPrefixSection />);
+  it("is a SettingsRow in the group card, not a nested card of its own, and announces the error inside the row", () => {
+    render(
+      <SettingsGroup
+        group={GENERAL.definitions.agents}
+        showTitle
+        tone="default"
+        dataTestId="settings-general-agents"
+        fill={false}
+      >
+        <WorktreeBranchPrefixSection />
+      </SettingsGroup>,
+    );
     const input = getPrefixInput();
+    const group = screen.getByTestId("settings-general-agents");
+    const groupCard = group.querySelector(":scope > .rounded-lg.border");
+    expect(groupCard instanceof HTMLElement).toBe(true);
+    if (!(groupCard instanceof HTMLElement)) return;
+    expect(groupCard.contains(input)).toBe(true);
+    // No bordered card between the group card and the row.
+    expect(groupCard.querySelector(".rounded-lg.border")).toBeNull();
 
-    // Card wrapper is the outermost bordered container around the strip.
-    const card = input.closest(".rounded-lg.border");
-    expect(card instanceof HTMLElement).toBe(true);
-    if (!(card instanceof HTMLElement)) return;
-    // Control row (label + input) is present before the error.
-    expect(card.querySelector("input")).toBe(input);
-    expect(card.textContent).toContain("Default branch prefix");
+    const row = input.closest("[data-settings-anchor]");
+    expect(row instanceof HTMLElement).toBe(true);
+    if (!(row instanceof HTMLElement)) return;
+    expect(row.getAttribute("data-settings-anchor")).toBe(
+      GENERAL.definitions.branchPrefix.anchor,
+    );
+    expect(groupCard.contains(row)).toBe(true);
+    expect(row.textContent).toContain("Worktree branch prefix");
 
     typePrefix(input, "bad prefix");
 
-    const error = screen.getByText("Prefix can't contain spaces.");
-    expect(card.contains(error)).toBe(true);
-    // Error is additive: the control row (input + label) remains inside the same card.
-    expect(card.querySelector("input")).toBe(input);
-    expect(card.textContent).toContain("Default branch prefix");
-    // Error sits as a sibling below the main control row, not replacing it.
-    const controlRow = input.closest(".flex.items-center");
-    expect(controlRow instanceof HTMLElement).toBe(true);
-    if (!(controlRow instanceof HTMLElement)) return;
-    expect(controlRow.contains(error)).toBe(false);
-    expect(card.contains(controlRow)).toBe(true);
+    const error = screen.getByRole("alert");
+    expect(error.textContent).toBe("Prefix can't contain spaces.");
+    expect(row.contains(error)).toBe(true);
+    // Additive: the input stays in the same row as the announced error.
+    expect(row.querySelector("input")).toBe(input);
   });
 
   it("hides the reset button when the saved value is the default", () => {
@@ -371,10 +385,13 @@ describe("WorktreeBranchPrefixSection", () => {
     expect(controlCluster.className).toContain("max-w-full");
     expect(controlCluster.className).toContain("flex-wrap");
 
-    const outerRow = controlCluster.parentElement;
-    expect(outerRow instanceof HTMLElement).toBe(true);
-    if (!(outerRow instanceof HTMLElement)) return;
-    expect(outerRow.className).toContain("flex-wrap");
+    const controlWrapper = controlCluster.parentElement;
+    expect(controlWrapper instanceof HTMLElement).toBe(true);
+    if (!(controlWrapper instanceof HTMLElement)) return;
+    const row = controlWrapper.parentElement;
+    expect(row instanceof HTMLElement).toBe(true);
+    if (!(row instanceof HTMLElement)) return;
+    expect(row.className).toContain("flex-wrap");
 
     expect(input.className).toContain("w-[min(45vw,11rem)]");
     expect(input.className).not.toContain("w-44");
@@ -391,7 +408,12 @@ describe("WorktreeBranchPrefixSection", () => {
     const controlCluster = input.parentElement;
     expect(controlCluster instanceof HTMLElement).toBe(true);
     if (!(controlCluster instanceof HTMLElement)) return;
-    expect(controlCluster.className).toContain("max-md:w-full");
+    const controlWrapper = controlCluster.parentElement;
+    expect(controlWrapper instanceof HTMLElement).toBe(true);
+    if (!(controlWrapper instanceof HTMLElement)) return;
+    // `controlSpansLine` puts the wrapped-line width on the row's control
+    // flex item, where a percentage width can resolve.
+    expect(controlWrapper.className).toContain("max-md:w-full");
 
     // The desktop width survives in markup - flex-basis is what supersedes it
     // below md, so the two never have to be reconciled by source order.
@@ -445,27 +467,27 @@ describe("WorktreeBranchPrefixSection", () => {
     expect("max-md:border-t").not.toMatch(ORDER_UTILITY);
   });
 
-  it("truncates the description only from md up, so it wraps below", () => {
-    // The single-line clamp is a two-column affordance: beside the input there
-    // is one line to spend. Once the control wraps away the sentence owns the
-    // width and should use as many lines as it needs. Scoped as `md:truncate`
-    // rather than an override of `truncate`, so which rule applies below md is
-    // not a question of utility source order.
+  it("puts the live preview in the row's description region, wrapping instead of truncating", () => {
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();
+    const row = input.closest("[data-settings-anchor]");
+    expect(row instanceof HTMLElement).toBe(true);
+    if (!(row instanceof HTMLElement)) return;
 
-    const controlCluster = input.parentElement;
-    expect(controlCluster instanceof HTMLElement).toBe(true);
-    if (!(controlCluster instanceof HTMLElement)) return;
-    const outerRow = controlCluster.parentElement;
-    expect(outerRow instanceof HTMLElement).toBe(true);
-    if (!(outerRow instanceof HTMLElement)) return;
+    const preview = screen.getByText(/New branches start like/);
+    expect(row.contains(preview)).toBe(true);
+    expect(preview.className).not.toMatch(/(^|\s)truncate(\s|$)/);
+    expect(preview.className).not.toContain("md:truncate");
 
-    const description = outerRow.querySelector("p");
-    expect(description instanceof HTMLElement).toBe(true);
-    if (!(description instanceof HTMLElement)) return;
-    expect(description.className).toContain("md:truncate");
-    expect(description.className).not.toMatch(/(^|\s)truncate(\s|$)/);
+    const status = preview.parentElement;
+    expect(status instanceof HTMLElement).toBe(true);
+    if (!(status instanceof HTMLElement)) return;
+    const described = status.parentElement;
+    expect(described instanceof HTMLElement).toBe(true);
+    if (!(described instanceof HTMLElement)) return;
+    expect(described.className).toContain("break-words");
+    expect(described.className).toContain("text-pretty");
+    expect(described.id.length).toBeGreaterThan(0);
   });
 
   it("resets the draft and store to the default immediately on reset click", () => {

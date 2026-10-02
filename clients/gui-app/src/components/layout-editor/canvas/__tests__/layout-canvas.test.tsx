@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { useState, type ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cancelLayoutDrag,
   layoutDragActive,
@@ -172,6 +172,13 @@ async function flushFrame(): Promise<void> {
 }
 
 beforeEach(() => {
+  // The hover chip measures only when the engine lacks CSS anchor positioning
+  // (`supportsAnchorPositioning` in hover-chip.ts), which is what jsdom used to
+  // answer by having no `CSS` object. jsdom 30 defines one whose `supports`
+  // answers true for any declaration, so without this the chip would take the
+  // browser's anchored path and never place itself. This suite asserts the
+  // measured path, so state the engine's real capability here.
+  vi.spyOn(CSS, "supports").mockReturnValue(false);
   useLayoutStore.setState({
     ...DEFAULT_LAYOUT_SNAPSHOT,
   });
@@ -183,6 +190,7 @@ afterEach(() => {
   cancelLayoutDrag();
   cleanup();
   useLayoutEditorStore.getState().endSession();
+  vi.restoreAllMocks();
 });
 
 describe("the session's canvas", () => {

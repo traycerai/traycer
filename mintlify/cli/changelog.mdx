@@ -5,6 +5,26 @@ description: "Track the latest updates and improvements to the Traycer CLI."
 rss: true
 ---
 
+<Update label="v1.4.2">
+Quieter crash reporting and fixes for sign-in cancellation and shell notifications.
+
+* **Crash reports** — repeated failures of the same kind on one machine are grouped over an hour instead of sending a report for every command. Request-ended errors keep their cause so they can be distinguished from rejected credentials.
+* **Provider sign-in** — cancellation is scoped to the sign-in attempt that owns the login.
+* **Notifications** — a shell-output notification waiting for delivery now links to its chat.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/cli-v1.4.2).
+</Update>
+
+<Update label="v1.4.1">
+More reliable provider sign-in and Host restarts on macOS.
+
+* **Provider sign-in** — sign-in continues while the Host prepares the provider CLI, and refusals and account-verification requests are surfaced.
+* **Models** — model names still match when a provider drops a tier marker from its model slug.
+* **macOS Host service** — if neither the Desktop-managed nor CLI-managed service is loaded, start and restart commands explain how to recover: quit and reopen Traycer Desktop, or run `traycer host service install` to register the CLI-managed service.
+
+See the [GitHub release](https://github.com/traycerai/traycer/releases/tag/cli-v1.4.1).
+</Update>
+
 <Update label="v1.4.0">
 Restarts and updates that recover cleanly, a cooperative stop on Windows, and a lighter Host on macOS.
 

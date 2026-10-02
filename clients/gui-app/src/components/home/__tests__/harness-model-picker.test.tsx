@@ -188,7 +188,7 @@ const queryMock = vi.hoisted(() => ({
         | "unreachable"
         | "host-starting";
       readonly hostLabel: string;
-      readonly unavailability: "offline" | "plan-restricted" | null;
+      readonly unavailability: "offline" | null;
     }
   >(),
   concreteDefaultHostId: null as string | null,
@@ -863,7 +863,18 @@ function providerCliStateWithProfiles(input: {
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
-    candidates: [],
+    // Capable by default: a runnable candidate, so `providerHostBlock`
+    // reports null unless a test explicitly narrows `candidates` to exercise
+    // the CLI-missing/checking gate.
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/resources/providers/claude/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
     auth: {
       status: "authenticated",
       badgeText: null,
@@ -2052,31 +2063,6 @@ describe("<HarnessModelPicker />", () => {
     screen.getByRole("option", { name: "Remote Mac is offline" });
     const refreshButton = screen.getByRole("button", {
       name: "Refresh providers & models — Remote Mac is offline",
-    });
-    expect(refreshButton.hasAttribute("disabled")).toBe(true);
-    expect(
-      screen.queryByRole("option", { name: "Couldn't load providers" }),
-    ).toBeNull();
-  });
-
-  it("surfaces a remote plan restriction before a provider-catalog error", async () => {
-    queryMock.harnesses = [];
-    queryMock.catalogHarnesses = [];
-    queryMock.selectedModelsByHarness = new Map();
-    queryMock.reachabilityByHost.set("remote-plan-restricted", {
-      status: "unreachable",
-      hostLabel: "Remote Mac",
-      unavailability: "plan-restricted",
-    });
-    renderPicker({ createProfileHostId: "remote-plan-restricted" });
-
-    await openPickerByTriggerName(/^Select model/);
-
-    screen.getByRole("option", {
-      name: "Remote Mac isn't available on your plan",
-    });
-    const refreshButton = screen.getByRole("button", {
-      name: "Refresh providers & models — Remote Mac isn't available on your plan",
     });
     expect(refreshButton.hasAttribute("disabled")).toBe(true);
     expect(

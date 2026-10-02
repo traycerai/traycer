@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type MockInstance } from "vitest";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
@@ -98,6 +98,38 @@ function useIndeterminateProcessLiveness(): () => void {
     async () => "indeterminate",
   );
   return () => __setAsyncProcessLivenessReaderForTest(restore);
+}
+
+/**
+ * `process.kill`, captured before any test in this file spies on it, so the
+ * fixture-pid spy below can delegate every OTHER pid to the real syscall.
+ */
+const realProcessKill = process.kill.bind(process);
+
+/**
+ * The dead-host guard gates `HostLifecycle`'s cached identity verdict
+ * (`readIdentityVerdict`) on `probeProcessExistenceWithoutSpawn(pid)`, which
+ * is `process.kill(pid, 0)` with no test seam of its own. Fixture pid 12345
+ * (below) names no process on the machine running this suite, so once a
+ * verdict for it is cached, a later reload with a failed probe would call
+ * the REAL syscall against an arbitrary pid instead of exercising the cache
+ * deliberately. Scoped to `pid` only, mirroring
+ * `spyProcessKillExists` in `host-lifecycle-reachability-retry.test.ts`:
+ * every other pid still gets the real syscall, and this one always reads
+ * `exists` - the fixture is meant to model a live-but-silent host, never a
+ * dead one.
+ */
+function spyProcessKillExists(pid: number): MockInstance<typeof process.kill> {
+  return vi
+    .spyOn(process, "kill")
+    .mockImplementation(
+      (target: number, signal: string | number | undefined): true => {
+        if (target === pid && (signal === 0 || signal === undefined)) {
+          return true;
+        }
+        return realProcessKill(target, signal);
+      },
+    );
 }
 
 describe("isCurrentHostWebsocketUrl", () => {
@@ -595,11 +627,13 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         probe: (url) => Promise.resolve(url === websocketUrl && reachable),
         readMetadata: undefined,
         respawn,
+        automaticRecoverySuspended: () => false,
         governor: createHostRecoveryGovernor({
           readLiveness: async () => "alive",
           now: undefined,
         }),
         readLiveness: undefined,
+        readLiveSupervisorPid: () => Promise.resolve(null),
       });
 
       // Listening BEFORE the write, since the watcher may fire first.
@@ -1073,10 +1107,29 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
         Promise.resolve(url === websocketUrl && reachable),
     });
     const restoreLiveness = useIndeterminateProcessLiveness();
+    // Once the first reload caches an identity verdict for pid 12345, the
+    // second and third reloads below (both with a failed probe) reach
+    // `readIdentityVerdict`'s cache-reuse check, which calls
+    // `probeProcessExistenceWithoutSpawn(12345)` - see the helper's comment.
+    const killSpy = spyProcessKillExists(12345);
     const changes: Array<string | null> = [];
     lifecycle.on("change", (snapshot) => {
       changes.push(snapshot?.hostId ?? null);
     });
+    // This test drives EVERY reload explicitly, because counting consecutive
+    // failed probes is what it tests - so the two mechanisms that can start
+    // an UNSOLICITED reload behind its back must both be kept out for the
+    // test's own duration:
+    //   - the pid-metadata watcher (measured: a late FSEvents edge for the
+    //     `writeFile` above can land inside the second explicit reload below
+    //     and supersede it via a generation bump) - never installed, because
+    //     the seed below is a plain reload rather than `bootstrap()`; and
+    //   - the reachability retry ladder `scheduleReachabilityRetry` arms on
+    //     the FIRST failed reload, which would supersede the same way if this
+    //     test ever spanned its 250ms - held behind fake timers below.
+    // The watcher is the source measured under load; the ladder is the same
+    // class, reproduced by delaying the probe past its first rung. Both end in
+    // the same `expected 'available' to be 'busy'`.
     try {
       // Seed with a plain reload, not `bootstrap()`: this test counts probes, so
       // it must own every reload. `bootstrap()` installs the real pid.json
@@ -1098,6 +1151,16 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       await lifecycle.reloadSnapshotFromDisk();
       expect(lifecycle.getSnapshot()?.availability).toBe("available");
       expect(changes).toEqual(["same-host"]);
+      // The dead-host guard added: this failed-probe reload consulted the
+      // pinned pid rather than trusting the cache's age alone. If the pin
+      // stops being load-bearing (the cache-reuse check is removed or
+      // bypassed), this assertion is what goes red instead of the test
+      // silently passing on an unconsulted spy.
+      expect(killSpy).toHaveBeenCalledWith(12345, 0);
+      // Mechanism, not end state: the ladder was armed by the failure above
+      // (`needsReprobe` is true through the hysteresis hold) AND held - the
+      // fake `setTimeout` it scheduled is still pending, not fired.
+      expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
 
       // The SECOND consecutive failure is corroboration, so the verdict
       // degrades - to `busy`, never to absence. The host is still named, still
@@ -1114,9 +1177,10 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
       expect(changes).toEqual(["same-host", "same-host", "same-host"]);
     } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
       restoreLiveness();
       lifecycle.dispose();
-      vi.useRealTimers();
       await rm(dir, { recursive: true, force: true });
     }
   });

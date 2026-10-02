@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import {
   DEFAULT_LAYOUT_SNAPSHOT,
@@ -17,6 +17,7 @@ function setResourceMonitor(patch: {
   readonly processes?: boolean;
   readonly ramShare?: boolean;
   readonly agentRows?: boolean;
+  readonly shown?: "shown" | "hidden";
 }): void {
   useLayoutStore.getState().setRegionValues("resourceMonitor", patch);
 }
@@ -87,6 +88,34 @@ describe("useNavigatorResourceMetrics", () => {
       processes: true,
       agentRows: false,
     });
+
+    const { result } = renderHook(() => useNavigatorResourceMetrics());
+
+    expect(result.current).toEqual([]);
+  });
+
+  it("keeps drawing the selection while the monitor itself is Hidden (G7, L-174)", () => {
+    // The rows' switch and the monitor's Shown used to be one control; the
+    // browser driver hid the monitor and asserted the agent row kept its
+    // readings, then unticked Memory under the Hidden monitor and asserted the
+    // row lost it. Both halves are this hook's contract.
+    setResourceMonitor({
+      cpu: true,
+      memory: true,
+      processes: false,
+      shown: "hidden",
+    });
+    const { result } = renderHook(() => useNavigatorResourceMetrics());
+    expect(result.current).toEqual(["cpu", "memory"]);
+
+    act(() => {
+      setResourceMonitor({ memory: false });
+    });
+    expect(result.current).toEqual(["cpu"]);
+  });
+
+  it("stays empty while the monitor is Shown but the rows' switch is off", () => {
+    setResourceMonitor({ agentRows: false, shown: "shown" });
 
     const { result } = renderHook(() => useNavigatorResourceMetrics());
 

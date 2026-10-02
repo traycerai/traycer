@@ -2,7 +2,7 @@ import {
   terminalSubscribeServerFrameSchema,
   terminalSubscribeServerFrameSchemaV14,
   terminalSubscribeServerFrameSchemaV15,
-  type TerminalSubscribeClientFrame,
+  type TerminalSubscribeClientFrameV17,
   type TerminalSubscribeServerFrame,
   type TerminalSubscribeServerFrameV14,
   type TerminalSubscribeServerFrameV15,
@@ -85,45 +85,104 @@ export interface TerminalStreamClientOptions {
   readonly cols: number;
   readonly rows: number;
   /**
-   * `terminal.subscribe@1.6` attachment intent. Absent ⇒ `presentation`
-   * (today's behavior). `cache` is a warm-reattach attachment with no
-   * attention claim; intent is open-frame-only, so a lease-state change
-   * constructs a new client rather than restating on the live session.
+   * `terminal.subscribe@1.6` attachment intent this client opens with. Absent
+   * ⇒ `presentation` (today's behavior). `cache` is an attachment with no
+   * attention claim and no say in the grid's size. A `viewer` frame through
+   * {@link TerminalStreamClient.sendAction} changes it afterwards.
    */
   readonly viewer?: TerminalSubscribeViewer;
   readonly callbacks: TerminalStreamCallbacks;
 }
 
+type TerminalViewerFrame = Extract<
+  TerminalSubscribeClientFrameV17,
+  { readonly kind: "viewer" }
+>;
+
 /**
  * Typed wrapper over `WsStreamClient` for a single host-owned terminal
  * session. The renderer attaches with its current cols/rows so the host's
- * effective-size recompute (`min` across attached clients) lands before the
- * `snapshot` frame is sent.
+ * effective-size recompute (`min` across attached presentation viewers) lands
+ * before the `snapshot` frame is sent.
  */
 export class TerminalStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: TerminalStreamCallbacks;
   private closed: boolean;
+  /**
+   * The intent this attachment stands for now. Every wire subscribe reads it,
+   * so a reconnect declares the current intent and never the one the client
+   * was built with: re-declaring a stale `presentation` would let a view that
+   * has since gone off screen size the grid until the next frame corrected it.
+   */
+  private viewer: TerminalSubscribeViewer;
+  private status: StreamConnectionStatus;
+  /**
+   * A change of intent made while the stream was not open. The subscribe
+   * already on the wire may predate it, so it is restated once the stream
+   * opens.
+   */
+  private pendingViewerFrame: TerminalViewerFrame | null;
 
   constructor(options: TerminalStreamClientOptions) {
     this.callbacks = options.callbacks;
     this.closed = false;
-    this.session = options.wsStreamClient.subscribe("terminal.subscribe", {
-      sessionId: options.sessionId,
-      cols: options.cols,
-      rows: options.rows,
-      viewer: options.viewer ?? "presentation",
-    });
+    this.viewer = options.viewer ?? "presentation";
+    this.status = "connecting";
+    this.pendingViewerFrame = null;
+    this.session = options.wsStreamClient.subscribeWithParamsProvider(
+      "terminal.subscribe",
+      () => ({
+        sessionId: options.sessionId,
+        cols: options.cols,
+        rows: options.rows,
+        viewer: this.viewer,
+      }),
+    );
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason) => {
+      this.status = status;
       this.callbacks.onConnectionStatus(status, reason);
+      // After the consumer's own open handling, which re-reports its size: a
+      // view coming on screen must have its real grid on the host before it
+      // starts counting toward the shared one.
+      if (status === "open") this.flushPendingViewerFrame();
     });
   }
 
-  sendAction(frame: TerminalSubscribeClientFrame): void {
+  /**
+   * Sends one client frame. A `viewer` frame is also this client's standing
+   * intent, so it is recorded whether or not it can be sent: it reaches the
+   * wire only on an open stream whose host negotiated `@1.7`, and an older
+   * host simply keeps the intent its open request carried.
+   */
+  sendAction(frame: TerminalSubscribeClientFrameV17): void {
     if (this.closed) return;
+    if (frame.kind === "viewer") {
+      this.viewer = frame.viewer;
+      if (this.status !== "open") {
+        this.pendingViewerFrame = frame;
+        return;
+      }
+      this.pendingViewerFrame = null;
+      this.sendViewerFrame(frame);
+      return;
+    }
+    this.session.sendClientFrame(frame, null);
+  }
+
+  private flushPendingViewerFrame(): void {
+    const frame = this.pendingViewerFrame;
+    if (frame === null || this.closed) return;
+    this.pendingViewerFrame = null;
+    this.sendViewerFrame(frame);
+  }
+
+  private sendViewerFrame(frame: TerminalViewerFrame): void {
+    const version = this.session.getNegotiatedSchemaVersion();
+    if (version === null || version.major !== 1 || version.minor < 7) return;
     this.session.sendClientFrame(frame, null);
   }
 

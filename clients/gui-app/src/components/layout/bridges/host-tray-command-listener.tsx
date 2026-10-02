@@ -21,6 +21,10 @@ import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-ho
 import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
 import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
 import {
+  isHostServiceNotice,
+  toastHostServiceNotice,
+} from "@/lib/host/host-service-notice";
+import {
   Analytics,
   AnalyticsEvent,
   hostUpdateAnalyticsCallbacks,
@@ -108,8 +112,14 @@ export function HostTrayCommandListener() {
       });
       return;
     }
-    hostUpdateAnalytics.onFailed(new Error(outcome.message));
     setBusy(null);
+    // A disabled task or another user's task: a notice, not a failed update.
+    if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+      toastHostServiceNotice(outcome.message);
+      invalidate();
+      return;
+    }
+    hostUpdateAnalytics.onFailed(new Error(outcome.message));
     toast.error(outcome.message);
   };
 
@@ -132,8 +142,14 @@ export function HostTrayCommandListener() {
       });
       return;
     }
-    hostUpdateAnalytics.onFailed(new Error(outcome.message));
     setBusy(null);
+    // A disabled task or another user's task: a notice, not a failed update.
+    if (outcome.kind === "deferred" && isHostServiceNotice(outcome.message)) {
+      toastHostServiceNotice(outcome.message);
+      invalidate();
+      return;
+    }
+    hostUpdateAnalytics.onFailed(new Error(outcome.message));
     toast.error(outcome.message);
   };
 
@@ -223,6 +239,7 @@ export function HostTrayCommandListener() {
     <>
       <LocalHostRestartFlow
         requested={pendingRestart}
+        firstLeg="cooperative"
         onClose={() => setPendingRestart(false)}
       />
       <ConfirmDestructiveDialog

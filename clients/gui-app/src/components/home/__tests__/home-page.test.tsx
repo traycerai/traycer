@@ -445,6 +445,7 @@ vi.mock("@/components/home/landing-appearance-wallpaper", () => ({
 }));
 import { HomePage } from "@/components/home/home-page";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
 // The workspace-folders store buckets by host; every fixture in this suite
 // resolves the active host through `homeMocks.getActiveHostId()`, so seed and
@@ -529,6 +530,12 @@ describe("<HomePage />", () => {
       attached: true,
       effectiveHostId: TEST_HOST_ID,
     });
+    homeMocks.openSettings.mockReset();
+    useSettingsSearchStore.setState({
+      query: "",
+      pendingReveal: null,
+      handoffPending: false,
+    });
   });
 
   afterEach(() => {
@@ -551,11 +558,45 @@ describe("<HomePage />", () => {
     useWorkspaceFoldersStore.setState({ byHost: {} });
     useMobileNavStore.setState({ open: false });
     setMobileApp(false);
+    useSettingsSearchStore.setState({
+      query: "",
+      pendingReveal: null,
+      handoffPending: false,
+    });
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
       contextMetadata: null,
     });
+  });
+
+  it("arms an Appearance Start page reveal before opening Settings from Customize start page", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Customize start page" }),
+    );
+
+    const reveal = useSettingsSearchStore.getState().pendingReveal;
+    expect(reveal).not.toBeNull();
+    if (reveal === null) return;
+    expect(reveal.section).toBe("appearance");
+    expect(reveal.anchor).toBe("appearance-start-page");
+    expect(homeMocks.openSettings).toHaveBeenCalledWith({
+      section: "appearance",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
+    queryClient.clear();
   });
 
   it("mounts the host-update banner above the hero", () => {

@@ -77,8 +77,10 @@ import {
 import {
   chatQueueSteerModeSchema,
   runtimeApprovalDecisionSchema,
+  runtimeApprovalDisplayFactSchema,
   runtimeEventSchema,
   runtimeEventSchemaPreBrowser,
+  runtimeEventSchemaPreDisplayFacts,
   runtimeEventSchemaPreFallback,
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
@@ -138,6 +140,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { chatSkeletonResumeSchema } from "@traycer/protocol/persistence/chat-transcript/skeleton-resume";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
 
@@ -170,6 +173,26 @@ export const chatSubscribeOpenRequestSchema = lazySchema(() =>
 );
 export type ChatSubscribeOpenRequest = z.infer<
   typeof chatSubscribeOpenRequestSchema
+>;
+
+/**
+ * `1.19` and later require an explicit nullable claim. `null` states that this
+ * client holds nothing; omission is an invalid request on those lines. A
+ * malformed present claim is a cache miss, so normalize it to null at the
+ * transport validation boundary before a resolver is constructed. Every older
+ * line keeps the base schema, so its parser strips a claim from a downgraded
+ * request.
+ */
+export const chatSubscribeOpenRequestSchemaV119 = lazySchema(() =>
+  chatSubscribeOpenRequestSchema.extend({
+    resume: z
+      .unknown()
+      .refine((value) => value !== undefined)
+      .pipe(chatSkeletonResumeSchema.nullable().catch(null)),
+  }),
+);
+export type ChatSubscribeOpenRequestV119 = z.infer<
+  typeof chatSubscribeOpenRequestSchemaV119
 >;
 
 // Frozen action set of the RELEASED `chat.subscribe@≤1.5` lines. `actionAck`
@@ -417,6 +440,9 @@ export const backgroundItemKindSchema = lazySchema(() =>
     // this panel - the chat is doing something, the user can see when it will
     // end, and the user can stop it - even though nothing is executing.
     "fallback-wait",
+    // `1.20`: a job the model scheduled with the CLI's cron tools. Unlike
+    // every kind above it has no stop control - see `cronBackgroundItemSchema`.
+    "cron",
   ]),
 );
 export type BackgroundItemKind = z.infer<typeof backgroundItemKindSchema>;
@@ -513,10 +539,64 @@ const fallbackWaitBackgroundItemSchema = lazySchema(() =>
   }),
 );
 
-export const backgroundItemSchema = lazySchema(() =>
+// ─── Frozen `chat.subscribe@1.10–1.19` background-item shapes ──────────────
+//
+// `1.20` adds the `cron` kind below. Every line from `1.10` through `1.19`
+// binds this union - the live one as it stood when `1.20` opened above it -
+// and not an alias for the live one, for the reason the pre-`fallback-wait`
+// freeze above gives: a released peer's decoder is a closed discriminated
+// union, so an unknown `kind` fails the WHOLE frame. The host omits a cron
+// item from those lines' `backgroundItems` rather than sending one.
+export const backgroundItemSchemaPreCron = lazySchema(() =>
   z.discriminatedUnion("kind", [
     ...backgroundItemSchemaPreFallbackWait.def.options,
     fallbackWaitBackgroundItemSchema,
+  ]),
+);
+
+// ─── Live background-item shapes (`chat.subscribe@1.20`) ───────────────────
+
+/**
+ * A job the model scheduled with the CLI's `CronCreate` tool
+ * (`chat.subscribe@1.20`).
+ *
+ * Its own kind rather than a reused `wakeup`, and the differences are the
+ * reason:
+ *
+ * - **No `scheduledFor`.** Neither the cron tools' results nor the Stop hook's
+ *   `session_crons` carry a next-fire time, so the row states the schedule
+ *   (`humanSchedule`, e.g. "Every 5 minutes", with the raw `schedule`
+ *   expression beside it) and never a countdown. A wake's timestamp is
+ *   required; inventing one here would be a guess rendered as a fact.
+ * - **No stop affordance, by construction.** A job ends only when the model
+ *   deletes it (`CronDelete` is a model tool call and nothing else) or when its
+ *   session ends. The wake-cancel path cannot delete a CLI job, so a client
+ *   must not offer `stopBackgroundItem` for this kind and a host must refuse
+ *   one. A cron-fired turn that is RUNNING is stopped with the ordinary Stop.
+ * - **Never a live background signal.** A job keeps no session alive and holds
+ *   no process; it is listed so a scheduled job is visible, not so it can be
+ *   managed from the panel.
+ *
+ * Identity rides the shared base fields: `taskId` is the CLI's job id (the
+ * same id a lost job is reported under) and `title` is `humanSchedule`.
+ * `prompt` is the model-authored text the job re-sends, rendered as plain
+ * text. `recurring` is false for a one-shot job.
+ */
+const cronBackgroundItemSchema = lazySchema(() =>
+  z.object({
+    ...backgroundItemBaseFields,
+    kind: z.literal("cron"),
+    schedule: z.string(),
+    humanSchedule: z.string(),
+    prompt: z.string(),
+    recurring: z.boolean(),
+  }),
+);
+
+export const backgroundItemSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    ...backgroundItemSchemaPreCron.def.options,
+    cronBackgroundItemSchema,
   ]),
 );
 export type BackgroundItem = z.infer<typeof backgroundItemSchema>;
@@ -524,6 +604,7 @@ export type CommandBackgroundItem = z.infer<typeof commandBackgroundItemSchema>;
 export type FallbackWaitBackgroundItem = z.infer<
   typeof fallbackWaitBackgroundItemSchema
 >;
+export type CronBackgroundItem = z.infer<typeof cronBackgroundItemSchema>;
 
 export const chatActionAckStatusSchema = lazySchema(() =>
   z.enum(["accepted", "rejected"]),
@@ -1217,18 +1298,60 @@ export type ChatApprovalStatePreTier = z.infer<
 >;
 
 /**
- * The live approval card (`chat.subscribe@1.16`): the reason carries its
- * `tier`. `.extend` over an existing key keeps that key's position, so the
- * shape differs from `1.15`'s by the one nested key.
+ * Frozen approval card as `chat.subscribe@1.16` and `1.17` ship it: the reason
+ * carries its `tier`. `.extend` over an existing key keeps that key's position,
+ * so the shape differs from `1.15`'s by the one nested key. `1.20` adds the
+ * card's display facts and `cautious` on the live schema below.
+ *
+ * Do NOT add fields here. Add them to `chatApprovalStateSchema` below.
  */
-export const chatApprovalStateSchema = lazySchema(() =>
+export const chatApprovalStateSchemaPreDisplayFacts = lazySchema(() =>
   chatApprovalStateSchemaPreTier.extend({
     reason: chatApprovalReasonSchema.nullable().default(null),
   }),
 );
+export type ChatApprovalStatePreDisplayFacts = z.infer<
+  typeof chatApprovalStateSchemaPreDisplayFacts
+>;
+
+/**
+ * The live approval card (`chat.subscribe@1.20`): `1.18`'s card plus what the
+ * provider said about the ask.
+ *
+ * Both keys are OPTIONAL and stripped, the opposite call from `1.16`'s `tier`
+ * (defaulted, tolerated): the host deletes them by name for every peer below
+ * `1.20` (`chat-frame-projection.ts`), so an older line never carries a key
+ * its contract does not name, and a `1.20` client reading an older host's
+ * frame sees absence - "the provider said nothing" - which is what an older
+ * host means.
+ *
+ * Pending-only, like `reviewing`: neither key reaches the accumulated
+ * approval block or the journal, so a card restored from history carries
+ * neither.
+ */
+export const chatApprovalStateSchema = lazySchema(() =>
+  chatApprovalStateSchemaPreDisplayFacts.extend({
+    /** Card-only facts - see `runtimeApprovalDisplayFactSchema`. */
+    displayFacts: z.array(runtimeApprovalDisplayFactSchema).optional(),
+    /**
+     * The CLI stamped this ask as one a person must answer individually (it
+     * carried the tool's own `decisionReason` or a `matchedAskRule`). "Approve
+     * all" skips it. Not the judge's `tier`: that is Traycer's judge saying why
+     * it escalated, this is the provider's own stamp, and it exists in every
+     * mode, judge or none.
+     */
+    cautious: z.boolean().optional(),
+  }),
+);
 export type ChatApprovalState = z.infer<typeof chatApprovalStateSchema>;
 
-export const chatFileEditApprovalStateSchema = lazySchema(() =>
+/**
+ * Frozen file-edit approval card, as every line through `chat.subscribe@1.19`
+ * ships it. `1.20` adds `cautious` and `displayFacts` on the live schema below.
+ *
+ * Do NOT add fields here. Add them to `chatFileEditApprovalStateSchema` below.
+ */
+export const chatFileEditApprovalStateSchemaPreCautious = lazySchema(() =>
   z.object({
     approvalId: z.string(),
     toolName: z.string(),
@@ -1237,6 +1360,28 @@ export const chatFileEditApprovalStateSchema = lazySchema(() =>
     operation: checkpointFileOperationSchema,
     input: z.unknown().nullable(),
     requestedAt: z.number(),
+  }),
+);
+export type ChatFileEditApprovalStatePreCautious = z.infer<
+  typeof chatFileEditApprovalStateSchemaPreCautious
+>;
+
+/**
+ * The live file-edit approval card (`chat.subscribe@1.20`): `1.18`'s card plus
+ * the two keys the command card gained on the same line, for the same reason.
+ *
+ * Set when a user's ask rule forced this edit to a person: `cautious`, so the
+ * edit is never approved by "Approve all" or a one-key shortcut, and the one
+ * `displayFacts` line saying which settings' rule asked - never the rule's
+ * content. Optional and stripped by name below `1.20`, exactly as on
+ * `chatApprovalStateSchema`, and pending-only: neither key is journaled.
+ */
+export const chatFileEditApprovalStateSchema = lazySchema(() =>
+  chatFileEditApprovalStateSchemaPreCautious.extend({
+    /** Card-only facts - see `runtimeApprovalDisplayFactSchema`. */
+    displayFacts: z.array(runtimeApprovalDisplayFactSchema).optional(),
+    /** See `chatApprovalStateSchema.cautious`. */
+    cautious: z.boolean().optional(),
   }),
 );
 export type ChatFileEditApprovalState = z.infer<
@@ -1789,12 +1934,17 @@ export const lastFailedAttemptSchema = lazySchema(() =>
      * identical, and the state where a wait is genuinely impossible looked like
      * the state where it is merely far away.
      *
-     * Rendering rule: explain when this is not `eligible`, and never infer any of
-     * these from the failure payload. `beyond_cap` is the one value that pairs
-     * with `failure.resetsAt` - the boundary IS known, and the payload carries it
-     * uncapped - so a card may name the time and point at Settings. The cap
-     * itself deliberately never reaches the client, for the reason
-     * {@link eligibleRungs} gives.
+     * Rendering rule: never infer any of these from the failure payload, and
+     * say anything only for a failure whose reason has a reset boundary at all
+     * (`REASON_ELIGIBLE_RUNGS` lists `wait` for it). The value is decided from
+     * the failed tuple's reset gauge alone, so a reason with no limit behind it
+     * can still arrive `no_verified_reset` or `beyond_cap`. The GUI's failed-turn
+     * card stands a line for `beyond_cap` only, and says `no_verified_reset`
+     * only as the answer to a refused Wait press. `beyond_cap` is the one value
+     * that pairs with `failure.resetsAt` - the boundary IS known, and the
+     * payload carries it uncapped - so a card may name the time and point at
+     * Settings. The cap itself deliberately never reaches the client, for the
+     * reason {@link eligibleRungs} gives.
      */
     waitDisposition: fallbackWaitDispositionSchema,
     /**
@@ -2023,6 +2173,35 @@ export const lastFallbackOutcomeSchema = lazySchema(() =>
 );
 export type LastFallbackOutcome = z.infer<typeof lastFallbackOutcomeSchema>;
 
+/**
+ * The provider's predicted next prompt for this chat (`chat.subscribe@1.20`),
+ * for a click-to-fill chip above the composer. The chip fills the composer
+ * and never sends.
+ *
+ * Carried the way `lastFallbackOutcome` is, on the snapshot AND on
+ * `turnStateChanged`: it outlives the provider frame that produced it (which
+ * lands after the turn has already ended), and an ABSENT key CLEARS - the host
+ * drops it on any send, any run opening and teardown, and a renderer that kept
+ * its last value would offer a suggestion for a conversation that has moved
+ * on. Live state only: never persisted, never published.
+ *
+ * Model-authored text, rendered as plain text.
+ */
+export const chatSuggestedPromptSchema = lazySchema(() => z.string());
+
+/**
+ * The provider's running estimate of the thinking tokens the active turn has
+ * spent (`chat.subscribe@1.20`), shown beside the streaming "Thinking" label.
+ *
+ * An ESTIMATE for a progress indicator, not usage: the turn's final usage
+ * carries the real output tokens, so this is never written to a message, a
+ * journal or a publication. A whole, non-negative count - the host rounds the
+ * provider's value before it reaches the wire.
+ */
+export const chatThinkingTokensEstimateSchema = lazySchema(() =>
+  z.number().int().nonnegative(),
+);
+
 // Historical snapshot field set. The live snapshot grows from this base;
 // additions must not flow backwards into chat.subscribe 1.7.
 const chatSnapshotSchemaV17 = lazySchema(() =>
@@ -2047,7 +2226,9 @@ const chatSnapshotSchemaV17 = lazySchema(() =>
     // composer's missing-worktree error + send gate. `[]` when the binding is null
     // or every bound directory exists. Never persisted - see worktree-schemas.ts.
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     // Cumulative file changes for the whole chat (first-snapshot → current),
     // computed host-side from checkpoint manifests + current disk content.
     // Drives the pinned accumulated-changes panel above the composer.
@@ -2120,6 +2301,8 @@ export const chatSnapshotSchema = lazySchema(() =>
     // and `[]` is simply true of every line that carries a full snapshot.
     portForwards: z.array(chatPortForwardSchema).default([]),
     pendingApprovals: z.array(chatApprovalStateSchema),
+    // The live file-edit card (`1.20`); the V17 base is frozen pre-`cautious`.
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
     backgroundItems: z.array(backgroundItemSchema).optional(),
     // The live fallback traversal, or absent when there is none
     // (`chat.subscribe@1.10`). Optional rather than nullable so an older host's
@@ -2145,6 +2328,12 @@ export const chatSnapshotSchema = lazySchema(() =>
     // because its whole job is to be readable after the incident's transcript
     // row has left the bounded tail.
     lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+    // The `1.20` live-only keys, kept in step with the windowed snapshot for
+    // the reason `portForwards` is above. No line that binds this shape can
+    // carry them - every full-snapshot line is below `1.20` - so the host
+    // deletes both from every snapshot it sends on one.
+    suggestedPrompt: chatSuggestedPromptSchema.optional(),
+    thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
   }),
 );
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
@@ -2168,42 +2357,74 @@ const chatSubscribeSnapshotServerFrameSchema = lazySchema(() =>
   }),
 );
 
-const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
-  z.object({
-    kind: z.literal("turnStateChanged"),
-    ...textFrameFields,
-    ...chatReferenceFields,
-    // `runStatus` rides every turn-state broadcast so the GUI's in-progress
-    // indicator updates the instant a turn is requested, stops, or completes -
-    // including the request→activeTurn window where `activeTurn` is still null.
-    runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
-    // Background-items deltas ride this same broadcast (added/settled/stopped).
-    // Optional for the same capability-sentinel reason as the snapshot field; an
-    // older host omits it and the renderer keeps its last snapshot value.
-    backgroundItems: z.array(backgroundItemSchema).optional(),
-    // See `chatSnapshotSchema.turnInProgress` - same predicate, same
-    // optionality, same conservative-fallback contract.
-    turnInProgress: z.boolean().optional(),
-    // Rides this broadcast for the same reason `backgroundItems` does: every
-    // transition the DTO describes is a turn-state transition too, so a separate
-    // frame would be a second ordering to get wrong. Absent means "no traversal",
-    // and unlike `backgroundItems` the renderer must NOT keep its last value -
-    // that is how a settled traversal's card would outlive it.
-    pendingFallback: pendingFallbackSchema.optional(),
-    // Same rule, same reason: the banner must vanish when the offer is answered,
-    // so an absent key CLEARS rather than preserving the last value.
-    pendingReturn: pendingReturnSchema.optional(),
-    // Same rule again (D152). The card must vanish when a replacement lands or a
-    // traversal takes the chat back over, so an absent key CLEARS - a renderer
-    // that kept its last value would offer Retry on a turn that has since
-    // succeeded, which is the exact defect D122 closed on the host side.
+// The frame as `chat.subscribe@1.13`-`1.17` ship it. `1.18` widens its failed
+// attempt and `1.20` widens it again on the live frame below; the pre-`auto`
+// freeze grows from this one too, so nothing either added can reach a line
+// below it.
+const chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117 = lazySchema(
+  () =>
+    z.object({
+      kind: z.literal("turnStateChanged"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      // `runStatus` rides every turn-state broadcast so the GUI's in-progress
+      // indicator updates the instant a turn is requested, stops, or completes
+      // - including the request→activeTurn window where `activeTurn` is still
+      // null.
+      runStatus: chatRunStatusSchema,
+      activeTurn: chatActiveTurnSchema.nullable(),
+      // Background-items deltas ride this same broadcast (added/settled/
+      // stopped). Optional for the same capability-sentinel reason as the
+      // snapshot field; an older host omits it and the renderer keeps its last
+      // snapshot value. Frozen at the kinds `1.16` shipped (no `cron`).
+      backgroundItems: z.array(backgroundItemSchemaPreCron).optional(),
+      // See `chatSnapshotSchema.turnInProgress` - same predicate, same
+      // optionality, same conservative-fallback contract.
+      turnInProgress: z.boolean().optional(),
+      // Rides this broadcast for the same reason `backgroundItems` does: every
+      // transition the DTO describes is a turn-state transition too, so a
+      // separate frame would be a second ordering to get wrong. Absent means
+      // "no traversal", and unlike `backgroundItems` the renderer must NOT keep
+      // its last value - that is how a settled traversal's card would outlive
+      // it.
+      pendingFallback: pendingFallbackSchema.optional(),
+      // Same rule, same reason: the banner must vanish when the offer is
+      // answered, so an absent key CLEARS rather than preserving the last
+      // value.
+      pendingReturn: pendingReturnSchema.optional(),
+      // Same rule again (D152). The card must vanish when a replacement lands
+      // or a traversal takes the chat back over, so an absent key CLEARS - a
+      // renderer that kept its last value would offer Retry on a turn that has
+      // since succeeded, which is the exact defect D122 closed on the host
+      // side. Frozen before `1.18`'s `waitResumesAt`.
+      lastFailedAttempt: lastFailedAttemptSchemaPreWaitResume.optional(),
+      // The last confirmed automatic outcome (D215). The clearing rule is the
+      // same in mechanism and OPPOSITE in timing: an absent key clears, but this
+      // one is cleared by the next ARM rather than by the traversal ending - a
+      // settled traversal's outcome is exactly what a consumer still needs to
+      // speak.
+      lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+    }),
+);
+
+// The frame as `chat.subscribe@1.18` ships it: the failed attempt names when
+// its wait would resume (`waitResumesAt`). `.extend` over the existing key
+// keeps its position, so the shape moves by that nested key alone.
+const chatSubscribeTurnStateChangedServerFrameSchemaV118 = lazySchema(() =>
+  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117.extend({
     lastFailedAttempt: lastFailedAttemptSchema.optional(),
-    // The last confirmed automatic outcome (D215). The clearing rule is the same
-    // in mechanism and OPPOSITE in timing: an absent key clears, but this one is
-    // cleared by the next ARM rather than by the traversal ending - a settled
-    // traversal's outcome is exactly what a consumer still needs to speak.
-    lastFallbackOutcome: lastFallbackOutcomeSchema.optional(),
+  }),
+);
+
+// The live frame (`chat.subscribe@1.20`): the cron kind in `backgroundItems`
+// and the provider's suggested prompt. `.extend` over an existing key keeps
+// its position, so the new key lands last and nothing else moves.
+const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
+  chatSubscribeTurnStateChangedServerFrameSchemaV118.extend({
+    backgroundItems: z.array(backgroundItemSchema).optional(),
+    // Same rule as the fallback keys: an absent key CLEARS the chip - see
+    // `chatSuggestedPromptSchema`.
+    suggestedPrompt: chatSuggestedPromptSchema.optional(),
   }),
 );
 
@@ -2212,23 +2433,14 @@ const chatSubscribeTurnStateChangedServerFrameSchema = lazySchema(() =>
 // TUPLES that name a permission mode - so on a pre-`auto` line they must be
 // the frozen tuples, exactly as the snapshot's copies are. This frame is
 // shared by every minor, which is why freezing the snapshot alone left `1.10`
-// still advertising `auto` through it.
+// still advertising `auto` through it. Built over the `1.13`-`1.17` freeze,
+// never the live frame, so nothing `1.20` added reaches these lines.
 const chatSubscribeTurnStateChangedServerFrameSchemaPreAuto = lazySchema(() =>
-  chatSubscribeTurnStateChangedServerFrameSchema.extend({
+  chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117.extend({
     pendingFallback: pendingFallbackSchemaPreAuto.optional(),
     pendingReturn: pendingReturnSchemaPreAuto.optional(),
     lastFailedAttempt: lastFailedAttemptSchemaPreAuto.optional(),
   }),
-);
-
-// The same frame as `1.13`-`1.17` ship it: the live frame with the failed
-// attempt frozen before `1.18`'s `waitResumesAt`. `.extend` over the existing
-// key keeps its position, so the shape moves by that nested key alone.
-const chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume = lazySchema(
-  () =>
-    chatSubscribeTurnStateChangedServerFrameSchema.extend({
-      lastFailedAttempt: lastFailedAttemptSchemaPreWaitResume.optional(),
-    }),
 );
 
 /**
@@ -2289,6 +2501,34 @@ const chatSubscribePortForwardsChangedServerFrameSchema = lazySchema(() =>
     // Defaulted for the same reason as the snapshot's field: a consumer reads
     // one array shape on both channels and never null-checks either.
     portForwards: z.array(chatPortForwardSchema).default([]),
+  }),
+);
+
+/**
+ * The active turn's thinking-token estimate moved (`chat.subscribe@1.20`) -
+ * see `chatThinkingTokensEstimateSchema`.
+ *
+ * Its own LIGHT frame rather than a key on `turnStateChanged`, because that
+ * frame is the WHOLE turn state (background items, the fallback DTOs) and
+ * recomputing and queueing all of it once a second for one number is the cost
+ * this frame exists to avoid. The host coalesces it to at most one per second.
+ * The snapshot carries the latest value too (`thinkingTokensEstimate`), so a
+ * reconnect mid-thought is not blank.
+ *
+ * Turn-scoped, because the provider's estimate is: a renderer applies it only
+ * while `turnId` is the active turn and clears it on the turn-end state it
+ * already receives.
+ *
+ * Never sent to a peer that negotiated `<=1.18`: it has no variant for this
+ * kind, and the host's per-minor projection drops the frame whole.
+ */
+const chatSubscribeThinkingTokensServerFrameSchema = lazySchema(() =>
+  z.object({
+    kind: z.literal("thinkingTokens"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    turnId: z.string(),
+    estimate: chatThinkingTokensEstimateSchema,
   }),
 );
 
@@ -2465,6 +2705,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
   EventSchema extends z.ZodType,
   ActionSchema extends z.ZodType,
   ApprovalSchema extends z.ZodType,
+  FileEditApprovalSchema extends z.ZodType,
   InterviewAnsweredSchema extends z.ZodType,
   InterviewErroredSchema extends z.ZodType,
   ExtraActionAckFields extends z.ZodRawShape,
@@ -2474,6 +2715,11 @@ function buildChatSubscribeCommonServerFrameSchemas<
   readonly event: EventSchema;
   readonly action: ActionSchema;
   readonly approval: ApprovalSchema;
+  /**
+   * The file-edit card: frozen pre-`cautious` on every line through `1.19`,
+   * live on `1.20`, the same axis `approval` moves on.
+   */
+  readonly fileEditApproval: FileEditApprovalSchema;
   readonly interviewAnswered: InterviewAnsweredSchema;
   readonly interviewErrored: InterviewErroredSchema;
   /**
@@ -2553,7 +2799,7 @@ function buildChatSubscribeCommonServerFrameSchemas<
         kind: z.literal("fileEditApprovalRequested"),
         ...textFrameFields,
         ...chatReferenceFields,
-        approval: chatFileEditApprovalStateSchema,
+        approval: schemas.fileEditApproval,
       }),
     ),
     lazySchema(() =>
@@ -2654,6 +2900,7 @@ const chatSubscribeCommonServerFrameSchemasV18 =
     event: chatEventSchema,
     action: chatActionSchemaV17ToV19,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {},
@@ -2699,6 +2946,7 @@ const chatSubscribeCommonServerFrameSchemasV110 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: fallbackGraceHoldLeaseFields,
@@ -2717,6 +2965,7 @@ const chatSubscribeCommonServerFrameSchemasV111 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: fallbackGraceHoldLeaseFields,
@@ -2738,6 +2987,7 @@ const chatSubscribeCommonServerFrameSchemasV112 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2757,6 +3007,7 @@ const chatSubscribeCommonServerFrameSchemasV113 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreTier,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2775,6 +3026,7 @@ const chatSubscribeCommonServerFrameSchemasV114 =
     event: chatEventSchema,
     action: chatActionSchemaV110ToV114,
     approval: chatApprovalStateSchemaPreTier,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2793,6 +3045,7 @@ const chatSubscribeCommonServerFrameSchemasV115 =
     event: chatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchemaPreTier,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2801,15 +3054,17 @@ const chatSubscribeCommonServerFrameSchemasV115 =
     },
   });
 
-// `chat.subscribe@1.16`'s common frames: the live set with the pre-sender-host
-// prompt item, the one axis `1.17` adds here.
+// `chat.subscribe@1.16`'s common frames: the approval card's reason carries
+// its tier, with no display facts (the axis `1.20` adds), and the prompt item
+// has no sender host (the axis `1.17` adds).
 const chatSubscribeCommonServerFrameSchemasV116 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
     queue: chatQueueStateSchemaPreSentFromHost,
     event: chatEventSchema,
     action: chatActionSchema,
-    approval: chatApprovalStateSchema,
+    approval: chatApprovalStateSchemaPreDisplayFacts,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2818,15 +3073,18 @@ const chatSubscribeCommonServerFrameSchemasV116 =
     },
   });
 
-// `chat.subscribe@1.17`'s common frames: the live set with the queue as it was
-// before `1.18` added `pausedReason`, the one axis `1.18` adds here.
+// `chat.subscribe@1.17`'s common frames: `1.16`'s with the queued prompt item
+// naming the machine it was sent from, without the `pausedReason` `1.18` added
+// to the queue, and the approval cards without display facts or `cautious` -
+// the axis `1.20` adds.
 const chatSubscribeCommonServerFrameSchemasV117 =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
     queue: chatQueueStateSchemaPrePausedReason,
     event: chatEventSchema,
     action: chatActionSchema,
-    approval: chatApprovalStateSchema,
+    approval: chatApprovalStateSchemaPreDisplayFacts,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2835,8 +3093,26 @@ const chatSubscribeCommonServerFrameSchemasV117 =
     },
   });
 
-// The live common frames (`chat.subscribe@1.18`): the queue says why it is
-// paused.
+// `chat.subscribe@1.18`'s common frames: `1.17`'s with the queue saying why it
+// is paused, and the approval cards still without display facts or `cautious`.
+const chatSubscribeCommonServerFrameSchemasV118 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+    action: chatActionSchema,
+    approval: chatApprovalStateSchemaPreDisplayFacts,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
+    extraActionAckFields: {
+      ...fallbackGraceHoldLeaseFields,
+      ...draftImageAckCauseFields,
+    },
+  });
+
+// The live common frames (`chat.subscribe@1.20`): the approval card carries
+// the provider's display facts and `cautious`.
 const chatSubscribeCommonServerFrameSchemas =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchema,
@@ -2844,6 +3120,7 @@ const chatSubscribeCommonServerFrameSchemas =
     event: chatEventSchema,
     action: chatActionSchema,
     approval: chatApprovalStateSchema,
+    fileEditApproval: chatFileEditApprovalStateSchema,
     interviewAnswered: interviewAnsweredServerFrameSchema,
     interviewErrored: interviewErroredServerFrameSchema,
     extraActionAckFields: {
@@ -2860,6 +3137,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     event: chatEventSchemaPreInReplyTo,
     action: chatActionSchemaV15,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
     extraActionAckFields: {},
@@ -2880,6 +3158,7 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV15,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
     extraActionAckFields: {},
@@ -2919,15 +3198,16 @@ const chatSubscribeSharedServerFrameSchemasV112 = [
   ...chatSubscribeCommonServerFrameSchemasV112,
   blockDeltaServerFrameSchema(runtimeEventSchemaPreBrowser),
 ];
-// `chat.subscribe@1.13`'s shared frames: the live `blockDelta` over the
-// pre-port-forward common set.
+// `chat.subscribe@1.13`'s shared frames: the pre-`1.20` `blockDelta` (no
+// approval display facts) over the pre-port-forward common set. `1.13` through
+// `1.19` bind the same frozen event union.
 const chatSubscribeSharedServerFrameSchemasV113 = [
   ...chatSubscribeCommonServerFrameSchemasV113,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 const chatSubscribeSharedServerFrameSchemasV114 = [
   ...chatSubscribeCommonServerFrameSchemasV114,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 const messageDeliveryChangedServerFrameSchema = lazySchema(() =>
   z.object({
@@ -2937,27 +3217,37 @@ const messageDeliveryChangedServerFrameSchema = lazySchema(() =>
     delivery: chatMessageDeliverySchema.nullable(),
   }),
 );
-// `chat.subscribe@1.15`'s shared frames: the live list with the pre-tier card.
+// `chat.subscribe@1.15`'s shared frames: the `1.16` list with the pre-tier
+// card.
 const chatSubscribeSharedServerFrameSchemasV115 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV115,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
-// `chat.subscribe@1.16`'s shared frames: the live list with the
-// pre-sender-host prompt item.
+// `chat.subscribe@1.16`'s shared frames: the tiered card with no display
+// facts, the pre-sender-host prompt item, and the `blockDelta` whose
+// `approval.requested` carries no display facts either.
 const chatSubscribeSharedServerFrameSchemasV116 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV116,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
-// `chat.subscribe@1.17`'s shared frames: the live list with the
-// pre-`pausedReason` queue. `blockDelta` stays live: `provider_notice.upsert`
-// carries its own field list, not the notice metadata, so `1.18`'s receipt
-// never reaches it.
+// `chat.subscribe@1.17`'s shared frames: `1.16`'s with the sender-host prompt
+// item, on the pre-`pausedReason` queue and still on the pre-display-facts
+// `blockDelta`. `1.18`'s receipt needs no `blockDelta` freeze:
+// `provider_notice.upsert` carries its own field list, not the notice
+// metadata, so the receipt never reaches it.
 const chatSubscribeSharedServerFrameSchemasV117 = [
   messageDeliveryChangedServerFrameSchema,
   ...chatSubscribeCommonServerFrameSchemasV117,
-  blockDeltaServerFrameSchema(runtimeEventSchema),
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
+];
+// `chat.subscribe@1.18`'s shared frames: `1.17`'s with the queue's
+// `pausedReason`, still on the pre-display-facts `blockDelta`.
+const chatSubscribeSharedServerFrameSchemasV118 = [
+  messageDeliveryChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV118,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreDisplayFacts),
 ];
 const chatSubscribeSharedServerFrameSchemas = [
   messageDeliveryChangedServerFrameSchema,
@@ -2979,6 +3269,10 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    // `1.20`. The host emits it through the funnel typed by this union and
+    // drops it for every line below `1.20`, all of which a full-snapshot peer
+    // negotiates.
+    chatSubscribeThinkingTokensServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemas,
   ]),
 );
@@ -3628,7 +3922,8 @@ const chatSubscribeClientFrameSchemaOptionsPreAuto = [
  * and can place a tab natively), and nothing else. It is a client claim; the
  * host checks membership against its own host inventory before dialing.
  *
- * Bound to the live line (`1.17`) only. Every line from `1.13` through `1.16`
+ * Bound to the live lines (`1.17` through `1.20`; no line after `1.17`
+ * changes a client frame) only. Every line from `1.13` through `1.16`
  * keeps the pre-key `send` / `editUserMessage` objects below, and every line
  * below `1.13` its own `send` object above. A new minor although `1.16` is
  * unreleased, for the reason `1.16` itself gives: the minor is what tells a
@@ -3792,7 +4087,9 @@ const chatSnapshotSchemaV10 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
   }),
 );
@@ -3858,7 +4155,7 @@ const chatSubscribeServerFrameSchemaV10 = lazySchema(() =>
       kind: z.literal("fileEditApprovalRequested"),
       ...textFrameFields,
       ...chatReferenceFields,
-      approval: chatFileEditApprovalStateSchema,
+      approval: chatFileEditApprovalStateSchemaPreCautious,
     }),
     z.object({
       kind: z.literal("fileEditApprovalResolved"),
@@ -4112,7 +4409,9 @@ const chatSnapshotSchemaV11 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV11).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4179,7 +4478,9 @@ const chatSnapshotSchemaV12 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV12).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4244,7 +4545,9 @@ const chatSnapshotSchemaV13 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV13).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4314,7 +4617,9 @@ const chatSnapshotSchemaV14 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4386,7 +4691,9 @@ const chatSnapshotSchemaV15 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
     turnInProgress: z.boolean().optional(),
@@ -4548,7 +4855,9 @@ const chatSnapshotSchemaV16 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     // The shipped command shape - see the `V16` managedCommandsChanged frame.
@@ -4590,6 +4899,7 @@ const chatSubscribeCommonServerFrameSchemasV16 =
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV16,
     approval: chatApprovalStateSchemaPreAuto,
+    fileEditApproval: chatFileEditApprovalStateSchemaPreCautious,
     interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
     interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
     extraActionAckFields: {},
@@ -4856,7 +5166,9 @@ const chatWindowedSnapshotSchemaV18 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     /**
      * How many files the chat has touched. The SUMMARIES arrive on their own
      * chunked frames, for the reason the skeleton never joined the snapshot:
@@ -4945,9 +5257,13 @@ const chatWindowedSnapshotSchemaV110 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
-    backgroundItems: z.array(backgroundItemSchema).optional(),
+    // Pre-cron: `1.10` through `1.19` inherit this binding, and only the live
+    // snapshot (`1.20`) re-widens it.
+    backgroundItems: z.array(backgroundItemSchemaPreCron).optional(),
     managedCommands: z.array(managedCommandSchema).default([]),
     heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
     turnInProgress: z.boolean().optional(),
@@ -5036,7 +5352,7 @@ const chatWindowedSnapshotSchemaV115 = lazySchema(() =>
 // alone.
 const chatWindowedSnapshotSchemaV116 = lazySchema(() =>
   chatWindowedSnapshotSchemaV115.extend({
-    pendingApprovals: z.array(chatApprovalStateSchema),
+    pendingApprovals: z.array(chatApprovalStateSchemaPreDisplayFacts),
   }),
 );
 // The windowed snapshot as `chat.subscribe@1.17` ships it: `1.16` with the
@@ -5047,15 +5363,34 @@ const chatWindowedSnapshotSchemaV117 = lazySchema(() =>
     queue: chatQueueStateSchemaPrePausedReason,
   }),
 );
-// The live windowed snapshot (`chat.subscribe@1.18`): `1.17` with the queue's
-// `pausedReason`, a tail whose notices may carry a settled `receipt`, and a
-// failed attempt that names when its wait would resume (`waitResumesAt`). All
-// three are existing keys, so `.extend` keeps their positions.
-export const chatWindowedSnapshotSchema = lazySchema(() =>
+// The windowed snapshot as `chat.subscribe@1.18` ships it: `1.17` with the
+// queue's `pausedReason`, a tail whose notices may carry a settled `receipt`,
+// and a failed attempt that names when its wait would resume
+// (`waitResumesAt`). All three are existing keys, so `.extend` keeps their
+// positions.
+const chatWindowedSnapshotSchemaV118 = lazySchema(() =>
   chatWindowedSnapshotSchemaV117.extend({
     queue: chatQueueStateSchema,
     tail: chatTranscriptWindowSchema,
     lastFailedAttempt: lastFailedAttemptSchema.optional(),
+  }),
+);
+// The live windowed snapshot (`chat.subscribe@1.20`): `1.18` with the approval
+// card's display facts, the cron background kind, and two live-only keys. Both
+// new keys are optional and stripped by name below `1.20`, like `1.10`'s
+// fallback DTOs: absent is "nothing to show", which is also what an older
+// host's silence means.
+export const chatWindowedSnapshotSchema = lazySchema(() =>
+  chatWindowedSnapshotSchemaV118.extend({
+    pendingApprovals: z.array(chatApprovalStateSchema),
+    // Both cards gain `cautious` and `displayFacts` on this line.
+    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    backgroundItems: z.array(backgroundItemSchema).optional(),
+    // The provider's predicted next prompt - see `chatSuggestedPromptSchema`.
+    suggestedPrompt: chatSuggestedPromptSchema.optional(),
+    // The latest thinking-token estimate for the active turn, so a reconnect
+    // mid-thought is not blank - see `thinkingTokens` for the live updates.
+    thinkingTokensEstimate: chatThinkingTokensEstimateSchema.optional(),
   }),
 );
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
@@ -5084,6 +5419,19 @@ const chatSubscribeSkeletonChunkServerFrameSchema = lazySchema(() =>
     ...textFrameFields,
     ...chatReferenceFields,
     chunk: chatSkeletonChunkSchema,
+  }),
+);
+
+/**
+ * Only a resumed stream (`1.19` and later) may put `retainedRows` on its first
+ * chunk.
+ * It names whole claimed blocks, equals that chunk's `fromOrdinal`, and is
+ * absent from later chunks and all full streams. The host enforces those
+ * relationships; the client checks them before using cached entries.
+ */
+const chatSubscribeSkeletonChunkServerFrameSchemaV119 = lazySchema(() =>
+  chatSubscribeSkeletonChunkServerFrameSchema.extend({
+    retainedRows: z.number().int().positive().optional(),
   }),
 );
 
@@ -5219,7 +5567,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5227,7 +5575,7 @@ const chatSubscribeServerFrameSchemaV114 = lazySchema(() =>
   ]),
 );
 
-// `chat.subscribe@1.15`'s server frames: the live union with the pre-tier
+// `chat.subscribe@1.15`'s server frames: the `1.16` union with the pre-tier
 // approval card, on the snapshot and on the approval frames alike, and the
 // pre-receipt message bodies on the tail and on `range`.
 const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
@@ -5239,7 +5587,7 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
-    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5247,9 +5595,22 @@ const chatSubscribeServerFrameSchemaV115 = lazySchema(() =>
   ]),
 );
 
-// `chat.subscribe@1.16`'s server frames: the live union with the
-// pre-sender-host prompt item, on the snapshot and on the queue frames alike,
-// and the pre-receipt message bodies.
+/**
+ * `chat.subscribe@1.16`'s server frames, frozen when `1.17` opened above it
+ * and again when `1.18` and `1.20` did.
+ *
+ * Every arm a later line widens is swapped for its `1.16` copy: the snapshot
+ * (the prompt item without its sender host; no `pausedReason`, no notice
+ * `receipt`, no `waitResumesAt`; no `suggestedPrompt`, no
+ * `thinkingTokensEstimate`, no cron item, no approval display facts),
+ * `turnStateChanged` (no `waitResumesAt`, no `suggestedPrompt`, no cron item),
+ * `range` (no notice `receipt`), the queue and approval frames, and
+ * `blockDelta`'s `approval.requested` (no display facts, `cautious` or
+ * `ruleForced`). There is no `thinkingTokens` arm. The arms no later line
+ * touches are the live ones by reference - which is sound only while later
+ * lines leave them untouched: whoever next changes one of them freezes that
+ * axis here, the way these are frozen now.
+ */
 const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema.extend({
@@ -5259,7 +5620,7 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
-    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5267,11 +5628,17 @@ const chatSubscribeServerFrameSchemaV116 = lazySchema(() =>
   ]),
 );
 
-// `chat.subscribe@1.17`'s server frames: the live union without the three keys
-// `1.18` added - the queue's `pausedReason` (on the snapshot and on
-// `queueChanged`), a notice's `receipt` (on the tail and on `range`), and the
-// failed attempt's `waitResumesAt` (on the snapshot and on `turnStateChanged`,
-// a freeze `1.13`-`1.16` share).
+/**
+ * `chat.subscribe@1.17`'s server frames, frozen when `1.18` opened above it
+ * and again when `1.20` did: `1.16`'s with the queued prompt item naming its
+ * sender host, on the snapshot and on the queue frames alike.
+ *
+ * Without the three keys `1.18` added - the queue's `pausedReason` (on the
+ * snapshot and on `queueChanged`), a notice's `receipt` (on the tail and on
+ * `range`), and the failed attempt's `waitResumesAt` (on the snapshot and on
+ * `turnStateChanged`, a freeze `1.13`-`1.16` share) - and with every
+ * Claude-parity arm at its `1.16` copy: `1.17` never carried any of them.
+ */
 const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema.extend({
@@ -5281,7 +5648,7 @@ const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreReceipt,
-    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -5289,10 +5656,56 @@ const chatSubscribeServerFrameSchemaV117 = lazySchema(() =>
   ]),
 );
 
+/**
+ * `chat.subscribe@1.18`'s server frames, frozen when `1.19` and `1.20` opened
+ * above it: `1.17`'s with the queue's `pausedReason`, a notice's `receipt` and
+ * the failed attempt's `waitResumesAt`, and every Claude-parity arm still at
+ * its `1.16` copy - `1.18` never carried any of them.
+ */
+const chatSubscribeServerFrameSchemaV118 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV118,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV118,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV118,
+  ]),
+);
+
+/**
+ * `chat.subscribe@1.19`'s server frames, frozen when `1.20` opened above it:
+ * `1.18`'s with `retainedRows` on a resumed stream's first skeleton chunk, and
+ * every Claude-parity arm still at its `1.16` copy - `1.19` never carried any
+ * of them.
+ */
+const chatSubscribeServerFrameSchemaV119 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV118,
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchemaV118,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribePortForwardsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV118,
+  ]),
+);
+
 export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchema,
-    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
@@ -5300,6 +5713,7 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    chatSubscribeThinkingTokensServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemas,
   ]),
 );
@@ -5341,7 +5755,9 @@ const chatWindowedSnapshotSchemaV19 = lazySchema(() =>
     pendingInterviews: z.array(chatPendingInterviewStateSchema),
     worktreeBinding: worktreeBindingSchema.nullable(),
     missingWorktreePaths: z.array(z.string()),
-    pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+    pendingFileEditApprovals: z.array(
+      chatFileEditApprovalStateSchemaPreCautious,
+    ),
     accumulatedFileChangeCount: z.number().int().nonnegative(),
     backgroundItems: z.array(backgroundItemSchemaPreFallbackWait).optional(),
     managedCommands: z.array(managedCommandSchema).default([]),
@@ -5456,7 +5872,7 @@ const chatSubscribeServerFrameSchemaV113 = lazySchema(() =>
     chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchemaPreMessageDelivery,
-    chatSubscribeTurnStateChangedServerFrameSchemaPreWaitResume,
+    chatSubscribeTurnStateChangedServerFrameSchemaV113ToV117,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     ...chatSubscribeSharedServerFrameSchemasV113,
@@ -5906,7 +6322,8 @@ export const chatSubscribeV115 = defineStreamRpcContract({
  * unchanged: the tier is host-authored.
  *
  * Frozen at the pre-sender-host client frames and queue item since `1.17`
- * opened above it (`chatSubscribeServerFrameSchemaV116`).
+ * opened above it, and at the pre-parity approval cards, events and
+ * `turnStateChanged` since `1.20` did (`chatSubscribeServerFrameSchemaV116`).
  */
 export const chatSubscribeV116 = defineStreamRpcContract({
   method: "chat.subscribe",
@@ -5940,8 +6357,11 @@ export const chatSubscribeV116 = defineStreamRpcContract({
  * place moved their captured surfaces.
  *
  * Frozen at the pre-`pausedReason` queue and the pre-receipt message bodies
- * since `1.18` opened above it (`chatSubscribeServerFrameSchemaV117`). Its
- * client frames are `1.18`'s, unchanged: both keys are host-authored.
+ * since `1.18` opened above it, and at the pre-parity approval cards, events
+ * and `turnStateChanged` since `1.20` did
+ * (`chatSubscribeServerFrameSchemaV117`). Its client frames are the live ones:
+ * no later line changes a client frame (`1.19`'s resume claim rides the open
+ * request, and this line keeps the pre-claim one).
  */
 export const chatSubscribeV117 = defineStreamRpcContract({
   method: "chat.subscribe",
@@ -5996,11 +6416,78 @@ export const chatSubscribeV117 = defineStreamRpcContract({
  * required on every object literal of its type.
  *
  * The client frames are `1.17`'s, unchanged.
+ *
+ * Frozen at the pre-resume skeleton chunk since `1.19` opened above it, and at
+ * the pre-parity approval cards, events and `turnStateChanged` since `1.20`
+ * did (`chatSubscribeServerFrameSchemaV118`).
  */
 export const chatSubscribeV118 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 18 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV118,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * Main's model-routing `1.18` plus a resume claim and confirmed prefix.
+ *
+ * Frozen at the pre-parity approval cards, events and `turnStateChanged`
+ * since `1.20` opened above it (`chatSubscribeServerFrameSchemaV119`).
+ */
+export const chatSubscribeV119 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 19 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV119,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The Claude-parity line.
+ *
+ * `1.20` adds six host-authored surfaces, every one of them live-only state -
+ * nothing here is persisted, published or written to a chat-sync record:
+ *
+ *   - `suggestedPrompt` on the snapshot and on `turnStateChanged`, where an
+ *     absent key clears the chip;
+ *   - `thinkingTokensEstimate` on the snapshot, and the light `thinkingTokens`
+ *     frame that updates it;
+ *   - the `cron` background-item kind, which has no `scheduledFor` and no stop
+ *     affordance;
+ *   - `displayFacts` and `cautious` on the approval card, on the
+ *     `approval.requested` runtime event (and on the host-internal
+ *     `RuntimeApprovalRequest`);
+ *   - `ruleForced` on the `approval.requested` runtime event only.
+ *
+ * PROJECTION, not tolerance - the opposite call from `1.16`'s `tier` and
+ * `1.17`'s `sentFromHostId`. Each key is deleted by name for every peer below
+ * `1.20`, the frame is dropped whole and a cron item is omitted from
+ * `backgroundItems` (`chat-frame-projection.ts`, one `chatSubscribeSupports…`
+ * predicate per surface). A new enum value and a new frame kind would fail an
+ * older peer's closed decoder outright, so those two could not be tolerated
+ * anyway; the keys are stripped as well, for the reason `1.10`'s fallback DTOs
+ * are - a card's worth of state sent to a peer that cannot render it is bytes
+ * for nothing, and a decoder's leniency is how a field ends up load-bearing on
+ * a line that never agreed to carry it.
+ *
+ * It also carries one behaviour with no schema change: a subagent's `text` and
+ * `reasoning` blocks may now be emitted parented under its card. A peer below
+ * `1.20` would render them flat, in the parent agent's voice, so the host's
+ * `< 1.20` projection tier blanks them in place for it rather than dropping
+ * them - dropping would renumber the rows that peer plans for itself.
+ *
+ * Opened above `1.19`: `main` took `1.17` for the sender-host line, `1.18` for
+ * the model-routing line and `1.19` for skeleton resume while this line was in
+ * flight under each of those numbers in turn - a long-lived branch does not
+ * own an unreleased minor. It inherits `1.19`'s open request (the resume
+ * claim) and its `retainedRows` chunk; the client frames are `1.17`'s,
+ * unchanged: everything above is host-authored.
+ */
+export const chatSubscribeV120 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 20 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchemaV119,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });

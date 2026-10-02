@@ -4,13 +4,16 @@
  * sidebar sources, rail items, header tabs, and tear-off all share one
  * context - no geometry bridges between provider islands.
  *
- * The provider holds ZERO React state: drag lifecycle handlers write into
- * the ephemeral `dnd-store` (narrow per-target selectors keep preview ticks
+ * Drag lifecycle handlers write into the ephemeral `dnd-store`
+ * (narrow per-target selectors keep preview ticks
  * scoped to the hovered pane) and track the last resolved drop in a ref.
  * Collision detection + the collision-pass pointer stash live in
  * `root-dnd-collision.ts`; commits live in `root-dnd-commits.ts` and read
  * stores imperatively.
+ * The sheet-join scope encloses both the live strip and the portaled drag
+ * overlay so they publish to the same bridge during a handoff.
  */
+import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
 import {
   ARTIFACT_TAB_DND_TYPE,
   SIDEBAR_NODE_DND_TYPE,
@@ -84,7 +87,21 @@ import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import { type SplitStripItem } from "@/stores/tabs/layout";
+import {
+  flattenStripItemRefs,
+  tabItemId,
+  type SplitStripItem,
+  type StripItem,
+} from "@/stores/tabs/layout";
+import { stripItemGroupId } from "@/stores/tabs/tab-groups";
+import type {
+  OrganizationAction,
+  OrganizationView,
+} from "@traycer/protocol/host/organization/contracts";
+import {
+  useOrganization,
+  type OrganizationContextValue,
+} from "@/hooks/organization/organization-context";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
@@ -113,24 +130,31 @@ import {
   insertionIndexForTarget,
   insertionIndexFromPointer,
   insertionOffsetsFor,
+  laneBoundsOf,
   overlayStartForPointer,
   remapGeometryToSlots,
   resolveStripDragState,
+  stripLayoutFor,
   stripOffsetsFor,
   type MergeSide,
   type StripDragGeometry,
   type StripDragState,
+  type StripSlot,
 } from "@/components/epic-canvas/dnd/strip-drag-model";
 import {
   HEADER_STRIP_SCROLL_TEST_ID,
   measureHeaderStripGeometry,
   readHeaderStripContentOrigin,
+  readHeaderStripGroups,
   readHeaderStripItemRect,
   readHeaderStripSession,
   readHeaderStripSlots,
   type HeaderStripDeclaration,
 } from "@/components/layout/tabs/header-strip-geometry";
-import { pulledOutOfStrip } from "@/components/epic-canvas/dnd/strip-axis";
+import {
+  pulledOutOfStrip,
+  type StripAxis,
+} from "@/components/epic-canvas/dnd/strip-axis";
 import { pointIsOutsideViewport } from "@/components/epic-canvas/dnd/viewport-release";
 import {
   readTabDetachHandler,
@@ -140,6 +164,7 @@ import { appLogger } from "@/lib/logger";
 import {
   armHeaderStripCommitHandoff,
   disarmHeaderStripCommitHandoff,
+  seedHeaderStripItemFrom,
 } from "@/components/layout/tabs/header-strip-commit-handoff";
 import {
   armTileStripCommitHandoff,
@@ -167,6 +192,13 @@ const HEADER_TAB_TEAR_OFF_RELEASE_PX = 16;
 /** Stable empty map so clearing offsets never churns store identity. */
 const EMPTY_HEADER_OFFSETS: ReadonlyMap<string, number> = new Map();
 
+/** No tab and no group's chrome displaced: the strip as it is drawn. */
+function clearHeaderStripLayout(): void {
+  const dndStore = useEpicDndStore.getState();
+  dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+  dndStore.headerStripGroupPlacementsChanged([]);
+}
+
 /**
  * The header-tab gesture in flight: the strip's 1-D geometry plus the axis it
  * runs along and the side its content lies on, read from the strip's own
@@ -177,6 +209,8 @@ interface HeaderStripDragSession extends HeaderStripDeclaration {
   readonly geometry: StripDragGeometry;
   readonly sourceRect: RectLike;
   readonly overlayOrigin: PointLike | null;
+  /** A keyboard drag never splits; splitting stays in the tab's menu. */
+  readonly canSplit: boolean;
 }
 
 /**
@@ -284,6 +318,7 @@ function trackPointerDown(event: PointerEvent): void {
 function beginHeaderStripSession(
   stripItemId: string,
   grab: PointLike,
+  canSplit: boolean,
 ): HeaderStripDragSession | null {
   const declaration = readHeaderStripSession();
   if (declaration === null) return null;
@@ -296,7 +331,7 @@ function beginHeaderStripSession(
   });
   return geometry === null
     ? null
-    : { ...declaration, geometry, sourceRect, overlayOrigin: null };
+    : { ...declaration, geometry, sourceRect, overlayOrigin: null, canSplit };
 }
 
 /** The press position for a starting gesture, most reliable source first. */
@@ -401,15 +436,13 @@ const rootDragOverlayModifier: Modifier = (args) => {
   const strip = document.querySelector(
     `[data-testid="${HEADER_STRIP_SCROLL_TEST_ID}"]`,
   );
-  const stripRect = strip === null ? null : strip.getBoundingClientRect();
+  const bounds = overlayBoundsOf(axis, geometry, strip);
   const start = overlayStartForPointer({
     pointer: axis.pointerMain(pointer),
     grabOffset: geometry.grabOffset,
     sourceExtent: geometry.sourceExtent,
-    stripStart:
-      stripRect === null ? Number.NEGATIVE_INFINITY : axis.mainStart(stripRect),
-    stripEnd:
-      stripRect === null ? Number.POSITIVE_INFINITY : axis.mainEnd(stripRect),
+    stripStart: bounds.start,
+    stripEnd: bounds.end,
   });
   const tearOff = useEpicDndStore.getState().headerTearOffPreview;
   const main =
@@ -421,6 +454,26 @@ const rootDragOverlayModifier: Modifier = (args) => {
     ? { ...args.transform, x: main, y: cross }
     : { ...args.transform, x: cross, y: main };
 };
+
+/**
+ * The range, along the strip's axis, the dragged tab's overlay stays in: the
+ * strip, or for a sectioned strip the section the tab is dragged in.
+ */
+function overlayBoundsOf(
+  axis: StripAxis,
+  geometry: StripDragGeometry,
+  strip: Element | null,
+): { readonly start: number; readonly end: number } {
+  const contentOrigin = readHeaderStripContentOrigin(axis);
+  const lane =
+    contentOrigin === null ? null : laneBoundsOf(geometry, contentOrigin);
+  if (lane !== null) return lane;
+  if (strip === null) {
+    return { start: Number.NEGATIVE_INFINITY, end: Number.POSITIVE_INFINITY };
+  }
+  const rect = strip.getBoundingClientRect();
+  return { start: axis.mainStart(rect), end: axis.mainEnd(rect) };
+}
 
 // DragOverlay is anchored to the grabbed node, which can be a member
 // inside a split. Keep that initial origin while the source frame slides.
@@ -558,6 +611,7 @@ function preserveSourceTileStripGap(): void {
   const geometry = remapGeometryToSlots(
     drag.geometry,
     readTileStripSlots(drag.groupId),
+    [],
   );
   if (geometry === null) {
     reportStripGeometryFailure("tile");
@@ -643,13 +697,14 @@ function updateTileStripPreview(
     const contentOrigin = readTileStripContentOriginX(groupId);
     if (contentOrigin === null) return rejectTileStripFrame(refs);
     const slots = readTileStripSlots(groupId);
-    const geometry = remapGeometryToSlots(drag.geometry, slots);
+    const geometry = remapGeometryToSlots(drag.geometry, slots, []);
     if (geometry === null) return rejectTileStripFrame(refs);
     activeTileDrag = { ...drag, geometry };
     const next = resolveStripDragState({
       geometry,
       contentOrigin,
       pointer: point.x,
+      canSplit: false,
       previous: dndStore.headerStripDragState,
     });
     dndStore.headerStripDragStateChanged(next);
@@ -662,6 +717,7 @@ function updateTileStripPreview(
     const sourceGeometry = remapGeometryToSlots(
       drag.geometry,
       readTileStripSlots(drag.groupId),
+      [],
     );
     if (sourceGeometry === null) return rejectTileStripFrame(refs);
     activeTileDrag = { ...drag, geometry: sourceGeometry };
@@ -731,7 +787,7 @@ function updateHeaderTabSourcePreview(input: {
     dndStore.headerTearOffPreviewChanged(false);
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
@@ -749,7 +805,7 @@ function updateHeaderTabSourcePreview(input: {
     );
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
@@ -757,11 +813,51 @@ function updateHeaderTabSourcePreview(input: {
   if (point === null) {
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
   input.publishStripState(point);
+}
+
+/**
+ * Explicit per-item displacement, the same mechanism the tile strip uses. No
+ * layout projection means no projection can be left mid-flight. The strip is
+ * laid out as the move would leave it, a group's header and block moving with
+ * its tabs; a split shows over that same layout, which is the one its zones
+ * were read against, so showing it moves nothing.
+ */
+function publishHeaderStripLayout(
+  geometry: StripDragGeometry,
+  state: StripDragState,
+): void {
+  const dndStore = useEpicDndStore.getState();
+  const layout = stripLayoutFor(geometry, state.targetIndex, state.groupId);
+  dndStore.headerStripOffsetsChanged(layout.offsets);
+  dndStore.headerStripGroupPlacementsChanged(layout.groups);
+}
+
+/**
+ * The slots, each one a merge target only when the dragged tab could pair with
+ * it now: a split pair, a locked tab or a kind that never splits pairs with
+ * nothing. A slot that cannot be split with has no middle, so the drag passes
+ * it at its centre instead of showing a split that would drop as nothing.
+ */
+function pairableSlots(
+  headerTab: HeaderTabDragData,
+  slots: ReadonlyArray<StripSlot>,
+): ReadonlyArray<StripSlot> {
+  const layout = layoutFromTabsStore();
+  return slots.map((slot) => {
+    const index = layout.items.findIndex((item) => item.id === slot.itemId);
+    if (!slot.isMergeTarget || index < 0) {
+      return { ...slot, isMergeTarget: false };
+    }
+    const target = stripPairTargetForIndex(index, layout);
+    const pairable =
+      target !== null && resolveLiveTopLevelDrop(headerTab, target) !== null;
+    return pairable ? slot : { ...slot, isMergeTarget: false };
+  });
 }
 
 /**
@@ -775,12 +871,14 @@ function publishHeaderStripDragState(input: {
 }): void {
   const dndStore = useEpicDndStore.getState();
   const { headerTab, session } = input;
+  const slots = session === null ? [] : readHeaderStripSlots(session.axis);
   const geometry =
     session === null
       ? null
       : remapGeometryToSlots(
           session.geometry,
-          readHeaderStripSlots(session.axis),
+          pairableSlots(headerTab, slots),
+          readHeaderStripGroups(session.axis, slots, headerTab.stripItemId),
         );
   activeHeaderStripSession =
     session === null || geometry === null ? null : { ...session, geometry };
@@ -790,7 +888,7 @@ function publishHeaderStripDragState(input: {
     reportStripGeometryFailure("header");
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
-    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    clearHeaderStripLayout();
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
@@ -798,31 +896,56 @@ function publishHeaderStripDragState(input: {
     geometry,
     contentOrigin,
     pointer: session.axis.pointerMain(input.point),
+    canSplit: session.canSplit,
     previous: dndStore.headerStripDragState,
   });
   dndStore.headerStripDragStateChanged(next);
-  // Explicit per-item displacement, the same mechanism the tile strip uses.
-  // No layout projection means no projection can be left mid-flight.
-  dndStore.headerStripOffsetsChanged(
-    stripOffsetsFor(geometry, next.targetIndex),
-  );
+  publishHeaderStripLayout(geometry, next);
   // A merge shows the pair highlight and nothing else - an insertion line
   // beside a highlighted merge target advertises two different outcomes for
   // one release. Plain reorder shows the line at the settled model boundary,
-  // where the displacement gap is opening.
+  // where the displacement gap is opening. A drop that changes nothing, or
+  // that joins a collapsed group (whose tabs are not drawn to be inserted
+  // among), shows none.
   dndStore.headerStripDropIndexChanged(
-    next.kind !== "reorder" || next.targetIndex === geometry.sourceIndex
-      ? null
-      : insertionIndexForTarget(geometry.sourceIndex, next.targetIndex),
+    next.kind === "reorder" &&
+      stripDropChangesLayout(geometry, next) &&
+      !stripDropJoinsCollapsedGroup(geometry, next)
+      ? insertionIndexForTarget(geometry.sourceIndex, next.targetIndex)
+      : null,
   );
   const pairTarget =
-    next.kind === "merge"
-      ? resolveStripPairTarget(headerTab, geometry, next)
-      : null;
+    next.kind === "merge" ? resolveStripPairTarget(headerTab, next) : null;
   dndStore.topLevelStripPairPreviewChanged(
     next.kind !== "merge" || pairTarget === null
       ? null
       : { targetRef: pairTarget.targetRef, side: next.targetSide },
+  );
+}
+
+/**
+ * Whether releasing at `state` writes anything: the item moves, or its group
+ * changes.
+ */
+function stripDropChangesLayout(
+  geometry: StripDragGeometry,
+  state: Extract<StripDragState, { readonly kind: "reorder" }>,
+): boolean {
+  const sourceGroupId = geometry.slots[geometry.sourceIndex]?.groupId ?? null;
+  return (
+    state.targetIndex !== geometry.sourceIndex ||
+    state.groupId !== sourceGroupId
+  );
+}
+
+/** Whether the drop joins a group none of whose tabs are drawn (a collapsed one). */
+function stripDropJoinsCollapsedGroup(
+  geometry: StripDragGeometry,
+  state: Extract<StripDragState, { readonly kind: "reorder" }>,
+): boolean {
+  return (
+    state.groupId !== null &&
+    !geometry.slots.some((slot) => slot.groupId === state.groupId)
   );
 }
 
@@ -832,17 +955,17 @@ function publishHeaderStripDragState(input: {
  */
 function resolveStripPairTarget(
   headerTab: HeaderTabDragData,
-  geometry: StripDragGeometry,
   state: StripDragState,
 ): TopLevelStripPairTarget | null {
   if (state.kind !== "merge") {
     return null;
   }
-  const index = geometry.slots.findIndex(
-    (slot) => slot.itemId === state.targetItemId,
+  const layout = layoutFromTabsStore();
+  const index = layout.items.findIndex(
+    (item) => item.id === state.targetItemId,
   );
   if (index < 0) return null;
-  const target = stripPairTargetForIndex(index, layoutFromTabsStore());
+  const target = stripPairTargetForIndex(index, layout);
   if (target === null) return null;
   return resolveLiveTopLevelDrop(headerTab, target) === null ? null : target;
 }
@@ -893,6 +1016,7 @@ function commitHeaderTabDrop(input: {
   readonly navigate: UseNavigateResult<string>;
   readonly geometry: StripDragGeometry | null;
   readonly dragState: StripDragState | null;
+  readonly organization: OrganizationContextValue | null;
 }): void {
   const headerTab = readHeaderTabDragData(input.event.active.data.current);
   const target =
@@ -926,11 +1050,7 @@ function commitHeaderTabDrop(input: {
   // position, and which half of the neighbour the dragged tab's centre is on
   // is what distinguishes "combine with this tab" from "move next to it".
   if (input.dragState.kind === "merge") {
-    const pairTarget = resolveStripPairTarget(
-      headerTab,
-      input.geometry,
-      input.dragState,
-    );
+    const pairTarget = resolveStripPairTarget(headerTab, input.dragState);
     if (pairTarget !== null) {
       commitHeaderStripPair(
         headerTab,
@@ -941,18 +1061,162 @@ function commitHeaderTabDrop(input: {
       return;
     }
   }
-  if (input.dragState.targetIndex === input.geometry.sourceIndex) return;
-  // Arm BEFORE the reorder is written: the strip items re-base their transform
-  // against the new baseline in the layout effect of the render this causes, so
-  // the flag has to be set by the time that render commits.
-  armHeaderStripCommitHandoff();
-  tabCommandCoordinator.reorderStripItem({
-    itemId: headerTab.stripItemId,
-    targetIndex: insertionIndexForTarget(
+  if (
+    input.dragState.kind !== "reorder" ||
+    !stripDropChangesLayout(input.geometry, input.dragState)
+  ) {
+    return;
+  }
+  const targetIndex = layoutInsertionIndex(
+    input.geometry,
+    insertionIndexForTarget(
       input.geometry.sourceIndex,
       input.dragState.targetIndex,
     ),
+  );
+  if (targetIndex === null) return;
+  // Arm BEFORE the move is written: the strip items re-base their transform
+  // against the new baseline in the layout effect of the render this causes, so
+  // the flag has to be set by the time that render commits.
+  armHeaderStripCommitHandoff();
+  // Read before the move: it repairs the layout, which drops a group left with
+  // no tab, and an organization's group emptied by this very drop is still the
+  // one the task is leaving.
+  const leavesOrganization = isOrganizationGroup(
+    input.geometry.slots[input.geometry.sourceIndex]?.groupId ?? null,
+  );
+  tabCommandCoordinator.moveStripItem({
+    itemId: headerTab.stripItemId,
+    targetIndex,
+    groupId: input.dragState.groupId,
   });
+  saveOrganizationGroupMove(input.organization, headerTab.stripItemId, {
+    leavesOrganization,
+    to: input.dragState.groupId,
+  });
+}
+
+function isOrganizationGroup(groupId: string | null): groupId is string {
+  return (
+    groupId !== null &&
+    Boolean(useTabsStore.getState().groups?.[groupId]?.organizationOwnerId)
+  );
+}
+
+/**
+ * Sends the menu's own command for a drop that changed an organization group,
+ * so the account keeps it. A failure is reported by the command, as the menu's
+ * is, and the organization's next view puts the tab back.
+ */
+function saveOrganizationGroupMove(
+  organization: OrganizationContextValue | null,
+  stripItemId: string,
+  groups: DroppedGroups,
+): void {
+  const view = organization?.supported ? organization.view : undefined;
+  if (organization === null || view === undefined) return;
+  const action = organizationGroupAction(view, stripItemId, groups);
+  if (action !== null) void organization.command(action).catch(() => undefined);
+}
+
+/** The groups a drop changed: whether it left an organization's, and the one it landed in. */
+interface DroppedGroups {
+  readonly leavesOrganization: boolean;
+  readonly to: string | null;
+}
+
+/**
+ * The organization command a drop that was just written needs, the same one
+ * the task's menu sends: its tasks moved into an organization's group at their
+ * new place among its members (all of them, open or not), or out of the one
+ * they left. Null when no organization group is involved.
+ */
+function organizationGroupAction(
+  view: OrganizationView,
+  stripItemId: string,
+  groups: DroppedGroups,
+): OrganizationAction | null {
+  const state = useTabsStore.getState();
+  const taskIdsOf = (item: StripItem): ReadonlyArray<string> =>
+    flattenStripItemRefs(item).flatMap((ref) => {
+      const epicId =
+        ref.kind === "epic"
+          ? useEpicCanvasStore.getState().tabsById[ref.id]?.epicId
+          : undefined;
+      return epicId === undefined ? [] : [epicId];
+    });
+  const moved = state.items.find((item) => item.id === stripItemId);
+  const taskIds = moved === undefined ? [] : taskIdsOf(moved);
+  if (taskIds.length === 0) return null;
+  const { to } = groups;
+  if (!isOrganizationGroup(to)) {
+    return groups.leavesOrganization
+      ? {
+          kind: "groups",
+          operations: taskIds.map((taskId) => ({
+            operation: "removeTask",
+            taskId,
+          })),
+        }
+      : null;
+  }
+  const members = view.groups.memberships
+    .filter((m) => m.groupId === to && !taskIds.includes(m.taskId))
+    .sort((a, b) => a.position - b.position)
+    .map((m) => m.taskId);
+  // Beside the nearest member drawn before it, else before the nearest after it.
+  const drawn = state.items.filter(
+    (item) => stripItemGroupId(item, state.customizations) === to,
+  );
+  const at = drawn.findIndex((item) => item.id === stripItemId);
+  const before = drawn
+    .slice(0, at)
+    .flatMap(taskIdsOf)
+    .findLast((id) => members.includes(id));
+  const after = drawn
+    .slice(at + 1)
+    .flatMap(taskIdsOf)
+    .find((id) => members.includes(id));
+  let index = members.length;
+  if (before !== undefined) index = members.indexOf(before) + 1;
+  else if (after !== undefined) index = members.indexOf(after);
+  const order = [
+    ...members.slice(0, index),
+    ...taskIds,
+    ...members.slice(index),
+  ];
+  return {
+    kind: "groups",
+    operations: [
+      ...taskIds.map((taskId) => ({
+        operation: "moveTask" as const,
+        taskId,
+        groupId: to,
+        position: order.indexOf(taskId),
+      })),
+      { operation: "reorderMembers", groupId: to, taskIds: order },
+    ],
+  };
+}
+
+/**
+ * The layout index of an insertion index counted in the model's slots: before
+ * the slot at that index, or after the last. A sectioned strip's slots are
+ * one section's items, so the layout index is read from the slot's item and
+ * not assumed to be the slot's own. `null` when that item has left the
+ * layout, so the drop writes nothing rather than landing somewhere unseen.
+ */
+function layoutInsertionIndex(
+  geometry: StripDragGeometry,
+  insertion: number,
+): number | null {
+  const after = insertion >= geometry.slots.length;
+  const anchorId = geometry.slots.at(after ? -1 : insertion)?.itemId;
+  const index = layoutFromTabsStore().items.findIndex(
+    (item) => item.id === anchorId,
+  );
+  if (index < 0) return null;
+  return after ? index + 1 : index;
 }
 
 /**
@@ -974,6 +1238,14 @@ function commitHeaderStripPair(
     (tab) => tab.kind === sourceRef.kind && tab.id === sourceRef.id,
   );
   if (sourceTab === undefined) return;
+  const splitId = `split:${uuidv4()}`;
+  // The pair takes its target's place, starting where the target is drawn, and
+  // the rows around it settle from where they are, as a reorder's do.
+  const session = activeHeaderStripSession;
+  armHeaderStripCommitHandoff();
+  if (session !== null) {
+    seedHeaderStripItemFrom(splitId, tabItemId(target.targetRef), session.axis);
+  }
   activatePreparedPairTabIntent(
     navigate,
     {
@@ -981,7 +1253,7 @@ function commitHeaderStripPair(
       right: side === "left" ? target.targetRef : sourceRef,
       focusedRef: sourceRef,
       targetRef: target.targetRef,
-      splitId: `split:${uuidv4()}`,
+      splitId,
       leftRatio: 0.5,
     },
     tabResolveIntent(sourceTab),
@@ -1184,6 +1456,7 @@ function commitOrdinaryDrop(input: {
   readonly navigate: UseNavigateResult<string>;
   readonly navigateNested: NavigateNestedFocus;
   readonly resolvedDrop: ResolvedEpicCanvasDrop | null;
+  readonly organization: OrganizationContextValue | null;
 }): boolean {
   const dndStore = useEpicDndStore.getState();
   const headerStripIndex = dndStore.headerStripDropIndex;
@@ -1194,6 +1467,7 @@ function commitOrdinaryDrop(input: {
       navigate: input.navigate,
       geometry: activeHeaderStripSession?.geometry ?? null,
       dragState: headerDragState,
+      organization: input.organization,
     });
     return false;
   }
@@ -1235,6 +1509,7 @@ interface RootDndProviderProps {
 export function RootDndProvider(props: RootDndProviderProps) {
   const navigate = useNavigate();
   const navigateNested = useEpicNestedFocusNavigation();
+  const organization = useOrganization();
   // No detach hook here, deliberately. `useTabOpenInNewWindowFlow` reaches
   // `useRouterState`, which THROWS without a router where `useNavigate` above
   // only warns - calling it from this provider made the whole provider
@@ -1379,6 +1654,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         const session = beginHeaderStripSession(
           headerTab.stripItemId,
           grabPoint(event.activatorEvent),
+          !isKeyboardEvent(event.activatorEvent),
         );
         activeHeaderStripSession = session;
         // The ghost enrichment (repo logo, notification badge) rides the
@@ -1608,6 +1884,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
         navigate,
         navigateNested,
         resolvedDrop: lastResolvedDropRef.current,
+        organization,
       });
       if (!committed) restorePromotedPreview();
       endGesture();
@@ -1617,6 +1894,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       hostBinding,
       navigate,
       navigateNested,
+      organization,
       queryClient,
       updateDropPreview,
     ],
@@ -1634,19 +1912,21 @@ export function RootDndProvider(props: RootDndProviderProps) {
   );
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={epicRootCollisionDetection}
-      autoScroll={{ threshold: { x: 0.2, y: 0.2 } }}
-      onDragStart={handleDragStart}
-      onDragMove={handleDragMove}
-      onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      {props.children}
-      <RootDragOverlay />
-    </DndContext>
+    <SheetJoinScope>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={epicRootCollisionDetection}
+        autoScroll={{ threshold: { x: 0.2, y: 0.2 } }}
+        onDragStart={handleDragStart}
+        onDragMove={handleDragMove}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        {props.children}
+        <RootDragOverlay />
+      </DndContext>
+    </SheetJoinScope>
   );
 }
 

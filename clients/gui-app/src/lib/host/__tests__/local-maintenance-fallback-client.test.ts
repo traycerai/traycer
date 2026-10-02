@@ -144,6 +144,7 @@ describe("mapInstallVersionOutcome", () => {
     {
       kind: "failed" as const,
       message: "install failed",
+      errorCode: null,
     },
     {
       kind: "stage-fingerprint-mismatch" as const,
@@ -169,6 +170,7 @@ describe("mapInstallVersionOutcome", () => {
       mapInstallVersionOutcome({
         kind: "failed",
         message: "first line\nsecond line\r\nthird line",
+        errorCode: null,
       }),
     ).toEqual({
       outcome: "cli-failed",
@@ -400,6 +402,7 @@ describe("buildMaintenanceFallbackServeMap", () => {
           outcome: {
             kind: "failed" as const,
             message: "install failed",
+            errorCode: null,
           },
         }),
     });

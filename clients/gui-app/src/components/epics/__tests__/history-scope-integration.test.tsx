@@ -27,6 +27,8 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     localHomedTaskIds: new Set<string>(),
     isFetching: false,
     error: null,
+    refetch: () => Promise.resolve(),
+    refetchBatches: [],
   }),
 }));
 
@@ -215,10 +217,15 @@ vi.mock("@/hooks/home/use-history-query", () => ({
   },
 }));
 
-vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => ({
-  useEpicBatchDelete: () => ({ isPending: false, mutate: vi.fn() }),
-  usePendingDeleteEpicIds: () => new Set<string>(),
-}));
+vi.mock("@/hooks/epic/use-epic-batch-delete-mutation", () => {
+  const nothingInFlight = (): boolean => false;
+  return {
+    useEpicBatchDelete: () => ({ isPending: false, mutate: vi.fn() }),
+    usePendingDeleteEpicIds: () => new Set<string>(),
+    useIsEpicDeleteInFlight: nothingInFlight,
+    useEpicDeleteInFlightReader: () => nothingInFlight,
+  };
+});
 
 vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   useTaskDeleteWorktreeCandidates: () => ({

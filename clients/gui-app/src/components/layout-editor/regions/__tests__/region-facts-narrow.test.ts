@@ -65,6 +65,12 @@ describe("regionRowAvailable", () => {
     ).toBe(false);
   });
 
+  it("keeps the minimap's Side narrow, which is device-local", () => {
+    expect(
+      regionRowAvailable("minimap", rowOf("minimap", "position-side"), true),
+    ).toBe(true);
+  });
+
   it("drops the toolbar clusters' own reorder narrow, but leaves the dock's alone", () => {
     expect(
       regionRowAvailable(

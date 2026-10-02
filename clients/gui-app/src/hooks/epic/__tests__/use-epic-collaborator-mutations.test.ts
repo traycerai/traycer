@@ -121,17 +121,23 @@ describe("useEpicGrantAccess", () => {
   // ── `s5-status-truthfulness` instance 5 ───────────────────────────────
   //
   // Every case below hit one of the two sentences above on the pre-fix code:
-  // a plan limit arrived as 403/`FORBIDDEN` and was reported as a permission
-  // failure - false about the user's OWN account - and every pending state
-  // arrived as a generic 409 and lost both its reason and its retry guidance.
+  // an unsynced epic arrived as 403/`FORBIDDEN` and was reported as a
+  // permission failure - false about the user's OWN account - and every
+  // pending state arrived as a generic 409 and lost both its reason and its
+  // retry guidance.
 
-  it("calls a plan limit a plan limit, with the upgrade path", () => {
+  it("names the unsynced epic as the reason, never permissions and never the plan", () => {
     renderHook(() => useEpicGrantAccess());
     capturedOptions["epic.grantAccess"].onError?.(
       makeError("E_SHARE_NEEDS_CLOUD_SYNC", "host prose"),
     );
     const message = vi.mocked(toast.error).mock.calls[0]?.[0];
-    expect(message).toContain("Upgrade");
+    // Cloud sync is on every plan, so the refusal is a state of the epic and
+    // there is nothing to upgrade.
+    expect(message).toBe(
+      "This epic isn't synced to the cloud yet, so it can't be shared. The epic keeps working locally either way.",
+    );
+    expect(message).not.toContain("Upgrade");
     expect(message).not.toContain("You don't have permission");
   });
 

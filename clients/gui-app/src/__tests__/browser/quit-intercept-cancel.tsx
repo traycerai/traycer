@@ -58,7 +58,7 @@ interface DecisionResponse {
 type DecisionPayload = string | DecisionResponse;
 
 /**
- * The seams the CDP driver reaches through. Widened with an intersection rather
+ * The seams the browser test reaches through. Widened with an intersection rather
  * than a `declare global`, mirroring how this repo's own quit-intercept test
  * widens `window` for `runnerHost`, so the extra members stay local to the
  * fixture instead of leaking into every file's `Window`.

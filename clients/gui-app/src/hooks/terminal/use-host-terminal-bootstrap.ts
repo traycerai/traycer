@@ -131,6 +131,7 @@ export function useHostTerminalBootstrap(args: {
     kind: "terminal",
     enabled:
       args.canMutate && gridReady && (projectionRunning || ensuredRunning),
+    viewer: "presentation",
   });
 
   const retry = useCallback(() => {

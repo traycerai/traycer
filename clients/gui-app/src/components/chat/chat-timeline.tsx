@@ -1,4 +1,4 @@
-import { useReadingWidthClass } from "@/lib/layout-overrides";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import {
   createContext,
   memo,
@@ -664,7 +664,7 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   message: ChatMessageModel;
 }) {
   const ctx = use(ChatTimelineRowCtx);
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   const highlightStore = use(NavigationHighlightStoreContext);
   const navigationHighlight = useRowNavigationHighlight(
     highlightStore,
@@ -689,10 +689,11 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
       data-navigation-highlighted={highlightRow ? "true" : undefined}
       className={cn(
         "mx-auto w-full rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
-        readingWidth,
+        readingWidth.className,
         highlightRow && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
         chatTimelineRowSizeHintClassName(message.role),
       )}
+      style={{ maxWidth: readingWidth.maxWidth }}
     >
       <ChatMessage
         message={message}

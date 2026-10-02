@@ -7,6 +7,7 @@ import {
   DESKTOP_RETENTION_PROFILE,
   getRetentionProfile,
 } from "@/stores/replica-memory/retention-profile";
+import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 
 /**
@@ -112,6 +113,11 @@ const TERMINAL_SESSION_SCOPE = "terminal";
  */
 export class TerminalSessionRegistry {
   private readonly sessions: SessionRegistry<TerminalRegistrySession>;
+  /**
+   * The intent of the `acquire` in progress, for `onRevived`: the shared
+   * registry revives inside `acquire` and hands its policy the session only.
+   */
+  private acquiringViewer: TerminalSubscribeViewer = "presentation";
 
   constructor() {
     this.sessions = createSessionRegistry<TerminalRegistrySession>({
@@ -152,18 +158,20 @@ export class TerminalSessionRegistry {
         // Attachment intent follows lease state, not session kind: a
         // lease-free running terminal-agent (indefinite keep-warm) or
         // lingering plain terminal must not claim attention.
-        // `terminal.subscribe@1.6` carries viewer only on the open frame, so
-        // this reopens as `cache`. A THROW here is the disappearing-transport
+        // A lease change reopens the stream as `cache`, which is how a host
+        // of any version hears it. A THROW here is the disappearing-transport
         // case and the registry fails toward disposal, because the captured
         // factory throws when the directory or user is gone and a warm entry
         // whose stream is already closed would only ever be revived dead.
         onParked: ({ handle }) => {
           handle.store.getState().setViewer("cache");
         },
-        // Lease-free keep-warm / linger was tagged `cache`. A tile looking
-        // again is presentation; intent is open-frame-only so this reopens.
+        // Lease-free keep-warm / linger was tagged `cache`. The tile taking
+        // the lease states what it is: one on screen is `presentation`, which
+        // reopens the stream; one mounted off screen stays `cache`, which
+        // leaves the parked stream exactly as it is.
         onRevived: ({ handle }) => {
-          handle.store.getState().setViewer("presentation");
+          handle.store.getState().setViewer(this.acquiringViewer);
         },
       },
     });
@@ -222,11 +230,18 @@ export class TerminalSessionRegistry {
     return this.sessions.peek(instanceId)?.handle ?? null;
   }
 
+  /**
+   * `viewer` is the acquiring tile's attachment intent. It decides what a
+   * revived lease-free entry becomes; a fresh store takes its own from
+   * `factory`.
+   */
   acquire(
     instanceId: string,
     factory: () => TerminalSessionStoreHandle,
     hostId: string | null,
+    viewer: TerminalSubscribeViewer,
   ): TerminalSessionStoreHandle {
+    this.acquiringViewer = viewer;
     return this.sessions.acquire(instanceId, TERMINAL_SESSION_SCOPE, () => {
       const handle = factory();
       return {
@@ -276,8 +291,7 @@ export class TerminalSessionRegistry {
    * handle warm, but reopening mints a fresh tab instance id - without
    * adoption the reopened tile would build a SECOND subscription while the
    * warm one lingers as an unreachable zombie (still attached host-side,
-   * still counted in the shared `min()` grid, with no UI able to correct
-   * it). Returns null when the session has no warm lease-free entry or the
+   * with no UI able to reach it). Returns null when the session has no warm lease-free entry or the
    * new id is already registered (remount, StrictMode second pass).
    */
   findAdoptableInstanceId(

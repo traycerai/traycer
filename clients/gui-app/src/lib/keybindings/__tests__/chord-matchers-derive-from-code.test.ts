@@ -108,12 +108,19 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
+  // Bare ArrowRight accepts an offered suggestion: a named platform
+  // navigation/acceptance key, not a registered physical chord.
+  "gui-app/src/components/chat/composer/chat-composer-editor-slot.tsx": 1,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,
   "gui-app/src/components/chat/composer/profile-rate-limit-switch-banner.tsx": 3,
+  "gui-app/src/components/chat/composer/prompt-suggestion.ts": 1,
   "gui-app/src/components/chat/segments/pending-interview/use-interview-card.ts": 5,
   "gui-app/src/components/chat/segments/revert-on-edit-dialog.tsx": 1,
   "gui-app/src/components/chat/segments/steer-settings-conflict-dialog.tsx": 1,
+  // Escape steps the open-as-chat view back one breadcrumb level; a named
+  // non-printable key, not a registered shortcut.
+  "gui-app/src/components/chat/subagent-chat-view.tsx": 1,
   "gui-app/src/components/composer/drafts/composer-drafts-control.tsx": 8,
   "gui-app/src/components/comments/comment-composer.tsx": 2,
   "gui-app/src/components/diff/use-diff-click-to-edit.ts": 1,
@@ -150,10 +157,11 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/layout-editor/layout-editor.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
-  // A group's chip and its side-strip header open the group editor on F2,
-  // ContextMenu and Shift+F10: named keys, none of them a registered chord.
-  "gui-app/src/components/layout/tabs/side-strip/side-tab-group-header.tsx": 3,
-  "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 3,
+  // Every group surface (the chip, the side-strip header, the Activity view's
+  // label and rail column) opens the group editor through this one anchor: F2,
+  // ContextMenu and Shift+F10, plus Enter and Space on a surface that opts in
+  // (the Activity label). Named keys, none of them a registered chord.
+  "gui-app/src/components/layout/tabs/group-editor-anchor.tsx": 5,
   // The guided tour's card answers arrows, Enter and Escape by name; none is
   // a registered chord.
   // Arrows, Home and End walking the minimap's own list - named keys inside an

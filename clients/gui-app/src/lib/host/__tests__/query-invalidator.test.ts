@@ -43,8 +43,6 @@ function rotationEntry(publicKey: string) {
     ...mockRemoteHostEntry,
     publicKey,
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable" as const,
       viewerReachability: "ok" as const,

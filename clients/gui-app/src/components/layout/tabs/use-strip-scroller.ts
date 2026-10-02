@@ -12,6 +12,7 @@ import {
   type StripAxis,
 } from "@/components/epic-canvas/dnd/strip-axis";
 import { runHeaderStripCommitHandoff } from "./header-strip-commit-handoff";
+import { readTranslate } from "./header-strip-geometry";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   HEADER_TAB_TRAILING_SLOT_DROP_ID,
@@ -62,31 +63,7 @@ export function useStripScroller(input: {
   // permanently mid-flight and never at the tab the user is on.
   const revealActiveMember = useCallback((): void => {
     const scroller = scrollerRef.current;
-    if (scroller === null) return;
-    // Mid-drag the strip's geometry belongs to dnd-kit: members carry
-    // displacement transforms, the dragged tab follows the pointer, and the
-    // drag model re-reads this very scroll offset as its content origin. A
-    // reveal here would measure a transient box AND move the ground under the
-    // gesture, so a drag is simply not a moment to reveal anything.
-    if (useEpicDndStore.getState().activeHeaderTab !== null) return;
-    // The selection as the strip PAINTED it - no second reading of
-    // `activeItemId` that could disagree with the tab that drew itself active.
-    // Exactly one node inside the scroller carries it: a split group's halves
-    // are selected only while the group itself holds the selection, and Home
-    // is drawn outside the scroller.
-    const selected = scroller.querySelector<HTMLElement>(
-      '[aria-selected="true"]',
-    );
-    if (selected === null) return;
-    // The strip MEMBER, not the selected node: inside a split group the
-    // selected node is one half of the member. Walking to the scroller's own
-    // child is what gets the element whose box is the whole item.
-    let member: HTMLElement | null = selected;
-    while (member !== null && member.parentElement !== scroller) {
-      member = member.parentElement;
-    }
-    if (member === null) return;
-    revealMemberAlongAxis(scroller, member, axis);
+    if (scroller !== null) revealSelectedMember(scroller, axis);
   }, [axis]);
   // On the activation CHANGE, and in a layout effect so the reveal lands in
   // the same paint as the newly active tab. Deliberately NOT on every render:
@@ -138,4 +115,45 @@ export function useStripScroller(input: {
     },
     [trailingSlotRef, extraRef],
   );
+}
+
+/**
+ * The strip member that holds the selection as the strip PAINTED it - no
+ * second reading of `activeItemId` that could disagree with the tab that drew
+ * itself active. Exactly one node inside the scroller carries it: a split
+ * group's halves are selected only while the group itself holds the
+ * selection, and Home is drawn outside the scroller. `null` mid-drag: the
+ * strip's geometry then belongs to dnd-kit, whose members carry displacement
+ * transforms and whose drag model reads the scroll offset as its content
+ * origin, so a drag is not a moment to reveal anything.
+ */
+export function selectedStripMember(scroller: HTMLElement): HTMLElement | null {
+  if (useEpicDndStore.getState().activeHeaderTab !== null) return null;
+  const selected = scroller.querySelector<HTMLElement>(
+    '[aria-selected="true"]',
+  );
+  // The strip MEMBER, not the selected node: inside a split group the
+  // selected node is one half of the member. Walking to the scroller's own
+  // child is what gets the element whose box is the whole item.
+  let member: HTMLElement | null = selected;
+  while (member !== null && member.parentElement !== scroller) {
+    member = member.parentElement;
+  }
+  return member;
+}
+
+/**
+ * Scroll the strip the least amount that brings the selected member into view.
+ * Exported for the strip's slot animations, which move the selection after
+ * the activation reveal has already run: a slot opening beside it, or the
+ * selected slot itself growing from nothing.
+ */
+export function revealSelectedMember(
+  scroller: HTMLElement,
+  axis: StripAxis,
+): void {
+  const member = selectedStripMember(scroller);
+  if (member !== null) {
+    revealMemberAlongAxis(scroller, member, axis, readTranslate(member, axis));
+  }
 }

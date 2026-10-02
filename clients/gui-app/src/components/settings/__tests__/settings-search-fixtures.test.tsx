@@ -172,11 +172,12 @@ describe("settings search fixtures", () => {
         // The context the contract is judged by must be the shell the panel
         // actually resolved, or the zero-target half proves nothing.
         expect(mounted).toEqual(shell.context);
-        // Layout (G6) shows only one tab's rows at a time, so its anchors
-        // cannot all be judged visible from this one static mount - each is
-        // checked after navigating to it, the way a real search result would.
+        // Layout and Appearance show only one tab's rows at a time, so their
+        // anchors cannot all be judged visible from this one static mount -
+        // each is checked after navigating to it, the way a real search
+        // result would.
         const assert =
-          fixture.section === "layout"
+          fixture.section === "layout" || fixture.section === "appearance"
             ? assertSettingsSearchTargetsByNavigation
             : assertSettingsSearchTargets;
         assert(fixture.section, shell.context, container);

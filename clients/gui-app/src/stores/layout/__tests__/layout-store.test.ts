@@ -134,7 +134,11 @@ describe("useLayoutStore", () => {
       });
       expect(
         effectiveLayoutValues("default", getLayoutSnapshot().overrides).model,
-      ).toEqual({ style: "bars", reasoningControl: "slider" });
+      ).toEqual({
+        style: "bars",
+        reasoningControl: "slider",
+        toolbarStyle: "flat",
+      });
     });
 
     it("keeps a key set back to the base's own value, and stops counting it", () => {
@@ -262,7 +266,10 @@ describe("useLayoutStore", () => {
     it("counts VALUES only, never the arrangement (L-57)", () => {
       const store = useLayoutStore.getState();
       store.setRegionValues("model", { style: "bars" });
-      store.setRegionValues("usageLimits", { bar: false, word: false });
+      store.setRegionValues("usageLimits", {
+        density: "compact",
+        reset: false,
+      });
       store.setArrangement({
         ...DEFAULT_ARRANGEMENT,
         dock: ["background", "changedFiles", "runningAgents"],
@@ -277,7 +284,7 @@ describe("useLayoutStore", () => {
     it("marks the changed region and leaves the others alone", () => {
       useLayoutStore
         .getState()
-        .setRegionValues("usageLimits", { bar: false, word: false });
+        .setRegionValues("usageLimits", { density: "compact" });
       const snapshot = getLayoutSnapshot();
 
       expect(regionChanged(snapshot, "usageLimits")).toBe(true);
@@ -319,6 +326,29 @@ describe("useLayoutStore", () => {
         homeTab: { shown: "shown" },
       });
       expect(changeCount(getLayoutSnapshot())).toBe(1);
+    });
+
+    it("reads a saved bar checkbox against the record's own preset", async () => {
+      // The same stored key means opposite things on two presets: bar off on
+      // Default leaves the percent, and bar on on Compact adds a bar beside
+      // the percent Compact always had.
+      await rehydrateFrom({
+        basePreset: "default",
+        overrides: { usageLimits: { bar: false } },
+        arrangement: DEFAULT_ARRANGEMENT,
+      });
+      expect(getLayoutSnapshot().overrides).toEqual({
+        usageLimits: { readingStyle: "percent" },
+      });
+
+      await rehydrateFrom({
+        basePreset: "compact",
+        overrides: { usageLimits: { bar: true } },
+        arrangement: DEFAULT_ARRANGEMENT,
+      });
+      expect(getLayoutSnapshot().overrides).toEqual({
+        usageLimits: { readingStyle: "both" },
+      });
     });
 
     /**
@@ -712,7 +742,8 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
 
   const EXPECTED_OVERRIDES = {
     homeTab: { shown: "shown" },
-    usageLimits: { bar: false, word: false, reset: false, amount: "remaining" },
+    // `showBar` and `showModeWord` are in the stored record and carry nowhere.
+    usageLimits: { reset: false, amount: "remaining" },
     resourceMonitor: { shown: "hidden", processes: false, ramShare: true },
     contextUsage: {
       style: "ring",

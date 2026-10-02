@@ -11,6 +11,7 @@ import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import { leaderDigitFor } from "@/components/ui/leader-digit-shortcuts";
 import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
 import { HeaderTabVisual } from "./header-tab-visual";
+import { SplitPairPreview } from "./split-pair-preview";
 import {
   useStripTabItem,
   type HeaderTabDndConfig,
@@ -25,8 +26,11 @@ import {
   headerTabClassName,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
-import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
+import { tabRefKey } from "@/stores/tabs/layout";
+import { useConcealedForTravel } from "./strip-selection-travel";
+import { useStripEntrance } from "./use-strip-entrance";
+import { useStripItemJoining } from "./use-strip-item-joining";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
 const TITLE_INPUT_CLASS =
@@ -72,7 +76,20 @@ interface TabItemProps {
 export const TabItem = memo(function TabItem(props: TabItemProps) {
   const { tab, dnd, chrome, includeMotionFrame, isActive } = props;
   const { rootRef, ...item } = useStripTabItem(props);
-  const joined = isActive && chrome === "own" && !item.isDragging;
+  // While the selection slides here, the traveller draws the joined box.
+  const concealed = useConcealedForTravel(dnd?.stripItemId ?? null);
+  const joined = isActive && chrome === "own" && !item.isDragging && !concealed;
+  const pairPreviewSide = useTopLevelStripPairPreview(tab.kind, tab.id);
+  // The same gate the vertical strip's hover card applies
+  // (`hoverCardAllowed`, `side-tab-row.tsx`): shut while renaming, a drag
+  // source, a drop indicator sits on this tab, or a pair-merge preview is
+  // active - each one already fights the pointer for something else.
+  const hoverCardEnabled =
+    !item.rename.isEditing &&
+    !item.isDragging &&
+    !props.showDropIndicatorBefore &&
+    !props.showDropIndicatorAfter &&
+    pairPreviewSide === null;
   const control = (
     <StripTabContextMenu item={item} input={props}>
       <div
@@ -97,6 +114,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           chrome={chrome}
           isActive={isActive}
           joined={joined}
+          concealed={concealed}
           titleControl={
             item.rename.isEditing ? (
               <StripTabTitleInput
@@ -116,8 +134,18 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             />
           }
           leaderVisible={item.leaderBadge !== null}
+          enabled={hoverCardEnabled}
+          pairPreview={
+            pairPreviewSide === null ? null : (
+              <SplitPairPreview
+                placement="top-bar"
+                side={pairPreviewSide}
+                title={item.displayName}
+                testId={`tab-strip-pair-preview-${tab.kind}-${tab.id}`}
+              />
+            )
+          }
         />
-        <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
         <HeaderTabSeparator visible={props.showSeparatorAfter} />
         <HeaderTabDropIndicator
           visible={props.showDropIndicatorAfter}
@@ -132,6 +160,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       isDragging={item.isDragging}
       offsetX={props.offsetX}
       dnd={dnd}
+      entranceKeys={tabRefKey(tab)}
     >
       {control}
     </HeaderTabMotionFrame>
@@ -177,15 +206,19 @@ function HeaderTabMotionFrame(props: {
   readonly offsetX: number;
   /** Drag config; its `stripItemId` is the drag model's measurement anchor. */
   readonly dnd: HeaderTabDndConfig | null;
+  /** The tab's ref key, the mark an open or a reopen leaves for it. */
+  readonly entranceKeys: string;
   readonly children: React.ReactNode;
 }) {
   const transition = useHeaderTabDisplacementTransition();
   const frameRef = useRef<HTMLDivElement | null>(null);
+  useStripEntrance(frameRef, props.entranceKeys, "tab");
   const x = useStripItemDisplacement({
     nodeRef: frameRef,
     offset: props.offsetX,
     transition,
   });
+  const groupJoining = useStripItemJoining(props.dnd?.stripItemId);
 
   return (
     <m.div
@@ -204,9 +237,10 @@ function HeaderTabMotionFrame(props: {
       transition={transition}
       data-strip-item-id={props.dnd?.stripItemId}
       data-strip-item-mergeable="true"
+      data-group-joining={groupJoining}
       // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
       // resolution harness.
-      className="relative flex w-56 min-w-[min(40vw,12rem)] group-data-[tab-layout=shrink]/strip:min-w-12 max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
+      className="group/joining relative flex w-56 min-w-[min(40vw,12rem)] group-data-[tab-layout=shrink]/strip:min-w-12 max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
       {props.children}
     </m.div>
@@ -285,33 +319,6 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
       // (`tab-<kind>-<id>` or `split-tab-group-<id>`).
       data-testid="header-tab-separator"
       className="pointer-events-none absolute right-0 top-1/2 z-10 h-5 w-px -translate-y-1/2 bg-border/80"
-    />
-  );
-}
-
-/**
- * Shown on the tab a pair-into-split drop would combine with, the moment the
- * pointer is on its approach half. The highlight covers ONLY the half the
- * DRAGGED tab will take - the side it approaches from, the same side the
- * commit writes. A full-tab ring reads inverted mid-drag: the opaque drag
- * overlay sits over the approach half, so the only visible part of a whole-tab
- * highlight is the OPPOSITE half.
- */
-function StripPairPreview(props: {
-  readonly tabKind: HeaderTabKind;
-  readonly tabId: string;
-}) {
-  const side = useTopLevelStripPairPreview(props.tabKind, props.tabId);
-  if (side === null) return null;
-  return (
-    <span
-      aria-hidden
-      data-testid={`tab-strip-pair-preview-${props.tabKind}-${props.tabId}`}
-      data-side={side}
-      className={cn(
-        "pointer-events-none absolute inset-y-0.5 z-30 rounded-xl bg-primary/20 ring-2 ring-primary",
-        side === "left" ? "left-0.5 right-1/2" : "left-1/2 right-0.5",
-      )}
     />
   );
 }

@@ -16,6 +16,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * injected elements, and the panel doesn't crash.
  */
 
+// The provider's Limits pick reads the watched host's usage through the layout
+// editor's own scope, which this suite does not stand up, and no label is
+// rendered through it. Where the page mounts it is held by
+// `providers-settings-panel.test.tsx`.
+vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
+  ProviderUsageLimitsSection: () => null,
+}));
+
 // Render the profile dropdown inline + always-open so the test can select
 // the hostile-labeled row without fighting Radix's pointerdown-based open
 // gesture in jsdom (mirrors the established mock in
@@ -41,6 +49,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 // mutations so this panel test keeps rendering without a QueryClientProvider.
 vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
   useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
+}));
+
+// The profile-copy entry button and Recent copies list label devices from the
+// account's host list, which is a real TanStack query. This suite is about the
+// panel, not copying, so the list is empty and the button renders disabled.
+// `use-host-options` is stubbed with only the member this subtree calls.
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () => ({ hosts: [] }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
@@ -101,7 +117,11 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => {
   };
 });
 vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => {
-  const useProvidersCancelLogin = () => ({ mutate: vi.fn(), isPending: false });
+  const useProvidersCancelLogin = () => ({
+    mutate: vi.fn(),
+    mutateAsync: () => Promise.resolve({ cancelled: true }),
+    isPending: false,
+  });
   return {
     useProvidersCancelLogin,
     useProvidersCancelLoginForClient: useProvidersCancelLogin,

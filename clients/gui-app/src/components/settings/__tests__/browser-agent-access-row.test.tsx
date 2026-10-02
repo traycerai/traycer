@@ -167,6 +167,14 @@ function createFixture(seed: Readonly<Record<string, boolean>>): Fixture {
   };
 }
 
+function agentOpenedTabsStub(): ReactNode {
+  return <div data-testid="agent-opened-tabs-stub">Agent-opened tabs stub</div>;
+}
+
+function browserSettingsSection(): ReactNode {
+  return <BrowserSettingsSection agentOpenedTabsRow={agentOpenedTabsStub()} />;
+}
+
 function row(): HTMLElement {
   return screen.getByRole("switch", {
     name: "Let agents use the in-app browser",
@@ -190,6 +198,16 @@ async function settleQueries(): Promise<void> {
   });
 }
 
+function documentPosition(
+  earlier: HTMLElement,
+  later: HTMLElement,
+): "before" | "after" | "unrelated" {
+  const relation = earlier.compareDocumentPosition(later);
+  if ((relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return "before";
+  if ((relation & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return "after";
+  return "unrelated";
+}
+
 afterEach(() => {
   cleanup();
   support.current = true;
@@ -201,13 +219,18 @@ afterEach(() => {
 });
 
 describe("<BrowserSettingsSection /> agent browser access", () => {
-  it("hides the row and the whole group on a host that cannot answer", async () => {
+  it("hides the access row on a host that cannot answer, and still draws the Agents group around the passed row", async () => {
     support.current = false;
     const fixture = createFixture({});
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByText("Browser")).toBeNull();
+    expect(
+      screen.queryByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeNull();
+    expect(screen.getByTestId("settings-browser-agents")).not.toBeNull();
+    expect(screen.getByTestId("agent-opened-tabs-stub")).not.toBeNull();
     // Hidden means not asked, not asked-and-ignored. NOT `waitFor`: it passes
     // on its first check, before anything could have fired, so it would hold
     // for a query that goes out a tick later just as happily. Settle the
@@ -221,10 +244,14 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     // methods degrade independently, so the gate demands both.
     support.set = false;
     const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByText("Browser")).toBeNull();
+    expect(
+      screen.queryByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeNull();
+    expect(screen.getByTestId("settings-browser-agents")).not.toBeNull();
     await settleQueries();
     expect(fixture.gets()).toEqual([]);
   });
@@ -232,26 +259,35 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
   it("hides the row while no handshake has answered yet", () => {
     support.current = null;
     const fixture = createFixture({});
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByText("Browser")).toBeNull();
+    expect(
+      screen.queryByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeNull();
+    expect(screen.getByTestId("settings-browser-agents")).not.toBeNull();
   });
 
-  it("keeps the group for dev origins alone, without the row", () => {
+  it("keeps the Agents group for the passed row and dev origins, without the access row", () => {
     support.current = false;
     useSettingsStore.setState({ browserDevOrigins: ["http://localhost:3000"] });
     const fixture = createFixture({});
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
-    expect(screen.getByText("Browser")).not.toBeNull();
+    expect(screen.getByText("Agents")).not.toBeNull();
     expect(screen.getByText("Detected dev origins")).not.toBeNull();
-    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.getByTestId("agent-opened-tabs-stub")).not.toBeNull();
+    expect(
+      screen.queryByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeNull();
   });
 
   it("renders the group for the row alone, naming the active host", async () => {
     const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
     await waitFor(() => {
       expect(row().getAttribute("data-state")).toBe("checked");
@@ -267,7 +303,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
   it("shows both members when origins exist too", async () => {
     useSettingsStore.setState({ browserDevOrigins: ["http://localhost:3000"] });
     const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
     await waitFor(() => {
       expect(row()).not.toBeNull();
@@ -275,9 +311,27 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     expect(screen.getByText("Detected dev origins")).not.toBeNull();
   });
 
+  it("draws access, the passed row, and detected origins in that order when all three are present", async () => {
+    useSettingsStore.setState({ browserDevOrigins: ["http://localhost:3000"] });
+    const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
+
+    const access = await screen.findByRole("switch", {
+      name: "Let agents use the in-app browser",
+    });
+    const passed = screen.getByTestId("agent-opened-tabs-stub");
+    const origins = screen.getByText("Detected dev origins");
+    const group = screen.getByTestId("settings-browser-agents");
+    expect(group.contains(access)).toBe(true);
+    expect(group.contains(passed)).toBe(true);
+    expect(group.contains(origins)).toBe(true);
+    expect(documentPosition(access, passed)).toBe("before");
+    expect(documentPosition(passed, origins)).toBe("before");
+  });
+
   it("writes the flip to the active host and re-reads it", async () => {
     const fixture = createFixture({ [mockLocalHostEntry.hostId]: true });
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
     await waitFor(() => {
       expect(row().getAttribute("data-state")).toBe("checked");
@@ -301,7 +355,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
       [mockLocalHostEntry.hostId]: true,
       [mockRemoteHostEntry.hostId]: false,
     });
-    const view = render(<BrowserSettingsSection />, {
+    const view = render(browserSettingsSection(), {
       wrapper: fixture.Wrapper,
     });
 
@@ -310,7 +364,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
     });
 
     fixture.activate(mockRemoteHostEntry);
-    view.rerender(<BrowserSettingsSection />);
+    view.rerender(browserSettingsSection());
 
     await waitFor(() => {
       expect(row().getAttribute("data-state")).toBe("unchecked");
@@ -326,7 +380,7 @@ describe("<BrowserSettingsSection /> agent browser access", () => {
   it("says so and refuses writes when the host cannot read its config", async () => {
     const fixture = createFixture({});
     fixture.failReads();
-    render(<BrowserSettingsSection />, { wrapper: fixture.Wrapper });
+    render(browserSettingsSection(), { wrapper: fixture.Wrapper });
 
     expect(
       await screen.findByText(/Couldn't read this host's browser setting/),

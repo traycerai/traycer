@@ -52,10 +52,8 @@ import "@/index.css";
  * seeds the dnd store with an `artifact-tab-strip` drop preview at index N
  * before the first render, so `TabStripDropIndicator` mounts inside tab N
  * without a real drag gesture; omitted, no preview is seeded and behaviour is
- * unchanged. Structure follows
- * `status-bar-usage-scroll.tsx` (vite + headless Chrome over CDP via
- * `scripts/chrome-launcher.mjs`); wired into `scripts/run-tests.ts` behind
- * `RUN_DIFF_EDIT_BROWSER_REGRESSION`, next to that fixture's entry.
+ * unchanged. Structure follows `status-bar-usage-scroll.tsx`; driven by
+ * `browser-tests/canvas-tab-strip-overflow.spec.ts`.
  *
  * What it mounts around `TabStrip`, and why each layer is real rather than
  * mocked (there is no `vi.mock` outside vitest):

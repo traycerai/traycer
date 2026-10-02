@@ -47,6 +47,7 @@ import type {
   MutationOutcome,
   MutationProgress,
   RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
   ServiceRegistrationOk,
   UninstallOk,
 } from "../../host/host-controller-types";
@@ -262,6 +263,8 @@ function buildControllerStatus(): HostControllerStatus {
     reachable: true,
     localAttempt: null,
     removedByUser: false,
+    lastEnsureFailure: null,
+    updateDeferral: null,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };
 }
@@ -329,6 +332,7 @@ class FakeHostController implements IpcHostController {
         removedInstallDir: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
       },
     };
   }
@@ -339,12 +343,18 @@ class FakeHostController implements IpcHostController {
         removedHost: true,
         deregisteredService: true,
         serviceRegistrationRetained: null,
+        serviceWarning: null,
         removedLoginItem: false,
       },
     };
   }
   isPendingRevisionRefreshQuarantined(): boolean {
     return false;
+  }
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return { kind: "ok", value: { result: "current", appliesAt: null } };
   }
   onMutationProgress(
     _listener: (progress: MutationProgress) => void,
@@ -1309,7 +1319,6 @@ describe("selection authority IPC binding", () => {
           hostId: "stale-host",
           attemptId: "attempt-1",
           outcome: "confirmed-refusal",
-          refusalDetail: null,
           transportKind: "local-ws",
           at: 0,
         }),
@@ -1352,7 +1361,6 @@ describe("selection authority IPC binding", () => {
           hostId: "evidence-host",
           attemptId: `attempt-${i}`,
           outcome: "confirmed-refusal",
-          refusalDetail: null,
           transportKind: "local-ws",
           at: i,
         });
@@ -1641,7 +1649,6 @@ describe("selection authority IPC binding", () => {
         hostId: "close-host",
         attemptId: `suppressed-${i}`,
         outcome: "confirmed-refusal",
-        refusalDetail: null,
         transportKind: "local-ws",
         at: i,
       });
@@ -1657,7 +1664,6 @@ describe("selection authority IPC binding", () => {
         hostId: "close-host",
         attemptId: `after-close-${i}`,
         outcome: "confirmed-refusal",
-        refusalDetail: null,
         transportKind: "local-ws",
         at: i,
       });
@@ -1779,7 +1785,6 @@ describe("selection authority IPC binding", () => {
           hostId: "crash-host",
           attemptId: `suppressed-${i}`,
           outcome: "confirmed-refusal",
-          refusalDetail: null,
           transportKind: "local-ws",
           at: i,
         });
@@ -1797,7 +1802,6 @@ describe("selection authority IPC binding", () => {
           hostId: "crash-host",
           attemptId: `after-crash-${i}`,
           outcome: "confirmed-refusal",
-          refusalDetail: null,
           transportKind: "local-ws",
           at: i,
         });
@@ -1947,7 +1951,6 @@ describe("selection authority IPC binding", () => {
           hostId: "detach-host",
           attemptId: `b-refusal-${i}`,
           outcome: "confirmed-refusal",
-          refusalDetail: null,
           transportKind: "local-ws",
           at: i,
         });

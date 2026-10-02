@@ -38,6 +38,8 @@ function fakeStatus(
     reachable: true,
     localAttempt,
     removedByUser: false,
+    lastEnsureFailure: null,
+    updateDeferral: null,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -103,6 +105,7 @@ function fakeHostController(withMutationStatus: boolean): FakeHostController {
     installVersion: notUsedByBroadcaster,
     registerService: notUsedByBroadcaster,
     deregisterService: notUsedByBroadcaster,
+    refreshServiceDefinition: notUsedByBroadcaster,
     respawn: notUsedByBroadcaster,
     recoverIfDown: notUsedByBroadcaster,
     freePortAndRestart: notUsedByBroadcaster,

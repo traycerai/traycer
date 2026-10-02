@@ -66,8 +66,9 @@ export const ORDER_GROUPS: Readonly<Record<OrderGroupId, OrderGroupFacts>> = {
     dividers: true,
   },
   usageProviders: {
-    label: "Providers",
-    description: "Drag to reorder. Open one to choose which limits it draws.",
+    label: "Profiles",
+    description:
+      "Drag providers to order. Hidden profiles stay in the popover.",
     note: null,
     dividers: false,
   },
@@ -76,12 +77,9 @@ export const ORDER_GROUPS: Readonly<Record<OrderGroupId, OrderGroupFacts>> = {
 /**
  * The order lists a surface draws, in reading order.
  *
- * `usageProviders` is a list of PROVIDERS rather than of regions, and it used
- * to hang three levels down inside the Usage limits row's disclosure. It is a
- * headed list in the Status bar card now (L-123), a sibling of the two region
- * rows, which is what took the depth from five levels to two. The docked
- * inspector still opens it from the Usage limits section, where a selection is
- * what there is.
+ * `usageProviders` is a list of PROVIDERS rather than of regions. It is the
+ * Profiles list of the Usage limits section, which draws it itself
+ * (`usage-resources-form.tsx`), so the Status bar surface has none of its own.
  */
 export const SURFACE_ORDER_GROUPS: Readonly<
   Record<SurfaceGroupId, ReadonlyArray<OrderGroupId>>
@@ -90,7 +88,7 @@ export const SURFACE_ORDER_GROUPS: Readonly<
   sidebar: ["rail"],
   chat: [],
   composer: ["dock", "toolbarLeft", "toolbarRight"],
-  statusBar: ["usageProviders"],
+  statusBar: [],
 };
 
 /**
@@ -101,6 +99,13 @@ export const SURFACE_ORDER_GROUPS: Readonly<
 export function orderGroupListLabel(group: OrderGroupId): string {
   return group === "rail" ? "Sidebar panels" : ORDER_GROUPS[group].label;
 }
+
+/**
+ * The rail list's line on a phone, which has no rail: the list orders the tab
+ * switcher's flat chip bar, where stacks and dividers mean nothing.
+ */
+export const PHONE_RAIL_INSTRUCTION =
+  "Drag to reorder. Turn a panel off to move it into More.";
 
 /**
  * How a list is operated AND whatever rule holds for the whole of it, as one

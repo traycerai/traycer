@@ -230,7 +230,9 @@ function makeOpts(
     yankLookup: { isVersionYanked: mocks.isVersionYankedMock },
     holdExplicitDowngrade: false,
     adoption: undefined,
+    lifecycleOrigin: "terminal",
     beforeMutate: null,
+    supervisorRelaunchWait: null,
     ...overrides,
   };
 }
@@ -285,6 +287,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
       stoppedBeforeSwap: false,
       postSwapAction: "install",
       postSwapError: null,
+      postSwapWarning: null,
     },
     lifecycle: {
       beforeSwap: async () => {},

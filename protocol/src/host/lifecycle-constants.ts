@@ -18,6 +18,28 @@ export const SHUTDOWN_FORCE_EXIT_MS = 30_000;
 export const RESTART_EXIT_CODE = 87;
 
 /**
+ * The exit status of an AUTOMATIC host update that parked itself: this account
+ * cannot start the service it would stop - the task is disabled, or another
+ * account owns it. On Windows that is the host's Scheduled Task disabled in
+ * Task Scheduler by its owner (`E_SERVICE_REGISTRATION_DISABLED`), or the
+ * machine-global task owned by another Windows account while a host started
+ * through it is running (`E_SERVICE_TASK_NOT_OWNED`). `traycer host update` -
+ * every trigger, the host update reconciler's detached run included - and the
+ * desktop's launch-time `traycer host apply --respect-hold` are the automatic
+ * paths. Such a run claimed no attempt and downloaded, stopped, swapped and
+ * wrote nothing; the stage is kept, and the first automatic run after the
+ * registration can be started again applies it.
+ *
+ * Distinct from every other exit the CLI and the host supervisor use (0, 1, 2,
+ * 66, 69, 75, 76, 77, 87, 128) and outside sysexits' 64-78, so the host's
+ * update reconciler can latch on it rather than relaunch the refusal on every
+ * tick. Only that refusal returns it; a CLI that predates it never does, and a
+ * host that predates it reads it as any other failed run. The error code says
+ * which of the two it is.
+ */
+export const HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE = 79;
+
+/**
  * Extra headroom the CLI's stop/restart poll keeps ABOVE the watchdog. The CLI
  * grace (`SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS`) must stay above
  * the watchdog: if the CLI gives up first it reports a spurious "stop did not
@@ -112,8 +134,8 @@ export const WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS =
   WINDOWS_SCHTASKS_END_TIMEOUT_MS +
   // The kill step is a bounded scan-then-kill loop, not a single pass, so its
   // worst case scales with the round bound. Leaving this as one scan + one
-  // kill would understate the sequence and let the caller's SIGKILL land
-  // mid-restart - the exact failure the outer budget below exists to prevent.
+  // kill would understate the sequence, and a caller that sized a timeout
+  // from it would SIGKILL a slow-but-successful restart mid-way.
   // Scans and kills are counted separately because the loop confirms with a
   // final scan it does not kill from: N+1 scans, N kills.
   (WINDOWS_KILL_CONVERGENCE_ROUNDS + 1) * WINDOWS_PROCESS_SCAN_TIMEOUT_MS +
@@ -121,25 +143,3 @@ export const WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS =
   WINDOWS_SCHTASKS_RUN_TIMEOUT_MS +
   WINDOWS_START_SPAWN_VERIFY_MS +
   WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS;
-
-/**
- * Budget for a full `traycer host restart` subprocess as invoked by Desktop
- * (Settings, tray, and the native-menu respawn path all route through this
- * one constant). `host restart` runs stop-then-start, and a caller-side
- * timeout shorter than the platform's own worst-case sequence SIGKILLs the
- * CLI mid-restart - after stop succeeds but before start runs - leaving the
- * host down. That is exactly what a desktop-side 10s cap against macOS's 32s
- * stop-grace used to do.
- *
- * Derived as the max of every platform's worst case plus margin, not just
- * macOS's: on macOS the stop phase alone waits up to `SHUTDOWN_FORCE_EXIT_MS
- * + STOP_EXIT_GRACE_MARGIN_MS`; on Windows the four-step sequence above can
- * legitimately take `WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS`, which is larger.
- * A budget sized only for macOS would SIGKILL a slow-but-successful Windows
- * restart during its final `schtasks /Run` step - the same class of bug this
- * constant exists to prevent, just on the other platform.
- */
-export const HOST_RESTART_SUBPROCESS_TIMEOUT_MS = Math.max(
-  SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS + 60_000,
-  WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS + 30_000,
-);

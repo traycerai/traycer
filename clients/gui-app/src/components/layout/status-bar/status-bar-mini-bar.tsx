@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * One rate-limit window as a severity-coloured meter. A gauge rather than a
- * layout surface, so it is sized like the header glyph's bars are.
+ * layout surface, so it is sized like the header glyph's bars are, at one of two widths.
  *
  * Its own module because two surfaces draw it: the strip's provider segment,
  * one per limit it shows, and Settings ▸ Layout's per-provider limit list, one
@@ -27,6 +27,8 @@ import { cn } from "@/lib/utils";
  */
 export function StatusBarMiniBar(props: {
   readonly windowKey: string;
+  /** `calm` is the bar alone (16px); `expanded` has numbers beside it (32px). */
+  readonly size: "calm" | "expanded";
   readonly usedPercent: number;
   readonly severity: RateLimitWindowSeverity;
 }): ReactNode {
@@ -35,7 +37,10 @@ export function StatusBarMiniBar(props: {
       aria-hidden
       data-testid="status-bar-provider-mini-bar"
       data-window-key={props.windowKey}
-      className="relative h-1 w-8 shrink-0 overflow-hidden rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40"
+      className={cn(
+        "relative h-1 shrink-0 overflow-hidden rounded-xs bg-muted-foreground/35 dark:bg-muted-foreground/40",
+        props.size === "calm" ? "w-4" : "w-8",
+      )}
     >
       <span
         data-testid="status-bar-provider-mini-bar-fill"

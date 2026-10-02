@@ -3,10 +3,7 @@ import {
   regionStateWord,
   regionWhere,
 } from "@/components/layout-editor/regions/region-facts";
-import {
-  BAR_HOST_OPTIONS,
-  edgeSideOptions,
-} from "@/components/layout-editor/regions/region-grammar";
+import { BAR_HOST_OPTIONS } from "@/components/layout-editor/regions/region-grammar";
 import {
   DEFAULT_ARRANGEMENT,
   type BarHost,
@@ -106,32 +103,6 @@ describe("BAR_HOST_OPTIONS", () => {
       "status-bar",
       "header",
     ]);
-  });
-});
-
-describe("edgeSideOptions", () => {
-  it("says Start / End for the header host while vertical", () => {
-    expect(labels(edgeSideOptions("header", "left"))).toEqual(["Start", "End"]);
-    expect(labels(edgeSideOptions("header", "right"))).toEqual([
-      "Start",
-      "End",
-    ]);
-  });
-
-  it("says Left / Right everywhere else", () => {
-    expect(labels(edgeSideOptions("header", "top"))).toEqual(["Left", "Right"]);
-    for (const placement of ["top", "left", "right"] as const) {
-      expect(labels(edgeSideOptions("status-bar", placement))).toEqual([
-        "Left",
-        "Right",
-      ]);
-    }
-  });
-
-  it("keeps the stored values whatever the labels say", () => {
-    expect(
-      edgeSideOptions("header", "left").map((option) => option.value),
-    ).toEqual(["left", "right"]);
   });
 });
 

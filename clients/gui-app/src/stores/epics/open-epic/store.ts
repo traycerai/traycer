@@ -169,31 +169,17 @@ export interface OpenEpicStoreOptions {
    */
   readonly hostId: string;
   /**
-   * What to do when the host's plan-denial deadline says this session's
-   * transport is worth probing again.
-   *
-   * Injected because the store CANNOT do it. Upstream's version of
-   * `retryTransport` closed and reopened the stream client the store owned;
-   * this store owns no client - the worker holds them over a proxied
-   * transport, and the session provider owns the socket - so a transport
-   * reopen here is a new SESSION, which is the provider's to build.
-   */
-  readonly onRetryTransport: () => void;
-  /**
    * Collapse this session's own transport backoff and re-dial NOW, keeping
    * everything the session holds.
    *
-   * Distinct from {@link onRetryTransport} in what it costs, which is why it is
-   * a separate seam rather than a flag on that one. A retry builds a NEW
-   * session and cannot carry the replica or the unsynced queue, so it refuses
-   * outright while the session is dirty. A wake touches no state at all: the
-   * socket is already redialing on a backoff, and this only stops it waiting.
-   * That is what makes it safe to put behind a button a user presses while
-   * looking at content they do not want to lose.
+   * A wake touches no state at all: the socket is already redialing on a
+   * backoff, and this only stops it waiting. That is what makes it safe to put
+   * behind a button a user presses while looking at content they do not want
+   * to lose.
    *
-   * Injected for the same reason the retry is: the store owns no client. The
-   * session provider holds the socket, so only it can name the connection this
-   * wakes - and it must be THIS session's, never the app-wide one.
+   * Injected because the store owns no client. The session provider holds the
+   * socket, so only it can name the connection this wakes - and it must be
+   * THIS session's, never the app-wide one.
    */
   readonly onWakeTransport: () => void;
   /**
@@ -646,24 +632,12 @@ export interface OpenEpicState {
    */
   requestFreshSnapshot: () => void;
   /**
-   * Asks the session's owner to rebuild this epic's transport, after the
-   * host's plan-denial deadline says it is worth probing again.
-   *
-   * A REQUEST, and a refusable one. Upstream's version of this reopened the
-   * stream client in place and so preserved the replica and buffered edits;
-   * here a rebuild is a new session, so this refuses outright while the
-   * session holds unsynced edits rather than trading them for a reconnect.
-   * A clean session rebuilds silently - no failure is presented for
-   * something the user did not do.
-   */
-  retryTransport: () => void;
-  /**
    * Stops this session's transport waiting out its backoff and re-dials now.
    *
    * Keeps everything: no snapshot is dropped, no replica replaced, no queue
    * cleared. The socket was already going to redial - this only declines to
-   * wait for it - so unlike { retryTransport} there is nothing to refuse
-   * over and no dirty-session gate.
+   * wait for it - so there is nothing to refuse over and no dirty-session
+   * gate.
    */
   wakeTransport: () => void;
   /**
@@ -1158,7 +1132,6 @@ export interface OpenEpicStoreHandle {
    */
   readonly detachTransport: () => void;
   readonly requestFreshSnapshot: () => void;
-  readonly retryTransport: () => void;
   /** See {@link OpenEpicState.wakeTransport}. */
   readonly wakeTransport: () => void;
   /**
@@ -2035,45 +2008,16 @@ export function createOpenEpicStore(
           },
 
           wakeTransport: () => {
-            // Same ended guard as the retry below, and nothing else. There is
-            // no dirty-session gate here because there is nothing to trade: a
+            // Ended covers BOTH exits: a disposed handle has nothing to wake,
+            // and a detached one is frozen by contract ("takes no further
+            // input"). There is no dirty-session gate because there is
+            // nothing to trade: a
             // wake keeps the replica, the queue and the snapshot exactly as
             // they are, and only declines to sit out the backoff.
             if (sessionEndedReason !== null) return;
             options.onWakeTransport();
           },
 
-          retryTransport: () => {
-            // Ended covers BOTH exits: a disposed handle has nothing to
-            // rebuild, and a detached one is frozen by contract ("takes no
-            // further input").
-            if (sessionEndedReason !== null) return;
-            const state = get();
-            // THE DATA-LOSS GATE, and the reason this is not upstream's
-            // implementation. That one closed and reopened the stream client
-            // the store itself owned, so the replica and the buffered edits
-            // survived underneath it. This store owns no client - the worker
-            // holds them over a proxied transport and the provider owns the
-            // socket - so a retry here is a NEW session, and nothing persists
-            // the replica or the unsynced queue. Rebuilding a dirty session
-            // would therefore destroy the only copy of those edits, which is
-            // the rule `session-registry` states as "never evict a session
-            // holding unsynced edits" and whose violation is on record as the
-            // F10 data loss.
-            //
-            // Gated on `isDirty` + pending writes rather than on `isClean()`,
-            // deliberately: `isClean()` ALSO requires an open transport,
-            // which a plan-denied one has by definition lost - so it reads
-            // false for every session this can ever be called about and the
-            // rebuild would never once fire. `snapshotLoaded` is excluded for
-            // the same shape of reason: a session that never loaded has
-            // nothing to lose, and requiring it would block exactly the
-            // sessions this exists to recover. The registry's cap predicate
-            // (`holdsNothingToLose`) and its re-point gate read the same
-            // three work fields for the same reason.
-            if (state.isDirty || state.writeCommands.length > 0) return;
-            options.onRetryTransport();
-          },
           retryMigration: () => {
             runtime.command({ kind: "retry-migration", payload: {} });
           },
@@ -2686,9 +2630,6 @@ export function createOpenEpicStore(
     hotArtifactRoomIdsForTests: () => bodyDocs.residentDocKeys(),
     requestFreshSnapshot: () => {
       store.getState().requestFreshSnapshot();
-    },
-    retryTransport: () => {
-      store.getState().retryTransport();
     },
     wakeTransport: () => {
       store.getState().wakeTransport();

@@ -1,8 +1,9 @@
 import { EPIC_REPLICAS_MAX_LIVE } from "./budget-limits";
 
 /**
- * The four count caps that decide how much of the app stays RESIDENT while
- * the user is elsewhere, chosen once per shell.
+ * The caps that decide how much of the app stays RESIDENT while the user is
+ * elsewhere, plus the byte allowances for image prefetch and caching, chosen
+ * once per shell.
  *
  * All four used to be bare module constants with no platform branch, so the
  * phone ran the desktop numbers: five hidden-but-mounted top-level surfaces
@@ -36,12 +37,45 @@ export interface RetentionProfile {
   readonly maxWarmChatSessions: number;
   /** Lingering plain terminals (`TerminalSessionRegistry`). */
   readonly maxLingeringPlainTerminals: number;
+  /** Raw draft bytes the visible composer's idle prefetch may plan to warm. */
+  readonly visibleDraftImagePrefetchBytes: number;
   /**
    * Decoded-byte budget for the renderer-side transcript image store
    * (`lib/attachments/transcript-image-bytes-store.ts`). Chat and artifact
    * attachments re-enter as unary `bytesBase64` on every relaunch without it.
    */
   readonly transcriptImageCacheBytes: number;
+  /**
+   * Upper bound on the `@pierre/diffs` highlighter pool
+   * (`DiffWorkerPoolProvider`). A cap, not the size: the provider still takes
+   * the smaller of this and what the machine's core count justifies.
+   *
+   * A count like the four above, and the only one whose unit is a WORKER
+   * ISOLATE rather than a JS object graph - an 834 KB bundle, an Oniguruma
+   * WASM engine, both themes and every grammar that isolate has been asked
+   * for, none of which a main-thread heap snapshot can see. The phone runs
+   * ONE: a single visible diff is the only thing a phone-layout shell can
+   * show, so the parallelism the desktop buys with two more isolates has
+   * nothing to spend itself on there.
+   */
+  readonly maxDiffHighlightWorkers: number;
+  /**
+   * How long the diff highlighter pool may sit with NO diff surface on screen
+   * before its worker isolates are terminated.
+   *
+   * The one TIME cap among the counts, and per-profile where
+   * {@link PARK_HIDDEN_EPIC_AFTER_MS} is not, because it prices a rebuild
+   * rather than a statement about attention: bringing the isolates back costs
+   * a WASM engine and a grammar re-resolve each. Desktop can afford to wait
+   * five minutes for a user who is plainly reading diffs; the phone, whose
+   * process ceiling every resident isolate counts against, waits 45 s.
+   *
+   * Termination leaves every mounted diff body in place (see
+   * `lib/diff/diff-worker-pool-demand.ts`), so the window only decides how
+   * soon an idle isolate is given back - never what a hidden tab shows when
+   * it comes back.
+   */
+  readonly diffWorkerPoolIdleMs: number;
 }
 
 /** Electron desktop and the browser: the numbers the app has always run. */
@@ -52,7 +86,10 @@ export const DESKTOP_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 5,
   maxWarmChatSessions: 6,
   maxLingeringPlainTerminals: 6,
+  visibleDraftImagePrefetchBytes: 16 * 1024 * 1024,
   transcriptImageCacheBytes: 64 * 1024 * 1024,
+  maxDiffHighlightWorkers: 3,
+  diffWorkerPoolIdleMs: 5 * 60_000,
 });
 
 /** The installed Capacitor app: a 2 GB process ceiling, one visible tab. */
@@ -63,7 +100,10 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   retainedTopLevelSurfaces: 2,
   maxWarmChatSessions: 3,
   maxLingeringPlainTerminals: 3,
+  visibleDraftImagePrefetchBytes: 8 * 1024 * 1024,
   transcriptImageCacheBytes: 16 * 1024 * 1024,
+  maxDiffHighlightWorkers: 1,
+  diffWorkerPoolIdleMs: 45_000,
 });
 
 /**

@@ -11,6 +11,8 @@ import { ZOD_INLINE_SERVER_DEPS } from "./vitest.shared";
 // `bun run test:packaging`.
 export default defineConfig({
   test: {
+    // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
+    clearMocks: false,
     server: ZOD_INLINE_SERVER_DEPS,
     include: ["scripts/prepack/__integration_tests__/**/*.test.ts"],
     globals: false,

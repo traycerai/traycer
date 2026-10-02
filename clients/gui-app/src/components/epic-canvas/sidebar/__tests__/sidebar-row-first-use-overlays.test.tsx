@@ -26,7 +26,11 @@ import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { ArtifactTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
-import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import {
+  EpicSidebarCloudChatRow,
+  type CloudChatRowExpansion,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
 import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
@@ -287,6 +291,13 @@ const ART_B = "spec-b";
 const TITLE_ART_A = "Alpha ticket";
 const TOOLTIP_DELAY_MS = 150;
 /** Same summary the cloud-row suite already mounts. */
+/** A leaf row: no subagents beneath it, so no expansion state to consult. */
+const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
+const LEAF_EXPANSION: CloudChatRowExpansion = {
+  expandedIds: new Set<string>(),
+  toggleExpanded: () => undefined,
+};
+
 const CLOUD_CHAT: CloudChatSummary = {
   identity: {
     taskId: "d60781ca-e0d3-4318-bf2a-e03d8ce4e3a7",
@@ -360,13 +371,21 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 function chatEntry(id: string, title: string): Y.Map<unknown> {
+  return chatEntryOnHost(id, title, "host-a");
+}
+
+function chatEntryOnHost(
+  id: string,
+  title: string,
+  hostId: string,
+): Y.Map<unknown> {
   const entry = new Y.Map<unknown>();
   entry.set("id", id);
   entry.set("title", title);
   entry.set("parentId", null);
   entry.set("createdAt", 1);
   entry.set("updatedAt", 1);
-  entry.set("hostId", "host-a");
+  entry.set("hostId", hostId);
   entry.set("archivedAt", null);
   entry.set("messages", new Y.Array<unknown>());
   return entry;
@@ -445,6 +464,31 @@ function createSession(): OpenedStoreForTest {
 
 function createArtifactSession(): OpenedStoreForTest {
   return openSeededStore(seedArtifactDoc());
+}
+
+const ROW_C = "chat-c";
+const ROW_D = "chat-d";
+const TITLE_C = "Gamma chat";
+const TITLE_D = "Delta chat";
+
+/**
+ * Two rows whose owner host is reachable (each opens the owner card) and two
+ * whose owner host is not (each falls back to the name label): the tree's
+ * hover cards in both of the outcomes `AgentHoverTooltip` has.
+ */
+function seedMixedOwnersDoc(): Uint8Array {
+  const donor = new Y.Doc();
+  const epic = donor.getMap<unknown>("epic");
+  const chats = new Y.Map<unknown>();
+  chats.set(ROW_A, chatEntryOnHost(ROW_A, TITLE_A, "host-a"));
+  chats.set(ROW_B, chatEntryOnHost(ROW_B, TITLE_B, "host-a"));
+  chats.set(ROW_C, chatEntryOnHost(ROW_C, TITLE_C, "host-b"));
+  chats.set(ROW_D, chatEntryOnHost(ROW_D, TITLE_D, "host-b"));
+  epic.set("title", "First-use overlays");
+  epic.set("artifacts", new Y.Map<unknown>());
+  epic.set("tuiAgents", new Y.Map<unknown>());
+  epic.set("chats", chats);
+  return Y.encodeStateAsUpdate(donor);
 }
 
 function captureContextMenuPoints(): {
@@ -584,6 +628,24 @@ function renderTree(): HTMLElement {
   return screen.getByTestId(`epic-sidebar-item-${ROW_A}`);
 }
 
+function renderMixedOwnersTree(): void {
+  const handle = openSeededStore(seedMixedOwnersDoc());
+  opened.push(handle);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <EpicSessionContext.Provider value={handle}>
+        <DndContext>
+          <ChatTreePanelBody
+            epicId={EPIC_ID}
+            tabId={TAB_ID}
+            messageHits={CHAT_TREE_MESSAGE_HITS_NONE}
+          />
+        </DndContext>
+      </EpicSessionContext.Provider>
+    </QueryClientProvider>,
+  );
+}
+
 function renderTreeInSelectionMode(): HTMLElement {
   const handle = createSession();
   opened.push(handle);
@@ -633,6 +695,8 @@ function renderCloudRow(): HTMLElement {
         <TooltipProvider delayDuration={150}>
           <EpicSidebarCloudChatRow
             chat={CLOUD_CHAT}
+            childEntries={NO_CHILDREN}
+            expansion={LEAF_EXPANSION}
             tabId={TAB_ID}
             depth={0}
             selectionMode={false}
@@ -1058,6 +1122,58 @@ describe("sidebar row first-use overlays", () => {
     expect(
       screen.getByTestId(`chat-navigator-hover-title-${ROW_A}`).textContent,
     ).toBe(TITLE_A);
+  });
+
+  it("hands a row's hover card to the next row's at once: the tree's rows share one HoverCardGroup, owner cards and name labels alike", async () => {
+    vi.useFakeTimers();
+    const user = userEvent.setup({
+      delay: null,
+      advanceTimers: vi.advanceTimersByTimeAsync,
+    });
+    renderMixedOwnersTree();
+    const row = (id: string): HTMLElement =>
+      screen.getByTestId(`epic-sidebar-item-${id}`);
+    const cardTexts = (): ReadonlyArray<string> =>
+      [...document.querySelectorAll('[data-slot="hover-card-content"]')].map(
+        (card) => card.textContent,
+      );
+    // Two ticks: the group closes the card before in an effect the arriving
+    // card's own effect sets up, which lands a scheduler task later.
+    const handOff = async (): Promise<void> => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+    };
+
+    // The first card of the tree waits its full intent delay...
+    const first = user.hover(row(ROW_A));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(499);
+    });
+    expect(cardTexts()).toEqual([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await first;
+    expect(cardTexts()).toHaveLength(1);
+    expect(cardTexts()[0]).toContain(TITLE_A);
+
+    // ...and every row after it, card or label, takes over with no wait and
+    // leaves exactly one card up: owner card -> label -> label -> owner card.
+    for (const [rowId, title] of [
+      [ROW_C, TITLE_C],
+      [ROW_D, TITLE_D],
+      [ROW_B, TITLE_B],
+    ]) {
+      const arriving = user.hover(row(rowId));
+      await handOff();
+      await arriving;
+      expect(cardTexts()).toHaveLength(1);
+      expect(cardTexts()[0]).toContain(title);
+    }
   });
 
   it("starts a drag from a never-touched row on the first pointer drag", async () => {

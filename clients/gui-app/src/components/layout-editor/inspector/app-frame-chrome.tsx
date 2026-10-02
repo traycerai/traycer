@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bell,
+  ChevronRight,
   ChevronsUpDown,
   History,
   House,
@@ -21,13 +22,13 @@ import {
   depictRegion,
 } from "@/components/layout-editor/region-depiction";
 import { PanelTaskHeaderBody } from "@/components/epic-canvas/sidebar/panel-task-header-body";
-import { LIVE_AGENTS_LIST_CLASS } from "@/components/epic-canvas/sidebar/live-agent-row";
 import { SampleLiveAgentItems } from "@/components/sample-workspace/sample-strip-live-agents";
+import { SAMPLE_NEEDS_YOU_ROW } from "@/components/sample-workspace/sample-workspace-scene";
 import {
+  BAR_REGION_IDS,
   barClusterRegions,
+  barPlacement,
   liveAgentsInStrip,
-  type BarHost,
-  type BarRegionId,
   type EdgeSide,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
@@ -42,6 +43,14 @@ import {
   type SideTabLiveAgents,
 } from "@/components/layout/tabs/side-strip/agent-meter";
 import { NO_LIVE_AGENTS } from "@/components/layout/tabs/side-strip/side-tab-live-agents";
+import {
+  sectionStyleOf,
+  twoLineStatusOf,
+} from "@/components/layout/tabs/side-strip/strip-section-row";
+import {
+  STRIP_SECTION_LABEL,
+  type StripSection,
+} from "@/components/layout/tabs/side-strip/strip-sections";
 import { MonogramChip } from "@/components/layout/tabs/monogram-chip";
 import { tabAutoTint } from "@/components/layout/tabs/tab-identity";
 import {
@@ -52,13 +61,17 @@ import {
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_STRIP_RAIL_DIVIDER_CLASS,
   SIDE_STRIP_RAIL_NAV_CLASS,
+  SIDE_STRIP_SECTION_HEADER_CLASS,
   SIDE_STRIP_SECTION_LABEL_CLASS,
   SIDE_TAB_ACTIVE_CLASS,
   SIDE_TAB_LEADING_CLASS,
   SIDE_TAB_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_ROW_CLASS,
+  SIDE_TAB_TWO_LINE_TRAILING_CLASS,
   SIDE_TAB_TILE_ACTIVE_CLASS,
   SIDE_TAB_TILE_CLASS,
   SIDE_TAB_TITLE_CLASS,
+  STRIP_AGENT_GROUP_CLASS,
 } from "@/components/layout/tabs/side-strip/side-strip-tokens";
 import type {
   RailRegionId,
@@ -127,12 +140,11 @@ const APP_FRAME_TABS: ReadonlyArray<AppFrameTask> = [
 ];
 
 /**
- * The top bar's row, minus the row itself: its two clusters, the home tab, the
- * tab strip and the header's own glyphs.
+ * The top bar's row, minus the row itself: the home tab, the tab strip, the
+ * readings placed in it and the header's own glyphs.
  *
- * A reading that named the header draws in the end it named (L-156), as
- * `HeaderBarCluster` renders it: left of the tabs or right of them, framed as
- * the top bar.
+ * The tab strip has no side, so a reading placed there draws just before
+ * History whatever its saved side, as `HeaderBarCluster` renders it.
  *
  * Drawn with their real labels, because two blank rectangles are not a picture
  * of a top bar (I-03).
@@ -140,20 +152,9 @@ const APP_FRAME_TABS: ReadonlyArray<AppFrameTask> = [
 export function AppFrameTopBar({ values, arrangement }: AppFrame): ReactNode {
   return (
     <>
-      <AppFrameBarCluster
-        host="header"
-        side="left"
-        values={values}
-        arrangement={arrangement}
-      />
       <AppFrameTabEntries values={values} arrangement={arrangement} />
       <span className="flex-1" />
-      <AppFrameBarCluster
-        host="header"
-        side="right"
-        values={values}
-        arrangement={arrangement}
-      />
+      <AppFrameStripReadings values={values} arrangement={arrangement} />
       <History aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <Bell aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <span className="size-5 shrink-0 rounded-full border border-border bg-foreground/10" />
@@ -336,22 +337,16 @@ export function AppFrameSideStrip({
               : "grid auto-cols-fr grid-flow-col",
           )}
         >
-          <AppFrameBarCluster
-            host="header"
-            side="left"
-            values={values}
-            arrangement={arrangement}
-          />
-          <AppFrameBarCluster
-            host="header"
-            side="right"
-            values={values}
-            arrangement={arrangement}
-          />
+          <AppFrameStripReadings values={values} arrangement={arrangement} />
         </div>
         <AppFrameAccount collapsed={collapsed} />
       </div>
-      <span aria-hidden data-sheet-join-bridge={edge} />
+      <span
+        aria-hidden
+        data-sheet-join-bridge={edge}
+        data-join-active=""
+        data-join-pane={join.pane}
+      />
     </div>
   );
 }
@@ -425,9 +420,10 @@ function AppFrameHomeTile(): ReactNode {
 }
 
 /**
- * The expanded strip's task rows, with the active task's live agents under its
- * row in the Activity view (D9): the strip draws them, and so does each Side
- * tab view picture, without the sheet join a lone picture has no sheet for.
+ * The expanded strip's task rows. The Activity view draws them in its
+ * sections, the active task's live agents under its row (D9), as the strip
+ * does; each Side tab view picture draws them without the sheet join a lone
+ * picture has no sheet for.
  */
 export function AppFrameStripTaskRows(props: {
   readonly liveAgents: boolean;
@@ -438,39 +434,126 @@ export function AppFrameStripTaskRows(props: {
   const tasks = props.startAtActive
     ? APP_FRAME_TABS.slice(APP_FRAME_TABS.indexOf(APP_FRAME_ACTIVE_TASK))
     : APP_FRAME_TABS;
+  if (props.liveAgents) {
+    return <AppFrameSectionedRows tasks={tasks} joined={props.joined} />;
+  }
   return tasks.map((task) => (
-    <Fragment key={task.id}>
-      <AppFrameTaskRow task={task} joined={props.joined} />
-      {task.active && props.liveAgents ? <AppFrameLiveAgents /> : null}
-    </Fragment>
+    <AppFrameTaskRow
+      key={task.id}
+      task={task}
+      joined={props.joined}
+      section={null}
+    />
   ));
 }
 
+/** The picture's tasks in the section a task in its state is in. */
+const APP_FRAME_SECTIONS: ReadonlyArray<StripSection> = [
+  "needs-you",
+  "working",
+  "idle",
+];
+
+function appFrameSectionOf(task: AppFrameTask): StripSection {
+  if (task.active) return "needs-you";
+  return task.agents.turn + task.agents.background > 0 ? "working" : "idle";
+}
+
+/** The Activity view's sections as the strip draws them: a header over each one's rows. */
+function AppFrameSectionedRows(props: {
+  readonly tasks: ReadonlyArray<AppFrameTask>;
+  readonly joined: SheetJoin | null;
+}): ReactNode {
+  return APP_FRAME_SECTIONS.flatMap((section) => {
+    const inSection = props.tasks.filter(
+      (task) => appFrameSectionOf(task) === section,
+    );
+    if (inSection.length === 0) return [];
+    return [
+      <Fragment key={section}>
+        <span
+          className={cn(
+            SIDE_STRIP_SECTION_HEADER_CLASS,
+            section === "needs-you"
+              ? "text-warning-foreground"
+              : "text-muted-foreground",
+          )}
+        >
+          <ChevronRight aria-hidden className="size-3 shrink-0 rotate-90" />
+          <span className="min-w-0 flex-1 truncate">
+            {STRIP_SECTION_LABEL[section]}
+          </span>
+          <span className="tabular-nums">{inSection.length}</span>
+        </span>
+        {inSection.map((task) => (
+          <Fragment key={task.id}>
+            <AppFrameTaskRow
+              task={task}
+              joined={props.joined}
+              section={section}
+            />
+            {task.active ? <AppFrameLiveAgents /> : null}
+          </Fragment>
+        ))}
+      </Fragment>,
+    ];
+  });
+}
+
 /**
- * An expanded task row: the empty 16px leading slot of an uncoloured, idle
- * task, the title, and the meter while more than one agent is live.
+ * An expanded task row: the title, flush to the row's padding, and the meter
+ * while more than one agent is live. In the Activity view (`section` set) it
+ * has that section's height and weight, and the Needs you row is the two-line
+ * one the strip draws for a task waiting on a reply.
  */
 function AppFrameTaskRow(props: {
   readonly task: AppFrameTask;
   readonly joined: SheetJoin | null;
+  readonly section: StripSection | null;
 }): ReactNode {
-  const { task } = props;
+  const { task, section } = props;
+  const twoLine = section === "needs-you";
+  const meter =
+    task.agents.turn + task.agents.background > 1 ? (
+      <SideTabMeter agents={task.agents} attention={null} size="row" />
+    ) : null;
   return (
     <span
       {...joinedAttribute(task.active ? props.joined : null)}
       className={cn(
-        "flex items-center text-muted-foreground",
+        "flex items-center",
         SIDE_TAB_ROW_CLASS,
+        twoLine && SIDE_TAB_TWO_LINE_ROW_CLASS,
+        section === null || section === "idle"
+          ? "text-muted-foreground"
+          : "text-foreground",
         task.active && cn("text-foreground", SIDE_TAB_ACTIVE_CLASS),
       )}
     >
-      <span aria-hidden className={cn(SIDE_TAB_LEADING_CLASS, "shrink-0")} />
-      <span className={cn(SIDE_TAB_TITLE_CLASS, "min-w-0 flex-1 truncate")}>
-        {task.label}
-      </span>
-      {task.agents.turn + task.agents.background > 1 ? (
-        <SideTabMeter agents={task.agents} attention={null} size="row" />
-      ) : null}
+      {twoLine ? (
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className={cn(SIDE_TAB_TITLE_CLASS, "truncate font-semibold")}>
+            {task.label}
+          </span>
+          {sectionStyleOf(SAMPLE_NEEDS_YOU_ROW, false, null).detail}
+        </span>
+      ) : (
+        <span className={cn(SIDE_TAB_TITLE_CLASS, "min-w-0 flex-1 truncate")}>
+          {task.label}
+        </span>
+      )}
+      {twoLine ? (
+        <span
+          className={cn(
+            "flex shrink-0 items-center",
+            SIDE_TAB_TWO_LINE_TRAILING_CLASS,
+          )}
+        >
+          {twoLineStatusOf(SAMPLE_NEEDS_YOU_ROW, null)?.node}
+        </span>
+      ) : (
+        meter
+      )}
     </span>
   );
 }
@@ -509,10 +592,10 @@ export function AppFramePanelTaskHeader(): ReactNode {
   );
 }
 
-/** The active task's live agents under its row, as the Activity view lists them (D9). */
+/** The active task's live agents under its row, as the Activity view nests them (D9). */
 function AppFrameLiveAgents(): ReactNode {
   return (
-    <ul data-testid="app-frame-live-agents" className={LIVE_AGENTS_LIST_CLASS}>
+    <ul data-testid="app-frame-live-agents" className={STRIP_AGENT_GROUP_CLASS}>
       <SampleLiveAgentItems />
     </ul>
   );
@@ -701,15 +784,13 @@ export function AppFrameStatusBarRow({
 }: AppFrame): ReactNode {
   return (
     <>
-      <AppFrameBarCluster
-        host="status-bar"
+      <AppFrameStatusBarCluster
         side="left"
         values={values}
         arrangement={arrangement}
       />
       <span className="flex-1" />
-      <AppFrameBarCluster
-        host="status-bar"
+      <AppFrameStatusBarCluster
         side="right"
         values={values}
         arrangement={arrangement}
@@ -719,30 +800,38 @@ export function AppFrameStatusBarRow({
 }
 
 /**
- * One end of one bar: the readings that named it, in the model's own order
- * (L-156).
- *
- * Both bars draw their clusters through this, so the picture cannot put the
- * monitor ahead of the usage limits in one place and behind it in another -
- * and neither bar has to know which regions can move.
+ * One end of the status bar: the readings that named it, in the model's own
+ * order (L-156), so the picture cannot put the monitor ahead of the usage
+ * limits where the live bar puts it behind.
  */
-function AppFrameBarCluster(props: {
-  readonly host: BarHost;
+function AppFrameStatusBarCluster(props: {
   readonly side: EdgeSide;
   readonly values: LayoutValues;
   readonly arrangement: LayoutArrangement;
 }): ReactNode {
-  const { host, side, values, arrangement } = props;
-  return barClusterRegions(arrangement, host, side).map(
-    (regionId: BarRegionId) => (
-      <AppFrameRegion
-        key={regionId}
-        regionId={regionId}
-        values={values}
-        arrangement={arrangement}
-      />
-    ),
-  );
+  const { side, values, arrangement } = props;
+  return barClusterRegions(arrangement, "status-bar", side).map((regionId) => (
+    <AppFrameRegion
+      key={regionId}
+      regionId={regionId}
+      values={values}
+      arrangement={arrangement}
+    />
+  ));
+}
+
+/** The tab strip's readings: no side, usage first, as the live strip draws them. */
+function AppFrameStripReadings({ values, arrangement }: AppFrame): ReactNode {
+  return BAR_REGION_IDS.filter(
+    (regionId) => barPlacement(arrangement, regionId).host === "header",
+  ).map((regionId) => (
+    <AppFrameRegion
+      key={regionId}
+      regionId={regionId}
+      values={values}
+      arrangement={arrangement}
+    />
+  ));
 }
 
 /**

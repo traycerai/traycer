@@ -64,6 +64,7 @@ interface FakeWorkerPoolManager {
   readonly setRenderOptions: () => Promise<void>;
   readonly primeFileHighlightCache: () => Promise<void>;
   readonly primeDiffHighlightCache: () => Promise<void>;
+  readonly subscribeToStatChanges: () => () => void;
 }
 
 /**
@@ -77,6 +78,7 @@ function fakeWorkerPoolManager(): WorkerPoolManager {
     setRenderOptions: () => Promise.resolve(),
     primeFileHighlightCache: () => Promise.resolve(),
     primeDiffHighlightCache: () => Promise.resolve(),
+    subscribeToStatChanges: () => () => {},
   };
   return Object.assign(Object.create(null) as WorkerPoolManager, fake);
 }

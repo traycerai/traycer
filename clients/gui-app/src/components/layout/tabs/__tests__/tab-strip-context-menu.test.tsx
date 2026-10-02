@@ -1,3 +1,4 @@
+import { useState, type ReactElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -6,6 +7,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   HomeTabContextMenu,
@@ -76,9 +78,28 @@ vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
     tasksById: new Map(),
     localHomedTaskIds: new Set(),
     isFetching: false,
+    isPending: false,
     error: null,
+    refetch: () => Promise.resolve(),
+    refetchBatches: [],
   }),
 }));
+
+// The appearance submenu reads the query client to look for task contexts the
+// tab strip already cached, so the menu needs the provider the app always has.
+// A fresh client per mount keeps one case's cache out of the next.
+function QueryClientWrapper(props: { readonly children: ReactNode }) {
+  const [queryClient] = useState(() => new QueryClient());
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
+function renderWithQueryClient(ui: ReactElement) {
+  return render(ui, { wrapper: QueryClientWrapper });
+}
 
 const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   kind: "epic",
@@ -150,7 +171,7 @@ function renderPinMenu(
   onSetTaskPinned: (pinned: boolean) => void,
   taskPinnedState: TaskPinnedState | null,
 ): void {
-  render(
+  renderWithQueryClient(
     <ContextMenu open>
       <ContextMenuTrigger>Open menu</ContextMenuTrigger>
       <TabContextMenuContent
@@ -227,7 +248,7 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
 
   it("renders live non-Mac binding labels for reopen and duplicate actions", () => {
     setMobileApp(false);
-    render(
+    renderWithQueryClient(
       <ContextMenu open>
         <ContextMenuTrigger>Open menu</ContextMenuTrigger>
         <TabContextMenuContent
@@ -259,7 +280,7 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
 
   it("updates a duplicate hint when rebound, then hides it when cleared while keeping the action", () => {
     const onDuplicateTab = vi.fn<(tab: HeaderTab) => void>();
-    const view = render(
+    const view = renderWithQueryClient(
       <ContextMenu open>
         <ContextMenuTrigger>Open menu</ContextMenuTrigger>
         <TabContextMenuContent
@@ -572,7 +593,7 @@ describe("the Tabs placement radio group", () => {
       startedAt: 0,
       origin: { kind: "tab" },
     });
-    render(
+    renderWithQueryClient(
       <div data-testid="app-column">
         <ContextMenu>
           <ContextMenuTrigger asChild>
@@ -629,7 +650,7 @@ describe("the Tabs placement radio group", () => {
 
   it("is on Home's menu between its layout verbs and Customize layout", async () => {
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
-    render(
+    renderWithQueryClient(
       <HomeTabContextMenu>
         <button type="button">Home</button>
       </HomeTabContextMenu>,

@@ -114,7 +114,7 @@ export function providerChanged(
 }
 
 /** That provider back to shown, on Automatic, leaving every other one alone. */
-export function revertProvider(
+function revertProvider(
   arrangement: LayoutArrangement,
   providerId: RateLimitProviderId,
 ): LayoutArrangement {
@@ -129,13 +129,15 @@ export function revertProvider(
   };
 }
 
-/** Whether anything about the usage providers differs from what shipped. */
+/**
+ * Whether the Profiles list differs from what shipped: a hidden provider or a
+ * reorder. A provider's picked limits are not counted: they are edited in
+ * Settings ▸ Providers, so neither the list nor the section it sits in can
+ * revert them.
+ */
 export function usageProvidersChanged(arrangement: LayoutArrangement): boolean {
   return (
     arrangement.hiddenProviders.length > 0 ||
-    Object.values(arrangement.providerLimits).some((selection) =>
-      limitsChanged(selection),
-    ) ||
     reorderedGroups(arrangement).includes("usageProviders")
   );
 }
@@ -201,6 +203,7 @@ export type ArrangementField =
   | "sideStripView"
   | "taskTabLayout"
   | "readingWidth"
+  | "wideReadingWidthPx"
   | "sidebarSide"
   | "minimapSide"
   | "usageHost"
@@ -214,6 +217,7 @@ const ARRANGEMENT_FIELDS: ReadonlyArray<ArrangementField> = [
   "sideStripView",
   "taskTabLayout",
   "readingWidth",
+  "wideReadingWidthPx",
   "sidebarSide",
   "minimapSide",
   "usageHost",

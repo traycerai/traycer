@@ -44,6 +44,7 @@ import {
   useIsActivePane,
   usePaneTabRefs,
 } from "@/stores/epics/canvas/store";
+import { PaneEmphasis } from "@/components/epic-canvas/canvas/pane-emphasis";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import {
   useEpicArtifact,
@@ -56,6 +57,7 @@ import {
   type EpicTuiAgentProjection,
 } from "@/lib/epic-selectors";
 import { EpicNodeTile } from "@/components/epic-canvas/renderers/epic-node-tile";
+import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import { PaneDropZone } from "@/components/epic-canvas/dnd/pane-drop-zone";
 import {
   concealsWithoutCollapsing,
@@ -549,6 +551,7 @@ export const TabGroupView = memo(function TabGroupView(
               />
             </div>
           </div>
+          <PaneEmphasis activeInstanceId={activeTab?.instanceId ?? null} />
         </PaneFocusProbeContext.Provider>
       </PaneActivationFocusIntentContext.Provider>
     </div>
@@ -719,7 +722,7 @@ function resolveChatFallbackDecision(args: {
  *
  * The published-chat tile under the substitution already reads the owner's
  * reachability for its own footer, and draws the unreachable-owner banner
- * (offline or plan-restricted) from that same read - so for an unreachable
+ * from that same read - so for an unreachable
  * host the canvas draws nothing, or the reader gets the sentence twice with
  * two Clone buttons. Unreachability outranks a `CHAT_NOT_VISIBLE` terminate
  * on purpose: the terminate is a fact from an earlier moment, reachability is
@@ -1025,17 +1028,20 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
 
   if (isRemoteDeleted) {
     return (
-      <DeletedArtifactBody
-        onClose={() => {
-          navigateNested(epicId, tabId, () =>
-            prepareCloseCanvasTabFocusTarget(
-              tabId,
-              groupId,
-              activeTab.instanceId,
-            ),
-          );
-        }}
-      />
+      <>
+        <MobileDrawerVisibleTilePaintReporter ready />
+        <DeletedArtifactBody
+          onClose={() => {
+            navigateNested(epicId, tabId, () =>
+              prepareCloseCanvasTabFocusTarget(
+                tabId,
+                groupId,
+                activeTab.instanceId,
+              ),
+            );
+          }}
+        />
+      </>
     );
   }
 
@@ -1047,6 +1053,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   if (isRetractedAsRevoked) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col">
+        <MobileDrawerVisibleTilePaintReporter ready />
         <ChatDeadTileBanner
           hostLabel={ownerHostLabel}
           reason="chat-no-longer-shared"

@@ -16,11 +16,10 @@ import {
 
 /**
  * Module-scoped registry of live `resources.subscribe` stores, keyed by
- * `epicId`. The `ResourcesStreamMount` inside each epic pane acquires an entry
- * (lease-counted, so two panes on the same epic share one stream) and releases
- * it on unmount; app-level surfaces (the terminal / chat sidebars, the epic
- * status row) read the entry by `epicId` without needing to sit inside that
- * pane's React subtree.
+ * `epicId`. Each surface that draws an epic's numbers acquires its entry
+ * through `useEpicResourcesLease` (lease-counted, so every chip on one epic
+ * shares one stream) and releases it on unmount; readers look the entry up by
+ * `epicId` without needing to sit inside any particular React subtree.
  *
  * `clientToken` guards a host swap: the `WsStreamClient` identity is carried
  * alongside each entry, and an acquire whose token differs from the live entry
@@ -95,6 +94,8 @@ class ResourcesRegistry {
   private readonly listeners = new Set<() => void>();
   private readonly globalListeners = new Set<() => void>();
   private globalVersion = 0;
+  /** Holders currently asking for interactive global cadence. */
+  private interactiveGlobalDemands = 0;
   private globalProjectionCache: {
     readonly version: number;
     readonly projection: GlobalResourceProjection;
@@ -176,7 +177,7 @@ class ResourcesRegistry {
       ...entries.map((entry) => entry.sampledAt ?? 0),
     );
     const projection = {
-      // The fallback aggregates entries opened by the epic panes, which all ride
+      // The fallback aggregates the per-epic leases' entries, which all ride
       // one transport and so agree on a host. A disagreeing set never reaches
       // here — it returned empty above.
       hostId: attribution.hostId,
@@ -355,6 +356,31 @@ class ResourcesRegistry {
   }
 
   /**
+   * Registers one holder's interactive demand on the global stream; returns its
+   * release. The stream runs interactive while any holder asks for it and
+   * background otherwise, re-stated on every change and on every handle this
+   * registry builds - so the effective cadence never depends on which holder
+   * spoke last.
+   */
+  holdInteractiveGlobalDemand(): () => void {
+    this.interactiveGlobalDemands += 1;
+    this.applyGlobalDemand();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.interactiveGlobalDemands -= 1;
+      this.applyGlobalDemand();
+    };
+  }
+
+  private applyGlobalDemand(): void {
+    this.globalEntry?.handle.setDemand(
+      this.interactiveGlobalDemands > 0 ? "interactive" : "background",
+    );
+  }
+
+  /**
    * `hostId` is the host the caller opened `clientToken` against — the claim
    * the projection republishes so a host-scoped reader can verify it. A caller
    * that cannot name one passes `null`, which reads as "do not attribute this
@@ -385,6 +411,7 @@ class ResourcesRegistry {
       this.globalEntry.hostId = hostId;
       this.globalEntry.unsubscribeStore = unsubscribeStore;
       this.globalEntry.leases += 1;
+      this.applyGlobalDemand();
       this.notifyGlobal();
       return handle;
     }
@@ -396,6 +423,7 @@ class ResourcesRegistry {
       leases: 1,
       unsubscribeStore: this.subscribeEntry(handle),
     };
+    this.applyGlobalDemand();
     this.notifyGlobal();
     return handle;
   }

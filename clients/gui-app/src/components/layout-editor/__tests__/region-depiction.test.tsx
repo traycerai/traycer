@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { SHIPPED_DEFAULT_VALUES } from "@/lib/layout/layout-presets";
@@ -127,6 +127,7 @@ describe("what a depiction draws", () => {
           processes: true,
           ramShare: false,
           agentRows: true,
+          density: "auto",
         },
         DEFAULT_ARRANGEMENT,
       ),
@@ -136,6 +137,40 @@ describe("what a depiction draws", () => {
     expect(text).toContain("procs");
     expect(text).not.toContain("mem");
     expect(text).not.toContain("ram");
+  });
+
+  it("draws Compact as CPU alone, whatever Metrics says, as the live reading does", () => {
+    const { container } = render(
+      depictRegion(
+        "resourceMonitor",
+        {
+          shown: "shown",
+          cpu: false,
+          memory: true,
+          processes: true,
+          ramShare: false,
+          agentRows: true,
+          density: "compact",
+        },
+        DEFAULT_ARRANGEMENT,
+      ),
+    );
+    expect(frameOf("resourceMonitor", container).textContent).toBe("12%");
+  });
+
+  it("draws Usage limits as the glyph where it resolves to Compact", () => {
+    const { container } = render(
+      depictRegion(
+        "usageLimits",
+        { ...SHIPPED_DEFAULT_VALUES.usageLimits, density: "compact" },
+        DEFAULT_ARRANGEMENT,
+      ),
+    );
+    const frame = frameOf("usageLimits", container);
+    expect(within(frame).getByTestId("rate-limit-gauge-icon")).toBeTruthy();
+    expect(
+      frame.querySelector('[data-testid^="status-bar-provider-segment-"]'),
+    ).toBeNull();
   });
 
   it("draws the context chip's three readings differently", () => {
@@ -211,27 +246,6 @@ describe("what a depiction draws", () => {
     expect(hostOf("railGitDiff", container)).toBe("rail");
   });
 
-  it("keeps the usage reading's parts under the values' control", () => {
-    const base = SHIPPED_DEFAULT_VALUES.usageLimits;
-    const withWord = render(
-      depictRegion(
-        "usageLimits",
-        { ...base, word: true, amount: "remaining" },
-        DEFAULT_ARRANGEMENT,
-      ),
-    );
-    expect(withWord.container.textContent).toContain("remaining");
-
-    const withoutWord = render(
-      depictRegion(
-        "usageLimits",
-        { ...base, word: false, amount: "remaining" },
-        DEFAULT_ARRANGEMENT,
-      ),
-    );
-    expect(withoutWord.container.textContent).not.toContain("remaining");
-  });
-
   it("draws every provider the arrangement still shows", () => {
     const visible = DEFAULT_ARRANGEMENT.usageProviders;
     // Only windowed providers get a picture (non-windowed ones report a
@@ -286,35 +300,37 @@ describe("what a depiction draws", () => {
 
   it("gives neighbouring providers readings of their own", () => {
     // The finding this replaces: every segment was drawn from ONE fixed
-    // window, so the strip printed the same "35% 5h" behind every icon and
-    // read as filler rather than as a picture of a status bar (LV2-19).
+    // window, so the strip printed the same reading behind every icon and
+    // read as filler rather than as a picture of a status bar (LV2-19). A calm
+    // profile is a bar alone now, so the reading is how far its bar is filled.
     const { container } = render(
       depictRegion(
         "usageLimits",
-        { ...SHIPPED_DEFAULT_VALUES.usageLimits, percent: true, reset: true },
+        SHIPPED_DEFAULT_VALUES.usageLimits,
         DEFAULT_ARRANGEMENT,
       ),
     );
 
-    // The READING alone: a segment prints its provider's name first, so
-    // comparing whole strings would be satisfied by the names and say nothing
-    // about the numbers behind them ("Codex35% used 58m" -> "35% used 58m").
-    const readings = [...container.querySelectorAll("[data-provider-id]")].map(
-      (segment) => segment.textContent.replace(/^\D+/, ""),
+    const fills = [...container.querySelectorAll("[data-provider-id]")].map(
+      (segment) =>
+        segment
+          .querySelector<HTMLElement>(
+            "[data-testid='status-bar-provider-mini-bar-fill']",
+          )
+          ?.style.getPropertyValue("width") ?? "",
     );
 
     const windowed = DEFAULT_ARRANGEMENT.usageProviders.filter(
       isWindowedRateLimitProvider,
     );
-    expect(readings).toHaveLength(windowed.length);
-    expect(readings.every((reading) => reading.length > 0)).toBe(true);
+    expect(fills).toHaveLength(windowed.length);
+    expect(fills.every((fill) => fill.length > 0)).toBe(true);
     // Three readings rotate across the catalog, so a strip longer than three
-    // repeats - but never beside its own twin, which is where the "eight
-    // identical strings" LV2-19 found was legible as filler.
-    const repeatedNeighbour = readings.filter(
-      (reading, index) => index > 0 && readings[index - 1] === reading,
+    // repeats - but never beside its own twin.
+    const repeatedNeighbour = fills.filter(
+      (fill, index) => index > 0 && fills[index - 1] === fill,
     );
     expect(repeatedNeighbour).toHaveLength(0);
-    expect(new Set(readings).size).toBe(3);
+    expect(new Set(fills).size).toBe(3);
   });
 });

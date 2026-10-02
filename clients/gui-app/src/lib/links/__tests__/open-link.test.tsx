@@ -11,7 +11,11 @@ import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/br
 import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { LinkTargetContext } from "@/lib/links/link-target-context";
-import { useOpenLink, type LinkClickEvent } from "@/lib/links/open-link";
+import {
+  useOpenLink,
+  useOpenLinkIn,
+  type LinkClickEvent,
+} from "@/lib/links/open-link";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -480,5 +484,67 @@ describe("useOpenLink", () => {
     expect(toastError).toHaveBeenCalled();
     expect(harness.bridged).toEqual([]);
     expect(harness.intents).toEqual([]);
+  });
+});
+
+describe("useOpenLinkIn", () => {
+  const EXTERNAL_ONLY_SETTINGS = {
+    default: "external",
+    markdown: "external",
+    terminal: "external",
+    github: "external",
+    image: "external",
+  } as const;
+
+  it("opens in the OS browser on request, whatever the link-open setting says", () => {
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    result.current.openLinkIn(DOCS_URL, "external");
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+  });
+
+  it("opens in-app on request even when the link-open setting says external", async () => {
+    useSettingsStore.setState({ linkOpen: EXTERNAL_ONLY_SETTINGS });
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    result.current.openLinkIn(DOCS_URL, "in-app");
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(harness.intents[0]).toMatchObject({
+      target: { tabId: VIEW_TAB_ID },
+      modifiers: { shift: false, alt: false, middle: false },
+    });
+    expect(harness.bridged).toEqual([]);
+  });
+
+  it("falls back to the OS browser for an in-app request with no link target", () => {
+    const { result } = renderHook(() => useOpenLinkIn());
+
+    result.current.openLinkIn(DOCS_URL, "in-app");
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+  });
+
+  it("sends a non-http(s) URL to the OS even when asked to open it in-app", () => {
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    result.current.openLinkIn("mailto:someone@example.test", "in-app");
+
+    expect(harness.bridged).toEqual(["mailto:someone@example.test"]);
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it("reports an in-app destination only where a link target is provided", () => {
+    const withTarget = renderHook(() => useOpenLinkIn(), { wrapper });
+    const withoutTarget = renderHook(() => useOpenLinkIn());
+
+    expect(withTarget.result.current.canOpenInApp).toBe(true);
+    expect(withoutTarget.result.current.canOpenInApp).toBe(false);
   });
 });

@@ -22,17 +22,26 @@ import {
 } from "../service";
 import { resolveServiceCliInvocation } from "../service/cli-binary";
 import {
+  readServiceRegistrationDisabled,
+  serviceRegistrationDisabledError,
+  type ServiceRegistrationDisabled,
+} from "../service/registration-disabled";
+import { withServiceInstallReport } from "../service/registration-repair";
+import { isServiceTaskNotOwnedError } from "../service/platforms/windows-task-gate";
+import {
   createBytesOnlyInstallLifecycle,
   createServiceInstallLifecycle,
 } from "../service/install-lifecycle";
 import {
   requireCliUpdateMutationCapability,
   withCliAttemptMutation,
+  withCliSupervisorRelaunchSegment,
   withCliUpdateExecutionSegment,
 } from "./update-contender";
 import {
   commitHostInstallSourceWithAttempt,
   installHostServiceWithAttempt,
+  restartHostServiceWithAttempt,
   startHostServiceWithAttempt,
 } from "./update-mutation";
 import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
@@ -42,8 +51,17 @@ import {
 } from "../registry/client";
 import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { holdVersionOnSwapCommitted } from "./held-host-version";
-import { CLI_ERROR_CODES, CliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
+import {
+  defaultSupervisorRelaunchWaitDeps,
+  findLiveServiceSupervisor,
+  MAX_SUPERVISOR_RELAUNCH_WAITS,
+  waitForSupervisorRelaunch,
+  type SupervisorRelaunchWaitDeps,
+} from "./service-supervisor-relaunch";
 import { assertHostNotBusy } from "./busy-check";
+import { refuseDesktopDisruptionOfForegroundRun } from "./foreground-host-run";
+import type { HostStartOrigin } from "./lifecycle-origin";
 import { hostHomeDir } from "../store/paths";
 import { resolveChatStoreSurveyRoots } from "./chat-store-survey-roots";
 import {
@@ -198,6 +216,14 @@ export interface ProvisionHostOptions {
    * invocation, which keeps the acquire-or-refuse path exactly as it was.
    */
   readonly adoption: UpdateMutationCapabilityAdoption | undefined;
+  /**
+   * `--lifecycle-origin` of the command provisioning this host, recorded in
+   * every adoption proof a start here publishes (`host/lifecycle-origin.ts`).
+   * It never decides whether the supervisor runs. Under `desktop` it does
+   * decide one thing: the install branch refuses over a host started in a
+   * terminal (`refuseDesktopDisruptionOfForegroundRun`).
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
   readonly onProgress: ((info: ProgressInfo) => void) | null;
   // When true, skip the pre-reinstall busy probe and replace a running host
   // unconditionally (the desktop's "Force restart"). Default callers pass
@@ -227,6 +253,14 @@ export interface ProvisionHostOptions {
    * call site instead, and a test passes its stub here.
    */
   readonly yankLookup: RegistryYankLookup | null;
+  /**
+   * How a start that finds the service's supervisor relaunching its host
+   * waits for that relaunch, or `null` for the real clock and budget
+   * (`SUPERVISOR_RELAUNCH_WAIT_MS`). A required seam for the reason
+   * `yankLookup` is one: the real wait is longer than a test timeout, so a
+   * suite that reaches it states the dependency instead of sleeping.
+   */
+  readonly supervisorRelaunchWait: SupervisorRelaunchWaitDeps | null;
   // When true, record a version hold if this run's install branch commits a
   // strict DOWNGRADE (committed version below the previous install). Set by
   // `host ensure --release <concrete>` - the other explicit-version install
@@ -259,6 +293,13 @@ interface ProvisionState {
   readonly installed: boolean;
   readonly registered: boolean;
   readonly running: boolean;
+  /**
+   * Whether the service status probe answered. `false` when it threw: then
+   * `registered` and `running` are only "not known to be", and the register
+   * branch - whose re-registration replaces one that exists, settings and
+   * all - is closed to it (`provisionUnderLock`).
+   */
+  readonly statusReadable: boolean;
   readonly version: string | null;
   readonly runtimeVersion: string | null;
 }
@@ -329,14 +370,470 @@ export async function provisionHost(
     admission: "legacy-update-shadow" as const,
     adoption: opts.adoption,
   };
+  let beforeMutateRan = false;
+  const beforeMutate = async (): Promise<void> => {
+    if (beforeMutateRan || opts.beforeMutate === null) return;
+    beforeMutateRan = true;
+    await opts.beforeMutate();
+  };
+  for (let relaunchWaits = 0; ; relaunchWaits += 1) {
+    const outcome = await provisionOrStartOverUpdateAttempt(
+      opts,
+      controller,
+      label,
+      progress,
+      fast,
+      yankLookup,
+      contenderOptions,
+      beforeMutate,
+    );
+    if (outcome.kind === "result") return outcome.result;
+    // The service's supervisor is alive and relaunching its host, so the
+    // start started nothing. Wait for that relaunch HERE, with the execution
+    // segment released: the relaunch contends for the same update-attempt
+    // lock (`withSupervisorRelaunchContender`), so waiting inside the segment
+    // would hold off the very spawn this is waiting for.
+    const settled = await awaitSupervisorRelaunch(
+      opts,
+      controller,
+      label,
+      outcome.supervisorPid,
+      relaunchWaits,
+    );
+    switch (settled.kind) {
+      case "result":
+        return settled.result;
+      case "timed-out":
+        return restartServiceOverStalledSupervisor(
+          opts,
+          controller,
+          label,
+          progress,
+          yankLookup,
+          contenderOptions,
+          outcome.supervisorPid,
+        );
+      case "supervisor-gone":
+        // The supervisor exited without bringing the host back (budget
+        // spent, or it was stopped): nothing is relaunching any more, so
+        // provision again - its start now takes the ordinary path, or finds
+        // and waits for a NEW supervisor (a service manager restarting a
+        // failed unit).
+        break;
+    }
+  }
+}
+
+/**
+ * `provisionInSegment` - and, when its shadow admission yielded to a standing
+ * update attempt and all this call has left to do is START the installed
+ * host, that start again under the admission the service's own supervisor
+ * relaunches under (`startOverUpdateAttempt`).
+ *
+ * Without it the host could stay down for good: under a mode that parks
+ * unattended starts, with an update record standing (parked, or interrupted)
+ * and the host down - after a Linked teardown over a parked update, or a
+ * reboot while one was parked - the login start parks, and this start, the
+ * desktop's only other way to bring the host back, yielded on every retry.
+ */
+async function provisionOrStartOverUpdateAttempt(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  progress: (info: ProgressInfo) => void,
+  fast: ProvisionState,
+  yankLookup: RegistryYankLookup,
+  contenderOptions: ProvisionSegmentOptions & {
+    readonly admission: "legacy-update-shadow";
+    readonly adoption: UpdateMutationCapabilityAdoption | undefined;
+  },
+  beforeMutate: () => Promise<void>,
+): Promise<ProvisionUnderLockOutcome> {
+  try {
+    return await provisionInSegment(
+      opts,
+      controller,
+      label,
+      progress,
+      fast,
+      yankLookup,
+      contenderOptions,
+      beforeMutate,
+    );
+  } catch (cause) {
+    if (
+      !isYieldToUpdateAttempt(cause) ||
+      !(await predictsStartOnly(opts, fast, yankLookup))
+    ) {
+      throw cause;
+    }
+    return startOverUpdateAttempt(
+      opts,
+      controller,
+      label,
+      progress,
+      yankLookup,
+      beforeMutate,
+      cause,
+    );
+  }
+}
+
+function isYieldToUpdateAttempt(cause: unknown): cause is CliError {
+  return (
+    cause instanceof CliError &&
+    cause.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE &&
+    cause.details !== null &&
+    cause.details.disposition === "yield"
+  );
+}
+
+/**
+ * Whether the fast read says this call only has to start the installed
+ * host: installed at a satisfying version, registered, not running, and
+ * nothing forced. An adopted child runs inside its parent's segment and is
+ * never here.
+ */
+async function predictsStartOnly(
+  opts: ProvisionHostOptions,
+  fast: ProvisionState,
+  yankLookup: RegistryYankLookup,
+): Promise<boolean> {
+  return (
+    !opts.force &&
+    opts.registerService &&
+    opts.adoption === undefined &&
+    fast.installed &&
+    fast.registered &&
+    !fast.running &&
+    (await versionSatisfied(
+      fast,
+      opts.satisfaction,
+      yankLookup,
+      opts.recordVersionOverride,
+    ))
+  );
+}
+
+/**
+ * Start the installed host beside a standing update attempt, admitted as the
+ * service's own supervisor relaunch is (`withCliSupervisorRelaunchSegment`,
+ * `supervisorRelaunchDisposition`): only where the record admits exactly this
+ * start - parked for work, parked on an activation of the INSTALLED
+ * generation, or interrupted in a phase whose own next act is starting the
+ * host. The record is left standing, as the supervisor's relaunch leaves it.
+ *
+ * A record the disposition refuses, and a locked re-read that finds more to
+ * do than a start (bytes to install, a service to register), both end in the
+ * shadow admission's own yield - the error this call reported before.
+ */
+async function startOverUpdateAttempt(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  progress: (info: ProgressInfo) => void,
+  yankLookup: RegistryYankLookup,
+  beforeMutate: () => Promise<void>,
+  yielded: CliError,
+): Promise<ProvisionUnderLockOutcome> {
+  const relaunchOptions = {
+    environment: opts.runtime.environment,
+    reason: opts.lockReason,
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "supervisor-relaunch-maintenance" as const,
+  };
+  try {
+    return await withCliSupervisorRelaunchSegment(
+      relaunchOptions,
+      async (capability, context) => {
+        await beforeMutate();
+        return withCliAttemptMutation(
+          capability,
+          relaunchOptions,
+          async (): Promise<ProvisionUnderLockOutcome> => {
+            const state = await readProvisionState(
+              controller,
+              label,
+              opts.runtime,
+            );
+            if (
+              await isSatisfied(
+                state,
+                opts.satisfaction,
+                opts.registerService,
+                yankLookup,
+                opts.recordVersionOverride,
+              )
+            ) {
+              return { kind: "result", result: noopResult(state) };
+            }
+            if (
+              !state.installed ||
+              !state.registered ||
+              state.running ||
+              !(await versionSatisfied(
+                state,
+                opts.satisfaction,
+                yankLookup,
+                opts.recordVersionOverride,
+              ))
+            ) {
+              throw yielded;
+            }
+            await assertHostNotBusy(opts.runtime.environment);
+            if (context.activeAttempt !== null) {
+              opts.runtime.logger.info(
+                "Host provisioning is starting the installed host beside a standing update attempt",
+                {
+                  environment: opts.runtime.environment,
+                  attemptId: context.activeAttempt.attemptId,
+                  phase: context.activeAttempt.phase,
+                },
+              );
+            }
+            return runStart(
+              opts,
+              controller,
+              label,
+              state,
+              progress,
+              capability,
+              relaunchOptions,
+            );
+          },
+        );
+      },
+    );
+  } catch (cause) {
+    if (
+      cause instanceof CliError &&
+      cause.code === CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE
+    ) {
+      throw yielded;
+    }
+    throw cause;
+  }
+}
+
+/** How a wait for a live service supervisor's relaunch ended. */
+type SupervisorRelaunchSettlement =
+  /** The host came back: the no-op result over a fresh read. */
+  | { readonly kind: "result"; readonly result: HostProvisionResult }
+  /** The supervisor exited without it: provision again. */
+  | { readonly kind: "supervisor-gone" }
+  /**
+   * The supervisor outlived the whole wait with no host. Its liveness said it
+   * was relaunching; a full backoff plus a boot's allowance says it is not.
+   */
+  | { readonly kind: "timed-out" };
+
+/**
+ * Wait out a live service supervisor's relaunch - ONCE. Throws
+ * `E_SERVICE_SUPERVISOR_RELAUNCHING` when this call has already waited its
+ * share across supervisors that keep coming and going.
+ */
+async function awaitSupervisorRelaunch(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  supervisorPid: number,
+  waitsSoFar: number,
+): Promise<SupervisorRelaunchSettlement> {
+  const deps = opts.supervisorRelaunchWait ?? defaultSupervisorRelaunchWaitDeps;
+  if (waitsSoFar >= MAX_SUPERVISOR_RELAUNCH_WAITS) {
+    throw supervisorRelaunchingError(opts, supervisorPid, deps.waitMs);
+  }
+  opts.runtime.logger.info(
+    "Host provisioning found the service's supervisor relaunching the host; waiting for it instead of starting",
+    {
+      environment: opts.runtime.environment,
+      supervisorPid,
+      waitMs: deps.waitMs,
+    },
+  );
+  const wait = await waitForSupervisorRelaunch(opts.runtime.environment, deps);
+  opts.runtime.logger.info("Host provisioning supervisor relaunch wait ended", {
+    environment: opts.runtime.environment,
+    supervisorPid,
+    result: wait.kind,
+  });
+  switch (wait.kind) {
+    case "host-ready":
+      return {
+        kind: "result",
+        result: noopResult(
+          await readProvisionState(controller, label, opts.runtime),
+        ),
+      };
+    case "supervisor-gone":
+      return { kind: "supervisor-gone" };
+    case "timed-out":
+      return { kind: "timed-out" };
+  }
+}
+
+/**
+ * The service's supervisor is alive and a whole relaunch wait brought no
+ * host: "relaunching" was only ever inferred from its liveness, and the wait
+ * - the longest backoff plus a boot's allowance - has now disproved it. Its
+ * child is wedged (booting and never publishing), or the supervisor is stuck
+ * outside its ladder. An ordinary start cannot reach it - the service manager
+ * starts nothing for a service that is running - and a second wait would only
+ * repeat the first. So RESTART the service: that ends the stalled supervisor
+ * and starts a fresh one on a published proof, the recycle a failed start's
+ * re-register used to give before this start learnt to wait.
+ *
+ * Under the lock it re-reads first: a host that came up meanwhile is the
+ * no-op, and a supervisor that exited meanwhile takes the ordinary start.
+ */
+async function restartServiceOverStalledSupervisor(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  progress: (info: ProgressInfo) => void,
+  yankLookup: RegistryYankLookup,
+  contenderOptions: ProvisionSegmentOptions & {
+    readonly admission: "legacy-update-shadow";
+    readonly adoption: UpdateMutationCapabilityAdoption | undefined;
+  },
+  stalledSupervisorPid: number,
+): Promise<HostProvisionResult> {
+  const deps = opts.supervisorRelaunchWait ?? defaultSupervisorRelaunchWaitDeps;
+  opts.runtime.logger.warn(
+    "Host provisioning waited out the service supervisor's relaunch with no host; restarting the service",
+    {
+      environment: opts.runtime.environment,
+      supervisorPid: stalledSupervisorPid,
+      waitMs: deps.waitMs,
+    },
+  );
+  const outcome = await withCliUpdateExecutionSegment(
+    contenderOptions,
+    (capability) =>
+      withCliAttemptMutation(
+        capability,
+        contenderOptions,
+        async (): Promise<ProvisionUnderLockOutcome> => {
+          const state = await readProvisionState(
+            controller,
+            label,
+            opts.runtime,
+          );
+          if (
+            await isSatisfied(
+              state,
+              opts.satisfaction,
+              opts.registerService,
+              yankLookup,
+              opts.recordVersionOverride,
+            )
+          ) {
+            return { kind: "result", result: noopResult(state) };
+          }
+          if (!state.installed || !state.registered) {
+            throw supervisorRelaunchingError(
+              opts,
+              stalledSupervisorPid,
+              deps.waitMs,
+            );
+          }
+          await assertHostNotBusy(opts.runtime.environment);
+          const supervisor = await findLiveServiceSupervisor(
+            opts.runtime.environment,
+          );
+          if (supervisor === null) {
+            return runStart(
+              opts,
+              controller,
+              label,
+              state,
+              progress,
+              capability,
+              contenderOptions,
+            );
+          }
+          progress({
+            stage: "host-provision",
+            message:
+              "restarting the host service: its supervisor is not bringing the host back",
+            percent: null,
+            bytes: null,
+            totalBytes: null,
+            workUnits: null,
+          });
+          await restartHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            opts.lifecycleOrigin,
+            controller,
+            label,
+          );
+          return {
+            kind: "result",
+            result: await startedResult(
+              opts,
+              controller,
+              label,
+              state,
+              "running",
+            ),
+          };
+        },
+      ),
+  );
+  if (outcome.kind === "result") return outcome.result;
+  // The stalled supervisor exited under the lock and the ordinary start then
+  // found yet another one alive: supervisors keep coming and going without a
+  // host, which is a failure to report, not to wait out again.
+  throw supervisorRelaunchingError(opts, outcome.supervisorPid, deps.waitMs);
+}
+
+function supervisorRelaunchingError(
+  opts: ProvisionHostOptions,
+  supervisorPid: number,
+  waitMs: number,
+): CliError {
+  return cliError({
+    code: CLI_ERROR_CODES.SERVICE_SUPERVISOR_RELAUNCHING,
+    message: `the host's service supervisor (pid ${String(supervisorPid)}) is relaunching the host and it has not come back within ${String(Math.round(waitMs / 1000))}s; nothing was changed. Run 'traycer host status' to follow it, or 'traycer host restart' to replace the supervisor`,
+    details: {
+      environment: opts.runtime.environment,
+      supervisorPid,
+    },
+    exitCode: 1,
+  });
+}
+
+/**
+ * Everything past the fast path, inside one execution segment: the
+ * install/register/start decision and its mutation. Returns the result, or
+ * `supervisor-relaunching` for `provisionHost` to wait out once the segment
+ * has been released.
+ */
+async function provisionInSegment(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  progress: (info: ProgressInfo) => void,
+  fast: ProvisionState,
+  yankLookup: RegistryYankLookup,
+  contenderOptions: {
+    readonly environment: Environment;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+    readonly admission: "legacy-update-shadow";
+    readonly adoption: UpdateMutationCapabilityAdoption | undefined;
+  },
+  beforeMutate: () => Promise<void>,
+): Promise<ProvisionUnderLockOutcome> {
   return withCliUpdateExecutionSegment(contenderOptions, async (capability) => {
     // Past the no-op return: this call is going to install, register or
     // start something. Keep the outer capability from that decision through
     // source resolution and staging, while preserving the short CLI-lock
     // scope around only the final lifecycle mutation.
-    if (opts.beforeMutate !== null) {
-      await opts.beforeMutate();
-    }
+    await beforeMutate();
     const predictedInstall =
       opts.force ||
       !fast.installed ||
@@ -346,6 +843,18 @@ export async function provisionHost(
         yankLookup,
         opts.recordVersionOverride,
       ));
+    // A desktop ensure never replaces a host a person started in a terminal:
+    // refused before the floor gate and the staging download below. This
+    // segment holds the update-attempt lock every host spawn takes, so no
+    // foreground run can start behind this check; `provisionUnderLock`
+    // repeats it for the install branch this prediction missed.
+    if (predictedInstall && opts.registerService) {
+      await refuseDesktopDisruptionOfForegroundRun(
+        "host ensure",
+        opts.runtime.environment,
+        opts.lifecycleOrigin,
+      );
+    }
     // THE STORE-FORMAT FLOOR, before staging - and reached on the `--force`
     // branch above like every other. This is the path the desktop's Force
     // restart drives (`host ensure --force`), and force is exactly what skips
@@ -442,9 +951,24 @@ async function gateProvisionStoreFormatFloor(
 // whole attempt retries with the freshly staged source - at most one
 // retry, since the retry's `preStaged` is never null, so `"need-stage"`
 // cannot recur.
+//
+// `"supervisor-relaunching"` leaves the lock the same way, and further: a
+// start found the service's own supervisor alive, relaunching its host
+// (`startHostServiceWithAttempt`), so nothing was started, and the wait for
+// that relaunch belongs outside the execution segment too (`provisionHost`).
 type ProvisionAttemptOutcome =
   | { readonly kind: "result"; readonly result: HostProvisionResult }
-  | { readonly kind: "need-stage" };
+  | { readonly kind: "need-stage" }
+  | {
+      readonly kind: "supervisor-relaunching";
+      readonly supervisorPid: number;
+    };
+
+/** What leaves `provisionUnderLock`: `"need-stage"` is resolved inside it. */
+type ProvisionUnderLockOutcome = Exclude<
+  ProvisionAttemptOutcome,
+  { readonly kind: "need-stage" }
+>;
 
 async function provisionUnderLock(
   opts: ProvisionHostOptions,
@@ -462,7 +986,7 @@ async function provisionUnderLock(
     readonly admission: "legacy-update-shadow";
   },
   storeFormatFloor: StoreFormatFloorEvidence,
-): Promise<HostProvisionResult> {
+): Promise<ProvisionUnderLockOutcome> {
   let stagedConsumed = false;
   opts.runtime.logger.debug("Host provisioning entering CLI lock", {
     environment: opts.runtime.environment,
@@ -540,6 +1064,36 @@ async function provisionUnderLock(
           );
           return { kind: "result", result: noopResult(state) };
         }
+        // Reinstall when the bytes are absent/stale, OR when forced (D5: Force =
+        // reinstall + restart onto this build even if the install record matches).
+        // Evaluate the (async, yank-checked) predicate once and reuse it for
+        // both the branch decision and the log so the manifest lookup runs at
+        // most once here.
+        const reinstallVersionSatisfied = await versionSatisfied(
+          state,
+          opts.satisfaction,
+          yankLookup,
+          opts.recordVersionOverride,
+        );
+        const reinstall =
+          opts.force || !state.installed || !reinstallVersionSatisfied;
+        // A desktop ensure never replaces a host a person started in a
+        // terminal. Refused here, before the busy guard below and before the
+        // install branch releases the lock to stage, so nothing is probed,
+        // downloaded or stopped; the next ensure once that host has exited
+        // installs as usual. `provisionInSegment` already refused a PREDICTED
+        // install before staging it; this covers the install the locked
+        // re-read finds when the prediction did not. Only the install branch
+        // replaces the running host, and only when it registers the service:
+        // bytes-only (`registerService: false`, the packaged-macOS path) stops
+        // nothing.
+        if (reinstall && opts.registerService) {
+          await refuseDesktopDisruptionOfForegroundRun(
+            "host ensure",
+            opts.runtime.environment,
+            opts.lifecycleOrigin,
+          );
+        }
         // Every remaining path replaces or cycles a LIVE host - reinstall
         // (forced, or bytes absent/stale), (re)register, or (re)start - so the
         // busy guard must cover ALL of them, not just the install branch.
@@ -565,18 +1119,7 @@ async function provisionUnderLock(
             },
           );
         }
-        // Reinstall when the bytes are absent/stale, OR when forced (D5: Force =
-        // reinstall + restart onto this build even if the install record matches).
-        // Evaluate the (async, yank-checked) predicate once and reuse it for
-        // both the branch decision and the log so the manifest lookup runs at
-        // most once here.
-        const reinstallVersionSatisfied = await versionSatisfied(
-          state,
-          opts.satisfaction,
-          yankLookup,
-          opts.recordVersionOverride,
-        );
-        if (opts.force || !state.installed || !reinstallVersionSatisfied) {
+        if (reinstall) {
           if (preStaged === null) {
             opts.runtime.logger.debug(
               "Host provisioning lost the fast-path prediction; releasing the lock to stage outside it",
@@ -630,7 +1173,7 @@ async function provisionUnderLock(
             ),
           };
         }
-        if (!state.registered) {
+        if (!state.registered && state.statusReadable) {
           opts.runtime.logger.debug(
             "Host provisioning selected service-register branch",
             {
@@ -649,29 +1192,40 @@ async function provisionUnderLock(
             ),
           };
         }
-        // installed + registered + stopped → start.
+        if (!state.statusReadable) {
+          // The status probe failed, so whether the service is registered is
+          // unknown - and registering replaces a registration that exists,
+          // settings and all (on Windows a `/Create /F` re-enables a task the
+          // user disabled). Start what is registered instead: a start that
+          // cannot find or run the registration fails, and `runStart`'s own
+          // escalation re-registers on THAT evidence.
+          opts.runtime.logger.info(
+            "Host provisioning could not read the service status; starting the registered service instead of re-registering it",
+            {
+              environment: opts.runtime.environment,
+            },
+          );
+        }
+        // installed + registered (or unreadable) + stopped → start.
         opts.runtime.logger.debug(
           "Host provisioning selected service-start branch",
           {
             environment: opts.runtime.environment,
           },
         );
-        return {
-          kind: "result",
-          result: await runStart(
-            opts,
-            controller,
-            label,
-            state,
-            progress,
-            capability,
-            contenderOptions,
-          ),
-        };
+        return runStart(
+          opts,
+          controller,
+          label,
+          state,
+          progress,
+          capability,
+          contenderOptions,
+        );
       },
     );
-    if (outcome.kind === "result") {
-      return outcome.result;
+    if (outcome.kind !== "need-stage") {
+      return outcome;
     }
     // Lock released. Stage outside it (network transfer never runs inside
     // cli-lock), then reacquire and retry - `preStaged` is non-null on this
@@ -816,6 +1370,7 @@ async function commitInstall(
   const result = await commitHostInstallSourceWithAttempt(
     capability,
     contenderOptions,
+    opts.lifecycleOrigin,
     {
       environment: opts.runtime.environment,
       staged,
@@ -828,6 +1383,30 @@ async function commitInstall(
         : null,
     },
   );
+  // The bytes are in, but ensure promises a RUNNING host, and a registration
+  // refused as another user's or kept disabled as its owner left it starts
+  // none. `host install` reports that as a warning beside its success; ensure
+  // fails with the typed code, so the desktop can say why and stop asking -
+  // `E_SERVICE_REGISTRATION_DISABLED` is what ensure already answers over a
+  // disabled task on its start path.
+  if (handle !== null && handle.state.postSwapWarning !== null) {
+    throw cliError({
+      code:
+        handle.state.postSwapWarning.code ===
+        CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED
+          ? CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED
+          : CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+      message: handle.state.postSwapWarning.message,
+      details: {
+        environment: opts.runtime.environment,
+        version: result.record.version,
+        // The not-owned refusal's reason, carried through: which of another
+        // user's task or an unconfirmed owner this is.
+        ...handle.state.postSwapWarning.details,
+      },
+      exitCode: 1,
+    });
+  }
   const post = await readProvisionState(controller, label, opts.runtime);
   opts.runtime.logger.info("Host provisioning install branch completed", {
     environment: opts.runtime.environment,
@@ -898,6 +1477,7 @@ async function runServiceRegister(
   await installHostServiceWithAttempt(
     capability,
     contenderOptions,
+    opts.lifecycleOrigin,
     controller,
     {
       label,
@@ -939,6 +1519,27 @@ async function runServiceRegister(
   };
 }
 
+/** The contender options every provisioning segment carries. */
+interface ProvisionSegmentOptions {
+  readonly environment: Environment;
+  readonly reason: string;
+  readonly waitMs: number;
+  readonly pollIntervalMs: number;
+}
+
+// `supervisor-relaunch-maintenance` only from `startOverUpdateAttempt`: the
+// one mutation that admission covers is this start.
+/**
+ * What a failed Windows start already knows about the task it could not run:
+ * its `/Run` refusal carries `registrationDisabled` from the ownership gate's
+ * read of that task. `null` for any failure that does not carry it.
+ */
+function startRefusedOverDisabledRegistration(error: unknown): boolean | null {
+  if (!(error instanceof CliError) || error.details === null) return null;
+  const verdict = error.details.registrationDisabled;
+  return typeof verdict === "boolean" ? verdict : null;
+}
+
 async function runStart(
   opts: ProvisionHostOptions,
   controller: ServiceController,
@@ -946,14 +1547,12 @@ async function runStart(
   state: ProvisionState,
   progress: (info: ProgressInfo) => void,
   capability: UpdateMutationCapability,
-  contenderOptions: {
-    readonly environment: Environment;
-    readonly reason: string;
-    readonly waitMs: number;
-    readonly pollIntervalMs: number;
-    readonly admission: "legacy-update-shadow";
+  contenderOptions: ProvisionSegmentOptions & {
+    readonly admission:
+      | "legacy-update-shadow"
+      | "supervisor-relaunch-maintenance";
   },
-): Promise<HostProvisionResult> {
+): Promise<ProvisionUnderLockOutcome> {
   progress({
     stage: "host-provision",
     message: "starting the registered host service",
@@ -965,13 +1564,61 @@ async function runStart(
   // First attempt: plain start (on win32 this already polls for post-baseline
   // spawn evidence and surfaces Last Run Result on failure - finding F).
   try {
-    await startHostServiceWithAttempt(
+    const started = await startHostServiceWithAttempt(
       capability,
       contenderOptions,
+      opts.lifecycleOrigin,
       controller,
       label,
     );
+    // The service's supervisor is alive and relaunching its host: nothing was
+    // started, and nothing is wrong with the definition, so there is nothing
+    // to escalate. `provisionHost` waits for the relaunch.
+    if (started.kind === "supervisor-relaunching") return started;
   } catch (firstError) {
+    // Another user's task under this name: the start was refused before any
+    // `/Run`, and the rewrite below is a `/Create /F` of that same task - the
+    // takeover the ownership gate exists to stop. Nothing to escalate, nothing
+    // else to read.
+    if (isServiceTaskNotOwnedError(firstError)) throw firstError;
+    // A registration its owner switched off (Task Scheduler's "Disable") is
+    // theirs to turn back on. An automatic re-registration carries it over
+    // disabled and starts nothing, so the rewrite below could not bring the
+    // host up either: refuse and name the repairs instead. A read that fails
+    // keeps the escalation, as before this check. A Windows `/Run` refusal
+    // already says whether the task was disabled, from its own gate read, so
+    // only a failure that does not say costs a read here.
+    const startVerdict = startRefusedOverDisabledRegistration(firstError);
+    const registration: ServiceRegistrationDisabled =
+      startVerdict === null
+        ? await readServiceRegistrationDisabled(label, process.platform)
+        : startVerdict
+          ? { kind: "disabled" }
+          : { kind: "not-disabled" };
+    if (registration.kind === "disabled") {
+      opts.runtime.logger.warn(
+        "Host provisioning start failed on a service registration its owner disabled; not re-registering it",
+        {
+          environment: opts.runtime.environment,
+          errorName: errorFromUnknown(firstError).name,
+          errorMessage: errorFromUnknown(firstError).message,
+        },
+      );
+      throw serviceRegistrationDisabledError(
+        opts.runtime.environment,
+        label,
+        errorFromUnknown(firstError).message,
+      );
+    }
+    if (registration.kind === "unknown") {
+      opts.runtime.logger.info(
+        "Host provisioning could not read whether the service registration is disabled; escalating as before",
+        {
+          environment: opts.runtime.environment,
+          reason: registration.reason,
+        },
+      );
+    }
     // Escalate once: full task/launcher rewrite (the install-branch
     // registration - the field-proven manual recovery "we had to manually
     // `service install`") -> retry start -> then an honest error. Exactly one
@@ -998,17 +1645,22 @@ async function runStart(
       allowSelfInvocation: opts.allowSelfInvocation,
     });
     let rewriteError: unknown = null;
+    let rewriteKeptDisabled = false;
     try {
-      await installHostServiceWithAttempt(
-        capability,
-        contenderOptions,
-        controller,
-        {
-          label,
-          cli,
-          enableLinger: opts.enableLinger,
-        },
+      const report = await withServiceInstallReport(() =>
+        installHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          opts.lifecycleOrigin,
+          controller,
+          {
+            label,
+            cli,
+            enableLinger: opts.enableLinger,
+          },
+        ),
       );
+      rewriteKeptDisabled = report.keptDisabled;
     } catch (cause) {
       // A retry is valid only after the rewritten task was successfully
       // registered and its own `/Run`/verification failed. Retrying after a
@@ -1047,12 +1699,17 @@ async function runStart(
     // repaired host as failed. Only retry when install's own launch failed.
     if (rewriteError !== null) {
       try {
-        await startHostServiceWithAttempt(
+        const retried = await startHostServiceWithAttempt(
           capability,
           contenderOptions,
+          opts.lifecycleOrigin,
           controller,
           label,
         );
+        // The rewrite's own launch reported failure, yet a supervisor it
+        // started is alive now: that one brings the host up, so wait for it
+        // rather than start over it.
+        if (retried.kind === "supervisor-relaunching") return retried;
       } catch (retryError) {
         opts.runtime.logger.error(
           "Host provisioning start still failed after service rewrite",
@@ -1066,6 +1723,16 @@ async function runStart(
         throw retryError;
       }
     }
+    // The rewrite read the task itself, and a task its owner disabled was
+    // carried over disabled and not started (the read above could not tell):
+    // there is no host coming, so say why rather than wait for one.
+    if (rewriteError === null && rewriteKeptDisabled) {
+      throw serviceRegistrationDisabledError(
+        opts.runtime.environment,
+        label,
+        errorFromUnknown(firstError).message,
+      );
+    }
     opts.runtime.logger.info(
       "Host provisioning start recovered via one-shot service rewrite",
       {
@@ -1073,6 +1740,27 @@ async function runStart(
       },
     );
   }
+  // Reached only when installed + registered + stopped (see the branch
+  // selection above) - the service was registered but not running before
+  // this call.
+  return {
+    kind: "result",
+    result: await startedResult(opts, controller, label, state, "stopped"),
+  };
+}
+
+/**
+ * The result of a branch that started the registered service - a plain start
+ * (`priorServiceState: "stopped"`) or the restart over a stalled supervisor
+ * (`"running"`: its supervisor was up, its host was not).
+ */
+async function startedResult(
+  opts: ProvisionHostOptions,
+  controller: ServiceController,
+  label: ServiceLabel,
+  state: ProvisionState,
+  priorServiceState: ServiceState,
+): Promise<HostProvisionResult> {
   const post = await readProvisionState(controller, label, opts.runtime);
   const installGeneration = await attestedGenerationFromCurrentRecord(
     opts.runtime.environment,
@@ -1089,11 +1777,8 @@ async function runStart(
     version: state.version,
     runtimeVersion: state.runtimeVersion,
     action: "started",
-    // Reached only when installed + registered + stopped (see the branch
-    // selection above) - the service was registered but not running before
-    // this call.
     serviceLifecycle: {
-      priorServiceState: "stopped",
+      priorServiceState,
       stoppedBeforeSwap: false,
       postSwapAction: "start",
       postSwapError: null,
@@ -1121,8 +1806,10 @@ async function readProvisionState(
   label: ServiceLabel,
   runtime: RuntimeContext,
 ): Promise<ProvisionState> {
-  // A malformed install record (or status probe failure) is treated as
-  // "not present" so provisioning self-heals rather than wedging.
+  // A malformed install record is treated as "not present" so provisioning
+  // self-heals rather than wedging. A status probe that fails reads as not
+  // registered and not running too, but is marked unreadable: the register
+  // branch is closed to it (see `ProvisionState.statusReadable`).
   let recordVersion: string | null = null;
   let recordRuntimeVersion: string | null = null;
   let installed = false;
@@ -1143,6 +1830,7 @@ async function readProvisionState(
   }
   let registered = false;
   let running = false;
+  let statusReadable = true;
   try {
     const status = await controller.status(label);
     registered = status.state !== "not-installed";
@@ -1155,11 +1843,13 @@ async function readProvisionState(
     });
     registered = false;
     running = false;
+    statusReadable = false;
   }
   return {
     installed,
     registered,
     running,
+    statusReadable,
     version: recordVersion,
     runtimeVersion: recordRuntimeVersion,
   };

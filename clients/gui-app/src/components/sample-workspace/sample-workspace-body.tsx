@@ -39,7 +39,7 @@ import { createComposerPickerStore } from "@/components/chat/composer/picker/com
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import {
   useArrangementValue,
-  useReadingWidthClass,
+  useReadingWidthStyle,
   useRegionShown,
   useRegionValues,
 } from "@/lib/layout-overrides";
@@ -403,7 +403,7 @@ function SampleTranscript() {
   const content = useRef<HTMLDivElement>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [capacity, setCapacity] = useState(12);
-  const readingWidth = useReadingWidthClass();
+  const readingWidth = useReadingWidthStyle();
   // Thinking hidden leaves the reasoning run out, as the real transcript does,
   // unless the editor is pointing at it (L-14).
   const thinkingShown = useRegionShown("thinking");
@@ -510,8 +510,9 @@ function SampleTranscript() {
                 ref={content}
                 className={cn(
                   "mx-auto w-full space-y-8 px-6 py-6",
-                  readingWidth,
+                  readingWidth.className,
                 )}
+                style={{ maxWidth: readingWidth.maxWidth }}
               >
                 {SAMPLE_TURNS.map((turn, index) => (
                   <div key={turn.prompt} data-sample-turn className="space-y-4">

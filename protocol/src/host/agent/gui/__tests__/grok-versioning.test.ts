@@ -104,7 +104,7 @@ import {
 // is what holds the v2.0–v9.0 lines and their upgrade/downgrade bridges.
 import {
   hostRpcRegistry,
-  providersAwaitLoginDowngradeV21ToV10,
+  providersAwaitLoginDowngradeV22ToV10,
   providersListDowngradeV2ToV1,
   providersListDowngradeV4ToV1,
   providersListDowngradeV4ToV2,
@@ -319,20 +319,22 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
       providersSetApiKeyResponseSchemaV10.parse(setApiKey.value),
     ).not.toThrow();
 
-    const awaitLogin = providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
+    const awaitLogin = providersAwaitLoginDowngradeV22ToV10.downgradeResponse({
       state,
       existingProfileId: null,
       codeRejected: false,
+      refusal: null,
     });
     expect(awaitLogin.ok).toBe(true);
     if (!awaitLogin.ok) return;
     expect(awaitLogin.value.state?.auth.status).toBe("unknown");
 
     expect(
-      providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
+      providersAwaitLoginDowngradeV22ToV10.downgradeResponse({
         state: null,
         existingProfileId: null,
         codeRejected: false,
+        refusal: null,
       }),
     ).toEqual({ ok: true, value: { state: null } });
   });

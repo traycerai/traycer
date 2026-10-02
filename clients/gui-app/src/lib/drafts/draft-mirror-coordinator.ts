@@ -16,7 +16,7 @@ import {
   registerExtraImageRootSource,
   registerExtraImageSizeSource,
 } from "@/lib/composer/landing-image-budget";
-import { getImageBytes } from "@/lib/composer/landing-image-store";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
   currentDraftBlobOwnerId,
@@ -31,9 +31,12 @@ import {
   blobHashesOfDocument,
 } from "./draft-write-codec";
 import { draftKindIsHostBound } from "./draft-portability";
+import { cloudDraftIdentityKey } from "./cloud-draft-identity";
 import {
   forgetCloudDraftPayloadUnsupportedHost,
   rebindCloudDraftImageClientForHost,
+  cloudDraftImageSourcesRecorded,
+  recordCloudDraftImageSources,
   recoverCloudDraftImages,
   resetCloudDraftImageRecoveryForTests,
 } from "./cloud-draft-image-recovery";
@@ -202,12 +205,158 @@ let landingAdoptionHostId: string | null = null;
  * Ordering fence for the cloud-directory absence sweep: every landing
  * document apply - a cloud-head ingest or a host session's live echo -
  * takes the next sequence number when it STARTS, and a directory snapshot
- * records the sequence current when its request was DISPATCHED. A row
- * applied after that (by another mount, through another host) is not
- * absent from that snapshot in any sense the snapshot can attest to.
+ * takes the next one when its request is DISPATCHED. A row applied after
+ * that (by another mount, through another host) is not absent from that
+ * snapshot in any sense the snapshot can attest to.
  */
 let cloudIngestSeq = 0;
 const cloudIngestSeqByDraft = new Map<string, number>();
+/**
+ * The same ordering fence, reserved for every headed row a directory LISTS,
+ * whichever host owns it and whether or not the walking mount applies it
+ * (another mount is reading the head, it is settled, or it is this host's
+ * own row, which another host's directory lists as foreign). Stamped at the
+ * listing snapshot's DISPATCH position, never at the walk: a walk of a
+ * cached snapshot can run after a newer request was dispatched, and a stamp
+ * taken then would outrank that newer response's absence. Kept apart from
+ * `cloudIngestSeqByDraft` because that map is also the apply's supersession
+ * check: an apply abandons itself when the row's sequence moved under its
+ * blob reads, which is right for a newer apply or a newer head's read and
+ * wrong for a mount that merely walked a directory listing the row. The
+ * sweep and the flush read the later of the two.
+ */
+const cloudSweepFenceByRow = new Map<string, number>();
+/**
+ * The same listing fence under the bare id, the later of every owner's: for
+ * a mirror WITHOUT an owner, which the absence predicate treats as listed
+ * under any owner, so a positive listing of the id by any owner must hold
+ * an older snapshot's absence off it the same way.
+ */
+const cloudSweepFenceByDraftId = new Map<string, number>();
+
+/**
+ * The sweep fence is keyed by the ROW (owner plus id), not the bare id: cloud
+ * ids are host-minted, so two owners can list the same id, and owner A's
+ * listing must not keep owner B's absent mirror from being swept. The ingest
+ * fence stays keyed by id because an apply is for whichever row the mirror
+ * under that id is.
+ */
+function cloudSweepFenceKey(draftId: string, ownerHostId: string): string {
+  // Encoded, not joined: the wire accepts any non-empty string for either
+  // half, so no delimiter character is one a half cannot contain.
+  return JSON.stringify([ownerHostId, draftId]);
+}
+
+/**
+ * The later of the row's two fences for a mirror. A mirror with no owner is
+ * treated as listed under any owner by the absence predicate, so its sweep
+ * fence is the id's under any owner.
+ */
+function cloudDraftFenceSeq(
+  draftId: string,
+  ownerHostId: string | null,
+): number {
+  return Math.max(
+    cloudIngestSeqByDraft.get(draftId) ?? 0,
+    ownerHostId === null
+      ? (cloudSweepFenceByDraftId.get(draftId) ?? 0)
+      : (cloudSweepFenceByRow.get(cloudSweepFenceKey(draftId, ownerHostId)) ??
+          0),
+  );
+}
+/**
+ * What this renderer knows about one foreign cloud draft row's head: the
+ * `headSha256` it is reading or has settled, and for a settled landing head
+ * the id of the mirror it installed, so the guard can tell when that mirror
+ * has since left the store. One entry per row (`cloudDraftIdentityKey`); a
+ * new head for the row overwrites the old one. A mirror's record ends with
+ * the mirror; a settled record without one stays until the row's head
+ * changes, so the map is bounded by the rows this renderer has ever been
+ * shown, not by the directory's current size.
+ */
+type CloudDraftHeadRecord = {
+  readonly headSha256: string | null;
+  /**
+   * The listing's `publishedAt` for that head: the server's publication
+   * order for the row, which is the one ordering fact a listing carries
+   * (`throughRecordSeq` is not one: a fork or a rewrite renumbers). Two
+   * host-scoped directory caches can list successive heads of one row at
+   * once, and a mount walking the older cache must neither read the older
+   * head nor replace the record of the newer one. Never an authority
+   * decision: the apply still refuses by revision.
+   */
+  readonly publishedAt: number | null;
+  /** `reading`: a mount has the head read in flight; `settled`: decided. */
+  readonly state: "reading" | "settled";
+  readonly mirrorId: string | null;
+  /**
+   * The image hashes the installed document names. A mount on another host
+   * that skips this head still registers its host as a source for them
+   * (`noteCloudDraftHeadHost`), as its own ingest did when every mount read
+   * every head: once the ingesting host's mirror is released its requester
+   * is closed, and without this the images have no live source. Which hosts
+   * ARE recorded is the image-source registry's to say
+   * (`cloudDraftImageSourcesRecorded`), not this record's: the registry caps
+   * the sources per hash and evicts the oldest, and a list kept here would
+   * go on naming an evicted host as registered.
+   */
+  readonly imageHashes: readonly string[];
+};
+/** What a decided head is remembered with. */
+type CloudDraftHeadSettlement = {
+  readonly mirrorId: string | null;
+  readonly imageHashes: readonly string[];
+};
+const SETTLED_WITHOUT_MIRROR: CloudDraftHeadSettlement = {
+  mirrorId: null,
+  imageHashes: [],
+};
+const cloudDraftHeadAbandonListeners = new Set<
+  (summary: CloudChatSummary, cause: CloudDraftHeadAbandonCause) => void
+>();
+/**
+ * Process-wide on purpose. The ingest hook used to keep this guard on its own
+ * instance, and it is mounted by the landing page and again by every tab, so
+ * each Task open re-read every foreign draft head through the host - about
+ * sixty `api/chats/resolve` on an account with two hosts, queued ahead of the
+ * chat the person was opening - and N tabs restored into one Task read every
+ * head N times at once. A head is read once per renderer lifetime and again
+ * only when its `headSha256` changes or the same digest is republished later,
+ * when the sweep drops its mirror, when the mirror is gone from the store by
+ * any other road, or when the one read in flight was torn down or gave up
+ * (and then by one mount: the wake a teardown sends is taken after the
+ * commit, so a delivery that re-runs every mount at once hands the reads to
+ * the new runs, not down the chain of old ones).
+ */
+const cloudDraftHeads = new Map<string, CloudDraftHeadRecord>();
+/**
+ * The hosts whose mounts have shown each ROW, keyed as `cloudDraftHeads` is:
+ * the host that ingested a head, and every host whose mount skipped or noted
+ * one. They are the row's, not a head's or a record's, and they outlive both:
+ * a mount whose host-scoped directory is cached at an older head runs no
+ * note again until its next delivery, so every head of the row that settles
+ * with images registers these hosts as sources for its hashes then, whatever
+ * records were claimed, settled, released or abandoned in between (a stash
+ * entry, converted before its head settles, asks one of them for the bytes
+ * its reading host missed, `recoverCloudStashImages`). Whether a
+ * host IS recorded for a hash is the registry's to say
+ * (`cloudDraftImageSourcesRecorded`), and a host whose session is gone is
+ * skipped at registration; this map only names who to ask for. Bounded by
+ * the rows ever shown times the hosts on the account.
+ */
+const cloudDraftRowHosts = new Map<string, Set<string>>();
+
+/** Remember `hostId` as a host of the row `key`; true when it was not yet. */
+function rememberCloudDraftRowHost(key: string, hostId: string): boolean {
+  const hosts = cloudDraftRowHosts.get(key);
+  if (hosts === undefined) {
+    cloudDraftRowHosts.set(key, new Set([hostId]));
+    return true;
+  }
+  if (hosts.has(hostId)) return false;
+  hosts.add(hostId);
+  return true;
+}
 /**
  * View state of landing rows a successor may inherit, keyed by the
  * superseded id: a row a host `delete` frame removed while open in this
@@ -248,9 +397,9 @@ export function draftsCloudScopeId(hostId: string): string | null {
  * is app-global and survives restarts - and the source row retired so it
  * stops being listed.
  *
- * The blobs are already in this window's landing store (`applyHostDocument`
- * read them through `readDraftBlobsIntoLocalStore` before calling here), so
- * `readBlob` resolves straight from that map.
+ * `applyHostDocument` read verified blobs through `readDraftBlobsIntoLocalStore`
+ * before calling here. A full partition may have kept them ephemeral; the
+ * conversion imports from this map under its own batch reservation.
  *
  * `applyOwner` is the account the apply belongs to, captured before its first
  * await. Re-asked here because the conversion installs a landing draft - this
@@ -1276,6 +1425,11 @@ export function resetDraftMirrorCoordinatorForTests(): void {
   landingAdoptionHostId = null;
   cloudIngestSeq = 0;
   cloudIngestSeqByDraft.clear();
+  cloudSweepFenceByRow.clear();
+  cloudSweepFenceByDraftId.clear();
+  cloudDraftHeads.clear();
+  cloudDraftRowHosts.clear();
+  cloudDraftHeadAbandonListeners.clear();
   inheritableLandingTabs.clear();
   retiredStashIdsThisSession.clear();
   warnedUnboundComposer.clear();
@@ -1390,8 +1544,12 @@ export async function ingestCloudDraftSummary(input: {
   // overwrites the row for a chat that lives on THAT host - flipping the
   // owning host's own live draft to `origin: "replica"`, which would make
   // the chat composer fork it on the next keystroke. Every tile mount
-  // re-ran this.
-  if (draftKindIsHostBound(input.document.kind)) return;
+  // re-ran this. Settled for this head: the decision is about the KIND, so
+  // nothing a later mount could read would change it.
+  if (draftKindIsHostBound(input.document.kind)) {
+    settleCloudDraftHead(input.summary, SETTLED_WITHOUT_MIRROR);
+    return;
+  }
   // The absence-sweep fence is reserved by `applyHostDocument` at its
   // (synchronous) start, before the blob reads: an older directory request
   // settling in that window already sees this row as newer than its
@@ -1404,7 +1562,13 @@ export async function ingestCloudDraftSummary(input: {
   // started under A and finished under B would install A's text under B with
   // every check agreeing.
   const ingestOwner = input.readOwner;
-  if (currentDraftBlobOwnerId() !== ingestOwner) return;
+  // A head read under another account decides nothing about this one: the
+  // claim is released, like every refusal about the moment, or a reader
+  // that switched A -> B -> A would find its own stale claim and never ask.
+  if (currentDraftBlobOwnerId() !== ingestOwner) {
+    releaseCloudDraftHeadRead(input.summary);
+    return;
+  }
   // A stash row's bytes have to arrive WITH it. `ingestRemote` is idempotent
   // by entry id and the images ride the same durable write as the row, so
   // there is no second chance after the apply - which is why this fetch is
@@ -1432,8 +1596,39 @@ export async function ingestCloudDraftSummary(input: {
   // `null` for a stash document too - no hashes, no mounted client, a read that
   // threw - and every one of those still awaited, so every one of them still
   // needs the account re-asked before this document is applied.
-  if (fetchesStashImages && currentDraftBlobOwnerId() !== ingestOwner) return;
+  if (fetchesStashImages && currentDraftBlobOwnerId() !== ingestOwner) {
+    releaseCloudDraftHeadRead(input.summary);
+    return;
+  }
+  // A newer head of the row claimed or installed while this read was in
+  // flight (two host-scoped directory caches list successive heads at once).
+  // The settle below would leave that record alone, but the apply has to be
+  // refused too: a cloud document carries a synthetic revision, so the store
+  // would take the older head over the newer one and the row would show it
+  // for as long as the newer record stands.
+  if (!cloudDraftHeadClaimStands(input.summary)) return;
   const installed = await applyHostDocument(input.document, stashImages);
+  // What the guard remembers about this head. An installed landing head is
+  // remembered WITH its mirror's id, so the record ends when that mirror
+  // leaves the store. An installed new-chat or stash document has no mirror
+  // the store can vouch for and is settled for this renderer: a patch the
+  // user discards locally comes back on the next head, not the next mount
+  // (stash already worked this way, `retiredStashIdsThisSession`). A landing
+  // head refused because its id is RETIRED here is settled too (a landing
+  // pending delete is such a retirement receipt). Every other refusal - a
+  // newer apply, an identity that changed under the read, a dirty local row
+  // - is about this moment, not this head, so the record is released and
+  // the next mount asks again, as it always did.
+  if (installed) {
+    settleCloudDraftHead(input.summary, installedHeadSettlement(input));
+  } else if (
+    input.document.kind === "landing" &&
+    landingDraftIsRetired(input.document.draftId)
+  ) {
+    settleCloudDraftHead(input.summary, SETTLED_WITHOUT_MIRROR);
+  } else {
+    releaseCloudDraftHeadRead(input.summary);
+  }
   // No row took it, so this document roots nothing and there is nothing for
   // recovery to fetch FOR - whether it was retired, fenced by a pending
   // delete, beaten by a newer apply, refused as an older revision, or kept out
@@ -1446,13 +1641,21 @@ export async function ingestCloudDraftSummary(input: {
   // candidate list and can evict the address of the account that IS being
   // served. `applyHostDocument` swallows its own abandonment, so the condition
   // is re-derived here rather than returned from it.
-  if (currentDraftBlobOwnerId() !== ingestOwner) return;
-  await recoverIngestedCloudDraftImages(input);
+  if (currentDraftBlobOwnerId() === ingestOwner) {
+    recoverIngestedCloudDraftImages(input);
+  }
+  // The ingesting host is a host of the ROW too: a later head of the row
+  // installed through another host registers it for that head's images when
+  // its directory is still cached at this one. Noted AFTER its own sources
+  // are recorded above, so the note's registration for this head is the
+  // registry's no-op; when the account moved and recovery was skipped, the
+  // note still marks the host on the row and registers nothing.
+  noteCloudDraftHeadHost(input.summary, input.hostId);
 }
 
 /**
- * Pull a cloud-ingested draft's images down from the published
- * `image-attachment` blobs, for the window that has no other source for them.
+ * Remember the published image addresses of a cloud-ingested draft without
+ * pulling image bytes into this window during bootstrap.
  *
  * This is the ONLY path where that can be true. A document that arrives on
  * `drafts.subscribe` came from a host this window holds a mirror on, so
@@ -1460,10 +1663,8 @@ export async function ingestCloudDraftSummary(input: {
  * arrives here is owned by a host this window is not mirroring, which is the
  * second-window and offline-owner case the replica exists for.
  *
- * Run AFTER the apply so the row already roots these hashes, and awaited rather
- * than detached so an ingest is one settled unit - nothing is gated on it, and
- * each read carries its own timeout, so awaiting costs a bounded wait on a
- * chain whose caller has already released its ingest guard.
+ * Run AFTER the apply so the row already roots these hashes. Visible-draft
+ * idle prefetch and render/submit resolution use these addresses later.
  *
  * Landing and new-chat only. Stash entries also reach this function, and their
  * bytes are deliberately NOT recovered here: a stash row is converted into a
@@ -1476,20 +1677,11 @@ export async function ingestCloudDraftSummary(input: {
 /**
  * Fetch a cloud-ingested STASH document's images, for handing to the apply.
  *
- * The stash twin of {@link recoverIngestedCloudDraftImages}, and it runs on the
- * other side of the apply for a reason the sibling's own comment gives: that
- * one writes into this window's image partition, where the APPLIED row is what
- * roots the hashes, so it must run after. A stash row is not applied as a row
- * at all - it is CONVERTED, and the conversion reads these bytes through the
- * map handed in - so for this kind "after the apply" is not late, it is never.
+ * The stash twin of {@link recoverIngestedCloudDraftImages} runs before apply:
+ * a stash row is CONVERTED, and conversion needs its bytes in the handed map.
  *
- * The bytes still pass through the partition on the way: the cloud transfer
- * verifies each digest with `putImageBytesAtHash`, which is what makes a
- * returned byte string trustworthy, and that write seeds a session entry which
- * roots them meanwhile. Once the conversion has re-written them under their
- * landing hashes that first copy is incidental, and the sweep reclaims it on
- * its own schedule - the same
- * disposition any unrooted transfer gets.
+ * The transfer verifies each digest. An unrooted stash hash stays ephemeral
+ * until conversion admits it through the landing image budget.
  *
  * Answers an EMPTY map for every failure, including a fetch that raises: the
  * caller applies the document either way, and a stash entry whose images are
@@ -1508,8 +1700,15 @@ async function recoverCloudStashImages(input: {
   // cloud read is a byte pipe through whatever host this device runs.
   const client = sessionClients.get(input.hostId);
   if (client === undefined) return null;
+  // One account check ahead of every record below: the registry refuses a
+  // source from another account per record, with a line each, and a row of
+  // an account this window no longer serves has nothing worth asking for.
+  if (input.summary.identity.ownerUserId !== currentDraftBlobOwnerId()) {
+    return null;
+  }
+  let recovered: ReadonlyMap<string, ImageBytes>;
   try {
-    await recoverCloudDraftImages({
+    recovered = await recoverCloudDraftImages({
       identity: input.summary.identity,
       hostId: input.hostId,
       client,
@@ -1521,9 +1720,56 @@ async function recoverCloudStashImages(input: {
     });
     return null;
   }
+  // A byte the reading host's pipe missed is asked of another mounted host
+  // of the row. A stash entry is converted before its head settles, and its
+  // settlement keeps no image hashes, so the hosts whose mounts skipped
+  // this head (`noteCloudDraftHeadHost` remembers them on the row) would
+  // otherwise never be a source for it - and the conversion retires the
+  // source row, so the miss would be for good. One host at a time, each
+  // asked only for the hashes still missing, until nothing is missing or
+  // the row's hosts are exhausted. A hash NO host of the row can serve ends
+  // with the row's addresses recorded over an earlier draft's for the same
+  // bytes (the registry keeps three per hash): accepted, since it takes
+  // three mounted hosts, a shared hash, and that earlier draft's bytes
+  // still readable where this row's are not, against a conversion that
+  // would otherwise lose a recoverable image. Each pass is the registry's
+  // own walk over every address it holds for the hash, so a later pass may
+  // ask the reading host again for a hash it already missed: bounded by the
+  // walk's attempt cap, and it loses nothing (the miss may have been a
+  // transient of that pipe).
+  let missing = hashes.filter((hash) => !recovered.has(hash));
+  // The row's hosts are re-read before every turn, and each host's
+  // requester is looked up as its turn comes, never ahead of the earlier
+  // hosts' awaits: a mount that starts during the pass notes its host on
+  // the row then and is asked too, and a session released and re-acquired
+  // meanwhile has a new requester (the old one would be recorded over the
+  // rebind and fail for nothing). A remembered host without a session is
+  // not counted as asked, so one that mounts later in the pass gets its
+  // turn.
+  const asked = new Set<string>([input.hostId]);
+  while (missing.length !== 0) {
+    const fallback = nextStashImageFallbackHost(input.summary, asked);
+    if (fallback === null) break;
+    asked.add(fallback.hostId);
+    try {
+      const more = await recoverCloudDraftImages({
+        identity: input.summary.identity,
+        hostId: fallback.hostId,
+        client: fallback.client,
+        hashes: missing,
+      });
+      recovered = new Map([...recovered, ...more]);
+      missing = missing.filter((hash) => !recovered.has(hash));
+    } catch (error: unknown) {
+      appLogger.warn(
+        "[draft-mirror] cloud stash image recovery through another host failed",
+        { error: describeLogError(error) },
+      );
+    }
+  }
   const images = new Map<string, ImageBlob>();
   for (const hash of hashes) {
-    const bytes = await getImageBytes(hash);
+    const bytes = recovered.get(hash);
     if (bytes === undefined) continue;
     // Sniffed from the BYTES, never from the document's `mimeType` attr, and
     // with NO fallback. The transport's readers answer `"image/png"` for bytes
@@ -1540,11 +1786,29 @@ async function recoverCloudStashImages(input: {
   return images;
 }
 
-async function recoverIngestedCloudDraftImages(input: {
+/**
+ * The first host remembered on the row, in the order they were remembered,
+ * that is not in `asked` and has a session mounted here, with the requester
+ * it holds right now; `null` when there is none.
+ */
+function nextStashImageFallbackHost(
+  summary: CloudChatSummary,
+  asked: ReadonlySet<string>,
+): { hostId: string; client: HostRequester<HostRpcRegistry> } | null {
+  const key = cloudDraftIdentityKey(summary);
+  for (const rowHostId of cloudDraftRowHosts.get(key) ?? []) {
+    if (asked.has(rowHostId)) continue;
+    const client = sessionClients.get(rowHostId);
+    if (client !== undefined) return { hostId: rowHostId, client };
+  }
+  return null;
+}
+
+function recoverIngestedCloudDraftImages(input: {
   readonly hostId: string;
   readonly summary: CloudChatSummary;
   readonly document: DraftDocument;
-}): Promise<void> {
+}): void {
   const { document } = input;
   if (document.kind !== "landing" && document.kind !== "new-chat") return;
   const hashes = blobHashesOfDocument(document);
@@ -1554,23 +1818,19 @@ async function recoverIngestedCloudDraftImages(input: {
   // every site that runs the cloud ingest acquires this mirror alongside it.
   const client = sessionClients.get(input.hostId);
   if (client === undefined) return;
-  // Contained at this boundary, not inside the recovery module, and the
-  // asymmetry is deliberate. `useCloudDraftsIngest` calls this from a `void
-  // attemptRead(0)` chain with no catch around the ingest, so ANY rejection
-  // that reaches it is an unhandled rejection. Every failure the recovery can
-  // actually produce is already answered as a miss, so this catches only a
-  // fault nobody predicted - and it belongs here, where the consequence is,
-  // rather than in the module, where swallowing would also hide it from that
-  // module's own tests.
-  await recoverCloudDraftImages({
+  // Already recorded when this host was on the row's host set at the settle
+  // just above (it ingested an earlier head of the row); one record per host
+  // per head, whichever path reaches the registry first.
+  if (
+    cloudDraftImageSourcesRecorded(input.summary.identity, input.hostId, hashes)
+  ) {
+    return;
+  }
+  recordCloudDraftImageSources({
     identity: input.summary.identity,
     hostId: input.hostId,
     client,
     hashes,
-  }).catch((error: unknown) => {
-    appLogger.warn("[draft-mirror] cloud draft image recovery failed", {
-      error: describeLogError(error),
-    });
   });
 }
 
@@ -1613,9 +1873,506 @@ export function deleteLandingDraftThroughHost(
     });
 }
 
-/** The current ingest sequence; a directory captures it at dispatch. */
+/**
+ * A directory request's position in the ingest sequence, taken at its
+ * dispatch. Fresh for every request, so two snapshots never share one: the
+ * sweep fence a walk of the older snapshot reserves at that snapshot's
+ * position must outrank only the requests dispatched before it.
+ */
 export function cloudDraftIngestSeq(): number {
+  cloudIngestSeq += 1;
   return cloudIngestSeq;
+}
+
+/**
+ * The row's identity plus the head it currently publishes: the key a mount
+ * tracks its own in-flight reads under. `headSha256` is part of it because
+ * the identity alone is stable across publishes: a newer head for the same
+ * draft must be a new key, or the replica goes stale.
+ */
+export function cloudDraftHeadKey(summary: CloudChatSummary): string {
+  return `${cloudDraftIdentityKey(summary)}:${summary.headSha256}`;
+}
+
+/**
+ * Whether a mount may skip the head a directory row lists: another mount is
+ * reading it now, or this renderer has settled it. A head settled with a
+ * mirror id answers true only while that mirror is still in the landing
+ * store; a mirror removed by any road ends the record, and the next mount
+ * reads the head again. A record for a DIFFERENT head of the same row is not
+ * this head's and answers false.
+ */
+export function cloudDraftHeadSettled(summary: CloudChatSummary): boolean {
+  const key = cloudDraftIdentityKey(summary);
+  const record = cloudDraftHeads.get(key);
+  if (record === undefined) return false;
+  if (record.headSha256 !== summary.headSha256) {
+    // A listing older than the record is a stale cache, not a new head:
+    // nothing to read, and the record stands.
+    return listingIsOlderThanRecord(record, summary);
+  }
+  if (record.state === "reading") {
+    advanceCloudDraftHeadStamp(key, record, summary);
+    return true;
+  }
+  if (record.mirrorId === null) {
+    // Settled WITHOUT a mirror: a terminal read refusal, a host-bound kind,
+    // an installed new-chat or stash document. A later publication of the
+    // same digest is a new fact about the row - the read's `unpublished` or
+    // `missing` answer was a retraction the owner has since undone with the
+    // same content - so the settlement does not carry over it: the head is
+    // read again. An installed landing head below needs no re-read for
+    // identical bytes; it only advances its stamp.
+    if (listingIsLaterThanRecord(record, summary)) {
+      cloudDraftHeads.delete(key);
+      return false;
+    }
+    return true;
+  }
+  const mirrorId = record.mirrorId;
+  const mirror = useLandingDraftStore
+    .getState()
+    .drafts.find((draft) => draft.id === mirrorId);
+  // Present AND this row's. Cloud ids are host-minted, so another owner's
+  // row under the same id installs over this mirror's id; the record is
+  // keyed per row and would otherwise keep answering "settled" for a mirror
+  // that now shows the other owner's draft. An unowned mirror matches, as
+  // the absence sweep's owner check has it.
+  const present =
+    mirror !== undefined &&
+    (mirror.ownerHostId === null || mirror.ownerHostId === summary.ownerHostId);
+  if (!present) {
+    cloudDraftHeads.delete(key);
+    return false;
+  }
+  advanceCloudDraftHeadStamp(key, record, summary);
+  return true;
+}
+
+/**
+ * The same digest listed again at a later publication time: a row that
+ * published A, then B, then byte-identical A again. The content is settled,
+ * but the record's order stamp must move to the republication, or a stale
+ * cache delivering B afterwards reads as newer than the record and rolls
+ * the mirror back to it.
+ */
+function advanceCloudDraftHeadStamp(
+  key: string,
+  record: CloudDraftHeadRecord,
+  summary: CloudChatSummary,
+): void {
+  const publishedAt = laterPublication(record.publishedAt, summary.publishedAt);
+  if (publishedAt === record.publishedAt) return;
+  cloudDraftHeads.set(key, { ...record, publishedAt });
+}
+
+/**
+ * Whether `summary` is a LATER publication of the same digest than the
+ * record holds. Unknown on either side compares as not later.
+ */
+function listingIsLaterThanRecord(
+  record: CloudDraftHeadRecord,
+  summary: CloudChatSummary,
+): boolean {
+  return (
+    record.headSha256 === summary.headSha256 &&
+    publishedLaterThan(summary.publishedAt, record.publishedAt)
+  );
+}
+
+/**
+ * Whether `later` is a LATER publication time than `earlier`: the one rule
+ * for "the same digest was republished since". Unknown on either side
+ * compares as not later.
+ */
+function publishedLaterThan(
+  later: number | null,
+  earlier: number | null,
+): boolean {
+  return later !== null && earlier !== null && later > earlier;
+}
+
+/** The later of two publication times; an unknown side yields the other. */
+function laterPublication(
+  current: number | null,
+  listed: number | null,
+): number | null {
+  if (current === null) return listed;
+  if (listed === null) return current;
+  return listed > current ? listed : current;
+}
+
+/**
+ * Whether another mount of this renderer is reading the head a row lists
+ * right now. A mount that skips such a head still reserves the row's SWEEP
+ * fence on its walk, as every listed head is: the reader's apply must not
+ * meet a replica this mount's absence sweep dropped in the meantime. The
+ * ingest fence is the reader's own.
+ */
+export function cloudDraftHeadReading(summary: CloudChatSummary): boolean {
+  const record = cloudDraftHeads.get(cloudDraftIdentityKey(summary));
+  return (
+    record !== undefined &&
+    record.state === "reading" &&
+    record.headSha256 === summary.headSha256
+  );
+}
+
+/**
+ * A mount is about to read this head: other mounts skip it from here on. One
+ * record per row, so a read of a newer head displaces whatever the row held.
+ */
+export function beginCloudDraftHeadRead(summary: CloudChatSummary): void {
+  const key = cloudDraftIdentityKey(summary);
+  const current = cloudDraftHeads.get(key);
+  // A read started from a stale listing must not displace the newer head's
+  // record (the hook asks `cloudDraftHeadSettled` first and will not start
+  // one; this holds for any caller).
+  if (current !== undefined && listingIsOlderThanRecord(current, summary)) {
+    return;
+  }
+  cloudDraftHeads.set(key, {
+    headSha256: summary.headSha256,
+    // A record of the SAME digest may already carry a later republication
+    // stamp than the listing this read starts from; the stamp never moves
+    // back.
+    publishedAt:
+      current !== undefined && current.headSha256 === summary.headSha256
+        ? laterPublication(current.publishedAt, summary.publishedAt)
+        : summary.publishedAt,
+    state: "reading",
+    mirrorId: null,
+    imageHashes: [],
+  });
+}
+
+/**
+ * Whether `summary` lists an OLDER head of the row than `record` holds: a
+ * different digest published earlier. Unknown on either side (an unpublished
+ * row) compares as not older, which is the pre-existing behaviour: a
+ * different digest is read.
+ */
+function listingIsOlderThanRecord(
+  record: CloudDraftHeadRecord,
+  summary: CloudChatSummary,
+): boolean {
+  return (
+    record.headSha256 !== summary.headSha256 &&
+    record.publishedAt !== null &&
+    summary.publishedAt !== null &&
+    summary.publishedAt < record.publishedAt
+  );
+}
+
+/**
+ * The mount that was reading this head is gone (its tile closed, its host or
+ * scope changed) with the read undecided, or its read ran out of attempts.
+ * The claim is released as {@link releaseCloudDraftHeadRead} does, and every
+ * mount still listening is told, so one of them picks the head up now rather
+ * than at its next directory delivery. A read that gave up wakes the others
+ * because its failure is its host's: two mounts bound to different hosts read
+ * through different byte pipes, and the directory has no polling interval to
+ * bring the healthy one back on its own. The wake names its cause: a mount
+ * that ran out of attempts on a publication ignores `exhausted` wakes for the
+ * head while its run still lists that publication, until its next delivery
+ * (its own wake, and a sibling's that met the same answer), so the head is
+ * not traded between failing mounts at the ladder's pace, and takes a
+ * `released` one (a sibling torn down with the head undecided),
+ * because that sibling's leaving says nothing about whether the read would
+ * succeed now. A read refused for the moment, or answered an ambiguous
+ * identity, still releases silently ({@link releaseCloudDraftHeadRead}): the
+ * other mount would meet the same answer.
+ */
+export function abandonCloudDraftHeadRead(
+  summary: CloudChatSummary,
+  cause: CloudDraftHeadAbandonCause,
+): void {
+  const key = cloudDraftIdentityKey(summary);
+  const record = cloudDraftHeads.get(key);
+  if (
+    record === undefined ||
+    record.state !== "reading" ||
+    record.headSha256 !== summary.headSha256
+  ) {
+    return;
+  }
+  cloudDraftHeads.delete(key);
+  notifyCloudDraftHeadAbandoned(summary, cause);
+}
+
+/**
+ * Why a head's reader let it go: `exhausted` when its read ran out of
+ * attempts, `released` when the mount was torn down with the read undecided
+ * or its refusal answered for a publication the record had moved past
+ * ({@link settleCloudDraftHeadWithoutApply}).
+ */
+export type CloudDraftHeadAbandonCause = "exhausted" | "released";
+
+/**
+ * Tell every listening mount a head needs a reader now, and why its last
+ * reader let it go. Each one reads what its own directory lists under the
+ * head's key, after asking the guard.
+ */
+function notifyCloudDraftHeadAbandoned(
+  summary: CloudChatSummary,
+  cause: CloudDraftHeadAbandonCause,
+): void {
+  for (const listener of [...cloudDraftHeadAbandonListeners]) {
+    listener(summary, cause);
+  }
+}
+
+/** Hear every {@link abandonCloudDraftHeadRead}; returns the unsubscribe. */
+export function subscribeCloudDraftHeadAbandoned(
+  listener: (
+    summary: CloudChatSummary,
+    cause: CloudDraftHeadAbandonCause,
+  ) => void,
+): () => void {
+  cloudDraftHeadAbandonListeners.add(listener);
+  return () => {
+    cloudDraftHeadAbandonListeners.delete(listener);
+  };
+}
+
+/**
+ * A mount on `hostId` skipped this head: register that host's requester as a
+ * source for the head's images, once per host, if its mirror session is
+ * mounted. Before the coordinator held the record, that mount's own ingest
+ * did this; a window whose only mounted session is on another host than the
+ * one that ingested the head would otherwise have no live source for those
+ * images once the ingesting host's session is released. A head still being
+ * read keeps the host on its record and registers it when the read settles:
+ * nothing calls this again for that mount until its next directory
+ * delivery, and the ingesting mount can be gone by then.
+ */
+export function noteCloudDraftHeadHost(
+  summary: CloudChatSummary,
+  hostId: string,
+): void {
+  const key = cloudDraftIdentityKey(summary);
+  // A host of the row from here on, whatever the record does: every head of
+  // the row that settles with images registers it then.
+  rememberCloudDraftRowHost(key, hostId);
+  const record = cloudDraftHeads.get(key);
+  if (record === undefined || record.state === "reading") return;
+  // Registered now for the head the record holds when that is the head the
+  // guard skipped: this very digest, or a STALE listing of the row (an older
+  // head, from a host-scoped directory cache not yet refreshed) that the
+  // guard answered as settled because the record holds a newer one. A
+  // listing of a newer head than the record's is read, never noted.
+  if (
+    record.headSha256 !== summary.headSha256 &&
+    !listingIsOlderThanRecord(record, summary)
+  ) {
+    return;
+  }
+  registerCloudDraftHeadHost(key, summary.identity, hostId);
+}
+
+/**
+ * Record `hostId`'s requester as a source for the settled head's images, if
+ * the head names any, the registry does not already hold this host for all
+ * of them, the host's session is mounted and the account is still served. A
+ * host not recorded here is recorded by a later {@link noteCloudDraftHeadHost}
+ * once it can be, and one the registry evicts since (it keeps three hosts per
+ * hash) is recorded again by the next walk, because the registry is asked
+ * each time rather than a list kept here.
+ */
+function registerCloudDraftHeadHost(
+  key: string,
+  identity: CloudChatSummary["identity"],
+  hostId: string,
+): void {
+  // The record is the row's (the key names it), and its images are the ones
+  // this host is a source for, whichever head the caller's listing named.
+  const record = cloudDraftHeads.get(key);
+  if (
+    record === undefined ||
+    record.state !== "settled" ||
+    record.imageHashes.length === 0 ||
+    cloudDraftImageSourcesRecorded(identity, hostId, record.imageHashes)
+  ) {
+    return;
+  }
+  const client = sessionClients.get(hostId);
+  if (client === undefined) return;
+  // The registry refuses a source for an account this window no longer
+  // serves (a cached directory rendered across a switch), and its refusal
+  // is what the next walk's query sees, so the account's return registers
+  // the host then.
+  if (identity.ownerUserId !== currentDraftBlobOwnerId()) return;
+  recordCloudDraftImageSources({
+    identity,
+    hostId,
+    client,
+    hashes: record.imageHashes,
+  });
+}
+
+function imageHashesOfDocument(document: DraftDocument): readonly string[] {
+  if (document.kind !== "landing" && document.kind !== "new-chat") return [];
+  return blobHashesOfDocument(document);
+}
+
+/**
+ * The read of this head ended without a decision and without a wake: an
+ * apply refused for a reason about the moment, or an ambiguous identity,
+ * which another mount asking now would meet too; the mounts that skipped the
+ * head hold neither a record nor a key for it and ask again at their next
+ * directory delivery. A reader torn down or out of attempts goes through
+ * {@link abandonCloudDraftHeadRead} instead.
+ * Only a record still READING this head is dropped: a decision another
+ * mount reached in the meantime, or a newer head's read, stays. The claim is
+ * identified by row and digest, not by the mount that made it, so a release
+ * from a torn-down continuation can drop another mount's live read of the
+ * same head; that mount's next attempt claims the head again when it finds
+ * nobody holding it (the ingest hook's retry), and otherwise the cost is one
+ * duplicate read by a third mount.
+ */
+export function releaseCloudDraftHeadRead(summary: CloudChatSummary): void {
+  const key = cloudDraftIdentityKey(summary);
+  const record = cloudDraftHeads.get(key);
+  if (
+    record !== undefined &&
+    record.state === "reading" &&
+    record.headSha256 === summary.headSha256
+  ) {
+    cloudDraftHeads.delete(key);
+  }
+}
+
+/**
+ * The read answered a settled refusal - unpublished, corrupt, needs a newer
+ * app, the wrong owner - which is terminal for THIS head: a head that later
+ * publishes arrives under a new `headSha256`. Without this record the row
+ * was resolved again on every mount, forever, which for an app older than the
+ * heads it is shown was the whole fan-out over again.
+ */
+export function settleCloudDraftHeadWithoutApply(
+  summary: CloudChatSummary,
+): void {
+  const key = cloudDraftIdentityKey(summary);
+  const current = cloudDraftHeads.get(key);
+  // The refusal answers for the publication the read STARTED from. A record
+  // advanced to a later republication of the same digest while that read was
+  // in flight (A at 5 retracted and republished unchanged at 9, with a
+  // directory listing 9 answered first) must not take the refusal as the
+  // republication's: it is the one exception to the stamp never moving back,
+  // because the later stamp was a fact about a listing nobody has read. The
+  // record settles the publication it answered for, and the mounts listing
+  // the republication are woken to read it now, as after an abandoned read;
+  // their walk finds the same digest listed later than the record and reads
+  // it, while the mount whose listing was refused finds it settled.
+  if (
+    current !== undefined &&
+    current.state === "reading" &&
+    current.headSha256 === summary.headSha256 &&
+    recordIsLaterThanListing(current, summary)
+  ) {
+    cloudDraftHeads.set(key, {
+      headSha256: summary.headSha256,
+      publishedAt: summary.publishedAt,
+      state: "settled",
+      mirrorId: null,
+      imageHashes: [],
+    });
+    notifyCloudDraftHeadAbandoned(summary, "released");
+    return;
+  }
+  settleCloudDraftHead(summary, SETTLED_WITHOUT_MIRROR);
+}
+
+/**
+ * Whether the record names a LATER publication of the same digest than the
+ * listing a read started from. Unknown on either side compares as not later.
+ */
+function recordIsLaterThanListing(
+  record: CloudDraftHeadRecord,
+  summary: CloudChatSummary,
+): boolean {
+  return (
+    record.headSha256 === summary.headSha256 &&
+    publishedLaterThan(record.publishedAt, summary.publishedAt)
+  );
+}
+
+/**
+ * What an INSTALLED head is remembered with: a landing head with its mirror's
+ * id (the record ends when that mirror leaves the store) and the image hashes
+ * the document names. Which hosts are sources for them is the registry's
+ * record: `recoverIngestedCloudDraftImages` records the ingesting host when
+ * it can, and `noteCloudDraftHeadHost` asks the registry before recording
+ * another.
+ */
+function installedHeadSettlement(input: {
+  readonly summary: CloudChatSummary;
+  readonly document: DraftDocument;
+}): CloudDraftHeadSettlement {
+  return {
+    mirrorId:
+      input.document.kind === "landing" ? input.summary.identity.chatId : null,
+    imageHashes: imageHashesOfDocument(input.document),
+  };
+}
+
+/**
+ * Whether this read's head is still the one the row's record names: no
+ * record (released or abandoned, and nothing newer claimed), or a record for
+ * this very digest. A record for another digest means a newer head was
+ * claimed or installed since this read began.
+ */
+function cloudDraftHeadClaimStands(summary: CloudChatSummary): boolean {
+  const record = cloudDraftHeads.get(cloudDraftIdentityKey(summary));
+  return record === undefined || record.headSha256 === summary.headSha256;
+}
+
+/**
+ * Guarded by the head: a record for ANOTHER head of the row is left alone.
+ * Two host-scoped directories can list successive heads for one row at
+ * once, and a read of the older head that completes after the newer head
+ * was claimed or installed must not replace that record, or the next mount
+ * reads the newer head again. A row with no record is settled as asked.
+ */
+function settleCloudDraftHead(
+  summary: CloudChatSummary,
+  settlement: CloudDraftHeadSettlement,
+): void {
+  const key = cloudDraftIdentityKey(summary);
+  const current = cloudDraftHeads.get(key);
+  if (current !== undefined && current.headSha256 !== summary.headSha256) {
+    return;
+  }
+  cloudDraftHeads.set(key, {
+    headSha256: summary.headSha256,
+    // The read may have started from an earlier listing of a digest whose
+    // record was since advanced to a republication; keep the later stamp.
+    publishedAt:
+      current === undefined
+        ? summary.publishedAt
+        : laterPublication(current.publishedAt, summary.publishedAt),
+    state: "settled",
+    mirrorId: settlement.mirrorId,
+    imageHashes: settlement.imageHashes,
+  });
+  // The row's hosts register as sources now that this head's images are
+  // known (a no-op for a host the registry already holds, and for a head
+  // without images).
+  const hosts = cloudDraftRowHosts.get(key);
+  if (hosts !== undefined) {
+    for (const hostId of hosts) {
+      registerCloudDraftHeadHost(key, summary.identity, hostId);
+    }
+  }
+}
+
+/** Forget every head whose mirror is one of `draftIds`. */
+function forgetCloudDraftHeadsOfMirrors(draftIds: ReadonlySet<string>): void {
+  for (const [key, record] of cloudDraftHeads) {
+    if (record.mirrorId !== null && draftIds.has(record.mirrorId)) {
+      cloudDraftHeads.delete(key);
+    }
+  }
 }
 
 /**
@@ -1632,9 +2389,39 @@ export function reserveCloudDraftIngestFence(draftId: string): void {
 }
 
 /**
+ * Reserve the absence-sweep fence for a headed row a directory lists, at
+ * that directory's dispatch position (`listedAtSeq`, the snapshot's
+ * `fenceSeq`). A positive listing has to order against older snapshots (a
+ * later-dispatched response that lists the row can run before an
+ * earlier-dispatched one that omits it) and must NOT outrank a newer one (a
+ * walk of a cached snapshot can run after a newer request was dispatched,
+ * and that response's absence is the later fact), so the stamp is the
+ * listing's own position, never the walk's, and never moves back. This
+ * reservation must not supersede an apply of the row that another mount has
+ * in flight, which {@link reserveCloudDraftIngestFence} would: it keeps its
+ * own map, keyed by the row (owner plus id), so one owner's listing protects
+ * only its own mirror - and, under the bare id, a mirror without an owner,
+ * which the absence predicate treats as listed under any owner.
+ */
+export function reserveCloudDraftSweepFence(
+  draftId: string,
+  ownerHostId: string,
+  listedAtSeq: number,
+): void {
+  const key = cloudSweepFenceKey(draftId, ownerHostId);
+  const current = cloudSweepFenceByRow.get(key) ?? 0;
+  if (listedAtSeq > current) cloudSweepFenceByRow.set(key, listedAtSeq);
+  const currentById = cloudSweepFenceByDraftId.get(draftId) ?? 0;
+  if (listedAtSeq > currentById) {
+    cloudSweepFenceByDraftId.set(draftId, listedAtSeq);
+  }
+}
+
+/**
  * Drop local mirrors of cloud rows a settled directory no longer lists.
- * `fenceSeq` is the ingest sequence at that directory's fetch start: a row
- * ingested since is kept. A replica qualifies once clean. An OWN row
+ * `fenceSeq` is the position that directory's request took when it was
+ * dispatched: a row ingested, or listed by a later-dispatched directory,
+ * since then is kept. A replica qualifies once clean. An OWN row
  * adopted on another host qualifies only when it was published (an
  * unpublished own row is never listed) and that host has no mirror
  * session here (a mounted session delivers its own tombstones, and its
@@ -1645,8 +2432,10 @@ export function sweepAbsentCloudDraftMirrors(
   listed: ReadonlyMap<string, ReadonlySet<string>>,
   fenceSeq: number,
 ): readonly string[] {
-  return dropForeignLandingMirrorsAbsent(hostId, listed, (draft) => {
-    if ((cloudIngestSeqByDraft.get(draft.id) ?? 0) > fenceSeq) return false;
+  const dropped = dropForeignLandingMirrorsAbsent(hostId, listed, (draft) => {
+    if (cloudDraftFenceSeq(draft.id, draft.ownerHostId) > fenceSeq) {
+      return false;
+    }
     if (draft.origin === "replica") return true;
     // A row with no recorded publication state is treated as unpublished.
     return (
@@ -1656,6 +2445,10 @@ export function sweepAbsentCloudDraftMirrors(
       !sessions.has(draft.adoption.hostId)
     );
   });
+  // A dropped mirror's head is no longer settled here: the same head listed
+  // again later (a row that reappears) is read and applied again.
+  if (dropped.length > 0) forgetCloudDraftHeadsOfMirrors(new Set(dropped));
+  return dropped;
 }
 
 /**
@@ -1685,7 +2478,7 @@ export function flushAbsentOwnCloudDrafts(
     ) {
       continue;
     }
-    if ((cloudIngestSeqByDraft.get(draft.id) ?? 0) > fenceSeq) continue;
+    if (cloudDraftFenceSeq(draft.id, draft.ownerHostId) > fenceSeq) continue;
     const owners = listed.get(draft.id);
     if (
       owners !== undefined &&
@@ -1752,9 +2545,9 @@ registerExtraImageRootSource({
  * The step it does not cover is a root this partition has NEVER held: a draft
  * mirrored from the host, or restored on a second machine, naming digests whose
  * bytes the recovery legs have not fetched yet. Unmeasured, undeclared and
- * absent from the partition, such a root prices at ZERO - and recovery then
- * writes those bytes in through `cloud-draft-image-recovery` /
- * `readDraftBlobsIntoLocalStore`, neither of which asks the budget for room.
+ * absent from the partition, such a root prices at ZERO. Both the cloud and
+ * host recovery readers now reserve residency before writing those bytes;
+ * this declaration lets that reservation account for a restored root.
  * The landing surface never had this hole, because `declaredSizeByHash` walks
  * landing drafts directly; this is the same reading for the two composer
  * surfaces that reach the budget only through this registration.

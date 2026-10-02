@@ -462,9 +462,9 @@ describe("<EpicsList />", () => {
     expect(await screen.findByTestId("epics-list-rows")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-loading")).toBeNull();
     expect(screen.getByText("Legacy Phase")).not.toBeNull();
-    expect(screen.getByText("updated 1 minute ago")).not.toBeNull();
+    expect(screen.getByText("activity 1 minute ago")).not.toBeNull();
     expect(screen.getByText("First Epic")).not.toBeNull();
-    expect(screen.getByText("updated 2 minutes ago")).not.toBeNull();
+    expect(screen.getByText("activity 2 minutes ago")).not.toBeNull();
     expect(screen.getAllByTestId("epics-list-row")).toHaveLength(2);
     expect(listTasksRequests).toEqual([
       expectedDefaultHistoryRequest(undefined),

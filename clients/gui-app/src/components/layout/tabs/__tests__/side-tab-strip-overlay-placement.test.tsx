@@ -9,11 +9,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -56,7 +58,10 @@ import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notification
 import { __resetHostNotificationsStoreForTests } from "@/stores/notifications/host-notifications-store";
 import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
 
 // Same host-resolution seam `notifications-bell.test.tsx` stubs: the bell
 // resolves its host through these two hooks, not through the app-wide active
@@ -375,6 +380,196 @@ describe("<SideTabStrip /> real overlay placement, right edge (D7)", () => {
     const drawer = screen.getByTestId("side-strip-inbox-drawer");
     expect(drawer.getAttribute("data-side")).toBe("right");
     expect(drawer.getAttribute("data-align")).toBe("start");
+  });
+});
+
+const ALPHA: TabRef = { kind: "epic", id: "e-alpha" };
+
+/** One open task, so the strip has a real row to hover. */
+function openAlphaTab(): void {
+  useEpicCanvasStore
+    .getState()
+    .seedEpic(ALPHA.id, { tabId: ALPHA.id, name: "Alpha" }, []);
+  useTabsStore.setState({
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(ALPHA), ref: ALPHA }],
+    activeItemId: tabItemId(ALPHA),
+    stripOrder: [ALPHA],
+    systemTabs: { history: null, settings: null },
+  });
+}
+
+/** A real mouse hover: Floating UI's open delay rides on the native
+ * `mouseenter` and gates on the pointer type the React `onPointerEnter`
+ * records just before it, so both fire, in this order. */
+function hoverIn(trigger: HTMLElement): void {
+  fireEvent.pointerEnter(trigger, { pointerType: "mouse" });
+  fireEvent.mouseEnter(trigger);
+}
+
+describe("<SideTabStrip /> the sides its overlays open on, per edge (D7)", () => {
+  beforeEach(() => {
+    resetSharedState();
+    signIn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+  });
+
+  it.each([
+    { edge: "left", side: "right" },
+    { edge: "right", side: "left" },
+  ] as const)(
+    "opens a task row's hover card toward the content: side=$side on the $edge strip",
+    async ({ edge, side }) => {
+      openAlphaTab();
+      renderHarness(
+        <WindowsBridgeContext.Provider
+          value={{ bridge: null, hasHydrated: true }}
+        >
+          <SideTabStrip edge={edge} ownsTitleBar={false} />
+        </WindowsBridgeContext.Provider>,
+      );
+      const row = await screen.findByTestId("tab-epic-e-alpha");
+      // After the strip has mounted on real timers: the card's open delay is
+      // the only clock this test needs to drive.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      expect(screen.queryByTestId("side-tab-hover-card")).toBeNull();
+
+      hoverIn(row);
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // The row's own card, read off the real strip: the edge it took its side
+      // from is the one `SideTabStrip` provided, not one this test wrote.
+      const card = screen.getByTestId("side-tab-hover-card");
+      expect(card.getAttribute("data-side")).toBe(side);
+      expect(card.getAttribute("data-align")).toBe("start");
+    },
+  );
+
+  it("opens the user menu toward the content on the left strip (side=right, align=end)", async () => {
+    renderHarness(
+      <WindowsBridgeContext.Provider
+        value={{ bridge: null, hasHydrated: true }}
+      >
+        <SideTabStrip edge="left" ownsTitleBar={false} />
+      </WindowsBridgeContext.Provider>,
+    );
+    await screen.findByTestId("side-tab-strip");
+
+    fireEvent.pointerDown(screen.getByTestId("user-menu-trigger"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const menu = await screen.findByTestId("user-menu-content");
+    expect(menu.getAttribute("data-side")).toBe("right");
+    expect(menu.getAttribute("data-align")).toBe("end");
+  });
+});
+
+/**
+ * jsdom lays nothing out, so the painted title's overflow is stubbed on the
+ * one element that measures it: the row's `.header-tab-title-text`.
+ */
+function stubTaskTitleOverflow(truncated: boolean): void {
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList.contains("header-tab-title-text") && truncated
+        ? 320
+        : 0;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList.contains("header-tab-title-text") ? 120 : 0;
+    },
+  });
+}
+
+function restoreTitleMetrics(): void {
+  for (const property of ["scrollWidth", "clientWidth"] as const) {
+    Object.defineProperty(HTMLElement.prototype, property, {
+      configurable: true,
+      get: () => 0,
+    });
+  }
+}
+
+function setSideStripView(view: "layered" | "activity"): void {
+  act(() => {
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: "left",
+        sideStripView: view,
+      },
+    });
+  });
+}
+
+async function dwellOnAlphaRow(): Promise<void> {
+  openAlphaTab();
+  renderHarness(
+    <WindowsBridgeContext.Provider value={{ bridge: null, hasHydrated: true }}>
+      <SideTabStrip edge="left" ownsTitleBar={false} />
+    </WindowsBridgeContext.Provider>,
+  );
+  const row = await screen.findByTestId("tab-epic-e-alpha");
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  hoverIn(row);
+  act(() => {
+    vi.advanceTimersByTime(1000);
+  });
+}
+
+describe("<SideTabStrip /> a task row's hover card, by view", () => {
+  beforeEach(() => {
+    resetSharedState();
+    signIn();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    restoreTitleMetrics();
+    useAuthStore.getState().setSignedOut();
+    resetSharedState();
+  });
+
+  it("keeps the full card in the Layered view, its state line included, even for a title that fits", async () => {
+    setSideStripView("layered");
+    stubTaskTitleOverflow(false);
+    await dwellOnAlphaRow();
+
+    const card = screen.getByTestId("side-tab-hover-card");
+    expect(card.textContent).toContain("Alpha");
+    expect(within(card).getByTestId("side-tab-hover-card-state")).toBeTruthy();
+  });
+
+  it("shows only the full title in the Activity view, for a title the row cuts short", async () => {
+    setSideStripView("activity");
+    stubTaskTitleOverflow(true);
+    await dwellOnAlphaRow();
+
+    const card = screen.getByTestId("side-tab-hover-card");
+    expect(card.textContent).toBe("Alpha");
+    expect(within(card).queryByTestId("side-tab-hover-card-state")).toBeNull();
+  });
+
+  it("opens no card in the Activity view for a title that fits", async () => {
+    setSideStripView("activity");
+    stubTaskTitleOverflow(false);
+    await dwellOnAlphaRow();
+
+    expect(screen.queryByTestId("side-tab-hover-card")).toBeNull();
   });
 });
 

@@ -1,7 +1,7 @@
 import {
   alwaysAvailable,
-  isPushPermissionGroupAvailable,
-  isSystemNotificationsGroupAvailable,
+  isPushPermissionRowAvailable,
+  isSystemNotificationsRowAvailable,
 } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
@@ -72,61 +72,66 @@ export const APP_NOTIFICATIONS = defineSettingsSection("app-notifications", {
     availableWhen: alwaysAvailable,
     keywords: [],
   },
-  events: {
+  // Where the alerts themselves are configured: the OS (or, in the phone app,
+  // its push permission) and the selected host's own page. Each used to be a
+  // heading over one row. Notification events is drawn in every shell, so the
+  // group is never empty.
+  notifications: {
     kind: "group",
-    search: { anchor: "app-notifications-events" },
-    label: "Events",
+    search: { anchor: "app-notifications-notifications" },
+    label: "Notifications",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: ["alerts", "triggers", "when"],
+    keywords: ["alerts", "delivery"],
+  },
+  osNotifications: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "app-notifications-os" },
+    label: "OS notifications",
+    description:
+      "Banners, badges, and delivery are managed by your operating system.",
+    availableWhen: isSystemNotificationsRowAvailable,
+    keywords: ["os", "native", "banner", "badge", "macos", "windows", "system"],
+  },
+  // "On this phone", never "on this device": in this GUI "device" is the UI
+  // word for a HOST, and this row is about the phone in the person's hand.
+  pushNotifications: {
+    kind: "row",
+    group: "notifications",
+    search: { anchor: "app-notifications-push" },
+    label: "Push notifications on this phone",
+    // The sentence reports the OS permission state, so it is the row's status.
+    description: null,
+    availableWhen: isPushPermissionRowAvailable,
+    keywords: [
+      "push",
+      "mobile",
+      "phone",
+      "permission",
+      "remote",
+      "ios",
+      "android",
+      "device",
+    ],
   },
   notificationEvents: {
     kind: "row",
-    group: "events",
+    group: "notifications",
     search: { anchor: "app-notification-events" },
     label: "Notification events",
     description:
       "Choose which events alert you for the host selected in Settings.",
     availableWhen: alwaysAvailable,
-    keywords: ["events", "turn done", "alerts", "filter", "which"],
-  },
-  system: {
-    kind: "group",
-    search: { anchor: "app-notifications-system" },
-    label: "System",
-    description: null,
-    breadcrumb: null,
-    availableWhen: isSystemNotificationsGroupAvailable,
-    keywords: ["os", "native", "banner", "badge"],
-  },
-  osNotifications: {
-    kind: "row",
-    group: "system",
-    search: { anchor: "app-notifications-os" },
-    label: "OS notifications",
-    description:
-      "Banners, badges, and delivery are managed by your operating system.",
-    availableWhen: alwaysAvailable,
-    keywords: ["os", "native", "banner", "badge", "macos", "windows"],
-  },
-  thisPhone: {
-    kind: "group",
-    search: { anchor: "app-notifications-this-phone" },
-    label: "This phone",
-    description: null,
-    breadcrumb: null,
-    availableWhen: isPushPermissionGroupAvailable,
-    keywords: ["mobile", "ios", "android", "device", "push"],
-  },
-  pushNotifications: {
-    kind: "row",
-    group: "thisPhone",
-    search: { anchor: "app-notifications-push" },
-    label: "Push notifications",
-    // The sentence reports the OS permission state, so it is the row's status.
-    description: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["push", "mobile", "phone", "permission", "remote"],
+    keywords: [
+      "events",
+      "turn done",
+      "alerts",
+      "filter",
+      "which",
+      "triggers",
+      "when",
+    ],
   },
 });

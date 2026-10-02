@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
+import { SheetJoinBridge } from "@/components/layout/tabs/sheet-join";
 import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
 import type { AppColumnChrome } from "@/components/layout/header/app-title-band-kind";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
@@ -39,6 +40,12 @@ export type AppColumnFrameProps = AppColumnFrameSlots & AppColumnChrome;
 export function AppColumnFrame(props: AppColumnFrameProps): ReactNode {
   const { placement, titleBand, columnRef } = props;
   const edge = sideTabStripEdge(placement);
+  useLayoutEffect(() => {
+    // Portalled overlays inherit from HTML, outside the app column.
+    const root = document.documentElement;
+    root.setAttribute("data-app-title-band", titleBand);
+    return () => root.removeAttribute("data-app-title-band");
+  }, [titleBand]);
 
   return (
     <div
@@ -49,8 +56,6 @@ export function AppColumnFrame(props: AppColumnFrameProps): ReactNode {
       // the OLD snapshot of the column is captured before that.
       data-layout-column
       data-tab-strip-placement={placement}
-      // Read by styles/window-chrome.css to size `--app-title-band-height`.
-      data-app-title-band={titleBand}
       // Scoped so a picture of the frame inside it (the layout editor's
       // preset miniatures) can never lend the bridge its anchors.
       className="relative flex h-safe-dvh min-w-0 flex-1 flex-col [anchor-scope:--sheet-joined,--task-frame] md:bg-shell-ground"
@@ -92,7 +97,7 @@ export function AppColumnFrame(props: AppColumnFrameProps): ReactNode {
       {edge === null ? (
         <>
           <div data-strip-drag-overlay-host className="contents" />
-          <span aria-hidden data-sheet-join-bridge="top" />
+          <SheetJoinBridge edge="top" />
         </>
       ) : null}
       {props.tail}

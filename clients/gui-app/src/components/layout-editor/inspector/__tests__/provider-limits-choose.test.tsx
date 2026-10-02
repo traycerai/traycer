@@ -6,11 +6,7 @@ import {
   AUTOMATIC_LIMIT_SELECTION,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
-import {
-  providerChanged,
-  resetWouldChange,
-  usageProvidersChanged,
-} from "@/lib/layout/layout-diff";
+import { providerChanged, resetWouldChange } from "@/lib/layout/layout-diff";
 import { USAGE_PROVIDER_LEVEL } from "@/components/layout-editor/regions/usage-provider-level";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -154,11 +150,10 @@ describe('the provider row\'s "Choose..." checklist (L-96, I-14)', () => {
     );
 
     // Byte-identical to the shipped layout, so there is nothing to revert, no
-    // dot to draw on the provider or on Usage limits, and no "Reset
+    // dot to draw on the provider, and no "Reset
     // layout..." - a confirmed, irreversible action - to offer.
     expect(arrangement().providerLimits).toEqual({});
     expect(providerChanged(arrangement(), PROVIDER)).toBe(false);
-    expect(usageProvidersChanged(arrangement())).toBe(false);
     expect(resetWouldChange(getLayoutSnapshot())).toBe(false);
     // And the checklist goes with the picks.
     expect(screen.queryByRole("group", { name: "Limits to draw" })).toBeNull();

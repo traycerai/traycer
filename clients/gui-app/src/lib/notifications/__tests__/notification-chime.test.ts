@@ -1,403 +1,240 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_NOTIFICATION_CHIME_SOUNDS,
+  NOTIFICATION_CHIME_SOUNDS,
   disposeNotificationChimeAudio,
+  installNotificationChimeAudioWarmup,
   notificationChimeEventTypeForSeverities,
   playNotificationChimeSound,
   prepareNotificationChimeAudio,
 } from "@/lib/notifications/notification-chime";
-import { __setBrowserDocumentHiddenForTests } from "@/lib/dom/document-visibility";
 
-type AudioParamMock = Mock<(value: number, atTime: number) => void>;
-type OscillatorEventMock = Mock<(atTime: number) => void>;
+// The HTML media element is the hardware boundary: play() is where autoplay
+// policy and the audio device answer. "allow" resolves, "block" rejects like an
+// autoplay refusal, "manual" leaves each play() pending for the test to settle.
+type PlayMode = "allow" | "block" | "manual";
 
-const oscillators: Array<{
-  readonly frequency: {
-    readonly exponentialRampToValueAtTime: AudioParamMock;
-    readonly setValueAtTime: AudioParamMock;
-  };
-  readonly start: OscillatorEventMock;
-  readonly stop: OscillatorEventMock;
-  onended: (() => void) | null;
-}> = [];
+interface PendingPlay {
+  readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
+}
 
-class FakeAudioContext {
-  readonly currentTime = 2;
-  readonly destination = {};
-  state: AudioContextState = "running";
-  readonly close = vi.fn(() => Promise.resolve());
-  readonly resume = vi.fn(() => {
-    this.state = "running";
-    return Promise.resolve();
-  });
-  readonly suspend = vi.fn(() => {
-    this.state = "suspended";
-    return Promise.resolve();
-  });
+let playMode: PlayMode = "allow";
+const audios: FakeAudio[] = [];
 
-  createOscillator() {
-    const oscillator = {
-      type: "sine" as OscillatorType,
-      frequency: {
-        setValueAtTime: vi.fn<(value: number, atTime: number) => void>(),
-        exponentialRampToValueAtTime:
-          vi.fn<(value: number, atTime: number) => void>(),
-      },
-      connect: vi.fn(),
-      start: vi.fn<(atTime: number) => void>(),
-      stop: vi.fn<(atTime: number) => void>(),
-      onended: null as (() => void) | null,
-    };
-    oscillators.push(oscillator);
-    return oscillator;
+class FakeAudio {
+  readonly home: string;
+  readonly played: string[] = [];
+  readonly pending: PendingPlay[] = [];
+  preload = "";
+  currentTime = 0;
+  onended: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  readonly pause = vi.fn();
+  readonly load = vi.fn();
+
+  constructor(public src: string) {
+    this.home = src;
+    audios.push(this);
   }
 
-  createGain() {
-    return {
-      gain: {
-        setValueAtTime: vi.fn(),
-        exponentialRampToValueAtTime: vi.fn(),
-        linearRampToValueAtTime: vi.fn(),
-        setTargetAtTime: vi.fn(),
-      },
-      connect: vi.fn(),
-      disconnect: vi.fn(),
-    };
+  removeAttribute(name: string): void {
+    if (name === "src") this.src = "";
+  }
+
+  play(): Promise<void> {
+    this.played.push(this.src);
+    return new Promise<void>((resolve, reject) => {
+      this.pending.push({ resolve, reject });
+      if (playMode === "allow") resolve();
+      if (playMode === "block") {
+        reject(new DOMException("blocked", "NotAllowedError"));
+      }
+    });
   }
 }
 
+const AUDIBLE_SOUNDS = NOTIFICATION_CHIME_SOUNDS.filter(
+  (sound) => sound !== "none",
+);
+
+function fileName(url: string): string {
+  return (url.split("/").pop() ?? "").split("?")[0];
+}
+
+function cachedAudioFor(sound: string): FakeAudio {
+  const audio = audios.find((candidate) =>
+    candidate.home.endsWith(`/${sound}.wav`),
+  );
+  if (audio === undefined) throw new Error(`no audio element for ${sound}`);
+  return audio;
+}
+
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+beforeEach(() => {
+  playMode = "allow";
+  vi.stubGlobal("Audio", FakeAudio);
+});
+
 afterEach(() => {
   disposeNotificationChimeAudio();
-  oscillators.length = 0;
+  audios.length = 0;
   vi.unstubAllGlobals();
 });
 
-describe("playNotificationChimeSound", () => {
-  it("primes the audio renderer before the first audible chime", () => {
-    vi.stubGlobal("AudioContext", FakeAudioContext);
-
-    prepareNotificationChimeAudio();
-
-    expect(oscillators).toHaveLength(1);
-    expect(oscillators[0].start).toHaveBeenCalledWith(2);
-    expect(oscillators[0].stop).toHaveBeenCalledWith(2.02);
-  });
-
-  it("suspends the audio context after warmup so an idle renderer is not holding a running context", () => {
-    const contexts: FakeAudioContext[] = [];
-    class TrackingAudioContext extends FakeAudioContext {
-      constructor() {
-        super();
-        contexts.push(this);
-      }
-    }
-    vi.stubGlobal("AudioContext", TrackingAudioContext);
-
-    prepareNotificationChimeAudio();
-
-    expect(contexts).toHaveLength(1);
-    expect(contexts[0].suspend).toHaveBeenCalledOnce();
-    expect(contexts[0].state).toBe("suspended");
-  });
-
-  it("plays a chime while the document is hidden after warmup left the context suspended", async () => {
-    const contexts: FakeAudioContext[] = [];
-    class TrackingAudioContext extends FakeAudioContext {
-      constructor() {
-        super();
-        contexts.push(this);
-      }
-    }
-    vi.stubGlobal("AudioContext", TrackingAudioContext);
-
-    prepareNotificationChimeAudio();
-    expect(contexts[0].state).toBe("suspended");
-    const oscillatorsAfterWarmup = oscillators.length;
-
-    try {
-      __setBrowserDocumentHiddenForTests(true);
-      playNotificationChimeSound("classic");
-
-      expect(contexts[0].resume).toHaveBeenCalledOnce();
-      await contexts[0].resume.mock.results[0].value;
-      await Promise.resolve();
-      expect(oscillators.length).toBeGreaterThan(oscillatorsAfterWarmup);
-    } finally {
-      __setBrowserDocumentHiddenForTests(false);
-    }
-  });
-
-  it("resumes again if a chime starts while an idle suspend is still in flight", async () => {
-    const contexts: FakeAudioContext[] = [];
-    let releaseSuspend: () => void = () => undefined;
-    class DeferredSuspendContext extends FakeAudioContext {
-      constructor() {
-        super();
-        contexts.push(this);
-      }
-
-      override readonly suspend = vi.fn(() => {
-        return new Promise<void>((resolve) => {
-          releaseSuspend = () => {
-            this.state = "suspended";
-            resolve();
-          };
-        });
-      });
-    }
-    vi.stubGlobal("AudioContext", DeferredSuspendContext);
-
-    prepareNotificationChimeAudio();
-    expect(contexts[0].suspend).toHaveBeenCalledOnce();
-    expect(contexts[0].state).toBe("running");
-
-    playNotificationChimeSound("classic");
-    expect(oscillators.length).toBeGreaterThan(1);
-    expect(contexts[0].state).toBe("running");
-
-    releaseSuspend();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(contexts[0].resume).toHaveBeenCalled();
-    expect(contexts[0].state).toBe("running");
-  });
-
-  it("suspends after the last oscillator of a chime ends", () => {
-    const contexts: FakeAudioContext[] = [];
-    class TrackingAudioContext extends FakeAudioContext {
-      constructor() {
-        super();
-        contexts.push(this);
-      }
-    }
-    vi.stubGlobal("AudioContext", TrackingAudioContext);
-
-    playNotificationChimeSound("classic");
-    const ended = oscillators.find((oscillator) => oscillator.onended !== null);
-    expect(ended?.onended).toEqual(expect.any(Function));
-    ended?.onended?.();
-    expect(contexts[0].suspend).toHaveBeenCalledOnce();
-    expect(contexts[0].state).toBe("suspended");
-  });
-
-  it("releases the active-chime reservation when scheduling throws, so idle suspend still runs", () => {
-    const contexts: FakeAudioContext[] = [];
-    class TrackingAudioContext extends FakeAudioContext {
-      constructor() {
-        super();
-        contexts.push(this);
-      }
-    }
-    const original = Object.getOwnPropertyDescriptor(
-      FakeAudioContext.prototype,
-      "createOscillator",
-    );
-    Object.defineProperty(FakeAudioContext.prototype, "createOscillator", {
-      configurable: true,
-      writable: true,
-      value: () => {
-        throw new Error("audio resources unavailable");
-      },
-    });
-    try {
-      vi.stubGlobal("AudioContext", TrackingAudioContext);
-      playNotificationChimeSound("classic");
-      expect(contexts[0].suspend).toHaveBeenCalledOnce();
-      expect(contexts[0].state).toBe("suspended");
-    } finally {
-      if (original === undefined) {
-        Reflect.deleteProperty(FakeAudioContext.prototype, "createOscillator");
-      } else {
-        Object.defineProperty(
-          FakeAudioContext.prototype,
-          "createOscillator",
-          original,
-        );
-      }
-    }
-  });
-
-  it("tears down already-started voices if a later voice throws, without a second release on onended", () => {
-    const contexts: FakeAudioContext[] = [];
-    class TrackingAudioContext extends FakeAudioContext {
-      constructor() {
-        super();
-        contexts.push(this);
-      }
-    }
-    const original = Object.getOwnPropertyDescriptor(
-      FakeAudioContext.prototype,
-      "createOscillator",
-    );
-    let remaining = 1;
-    Object.defineProperty(FakeAudioContext.prototype, "createOscillator", {
-      configurable: true,
-      writable: true,
-      value: () => {
-        if (remaining === 0) {
-          throw new Error("second voice unavailable");
-        }
-        remaining -= 1;
-        const oscillator = {
-          type: "sine" as OscillatorType,
-          frequency: {
-            setValueAtTime: vi.fn<(value: number, atTime: number) => void>(),
-            exponentialRampToValueAtTime:
-              vi.fn<(value: number, atTime: number) => void>(),
-          },
-          connect: vi.fn(),
-          disconnect: vi.fn(),
-          start: vi.fn<(atTime: number) => void>(),
-          stop: vi.fn<(atTime: number) => void>(),
-          onended: null as (() => void) | null,
-        };
-        oscillators.push(oscillator);
-        return oscillator;
-      },
-    });
-    try {
-      vi.stubGlobal("AudioContext", TrackingAudioContext);
-      playNotificationChimeSound("classic");
-      expect(oscillators).toHaveLength(1);
-      expect(contexts[0].suspend).toHaveBeenCalledOnce();
-      oscillators[0].onended?.();
-      expect(contexts[0].suspend).toHaveBeenCalledOnce();
-    } finally {
-      if (original === undefined) {
-        Reflect.deleteProperty(FakeAudioContext.prototype, "createOscillator");
-      } else {
-        Object.defineProperty(
-          FakeAudioContext.prototype,
-          "createOscillator",
-          original,
-        );
-      }
-    }
-  });
-
-  it("does not create an audio context when chimes are disabled", () => {
-    const AudioContext = vi.fn(FakeAudioContext);
+describe("notification chime audio", () => {
+  it("does not construct an AudioContext from app startup or the first user gesture", () => {
+    const AudioContext = vi.fn();
     vi.stubGlobal("AudioContext", AudioContext);
 
-    playNotificationChimeSound("none");
+    const uninstall = installNotificationChimeAudioWarmup();
+    try {
+      window.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
 
-    expect(AudioContext).not.toHaveBeenCalled();
+      expect(AudioContext).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+    }
   });
 
-  it("plays Classic as a bell fundamental with a short octave shimmer", () => {
-    vi.stubGlobal("AudioContext", FakeAudioContext);
+  it("plays nothing for the none sound", () => {
+    playNotificationChimeSound("none");
+
+    expect(audios).toHaveLength(0);
+  });
+
+  it("warms with silence only, then leaves every chime asset cached", async () => {
+    prepareNotificationChimeAudio();
+    await settle();
+
+    expect(audios.map((audio) => fileName(audio.home)).sort()).toEqual(
+      AUDIBLE_SOUNDS.map((sound) => `${sound}.wav`).sort(),
+    );
+    for (const audio of audios) {
+      expect(audio.played.map(fileName)).toEqual(["silence.wav"]);
+      expect(audio.pause).toHaveBeenCalledOnce();
+      expect(audio.src).toBe(audio.home);
+    }
+  });
+
+  it("plays a chime from its warmed element from the start", async () => {
+    prepareNotificationChimeAudio();
+    await settle();
+    const classic = cachedAudioFor("classic");
+    classic.currentTime = 1.5;
 
     playNotificationChimeSound("classic");
 
-    expect(oscillators).toHaveLength(2);
-    expect(oscillators[0].start.mock.calls[0][0]).toBeCloseTo(2.005);
-    expect(oscillators[0].stop.mock.calls[0][0]).toBeCloseTo(2.345);
-    expect(oscillators[1].stop.mock.calls[0][0]).toBeCloseTo(2.165);
+    expect(audios).toHaveLength(AUDIBLE_SOUNDS.length);
+    expect(classic.played.map(fileName)).toEqual([
+      "silence.wav",
+      "classic.wav",
+    ]);
+    expect(classic.currentTime).toBe(0);
   });
 
-  it("plays Prism as a three-note ascending chord", () => {
-    vi.stubGlobal("AudioContext", FakeAudioContext);
+  it("retries a warmup that autoplay refused on the next user gesture, once", async () => {
+    playMode = "block";
+    const uninstall = installNotificationChimeAudioWarmup();
+    try {
+      await settle();
+      for (const audio of audios) expect(audio.src).toBe(audio.home);
+
+      playMode = "allow";
+      window.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      await settle();
+      for (const audio of audios) {
+        expect(audio.played.map(fileName)).toEqual([
+          "silence.wav",
+          "silence.wav",
+        ]);
+        expect(audio.src).toBe(audio.home);
+      }
+
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+      await settle();
+      for (const audio of audios) expect(audio.played).toHaveLength(2);
+    } finally {
+      uninstall();
+    }
+  });
+
+  it.each(["resolves", "rejects"] as const)(
+    "a chime started during warmup is not paused or reset when the stale warmup %s",
+    async (outcome) => {
+      playMode = "manual";
+      prepareNotificationChimeAudio();
+      const classic = cachedAudioFor("classic");
+
+      playNotificationChimeSound("classic");
+      expect(classic.played.map(fileName)).toEqual([
+        "silence.wav",
+        "classic.wav",
+      ]);
+
+      if (outcome === "resolves") classic.pending[0].resolve();
+      else classic.pending[0].reject(new DOMException("aborted", "AbortError"));
+      await settle();
+
+      expect(classic.pause).not.toHaveBeenCalled();
+      expect(classic.load).not.toHaveBeenCalled();
+      expect(fileName(classic.src)).toBe("classic.wav");
+    },
+  );
+
+  it("restarts the same sound on its one element while it plays, and overlaps distinct sounds", () => {
+    playNotificationChimeSound("classic");
+    const classic = cachedAudioFor("classic");
+    classic.currentTime = 1.2;
+
+    playNotificationChimeSound("classic");
+
+    expect(audios).toHaveLength(1);
+    expect(classic.currentTime).toBe(0);
+    expect(classic.played.map(fileName)).toEqual([
+      "classic.wav",
+      "classic.wav",
+    ]);
 
     playNotificationChimeSound("prism");
 
-    expect(oscillators).toHaveLength(3);
-    expect(oscillators[0].start.mock.calls[0][0]).toBeCloseTo(2.005);
-    expect(oscillators[1].start.mock.calls[0][0]).toBeCloseTo(2.095);
-    expect(oscillators[2].start.mock.calls[0][0]).toBeCloseTo(2.185);
+    expect(audios).toHaveLength(2);
+    expect(cachedAudioFor("prism").played.map(fileName)).toEqual(["prism.wav"]);
+    expect(classic.played).toHaveLength(2);
   });
 
-  it("plays Ripple with fast upward water-drop motion", () => {
-    vi.stubGlobal("AudioContext", FakeAudioContext);
-
-    playNotificationChimeSound("ripple");
-
-    expect(oscillators).toHaveLength(2);
-    expect(oscillators[0].frequency.setValueAtTime).toHaveBeenCalledWith(
-      440,
-      2.005,
-    );
-    const frequencyRamp =
-      oscillators[0].frequency.exponentialRampToValueAtTime.mock.calls[0];
-    expect(frequencyRamp[0]).toBe(880);
-    expect(frequencyRamp[1]).toBeCloseTo(2.095);
-  });
-
-  it("plays Rift as a restrained descending failure cue", () => {
-    vi.stubGlobal("AudioContext", FakeAudioContext);
-
-    playNotificationChimeSound("rift");
-
-    expect(oscillators).toHaveLength(3);
-    expect(oscillators[0].frequency.setValueAtTime).toHaveBeenCalledWith(
-      659.25,
-      2.005,
-    );
-    expect(oscillators[1].frequency.setValueAtTime).toHaveBeenCalledWith(
-      622.25,
-      2.105,
-    );
-    expect(oscillators[2].frequency.setValueAtTime).toHaveBeenCalledWith(
-      440,
-      2.205,
-    );
-    expect(oscillators[2].stop.mock.calls[0][0]).toBeCloseTo(2.415);
-  });
-
-  it("reuses one interactive audio context across chimes", () => {
-    const AudioContext = vi.fn(FakeAudioContext);
-    vi.stubGlobal("AudioContext", AudioContext);
-
+  it("still plays a later chime after autoplay rejected an earlier one", async () => {
+    playMode = "block";
     playNotificationChimeSound("classic");
-    playNotificationChimeSound("ember");
+    await settle();
 
-    expect(AudioContext).toHaveBeenCalledTimes(1);
-    expect(AudioContext).toHaveBeenCalledWith({ latencyHint: "interactive" });
+    playMode = "allow";
+    playNotificationChimeSound("classic");
+
+    expect(audios).toHaveLength(1);
+    expect(audios[0].played.map(fileName)).toEqual([
+      "classic.wav",
+      "classic.wav",
+    ]);
   });
 
-  it("resumes a suspended audio context before scheduling the chime", async () => {
-    const contexts: FakeAudioContext[] = [];
-    class SuspendedAudioContext extends FakeAudioContext {
-      constructor() {
-        super();
-        this.state = "suspended";
-        contexts.push(this);
-      }
+  it("disposal stops and releases every retained element", () => {
+    playNotificationChimeSound("classic");
+    prepareNotificationChimeAudio();
+
+    disposeNotificationChimeAudio();
+
+    for (const audio of audios) {
+      expect(audio.pause).toHaveBeenCalled();
+      expect(audio.src).toBe("");
     }
-    vi.stubGlobal("AudioContext", SuspendedAudioContext);
-
+    const before = audios.length;
     playNotificationChimeSound("classic");
-
-    const context = contexts[0];
-    expect(context.resume).toHaveBeenCalledOnce();
-    expect(oscillators).toHaveLength(0);
-    await context.resume.mock.results[0].value;
-    await Promise.resolve();
-    expect(oscillators).toHaveLength(2);
-  });
-
-  it.each([
-    ["coin", 2],
-    ["bloop", 1],
-    ["cuckoo", 4],
-    ["ta-da", 6],
-    ["beacon", 3],
-  ] as const)("plays the %s recipe", (sound, voiceCount) => {
-    vi.stubGlobal("AudioContext", FakeAudioContext);
-
-    playNotificationChimeSound(sound);
-
-    expect(oscillators).toHaveLength(voiceCount);
-  });
-
-  it("plays Ta-da as two pickups followed by a compact chord landing", () => {
-    vi.stubGlobal("AudioContext", FakeAudioContext);
-
-    playNotificationChimeSound("ta-da");
-
-    expect(oscillators[0].start.mock.calls[0][0]).toBeCloseTo(2.005);
-    expect(oscillators[1].start.mock.calls[0][0]).toBeCloseTo(2.075);
-    expect(oscillators[2].start.mock.calls[0][0]).toBeCloseTo(2.15);
-    expect(oscillators[5].stop.mock.calls[0][0]).toBeCloseTo(2.29);
+    expect(audios).toHaveLength(before + 1);
   });
 });
 

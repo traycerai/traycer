@@ -24,6 +24,7 @@ function neutralPresentation(): DefaultHostReadinessPresentation {
     progress: null,
     lastProgress: null,
     provisioningError: null,
+    ensureFailure: null,
     provisioning: false,
     removed: false,
     hostBusy: false,

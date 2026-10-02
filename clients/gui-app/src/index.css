@@ -252,6 +252,54 @@
   animation: side-strip-waiting-pulse 600ms ease-out 2;
 }
 
+/* A pane taking focus from the Activity strip: its neutral ring fades in and
+   out once. Opacity only, so the ring's own geometry never moves. The
+   component adds this class only while motion is enabled; without it the ring
+   just shows, and the component takes it away after 600ms. */
+@keyframes pane-focus-flash {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.pane-focus-flash {
+  animation: pane-focus-flash 400ms ease-out both;
+}
+
+/* The pending card an activation scrolled to: a warning ring that fades over
+   600ms. The component takes the class away 600ms after the card is shown, so
+   with no motion (the OS query or the app's own switch), where the ring does
+   not fade, it shows for exactly that long and then goes away. */
+@keyframes pending-card-highlight {
+  from {
+    box-shadow: inset 0 0 0 2px
+      color-mix(in srgb, var(--color-warning) 80%, transparent);
+  }
+  to {
+    box-shadow: inset 0 0 0 2px transparent;
+  }
+}
+
+.pending-card-highlight {
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--color-warning) 80%, transparent);
+  animation: pending-card-highlight 600ms ease-out forwards;
+}
+
+:root[data-reduce-panel-motion] .pending-card-highlight {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pending-card-highlight {
+    animation: none;
+  }
+}
+
 /* The sheet join: the active task tab (top), row, tile or split pair (side)
    runs into its task's surface, so the tab and everything the task owns read
    as one shape. The joined element takes the fill of the pane it meets and
@@ -261,9 +309,10 @@
    pseudo-elements are the concave corners that flare out along the
    surface's edge. One mechanism for both placements.
 
-   The fill is the pane's: `data-join-pane` names it (the epic panel, its
-   collapsed rail, or the canvas, the default and the only one a top tab
-   meets by rule).
+   The fill is the pane's: `data-join-pane` names it (a panel in the
+   sidebar's fill, the epic panel's collapsed rail, a surface's own ground,
+   or the canvas, the default). `surface-join-pane.ts` says which one each
+   kind of surface shows its tab.
 
    Arc geometry: absolute offsets resolve against the bridge's padding box.
    At 100%, each arc already overlaps its 1px border, landing on the border's
@@ -283,19 +332,24 @@
   }
 
   [data-sheet-joined][data-join-pane="panel"],
-  :has([data-sheet-joined][data-join-pane="panel"]) > [data-sheet-join-bridge] {
+  [data-sheet-join-bridge][data-join-pane="panel"] {
     --join-fill: var(--sidebar);
   }
 
   [data-sheet-joined][data-join-pane="rail"],
-  :has([data-sheet-joined][data-join-pane="rail"]) > [data-sheet-join-bridge] {
+  [data-sheet-join-bridge][data-join-pane="rail"],
+  [data-sheet-joined][data-join-pane="surface"],
+  [data-sheet-join-bridge][data-join-pane="surface"] {
     --join-fill: var(--background);
   }
 
   /* A header tab's box already carries its border; it only opens at the
-     bottom. */
+     bottom. Its outline is `--join-outline` (the tab's own colour, set by
+     `TabChromeBackground`), which the bridge below continues down its sides
+     and round its feet - one silhouette in one colour, the pre-#2021 tab cap.
+     Unset, it is the sheets' border. */
   [data-sheet-joined="top"] {
-    border-color: var(--canvas-border);
+    border-color: var(--join-outline, var(--canvas-border));
     border-bottom-width: 0;
     border-end-start-radius: 0;
     border-end-end-radius: 0;
@@ -333,7 +387,7 @@
     }
   }
 
-  :has([data-sheet-joined]) > [data-sheet-join-bridge] {
+  :where([data-sheet-join-bridge])[data-join-active] {
     --join-fill: var(--canvas);
     --join-radius: var(--radius-lg);
     display: block;
@@ -342,7 +396,10 @@
     position-anchor: --sheet-joined;
     position-visibility: anchors-visible;
     /* Over the strip's resize handle (z-20), whose hover line would otherwise
-       cut the joined band in two; the handle still takes the pointer here. */
+       cut the joined band in two; the handle still takes the pointer here.
+       Under the collapsed tile's accent ring (z-22,
+       `SIDE_TAB_TILE_ACCENT_RING_CLASS`), whose right side lies inside this
+       box on the joined tile - move the two together. */
     z-index: 21;
     background-color: var(--join-fill);
     pointer-events: none;
@@ -362,7 +419,7 @@
       position: absolute;
       width: var(--join-radius);
       height: var(--join-radius);
-      border: 0 solid var(--canvas-border);
+      border: 0 solid var(--join-outline, var(--canvas-border));
       box-shadow: calc(var(--arc-x) * var(--join-radius) / 2)
         calc(var(--arc-y) * var(--join-radius) / 2) 0
         calc(var(--join-radius) / 2 - 1px) var(--join-fill);
@@ -372,12 +429,12 @@
   /* Tabs on top: from the tab's bottom down onto the sheet, whose top edge is
      the surface frame's, its own anchor, so the run follows whatever sits
      between them (a banner included). */
-  :has([data-sheet-joined="top"]) > [data-sheet-join-bridge="top"] {
+  [data-sheet-join-bridge="top"][data-join-active] {
     left: anchor(left);
     right: anchor(right);
     top: anchor(bottom);
     bottom: calc(anchor(--task-frame top) - 1px);
-    border-inline: 1px solid var(--canvas-border);
+    border-inline: 1px solid var(--join-outline, var(--canvas-border));
 
     &::before,
     &::after {
@@ -407,8 +464,8 @@
 
   /* Tabs on the side: from the row's inner edge across the strip's gutter
      onto the surface. */
-  :has([data-sheet-joined="left"]) > [data-sheet-join-bridge="left"],
-  :has([data-sheet-joined="right"]) > [data-sheet-join-bridge="right"] {
+  [data-sheet-join-bridge="left"][data-join-active],
+  [data-sheet-join-bridge="right"][data-join-active] {
     top: anchor(top);
     bottom: anchor(bottom);
     border-block: 1px solid var(--canvas-border);
@@ -422,7 +479,7 @@
     }
   }
 
-  :has([data-sheet-joined="left"]) > [data-sheet-join-bridge="left"] {
+  [data-sheet-join-bridge="left"][data-join-active] {
     left: anchor(right);
     right: calc(anchor(--task-frame left) - 1px);
 
@@ -450,7 +507,7 @@
     }
   }
 
-  :has([data-sheet-joined="right"]) > [data-sheet-join-bridge="right"] {
+  [data-sheet-join-bridge="right"][data-join-active] {
     right: anchor(left);
     left: calc(anchor(--task-frame right) - 1px);
 
@@ -476,6 +533,73 @@
       --arc-x: -1;
       --arc-y: -1;
     }
+  }
+
+  /* The reopen glow (`join-glow.ts`). It tints the join's own borders, on the
+     tab's box and on the bridge alike, so it follows the real silhouette with
+     its concave feet; the box also takes a faint wash from its top edge. The
+     tab box sits under the strip that carries the flag, and the bridge
+     carries its own. */
+  [data-join-glow] [data-sheet-joined="top"],
+  [data-sheet-join-bridge="top"][data-join-active][data-join-glow] {
+    --join-edge: color-mix(
+      in oklab,
+      var(--canvas-border),
+      var(--primary) calc(var(--join-glow) * 35%)
+    );
+    animation: join-glow 1.1s ease-out both;
+  }
+
+  [data-join-glow] [data-sheet-joined="top"] {
+    border-color: var(--join-edge);
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(
+        in oklab,
+        var(--primary) calc(var(--join-glow) * 8%),
+        transparent
+      ),
+      transparent
+    );
+  }
+
+  [data-sheet-join-bridge="top"][data-join-active][data-join-glow] {
+    border-inline-color: var(--join-edge);
+
+    &::before,
+    &::after {
+      border-color: var(--join-edge);
+    }
+  }
+}
+
+/* The glow is motion too: none when the person asks for less of it. */
+@media (prefers-reduced-motion: reduce) {
+  [data-join-glow] [data-sheet-joined="top"],
+  [data-sheet-join-bridge="top"][data-join-glow] {
+    animation: none;
+  }
+}
+
+/* Animated per element that wears the glow; the bridge's arcs inherit it. */
+@property --join-glow {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+@keyframes join-glow {
+  0% {
+    --join-glow: 0;
+  }
+  18% {
+    --join-glow: 1;
+  }
+  40% {
+    --join-glow: 1;
+  }
+  100% {
+    --join-glow: 0;
   }
 }
 
@@ -955,9 +1079,14 @@
  * Wide panes and modals may intentionally give markdown room for tables,
  * diagrams, and code. Cap only prose-bearing blocks so plain paragraphs do not
  * stretch into uncomfortable 4K line lengths while wide media remains usable.
+ *
+ * Inside a reading-width column (`useReadingWidthStyle`) the column IS the
+ * measure - the user picked it - so that column sets `--md-block-measure`
+ * to `none` and this guard stands down. Left at 72ch there, it silently
+ * overrode Wide: the column grew and every paragraph stayed at 72ch.
  */
 .md-prose :where(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) {
-  max-width: 72ch;
+  max-width: var(--md-block-measure, 72ch);
 }
 
 /*
@@ -1578,7 +1707,7 @@
     opacity: 0;
   }
 
-  /* The close button is inert until keyboard focus, or hover on a wide tab.
+  /* The close button is inert until keyboard focus or hover.
      Keep BOTH the `none`
      default and the `auto` reveal in this same @layer so the reveal wins by
      specificity. Do NOT put a `pointer-events-none` Tailwind utility on the
@@ -1622,19 +1751,21 @@
     pointer-events: auto;
   }
 
-  @container (min-width: 7rem) {
-    .group\/tab:hover .header-tab-title {
-      padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
-    }
+  /* Ungated by width: shrink's narrowest tab (`min-w-12`,
+     `tab-strip-item.tsx`) still fits the close control whole beside the
+     icon, the title giving up its room. A `min-width: 7rem` container gate
+     here predated shrink-to-fit and hid the close on every shrunk tab. */
+  .group\/tab:hover .header-tab-title {
+    padding-inline-end: calc(1.25rem + var(--spacing) * 1.5);
+  }
 
-    .group\/tab:hover .header-tab-trailing-slot {
-      width: 1.25rem;
-      opacity: 1;
-    }
+  .group\/tab:hover .header-tab-trailing-slot {
+    width: 1.25rem;
+    opacity: 1;
+  }
 
-    .group\/tab:hover .header-tab-close-button {
-      pointer-events: auto;
-    }
+  .group\/tab:hover .header-tab-close-button {
+    pointer-events: auto;
   }
 
   .header-tab-label[data-leader-visible="true"] .header-tab-title {

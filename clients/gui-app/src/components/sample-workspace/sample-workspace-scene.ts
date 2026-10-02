@@ -17,8 +17,11 @@ import type { ResourceMetric } from "@/lib/layout/layout-values";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type { MessageSegment } from "@/stores/composer/chat-store";
-import type { LiveAgentKind } from "@/components/epic-canvas/sidebar/live-agent-row";
-import type { NeedsYouItem } from "@/stores/notifications/needs-you-items";
+import type { NeedsYouRow } from "@/components/layout/tabs/side-strip/strip-sections";
+import type {
+  StripAgent,
+  StripAgentStatus,
+} from "@/components/layout/tabs/side-strip/strip-task-agents";
 
 /**
  * One sample data set for the canvas and every picture of it (C12): the
@@ -37,10 +40,15 @@ export interface SampleUsageReading {
  * The three readings a sample usage segment is taken from, by rotation.
  *
  * One short window part-way through, one long one further along and one day
- * window barely started: three different percentages, durations and
- * countdowns, so no two neighbouring segments print the same string. All
- * three stay under `classifyProviderRateLimitWindow`'s warning thresholds - a
- * picture of the grammar is not a picture of a person about to run out.
+ * window close to its limit: three different percentages, durations and
+ * countdowns, so no two neighbouring segments print the same string.
+ *
+ * The day window is the one reading over a warning threshold (84% of a short
+ * window is `running_low`, never `limited`). The status bar draws a healthy
+ * profile as a bare bar and expands only one that needs attention, so a
+ * sample with nothing running low would never draw the expanded form - the
+ * one form Percent shows and Reset time change - and the layout editor's
+ * picture of those two rows would not move.
  */
 const SAMPLE_USAGE_READINGS: ReadonlyArray<SampleUsageReading> = [
   {
@@ -57,7 +65,7 @@ const SAMPLE_USAGE_READINGS: ReadonlyArray<SampleUsageReading> = [
   },
   {
     durationMinutes: 24 * 60,
-    usedPercent: 12,
+    usedPercent: 84,
     resetsInMinutes: 6 * 60 + 20,
     kind: "period",
   },
@@ -375,76 +383,44 @@ export const SAMPLE_SIDEBAR_AGENTS: ReadonlyArray<{
   },
 ];
 
-export interface SampleLiveAgent {
-  readonly nodeId: string;
-  readonly title: string;
-  readonly kind: LiveAgentKind;
-  /** How many live agents it sits under. */
-  readonly depth: number;
-  readonly updatedAt: number;
-}
+/**
+ * The same three agents as the Activity view nests them under the task's tab
+ * (D9), in its list order and one in each state that reads differently there:
+ * waiting on a reply, stopped on an error, and working. The canvas's strip and
+ * every picture of it draw these.
+ */
+export const SAMPLE_LIVE_AGENTS: ReadonlyArray<StripAgent> = [
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[0], "waiting", "interview"),
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[2], "failed", "failure"),
+  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[1], "turn", "running"),
+];
 
 /**
- * The same three agents as the Activity view lists them under the task's tab
- * (D9), one in each state that reads differently there: waiting on a reply
- * (its chip in place of a time), working, nested under the first, and stopped
- * on an error. The canvas's strip and every picture of it draw these.
+ * The sample task's row in the Activity view's sections: waiting on the reply
+ * its first agent asks for, so the layout editor's strip shows a Needs you row
+ * over the agents nested under it.
  */
-export const SAMPLE_LIVE_AGENTS: ReadonlyArray<SampleLiveAgent> = [
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[0], "interview", 0),
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[1], "running", 1),
-  sampleLiveAgent(SAMPLE_SIDEBAR_AGENTS[2], "failure", 0),
-];
+export const SAMPLE_NEEDS_YOU_ROW: NeedsYouRow = {
+  section: "needs-you",
+  reason: "reply",
+  agentTitle: SAMPLE_SIDEBAR_AGENTS[0].title,
+  count: 1,
+  createdAt: SAMPLE_EPOCH - 2 * MINUTE_MS,
+};
 
 function sampleLiveAgent(
   agent: (typeof SAMPLE_SIDEBAR_AGENTS)[number],
-  kind: LiveAgentKind,
-  depth: number,
-): SampleLiveAgent {
+  status: StripAgentStatus,
+  kind: StripAgent["kind"],
+): StripAgent {
   return {
-    nodeId: agent.id,
+    id: agent.id,
     title: agent.title,
+    status,
     kind,
-    depth,
-    updatedAt: SAMPLE_EPOCH - agent.idleMinutes * MINUTE_MS,
+    since: SAMPLE_EPOCH - agent.idleMinutes * MINUTE_MS,
   };
 }
-
-/**
- * The Activity view's Needs you block on the canvas: the one sample agent
- * waiting on a reply, so the block, the agent's Reply chip and its row all
- * tell the same story. Never the person's own prompts (B1). A `null` payload,
- * so an activation that got past the canvas's firewall would open nothing.
- */
-export const SAMPLE_NEEDS_YOU_ITEMS: ReadonlyArray<NeedsYouItem> = [
-  {
-    row: {
-      feedId: "sample-needs-you-1",
-      source: "host",
-      sourceId: "sample-needs-you-1",
-      createdAt: SAMPLE_LIVE_AGENTS[0].updatedAt,
-      readAt: null,
-      title: SAMPLE_TASK_TITLE,
-      body: "",
-      payload: null,
-      hostKind: "interview.requested",
-      appLocalKind: null,
-      globalEntry: null,
-      severity: "needs_action",
-      outcome: null,
-      resolvedAt: null,
-      sourceRef: null,
-      originHostId: SAMPLE_HOST_ID,
-      providerPackAttribution: null,
-      category: "task",
-    },
-    reason: "reply",
-    ask: "Question waiting",
-    taskTitle: SAMPLE_TASK_TITLE,
-    agentTitle: SAMPLE_LIVE_AGENTS[0].title,
-    createdAt: SAMPLE_LIVE_AGENTS[0].updatedAt,
-  },
-];
 
 /** The Artifacts panel's rows; the first is the open, commented artifact. */
 export const SAMPLE_SIDEBAR_ARTIFACTS: ReadonlyArray<{

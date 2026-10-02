@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { tabAutoTint } from "../tab-identity";
+import { cleanup, render } from "@testing-library/react";
+import { sideTabTitleIconOf, tabAutoTint } from "../tab-identity";
 
 /** The hues D11 leaves out: amber, red and the info blue that marks unread. */
 const FORBIDDEN_HUE_RANGES: ReadonlyArray<readonly [number, number]> = [
@@ -49,5 +50,31 @@ describe("tabAutoTint", () => {
     );
     expect(hues).toHaveLength(2);
     expect(hues[0]).toBe(hues[1]);
+  });
+});
+
+describe("sideTabTitleIconOf", () => {
+  function iconOf(icon: string) {
+    const { container } = render(
+      sideTabTitleIconOf({
+        appearance: { color: null, icon },
+        icon: null,
+      }),
+    );
+    const node = container.querySelector('[data-slot="tab-custom-icon"]');
+    cleanup();
+    return node;
+  }
+
+  it("draws letters as a label apart from the title, and an emoji plain", () => {
+    const letters = iconOf("AB");
+    expect(letters?.textContent).toBe("AB");
+    expect(letters?.classList.contains("font-medium")).toBe(true);
+    expect(letters?.classList.contains("text-muted-foreground")).toBe(true);
+
+    const emoji = iconOf("🚀");
+    expect(emoji?.textContent).toBe("🚀");
+    expect(emoji?.classList.contains("font-medium")).toBe(false);
+    expect(emoji?.classList.contains("text-muted-foreground")).toBe(false);
   });
 });

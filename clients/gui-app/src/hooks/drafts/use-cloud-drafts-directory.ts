@@ -40,9 +40,10 @@ export interface CloudDraftsDirectory {
   readonly scopeId: string | null;
   readonly chats: ReadonlyArray<CloudChatSummary>;
   /**
-   * The cloud ingest sequence current when the request that produced
-   * `chats` was dispatched. An absence in `chats` says nothing about a row
-   * ingested after that, so the sweep fences on it.
+   * The position in the cloud ingest sequence the request that produced
+   * `chats` took when it was dispatched (fresh per request). An absence in
+   * `chats` says nothing about a row ingested after that, so the sweep
+   * fences on it, and a listing in `chats` is stamped at it.
    */
   readonly snapshotIngestSeq: () => number;
 }

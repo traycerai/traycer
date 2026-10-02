@@ -75,7 +75,10 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
+import { ProfileCopyIncomingSection } from "./profile-copy/profile-copy-incoming-section";
+import { ProfileCopyRecentSection } from "./profile-copy/profile-copy-recent-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
+import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -243,7 +246,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   reasonix:
     "Reasonix - a coding CLI you point at your own model provider; keys live in Reasonix's own store, set up from its terminal wizard.",
   antigravity:
-    "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in, but never signs it out or writes to its home.",
+    "Antigravity - Google's agent server via your Google account; Traycer can sign the terminal account in or switch its Google account, but never signs it out.",
 };
 
 function hasPendingProviderProbe(
@@ -589,7 +592,7 @@ function ProvidersPanelBody({
     // recovery invalidation does land.
     //
     // A remote host that dialed and then went TERMINAL - an incompatible
-    // handshake, a plan restriction, a rejected credential, the reconnect cap -
+    // handshake, a rejected credential, the reconnect cap -
     // owes no boundary either, and would strand this spinner just as badly.
     // That case never PERSISTS here, enforced at two layers. New requests:
     // `RemoteSession.sendUnary` rejects a closed session as a non-retryable
@@ -684,7 +687,7 @@ function ProvidersRailLayout({
   const [initialFocus, setInitialFocus] = useState(() => {
     const focus = useProvidersFocusStore.getState();
     // The intent is consumed only by the rail of the host it NAMES. A profile
-    // deep link whose target is unreachable or plan-gated never mounts a rail
+    // deep link whose target is unreachable never mounts a rail
     // there, so the harness / profile / sign-in halves stay armed; without
     // this check the next reachable host the user picked consumed them and
     // could start an automatic sign-in on that machine whenever the same
@@ -1100,8 +1103,13 @@ function ProviderDetail({
   const anyProfileEnablementPending = state.profiles.some((profile) =>
     profileEnablementPending(profileCommitId(profile)),
   );
-  // Whether the detail pane below the header is inert - the Account and
-  // Profiles controls included.
+  // Whether the detail pane below the header is inert - the Account controls
+  // included. The Profiles tab is the one exception (`tab !== "usage"` below)
+  // and holds its own controls instead (`ProviderProfileScopedSection`),
+  // because one of them has to stay live while the provider is off: the host
+  // refuses to turn a provider on while none of its profiles is on, so with
+  // every profile off, turning one on is the step this pane's own switch is
+  // waiting for. An inert tab would leave that provider off for good.
   //
   // Keyed on the effective `enabled` flag, which is now the only thing it could
   // be keyed on. Not because `false` has a single cause - boot seeding leaves
@@ -1450,6 +1458,18 @@ function ProviderTabBody({
             {...profileTab}
             onOpenCliSettings={() => onActiveTabChange("general")}
           />
+          {/* Copies arriving on this host, then copies this window sent from
+              it. Both name hosts by the ids their copies captured; neither
+              follows the scope once a copy is opened. */}
+          <ProfileCopyIncomingSection
+            hostId={profileTab.hostId}
+            providerId={state.providerId}
+          />
+          <ProfileCopyRecentSection
+            hostId={profileTab.hostId}
+            providerId={state.providerId}
+            profiles={state.profiles}
+          />
           <div
             className={cn(
               "flex flex-col gap-3 transition-opacity duration-150",
@@ -1474,8 +1494,9 @@ function ProviderTabBody({
               />
             ) : null}
           </div>
-          {/* Outside the inert block: it is not profile-scoped, so dimming it
-              while a profile switch settles would suggest it is. */}
+          {/* Outside the inert block: neither is profile-scoped, so dimming
+              them while a profile switch settles would suggest it is. */}
+          <ProviderUsageLimitsSection providerId={state.providerId} />
           <FallbackCrossLinkRow />
         </div>
       );

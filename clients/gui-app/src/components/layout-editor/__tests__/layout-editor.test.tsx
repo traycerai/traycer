@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -99,6 +100,18 @@ function escape(target: EventTarget): void {
   );
 }
 
+/**
+ * A named radio group INSIDE the inspector, or null. Scoped to it because the
+ * canvas draws its own placement bar with the same names (`Sidebar side` among
+ * them): the claim is about the form the inspector shows, not about the page.
+ */
+function inspectorRadioGroup(name: string): HTMLElement | null {
+  const inspector = document.querySelector("[data-layout-inspector]");
+  if (!(inspector instanceof HTMLElement))
+    throw new Error("the inspector is not mounted");
+  return within(inspector).queryByRole("radiogroup", { name });
+}
+
 function chord(shift: boolean): KeyboardEvent {
   const event = new KeyboardEvent("keydown", {
     key: "z",
@@ -142,6 +155,7 @@ describe("the mounted editor root", () => {
     expect(view.container.querySelector("[data-layout-inspector]")).toBeNull();
     expect(column.hasAttribute("aria-hidden")).toBe(false);
     expect(column.hasAttribute("data-layout-editing")).toBe(false);
+    expect(column.hasAttribute("data-inspector-dock")).toBe(false);
   });
 
   it("docks the inspector beside the column and firewalls the column", () => {
@@ -156,6 +170,9 @@ describe("the mounted editor root", () => {
     expect(inspector?.getAttribute("data-dock-mode")).toBe("right");
     expect(column.getAttribute("aria-hidden")).toBe("true");
     expect(column.getAttribute("data-layout-editing")).toBe("1");
+    // The column carries the dock itself: the left-inset rule reads this
+    // attribute, not a `:has()` over the inspector.
+    expect(column.getAttribute("data-inspector-dock")).toBe("right");
 
     act(() => {
       useLayoutEditorStore.getState().setDockMode("left");
@@ -165,12 +182,14 @@ describe("the mounted editor root", () => {
         .querySelector("[data-layout-inspector]")
         ?.getAttribute("data-dock-mode"),
     ).toBe("left");
+    expect(column.getAttribute("data-inspector-dock")).toBe("left");
 
     act(() => {
       useLayoutEditorStore.getState().endSession();
     });
     expect(column.hasAttribute("aria-hidden")).toBe(false);
     expect(column.hasAttribute("data-layout-editing")).toBe(false);
+    expect(column.hasAttribute("data-inspector-dock")).toBe(false);
   });
 
   it("walks the layout history on Mod+Z and Mod+Shift+Z (L-18)", () => {
@@ -409,6 +428,48 @@ describe("the mounted editor root", () => {
     expect(
       view.container.querySelector("[data-layout-inspector-back]")?.textContent,
     ).toBe("All settings");
+  });
+
+  // The store half - `selectSurface` writes `area` - is
+  // `layout-editor-store.test.ts`'s. This is the half after it: the mounted
+  // inspector reads that `area` and draws the area's own rows, so a canvas
+  // selection of a surface lands the user on the form that places it.
+  it("opens the Task tabs area when the tab strip surface is selected: its Tab placement row is on screen, the Sidebar's is not", () => {
+    const column = mountColumn();
+    render(<LayoutEditor column={column} />);
+    act(() => {
+      openSession();
+    });
+    // At All settings neither area's own rows are drawn, so what appears next
+    // is the selection's doing.
+    expect(inspectorRadioGroup("Tab placement")).toBeNull();
+    expect(inspectorRadioGroup("Sidebar side")).toBeNull();
+
+    act(() => {
+      useLayoutEditorStore.getState().selectSurface("topBar");
+    });
+
+    expect(useLayoutEditorStore.getState().area).toBe("topBar");
+    expect(inspectorRadioGroup("Tab placement")).not.toBeNull();
+    expect(inspectorRadioGroup("Sidebar side")).toBeNull();
+  });
+
+  it("opens the Sidebar area when the sidebar surface is selected: its Sidebar side row is on screen, the Task tabs' is not", () => {
+    const column = mountColumn();
+    render(<LayoutEditor column={column} />);
+    act(() => {
+      openSession();
+      useLayoutEditorStore.getState().selectSurface("topBar");
+    });
+    expect(inspectorRadioGroup("Tab placement")).not.toBeNull();
+
+    act(() => {
+      useLayoutEditorStore.getState().selectSurface("sidebar");
+    });
+
+    expect(useLayoutEditorStore.getState().area).toBe("sidebar");
+    expect(inspectorRadioGroup("Sidebar side")).not.toBeNull();
+    expect(inspectorRadioGroup("Tab placement")).toBeNull();
   });
 
   it("raises the relay row only while something is blocking on the user (4.8)", () => {

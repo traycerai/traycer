@@ -508,10 +508,8 @@ describe("<EpicLeftPanelRail />", () => {
     useLayoutEditorStore.getState().endSession();
   });
 
-  // Every stack member's own button answers a click exactly as a lone
-  // panel's icon would (L-181): there is no separate group-click branch any
-  // more, just `handleClick` reading `displayedPanelId` and that ONE panel's
-  // own collapsed state.
+  // A stack's one icon answers a click as a lone panel's would: open the
+  // stack when it is not showing, collapse the column when it is.
   it("opens its top panel's icon when neither member is showing", () => {
     useLeftPanelStore.getState().setActivePanelId(TAB_ID, "terminals");
     render(
@@ -527,7 +525,11 @@ describe("<EpicLeftPanelRail />", () => {
     expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe("chats");
   });
 
-  it("reopens a member whose own section is collapsed, instead of collapsing the column", () => {
+  it("collapses the column when only a member that is NOT displayed is collapsed", () => {
+    // Agents is displayed and open; Artifacts, collapsed, is a choice the
+    // column already shows. The click used to re-open Artifacts (and make it
+    // active) instead, one collapsed section per click, so the column
+    // collapsed only once none was left.
     useLeftPanelStore.getState().togglePanelSectionCollapsed("artifacts");
     render(
       <EpicLeftPanelRail
@@ -539,13 +541,11 @@ describe("<EpicLeftPanelRail />", () => {
 
     fireEvent.click(screen.getByTestId("epic-rail-chats"));
 
-    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
-      "artifacts",
-    );
+    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(true);
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe("chats");
     expect(
       useLeftPanelStore.getState().panelSectionCollapsedByPanelId.artifacts,
-    ).toBe(false);
-    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(false);
+    ).toBe(true);
   });
 
   it("namespaces duplicate Epic rail registrations by view tab", () => {
@@ -826,13 +826,55 @@ describe("<EpicLeftPanelRail />", () => {
     }
   });
 
-  it("puts a collapsed section back when its own rail icon is clicked (L-170)", () => {
-    // The lit icon usually toggles the whole sidebar (R5R-09), and it still
-    // does for every lone panel and every expanded stack member. The one
-    // exception is the state per-section collapse created: an active panel
-    // that is DISPLAYED and collapsed, where the click means "put this
-    // section back". Without it the icon the user reaches for collapses the
-    // whole column and the only way out is a chevron they have to find again.
+  it("hands a rail label to the neighbouring icon's at once: the rail's icons share one HoverCardGroup", () => {
+    // The rail is its own group (`epic-sidebar-rail.tsx`): the first label waits
+    // for intent and the next icon's replaces it with no wait, so a sweep along
+    // the rail reads one icon after another rather than a delay per icon.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId={TAB_ID}
+          orientation="vertical"
+        />,
+      );
+      const first = screen.getByTestId("epic-rail-terminals");
+      const neighbour = screen.getByTestId("epic-rail-sharing");
+      const settle = (ms: number) => {
+        act(() => {
+          vi.advanceTimersByTime(ms);
+        });
+      };
+      const labels = (): ReadonlyArray<string> =>
+        [...document.querySelectorAll('[data-slot="hover-card-content"]')].map(
+          (label) => label.textContent,
+        );
+
+      fireEvent.pointerEnter(first, { pointerType: "mouse" });
+      fireEvent.mouseEnter(first);
+      settle(499);
+      expect(labels()).toEqual([]);
+      settle(1);
+      expect(labels()).toEqual([first.getAttribute("aria-label")]);
+
+      fireEvent.mouseLeave(first);
+      fireEvent.pointerEnter(neighbour, { pointerType: "mouse" });
+      fireEvent.mouseEnter(neighbour);
+      // Two acts: the group closes the label before in an effect the
+      // arriving label's own effect sets up, a scheduler task later.
+      settle(1);
+      settle(1);
+      expect(labels()).toEqual([neighbour.getAttribute("aria-label")]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("collapses the column even when the ACTIVE member's own section is collapsed", () => {
+    // A stack draws every member at once, so which one is "active" is not on
+    // screen; the lit icon toggles the column whatever the sections say
+    // (VS Code's rule) and the next click brings the column back as it was.
     useLeftPanelStore.getState().togglePanelSectionCollapsed("chats");
     render(
       <EpicLeftPanelRail
@@ -844,16 +886,38 @@ describe("<EpicLeftPanelRail />", () => {
 
     fireEvent.click(screen.getByTestId("epic-rail-chats"));
 
+    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(true);
     expect(
       useLeftPanelStore.getState().panelSectionCollapsedByPanelId.chats,
-    ).toBe(false);
-    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(false);
+    ).toBe(true);
 
-    // A second click, now that the section is expanded, is the ordinary
-    // "collapse the sidebar" the lit icon has always meant.
     fireEvent.click(screen.getByTestId("epic-rail-chats"));
 
-    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(true);
+    expect(useLeftPanelStore.getState().isMainCollapsed(TAB_ID)).toBe(false);
+    expect(
+      useLeftPanelStore.getState().panelSectionCollapsedByPanelId.chats,
+    ).toBe(true);
+  });
+
+  it("opens a stack on a member that is already open, changing no section", () => {
+    useLeftPanelStore.getState().setActivePanelId(TAB_ID, "terminals");
+    useLeftPanelStore.getState().togglePanelSectionCollapsed("chats");
+    render(
+      <EpicLeftPanelRail
+        epicId={EPIC_ID}
+        tabId={TAB_ID}
+        orientation="vertical"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-rail-chats"));
+
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+      "artifacts",
+    );
+    expect(
+      useLeftPanelStore.getState().panelSectionCollapsedByPanelId.chats,
+    ).toBe(true);
   });
 
   /**

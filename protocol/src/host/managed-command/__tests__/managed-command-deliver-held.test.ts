@@ -7,10 +7,7 @@ import {
   managedCommandHeldReleaseFailureSchema,
   managedCommandHeldReleaseUnattributedSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
-import {
-  hostRpcRegistry,
-  hostStreamRpcRegistry,
-} from "@traycer/protocol/host/index";
+import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 /**
@@ -242,9 +239,12 @@ describe("managedCommand.deliverHeld registry membership", () => {
   // for every already-released peer, which never negotiated this method.
   it("lands in optionalUnary, never in unary", () => {
     const surface = buildProtocolSurface({
-      unary: hostRpcRegistry,
+      unary: {
+        "managedCommand.deliverHeld":
+          hostRpcRegistry["managedCommand.deliverHeld"],
+      },
       unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
-      stream: hostStreamRpcRegistry,
+      stream: {},
     });
     expect(surface.optionalUnary).toHaveProperty("managedCommand.deliverHeld");
     expect(surface.unary).not.toHaveProperty("managedCommand.deliverHeld");

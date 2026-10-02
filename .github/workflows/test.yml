@@ -161,8 +161,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          package-manager-cache: false
           node-version: "24.20.0"
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -211,9 +212,12 @@ jobs:
       # together ("Arguments tui and outputStyle are mutually exclusive") and
       # exits 1 before running anything, which would redden every job here.
       # `stream` is already a non-TUI style, so nothing is lost.
+      #
+      # The GUI's real-browser regressions do not run here: they have their own
+      # workflow, `browser-regressions.yml`, which runs them in parallel jobs.
+      # Serially at the end of gui-app shard 1 they took this required check
+      # from about 7 minutes to about 35.
       - name: Test
-        env:
-          RUN_DIFF_EDIT_BROWSER_REGRESSION: ${{ matrix.project == 'traycer-clients-gui-app' && '1' || '0' }}
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --outputStyle=stream ${{ matrix.test_args }}
       # Diagnostics for the gui-app shard flake: shards die with every visible
       # test passing, a log truncated mid-write, and exit 1 with no vitest
@@ -285,8 +289,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          package-manager-cache: false
           node-version: "24.20.0"
       # The standard runner starts immediately. A larger runner queued for
       # more than three minutes, while cache restore on this runner took 3m27
@@ -300,6 +305,32 @@ jobs:
         run: bun run --filter @traycer-clients/traycer-cli smoke:sea
       - name: Exit-code repro loop
         run: bun run --filter @traycer-clients/traycer-cli smoke:exit-code
+      # The only Windows run of the host-lock verifying read against a real
+      # process whose exact read is DENIED. The runner is elevated: its token
+      # holds SeDebugPrivilege, and every PowerShell the reader starts would
+      # enable it and read every process. The wrapper removes the privilege
+      # from the token this run inherits; the test fails under CI if it is
+      # still held.
+      - name: Denied-read fallback, a real denied read
+        working-directory: clients/shared
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File host-lock/__tests__/run-without-sedebug.ps1 bunx vitest run host-lock/__tests__/process-identity-windows-denied-read.win32.test.ts
+      # The update-recovery reader builds its open() flags from the constants
+      # the platform defines, and Windows defines none of O_NOFOLLOW,
+      # O_NONBLOCK and O_NOCTTY. This runs the real reader where they are
+      # missing: a real file must still verify and a missing one must still
+      # read as missing.
+      - name: Update-recovery reader, real Windows open flags
+        working-directory: clients/traycer-cli
+        run: bunx vitest run src/host/__tests__/update-recovery-evidence-flag-fallback-real-platform.test.ts
+      # The only real run of the CLI finalize helper's Windows launch. A
+      # detached spawn there exits 0 having run no line of the script, and no
+      # stubbed test can see that: this starts a marker-only helper through
+      # the production launcher and checks it arms and outlives the process
+      # that launched it, and that a helper the CLI abandoned exits without
+      # finalizing (upgrade/finalize-helper.ts, "Launching on Windows").
+      - name: Finalize helper launch, a real PowerShell handoff
+        working-directory: clients/traycer-cli
+        run: bunx vitest run src/upgrade/__tests__/finalize-helper-launch.win32.test.ts
 
   # macOS job: the desktop workspace's packaging/signing-adjacent assertions
   # (prepack unit suite + the real electron-builder pack in test:packaging)
@@ -320,8 +351,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
+          package-manager-cache: false
           node-version: "24.20.0"
       - name: Cache bun global install cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -349,6 +381,11 @@ jobs:
       # mutually exclusive; `stream` is already a non-TUI style).
       - name: Desktop unit tests (darwin-gated blocks included)
         run: bunx nx run-many --target=test --projects="@traycer-clients/desktop" --outputStyle=stream
+      # the shared exec-sync-stderr off-Linux case never ran in CI
+      # (shared tests are Linux-only; this job is the macOS lane).
+      - name: Shared exec-sync stderr (darwin-gated blocks)
+        working-directory: clients/shared
+        run: bunx vitest run __tests__/exec-sync-stderr.test.ts
       - name: Real electron-builder packaging test
         run: bun run test:packaging
         working-directory: clients/desktop

@@ -1,4 +1,5 @@
 import { rename } from "node:fs/promises";
+import { reportBoundedWait } from "../runner/bounded-wait-progress";
 
 // Windows releases a terminated process's directory/file handles
 // asynchronously, so a rename issued right after the OS service stop
@@ -110,6 +111,11 @@ export async function renameWithRetryPlan(
         // retry-side kill/cleanup hook. Do not collapse a lost authority
         // into a best-effort hook failure.
         await plan.verifyBeforeAttempt();
+        // `maxTotalMs` is checked only BEFORE a hook, and one Windows re-kill
+        // is minutes long, so an install's two swap renames can outlast
+        // Desktop's idle timer between them. Each re-kill reports as it
+        // begins (bounded-wait-progress.ts).
+        reportBoundedWait("waiting for the host's files to be released");
         await plan.onRetry();
       }
       await new Promise((resolve) =>

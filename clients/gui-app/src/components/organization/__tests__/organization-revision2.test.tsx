@@ -362,7 +362,12 @@ describe("organization Revision 2", () => {
           <button type="button">Task row</button>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <TaskOrganizationMenu taskId="task-1" canEdit title="Task" />
+          <TaskOrganizationMenu
+            taskId="task-1"
+            canEdit
+            title="Task"
+            onEditGroup={null}
+          />
         </ContextMenuContent>
       </ContextMenu>,
     );

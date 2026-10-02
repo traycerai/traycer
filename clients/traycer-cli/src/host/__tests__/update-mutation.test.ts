@@ -1,13 +1,56 @@
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   updateAttemptLockPath,
   updateAttemptRecordPath,
   withUpdateContender,
   type UpdateMutationCapability,
 } from "@traycer-clients/shared/host-update";
+
+// HOME is redirected to a private temp dir BEFORE anything reads it: this
+// file's own `store/paths` mock below only replaces `hostHomeDir` - it is
+// NOT isolation on its own, because `createCliLogger` (through
+// `store/paths.ts`'s `cliLogPath`) and the protocol path helpers still
+// resolve `homedir()` for real. `node:os.homedir()` itself must be
+// redirected first.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-update-mutation-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+beforeAll(async () => {
+  expect(osHome.current).not.toBe("");
+  expect(homedir()).toBe(osHome.current);
+  const paths =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  expect(paths.hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+  expect(paths.cliLogPath("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
 
 const homeRef = vi.hoisted(() => ({ current: "" }));
 const commitMock = vi.hoisted(() => ({
@@ -25,6 +68,12 @@ vi.mock("../../installer/apply", () => ({
 vi.mock("../../installer/install", () => ({
   commitHostInstallSource: (options: unknown) => commitMock.invoke(options),
 }));
+const busyMock = vi.hoisted(() => ({
+  assertIdle: vi.fn(),
+}));
+vi.mock("../busy-check", () => ({
+  assertHostIdleForStop: busyMock.assertIdle,
+}));
 vi.mock("../host-start-adoption", () => ({
   publishHostStartAdoption: adoptionMock.publish,
 }));
@@ -32,10 +81,17 @@ vi.mock("../host-start-adoption", () => ({
 import {
   installHostServiceWithAttempt,
   commitHostInstallSourceWithAttempt,
+  refreshHostServiceDefinitionWithAttempt,
   stopHostForRestartWithAttempt,
+  stopHostServiceWithAttempt,
 } from "../update-mutation";
+import type { ServiceDefinitionRefresh } from "../../service/service-definition";
 import { withCliUpdateExecutionSegment } from "../update-contender";
-import type { InstallServiceOptions, RestartStop } from "../../service";
+import type {
+  InstallServiceOptions,
+  RestartStop,
+  ServiceController,
+} from "../../service";
 import type {
   CommitHostInstallSourceOptions,
   StagedHostInstallSource,
@@ -43,6 +99,7 @@ import type {
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { ungatedStoreFormatFloorEvidence } from "../store-format-floor";
 import { atServiceSpawnEdge } from "../../service/spawn-edge";
+import { verifyServiceMutationAuthority } from "../../service/mutation-authority";
 
 const roots: string[] = [];
 
@@ -137,6 +194,7 @@ describe("CLI capability-consuming mutation facades", () => {
         await installHostServiceWithAttempt(
           capability,
           contenderOptions,
+          "desktop",
           { install, hostStartAdoptionLabel },
           serviceOptions,
         );
@@ -149,6 +207,7 @@ describe("CLI capability-consuming mutation facades", () => {
       expect.anything(),
       contenderOptions,
       "ai.traycer.host.agent",
+      "desktop",
     );
     expect(events).toEqual([
       "label",
@@ -192,6 +251,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -237,6 +297,7 @@ describe("CLI capability-consuming mutation facades", () => {
         await installHostServiceWithAttempt(
           capability,
           contenderOptions,
+          "desktop",
           { install, hostStartAdoptionLabel },
           serviceOptions,
         );
@@ -290,6 +351,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -336,6 +398,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -387,6 +450,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel },
             serviceOptions,
           ),
@@ -407,6 +471,7 @@ describe("CLI capability-consuming mutation facades", () => {
       installHostServiceWithAttempt(
         forged,
         contenderOptions,
+        "desktop",
         { install, hostStartAdoptionLabel: async (label) => label.id },
         serviceOptions,
       ),
@@ -438,6 +503,7 @@ describe("CLI capability-consuming mutation facades", () => {
       installHostServiceWithAttempt(
         released,
         contenderOptions,
+        "desktop",
         { install, hostStartAdoptionLabel: async (label) => label.id },
         serviceOptions,
       ),
@@ -458,6 +524,7 @@ describe("CLI capability-consuming mutation facades", () => {
           installHostServiceWithAttempt(
             capability,
             contenderOptions,
+            "desktop",
             { install, hostStartAdoptionLabel: async (label) => label.id },
             serviceOptions,
           ),
@@ -495,18 +562,23 @@ describe("CLI capability-consuming mutation facades", () => {
       },
       async (capability) => {
         await expect(
-          commitHostInstallSourceWithAttempt(capability, contenderOptions, {
-            environment: "production",
-            staged: stagedSource,
-            onProgress: () => undefined,
-            lifecycle: null,
-            onWillSwap: null,
-            storeFormatFloor: ungatedStoreFormatFloorEvidence(
-              "host update",
-              false,
-            ),
-            onSwapCommitted: null,
-          }),
+          commitHostInstallSourceWithAttempt(
+            capability,
+            contenderOptions,
+            "desktop",
+            {
+              environment: "production",
+              staged: stagedSource,
+              onProgress: () => undefined,
+              lifecycle: null,
+              onWillSwap: null,
+              storeFormatFloor: ungatedStoreFormatFloorEvidence(
+                "host update",
+                false,
+              ),
+              onSwapCommitted: null,
+            },
+          ),
         ).rejects.toMatchObject({ code: "E_CLI_LOCK_BUSY" });
         return "must-not-report-ran";
       },
@@ -634,5 +706,262 @@ describe("CLI capability-consuming mutation facades", () => {
     expect(order).toEqual(["boundary", "actuator"]);
     expect(onAuthorityVerified).toHaveBeenCalledTimes(1);
     expect(stopForRestart).toHaveBeenCalledTimes(1);
+  });
+
+  // `refreshHostServiceDefinitionWithAttempt`: the definition-only
+  // refresh facade. Unlike `installHostServiceWithAttempt` there is no host
+  // start adoption to publish or wait for - the mechanism under test is
+  // simply "the refresher's `refresh` runs exactly once, under the
+  // authority scope, with the label it was given".
+  it("refreshHostServiceDefinitionWithAttempt: refresher.refresh is called exactly once, inside the mutation authority, with the given label", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const refreshResult: ServiceDefinitionRefresh = { kind: "current" };
+    const refresh = vi.fn(async () => refreshResult);
+
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: contenderOptions.reason,
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: contenderOptions.admission,
+      },
+      (capability) =>
+        refreshHostServiceDefinitionWithAttempt(
+          capability,
+          contenderOptions,
+          { refresh },
+          serviceOptions.label,
+        ),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: refreshResult });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith(serviceOptions.label);
+  });
+
+  // `refreshHostServiceDefinitionWithAttempt` runs its refresher
+  // callback INSIDE `withServiceMutationAuthority`'s scope (`update-
+  // mutation.ts:154`) - the pinned test at `:672-698` above only observes
+  // that the refresher ran; this observes the SCOPE itself, from inside the
+  // fake refresher, by calling `verifyServiceMutationAuthority` directly.
+  it("refreshHostServiceDefinitionWithAttempt runs its refresher inside the mutation authority scope: verifyServiceMutationAuthority resolves while live, rejects once the capability is lost", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const observed: { readonly liveResult: unknown; lostRejected: boolean } = {
+      liveResult: undefined,
+      lostRejected: false,
+    };
+    const refresh = vi.fn(async (): Promise<ServiceDefinitionRefresh> => {
+      await verifyServiceMutationAuthority();
+      // The capability is still live here - proven by the call above not
+      // throwing. Now take it away, the same way the file's other rows
+      // steal a live capability (`unlink(updateAttemptLockPath(...))`),
+      // and prove the SAME check now rejects from inside this same scope.
+      await unlink(updateAttemptLockPath(hostHomeDir));
+      try {
+        await verifyServiceMutationAuthority();
+      } catch {
+        observed.lostRejected = true;
+      }
+      return { kind: "current" };
+    });
+
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: contenderOptions.reason,
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: contenderOptions.admission,
+      },
+      (capability) =>
+        refreshHostServiceDefinitionWithAttempt(
+          capability,
+          contenderOptions,
+          { refresh },
+          serviceOptions.label,
+        ),
+    );
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(observed.lostRejected).toBe(true);
+    // `withServiceMutationAuthority`'s own catch-block re-probe (also now
+    // lost) rejects the whole attempt with the authority error, which
+    // `withUpdateContender` reports as a non-"ran" outcome.
+    expect(outcome.kind).not.toBe("ran");
+  });
+
+  it("refreshHostServiceDefinitionWithAttempt: a forged capability is rejected before the refresher ever runs", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const refresh = vi.fn(async (): Promise<ServiceDefinitionRefresh> => ({
+      kind: "current",
+    }));
+    const forged = { hostHomeDir } as UpdateMutationCapability;
+
+    await expect(
+      refreshHostServiceDefinitionWithAttempt(
+        forged,
+        contenderOptions,
+        { refresh },
+        serviceOptions.label,
+      ),
+    ).rejects.toMatchObject({ code: "E_CLI_LOCK_BUSY" });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("refreshHostServiceDefinitionWithAttempt: propagates the refresher's own rejection unchanged", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    const refreshFailure = new Error("could not rewrite the unit file");
+    const refresh = vi.fn(async (): Promise<ServiceDefinitionRefresh> => {
+      throw refreshFailure;
+    });
+
+    await expect(
+      withUpdateContender(
+        {
+          hostHomeDir,
+          reason: contenderOptions.reason,
+          waitMs: 0,
+          pollIntervalMs: 10,
+          admission: contenderOptions.admission,
+        },
+        (capability) =>
+          refreshHostServiceDefinitionWithAttempt(
+            capability,
+            contenderOptions,
+            { refresh },
+            serviceOptions.label,
+          ),
+      ),
+    ).rejects.toBe(refreshFailure);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("stopHostServiceWithAttempt busy gate", () => {
+  const platforms = ["macOS", "Linux", "Windows"] as const;
+
+  async function runInsideContender(
+    run: (capability: UpdateMutationCapability) => Promise<unknown>,
+  ): Promise<void> {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: contenderOptions.reason,
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: contenderOptions.admission,
+      },
+      run,
+    );
+  }
+
+  function controllerNamedFor(
+    platform: (typeof platforms)[number],
+    order: string[],
+  ): Pick<ServiceController, "stop"> {
+    return {
+      stop: async () => {
+        order.push(`${platform}:stop`);
+      },
+    };
+  }
+
+  it.each(platforms)(
+    "%s: if-idle probes then stops, in that order, with the label's environment",
+    async (platform) => {
+      const order: string[] = [];
+      busyMock.assertIdle.mockReset();
+      busyMock.assertIdle.mockImplementation(async () => {
+        order.push("probe");
+      });
+      const controller = controllerNamedFor(platform, order);
+      await runInsideContender((capability) =>
+        stopHostServiceWithAttempt(
+          capability,
+          contenderOptions,
+          controller,
+          serviceOptions.label,
+          { force: false },
+          "if-idle",
+        ),
+      );
+      expect(order).toEqual(["probe", `${platform}:stop`]);
+      expect(busyMock.assertIdle).toHaveBeenCalledWith(
+        serviceOptions.label.environment,
+      );
+    },
+  );
+
+  it.each(platforms)(
+    "%s: a busy host rejects E_HOST_BUSY and the controller is never stopped",
+    async (platform) => {
+      const order: string[] = [];
+      busyMock.assertIdle.mockReset();
+      busyMock.assertIdle.mockRejectedValue(
+        cliError({
+          code: CLI_ERROR_CODES.HOST_BUSY,
+          message: "busy",
+          details: null,
+          exitCode: 1,
+        }),
+      );
+      const controller = controllerNamedFor(platform, order);
+      await runInsideContender(async (capability) => {
+        await expect(
+          stopHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            controller,
+            serviceOptions.label,
+            { force: false },
+            "if-idle",
+          ),
+        ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+      });
+      expect(order).toEqual([]);
+    },
+  );
+
+  it.each(platforms)("%s: unconditional never probes", async (platform) => {
+    const order: string[] = [];
+    busyMock.assertIdle.mockReset();
+    const controller = controllerNamedFor(platform, order);
+    await runInsideContender((capability) =>
+      stopHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        controller,
+        serviceOptions.label,
+        { force: false },
+        "unconditional",
+      ),
+    );
+    expect(order).toEqual([`${platform}:stop`]);
+    expect(busyMock.assertIdle).not.toHaveBeenCalled();
+  });
+
+  it("the capability check comes before the probe", async () => {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    busyMock.assertIdle.mockReset();
+    const forged = { hostHomeDir } as UpdateMutationCapability;
+    await expect(
+      stopHostServiceWithAttempt(
+        forged,
+        contenderOptions,
+        { stop: async () => undefined },
+        serviceOptions.label,
+        { force: false },
+        "if-idle",
+      ),
+    ).rejects.toBeDefined();
+    expect(busyMock.assertIdle).not.toHaveBeenCalled();
   });
 });

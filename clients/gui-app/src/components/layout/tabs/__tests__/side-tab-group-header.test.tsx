@@ -160,4 +160,51 @@ describe("SideTabGroupHeader", () => {
     ).toBe("failed");
     expect(screen.queryByTestId("side-tab-group-count")).toBeNull();
   });
+
+  it("shows the member count only while the group is collapsed", () => {
+    renderHeader({
+      group: seedGroup(false),
+      variant: "expanded",
+      memberEntities: [],
+      indicators: { epics: {}, chats: {} },
+      columnSide: null,
+    });
+    expect(screen.queryByTestId("side-tab-group-count")).toBeNull();
+    cleanup();
+
+    renderHeader({
+      group: seedGroup(true),
+      variant: "expanded",
+      memberEntities: [],
+      indicators: { epics: {}, chats: {} },
+      columnSide: null,
+    });
+    expect(screen.getByTestId("side-tab-group-count").textContent).toBe("3");
+  });
+
+  it("leaves out the name of an unnamed group, keeping the chevron", () => {
+    const group: TabGroup = { name: "", color: "#8ab4f8", collapsed: false };
+    const member: TabRef = { kind: "epic", id: "e-1" };
+    useTabsStore.setState({
+      version: 2,
+      items: [{ kind: "tab", id: tabItemId(member), ref: member }],
+      activeItemId: tabItemId(member),
+      stripOrder: [member],
+      systemTabs: { history: null, settings: null },
+      groups: { [GROUP_ID]: group },
+      customizations: {
+        [tabRefKey(member)]: { color: null, icon: null, groupId: GROUP_ID },
+      },
+    });
+    renderHeader({
+      group,
+      variant: "expanded",
+      memberEntities: [],
+      indicators: { epics: {}, chats: {} },
+      columnSide: null,
+    });
+
+    expect(header().textContent).toBe("");
+    expect(screen.queryByTestId("side-tab-group-name")).toBeNull();
+  });
 });

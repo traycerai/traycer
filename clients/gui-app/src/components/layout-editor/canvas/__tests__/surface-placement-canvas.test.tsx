@@ -85,7 +85,7 @@ function SurfaceCanvas(): ReactElement {
 /**
  * The strip plus Side tab view's own canvas part (D9, item B): a
  * `[data-layout-setting]` element inside the strip's own space, registered
- * exactly as `SideStripLiveAgentsSlot` registers it via `useLayoutSettingPart`
+ * exactly as `StripAgentGroup` registers it via `useLayoutSettingPart`
  * - a separate component from `SurfaceCanvas` above, rather than a prop on it,
  * so none of that component's many existing call sites need to change.
  */

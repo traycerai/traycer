@@ -127,13 +127,17 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // Host-owned accepted-message delivery took @1.15. The approval card's
     // judge-reason tier took @1.16. The sender host on `send` /
     // `editUserMessage` and on the queued prompt item took @1.17. The model-routing
-    // receipt (`providerNotice.receipt`) and the queue's `pausedReason` took @1.18.
+    // receipt (`providerNotice.receipt`) and the queue's `pausedReason` took @1.18;
+    // the skeleton-resume open claim and retained-prefix count took @1.19.
+    // The Claude-parity surfaces took @1.20.
     //
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(18);
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(20);
+    // @1.6 added the `viewer` intent on the open request; @1.7 added the
+    // `viewer` client frame that restates it on a live stream.
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
     // @1.1 carries the resume cursor that lets a reconnect skip the catch-up.
     expect(hostStreamRpcRegistry["worktree.changed"][1].latestMinor).toBe(1);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
@@ -656,7 +660,7 @@ describe("stream compatibility", () => {
     expect(openAckManifest["browser.screencast"]).toBeUndefined();
     expect(openAckManifest["terminal.subscribe"]).toEqual({
       major: 1,
-      minor: 6,
+      minor: 7,
       supportedMajors: [1],
     });
 

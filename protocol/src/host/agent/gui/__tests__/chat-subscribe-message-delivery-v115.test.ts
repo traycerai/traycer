@@ -27,6 +27,7 @@ import {
   chatSubscribeV116,
   chatSubscribeV117,
   chatSubscribeV118,
+  chatSubscribeV119,
   type ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { projectChatClientFrameForVersion } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
@@ -66,7 +67,8 @@ type ChatSubscribeContract =
   | typeof chatSubscribeV115
   | typeof chatSubscribeV116
   | typeof chatSubscribeV117
-  | typeof chatSubscribeV118;
+  | typeof chatSubscribeV118
+  | typeof chatSubscribeV119;
 
 function clientFrameKinds(contract: ChatSubscribeContract): readonly string[] {
   return contract.clientFrameSchema.options.map(
@@ -81,10 +83,10 @@ function serverFrameKinds(contract: ChatSubscribeContract): readonly string[] {
 }
 
 describe("chat.subscribe registry carries the new line at 1.15", () => {
-  it("keeps 1.15 installed and bound to chatSubscribeV115 - the head has since moved to 1.18", () => {
+  it("keeps 1.15 installed and bound to chatSubscribeV115 - the head has since moved to 1.20", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
     expect(line.versions[15]?.contract).toBe(chatSubscribeV115);
-    expect(line.latestMinor).toBe(18);
+    expect(line.latestMinor).toBe(20);
   });
 
   it("keeps 1.14 bound to its own contract, not silently re-pointed at 1.15", () => {
@@ -92,14 +94,13 @@ describe("chat.subscribe registry carries the new line at 1.15", () => {
     expect(line.versions[14]?.contract).toBe(chatSubscribeV114);
   });
 
-  it("carries the message-delivery frame kinds forward onto the head (1.18)", () => {
-    // The head still speaks the message-delivery slice this line minted:
-    // `1.16` only adds the approval-tier key and `1.17` only the sender-host
-    // key and `1.18` only the receipt / pausedReason keys; none drops anything.
+  it("carries the message-delivery frame kinds through 1.19", () => {
+    // 1.18 preserves main's model-routing line; 1.19 only adds resume fields.
     for (const contract of [
       chatSubscribeV116,
       chatSubscribeV117,
       chatSubscribeV118,
+      chatSubscribeV119,
     ]) {
       expect(clientFrameKinds(contract)).toContain(NEW_CLIENT_ACTION_KIND);
       expect(serverFrameKinds(contract)).toContain("messageDeliveryChanged");
