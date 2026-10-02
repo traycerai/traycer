@@ -29,6 +29,10 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
+import {
+  useLandingPaneAnchorStore,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { SampleSceneContext } from "@/components/sample-workspace/sample-scene-context";
 import { useStripDisclosureStore } from "@/components/layout/tabs/side-strip/strip-disclosure";
@@ -447,6 +451,10 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingPaneAnchorStore.setState(
+    useLandingPaneAnchorStore.getInitialState(),
+    true,
+  );
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useSideTabStripStore.setState({
     widthPx: 240,
@@ -492,6 +500,40 @@ function openHistoryTab(): void {
       settings: null,
     },
   });
+}
+
+/** Opens the Settings system tab as the active tab, no epic tabs. */
+function openSettingsTab(): void {
+  const ref: TabRef = { kind: "settings", id: "settings" };
+  useTabsStore.setState({
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(ref), ref }],
+    activeItemId: tabItemId(ref),
+    stripOrder: [ref],
+    systemTabs: {
+      history: null,
+      settings: {
+        id: "settings",
+        kind: "settings",
+        name: "Settings",
+        lastPath: null,
+      },
+    },
+  });
+}
+
+/** Opens one draft as the active tab, no epic tabs, and returns its id. */
+function openDraftTab(): string {
+  const draftId = useLandingDraftStore.getState().createDraft(null);
+  const ref: TabRef = { kind: "draft", id: draftId };
+  useTabsStore.setState({
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(ref), ref }],
+    activeItemId: tabItemId(ref),
+    stripOrder: [ref],
+    systemTabs: { history: null, settings: null },
+  });
+  return draftId;
 }
 
 /** Writes the arrangement's `sidebarSide` alone, leaving every other field. */
@@ -3472,6 +3514,123 @@ describe("<SideTabStrip />", () => {
       const history = screen.getByTestId("tab-history-history");
       expect(history.getAttribute("data-sheet-joined")).toBe("left");
     });
+
+    // History paints no ground of its own, so its row takes the canvas's fill
+    // whichever side the sidebar is on - never the sidebar panel's, which is
+    // an epic's pane (`surfaceJoinPane`).
+    it.each(["left", "right"] as const)(
+      "joins an active History row to the canvas pane, with the sidebar on the %s",
+      async (sidebar) => {
+        setSidebarSide(sidebar);
+        openHistoryTab();
+        await renderStrip("/elsewhere", LEFT_STRIP);
+
+        expect(
+          screen
+            .getByTestId("tab-history-history")
+            .getAttribute("data-join-pane"),
+        ).toBe("canvas");
+        expect(
+          document
+            .querySelector('[data-sheet-join-bridge="left"]')
+            ?.getAttribute("data-join-pane"),
+        ).toBe("canvas");
+      },
+    );
+
+    // Settings paints `--background` with its rail, the sidebar's own fill,
+    // down its left edge: a row on the LEFT strip meets that rail, a row on
+    // the right strip the page's ground. Which side the sidebar panel is on
+    // is an epic's concern and moves neither.
+    it.each([
+      { edge: "left", pane: "panel", sidebar: "right" },
+      { edge: "right", pane: "surface", sidebar: "left" },
+    ] as const)(
+      "joins an active Settings row on the $edge strip to the $pane pane, with the sidebar on the $sidebar",
+      async ({ edge, pane, sidebar }) => {
+        setSidebarSide(sidebar);
+        openSettingsTab();
+        await renderStrip("/elsewhere", { ...LEFT_STRIP, edge });
+
+        const row = screen.getByTestId("tab-settings-settings");
+        expect(row.getAttribute("data-sheet-joined")).toBe(edge);
+        expect(row.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector(`[data-sheet-join-bridge="${edge}"]`)
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
+      },
+    );
+
+    // A draft paints `--background` until its terminal panel is rendered. The
+    // panel is canvas and docks on the right, so a right strip meets it; a
+    // panel that covers the page is met by either strip. What it renders is
+    // what it publishes, and a page whose panel is not rendered publishes
+    // nothing.
+    it.each([
+      {
+        edge: "left",
+        state: "not rendered",
+        coverage: null,
+        pane: "surface",
+      },
+      {
+        edge: "left",
+        state: "docked",
+        coverage: "docked",
+        pane: "surface",
+      },
+      {
+        edge: "left",
+        state: "full",
+        coverage: "full",
+        pane: "canvas",
+      },
+      {
+        edge: "right",
+        state: "not rendered",
+        coverage: null,
+        pane: "surface",
+      },
+      {
+        edge: "right",
+        state: "docked",
+        coverage: "docked",
+        pane: "canvas",
+      },
+      {
+        edge: "right",
+        state: "full",
+        coverage: "full",
+        pane: "canvas",
+      },
+    ] satisfies ReadonlyArray<{
+      readonly edge: EdgeSide;
+      readonly state: string;
+      readonly coverage: LandingPanelCoverage | null;
+      readonly pane: "surface" | "canvas";
+    }>)(
+      "joins an active draft row on the $edge strip to the $pane pane while its terminal panel is $state",
+      async ({ edge, coverage, pane }) => {
+        const draftId = openDraftTab();
+        act(() => {
+          useLandingPaneAnchorStore
+            .getState()
+            .setPanelCoverage(draftId, coverage);
+        });
+        await renderStrip("/elsewhere", { ...LEFT_STRIP, edge });
+
+        const row = screen.getByTestId(`tab-draft-${draftId}`);
+        expect(row.getAttribute("data-sheet-joined")).toBe(edge);
+        expect(row.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector(`[data-sheet-join-bridge="${edge}"]`)
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
+      },
+    );
 
     it("keeps the join on the collapsed tile", async () => {
       setSidebarSide("left");

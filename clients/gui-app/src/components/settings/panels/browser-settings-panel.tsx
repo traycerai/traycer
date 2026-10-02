@@ -60,10 +60,10 @@ export function BrowserSettingsPanel(): ReactNode {
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <SettingsGroup
-          group={BROWSER.definitions.search}
+          group={BROWSER.definitions.browsing}
           showTitle
           tone="default"
-          dataTestId="settings-browser-search"
+          dataTestId="settings-browser-browsing"
           fill={false}
         >
           <SettingsRow
@@ -81,15 +81,6 @@ export function BrowserSettingsPanel(): ReactNode {
               />
             }
           />
-        </SettingsGroup>
-        <BrowserSettingsSection />
-        <SettingsGroup
-          group={BROWSER.definitions.browserPlacement}
-          showTitle
-          tone="default"
-          dataTestId="settings-browser-placement"
-          fill={false}
-        >
           <SettingsRow
             row={BROWSER.definitions.tileBrowser}
             status={singleTileViewport ? SINGLE_TILE_VIEWPORT_NOTE : undefined}
@@ -122,33 +113,31 @@ export function BrowserSettingsPanel(): ReactNode {
             }
           />
         </SettingsGroup>
-        <SettingsGroup
-          group={BROWSER.definitions.agentTabs}
-          showTitle
-          tone="default"
-          dataTestId="settings-opening-agent-tabs"
-          fill={false}
-        >
-          <SettingsRow
-            row={BROWSER.definitions.agentOpenedTabs}
-            control={
-              <EnumSelect
-                labels={AGENT_TAB_SURFACING_LABELS}
-                isValue={isAgentTabSurfacing}
-                value={agentTabSurfacing}
-                onValueChange={(value) => {
-                  trackBrowserSetting("agentTabSurfacing");
-                  setAgentTabSurfacing(value);
-                }}
-                ariaLabel="Agent-opened tabs"
-              />
-            }
-          />
-        </SettingsGroup>
 
+        {/* Under the placement row it is about, not at the foot of the page. */}
         <p className="px-1 text-ui-sm text-muted-foreground">
           {MODIFIER_LEGEND}
         </p>
+
+        <BrowserSettingsSection
+          agentOpenedTabsRow={
+            <SettingsRow
+              row={BROWSER.definitions.agentOpenedTabs}
+              control={
+                <EnumSelect
+                  labels={AGENT_TAB_SURFACING_LABELS}
+                  isValue={isAgentTabSurfacing}
+                  value={agentTabSurfacing}
+                  onValueChange={(value) => {
+                    trackBrowserSetting("agentTabSurfacing");
+                    setAgentTabSurfacing(value);
+                  }}
+                  ariaLabel="Agent-opened tabs"
+                />
+              }
+            />
+          }
+        />
       </div>
     </SettingsPanelShell>
   );

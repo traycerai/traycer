@@ -22,6 +22,10 @@ import { Button } from "@/components/ui/button";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { useLandingTerminalSurfaceActive } from "./landing-terminal-surface-binding";
 import {
+  landingPanelCoverage,
+  usePublishLandingPanelCoverage,
+} from "./landing-pane-anchor-store";
+import {
   LEADER_SCOPE_LANDING_TERMINAL,
   registerLeaderScope,
 } from "@/lib/keybindings/leader-scope";
@@ -1849,6 +1853,12 @@ function LandingTerminalPanelContents(
   const isMobile = useIsMobileViewport();
   const fullOverlay = props.maximized || isMobile;
   const overlayActive = fullOverlay && props.panelOpen;
+  // The tab that joins this page takes the panel's ground where the panel
+  // covers the page, so it reads what is rendered here, never the layout.
+  usePublishLandingPanelCoverage(
+    props.landingPageId,
+    landingPanelCoverage({ panelOpen: props.panelOpen, fullOverlay }),
+  );
   // Same touch-key treatment as the epic terminal tiles: at phone width the
   // open panel is a full overlay, so the key bar mounts under the body and
   // the keyboard inset pads the covered strip (0 wherever the platform

@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 import {
   finishAnimations,
-  slowAnimations,
+  freezeAnimations,
   startedAnimations,
 } from "./support/section-motion.ts";
 
@@ -49,7 +49,7 @@ test("slides a row that changes section from where it was, by transform alone", 
   page,
 }) => {
   await openStrip(page);
-  await slowAnimations(page);
+  await freezeAnimations(page);
   const watcher = row(page, "watcher");
   const before = await boxOf(watcher);
 
@@ -61,7 +61,7 @@ test("slides a row that changes section from where it was, by transform alone", 
   );
   expect(slide?.properties).toEqual(["transform"]);
   // Laid out in To review, well above where it was, it is painted where it
-  // was, give or take the few milliseconds the slowed animation has run.
+  // was: the frozen slide is still on its first frame.
   expect(await laneOf(watcher)).toBe("to-review");
   expect(Math.abs((await boxOf(watcher)).y - before.y)).toBeLessThan(4);
 
@@ -73,7 +73,7 @@ test("glows a row once where it lands, in a ring that fades from its brightest",
   page,
 }) => {
   await openStrip(page);
-  await slowAnimations(page);
+  await freezeAnimations(page);
   const cookie = row(page, "cookie");
 
   await moveTask(page, "cookie", "needs-you");
@@ -99,7 +99,7 @@ test("keeps the glow and drops the slide under reduced motion", async ({
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openStrip(page);
-  await slowAnimations(page);
+  await freezeAnimations(page);
 
   await moveTask(page, "cookie", "needs-you");
   await expect(
@@ -115,7 +115,7 @@ test("keeps the row under the pointer in its section until the pointer leaves", 
   page,
 }) => {
   await openStrip(page);
-  await slowAnimations(page);
+  await freezeAnimations(page);
   const watcher = row(page, "watcher");
   await watcher.hover();
 

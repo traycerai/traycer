@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AppearanceDetails } from "@/components/settings/themes/appearance-details";
+import { AppearanceMotionRows } from "@/components/settings/themes/appearance-details";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 
 vi.mock("@/hooks/runner/use-runner-installed-fonts-query", () => ({
@@ -30,16 +30,16 @@ afterEach(() => {
   resetThemeLibrary();
 });
 
-describe("AppearanceDetails motion and readability", () => {
-  it("keeps motion and readability controls visible and gates duration on animations", () => {
-    render(<AppearanceDetails />);
+describe("AppearanceMotionRows", () => {
+  it("keeps motion and contrast controls visible and gates duration on animations", () => {
+    render(<AppearanceMotionRows />);
 
     expect(
-      screen.getByRole("heading", {
+      screen.queryByRole("heading", {
         level: 2,
         name: "Motion and readability",
       }),
-    ).toBeTruthy();
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Advanced options" }),
     ).toBeNull();

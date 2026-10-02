@@ -309,9 +309,10 @@
    pseudo-elements are the concave corners that flare out along the
    surface's edge. One mechanism for both placements.
 
-   The fill is the pane's: `data-join-pane` names it (the epic panel, its
-   collapsed rail, or the canvas, the default and the only one a top tab
-   meets by rule).
+   The fill is the pane's: `data-join-pane` names it (a panel in the
+   sidebar's fill, the epic panel's collapsed rail, a surface's own ground,
+   or the canvas, the default). `surface-join-pane.ts` says which one each
+   kind of surface shows its tab.
 
    Arc geometry: absolute offsets resolve against the bridge's padding box.
    At 100%, each arc already overlaps its 1px border, landing on the border's
@@ -336,7 +337,9 @@
   }
 
   [data-sheet-joined][data-join-pane="rail"],
-  [data-sheet-join-bridge][data-join-pane="rail"] {
+  [data-sheet-join-bridge][data-join-pane="rail"],
+  [data-sheet-joined][data-join-pane="surface"],
+  [data-sheet-join-bridge][data-join-pane="surface"] {
     --join-fill: var(--background);
   }
 

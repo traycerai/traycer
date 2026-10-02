@@ -26,6 +26,7 @@ import {
   SIZED_VERBS,
 } from "@/components/layout-editor/regions/region-grammar";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { NESTED_CONTEXT_MENU_PROPS } from "@/lib/dom/nested-context-menu";
 import { PRESET_VALUES } from "@/lib/layout/layout-presets";
 import type { RegionId } from "@/lib/layout/region-id";
 import {
@@ -117,6 +118,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
   useLayoutEditorStore.getState().endSession();
   useLayoutStore.getState().replaceAll(DEFAULT_LAYOUT_SNAPSHOT);
@@ -509,6 +511,84 @@ describe("a press the operating system's own menu serves", () => {
       expect(event.defaultPrevented).toBe(false);
       expect(verbsShowing()).toBe(false);
     }
+  });
+
+  function renderDockWithMarkedLink(): void {
+    render(
+      <LayoutClusterContextMenu>
+        <div data-testid="dock">
+          <span data-layout-region="changedFiles" data-testid="row">
+            <span data-testid="row-header">3 files changed</span>
+            <ContextMenu>
+              <ContextMenuTrigger asChild {...NESTED_CONTEXT_MENU_PROPS}>
+                <a href="https://example.com" data-testid="menu-link">
+                  with a menu
+                </a>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem data-testid="link-menu-item">
+                  Open in Browser
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+            <a href="https://example.com" data-testid="plain-link">
+              without one
+            </a>
+          </span>
+        </div>
+      </LayoutClusterContextMenu>,
+    );
+  }
+
+  // The transcript's web links own an app menu of their own. The stand-down
+  // above would stop their press before React sees it, so they carry the
+  // nested-menu mark that lets it through.
+  it("lets a link that marks its own menu open that menu instead of standing down", () => {
+    renderDockWithMarkedLink();
+
+    const onMarkedLink = press(screen.getByTestId("menu-link"));
+
+    expect(screen.queryByTestId("link-menu-item")).not.toBeNull();
+    // The inner menu prevented the event, which is also what keeps the
+    // cluster's verbs from opening on top of it.
+    expect(onMarkedLink.defaultPrevented).toBe(true);
+    expect(verbsShowing()).toBe(false);
+
+    // A link without the mark is still the operating system's.
+    const onPlainLink = press(screen.getByTestId("plain-link"));
+
+    expect(onPlainLink.defaultPrevented).toBe(false);
+    expect(verbsShowing()).toBe(false);
+  });
+
+  // Touch has no contextmenu event to default-prevent: Radix arms a long-press
+  // timer on every trigger the pointerdown bubbles through, so the inner
+  // menu's press would also open the cluster's unless the cluster declines it.
+  it("opens only a marked link's menu on a touch long-press, not the cluster's verbs", () => {
+    renderDockWithMarkedLink();
+    // The cluster only has content once an earlier right-click named a region,
+    // and it keeps that region after closing. Without this, the long-press
+    // could not show the verbs even if the cluster did open, and the test
+    // would pass for the wrong reason.
+    press(screen.getByTestId("row-header"));
+    expect(verbsShowing()).toBe(true);
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    expect(verbsShowing()).toBe(false);
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByTestId("menu-link"), {
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+    });
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+
+    expect(screen.queryByTestId("link-menu-item")).not.toBeNull();
+    expect(verbsShowing()).toBe(false);
   });
 
   it("leaves a press inside a text selection alone", () => {

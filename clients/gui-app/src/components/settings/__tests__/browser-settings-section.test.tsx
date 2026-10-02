@@ -8,6 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
@@ -119,6 +120,14 @@ function savedSite(
   return { domain, lastSeen: Date.now(), contributedByHostId };
 }
 
+function agentOpenedTabsStub(): ReactNode {
+  return <div data-testid="agent-opened-tabs-stub">Agent-opened tabs stub</div>;
+}
+
+function browserSettingsSection(): ReactNode {
+  return <BrowserSettingsSection agentOpenedTabsRow={agentOpenedTabsStub()} />;
+}
+
 function renderSection(
   current: BrowserSaveLoginsController,
   data: SavedLoginSitesAnswer | null,
@@ -130,7 +139,7 @@ function renderSection(
   });
   return render(
     <QueryClientProvider client={client}>
-      <BrowserSettingsSection />
+      {browserSettingsSection()}
     </QueryClientProvider>,
   );
 }
@@ -381,7 +390,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
 
     queryState.isLoading = false;
     queryState.isError = true;
-    view.rerender(<BrowserSettingsSection />);
+    view.rerender(browserSettingsSection());
     expect(screen.getByText("Unavailable")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Try again" })).not.toBeNull();
 
@@ -429,7 +438,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     };
     saveLogins.current = controller({});
     sites.current = bothSites;
-    const view = render(<BrowserSettingsSection />);
+    const view = render(browserSettingsSection());
     const manager = openManager();
 
     fireEvent.click(
@@ -441,16 +450,16 @@ describe("<BrowserSettingsSection /> website sessions", () => {
       expect(screen.queryByText("example.com")).toBeNull();
     });
 
-    view.rerender(<BrowserSettingsSection />);
+    view.rerender(browserSettingsSection());
     expect(screen.queryByText("example.com")).toBeNull();
 
     sites.current = {
       kind: "sites",
       sites: [savedSite("example.org", null)],
     };
-    view.rerender(<BrowserSettingsSection />);
+    view.rerender(browserSettingsSection());
     sites.current = bothSites;
-    view.rerender(<BrowserSettingsSection />);
+    view.rerender(browserSettingsSection());
 
     expect(screen.getAllByText("example.com").length).toBeGreaterThan(0);
   });
@@ -598,5 +607,30 @@ describe("<BrowserSettingsSection /> website sessions", () => {
       });
       expect(screen.queryByTestId("import-logins-dialog")).toBeNull();
     });
+  });
+});
+
+describe("<BrowserSettingsSection /> Agents group", () => {
+  afterEach(() => {
+    cleanup();
+    hostBinding.current = {};
+    useSettingsStore.setState({ browserDevOrigins: [] });
+  });
+
+  it("renders the Agents group with only the passed row when the host cannot advertise access and no origins exist", () => {
+    hostBinding.current = {};
+    useSettingsStore.setState({ browserDevOrigins: [] });
+    renderSection(controller({ enabled: true }), null);
+
+    const group = screen.getByTestId("settings-browser-agents");
+    expect(group.contains(screen.getByTestId("agent-opened-tabs-stub"))).toBe(
+      true,
+    );
+    expect(
+      screen.queryByRole("switch", {
+        name: "Let agents use the in-app browser",
+      }),
+    ).toBeNull();
+    expect(screen.queryByText("Detected dev origins")).toBeNull();
   });
 });

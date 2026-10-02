@@ -89,8 +89,13 @@ export function useConcealedForTravel(stripItemId: string | null): boolean {
   );
 }
 
-export function useSelectionTravelling(): boolean {
-  return useStripTravelStore((state) => state.concealedItemId !== null);
+/**
+ * The strip item the traveller is flying to, or `null` while nothing slides.
+ * The traveller reads that item's pane live (`useHeaderItemJoinPane`), the
+ * same way the box it stands in for does, so the two never differ.
+ */
+export function useTravelDestinationId(): string | null {
+  return useStripTravelStore((state) => state.concealedItemId);
 }
 
 interface BoxRect {

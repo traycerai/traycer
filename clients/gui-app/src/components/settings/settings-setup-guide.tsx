@@ -2,14 +2,9 @@ import { lazy, Suspense, type RefObject } from "react";
 import { useLayoutLitMoment } from "@/components/layout-editor/lit-moment";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
-import {
-  clampOnboardingStep,
-  useOnboardingStore,
-} from "@/stores/onboarding/onboarding-store";
-import { setupGuideStepsFor } from "@/stores/onboarding/setup-guides";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
+import { useActiveSetupGuideStep } from "@/components/settings/use-active-setup-guide-step";
 import { scrollPaneToCenter } from "@/components/settings/use-settings-anchor-reveal";
 
 const Coachmark = lazy(() =>
@@ -22,44 +17,30 @@ export function SettingsSetupGuide(props: {
   readonly section: SettingsSectionId;
   readonly rootRef: RefObject<HTMLElement | null>;
 }) {
-  const active = useOnboardingStore((state) => state.activeSetup);
+  const guide = useActiveSetupGuideStep();
   const complete = useOnboardingStore((state) => state.completeSetup);
   // No guide step runs inside a layout-editor session: the editor owns the
   // screen and its Escape, and a coachmark pointing into Settings would float
   // over it. The guide resumes at the same step when the session ends.
   const customizing = useLayoutEditorStore((state) => state.session !== null);
-  // Where the editor can never open, the guide ends on the page before its
-  // door (`requiresLayoutEditor`) rather than pointing at a missing control.
-  const availability = useSettingsAvailabilityContext();
-  const editorAvailable = isLayoutEditorAvailable(availability);
-  const steps =
-    active === null
-      ? []
-      : setupGuideStepsFor(active.id, { layoutEditor: editorAvailable });
-  // Resumed progress is stored against the guide's FULL step count
-  // (`setupGuideLength`), but a shell that cannot open the layout editor
-  // filters that door's trailing step out of `steps`. A step persisted at or
-  // past that point clamps to the last step this shell actually shows,
-  // rather than indexing past the filtered array and vanishing.
-  const displayStep =
-    active === null ? 0 : clampOnboardingStep(active.step, steps.length);
-  const step = active === null ? null : (steps[displayStep] ?? null);
   // Resolved above the early returns, because it is a hook: the lit moment
   // belongs to the step that asked for it and ends when that step does,
   // however it ends - Continue, Escape, or the surface closing (L-50).
   useLayoutLitMoment(
     !customizing &&
-      step !== null &&
-      step.litChrome === true &&
-      step.section === props.section,
+      guide !== null &&
+      guide.step.litChrome === true &&
+      guide.step.section === props.section,
   );
   // Nothing on unmount: development roots render under StrictMode, whose mount
   // probe runs every effect's cleanup once, which would clear the guide the
   // moment it started. `activeSetup` is session-local presence, so a closed
   // Settings simply resumes the same step when it reopens - and closing the
   // surface is not a user skip, so it must not finish the card either.
-  if (active === null || step === null) return null;
+  if (guide === null) return null;
   if (customizing) return null;
+  const { steps, step } = guide;
+  const displayStep = guide.index;
   if (step.section !== props.section) return null;
   const last = displayStep + 1 === steps.length;
   const go = (index: number): void => {
@@ -70,7 +51,7 @@ export function SettingsSetupGuide(props: {
   return (
     <Suspense fallback={null}>
       <Coachmark
-        id={`${active.id}-${displayStep}`}
+        id={`${guide.id}-${displayStep}`}
         title={step.title}
         content={step.content}
         progress={{
@@ -83,7 +64,7 @@ export function SettingsSetupGuide(props: {
         // the person has been shown the guide and declined it, so leaving it
         // half-finished on the checklist would nag them for a decision they
         // have already made.
-        onClose={() => complete(active.id)}
+        onClose={() => complete(guide.id)}
         onTarget={revealSetting}
         back={
           displayStep > 0
@@ -104,7 +85,7 @@ export function SettingsSetupGuide(props: {
                   // Completing rather than advancing: the last step SHOWN
                   // is not the stored last one where a step was left out.
                   if (last) {
-                    complete(active.id);
+                    complete(guide.id);
                     navigateToSettingsSection("getting-started");
                   } else {
                     useOnboardingStore.getState().advanceSetup();

@@ -154,8 +154,8 @@ describe("<PushPermissionSection />", () => {
   it("renders nothing where the shell has no OS push permission", () => {
     renderSection(null);
 
-    expect(screen.queryByTestId("push-permission-section")).toBeNull();
-    expect(screen.queryByText("This phone")).toBeNull();
+    expect(screen.queryByText("Push notifications on this phone")).toBeNull();
+    expect(screen.queryByTestId("push-permission-state")).toBeNull();
   });
 
   it("reports a granted permission with no control to act on", async () => {
@@ -163,9 +163,7 @@ describe("<PushPermissionSection />", () => {
     renderSection(permission.host);
 
     expect(await screen.findByText("On")).toBeTruthy();
-    const section = screen.getByTestId("push-permission-section");
-    expect(section.textContent).toContain("This phone");
-    expect(section.textContent).toContain("Push notifications");
+    expect(screen.getByText("Push notifications on this phone")).toBeTruthy();
     expect(
       screen.getByText("Delivered to this phone when an agent needs you."),
     ).toBeTruthy();

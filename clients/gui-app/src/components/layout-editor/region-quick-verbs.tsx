@@ -1,4 +1,10 @@
-import { useId, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useId,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { Eye, EyeOff, Layers, PanelTop } from "lucide-react";
 import { toast } from "sonner";
@@ -33,6 +39,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useRegionValues } from "@/lib/layout-overrides";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
 import { activateTabIntent } from "@/lib/tab-navigation";
+import { opensNestedContextMenu } from "@/lib/dom/nested-context-menu";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
 import {
   regionValuesHidden,
@@ -338,10 +345,10 @@ export function LayoutRegionContextMenuWithItems(props: {
  * innermost one wins with nothing written here: Radix's trigger composes the
  * caller's handler ahead of its own opener and SKIPS that opener once the
  * event is default-prevented, which the inner trigger has already done by the
- * time the event reaches this one. Nothing in the dock nests one today, so
- * that half is a property of the primitive rather than a defence the product
- * exercises; `region-quick-verbs.test.tsx` measures it so it cannot quietly
- * stop being true.
+ * time the event reaches this one. The transcript's web links nest one; they
+ * carry `NESTED_CONTEXT_MENU_PROPS` so the stand-down above lets their
+ * press through instead of handing it to the OS. `region-quick-verbs.test.tsx`
+ * measures the default-prevented half so it cannot quietly stop being true.
  */
 export function LayoutClusterContextMenu(props: {
   readonly children: ReactNode;
@@ -356,6 +363,19 @@ export function LayoutClusterContextMenu(props: {
           // Only ever reached with a region under the pointer: the refusal
           // above has already taken the event out of React's reach otherwise.
           setRegionId(regionUnder(event.target));
+        }}
+        onPointerDown={(event: PointerEvent<HTMLElement>) => {
+          // A touch or pen press arms Radix's long-press timer on every
+          // trigger it bubbles through, and the inner menu's contextmenu
+          // default-prevent never reaches this one's timer. Default-preventing
+          // here makes Radix skip arming it, so a nested menu's long-press
+          // opens that menu alone.
+          if (
+            event.pointerType !== "mouse" &&
+            opensNestedContextMenu(event.target)
+          ) {
+            event.preventDefault();
+          }
         }}
       >
         {props.children}
@@ -427,6 +447,10 @@ function standDownRef(
   standsDown: (target: EventTarget | null) => boolean,
 ): (node: HTMLElement | null) => (() => void) | undefined {
   const refuse = (event: Event): void => {
+    // An inner app menu (a markdown web link's) must still receive its press.
+    // It default-prevents the event, which already keeps this trigger's own
+    // opener shut, so there is nothing to refuse.
+    if (opensNestedContextMenu(event.target)) return;
     if (standsDown(event.target)) event.stopPropagation();
   };
   return (node) => {

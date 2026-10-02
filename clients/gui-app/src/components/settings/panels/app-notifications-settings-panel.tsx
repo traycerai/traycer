@@ -21,15 +21,18 @@ export function AppNotificationsSettingsPanel() {
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <NotificationChimeSettingsSection />
-        <SystemNotificationSettingsSection />
-        <PushPermissionSection />
+        {/* The OS row exists on the desktop and the push row in the phone
+          app; each gates itself. Notification events is drawn in every shell,
+          so the card always has a row. */}
         <SettingsGroup
-          group={APP_NOTIFICATIONS.definitions.events}
+          group={APP_NOTIFICATIONS.definitions.notifications}
           showTitle
           tone="default"
-          dataTestId="notification-event-settings-section"
+          dataTestId="app-notifications-notifications-section"
           fill={false}
         >
+          <SystemNotificationSettingsSection />
+          <PushPermissionSection />
           <SettingsRow
             row={APP_NOTIFICATIONS.definitions.notificationEvents}
             control={
