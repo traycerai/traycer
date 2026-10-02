@@ -48,7 +48,7 @@ export function DiffViewerSettingsSection(): ReactNode {
   return (
     <SettingsGroup
       group={APPEARANCE.definitions.diffViewer}
-      showTitle
+      showTitle={false}
       tone="default"
       dataTestId={undefined}
       fill={false}

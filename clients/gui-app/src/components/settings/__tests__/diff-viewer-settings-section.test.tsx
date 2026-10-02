@@ -47,12 +47,12 @@ describe("DiffViewerSettingsSection", () => {
     resetPreferences();
   });
 
-  it("renders the Diff viewer group with every row in order", () => {
+  it("renders every Diff viewer row in order without a group heading", () => {
     renderSection();
 
     expect(
-      screen.getByRole("heading", { level: 2, name: "Diff viewer" }),
-    ).not.toBeNull();
+      screen.queryByRole("heading", { level: 2, name: "Diff viewer" }),
+    ).toBeNull();
     expect(rowLabels()).toEqual([
       "Layout",
       "Line numbers",

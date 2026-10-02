@@ -1,13 +1,37 @@
 import {
-  AppearanceDetails,
   AppearanceFontRows,
+  AppearanceMotionRows,
 } from "@/components/settings/themes/appearance-details";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
-import { useMemo } from "react";
-import { RotateCcw } from "lucide-react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AppWindow,
+  FileDiff,
+  Image,
+  Palette,
+  RotateCcw,
+  Shapes,
+  SquareTerminal,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
+import { Tabs as TabsPrimitive } from "radix-ui";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import {
+  SettingsDetailHeader,
+  SettingsMasterDetail,
+  SettingsMasterSelect,
+} from "@/components/settings/settings-master-detail";
+import {
+  SETTINGS_AREA_BODY_PROPS,
+  settingsAreaPanelProps,
+  useSettingsAnchorArea,
+  useSettingsAreaStartsAtTop,
+  useSettingsGuideArea,
+} from "@/components/settings/settings-master-detail-area";
+import { settingsRailRowClassName } from "@/components/settings/settings-rail-row";
 import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
 import { DiffViewerSettingsSection } from "@/components/settings/diff-viewer-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
@@ -28,6 +52,7 @@ import {
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   useRunnerZoomChangeSubscription,
   useRunnerZoomPercentQuery,
@@ -51,6 +76,7 @@ import {
 } from "@/lib/comm-graph/office/office-view-vocabulary";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
+import type { InstalledFont } from "@/lib/desktop-installed-fonts";
 import {
   trackedSettingSetter,
   trackSettingChanged,
@@ -72,11 +98,264 @@ function trackAppearanceSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("appearance", setting);
 }
 
+/**
+ * The page's areas, in the order the rail lists them. Each is one group of the
+ * page's definitions, so its label and its search anchor come from there, and
+ * a search result finds its area by the group its row sits in.
+ */
+type AppearanceAreaId =
+  | "themes"
+  | "startPage"
+  | "interface"
+  | "typography"
+  | "terminal"
+  | "diffViewer"
+  | "tasks";
+
+interface AppearanceArea {
+  readonly id: AppearanceAreaId;
+  readonly icon: LucideIcon;
+  readonly description: string;
+}
+
+const APPEARANCE_AREAS: ReadonlyArray<AppearanceArea> = [
+  {
+    id: "themes",
+    icon: Palette,
+    description: "Light and dark themes, and which one is in use.",
+  },
+  {
+    id: "startPage",
+    icon: Image,
+    description: "The wallpaper and what the start page shows.",
+  },
+  {
+    id: "interface",
+    icon: AppWindow,
+    description: "Zoom, motion and contrast across the app.",
+  },
+  {
+    id: "typography",
+    icon: Type,
+    description: "Fonts and sizes for the interface, code and prompts.",
+  },
+  {
+    id: "terminal",
+    icon: SquareTerminal,
+    description: "The terminal's font and cursor.",
+  },
+  {
+    id: "diffViewer",
+    icon: FileDiff,
+    description: "How diffs and file edits in chat are drawn.",
+  },
+  {
+    id: "tasks",
+    icon: Shapes,
+    description: "The agent office view a task opens in, and its icon colors.",
+  },
+];
+
+function appearanceAreaLabel(id: AppearanceAreaId): string {
+  return APPEARANCE.definitions[id].label;
+}
+
+/**
+ * The area a settings-search anchor lives in, or `null` for one that is not
+ * this page's.
+ */
+function appearanceAreaForId(id: string): AppearanceAreaId | null {
+  return APPEARANCE_AREAS.find((area) => area.id === id)?.id ?? null;
+}
+
+function appearanceAreaForAnchor(anchor: string): AppearanceAreaId | null {
+  const definition = Object.values(APPEARANCE.definitions).find(
+    (entry) => entry.anchor === anchor,
+  );
+  if (definition === undefined) return null;
+  const groupKey =
+    definition.kind === "row" ? definition.group : definition.key;
+  return groupKey === null ? null : appearanceAreaForId(groupKey);
+}
+
+/**
+ * Appearance, one area at a time, in the master-detail layout Settings ▸
+ * Providers and Settings ▸ Layout use: a rail of areas beside the picked one
+ * from `md` up, a select above it below `md`.
+ *
+ * The page was one scroll of nine titled groups. It is the long page of the
+ * Application group - thirty rows - so the rail lets a person go to the one
+ * area they came to change.
+ *
+ * The areas are a vertical tab list, so the arrow keys walk them. Every area
+ * stays mounted, hidden while another is picked (`forceMount` makes Radix drop
+ * its own `hidden`, so it is passed here): a settings-search result picks its
+ * area and then looks for its row, and Radix would mount a picked area's
+ * children a commit after the pick.
+ */
 export function AppearanceSettingsPanel() {
+  const isMobile = useIsMobileViewport();
+  const [area, setArea] = useState<AppearanceAreaId>("themes");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useSettingsAnchorArea("appearance", appearanceAreaForAnchor, setArea);
+  useSettingsGuideArea("appearance", rootRef, appearanceAreaForId, setArea);
+  useSettingsAreaStartsAtTop(rootRef, area);
+
+  return (
+    <SettingsPanelShell
+      title={APPEARANCE.page.label}
+      description={APPEARANCE.page.description}
+      // Desktop only, as on Providers and Layout: the card fills the settings
+      // pane and the picked area's body owns the scroll. A phone has one
+      // scroll container already, so there the card is sized by its contents.
+      fillHeight={!isMobile}
+    >
+      <TabsPrimitive.Root
+        ref={rootRef}
+        value={area}
+        onValueChange={(value) => {
+          const next = appearanceAreaForId(value);
+          if (next !== null) setArea(next);
+        }}
+        orientation="vertical"
+        className="flex flex-col md:h-full md:min-h-0"
+      >
+        <SettingsMasterDetail
+          railLabel="Appearance areas"
+          mobileSelect={
+            <SettingsMasterSelect
+              label="Appearance area"
+              value={area}
+              options={APPEARANCE_AREAS.map((entry) => ({
+                value: entry.id,
+                label: appearanceAreaLabel(entry.id),
+                icon: <entry.icon className="size-4 shrink-0" />,
+                trailing: null,
+              }))}
+              onSelect={setArea}
+            />
+          }
+          rail={
+            <TabsPrimitive.List
+              aria-label="Appearance areas"
+              // Shrinks and scrolls in a short pane, as Providers' list does,
+              // so the last areas are never clipped by the card.
+              className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2"
+            >
+              {APPEARANCE_AREAS.map((entry) => (
+                <TabsPrimitive.Trigger
+                  key={entry.id}
+                  value={entry.id}
+                  className={settingsRailRowClassName(area === entry.id)}
+                >
+                  <entry.icon className="size-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {appearanceAreaLabel(entry.id)}
+                  </span>
+                </TabsPrimitive.Trigger>
+              ))}
+            </TabsPrimitive.List>
+          }
+        >
+          {APPEARANCE_AREAS.map((entry) => (
+            <TabsPrimitive.Content
+              key={entry.id}
+              value={entry.id}
+              forceMount
+              hidden={area !== entry.id}
+              {...settingsAreaPanelProps(entry.id)}
+              // Named by its area rather than by the rail's trigger, which a
+              // phone does not draw.
+              aria-labelledby={undefined}
+              aria-label={appearanceAreaLabel(entry.id)}
+              className="flex flex-1 flex-col outline-none md:min-h-0"
+            >
+              <div className="border-b border-border/60 pb-4">
+                <SettingsDetailHeader
+                  title={appearanceAreaLabel(entry.id)}
+                  badge={null}
+                  description={entry.description}
+                  footer={null}
+                  action={null}
+                />
+              </div>
+              {/* From `md` up the scroll owner, so the rail and the area's
+              header stay put. A container too: the theme tiles and the
+              terminal preview lay themselves out by the width of this pane,
+              not of the window. */}
+              <div
+                {...SETTINGS_AREA_BODY_PROPS}
+                className="@container -mx-5 flex flex-col gap-4 px-5 pt-4 pb-5 md:min-h-0 md:flex-1 md:overflow-y-auto"
+              >
+                <AppearanceAreaBody area={entry.id} />
+              </div>
+            </TabsPrimitive.Content>
+          ))}
+        </SettingsMasterDetail>
+      </TabsPrimitive.Root>
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * One area's rows. The area's header already names it, so no group here draws
+ * its own title.
+ */
+function AppearanceAreaBody(props: {
+  readonly area: AppearanceAreaId;
+}): ReactNode {
+  switch (props.area) {
+    case "themes":
+      return <ThemeGallery />;
+    case "startPage":
+      return <StartPageSettingsSection />;
+    case "interface":
+      return <InterfaceArea />;
+    case "typography":
+      return <TypographyArea />;
+    case "terminal":
+      return <TerminalArea />;
+    case "diffViewer":
+      return <DiffViewerSettingsSection />;
+    case "tasks":
+      return <TasksArea />;
+  }
+}
+
+function InterfaceArea(): ReactNode {
   const pointerCursors = useSettingsStore((state) => state.pointerCursors);
   const setPointerCursors = useSettingsStore(
     (state) => state.setPointerCursors,
   );
+  return (
+    <SettingsGroup
+      group={APPEARANCE.definitions.interface}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <DesktopZoomSettingsRow />
+      <SettingsRow
+        row={APPEARANCE.definitions.pointerCursors}
+        control={
+          <Switch
+            checked={pointerCursors}
+            onCheckedChange={trackedAppearanceSetter(
+              "pointerCursors",
+              setPointerCursors,
+            )}
+            aria-label="Show a hand cursor over clickable controls"
+          />
+        }
+      />
+      <AppearanceMotionRows />
+    </SettingsGroup>
+  );
+}
+
+function TypographyArea(): ReactNode {
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
   const codeFontSize = useSettingsStore((state) => state.codeFontSize);
@@ -87,6 +366,81 @@ export function AppearanceSettingsPanel() {
   const setCodeFontFamily = useSettingsStore(
     (state) => state.setCodeFontFamily,
   );
+  const installedFonts = useInstalledFonts();
+  return (
+    <SettingsGroup
+      group={APPEARANCE.definitions.typography}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <SettingsRow
+        row={APPEARANCE.definitions.uiFont}
+        control={
+          <div className="flex flex-col items-end gap-2">
+            <FontPicker
+              value={uiFontFamily}
+              onChange={trackedAppearanceSetter(
+                "uiFontFamily",
+                setUiFontFamily,
+              )}
+              options={installedFonts}
+              defaultLabel="Figtree (Default)"
+              resetTooltip="Reset to default"
+              ariaLabel="Interface font"
+            />
+            <SettingsNumberInput
+              value={uiFontSize}
+              onChange={trackedAppearanceSetter("uiFontSize", setUiFontSize)}
+              min={10}
+              max={20}
+              unit="px"
+              ariaLabel="Interface font size"
+              defaultValue={DEFAULT_UI_FONT_SIZE}
+              resetTooltip="Reset to default"
+            />
+          </div>
+        }
+      />
+      <SettingsRow
+        row={APPEARANCE.definitions.codeFont}
+        control={
+          <div className="flex flex-col items-end gap-2">
+            <FontPicker
+              value={codeFontFamily}
+              onChange={trackedAppearanceSetter(
+                "codeFontFamily",
+                setCodeFontFamily,
+              )}
+              options={installedFonts}
+              defaultLabel="System Default"
+              resetTooltip="Reset to default"
+              ariaLabel="Code font"
+            />
+            <SettingsNumberInput
+              value={codeFontSize}
+              onChange={trackedAppearanceSetter(
+                "codeFontSize",
+                setCodeFontSize,
+              )}
+              min={10}
+              max={24}
+              unit="px"
+              ariaLabel="Code font size"
+              defaultValue={DEFAULT_CODE_FONT_SIZE}
+              resetTooltip="Reset to default"
+            />
+          </div>
+        }
+      />
+      <AppearanceFontRows />
+    </SettingsGroup>
+  );
+}
+
+function TerminalArea(): ReactNode {
+  const codeFontSize = useSettingsStore((state) => state.codeFontSize);
   const terminalFontFamily = useSettingsStore(
     (state) => state.terminalFontFamily,
   );
@@ -109,11 +463,90 @@ export function AppearanceSettingsPanel() {
   const setTerminalCursorBlink = useSettingsStore(
     (state) => state.setTerminalCursorBlink,
   );
-  const installedFontsQuery = useRunnerInstalledFontsQuery();
-  const installedFonts = useMemo(
-    () => installedFontsQuery.data ?? [],
-    [installedFontsQuery.data],
+  const installedFonts = useInstalledFonts();
+  const compact = useSettingsDensity() === "compact";
+  return (
+    <SettingsGroup
+      group={APPEARANCE.definitions.terminal}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <div className="@container">
+        <div className="grid grid-cols-1 @min-[32rem]:grid-cols-[7fr_5fr]">
+          <div className="flex flex-col">
+            <SettingsRow
+              row={APPEARANCE.definitions.terminalFont}
+              control={
+                <div className="flex flex-col items-end gap-2">
+                  <FontPicker
+                    value={terminalFontFamily}
+                    onChange={trackedAppearanceSetter(
+                      "terminalFontFamily",
+                      setTerminalFontFamily,
+                    )}
+                    options={installedFonts}
+                    defaultLabel="Same as code font"
+                    resetTooltip="Use code font"
+                    ariaLabel="Terminal font"
+                  />
+                  <NullableFontSizeInput
+                    value={terminalFontSize}
+                    followValue={codeFontSize}
+                    onChange={trackedAppearanceSetter(
+                      "terminalFontSize",
+                      setTerminalFontSize,
+                    )}
+                    min={10}
+                    max={24}
+                    ariaLabel="Terminal font size"
+                    resetTooltip="Follow code size"
+                  />
+                </div>
+              }
+            />
+            <SettingsRow
+              row={APPEARANCE.definitions.terminalCursor}
+              control={
+                <TerminalCursorStylePicker
+                  value={terminalCursorStyle}
+                  onChange={trackedAppearanceSetter<TerminalCursorStyle>(
+                    "terminalCursorStyle",
+                    setTerminalCursorStyle,
+                  )}
+                />
+              }
+            />
+            <SettingsRow
+              row={APPEARANCE.definitions.blinkCursor}
+              control={
+                <Switch
+                  checked={terminalCursorBlink}
+                  onCheckedChange={trackedAppearanceSetter(
+                    "terminalCursorBlink",
+                    setTerminalCursorBlink,
+                  )}
+                  aria-label="Blink terminal cursor"
+                />
+              }
+            />
+          </div>
+          <div
+            className={cn(
+              "flex items-center border-t border-border/40 @min-[32rem]:border-t-0 @min-[32rem]:border-l",
+              compact ? "p-3.5" : "p-4",
+            )}
+          >
+            <TerminalPreview />
+          </div>
+        </div>
+      </div>
+    </SettingsGroup>
   );
+}
+
+function TasksArea(): ReactNode {
   const artifactIconColorMode = useSettingsStore(
     (state) => state.artifactIconColorMode,
   );
@@ -135,266 +568,73 @@ export function AppearanceSettingsPanel() {
   const setAgentOfficeDefaultView = useSettingsStore(
     (state) => state.setAgentOfficeDefaultView,
   );
-  const compact = useSettingsDensity() === "compact";
-
   return (
-    <SettingsPanelShell
-      title="Appearance"
-      description="Themes, fonts, and display preferences."
-      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    <SettingsGroup
+      group={APPEARANCE.definitions.tasks}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
     >
-      <div
-        className={cn("@container flex flex-col", compact ? "gap-5" : "gap-8")}
-      >
-        <ThemeGallery />
-
-        <StartPageSettingsSection />
-
-        <SettingsGroup
-          group={APPEARANCE.definitions.interface}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <DesktopZoomSettingsRow />
-          <SettingsRow
-            row={APPEARANCE.definitions.pointerCursors}
-            control={
-              <Switch
-                checked={pointerCursors}
-                onCheckedChange={trackedAppearanceSetter(
-                  "pointerCursors",
-                  setPointerCursors,
-                )}
-                aria-label="Show a hand cursor over clickable controls"
-              />
-            }
+      <SettingsRow
+        row={APPEARANCE.definitions.agentOfficeDefaultView}
+        control={
+          <Select
+            value={agentOfficeDefaultView}
+            onValueChange={(value) => {
+              if (!isOfficeViewChoice(value)) return;
+              trackAppearanceSetting("agentOfficeDefaultView");
+              setAgentOfficeDefaultView(value);
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="Agent office default view"
+              className="w-[40vw] max-w-32"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {OFFICE_VIEW_CHOICES.map((choice) => (
+                <SelectItem key={choice} value={choice}>
+                  {officeViewChoiceLabel(choice)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+      />
+      <SettingsRow
+        row={APPEARANCE.definitions.artifactIconColors}
+        control={
+          <EpicNodeIconColorPicker
+            enabled={artifactIconColorMode === "byType"}
+            onEnabledChange={(enabled) => {
+              trackAppearanceSetting("artifactIconColorMode");
+              setArtifactIconColorMode(enabled ? "byType" : "none");
+            }}
+            colors={artifactIconColors}
+            onChange={(type, color) => {
+              trackAppearanceSetting("artifactIconColors");
+              setArtifactIconColor(type, color);
+            }}
+            onReset={() => {
+              trackAppearanceSetting("artifactIconColors");
+              resetArtifactIconColors();
+            }}
           />
-        </SettingsGroup>
+        }
+      />
+    </SettingsGroup>
+  );
+}
 
-        <SettingsGroup
-          group={APPEARANCE.definitions.typography}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <SettingsRow
-            row={APPEARANCE.definitions.uiFont}
-            control={
-              <div className="flex flex-col items-end gap-2">
-                <FontPicker
-                  value={uiFontFamily}
-                  onChange={trackedAppearanceSetter(
-                    "uiFontFamily",
-                    setUiFontFamily,
-                  )}
-                  options={installedFonts}
-                  defaultLabel="Figtree (Default)"
-                  resetTooltip="Reset to default"
-                  ariaLabel="Interface font"
-                />
-                <SettingsNumberInput
-                  value={uiFontSize}
-                  onChange={trackedAppearanceSetter(
-                    "uiFontSize",
-                    setUiFontSize,
-                  )}
-                  min={10}
-                  max={20}
-                  unit="px"
-                  ariaLabel="Interface font size"
-                  defaultValue={DEFAULT_UI_FONT_SIZE}
-                  resetTooltip="Reset to default"
-                />
-              </div>
-            }
-          />
-          <SettingsRow
-            row={APPEARANCE.definitions.codeFont}
-            control={
-              <div className="flex flex-col items-end gap-2">
-                <FontPicker
-                  value={codeFontFamily}
-                  onChange={trackedAppearanceSetter(
-                    "codeFontFamily",
-                    setCodeFontFamily,
-                  )}
-                  options={installedFonts}
-                  defaultLabel="System Default"
-                  resetTooltip="Reset to default"
-                  ariaLabel="Code font"
-                />
-                <SettingsNumberInput
-                  value={codeFontSize}
-                  onChange={trackedAppearanceSetter(
-                    "codeFontSize",
-                    setCodeFontSize,
-                  )}
-                  min={10}
-                  max={24}
-                  unit="px"
-                  ariaLabel="Code font size"
-                  defaultValue={DEFAULT_CODE_FONT_SIZE}
-                  resetTooltip="Reset to default"
-                />
-              </div>
-            }
-          />
-          <AppearanceFontRows />
-        </SettingsGroup>
-
-        <AppearanceDetails />
-
-        <SettingsGroup
-          group={APPEARANCE.definitions.terminal}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <div className="@container">
-            <div className="grid grid-cols-1 @min-[32rem]:grid-cols-[7fr_5fr]">
-              <div className="flex flex-col">
-                <SettingsRow
-                  row={APPEARANCE.definitions.terminalFont}
-                  control={
-                    <div className="flex flex-col items-end gap-2">
-                      <FontPicker
-                        value={terminalFontFamily}
-                        onChange={trackedAppearanceSetter(
-                          "terminalFontFamily",
-                          setTerminalFontFamily,
-                        )}
-                        options={installedFonts}
-                        defaultLabel="Same as code font"
-                        resetTooltip="Use code font"
-                        ariaLabel="Terminal font"
-                      />
-                      <NullableFontSizeInput
-                        value={terminalFontSize}
-                        followValue={codeFontSize}
-                        onChange={trackedAppearanceSetter(
-                          "terminalFontSize",
-                          setTerminalFontSize,
-                        )}
-                        min={10}
-                        max={24}
-                        ariaLabel="Terminal font size"
-                        resetTooltip="Follow code size"
-                      />
-                    </div>
-                  }
-                />
-                <SettingsRow
-                  row={APPEARANCE.definitions.terminalCursor}
-                  control={
-                    <TerminalCursorStylePicker
-                      value={terminalCursorStyle}
-                      onChange={trackedAppearanceSetter<TerminalCursorStyle>(
-                        "terminalCursorStyle",
-                        setTerminalCursorStyle,
-                      )}
-                    />
-                  }
-                />
-                <SettingsRow
-                  row={APPEARANCE.definitions.blinkCursor}
-                  control={
-                    <Switch
-                      checked={terminalCursorBlink}
-                      onCheckedChange={trackedAppearanceSetter(
-                        "terminalCursorBlink",
-                        setTerminalCursorBlink,
-                      )}
-                      aria-label="Blink terminal cursor"
-                    />
-                  }
-                />
-              </div>
-              <div
-                className={cn(
-                  "flex items-center border-t border-border/40 @min-[32rem]:border-t-0 @min-[32rem]:border-l",
-                  compact ? "p-3.5" : "p-4",
-                )}
-              >
-                <TerminalPreview />
-              </div>
-            </div>
-          </div>
-        </SettingsGroup>
-
-        <DiffViewerSettingsSection />
-
-        <SettingsGroup
-          group={APPEARANCE.definitions.agentOffice}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <SettingsRow
-            row={APPEARANCE.definitions.agentOfficeDefaultView}
-            control={
-              <Select
-                value={agentOfficeDefaultView}
-                onValueChange={(value) => {
-                  if (!isOfficeViewChoice(value)) return;
-                  trackAppearanceSetting("agentOfficeDefaultView");
-                  setAgentOfficeDefaultView(value);
-                }}
-              >
-                <SelectTrigger
-                  size="sm"
-                  aria-label="Default view"
-                  className="w-[40vw] max-w-32"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {OFFICE_VIEW_CHOICES.map((choice) => (
-                    <SelectItem key={choice} value={choice}>
-                      {officeViewChoiceLabel(choice)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            }
-          />
-        </SettingsGroup>
-
-        <SettingsGroup
-          group={APPEARANCE.definitions.artifactIcons}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          <SettingsRow
-            row={APPEARANCE.definitions.artifactIconColors}
-            control={
-              <EpicNodeIconColorPicker
-                enabled={artifactIconColorMode === "byType"}
-                onEnabledChange={(enabled) => {
-                  trackAppearanceSetting("artifactIconColorMode");
-                  setArtifactIconColorMode(enabled ? "byType" : "none");
-                }}
-                colors={artifactIconColors}
-                onChange={(type, color) => {
-                  trackAppearanceSetting("artifactIconColors");
-                  setArtifactIconColor(type, color);
-                }}
-                onReset={() => {
-                  trackAppearanceSetting("artifactIconColors");
-                  resetArtifactIconColors();
-                }}
-              />
-            }
-          />
-        </SettingsGroup>
-      </div>
-    </SettingsPanelShell>
+/** The fonts installed on this machine, `[]` until the desktop answers. */
+function useInstalledFonts(): readonly InstalledFont[] {
+  const installedFontsQuery = useRunnerInstalledFontsQuery();
+  return useMemo(
+    () => installedFontsQuery.data ?? [],
+    [installedFontsQuery.data],
   );
 }
 

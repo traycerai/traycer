@@ -14,7 +14,10 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "style",
       "visual",
       "ui",
-      // Controls without search anchors land on the Appearance page.
+      // Controls without search anchors land on the Appearance page, which
+      // opens on Themes. So only what Themes holds is named here: a control
+      // in another area is found through its own row, or through its group
+      // (`contributesTo`) when it has no row to land on.
       "theme",
       "dark mode",
       "light mode",
@@ -28,10 +31,6 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "tokyo night",
       "everforest",
       "github",
-      "prompt font",
-      "ligatures",
-      "panel animations",
-      "contrast",
     ],
   },
   themes: {
@@ -101,10 +100,13 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   },
   // The effect rows exist only once a wallpaper is chosen, and Tint only for
   // the effect it adjusts. Strength applies to all three.
+  // With no row of their own to land on, their names are found through the
+  // Start page group rather than the page: a page result opens Appearance on
+  // Themes, where none of these is.
   wallpaperEffect: {
     kind: "row",
     group: "startPage",
-    search: { contributesTo: "page" },
+    search: { contributesTo: "startPage" },
     label: "Wallpaper effect",
     description:
       "Keep the original photo, turn it into a dot pattern, or add film grain.",
@@ -114,7 +116,7 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   effectStrength: {
     kind: "row",
     group: "startPage",
-    search: { contributesTo: "page" },
+    search: { contributesTo: "startPage" },
     label: "Effect strength",
     description: "Adjust how strongly the effect changes the photo.",
     availableWhen: alwaysAvailable,
@@ -123,7 +125,7 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   tintWallpaper: {
     kind: "row",
     group: "startPage",
-    search: { contributesTo: "page" },
+    search: { contributesTo: "startPage" },
     label: "Tint wallpaper with theme accent color",
     description: null,
     availableWhen: alwaysAvailable,
@@ -154,6 +156,9 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "home",
     ],
   },
+  // App-wide chrome: zoom, the pointer cursor, and how panels move and read.
+  // Motion and readability used to be a group of its own beside this one; the
+  // two are one area of the page now, so its vocabulary folds in here.
   interface: {
     kind: "group",
     search: { anchor: "appearance-interface" },
@@ -161,7 +166,16 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: ["layout", "chrome", "controls"],
+    keywords: [
+      "layout",
+      "chrome",
+      "controls",
+      "motion",
+      "readability",
+      "animation",
+      "accessibility",
+      "reduce motion",
+    ],
   },
   zoom: {
     kind: "row",
@@ -228,18 +242,9 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     availableWhen: alwaysAvailable,
     keywords: ["glyphs", "symbols", "arrows"],
   },
-  motionAndReadability: {
-    kind: "group",
-    search: { anchor: "appearance-motion-readability" },
-    label: "Motion and readability",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["animation", "accessibility", "reduce motion"],
-  },
   panelAnimations: {
     kind: "row",
-    group: "motionAndReadability",
+    group: "interface",
     search: { anchor: "appearance-panel-animations" },
     label: "Panel animations",
     description: "Animate sidebars, menus, and dialogs as they open and close.",
@@ -248,7 +253,7 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   },
   panelAnimationDuration: {
     kind: "row",
-    group: "motionAndReadability",
+    group: "interface",
     search: { anchor: "appearance-animation-duration" },
     label: "Animation duration",
     description:
@@ -258,7 +263,7 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   },
   contrast: {
     kind: "row",
-    group: "motionAndReadability",
+    group: "interface",
     search: { anchor: "appearance-contrast" },
     label: "Text and border contrast",
     description:
@@ -370,45 +375,46 @@ export const APPEARANCE = defineSettingsSection("appearance", {
     availableWhen: alwaysAvailable,
     keywords: ["whitespace", "spaces", "indentation"],
   },
-  // Its OWN group rather than a row under Interface: the groups here are
-  // either a cross-cutting appearance concern (Themes, Interface, Fonts and
-  // text, Motion and readability, Icon colors) or one surface's own settings
-  // (Start page, Terminal), and this is the second kind. Interface is app-wide
-  // chrome - zoom, the pointer cursor, where minimaps sit - and a default that
-  // only an epic's comm-graph tile reads would be misfiled there.
-  agentOffice: {
+  // What sits inside a task: which agent office view a task opens in, and how
+  // its chats, agents, terminals and artifacts are colored. Its OWN area
+  // rather than rows under Interface: Interface is app-wide chrome - zoom, the
+  // pointer cursor, how panels move - and a default that only a task's
+  // comm-graph tile reads would be misfiled there. Agent office and Icon
+  // colors were each a heading over one row.
+  tasks: {
     kind: "group",
-    search: { anchor: "appearance-agent-office" },
-    label: "Agent office",
+    search: { anchor: "appearance-tasks" },
+    label: "Tasks",
     description: null,
     breadcrumb: null,
     availableWhen: alwaysAvailable,
-    keywords: ["office", "agents", "comm graph", "epic canvas", "tile"],
+    keywords: [
+      "office",
+      "agents",
+      "comm graph",
+      "epic canvas",
+      "tile",
+      "icons",
+      "artifacts",
+      "files",
+      "color",
+    ],
   },
   agentOfficeDefaultView: {
     kind: "row",
-    group: "agentOffice",
+    group: "tasks",
     search: { anchor: "appearance-agent-office-default-view" },
-    label: "Default view",
-    description: "For epics you have not chosen a view in.",
+    label: "Agent office default view",
+    description: "For tasks you have not chosen a view in.",
     availableWhen: alwaysAvailable,
     // The view NAMES are deliberately not listed: they come from the office
     // view registry, and a second copy here would drift from it the moment a
     // view is added or renamed. "Auto" is the choice, not a view.
     keywords: ["office", "view", "auto", "floor", "layout", "default"],
   },
-  artifactIcons: {
-    kind: "group",
-    search: { anchor: "appearance-artifact-icons" },
-    label: "Icon colors",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["icons", "artifacts", "files", "color"],
-  },
   artifactIconColors: {
     kind: "row",
-    group: "artifactIcons",
+    group: "tasks",
     search: { anchor: "appearance-artifact-icon-colors" },
     label: "Color icons by type",
     description:
