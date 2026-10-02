@@ -222,6 +222,31 @@ describe("settings search", () => {
     expect(labelsFor("layout", DESKTOP)).toContain("Agent office default view");
   });
 
+  it("lands wallpaper-effect vocabulary on the Start page group, not the Appearance page", () => {
+    // These rows contribute to the Start page group. They used to contribute
+    // to the page, so a search opened Appearance on Themes, where none of
+    // them is.
+    for (const query of [
+      "Effect strength",
+      "Tint wallpaper with theme accent color",
+    ]) {
+      expect(landingFor(query, DESKTOP), query).toBe(
+        "appearance#appearance-start-page",
+      );
+      const pageHits = searchSettings(query, DESKTOP).filter(
+        (result) =>
+          result.entry.section === "appearance" && result.entry.anchor === null,
+      );
+      expect(pageHits, query).toEqual([]);
+    }
+    expect(searchSettings("Effect strength", DESKTOP)[0].entry).toMatchObject({
+      section: "appearance",
+      kind: "group",
+      label: "Start page",
+      anchor: "appearance-start-page",
+    });
+  });
+
   it("matches on a two-word query that spans the page and the row", () => {
     expect(landingFor("terminal font", DESKTOP)).toBe(
       "appearance#appearance-terminal-font",

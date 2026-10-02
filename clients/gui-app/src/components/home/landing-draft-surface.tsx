@@ -25,6 +25,8 @@ import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { cn } from "@/lib/utils";
 import { LandingVisibleDraftImagePrefetch } from "./visible-draft-image-prefetch";
 import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
@@ -370,6 +372,15 @@ function CustomizeStartPageButton() {
           size="icon"
           aria-label="Customize start page"
           onClick={() => {
+            // Appearance draws one area at a time and opens on Themes, so
+            // the start page's settings are asked for by name - the same
+            // request a settings search result makes.
+            useSettingsSearchStore
+              .getState()
+              .requestReveal(
+                "appearance",
+                APPEARANCE.definitions.startPage.anchor,
+              );
             openSettings({
               section: "appearance",
               resetToGeneral: false,

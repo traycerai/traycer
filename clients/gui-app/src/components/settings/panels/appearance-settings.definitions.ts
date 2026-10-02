@@ -14,7 +14,10 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "style",
       "visual",
       "ui",
-      // Controls without search anchors land on the Appearance page.
+      // Controls without search anchors land on the Appearance page, which
+      // opens on Themes. So only what Themes holds is named here: a control
+      // in another area is found through its own row, or through its group
+      // (`contributesTo`) when it has no row to land on.
       "theme",
       "dark mode",
       "light mode",
@@ -28,10 +31,6 @@ export const APPEARANCE = defineSettingsSection("appearance", {
       "tokyo night",
       "everforest",
       "github",
-      "prompt font",
-      "ligatures",
-      "panel animations",
-      "contrast",
     ],
   },
   themes: {
@@ -101,10 +100,13 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   },
   // The effect rows exist only once a wallpaper is chosen, and Tint only for
   // the effect it adjusts. Strength applies to all three.
+  // With no row of their own to land on, their names are found through the
+  // Start page group rather than the page: a page result opens Appearance on
+  // Themes, where none of these is.
   wallpaperEffect: {
     kind: "row",
     group: "startPage",
-    search: { contributesTo: "page" },
+    search: { contributesTo: "startPage" },
     label: "Wallpaper effect",
     description:
       "Keep the original photo, turn it into a dot pattern, or add film grain.",
@@ -114,7 +116,7 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   effectStrength: {
     kind: "row",
     group: "startPage",
-    search: { contributesTo: "page" },
+    search: { contributesTo: "startPage" },
     label: "Effect strength",
     description: "Adjust how strongly the effect changes the photo.",
     availableWhen: alwaysAvailable,
@@ -123,7 +125,7 @@ export const APPEARANCE = defineSettingsSection("appearance", {
   tintWallpaper: {
     kind: "row",
     group: "startPage",
-    search: { contributesTo: "page" },
+    search: { contributesTo: "startPage" },
     label: "Tint wallpaper with theme accent color",
     description: null,
     availableWhen: alwaysAvailable,

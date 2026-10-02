@@ -86,6 +86,22 @@ Two rules for a stacked page:
   dropdown with a sentence per option (General ▸ When you quit Traycer), not a
   permanent block of radios.
 
+One rule for a rail page, and it has three callers. **Whatever points at a
+control has to pick that control's area first**, because only the picked area
+is on screen (`settings-master-detail-area.ts`):
+
+- **A search result** picks the area of its anchor (`useSettingsAnchorArea`).
+  A row with no anchor of its own contributes its name to its GROUP, never to
+  the page: a page result opens the page on its first area, so the page's own
+  keywords name only what that first area holds.
+- **A setup guide step** picks the area that holds its target
+  (`useSettingsGuideArea`), found through the `data-settings-area` each area's
+  panel carries. Without it the coachmark has no visible target and the guide
+  has no card to continue from.
+- **A link from outside Settings** to something that is not in the first area
+  arms the same reveal a search result does, with the group's anchor (the
+  start page's "Customize start page" button).
+
 ## Getting started
 
 `/settings/getting-started` is the persistent setup checklist for agent selection,

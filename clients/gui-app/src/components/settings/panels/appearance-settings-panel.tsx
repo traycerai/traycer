@@ -26,8 +26,10 @@ import {
 } from "@/components/settings/settings-master-detail";
 import {
   SETTINGS_AREA_BODY_PROPS,
+  settingsAreaPanelProps,
   useSettingsAnchorArea,
   useSettingsAreaStartsAtTop,
+  useSettingsGuideArea,
 } from "@/components/settings/settings-master-detail-area";
 import { settingsRailRowClassName } from "@/components/settings/settings-rail-row";
 import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
@@ -162,6 +164,10 @@ function appearanceAreaLabel(id: AppearanceAreaId): string {
  * The area a settings-search anchor lives in, or `null` for one that is not
  * this page's.
  */
+function appearanceAreaForId(id: string): AppearanceAreaId | null {
+  return APPEARANCE_AREAS.find((area) => area.id === id)?.id ?? null;
+}
+
 function appearanceAreaForAnchor(anchor: string): AppearanceAreaId | null {
   const definition = Object.values(APPEARANCE.definitions).find(
     (entry) => entry.anchor === anchor,
@@ -169,7 +175,7 @@ function appearanceAreaForAnchor(anchor: string): AppearanceAreaId | null {
   if (definition === undefined) return null;
   const groupKey =
     definition.kind === "row" ? definition.group : definition.key;
-  return APPEARANCE_AREAS.find((area) => area.id === groupKey)?.id ?? null;
+  return groupKey === null ? null : appearanceAreaForId(groupKey);
 }
 
 /**
@@ -193,6 +199,7 @@ export function AppearanceSettingsPanel() {
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useSettingsAnchorArea("appearance", appearanceAreaForAnchor, setArea);
+  useSettingsGuideArea("appearance", rootRef, appearanceAreaForId, setArea);
   useSettingsAreaStartsAtTop(rootRef, area);
 
   return (
@@ -208,8 +215,8 @@ export function AppearanceSettingsPanel() {
         ref={rootRef}
         value={area}
         onValueChange={(value) => {
-          const next = APPEARANCE_AREAS.find((entry) => entry.id === value);
-          if (next !== undefined) setArea(next.id);
+          const next = appearanceAreaForId(value);
+          if (next !== null) setArea(next);
         }}
         orientation="vertical"
         className="flex flex-col md:h-full md:min-h-0"
@@ -257,6 +264,7 @@ export function AppearanceSettingsPanel() {
               value={entry.id}
               forceMount
               hidden={area !== entry.id}
+              {...settingsAreaPanelProps(entry.id)}
               // Named by its area rather than by the rail's trigger, which a
               // phone does not draw.
               aria-labelledby={undefined}

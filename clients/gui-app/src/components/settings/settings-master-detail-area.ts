@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect } from "react";
+import { useActiveSetupGuideStep } from "@/components/settings/use-active-setup-guide-step";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
 /**
  * The behaviour a master-detail settings page (`settings-master-detail.tsx`)
- * needs once it draws one AREA at a time: a search result has to pick its
- * area before its row can be seen, and a newly picked area starts at its top.
- * Shared by Settings ▸ Layout and Settings ▸ Appearance.
+ * needs once it draws one AREA at a time: a search result or a setup guide
+ * step has to pick its area before its target can be seen, and a newly picked
+ * area starts at its top. Shared by Settings ▸ Layout and Settings ▸
+ * Appearance.
  */
 
 /**
@@ -39,6 +41,53 @@ export function useSettingsAnchorArea<Area extends string>(
     const target = areaForAnchor(pendingReveal.anchor);
     if (target !== null) setArea(target);
   }, [pendingReveal, section, areaForAnchor, setArea]);
+}
+
+/**
+ * Names the area a panel draws, so a control inside it can be traced back to
+ * the area that has to be picked for it to be seen. Spread onto the area's
+ * panel.
+ */
+export function settingsAreaPanelProps(area: string): {
+  readonly "data-settings-area": string;
+} {
+  return { "data-settings-area": area };
+}
+
+/**
+ * A setup guide step that points into an area, taken to that area.
+ *
+ * The guide's coachmark draws only once its target is on screen
+ * (`useGuideTarget`), and Continue navigates between settings sections, never
+ * inside one. So a step whose target sits in an area that is not picked would
+ * leave the guide with no card and no way on. Every area stays mounted, so the
+ * target is in the DOM and its panel says which area it is.
+ *
+ * Runs when the step changes, not when the area does: a person who picks
+ * another area mid-step is left there, and the card returns with the area.
+ * `areaForId` is an effect dependency, so pass a module-level function.
+ */
+export function useSettingsGuideArea<Area extends string>(
+  section: SettingsSectionId,
+  root: { current: HTMLDivElement | null },
+  areaForId: (id: string) => Area | null,
+  setArea: (area: Area) => void,
+): void {
+  const guide = useActiveSetupGuideStep();
+  const selector =
+    guide !== null && guide.step.section === section
+      ? guide.step.selector
+      : null;
+  useEffect(() => {
+    if (selector === null) return;
+    const id = root.current
+      ?.querySelector(selector)
+      ?.closest("[data-settings-area]")
+      ?.getAttribute("data-settings-area");
+    if (id === null || id === undefined) return;
+    const target = areaForId(id);
+    if (target !== null) setArea(target);
+  }, [selector, root, areaForId, setArea]);
 }
 
 /**
