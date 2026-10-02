@@ -55,7 +55,19 @@ import { useBrowserFocusStore } from "@/stores/settings/browser-focus-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
-export function BrowserSettingsSection(): ReactNode {
+/**
+ * The Browser page's host-dependent half: the Agents group and Website
+ * sessions.
+ *
+ * The Agents group holds one row that is drawn in every shell - Agent-opened
+ * tabs, which the panel owns and hands in - between two that are not: agent
+ * access needs a host that advertises it, and the dev origins need a terminal
+ * to have printed one. So the card always has a row.
+ */
+export function BrowserSettingsSection(props: {
+  /** The always-present row of the Agents group, drawn by the panel. */
+  readonly agentOpenedTabsRow: ReactNode;
+}): ReactNode {
   const browserDevOrigins = useSettingsStore((s) => s.browserDevOrigins);
   const removeBrowserDevOrigin = useSettingsStore(
     (s) => s.removeBrowserDevOrigin,
@@ -78,33 +90,29 @@ export function BrowserSettingsSection(): ReactNode {
 
   return (
     <>
-      {/* Both members are conditional, so the group is too: with no detected
-          origins and a host that cannot answer for agent access, the card would
-          be a heading over an empty box. */}
-      {browserDevOrigins.length > 0 || agentAccessSupported ? (
-        <SettingsGroup
-          group={BROWSER.definitions.browser}
-          showTitle
-          tone="default"
-          dataTestId={undefined}
-          fill={false}
-        >
-          {agentAccessSupported ? (
-            <AgentBrowserAccessRow hostId={hostId} />
-          ) : null}
-          {browserDevOrigins.length > 0 ? (
-            <SettingsRow
-              row={BROWSER.definitions.detectedDevOrigins}
-              control={
-                <BrowserDevOriginsControl
-                  origins={browserDevOrigins}
-                  onRemove={removeBrowserDevOrigin}
-                />
-              }
-            />
-          ) : null}
-        </SettingsGroup>
-      ) : null}
+      <SettingsGroup
+        group={BROWSER.definitions.agents}
+        showTitle
+        tone="default"
+        dataTestId="settings-browser-agents"
+        fill={false}
+      >
+        {agentAccessSupported ? (
+          <AgentBrowserAccessRow hostId={hostId} />
+        ) : null}
+        {props.agentOpenedTabsRow}
+        {browserDevOrigins.length > 0 ? (
+          <SettingsRow
+            row={BROWSER.definitions.detectedDevOrigins}
+            control={
+              <BrowserDevOriginsControl
+                origins={browserDevOrigins}
+                onRemove={removeBrowserDevOrigin}
+              />
+            }
+          />
+        ) : null}
+      </SettingsGroup>
       <BrowserSavedLoginsGroup />
     </>
   );

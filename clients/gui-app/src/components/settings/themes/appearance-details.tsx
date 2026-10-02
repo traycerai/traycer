@@ -2,7 +2,6 @@ import { useShallow } from "zustand/react/shallow";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { FontPicker } from "@/components/settings/controls/font-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
-import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -66,7 +65,11 @@ export function AppearanceFontRows() {
   );
 }
 
-export function AppearanceDetails() {
+/**
+ * The motion and contrast rows of Appearance ▸ Interface. Rows only: the panel
+ * draws the Interface group they sit in, beside zoom and the pointer cursor.
+ */
+export function AppearanceMotionRows() {
   const preferences = useThemeLibraryStore(
     useShallow((state) => ({
       panelAnimations: state.panelAnimations,
@@ -76,13 +79,7 @@ export function AppearanceDetails() {
     })),
   );
   return (
-    <SettingsGroup
-      group={APPEARANCE.definitions.motionAndReadability}
-      showTitle
-      tone="default"
-      dataTestId={undefined}
-      fill={false}
-    >
+    <>
       <SettingsRow
         row={APPEARANCE.definitions.panelAnimations}
         control={
@@ -151,6 +148,6 @@ export function AppearanceDetails() {
           </div>
         }
       />
-    </SettingsGroup>
+    </>
   );
 }

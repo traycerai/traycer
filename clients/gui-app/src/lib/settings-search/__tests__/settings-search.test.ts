@@ -203,25 +203,23 @@ describe("settings search", () => {
     expect(scopes).toContain("Host");
   });
 
-  it("reaches the ported Agent office default view row, group breadcrumb included", () => {
-    // T6's `agentOffice` group and `agentOfficeDefaultView` row were ported
-    // onto main's declarative model by hand - a row cannot exist in that
-    // model without becoming a search entry, but a typo in its anchor or a
-    // group id that does not resolve would still compile and render. This
-    // proves the entry the port actually produced, not merely that some
-    // entry with this row's words exists.
+  it("reaches the Agent office default view row, group breadcrumb included", () => {
+    // The row used to sit under its own Agent office group; it is now a row
+    // of Appearance ▸ Tasks. A typo in its anchor or a group id that does
+    // not resolve would still compile and render. This proves the entry the
+    // page actually produced.
     expect(landingFor("office default view", DESKTOP)).toBe(
       "appearance#appearance-agent-office-default-view",
     );
     const results = searchSettings("office default view", DESKTOP);
     expect(results[0].entry.kind).toBe("setting");
-    expect(results[0].entry.label).toBe("Default view");
-    expect(results[0].entry.group).toBe("Agent office");
+    expect(results[0].entry.label).toBe("Agent office default view");
+    expect(results[0].entry.group).toBe("Tasks");
 
     // "layout" is a keyword, not a word the label contains - the same
     // distinction "finds a setting by a word its label does not contain"
     // makes above, pinned for this row specifically.
-    expect(labelsFor("layout", DESKTOP)).toContain("Default view");
+    expect(labelsFor("layout", DESKTOP)).toContain("Agent office default view");
   });
 
   it("matches on a two-word query that spans the page and the row", () => {
@@ -343,10 +341,10 @@ describe("settings search", () => {
 
     it("offers the phone's push row on mobile and withholds it on desktop", () => {
       expect(labelsFor("push notifications", MOBILE)).toContain(
-        "Push notifications",
+        "Push notifications on this phone",
       );
       expect(labelsFor("push notifications", DESKTOP)).not.toContain(
-        "Push notifications",
+        "Push notifications on this phone",
       );
     });
 

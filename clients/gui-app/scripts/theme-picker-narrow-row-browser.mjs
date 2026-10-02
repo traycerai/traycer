@@ -6,7 +6,7 @@
 // pushes the control onto a line of its own, and what the control does with
 // that line decides whether the name has room. That is flex line-breaking, a
 // container query (`cqw`) and where a line box falls - none of which jsdom
-// has. So this renders the real gallery
+// has. So this renders the real Appearance panel on its Themes area
 // (`src/__tests__/browser/theme-picker-narrow-row.tsx`) and measures:
 //   - every word of the name, as laid-out lines: a word that sits on more than
 //     one was split down the middle, which is the phone defect this exists to
@@ -339,10 +339,12 @@ function measureRows(client) {
          const label = row.firstElementChild;
          const name = trigger.querySelector('[id$="-value"]');
          const padding = getComputedStyle(row);
-         // The panel body's own wrapper is the \`@container\` the picker's
-         // \`cqw\` share is measured against.
-         const container = document.querySelector("[data-settings-panel-body] > div");
+         // The picked area's body is the \`@container\` the picker's \`cqw\`
+         // share is measured against. A \`cqw\` is a share of its CONTENT
+         // box, and this one carries the detail column's padding.
+         const container = row.closest("[data-settings-area-body]");
          if (container === null) throw new Error("no @container above the row");
+         const containerStyle = getComputedStyle(container);
          rows.push({
            which,
            control: cluster.getBoundingClientRect().width,
@@ -350,7 +352,10 @@ function measureRows(client) {
              row.getBoundingClientRect().width -
              parseFloat(padding.paddingLeft) -
              parseFloat(padding.paddingRight),
-           container: container.getBoundingClientRect().width,
+           container:
+             container.clientWidth -
+             parseFloat(containerStyle.paddingLeft) -
+             parseFloat(containerStyle.paddingRight),
            wrapped:
              cluster.getBoundingClientRect().top >=
              label.getBoundingClientRect().bottom,

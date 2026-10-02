@@ -220,7 +220,7 @@ export function StartPageSettingsSection() {
   return (
     <SettingsGroup
       group={APPEARANCE.definitions.startPage}
-      showTitle
+      showTitle={false}
       tone="default"
       dataTestId="start-page-settings-group"
       fill={false}

@@ -114,7 +114,7 @@ export function ThemeGallery() {
     <section className="space-y-5" aria-label="Theme">
       <SettingsGroup
         group={APPEARANCE.definitions.themes}
-        showTitle
+        showTitle={false}
         tone="default"
         dataTestId={undefined}
         fill={false}
