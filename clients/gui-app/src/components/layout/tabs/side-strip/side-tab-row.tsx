@@ -292,11 +292,9 @@ export function SideTabRow(props: SideTabRowProps) {
         {collapsed ? (
           <>
             <MonogramChip tile={props.tile} tint={null} tinted={false} />
-            <SideTabMeter
-              agents={props.agents}
-              attention={props.badge}
-              size="tile"
-            />
+            {/* The corner badge says what the task needs; the meter under it
+                counts agents only, so the tile says it once. */}
+            <SideTabMeter agents={props.agents} attention={null} size="tile" />
             <CornerBadge badge={props.badge} />
           </>
         ) : (

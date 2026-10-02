@@ -3308,6 +3308,35 @@ describe("<SideTabStrip />", () => {
       );
     });
 
+    it("has a tile say what its task needs with the corner badge alone, its meter counting agents, where the row's meter keeps the pip", async () => {
+      setBeta({ ...NONE, flags: { unreadDone: true }, turn: 1, background: 1 });
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      const pipsOf = (node: HTMLElement): ReadonlyArray<string | null> =>
+        Array.from(
+          within(node)
+            .getByTestId("side-tab-meter")
+            .querySelectorAll("[data-pip]"),
+        ).map((pip) => pip.getAttribute("data-pip"));
+
+      // The row has no badge: its meter's pip says it.
+      expect(pipsOf(screen.getByTestId("tab-epic-e-beta"))).toEqual([
+        "turn",
+        "background",
+        "unread",
+      ]);
+
+      act(() => {
+        useSideTabStripStore.setState({ collapsed: true });
+      });
+      const tile = screen.getByTestId("tab-epic-e-beta");
+      expect(
+        within(tile)
+          .getByTestId("side-tab-rail-badge")
+          .getAttribute("data-kind"),
+      ).toBe("unread");
+      expect(pipsOf(tile)).toEqual(["turn", "background"]);
+    });
+
     it("keeps the meter, with the close joining after it", async () => {
       setBeta({ ...NONE, turn: 2 });
       await renderStrip("/elsewhere", LEFT_STRIP);
