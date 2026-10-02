@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
-import { cn } from "@/lib/utils";
 import {
   EMPTY_NOTIFICATION_INDICATOR_STATE,
   type NotificationIndicatorState,
@@ -9,8 +8,11 @@ import type { SideTabLiveAgents } from "./agent-meter";
 import type { SideRowSection, SideTabRowStatus } from "./side-tab-row";
 import { sideTabStatusOf } from "./side-tab-status";
 import { SideTabStatusGlyph } from "./side-tab-status-glyph";
-import { StripElapsedTime } from "./strip-elapsed-time";
-import { NeedsYouDetail, ToReviewDetail } from "./strip-section-detail";
+import {
+  NeedsYouDetail,
+  SectionTime,
+  ToReviewDetail,
+} from "./strip-section-detail";
 import {
   needsYouRowOf,
   type NeedsYouRow,
@@ -91,15 +93,10 @@ export function twoLineStatusOf(
       <span className="flex items-center gap-1.5">
         {forkGlyph}
         {since === null ? null : (
-          <StripElapsedTime
+          <SectionTime
             since={since}
-            className={cn(
-              "text-ui-xs tabular-nums",
-              row.section === "needs-you"
-                ? "text-warning-foreground/70"
-                : "text-muted-foreground",
-            )}
-            testId="side-tab-section-time"
+            needsYou={row.section === "needs-you"}
+            className={undefined}
           />
         )}
       </span>

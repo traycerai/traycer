@@ -108,22 +108,41 @@ export function PairToReviewDetail(props: {
 }
 
 /**
- * A pair's time, at the end of its second line: its halves fill the title's
- * line, where a single row puts it. Toned as a single row's.
+ * A Needs you or To review time, wherever a row shows it: the wait since the
+ * request in muted amber, the time since the finish muted. A single row puts
+ * it at the end of its title's line, a pair at the end of its second line,
+ * since its halves fill the first.
  */
+export function SectionTime(props: {
+  readonly since: number;
+  readonly needsYou: boolean;
+  /** Where the line places it. */
+  readonly className: string | undefined;
+}): ReactNode {
+  return (
+    <StripElapsedTime
+      since={props.since}
+      className={cn(
+        "text-ui-xs tabular-nums",
+        props.needsYou ? "text-warning-foreground/70" : "text-muted-foreground",
+        props.className,
+      )}
+      testId="side-tab-section-time"
+    />
+  );
+}
+
+/** A pair's time, at the end of its second line. */
 function PairDetailTime(props: {
   readonly since: number | null;
   readonly needsYou: boolean;
 }): ReactNode {
   if (props.since === null) return null;
   return (
-    <StripElapsedTime
+    <SectionTime
       since={props.since}
-      className={cn(
-        "ms-auto shrink-0 tabular-nums",
-        props.needsYou ? "text-warning-foreground/70" : "text-muted-foreground",
-      )}
-      testId="side-tab-section-time"
+      needsYou={props.needsYou}
+      className="ms-auto shrink-0"
     />
   );
 }
