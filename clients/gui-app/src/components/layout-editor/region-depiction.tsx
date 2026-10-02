@@ -371,32 +371,11 @@ const INERT_DIFF_OPENER: ChatSnapshotDiffOpener = {
 
 // ── Per-region renderers ────────────────────────────────────────────────────
 
-/**
- * The segment itself, which the cluster repeats once per shown provider.
- *
- * `windows` is the one place a picture is drawn from live numbers rather than
- * from the specimen, and it is the provider level that needs it (L-96): the
- * limits a user ticks there are that provider's OWN windows, so a stage drawn
- * from the specimen would answer a tick with a picture that never changes.
- * The caller reads them; this module still asks for nothing (the passivity
- * contract in the header).
- *
- * `null` requests specimen data. An empty live list stays empty: the provider
- * level must never turn an absent reading into an invented one.
- */
+/** The segment itself, which the cluster repeats once per shown provider. */
 function depictUsageProviderSegment(
   providerId: RateLimitProviderId,
   values: UsageLimitsValues,
-  windows: ReadonlyArray<StatusBarRateLimitWindow> | null,
 ): ReactNode {
-  if (!isWindowedRateLimitProvider(providerId)) return null;
-  if (windows !== null && windows.length === 0) {
-    return (
-      <span className="text-ui-xs text-muted-foreground">
-        No limits reported
-      </span>
-    );
-  }
   return (
     <StatusBarUsageReadings
       display={{
@@ -405,18 +384,17 @@ function depictUsageProviderSegment(
       }}
       cluster={{
         kind: "segments",
-        segments: [specimenSegment(providerId, windows)],
+        segments: [specimenSegment(providerId)],
       }}
     />
   );
 }
 
-/** One provider's live segment over the given windows, or its specimen's. */
+/** One provider's segment over its specimen window. */
 function specimenSegment(
   providerId: RateLimitProviderId,
-  windows: ReadonlyArray<StatusBarRateLimitWindow> | null,
 ): StatusBarProviderSegmentModel {
-  const drawn = windows ?? [specimenWindow(providerId)];
+  const drawn = [specimenWindow(providerId)];
   return {
     providerId,
     profileId: null,
@@ -458,7 +436,7 @@ function depictUsageLimits(
         <UsageGlyph
           cluster={{
             kind: "segments",
-            segments: providers.map((id) => specimenSegment(id, null)),
+            segments: providers.map((id) => specimenSegment(id)),
           }}
         />
       </span>
@@ -466,7 +444,7 @@ function depictUsageLimits(
   }
   return providers.map((providerId) => (
     <span key={providerId} className="inline-flex shrink-0 items-center">
-      {depictUsageProviderSegment(providerId, values, null)}
+      {depictUsageProviderSegment(providerId, values)}
     </span>
   ));
 }
