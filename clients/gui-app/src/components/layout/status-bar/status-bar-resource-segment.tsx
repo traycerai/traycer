@@ -122,22 +122,20 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
     if (compact) {
       // The icon already says which metric this is, so the label is dropped.
       return (
-        <>
-          {icon}
-          <TooltipWrapper
-            label={views[0].unavailableReason}
-            side="top"
-            sideOffset={6}
-            align={undefined}
-          >
-            <span
-              data-testid="status-bar-resource-compact-cpu"
-              className={cn(cpuWarning && RUNNING_LOW_TEXT_CLASS_NAME)}
-            >
-              {views[0].value ?? UNAVAILABLE_DASH}
-            </span>
-          </TooltipWrapper>
-        </>
+        <TooltipWrapper
+          label={views[0].unavailableReason}
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          <span className="inline-flex">
+            <CpuReading
+              view={views[0]}
+              cpuPercent={cpuPercent}
+              withLabel={false}
+            />
+          </span>
+        </TooltipWrapper>
       );
     }
     return (
@@ -223,7 +221,6 @@ export function StatusBarMetric(props: {
           </>
         ) : (
           <span
-            data-warning={warning ? "true" : undefined}
             className={cn("truncate", warning && RUNNING_LOW_TEXT_CLASS_NAME)}
           >
             {view.value}
@@ -231,5 +228,34 @@ export function StatusBarMetric(props: {
         )}
       </span>
     </TooltipWrapper>
+  );
+}
+
+/**
+ * The Compact reading, in every placement: the CPU icon and its percent, in the
+ * warning color from the shared threshold. The percent holds a fixed minimum
+ * width, so its button does not change width as the value moves; the expanded
+ * strip's tile also says "cpu" before it.
+ */
+export function CpuReading(props: {
+  readonly view: StatusBarResourceMetricView;
+  readonly cpuPercent: number | null;
+  readonly withLabel: boolean;
+}): ReactNode {
+  const { view } = props;
+  const value = view.value ?? UNAVAILABLE_DASH;
+  return (
+    <span
+      data-testid="resource-cpu-reading"
+      className={cn(
+        "inline-flex items-center gap-1.5",
+        isCpuWarning(props.cpuPercent) && RUNNING_LOW_TEXT_CLASS_NAME,
+      )}
+    >
+      <Cpu className="size-3.5" aria-hidden />
+      <span className="min-w-6 text-end tabular-nums">
+        {props.withLabel ? `${view.label} ${value}` : value}
+      </span>
+    </span>
   );
 }

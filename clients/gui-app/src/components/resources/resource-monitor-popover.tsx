@@ -168,9 +168,11 @@ import {
   planRestrictedMobileTitle,
 } from "@/lib/host/plan-restricted-copy";
 import { isMobileApp } from "@/lib/mobile-app";
-import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
-import { StatusBarMetric } from "@/components/layout/status-bar/status-bar-resource-segment";
+import {
+  CpuReading,
+  StatusBarMetric,
+} from "@/components/layout/status-bar/status-bar-resource-segment";
 import {
   isCpuWarning,
   useStatusBarResourceMetrics,
@@ -5298,7 +5300,11 @@ function readingButtonLook(
         "aria-label": "Resources",
         className: undefined,
         children: (
-          <CpuReading views={views} cpuPercent={cpuPercent} withLabel={false} />
+          <CpuReading
+            view={views[0]}
+            cpuPercent={cpuPercent}
+            withLabel={false}
+          />
         ),
       };
     case "readout":
@@ -5308,7 +5314,7 @@ function readingButtonLook(
         "aria-label": statusBarResourceSegmentLabel(views),
         className: "w-full shadow-xs",
         children: (
-          <CpuReading views={views} cpuPercent={cpuPercent} withLabel />
+          <CpuReading view={views[0]} cpuPercent={cpuPercent} withLabel />
         ),
       };
     case "inline":
@@ -5328,36 +5334,6 @@ function readingButtonLook(
         children: <ResourceReadout views={views} cpuPercent={cpuPercent} />,
       };
   }
-}
-
-/**
- * The Compact reading: the CPU icon and its percent, in the warning color from
- * the shared threshold. The percent holds a fixed minimum width, so the button
- * does not change width as the value moves; the expanded strip's tile also
- * says "cpu" before it.
- */
-function CpuReading(props: {
-  readonly views: ReadonlyArray<StatusBarResourceMetricView>;
-  readonly cpuPercent: number | null;
-  readonly withLabel: boolean;
-}): ReactNode {
-  const view = props.views[0];
-  const value = view.value ?? UNAVAILABLE_DASH;
-  return (
-    <span
-      data-testid="resource-cpu-reading"
-      data-warning={isCpuWarning(props.cpuPercent) ? "true" : undefined}
-      className={cn(
-        "inline-flex items-center gap-1.5",
-        isCpuWarning(props.cpuPercent) && RUNNING_LOW_TEXT_CLASS_NAME,
-      )}
-    >
-      <Cpu className="size-3.5" aria-hidden />
-      <span className="min-w-6 text-end tabular-nums">
-        {props.withLabel ? `${view.label} ${value}` : value}
-      </span>
-    </span>
-  );
 }
 
 /**

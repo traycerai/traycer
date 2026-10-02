@@ -113,8 +113,6 @@ describe("<StatusBarProviderSegment /> severity forms", () => {
   it("draws a healthy profile calm: a 16px bar and no text at all", () => {
     renderSegment(singleWindowSegment("healthy", 41, resetsAt), DISPLAY);
 
-    const segment = screen.getByTestId("status-bar-provider-segment-codex");
-    expect(segment.dataset.form).toBe("calm");
     expect(
       screen.getByTestId("status-bar-provider-mini-bar").className,
     ).toContain("w-4");
@@ -160,8 +158,6 @@ describe("<StatusBarProviderSegment /> severity forms", () => {
       DISPLAY,
     );
 
-    const segment = screen.getByTestId("status-bar-provider-segment-codex");
-    expect(segment.dataset.form).toBe("expanded");
     expect(text("status-bar-provider-account")).toBe("Work");
     expect(
       screen.getByTestId("status-bar-provider-mini-bar").className,
@@ -210,9 +206,7 @@ describe("<StatusBarProviderSegment /> severity forms", () => {
       DISPLAY,
     );
 
-    expect(
-      screen.getByTestId("status-bar-provider-segment-codex").dataset.form,
-    ).toBe("expanded");
+    expect(text("status-bar-provider-name")).toBe("Codex");
     // Each window still prints its own tier inside the expanded profile.
     expect(text("status-bar-window-percent-codex:primary")).toBe("10%");
     expect(text("status-bar-window-percent-codex:secondary")).toBe("88%");
@@ -255,11 +249,14 @@ describe("<StatusBarProviderSegment /> in place", () => {
     rerender(row("limited"));
 
     expect(order()).toEqual(["a", "b", "c"]);
+    // Only the limited profile expands to print its name.
     expect(
       [...document.querySelectorAll("[data-profile-id]")].map(
-        (node) => (node as HTMLElement).dataset.form,
+        (node) =>
+          node.querySelector('[data-testid="status-bar-provider-account"]')
+            ?.textContent ?? null,
       ),
-    ).toEqual(["calm", "expanded", "calm"]);
+    ).toEqual([null, "b", null]);
   });
 });
 
@@ -273,33 +270,79 @@ describe("<StatusBarProviderSegment /> settings", () => {
     expect(text("status-bar-window-percent-codex:primary")).toBe("14%");
   });
 
-  it("omits the reset time from expanded profiles when Reset time is off", () => {
+  it("prints remaining as the complement of the ROUNDED used percentage", () => {
+    // 33.5% used reads 34% used, so remaining is 66%; rounding the complement
+    // instead would print 67%, and the two numbers would not add up.
+    renderSegment(singleWindowSegment("running_low", 33.5, null), {
+      percentMode: "used",
+      showTimer: false,
+    });
+    expect(text("status-bar-window-percent-codex:primary")).toBe("34%");
+    cleanup();
+
+    renderSegment(singleWindowSegment("running_low", 33.5, null), {
+      percentMode: "remaining",
+      showTimer: false,
+    });
+    expect(text("status-bar-window-percent-codex:primary")).toBe("66%");
+  });
+
+  it("gives the reset time's place to the window's name when Reset time is off", () => {
     const resetsAt = resetsAtIn(5, 1);
     renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
       percentMode: "used",
       showTimer: false,
     });
 
-    expect(text("status-bar-window-codex:primary")).toBe("86%");
+    // A bare percentage under an icon names no limit at all.
+    expect(text("status-bar-window-codex:primary")).toBe("86%5h");
     cleanup();
 
     renderSegment(singleWindowSegment("limited", 100, resetsAt), {
       percentMode: "used",
       showTimer: false,
     });
-    expect(text("status-bar-window-codex:primary")).toBe("Limit");
+    expect(text("status-bar-window-codex:primary")).toBe("Limit5h");
   });
 
-  it("does not change a calm profile when Reset time flips", () => {
-    renderSegment(singleWindowSegment("healthy", 12, resetsAtIn(5, 1)), {
-      percentMode: "used",
-      showTimer: false,
-    });
+  it("drops a named window's name once it is the provider's only limit", () => {
+    renderSegment(
+      segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "claude-code:model:Fable",
+            label: "Fable",
+            labelIsDuration: false,
+            severity: "running_low",
+            usedPercent: 57,
+            resetsAt: resetsAtIn(4, 1),
+          }),
+        ],
+      }),
+      DISPLAY,
+    );
 
-    expect(
-      screen.getByTestId("status-bar-provider-segment-codex").dataset.form,
-    ).toBe("calm");
-    expect(screen.queryByTestId("status-bar-window-codex:primary")).toBeNull();
+    expect(text("status-bar-window-claude-code:model:Fable")).toBe("57%4d");
+  });
+
+  it("falls back to a lone window's short name with no countdown to print", () => {
+    renderSegment(
+      segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "grok:period",
+            label: "wk",
+            labelIsDuration: false,
+            severity: "running_low",
+            usedPercent: 86,
+            resetsAt: null,
+          }),
+        ],
+      }),
+      DISPLAY,
+    );
+
+    expect(text("status-bar-window-grok:period")).toBe("86%wk");
   });
 
   it("keeps the window's name beside two limits so two bars can be told apart", () => {

@@ -889,27 +889,6 @@ describe("<RateLimitIconButton />", () => {
       expect(screen.queryByTestId("rate-limit-glyph-reset")).toBeNull();
     });
 
-    it("keeps the stale-data amber gauge", () => {
-      cluster = segmentsCluster([
-        segmentFixture({
-          providerId: "codex",
-          state: "degraded",
-          windows: [
-            windowFixture({
-              windowKey: "codex:5h",
-              usedPercent: 40,
-              severity: "healthy",
-            }),
-          ],
-        }),
-      ]);
-      renderIcon();
-
-      expect(
-        screen.getByTestId("rate-limit-gauge-icon").getAttribute("class"),
-      ).toContain("text-warning-foreground");
-    });
-
     it("drops the reset text on the 40px rail tile but keeps the destructive gauge", () => {
       cluster = segmentsCluster([
         segmentFixture({

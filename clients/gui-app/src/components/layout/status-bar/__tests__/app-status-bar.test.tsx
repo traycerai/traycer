@@ -721,46 +721,45 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
   });
 
   /**
-   * The resource readout answers with its OWN verbs (L-144).
+   * The resource readout answers with its OWN menu (L-144).
    *
    * The bar's menu stands down over it - it is the resource popover's trigger,
-   * and the bar's own quick verbs name `usageLimits`, the segment beside this
-   * one - so for as long as the segment had no menu of its own it was the one
-   * piece of the strip that answered no right-click at all.
+   * and the bar's menu is about the usage cluster beside it - so for as long
+   * as the segment had no menu of its own it was the one piece of the strip
+   * that answered no right-click at all. Both menus offer the way into the
+   * editor, so what tells them apart is the bar's provider checkboxes.
    *
    * Nested Radix triggers do not both fire: the inner one defaults the shared
    * event prevented before the outer trigger's composed opener runs.
+   *
+   * LV2-05 / L-129: the menu is wanted in an editor session at least as much
+   * as at rest, and that is where it used to be firewalled.
    */
-  it("answers a right-click on the resource segment with the segment's own menu", () => {
-    windowedProviders = twoWindowedProviders();
-    render(<AppStatusBar />);
+  it.each([
+    { label: "at rest", editing: false },
+    { label: "while the layout editor is open", editing: true },
+  ])(
+    "answers a right-click on the resource segment with the segment's own menu, $label",
+    ({ editing }) => {
+      windowedProviders = twoWindowedProviders();
+      if (editing) {
+        useLayoutEditorStore.getState().beginSession({
+          entry: "pointer",
+          source: "direct_ui",
+          startedAt: 0,
+          origin: { kind: "tab" },
+        });
+      }
+      render(<AppStatusBar />);
 
-    fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
+      fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
 
-    expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
-    // The segment's menu, not the bar's: the bar's provider checkboxes are
-    // what must NOT be on screen here.
-    expect(
-      screen.queryByRole("menuitemcheckbox", { name: "Codex" }),
-    ).toBeNull();
-  });
-
-  it("answers the same right-click while the layout editor is open", () => {
-    // LV2-05 / L-129: the verbs are wanted in a session at least as much as at
-    // rest, and that is where they used to be firewalled.
-    windowedProviders = twoWindowedProviders();
-    useLayoutEditorStore.getState().beginSession({
-      entry: "pointer",
-      source: "direct_ui",
-      startedAt: 0,
-      origin: { kind: "tab" },
-    });
-    render(<AppStatusBar />);
-
-    fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
-
-    expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
-  });
+      expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
+      expect(
+        screen.queryByRole("menuitemcheckbox", { name: "Codex" }),
+      ).toBeNull();
+    },
+  );
 
   it("leaves the left click on the resource segment to the panel", () => {
     // The menu wraps the POPOVER, never the node the popover hands to
@@ -950,9 +949,10 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       ],
     };
 
-    // The same readings, part by part, on both viewports: the percentage in
-    // the text and one mini bar per reading (a running-low profile is the
-    // expanded form) - with every account drawn and none folded away.
+    // The same readings, part by part, on both viewports: the percentage and
+    // the window's label in the text and one mini bar per reading (a
+    // running-low profile is the expanded form) - with every account drawn
+    // and none folded away.
     function expectFullReadings(): void {
       expect(
         screen
@@ -962,11 +962,11 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
       expect(
         screen.getByTestId("status-bar-window-codex:primary").textContent,
-      ).toBe("34%");
+      ).toBe("34%5h");
       expect(
         screen.getByTestId("status-bar-window-claude-code:fiveHour")
           .textContent,
-      ).toBe("57%");
+      ).toBe("57%5h");
       expect(
         screen
           .getAllByTestId("status-bar-provider-mini-bar")

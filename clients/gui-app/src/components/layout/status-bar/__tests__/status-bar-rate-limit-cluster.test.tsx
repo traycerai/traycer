@@ -536,9 +536,9 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
     const windows = screen.getAllByTestId(/^status-bar-window-(?!percent-)/);
     expect(windows).toHaveLength(6);
     // The bar and the percentage are the floor in the detailed form: no
-    // switch takes them away.
+    // switch takes them away. The window's name takes the countdown's place.
     for (const window of windows) {
-      expect(window.textContent).toMatch(/^\d+%$/);
+      expect(window.textContent).toMatch(/^\d+%5h$/);
     }
     expect(screen.getAllByTestId("status-bar-provider-mini-bar")).toHaveLength(
       6,

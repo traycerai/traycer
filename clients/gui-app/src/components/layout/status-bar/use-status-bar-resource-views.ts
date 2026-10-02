@@ -15,34 +15,6 @@ import {
 import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
 import { SAMPLE_RESOURCE_VALUES } from "@/components/sample-workspace/sample-workspace-scene";
 
-/**
- * The resource segment's readings, as a hook two surfaces can ask for.
- *
- * The segment draws them; the Settings preview needs the same list a second
- * time, because a preview frame is `inert` and a tooltip inside it can never
- * open - so the reason a dash has no number must be reachable OUTSIDE the
- * frame. Reading it from here rather than lifting it out of the segment keeps
- * the caption and the segment describing one computation: a second derivation
- * of "why is there no number" is exactly how a preview ends up disagreeing
- * with the thing it previews.
- *
- * Every source under it is a store or context read, so a second caller pays
- * nothing for it.
- */
-export function useStatusBarResourceMetricViews(input: {
-  /** The watched host, for the "too old to stream" verdict and its copy. */
-  readonly hostId: string | null;
-  readonly hostLabel: string;
-  /**
-   * Whether that host was PICKED rather than followed - the burden of proof the
-   * projection has to meet before its numbers may be printed under this host's
-   * name. See `attributedProjection`.
-   */
-  readonly hasExplicitPick: boolean;
-}): ReadonlyArray<StatusBarResourceMetricView> {
-  return useStatusBarResourceMetrics({ ...input, compact: false }).views;
-}
-
 /** CPU at or above the shared threshold reads in the warning color. */
 export function isCpuWarning(cpuPercent: number | null): boolean {
   return cpuPercent !== null && cpuPercent >= CPU_WARNING_PERCENT;
@@ -51,6 +23,11 @@ export function isCpuWarning(cpuPercent: number | null): boolean {
 const CPU_ONLY: ReadonlyArray<ResourceMetric> = ["cpu"];
 
 /**
+ * The resource readings, as one hook every surface drawing them asks: the
+ * status bar segment and the reading buttons (`ResourceMonitorPopover`), so
+ * the two never derive "why is there no number" twice. Every source under it
+ * is a store or context read, so a second caller pays nothing for it.
+ *
  * The views plus the number behind the CPU one, which is what the warning color
  * is decided from: the view carries only the formatted string, and a rule
  * parsed back out of `"92%"` would break with the format.
@@ -61,8 +38,14 @@ const CPU_ONLY: ReadonlyArray<ResourceMetric> = ["cpu"];
  * are specimens and never a warning.
  */
 export function useStatusBarResourceMetrics(input: {
+  /** The watched host, for the "too old to stream" verdict and its copy. */
   readonly hostId: string | null;
   readonly hostLabel: string;
+  /**
+   * Whether that host was PICKED rather than followed - the burden of proof the
+   * projection has to meet before its numbers may be printed under this host's
+   * name. See `attributedProjection`.
+   */
   readonly hasExplicitPick: boolean;
   readonly compact: boolean;
 }): {

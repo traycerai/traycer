@@ -120,17 +120,6 @@ describe("<StatusBarResourceSegment />", () => {
       };
     }
 
-    it("draws the detailed form in the status bar by default", () => {
-      registry.projection = liveProjection("host-b");
-
-      renderSegment({ hasExplicitPick: true });
-
-      expect(
-        screen.queryByTestId("status-bar-resource-compact-cpu"),
-      ).toBeNull();
-      expect(metricText("processes")).toContain("14");
-    });
-
     it("draws the CPU icon and its percent alone when Density is Compact, whatever Metrics says", () => {
       registry.projection = liveProjection("host-b");
       useLayoutStore.getState().setRegionValues("resourceMonitor", {
@@ -141,9 +130,9 @@ describe("<StatusBarResourceSegment />", () => {
 
       renderSegment({ hasExplicitPick: true });
 
-      expect(
-        screen.getByTestId("status-bar-resource-compact-cpu").textContent,
-      ).toBe("12%");
+      expect(screen.getByTestId("resource-cpu-reading").textContent).toBe(
+        "12%",
+      );
       expect(
         screen.queryByTestId("status-bar-resource-metric-processes"),
       ).toBeNull();
@@ -176,9 +165,9 @@ describe("<StatusBarResourceSegment />", () => {
 
       renderSegment({ hasExplicitPick: true });
 
-      expect(
-        screen.getByTestId("status-bar-resource-compact-cpu").className,
-      ).toContain(RUNNING_LOW_TEXT_CLASS_NAME);
+      expect(screen.getByTestId("resource-cpu-reading").className).toContain(
+        RUNNING_LOW_TEXT_CLASS_NAME,
+      );
     });
 
     it("never warns on the other metrics", () => {

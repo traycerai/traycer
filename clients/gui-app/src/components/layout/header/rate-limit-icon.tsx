@@ -412,7 +412,6 @@ function UsageGlyphParts({
     <>
       <Gauge
         data-testid="rate-limit-gauge-icon"
-        data-limited={limited ? "true" : undefined}
         className={cn(
           "size-3.5",
           isDegraded && RUNNING_LOW_TEXT_CLASS_NAME,

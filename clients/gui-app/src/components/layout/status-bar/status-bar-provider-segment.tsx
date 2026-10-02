@@ -24,6 +24,7 @@ import {
   RUNNING_LOW_TEXT_CLASS_NAME,
 } from "@/lib/rate-limits/window-severity";
 import {
+  windowLabelText,
   windowPercentText,
   windowPercentValueText,
 } from "@/lib/rate-limits/status-bar-window-text";
@@ -111,7 +112,6 @@ export function StatusBarProviderSegment(
   const { segment, display } = props;
   const now = useSampledNow();
   const hasNumbers = segment.state === "live" || segment.state === "degraded";
-  const calm = statusBarSegmentSeverity(segment) === "healthy";
   const icon = (
     <HarnessIcon
       harnessId={providerIdToGuiHarnessId(segment.providerId)}
@@ -157,7 +157,6 @@ export function StatusBarProviderSegment(
       data-provider-id={segment.providerId}
       data-profile-id={segment.profileId ?? ""}
       data-state={segment.state}
-      data-form={calm ? "calm" : "expanded"}
     >
       {/*
         One tooltip over the whole segment, in one place for every state: a
@@ -325,9 +324,9 @@ function SegmentBody(props: {
  * resets 3d` once the host says it is `limited`.
  *
  * The percentage (or "Limit") is the only tinted span - severity is a fact
- * about the reading rather than a preference about it. With Reset time off the
- * countdown is omitted; a provider with several live limits keeps the window's
- * name, because without it two bars on one profile cannot be told apart.
+ * about the reading rather than a preference about it. What follows it is
+ * `windowLabelText`'s: the countdown, the window's name, or both, so with Reset
+ * time off the countdown gives way to the name.
  */
 function StatusBarExpandedWindow(props: {
   readonly window: StatusBarRateLimitWindow;
@@ -343,11 +342,13 @@ function StatusBarExpandedWindow(props: {
     props.display.showTimer && window.resetsAt !== null
       ? formatResetCountdown(window.resetsAt, props.now)
       : null;
-  // A duration name (`5h`) is what the countdown already says.
-  const name =
-    props.liveWindowCount > 1 && !(window.labelIsDuration && countdown !== null)
-      ? window.label
-      : null;
+  const label = windowLabelText({
+    label: window.label,
+    labelIsDuration: window.labelIsDuration,
+    countdown:
+      countdown !== null && limited ? `resets ${countdown}` : countdown,
+    visibleWindowCount: props.liveWindowCount,
+  });
   // The tone crossing a threshold is a state change worth bridging; the digits
   // do not roll.
   const severityClassName = props.motionEnabled
@@ -356,8 +357,6 @@ function StatusBarExpandedWindow(props: {
         SEVERITY_TRANSITION_CLASS_NAME,
       )
     : rateLimitWindowSeverityTextClassName(window.severity);
-  const reset =
-    countdown !== null && limited ? `resets ${countdown}` : countdown;
   return (
     <span
       className="inline-flex items-center gap-1 whitespace-nowrap"
@@ -380,8 +379,7 @@ function StatusBarExpandedWindow(props: {
               props.display.percentMode,
             )}
       </span>
-      {name === null ? null : <span>{name}</span>}
-      {reset === null ? null : <span>{reset}</span>}
+      <span>{label}</span>
     </span>
   );
 }

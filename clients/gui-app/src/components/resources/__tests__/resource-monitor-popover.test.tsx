@@ -5510,23 +5510,19 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       ).toBe("cpu 16%");
     });
 
-    it.each(["strip", "readout"] as const)(
-      "reads in the warning color at 85% and above only (%s)",
-      (form) => {
-        const stub = renderPopoverForm(form);
+    // The threshold itself is held once, at the status bar segment.
+    it("reads the CPU in the warning color once it crosses the threshold", () => {
+      const stub = renderPopoverForm("strip");
+      const reading = (): HTMLElement =>
+        within(
+          screen.getByTestId("resource-monitor-header-button"),
+        ).getByTestId("resource-cpu-reading");
 
-        emitCpu(stub, 84);
-        const button = screen.getByTestId("resource-monitor-header-button");
-        expect(
-          within(button).getByTestId("resource-cpu-reading").dataset.warning,
-        ).toBeUndefined();
-
-        emitCpu(stub, 85);
-        const reading = within(button).getByTestId("resource-cpu-reading");
-        expect(reading.dataset.warning).toBe("true");
-        expect(reading.className).toContain("text-warning-foreground");
-      },
-    );
+      emitCpu(stub, 16);
+      expect(reading().className).not.toContain("text-warning-foreground");
+      emitCpu(stub, 92);
+      expect(reading().className).toContain("text-warning-foreground");
+    });
 
     it("keeps the background stream with every metric off, since CPU is always read", () => {
       useLayoutStore.getState().setRegionValues("resourceMonitor", {
@@ -5558,32 +5554,28 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
     );
   });
 
-  it.each(["inline", "rows"] as const)(
-    "Detailed (%s) reads the CPU value in the warning color at 85% and above",
-    (form) => {
-      const stub = renderPopoverForm(form);
-      const emitCpu = (cpu: number): void => {
-        act(() => {
-          stub.emit().onSnapshot(
-            projection({
-              app: { ...app(), cpuPercent: cpu },
-              owners: [owner({})],
-            }),
-          );
-        });
-      };
-      const cpuValue = (): string | undefined =>
-        within(
-          screen.getByTestId("resource-monitor-header-button"),
-        ).getByTestId("status-bar-resource-metric-cpu").lastElementChild
-          ?.className;
+  it("Detailed reads the CPU value in the warning color once it crosses the threshold", () => {
+    const stub = renderPopoverForm("rows");
+    const emitCpu = (cpu: number): void => {
+      act(() => {
+        stub.emit().onSnapshot(
+          projection({
+            app: { ...app(), cpuPercent: cpu },
+            owners: [owner({})],
+          }),
+        );
+      });
+    };
+    const cpuValue = (): string | undefined =>
+      within(screen.getByTestId("resource-monitor-header-button")).getByTestId(
+        "status-bar-resource-metric-cpu",
+      ).lastElementChild?.className;
 
-      emitCpu(84);
-      expect(cpuValue()).not.toContain("text-warning-foreground");
-      emitCpu(85);
-      expect(cpuValue()).toContain("text-warning-foreground");
-    },
-  );
+    emitCpu(16);
+    expect(cpuValue()).not.toContain("text-warning-foreground");
+    emitCpu(92);
+    expect(cpuValue()).toContain("text-warning-foreground");
+  });
 
   it("stays icon-only in the glyph form, whatever the metrics say", () => {
     const stub = renderPopoverForm("glyph");

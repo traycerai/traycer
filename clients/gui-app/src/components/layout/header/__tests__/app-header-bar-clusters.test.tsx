@@ -36,7 +36,7 @@ vi.mock("@/components/layout/header/app-update-button", () => ({
   AppUpdateHeaderButton: () => null,
 }));
 vi.mock("@/components/layout/header/history-button", () => ({
-  HistoryButton: () => null,
+  HistoryButton: () => <button type="button" aria-label="History" />,
 }));
 vi.mock("@/components/notifications/notifications-bell", () => ({
   NotificationsBell: () => null,
@@ -110,6 +110,18 @@ function beforeTabs(node: Element): boolean {
   );
 }
 
+/** The header control right after `node`'s last button, by its name. */
+function controlAfter(node: Element): string | null {
+  const buttons = [
+    ...screen.getByTestId("app-header").querySelectorAll("button"),
+  ];
+  const own = node.matches("button")
+    ? node
+    : [...node.querySelectorAll("button")].at(-1);
+  const index = own === undefined ? -1 : buttons.indexOf(own);
+  return buttons[index + 1]?.getAttribute("aria-label") ?? null;
+}
+
 describe("the header's bar clusters (L-156)", () => {
   it("draws neither reading while both are in the strip", () => {
     render(<AppHeader variant="app" />);
@@ -119,20 +131,19 @@ describe("the header's bar clusters (L-156)", () => {
     expect(screen.queryByTestId("header-resource-trigger")).toBeNull();
   });
 
-  it("draws the reading that named the header before History, whatever side it saved", () => {
-    place({ usageHost: "header", usageSide: "left" });
-    render(<AppHeader variant="app" />);
+  it.each(["left", "right"] as const)(
+    "draws the reading that named the header directly before History, whatever side it saved (%s)",
+    (usageSide) => {
+      place({ usageHost: "header", usageSide });
+      render(<AppHeader variant="app" />);
 
-    // A tab strip has no side: the saved side is only the status bar's.
-    expect(headerRegions()).toEqual(["usageLimits"]);
-    expect(beforeTabs(screen.getByTestId("header-usage-trigger"))).toBe(false);
-    cleanup();
-
-    place({ usageHost: "header", usageSide: "right" });
-    render(<AppHeader variant="app" />);
-
-    expect(beforeTabs(screen.getByTestId("header-usage-trigger"))).toBe(false);
-  });
+      // A tab strip has no side: the saved side is only the status bar's.
+      expect(headerRegions()).toEqual(["usageLimits"]);
+      const trigger = screen.getByTestId("header-usage-trigger");
+      expect(beforeTabs(trigger)).toBe(false);
+      expect(controlAfter(trigger)).toBe("History");
+    },
+  );
 
   it("hands a lone reading its Compact strip form", () => {
     place({ usageHost: "header" });
@@ -164,6 +175,7 @@ describe("the header's bar clusters (L-156)", () => {
         "header-resource-trigger",
       ]);
       expect(group.querySelector("[aria-hidden]")).not.toBeNull();
+      expect(controlAfter(group)).toBe("History");
       expect(screen.getByTestId("header-usage-trigger").dataset.form).toBe(
         "strip",
       );
