@@ -61,6 +61,7 @@ type AuthStatus = "authenticated" | "unauthenticated" | "unknown";
 
 interface ProfileSpec {
   readonly profileId: string;
+  readonly kind: "ambient" | "managed";
   readonly label: string;
   readonly email: string | null;
   readonly authStatus: AuthStatus;
@@ -79,7 +80,7 @@ function authInput(status: AuthStatus): object {
 function profileInput(spec: ProfileSpec): object {
   return {
     profileId: spec.profileId,
-    kind: "managed",
+    kind: spec.kind,
     authType: "oauth",
     label: spec.label,
     auth: authInput(spec.authStatus),
@@ -200,6 +201,7 @@ function signedInState(profiles: readonly ProfileSpec[]): StateSpec {
 
 const NEW_PROFILE: ProfileSpec = {
   profileId: "prof_new",
+  kind: "managed",
   label: "Work",
   email: "jane.doe@example.com",
   authStatus: "authenticated",
@@ -207,8 +209,17 @@ const NEW_PROFILE: ProfileSpec = {
 
 const WORK_PROFILE: ProfileSpec = {
   profileId: "prof_work",
+  kind: "managed",
   label: "Work",
   email: "work@example.com",
+  authStatus: "authenticated",
+};
+
+const AMBIENT_PROFILE: ProfileSpec = {
+  profileId: "ambient",
+  kind: "ambient",
+  label: "Terminal login",
+  email: "me@example.com",
   authStatus: "authenticated",
 };
 
@@ -274,6 +285,19 @@ function nextStartAnswer(): ProvidersStartLoginResponseV13 {
   return answer;
 }
 
+function nextListAnswer(): Promise<{
+  providers: ProviderCliState[];
+  native: null;
+}> {
+  listReads += 1;
+  const later = scenario.laterListReads;
+  if (listReads === 1 || later === null) {
+    return Promise.resolve({ providers: [scenario.listState], native: null });
+  }
+  if (later instanceof Error) return Promise.reject(later);
+  return Promise.resolve({ providers: [later], native: null });
+}
+
 type DispatchCall = (typeof dispatchMock.mock.calls)[number];
 
 function callsTo(method: string): DispatchCall[] {
@@ -288,8 +312,8 @@ function onlyCallTo(method: string): DispatchCall {
   return call;
 }
 
-function listCalls(): (typeof rpcMock.mock.calls)[number][] {
-  return rpcMock.mock.calls.filter((call) => call[0] === "providers.list");
+function listCalls(): DispatchCall[] {
+  return callsTo("providers.list");
 }
 
 function submitCalls(): (typeof rpcMock.mock.calls)[number][] {
@@ -320,6 +344,12 @@ function ensurePackCalls(): (typeof rpcMock.mock.calls)[number][] {
     (call) => call[0] === "providers.ensurePack",
   );
 }
+
+const LIST_DISPATCH: HostRpcDispatch = {
+  responseTimeoutMs: null,
+  requiredHostMethodVersion: null,
+  signal: null,
+};
 
 const AWAIT_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
   method: "providers.awaitLogin",
@@ -469,18 +499,6 @@ beforeEach(() => {
   listReads = 0;
   rpcMock.mockImplementation((method) => {
     switch (method) {
-      case "providers.list": {
-        listReads += 1;
-        const later = scenario.laterListReads;
-        if (listReads === 1 || later === null) {
-          return Promise.resolve({
-            providers: [scenario.listState],
-            native: null,
-          });
-        }
-        if (later instanceof Error) return Promise.reject(later);
-        return Promise.resolve({ providers: [later], native: null });
-      }
       case "providers.submitLoginCode":
         return Promise.resolve({ outcome: "accepted" });
       case "providers.touchLogin":
@@ -493,6 +511,8 @@ beforeEach(() => {
   });
   dispatchMock.mockImplementation((method, _params, dispatch) => {
     switch (method) {
+      case "providers.list":
+        return nextListAnswer();
       case "providers.startLogin":
         return scenario.startFailure === null
           ? Promise.resolve(nextStartAnswer())
@@ -550,6 +570,17 @@ describe("profile add (create)", () => {
       "Added claude (Claude Code) profile prof_new",
     );
     expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads providers.list with no version floor", async () => {
+    await runLogin(create("Work"), makeIo(false), makeCtx(false, false));
+
+    const [, listParams, listDispatch] = onlyCallTo("providers.list");
+    expect(listParams).toEqual({ native: null });
+    expect(listDispatch).toEqual(LIST_DISPATCH);
+    expect(rpcMock).not.toHaveBeenCalledWith("providers.list", {
+      native: null,
+    });
   });
 
   it("renames a profile created without --label to the email prefix", async () => {
@@ -1062,6 +1093,88 @@ describe("profile login (ambient)", () => {
     );
   });
 
+  it("is signed in when the summary is unknown but the ambient row is authenticated", async () => {
+    scenario.startAnswers = [startAnswer({ profileId: null })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: {
+            auth: "unknown",
+            authPending: false,
+            profiles: [AMBIENT_PROFILE],
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      existing("ambient"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "signed-in",
+      profile: null,
+      created: false,
+    });
+  });
+
+  it("is not signed in when the summary is authenticated but the ambient row is unauthenticated", async () => {
+    scenario.startAnswers = [startAnswer({ profileId: null })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: {
+            auth: "authenticated",
+            authPending: false,
+            profiles: [{ ...AMBIENT_PROFILE, authStatus: "unauthenticated" }],
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      existing("ambient"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "not-completed",
+    });
+  });
+
+  it("does not ask again when the ambient row has answered although the summary is still pending", async () => {
+    scenario.startAnswers = [startAnswer({ profileId: null })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: {
+            auth: "unknown",
+            authPending: true,
+            profiles: [AMBIENT_PROFILE],
+          },
+        }),
+      );
+    const fake = makeIo(false);
+
+    const result = await runLogin(
+      existing("ambient"),
+      fake,
+      makeCtx(false, false),
+    );
+
+    expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+    expect(fake.wait).not.toHaveBeenCalled();
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toEqual(
+      expect.objectContaining({ status: "signed-in" }),
+    );
+  });
+
   it("asks again while the ambient verdict is still in flight", async () => {
     scenario.startAnswers = [startAnswer({ profileId: null })];
     const verdicts = [
@@ -1296,11 +1409,6 @@ describe("start answers", () => {
     ];
     rpcMock.mockImplementation((method) => {
       switch (method) {
-        case "providers.list":
-          return Promise.resolve({
-            providers: [scenario.listState],
-            native: null,
-          });
         case "providers.ensurePack":
           return Promise.reject(new Error("host refused the retry"));
         default:
@@ -1375,6 +1483,8 @@ describe("a create's profile id from a still-starting answer", () => {
     let starts = 0;
     dispatchMock.mockImplementation((method) => {
       switch (method) {
+        case "providers.list":
+          return nextListAnswer();
         case "providers.startLogin":
           starts += 1;
           return starts === 1
@@ -1462,6 +1572,8 @@ describe("interrupt", () => {
   it("cancels, rather than throws, when Ctrl+C aborts a start that is still in flight", async () => {
     dispatchMock.mockImplementation((method, _params, dispatch) => {
       switch (method) {
+        case "providers.list":
+          return nextListAnswer();
         case "providers.startLogin":
           return new Promise((_resolve, reject) => {
             const signal = dispatch.signal;
@@ -1519,6 +1631,8 @@ describe("interrupt", () => {
       });
     dispatchMock.mockImplementation((method, _params, dispatch) => {
       switch (method) {
+        case "providers.list":
+          return nextListAnswer();
         case "providers.startLogin":
           return Promise.resolve(nextStartAnswer());
         case "providers.awaitLogin":
@@ -1600,6 +1714,7 @@ describe("a sign-in needs a person", () => {
 
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(rpcMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1702,11 +1817,6 @@ describe("code paste", () => {
     scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
     rpcMock.mockImplementation((method) => {
       switch (method) {
-        case "providers.list":
-          return Promise.resolve({
-            providers: [scenario.listState],
-            native: null,
-          });
         case "providers.submitLoginCode":
           return Promise.resolve({ outcome: "noActiveLogin" });
         default:

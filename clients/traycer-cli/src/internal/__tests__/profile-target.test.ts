@@ -1,11 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { providerCliStateSchema } from "@traycer/protocol/host/provider-schemas";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
+import { callHostRpcWithDispatch } from "../host-rpc";
 import {
   isAmbientProfileId,
   parseProfileArgument,
   parseProviderArgument,
   printable,
+  readProviderStates,
 } from "../profile-target";
+
+vi.mock("../host-rpc", async () => {
+  const actual =
+    await vi.importActual<typeof import("../host-rpc")>("../host-rpc");
+  return {
+    ...actual,
+    callHostRpcWithDispatch: vi.fn(),
+  };
+});
+
+const dispatchMock = vi.mocked(callHostRpcWithDispatch);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 function failureOf(run: () => unknown): CliError {
   let thrown: unknown = null;
@@ -92,5 +110,42 @@ describe("isAmbientProfileId", () => {
   it("is true only for the ambient sentinel", () => {
     expect(isAmbientProfileId("ambient")).toBe(true);
     expect(isAmbientProfileId("prof_work")).toBe(false);
+  });
+});
+
+describe("readProviderStates", () => {
+  it("reads providers.list with no version floor and returns the providers", async () => {
+    const state = providerCliStateSchema.parse({
+      providerId: "claude-code",
+      enabled: true,
+      disabledBy: null,
+      selected: { kind: "bundled" },
+      candidates: [],
+      authPending: false,
+      checkedAt: null,
+      apiKey: { supported: false, configured: false, source: null },
+      auth: {
+        status: "authenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      profiles: [],
+    });
+    dispatchMock.mockResolvedValue({ providers: [state], native: null });
+
+    const states = await readProviderStates();
+
+    expect(states).toEqual([state]);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "providers.list",
+      { native: null },
+      {
+        responseTimeoutMs: null,
+        requiredHostMethodVersion: null,
+        signal: null,
+      },
+    );
   });
 });

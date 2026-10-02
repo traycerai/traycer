@@ -6,7 +6,10 @@ import {
   type ProviderId,
   type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import { callHostRpc } from "../../internal/host-rpc";
+import {
+  callHostRpcWithDispatch,
+  type HostRpcDispatch,
+} from "../../internal/host-rpc";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 import type { CommandContext } from "../../runner/runner";
@@ -32,11 +35,17 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpc: vi.fn(),
+    callHostRpcWithDispatch: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
+const rpcMock = vi.mocked(callHostRpcWithDispatch);
+
+const LIST_DISPATCH: HostRpcDispatch = {
+  responseTimeoutMs: null,
+  requiredHostMethodVersion: null,
+  signal: null,
+};
 
 function makeCtx(): CommandContext {
   return {
@@ -162,7 +171,12 @@ describe("traycer profile list", () => {
 
     const result = await buildProfileListCommand({ provider: null })(makeCtx());
 
-    expect(rpcMock).toHaveBeenCalledWith("providers.list", { native: null });
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock).toHaveBeenCalledWith(
+      "providers.list",
+      { native: null },
+      LIST_DISPATCH,
+    );
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual({
       providers: [

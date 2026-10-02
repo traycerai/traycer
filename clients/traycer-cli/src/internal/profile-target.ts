@@ -1,6 +1,7 @@
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import {
   PROVIDER_DISPLAY_NAMES,
+  type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -8,6 +9,32 @@ import {
   providerIdFromHarnessOrProviderName,
 } from "../../../shared/providers/provider-harness-ids";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import {
+  callHostRpcWithDispatch,
+  PLAIN_DISPATCH,
+  toAgentCliError,
+} from "./host-rpc";
+
+/**
+ * Every provider's state, profiles included, as the host holds it now.
+ *
+ * No version floor, deliberately. A host from before profiles existed
+ * (`providers.list` below 4.0) is upgraded with `profiles: []` and reads as
+ * holding none, and a floor would be the way to tell the two apart - but a
+ * floor is matched within ONE major, and this method has opened a new major
+ * four times. Naming today's major would refuse hosts on 7.x and 8.x that
+ * list their profiles correctly, and would refuse a NEWER host the day the
+ * next major opens, where the negotiated downgrade serves this read fine.
+ * The commands that change anything name their own floors.
+ */
+export async function readProviderStates(): Promise<
+  readonly ProviderCliState[]
+> {
+  const response = await toAgentCliError(
+    callHostRpcWithDispatch("providers.list", { native: null }, PLAIN_DISPATCH),
+  );
+  return response.providers;
+}
 
 /**
  * The `<provider>` argument of the `traycer profile` commands: a harness id as

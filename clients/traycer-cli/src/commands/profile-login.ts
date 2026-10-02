@@ -25,7 +25,15 @@ import {
   parseProfileArgument,
   parseProviderArgument,
   printable,
+  readProviderStates,
 } from "../internal/profile-target";
+import {
+  AMBIENT_AUTH_PENDING_REPOLL_CAP,
+  AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
+  isAmbientAuthVerdictPending,
+  isProviderAmbientAuthenticated,
+  isProviderAmbientSignedOut,
+} from "../../../shared/providers/provider-ambient-auth";
 import { CLI_ERROR_CODES, cliError, type CliError } from "../runner/errors";
 import type {
   CommandContext,
@@ -144,12 +152,6 @@ const PACK_POLL_MS = 2_000;
 const STILL_STARTING_CAP = 12;
 /** Under the host's 3-minute rolling deadline for a paste-code sign-in. */
 const KEEPALIVE_INTERVAL_MS = 60_000;
-/**
- * The ambient verdict can still be in flight when the long-poll settles; the
- * host says so with `authPending`, and asking again is cheap.
- */
-const AUTH_PENDING_REPOLL_CAP = 3;
-const AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
 
 const INTERRUPTED_EXIT_CODE = 130;
 
@@ -267,10 +269,9 @@ function notInteractive(): CliError {
 async function readProviderState(
   providerId: ProviderId,
 ): Promise<ProviderCliState> {
-  const response = await toAgentCliError(
-    callHostRpc("providers.list", { native: null }),
+  const state = (await readProviderStates()).find(
+    (p) => p.providerId === providerId,
   );
-  const state = response.providers.find((p) => p.providerId === providerId);
   if (state === undefined) {
     throw cliError({
       code: CLI_ERROR_CODES.NOT_FOUND,
@@ -593,15 +594,17 @@ async function awaitUntilSettled(
       throw error;
     }
     if (signal.aborted) return null;
+    // Not settled only while neither ambient source has answered: a verdict
+    // on the ambient row counts even while the provider's summary lags.
     const pending =
       profileId === null &&
       !result.codeRejected &&
       result.state !== null &&
-      result.state.authPending &&
-      result.state.auth.status !== "authenticated" &&
-      result.state.auth.status !== "unauthenticated";
-    if (!pending || repolls >= AUTH_PENDING_REPOLL_CAP) return result;
-    await io.wait(AUTH_PENDING_REPOLL_DELAY_MS);
+      isAmbientAuthVerdictPending(result.state) &&
+      !isProviderAmbientAuthenticated(result.state) &&
+      !isProviderAmbientSignedOut(result.state);
+    if (!pending || repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return result;
+    await io.wait(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
     if (signal.aborted) return null;
   }
 }
@@ -628,7 +631,11 @@ async function outcomeOf(
   // Presence is not success: a row stays listed while signed out, so the row
   // (or, for ambient, the provider's own verdict) must say authenticated.
   if (heldProfileId === null) {
-    return result.state?.auth.status === "authenticated"
+    // The ambient login shows in two places that converge at different
+    // times, the provider's summary and the ambient row. The shared verdict
+    // reconciles them: a definitive sign-out on either wins, otherwise a
+    // signed-in on either counts.
+    return result.state !== null && isProviderAmbientAuthenticated(result.state)
       ? { status: "signed-in", profile: null, created: false }
       : failedOutcome(result);
   }
