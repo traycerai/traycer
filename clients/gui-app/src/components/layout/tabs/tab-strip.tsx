@@ -30,8 +30,13 @@ import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { HomeStripSlot } from "@/components/layout/tabs/tab-strip-home-item";
 import { useHomeTabDrawn } from "@/components/layout/tabs/use-home-tab-drawn";
-import { useTabStripController } from "@/components/layout/tabs/tab-strip-controller";
+import {
+  useTabStripController,
+  type TabStripController,
+} from "@/components/layout/tabs/tab-strip-controller";
 import { TabStripIndicatorScope } from "@/components/layout/tabs/tab-strip-indicator-scope";
+import { StripNeedsYouScope } from "@/components/layout/tabs/side-strip/strip-needs-you-scope";
+import { StripSectionsScope } from "@/components/layout/tabs/side-strip/strip-sections-scope";
 import { useArrangementValue } from "@/lib/layout-overrides";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
@@ -177,13 +182,18 @@ function TabStripBody() {
   );
 
   // On the empty landing route the strip draws nothing; the header's own
-  // actions stay, so no control is lost.
+  // actions stay, so no control is lost. Its sections are still read: the
+  // bell counts the tasks that need the person as the sidebar would.
   if (controller.isEmptyLanding) {
-    return null;
+    return (
+      <TabStripSectionsScope controller={controller}>
+        {null}
+      </TabStripSectionsScope>
+    );
   }
 
   return (
-    <TabStripIndicatorScope indicators={controller.indicators}>
+    <TabStripSectionsScope controller={controller}>
       <div
         ref={stripRef}
         tabIndex={-1}
@@ -309,7 +319,27 @@ function TabStripBody() {
         </div>
         {controller.dialogs}
       </div>
-    </TabStripIndicatorScope>
+    </TabStripSectionsScope>
+  );
+}
+
+/**
+ * The strip's indicator scope, under the sections it publishes the Needs you
+ * task count from, as the side strip reads them.
+ */
+function TabStripSectionsScope(props: {
+  readonly controller: TabStripController;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { controller } = props;
+  return (
+    <StripNeedsYouScope controller={controller}>
+      <TabStripIndicatorScope indicators={controller.indicators}>
+        <StripSectionsScope controller={controller}>
+          {props.children}
+        </StripSectionsScope>
+      </TabStripIndicatorScope>
+    </StripNeedsYouScope>
   );
 }
 

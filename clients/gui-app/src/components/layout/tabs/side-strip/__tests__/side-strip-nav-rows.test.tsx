@@ -291,17 +291,22 @@ describe("SideStripNavRows", () => {
     ).not.toBe(0);
   });
 
-  it("shows one unread count, tinted while an ask needs you, hidden at 0", async () => {
+  it("Layered view: the amber pill is the Needs you task count, the muted one the unread total while no task needs you, hidden at 0", async () => {
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
     expect(screen.queryByTestId("side-strip-inbox-count")).toBeNull();
 
-    seedApprovals(2);
+    seedFeed(0, 3);
+    const unread = screen.getByTestId("side-strip-inbox-count");
+    expect(unread.textContent).toBe("3");
+    expect(unread.dataset.needsYou).toBe("false");
 
-    const badge = screen.getByTestId("side-strip-inbox-count");
-    expect(badge.textContent).toBe("2");
-    expect(badge.dataset.needsYou).toBe("true");
+    // Amber says Needs you, so it never carries the unread total.
+    seedFeed(2, 5);
+    const needsYou = screen.getByTestId("side-strip-inbox-count");
+    expect(needsYou.textContent).toBe("2");
+    expect(needsYou.dataset.needsYou).toBe("true");
   });
 
   it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {

@@ -216,11 +216,12 @@ function InboxNavRow(props: {
   // Tasks, as the Needs you header counts them; the drawer lists requests.
   const needsYouCount = useNeedsYouTaskCount();
   const unreadCount = useMergedNotificationUnreadCount();
-  // The Activity view's pill is the Needs you count alone; the Layered view's
-  // is the unread total, falling back to it when nothing is unread.
+  // Amber is Needs you in both views: while a task needs the person the pill
+  // is the Needs you task count. With none, the Layered view shows the unread
+  // total in the muted pill; the Activity view's To review says that instead.
   const needsYouOnly = useLiveAgentsInStrip();
-  const pillCount =
-    needsYouOnly || unreadCount === 0 ? needsYouCount : unreadCount;
+  let pillCount = needsYouCount;
+  if (needsYouCount === 0 && !needsYouOnly) pillCount = unreadCount;
   // The bell's `unknown`: a summary is unavailable, so zero counts are not a
   // claim that nothing is waiting (see `useNotificationBellState`).
   const unavailable = bellState.kind === "unknown";
@@ -269,10 +270,8 @@ function InboxNavRow(props: {
                 >
                   Notifications
                 </span>
-                {/* One count, the unread total; a pending ask tints it
-                    rather than adding a second number. An ask already read
-                    is still pending, so with nothing unread it shows alone.
-                    In the Activity view it is the Needs you count itself. */}
+                {/* One count: amber, the Needs you task count; muted, the
+                    unread total. */}
                 {pillCount > 0 ? (
                   <Badge
                     variant={needsYouCount > 0 ? "warning" : "muted"}
