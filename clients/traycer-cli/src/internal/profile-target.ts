@@ -24,7 +24,7 @@ export function parseProviderArgument(value: string): ProviderId {
   if (providerId === null) {
     throw cliError({
       code: CLI_ERROR_CODES.INVALID_ARGUMENT,
-      message: `traycer: unknown provider '${value}' - run 'traycer profile list' to see the providers that have profiles.`,
+      message: `traycer: unknown provider '${printable(value)}' - run 'traycer profile list' to see the providers that have profiles.`,
       details: null,
       exitCode: 1,
     });
@@ -52,6 +52,27 @@ export function parseProfileArgument(value: string): string {
 
 export function isAmbientProfileId(profileId: string): boolean {
   return profileId === AMBIENT_PROFILE_ID_SENTINEL;
+}
+
+/**
+ * Text from the host, made safe to print in a terminal line. A profile label,
+ * an account email and a provider's refusal reason are all written by someone
+ * else - a label can arrive with a profile copied from another machine - and
+ * a newline or an escape sequence in one would split a table row or drive the
+ * terminal. Control characters are shown as `\xNN` / `\uNNNN`; anything else
+ * is unchanged. Structured (`--json`) output keeps the original value.
+ */
+export function printable(text: string): string {
+  return text.replace(
+    // C0 controls, DEL, C1 controls, and the two Unicode line separators.
+    /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
+    (character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0xff
+        ? `\\x${code.toString(16).padStart(2, "0")}`
+        : `\\u${code.toString(16).padStart(4, "0")}`;
+    },
+  );
 }
 
 /** How a provider is named back to the user: `claude (Claude Code)`. */

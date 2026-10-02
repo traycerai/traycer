@@ -96,7 +96,7 @@ traycer profile enable claude <profile-id>
 traycer profile remove claude <profile-id>    # asks first; --yes to skip
 ```
 
-`add` and `login` print a sign-in link (and a code, where the provider uses one) and wait for the sign-in to finish, so they need a terminal: they are refused under `--json` and in CI. Press Ctrl+C to cancel. Managed profiles exist for Claude Code, Codex, Grok and Antigravity.
+`add` and `login` print a sign-in link (and a code, where the provider uses one) and wait for the sign-in to finish, so they need a terminal: they are refused under `--json` and in CI, and for Claude Code also when input is piped or redirected (you may need to paste a code). Press Ctrl+C to cancel. Managed profiles exist for Claude Code, Codex, Grok and Antigravity.
 
 ## Agent and Workspace Commands
 

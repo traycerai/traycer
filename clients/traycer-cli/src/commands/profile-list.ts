@@ -9,6 +9,7 @@ import { callHostRpc, toAgentCliError } from "../internal/host-rpc";
 import {
   describeProvider,
   parseProviderArgument,
+  printable,
 } from "../internal/profile-target";
 import type { CommandFn } from "../runner/runner";
 
@@ -114,9 +115,9 @@ function formatProfileList(
 
 function cellsOf(row: ProfileListRow): string[] {
   return [
-    row.profileId,
-    row.label,
-    row.email ?? "-",
+    printable(row.profileId),
+    printable(row.label),
+    row.email === null ? "-" : printable(row.email),
     row.enabled ? "enabled" : "disabled",
     row.authStatus,
     row.rateLimitStatus,

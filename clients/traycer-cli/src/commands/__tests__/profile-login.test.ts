@@ -306,6 +306,11 @@ const START_DISPATCH: HostRpcDispatch = {
   signal: null,
 };
 
+const AWAIT_DISPATCH_FLOOR: HostRpcDispatch["requiredHostMethodVersion"] = {
+  method: "providers.awaitLogin",
+  version: { major: 2, minor: 1 },
+};
+
 const CANCEL_DISPATCH: HostRpcDispatch = {
   responseTimeoutMs: null,
   requiredHostMethodVersion: {
@@ -330,6 +335,7 @@ const RENAME_DISPATCH: HostRpcDispatch = {
 
 interface FakeIo {
   readonly io: ProfileLoginIo;
+  readonly stdinIsTerminal: Mock<ProfileLoginIo["stdinIsTerminal"]>;
   readonly openUrl: Mock<ProfileLoginIo["openUrl"]>;
   readonly wait: Mock<ProfileLoginIo["wait"]>;
   readonly onInterrupt: Mock<ProfileLoginIo["onInterrupt"]>;
@@ -347,6 +353,7 @@ function makeIo(hasTerminal: boolean): FakeIo {
   const lineSinks: ((line: string) => void)[] = [];
   const stopInterrupt = vi.fn<() => void>();
   const stopReading = vi.fn<() => void>();
+  const stdinIsTerminal = vi.fn<ProfileLoginIo["stdinIsTerminal"]>(() => true);
   const openUrl = vi.fn<ProfileLoginIo["openUrl"]>();
   const wait = vi.fn<ProfileLoginIo["wait"]>(() => Promise.resolve());
   const onInterrupt = vi.fn<ProfileLoginIo["onInterrupt"]>((handler) => {
@@ -361,11 +368,13 @@ function makeIo(hasTerminal: boolean): FakeIo {
   return {
     io: {
       newHolderId: () => HOLDER_ID,
+      stdinIsTerminal,
       openUrl,
       wait,
       onInterrupt,
       readLines,
     },
+    stdinIsTerminal,
     openUrl,
     wait,
     onInterrupt,
@@ -509,7 +518,9 @@ describe("profile add (create)", () => {
       PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
     );
     expect(awaitDispatch.signal).toBeInstanceOf(AbortSignal);
-    expect(awaitDispatch.requiredHostMethodVersion).toBeNull();
+    expect(awaitDispatch.requiredHostMethodVersion).toEqual(
+      AWAIT_DISPATCH_FLOOR,
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.data).toEqual({
@@ -942,6 +953,40 @@ describe("profile login (existing)", () => {
     expect(result.human).toContain("Verify your account first.");
     expect(result.human).toContain("https://example.com/verify");
   });
+
+  it("escapes control characters in a refusal reason for the terminal and keeps data unchanged", async () => {
+    scenario.listState = listState({
+      ...NO_PROFILES,
+      profiles: [WORK_PROFILE],
+    });
+    scenario.startAnswers = [startAnswer({ profileId: "prof_work" })];
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          refusal: {
+            reason: "Blocked.\r\nforged line",
+            actionUrl: null,
+          },
+        }),
+      );
+
+    const result = await runLogin(
+      existing("prof_work"),
+      makeIo(false),
+      makeCtx(false, false),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.human).toBe(
+      "claude (Claude Code) refused the sign-in: Blocked.\\x0d\\x0aforged line",
+    );
+    expect(result.human).not.toMatch(/[\r\n]/);
+    expect(result.data).toEqual({
+      providerId: "claude-code",
+      status: "refused",
+      refusal: { reason: "Blocked.\r\nforged line", actionUrl: null },
+    });
+  });
 });
 
 describe("profile login (ambient)", () => {
@@ -1218,6 +1263,50 @@ describe("a call that fails partway", () => {
   });
 });
 
+describe("a create's profile id from a still-starting answer", () => {
+  it("is released by name when the next start ask rejects", async () => {
+    const failure = new Error("second start timed out");
+    let starts = 0;
+    dispatchMock.mockImplementation((method) => {
+      switch (method) {
+        case "providers.startLogin":
+          starts += 1;
+          return starts === 1
+            ? Promise.resolve(
+                startAnswer({
+                  started: false,
+                  url: null,
+                  pending: "starting",
+                  profileId: "prof_new",
+                }),
+              )
+            : Promise.reject(failure);
+        case "providers.cancelLogin":
+          return Promise.resolve({ cancelled: true });
+        default:
+          return Promise.reject(new Error(`unexpected dispatch ${method}`));
+      }
+    });
+    const fake = makeIo(false);
+
+    await expect(
+      runLogin(create("Work"), fake, makeCtx(false, false)),
+    ).rejects.toBe(failure);
+
+    expect(callsTo("providers.startLogin")).toHaveLength(2);
+    expect(callsTo("providers.awaitLogin")).toHaveLength(0);
+    const [, cancelParams, cancelDispatch] = onlyCallTo(
+      "providers.cancelLogin",
+    );
+    expect(cancelParams).toEqual({
+      providerId: "claude-code",
+      profileId: "prof_new",
+      holderId: HOLDER_ID,
+    });
+    expect(cancelDispatch).toEqual(CANCEL_DISPATCH);
+  });
+});
+
 describe("interrupt", () => {
   it("cancels with this command's holder id and the host-minted profile id", async () => {
     scenario.awaitLogin = (dispatch) =>
@@ -1313,6 +1402,32 @@ describe("a sign-in needs a person", () => {
 
     expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
     expect(callsTo("providers.startLogin")).toHaveLength(0);
+  });
+
+  it("refuses a paste-code provider whose stdin is not a terminal before starting anything", async () => {
+    scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
+    const fake = makeIo(false);
+    fake.stdinIsTerminal.mockReturnValue(false);
+
+    const error = await failureOf(
+      runLogin(create("Work"), fake, makeCtx(false, false)),
+    );
+
+    expect(error.code).toBe(CLI_ERROR_CODES.INVALID_ARGUMENT);
+    expect(error.message).toContain("interactive terminal");
+    expect(callsTo("providers.startLogin")).toHaveLength(0);
+    expect(callsTo("providers.cancelLogin")).toHaveLength(0);
+  });
+
+  it("starts a provider that takes no pasted code even when stdin is not a terminal", async () => {
+    // A device-code sign-in reads nothing from stdin, so a redirected stdin
+    // is no reason to refuse it.
+    const fake = makeIo(false);
+    fake.stdinIsTerminal.mockReturnValue(false);
+
+    const result = await runLogin(create("Work"), fake, makeCtx(false, false));
+    expect(callsTo("providers.startLogin").length).toBeGreaterThan(0);
+    expect(result.data).not.toMatchObject({ status: "cancelled" });
   });
 
   it("refuses an unknown provider before reading host state", async () => {

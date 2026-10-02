@@ -228,6 +228,39 @@ describe("traycer profile list", () => {
     );
   });
 
+  it("keeps a profile with control characters in its label on one human row and leaves data unchanged", async () => {
+    const hostileLabel = "Work\n\u001b[31mred";
+    respondWith([
+      stateFixture("claude-code", [
+        {
+          profileId: "prof_work",
+          kind: "managed",
+          label: hostileLabel,
+          email: "me@example.com",
+          authStatus: "authenticated",
+          enabled: true,
+        },
+      ]),
+    ]);
+
+    const result = await buildProfileListCommand({ provider: null })(makeCtx());
+
+    const lines = (result.human ?? "").split("\n");
+    // Provider heading, column header, and exactly one profile row.
+    expect(lines).toHaveLength(3);
+    const row = lines[2];
+    expect(row).toContain("Work\\x0a\\x1b[31mred");
+    expect(row).toContain("prof_work");
+    expect(result.human).not.toContain("\u001b");
+    expect(result.data).toEqual({
+      providers: [
+        expect.objectContaining({
+          profiles: [expect.objectContaining({ label: hostileLabel })],
+        }),
+      ],
+    });
+  });
+
   it("says so when no provider has a profile", async () => {
     respondWith([stateFixture("claude-code", []), stateFixture("codex", [])]);
 

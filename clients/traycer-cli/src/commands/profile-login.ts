@@ -24,6 +24,7 @@ import {
   isAmbientProfileId,
   parseProfileArgument,
   parseProviderArgument,
+  printable,
 } from "../internal/profile-target";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
@@ -58,6 +59,8 @@ export type ProfileLoginTarget =
  */
 export interface ProfileLoginIo {
   readonly newHolderId: () => string;
+  /** Whether stdin is a terminal a person can type into. */
+  readonly stdinIsTerminal: () => boolean;
   readonly openUrl: (url: string) => void;
   readonly wait: (ms: number) => Promise<void>;
   /** Calls `handler` on Ctrl+C until the returned function is called. */
@@ -74,6 +77,7 @@ export interface ProfileLoginIo {
 
 export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
   newHolderId: () => randomUUID(),
+  stdinIsTerminal: () => process.stdin.isTTY === true,
   openUrl: openInBrowser,
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   onInterrupt: (handler) => {
@@ -90,6 +94,20 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
     lines.on("SIGINT", onInterrupt);
     return () => lines.close();
   },
+};
+
+/**
+ * `profileId` reached `providers.awaitLogin` at 2.1. Below it the field is
+ * dropped and the wait lands on the ambient login, not the profile being
+ * signed in, so the wait names its floor like the start and the cancel do.
+ */
+const AWAIT_LOGIN_DISPATCH: HostRpcDispatch = {
+  responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+  requiredHostMethodVersion: {
+    method: "providers.awaitLogin",
+    version: { major: 2, minor: 1 },
+  },
+  signal: null,
 };
 
 /**
@@ -168,14 +186,14 @@ export function buildProfileLoginCommand(
     const providerId = parseProviderArgument(opts.provider);
     const target = resolveTarget(opts.target);
     const state = await readProviderState(providerId);
-    assertInteractive(ctx);
+    assertInteractive(ctx, io, state);
     if (
       target.profileId !== null &&
       !state.profiles.some((p) => p.profileId === target.profileId)
     ) {
       throw cliError({
         code: CLI_ERROR_CODES.NOT_FOUND,
-        message: `traycer: ${describeProvider(providerId)} has no profile '${target.profileId}' - run 'traycer profile list ${opts.provider}' to see them.`,
+        message: `traycer: ${describeProvider(providerId)} has no profile '${printable(target.profileId)}' - run 'traycer profile list ${printable(opts.provider)}' to see them.`,
         details: null,
         exitCode: 1,
       });
@@ -210,16 +228,28 @@ function resolveTarget(target: ProfileLoginTarget): ResolvedTarget {
 }
 
 /**
- * A sign-in needs a person: someone has to open the link. A caller that
- * cannot show one is refused before the host is asked to start anything, so
- * no login child is left running that nobody will finish.
+ * A sign-in needs a person: someone has to open the link, and for a provider
+ * that hands back a code, type it in. A caller that cannot is refused before
+ * the host is asked to start anything, so no login child is left running that
+ * nobody can finish.
+ *
+ * The stdin check applies only to a paste-code provider. With stdin redirected
+ * its code could never be submitted and the command would wait out the host's
+ * whole deadline; a device-code sign-in reads nothing from stdin and works
+ * fine without one.
  */
-function assertInteractive(ctx: CommandContext): void {
-  if (!ctx.runtime.json && !ctx.runtime.nonInteractive) return;
+function assertInteractive(
+  ctx: CommandContext,
+  io: ProfileLoginIo,
+  state: ProviderCliState,
+): void {
+  const canTakeCode =
+    !declares(state.loginCapability?.codePaste) || io.stdinIsTerminal();
+  if (!ctx.runtime.json && !ctx.runtime.nonInteractive && canTakeCode) return;
   throw cliError({
     code: CLI_ERROR_CODES.INVALID_ARGUMENT,
     message:
-      "traycer: signing a profile in needs a person at a terminal - run this without --json and outside CI.",
+      "traycer: signing a profile in needs a person at a terminal - run this in an interactive terminal, without --json and outside CI.",
     details: null,
     exitCode: 1,
   });
@@ -281,8 +311,15 @@ async function runLogin(
               },
       },
       abort.signal,
+      // Each answer, not only the last: a create's "still starting" answer
+      // already names the profile the host minted, so a release after a
+      // thrown ask names it too. The host finds this command's login by its
+      // holder id; naming the profile keeps the release right for a host
+      // that keys the cancel by profile.
+      (received) => {
+        if (target.create !== null) heldProfileId = received.profileId;
+      },
     );
-    if (target.create !== null) heldProfileId = answer.profileId;
     const holdsLogin = answer.started || answer.pending === "starting";
     if (abort.signal.aborted) {
       if (holdsLogin) await release();
@@ -349,6 +386,7 @@ async function startUntilSettled(
   io: ProfileLoginIo,
   request: StartLoginRequest,
   signal: AbortSignal,
+  onAnswer: (answer: StartLoginAnswer) => void,
 ): Promise<StartLoginAnswer> {
   let stillStarting = 0;
   for (;;) {
@@ -359,6 +397,7 @@ async function startUntilSettled(
         START_LOGIN_DISPATCH,
       ),
     );
+    onAnswer(answer);
     if (answer.pending === null || signal.aborted) return answer;
     if (answer.pending === "starting") {
       stillStarting += 1;
@@ -397,7 +436,7 @@ function notStartedMessage(
     return "The provider took too long to start its sign-in. Try again.";
   }
   if (answer.pack !== null && answer.pack.reason !== null) {
-    return `The provider's first-time setup did not install (${answer.pack.reason}). Try again.`;
+    return `The provider's first-time setup did not install (${printable(answer.pack.reason)}). Try again.`;
   }
   return NOT_STARTED;
 }
@@ -407,12 +446,19 @@ function declares(marker: object | null | undefined): boolean {
   return marker !== null && marker !== undefined;
 }
 
-function isHttpUrl(value: string): boolean {
+/**
+ * The http(s) URL `value` parses to, or null. The parsed form is what gets
+ * both printed and opened: the parser drops tabs and line breaks, so the raw
+ * string could print as one link and open as another.
+ */
+function httpUrlOf(value: string): string | null {
   try {
-    const { protocol } = new URL(value);
-    return protocol === "https:" || protocol === "http:";
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.href
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -425,15 +471,18 @@ function announce(
 ): void {
   // The link is the host's relay of what a provider CLI printed. Only an
   // http(s) one is shown as a link to open or handed to the OS opener.
-  const url = answer.url !== null && isHttpUrl(answer.url) ? answer.url : null;
+  const url = answer.url === null ? null : httpUrlOf(answer.url);
   const lines: string[] = [];
   if (url !== null) {
-    lines.push("To sign in, open this URL in a browser:", `  ${url}`);
+    lines.push(
+      "To sign in, open this URL in a browser:",
+      `  ${printable(url)}`,
+    );
   } else {
     lines.push("Finish the sign-in in the browser window the provider opened.");
   }
   if (answer.userCode !== null) {
-    lines.push("and enter the code:", `  ${answer.userCode}`);
+    lines.push("and enter the code:", `  ${printable(answer.userCode)}`);
   }
   if (readingPastedCode) {
     lines.push(
@@ -497,11 +546,7 @@ async function awaitUntilSettled(
         callHostRpcWithDispatch(
           "providers.awaitLogin",
           { providerId, profileId },
-          {
-            ...PLAIN_DISPATCH,
-            responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
-            signal,
-          },
+          { ...AWAIT_LOGIN_DISPATCH, signal },
         ),
       );
     } catch (error) {
@@ -629,6 +674,10 @@ async function nameNewProfile(
   }
 }
 
+function describeRow(row: ProfileListRow): string {
+  return `${printable(row.profileId)} "${printable(row.label)}"`;
+}
+
 function resultOf(
   providerId: ProviderId,
   outcome: LoginOutcome,
@@ -642,19 +691,19 @@ function resultOf(
         human:
           outcome.profile === null
             ? `Signed in to ${provider}.`
-            : `${outcome.created ? "Added" : "Signed in"} ${provider} profile ${outcome.profile.profileId} "${outcome.profile.label}"${outcome.profile.email === null ? "" : ` (${outcome.profile.email})`}.`,
+            : `${outcome.created ? "Added" : "Signed in"} ${provider} profile ${describeRow(outcome.profile)}${outcome.profile.email === null ? "" : ` (${printable(outcome.profile.email)})`}.`,
         exitCode: 0,
       };
     case "already-exists":
       return {
         data,
-        human: `That account is already ${provider} profile ${outcome.profile.profileId} "${outcome.profile.label}". No profile was added.`,
+        human: `That account is already ${provider} profile ${describeRow(outcome.profile)}. No profile was added.`,
         exitCode: 0,
       };
     case "refused":
       return {
         data,
-        human: `${provider} refused the sign-in: ${outcome.refusal.reason}${outcome.refusal.actionUrl === null ? "" : `\n  ${outcome.refusal.actionUrl}`}`,
+        human: `${provider} refused the sign-in: ${printable(outcome.refusal.reason)}${outcome.refusal.actionUrl === null ? "" : `\n  ${printable(outcome.refusal.actionUrl)}`}`,
         exitCode: 1,
       };
     case "code-rejected":

@@ -148,6 +148,27 @@ describe("traycer profile rename", () => {
     );
   });
 
+  it("escapes control characters in the human line and sends the label unchanged", async () => {
+    const label = "Work\u001b[31m";
+
+    const result = await buildProfileRenameCommand({
+      provider: "claude",
+      profile: "prof_work",
+      label,
+    })(makeCtx(false, false));
+
+    expect(dispatchMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        profileAction: expect.objectContaining({ label }),
+      }),
+    );
+    expect(result.data).toEqual(expect.objectContaining({ label }));
+    expect(result.human).toBe(
+      'Renamed claude (Claude Code) profile prof_work to "Work\\x1b[31m".',
+    );
+    expect(result.human).not.toContain("\u001b");
+  });
+
   it("trims the label before sending it", async () => {
     await buildProfileRenameCommand({
       provider: "claude-code",

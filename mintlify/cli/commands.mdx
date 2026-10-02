@@ -198,7 +198,7 @@ A profile is an account a provider runs under. The provider's own CLI login is t
 
 - `<provider>` is `claude`, `codex`, `grok`, or `antigravity`.
 - `<profile>` is `ambient` or a profile ID from `traycer profile list`.
-- `add` and `login` need a person at a terminal, so they are refused with `--json` and in CI. Press Ctrl-C to cancel a sign-in; a profile that was being created is discarded.
+- `add` and `login` need a person at a terminal, so they are refused with `--json` and in CI. Claude Code is also refused when input is piped or redirected, because you may need to paste a code. Press Ctrl-C to cancel a sign-in; a profile that was being created is discarded.
 - For Claude Code, if the browser shows a code instead of finishing, paste it into the terminal and press Enter.
 - If the account you sign in to already belongs to another profile, `add` reports that profile and adds nothing.
 

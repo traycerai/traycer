@@ -14,6 +14,7 @@ import {
   isAmbientProfileId,
   parseProfileArgument,
   parseProviderArgument,
+  printable,
 } from "../internal/profile-target";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
@@ -61,7 +62,7 @@ export function buildProfileRenameCommand(opts: {
     await applyProfileAction(providerId, { type: "rename", profileId, label });
     return {
       data: { providerId, profileId, label },
-      human: `Renamed ${describeProvider(providerId)} profile ${profileId} to "${label}".`,
+      human: `Renamed ${describeProvider(providerId)} profile ${printable(profileId)} to "${printable(label)}".`,
       exitCode: 0,
     };
   };
@@ -101,7 +102,7 @@ export function buildProfileSetEnabledCommand(opts: {
     );
     return {
       data: { providerId, profileId, enabled: response.enabled },
-      human: `${response.enabled ? "Enabled" : "Disabled"} ${describeProvider(providerId)} profile ${profileId}.`,
+      human: `${response.enabled ? "Enabled" : "Disabled"} ${describeProvider(providerId)} profile ${printable(profileId)}.`,
       exitCode: 0,
     };
   };
@@ -135,7 +136,7 @@ export function buildProfileRemoveCommand(opts: {
     await applyProfileAction(providerId, { type: "remove", profileId });
     return {
       data: { providerId, profileId, removed: true },
-      human: `Removed ${describeProvider(providerId)} profile ${profileId}.`,
+      human: `Removed ${describeProvider(providerId)} profile ${printable(profileId)}.`,
       exitCode: 0,
     };
   };
@@ -165,7 +166,7 @@ async function confirmRemoval(
   });
   const answer = await prompt
     .question(
-      `Remove ${describeProvider(providerId)} profile ${profileId} and its stored sign-in? [y/N] `,
+      `Remove ${describeProvider(providerId)} profile ${printable(profileId)} and its stored sign-in? [y/N] `,
     )
     .finally(() => prompt.close());
   if (!/^y(es)?$/i.test(answer.trim())) {
