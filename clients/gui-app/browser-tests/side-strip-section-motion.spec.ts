@@ -177,8 +177,8 @@ test.describe("over a list that overflows", () => {
   test.use({ viewport: { width: 900, height: 700 } });
 
   const scroller = (page: Page): Locator => page.getByTestId(SCROLLER);
-  const pill = (page: Page): Locator =>
-    page.getByTestId("side-strip-needs-you-pill");
+  const chip = (page: Page): Locator =>
+    page.getByTestId("side-strip-needs-you-chip");
   const scrollTo = async (page: Page, top: number): Promise<void> => {
     await scroller(page).evaluate((node, to) => {
       node.scrollTop = to;
@@ -186,65 +186,84 @@ test.describe("over a list that overflows", () => {
     await nextFrames(page, 3);
   };
 
-  test("floats the pill only while the Needs you header is out of view", async ({
+  test("shows the chip only while the Needs you header is out of view", async ({
     page,
   }) => {
     await openStrip(page);
-    await expect(pill(page)).toHaveCount(0);
+    await expect(chip(page)).toHaveCount(0);
 
     // Still inside Needs you: its header sticks and stays in view.
     await scrollTo(page, 40);
-    await expect(pill(page)).toHaveCount(0);
+    await expect(chip(page)).toHaveCount(0);
 
     await scrollTo(page, 1000);
-    await expect(pill(page)).toHaveText("↑ 2 need you");
+    await expect(chip(page)).toHaveAccessibleName("2 need you");
+    await expect(chip(page).getByText("need you")).toBeVisible();
 
     await scrollTo(page, 0);
-    await expect(pill(page)).toHaveCount(0);
+    await expect(chip(page)).toHaveCount(0);
   });
 
-  test("docks the pill on the list's top edge, every header below it and none under it", async ({
-    page,
-  }) => {
-    await openStrip(page);
-    const top = (await boxOf(scroller(page))).y;
-    const headers = page.locator("[data-strip-section]");
-    // Every place it shows: as Working's header reaches the top, partway
-    // through Working, and at the end with Idle's header in view below.
-    for (const at of [480, 560, 1000]) {
-      await scrollTo(page, at);
-      const band = await boxOf(pill(page).locator(".."));
-      expect(band.y).toBeCloseTo(top, 0);
-      const boxes = await headers.evaluateAll((nodes) =>
-        nodes.map((node) => node.getBoundingClientRect().toJSON() as DOMRect),
+  for (const width of [240, 192]) {
+    test(`at ${String(width)}px, holds the chip in the stuck header's own row, before its count and clear of its name, moving nothing`, async ({
+      page,
+    }) => {
+      await openStrip(page);
+      await page.evaluate(
+        `window.__sideTabStripProbe.setWidth(${String(width)})`,
       );
-      // A header is under the band only where a later one covers it at the top.
-      const shown = boxes.filter(
-        (box, index) =>
-          !boxes.some(
-            (later, after) =>
-              after > index && Math.abs(later.top - box.top) < 1,
-          ),
-      );
-      for (const header of shown) {
-        expect(header.top).toBeGreaterThanOrEqual(band.y + band.height - 0.5);
+      await nextFrames(page, 3);
+      const top = (await boxOf(scroller(page))).y;
+      // As Working's header reaches the top, partway through Working, and at
+      // the end with Idle's header stuck.
+      for (const at of [480, 560, 1000]) {
+        await scrollTo(page, at);
+        const row = chip(page).locator(
+          "xpath=ancestor::*[@data-strip-section-row]",
+        );
+        const header = row.locator("[data-strip-section]");
+        const [rowBox, chipBox, name, count] = await Promise.all([
+          boxOf(row),
+          boxOf(chip(page)),
+          boxOf(header.locator(".truncate")),
+          boxOf(header.locator("span").last()),
+        ]);
+        // The row is stuck where every header sticks: nothing made room.
+        expect(rowBox.y).toBeCloseTo(top, 0);
+        expect(chipBox.y).toBeGreaterThanOrEqual(rowBox.y);
+        expect(chipBox.y + chipBox.height).toBeLessThanOrEqual(
+          rowBox.y + rowBox.height + 0.5,
+        );
+        expect(chipBox.x + chipBox.width).toBeLessThanOrEqual(count.x);
+        // Where the name's own letters end, not its box, which fills the row.
+        const nameEnd = await header.locator(".truncate").evaluate((node) => {
+          const letters = document.createRange();
+          letters.selectNodeContents(node);
+          return letters.getBoundingClientRect().right;
+        });
+        expect(nameEnd).toBeLessThanOrEqual(name.x + name.width);
+        expect(chipBox.x).toBeGreaterThanOrEqual(nameEnd);
       }
-    }
-  });
+      // At 192px only "↑ N" fits beside the name.
+      await expect(chip(page).getByText("need you")).toBeVisible({
+        visible: width === 240,
+      });
+    });
+  }
 
-  test("takes the pill's click back to Needs you and puts focus on its header", async ({
+  test("takes the chip's click back to Needs you and puts focus on its header", async ({
     page,
   }) => {
     await openStrip(page);
     await scrollTo(page, 1000);
-    const at = await centreOf(pill(page));
+    const at = await centreOf(chip(page));
 
     await page.mouse.click(at.x, at.y);
 
     await expect
       .poll(() => scroller(page).evaluate((node) => node.scrollTop))
       .toBe(0);
-    await expect(pill(page)).toHaveCount(0);
+    await expect(chip(page)).toHaveCount(0);
     await expect(
       page.getByTestId("side-strip-section-needs-you"),
     ).toBeFocused();
@@ -260,11 +279,10 @@ test.describe("over a list that overflows", () => {
     });
     await nextFrames(page, 3);
 
-    // Needs you is above now, so the header sticks under the pill's band.
-    const band = await boxOf(pill(page).locator(".."));
+    const top = (await boxOf(scroller(page))).y;
     const header = page.getByTestId("side-strip-section-to-review");
     const headerBox = await boxOf(header);
-    expect(headerBox.y).toBeCloseTo(band.y + band.height, 0);
+    expect(headerBox.y).toBeCloseTo(top, 0);
     const hit = await page.evaluate(
       ({ x, y }) =>
         document

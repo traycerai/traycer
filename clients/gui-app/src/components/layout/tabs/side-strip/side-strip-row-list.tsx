@@ -35,7 +35,6 @@ import { useSectionedStrip } from "./strip-agents-mode";
 import {
   SIDE_STRIP_LIST_CLASS,
   SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
-  SIDE_STRIP_SECTIONED_SCROLL_PADDING_UNDER_PILL_CLASS,
 } from "./side-strip-tokens";
 import { SideTabGroupBlock } from "./side-tab-group-block";
 import { SideTabGroupColumn } from "./side-tab-group-column";
@@ -164,9 +163,6 @@ export function SideStripRowList(props: {
         "no-scrollbar min-h-0 flex-[0_1_auto] overflow-y-auto overscroll-y-contain [-webkit-app-region:no-drag]",
         sectionedList && SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS,
         sectionedList &&
-          scroll.needsYouAbove &&
-          SIDE_STRIP_SECTIONED_SCROLL_PADDING_UNDER_PILL_CLASS,
-        sectionedList &&
           resolveMinimapRailMaskClassName(false, scroll.moreBelow),
       )}
     >
@@ -177,6 +173,7 @@ export function SideStripRowList(props: {
           variant={variant}
           scroller={scroller}
           needsYouAbove={scroll.needsYouAbove}
+          stuck={scroll.stuck}
         />
       ) : (
         segments.map((segment) => {

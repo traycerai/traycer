@@ -26,7 +26,7 @@ import {
   SIDE_TAB_TWO_LINE_TRAILING_CLASS,
   SIDE_TAB_TITLE_CLASS,
 } from "./side-strip-tokens";
-import { StripNeedsYouPill } from "./strip-needs-you-pill";
+import { StripNeedsYouChip } from "./strip-needs-you-chip";
 import { StripRowMotion } from "./strip-row-motion";
 import { StripSectionHeader } from "./strip-section-header";
 import { useStripSectionFolded } from "./strip-section-fold";
@@ -56,14 +56,14 @@ import { StripSectionsContext } from "./strip-sections-context";
  *
  * The rail draws the same sections as runs of tiles, a group's run in a column
  * of its own: a hairline before each run, Needs you's beaded in amber, no
- * headers, so no fold, no pill, and no tile for a task with no tab (the
+ * headers, so no fold, no chip, and no tile for a task with no tab (the
  * Notifications tile counts its prompt). It is this same component, so the
  * announcer, the holds and the drawn order carry across a collapse.
  *
  * A task that changes section slides there and glows, unless the pointer is on
  * its row or keyboard focus is, in which case it stays until the person leaves
- * it. Arrivals in Needs you are announced, and the "↑ N need you" pill floats
- * while that section's header is out of view.
+ * it. Arrivals in Needs you are announced, and while that section's header is
+ * out of view the header stuck on top holds a "↑ N need you" chip.
  */
 export function SideStripSections(props: {
   readonly controller: TabStripController;
@@ -72,8 +72,11 @@ export function SideStripSections(props: {
   /** The list's scroller, which holds the rows' frames. */
   readonly scroller: HTMLElement | null;
   readonly needsYouAbove: boolean;
+  /** The section whose header is stuck on the list's top edge, if any. */
+  readonly stuck: string | null;
 }): ReactNode {
-  const { controller, handlers, variant, scroller, needsYouAbove } = props;
+  const { controller, handlers, variant, scroller, needsYouAbove, stuck } =
+    props;
   const assigned = use(StripSectionsContext);
   const holds = useStripSectionHolds(scroller);
   const sections = useMemo(
@@ -109,22 +112,23 @@ export function SideStripSections(props: {
           group.entries.some((entry) => entry.kind === "tabs"),
         )
       : sections;
-  const pill = needsYouAbove && scroller !== null && needsYou !== undefined;
+  // The chip rides in the header stuck on the top edge.
+  const chip =
+    needsYouAbove && scroller !== null && needsYou !== undefined ? (
+      <StripNeedsYouChip
+        scroller={scroller}
+        count={sectionTaskCount(needsYou)}
+      />
+    ) : null;
   return (
     <>
-      {pill ? (
-        <StripNeedsYouPill
-          scroller={scroller}
-          count={sectionTaskCount(needsYou)}
-        />
-      ) : null}
       <StripRowMotion scroller={scroller} placements={placements} slide={slide}>
         {drawn.map((group) => (
           <StripSectionRows
             key={group.section}
             group={group}
             variant={variant}
-            underPill={pill}
+            chip={group.section === stuck ? chip : null}
             memberOffsets={offsets}
             controller={controller}
             handlers={handlers}
@@ -152,8 +156,8 @@ export function SideStripSections(props: {
 function StripSectionRows(props: {
   readonly group: StripSectionGroup;
   readonly variant: SideTabRowVariant;
-  /** The "↑ N need you" pill is docked on top: the header sticks under it. */
-  readonly underPill: boolean;
+  /** The "↑ N need you" chip its header holds, or `null`. */
+  readonly chip: ReactNode | null;
   /** Tabs drawn before each item, for its Alt-digit badge. */
   readonly memberOffsets: ReadonlyMap<string, number>;
   readonly controller: TabStripController;
@@ -232,7 +236,7 @@ function StripSectionRows(props: {
         <StripSectionHeader
           section={group.section}
           count={sectionTaskCount(group)}
-          underPill={props.underPill}
+          chip={props.chip}
         />
       )}
       {sectionSegmentsOf(shown).map((segment) => {

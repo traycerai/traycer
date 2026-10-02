@@ -1967,6 +1967,9 @@ describe("<SideTabStrip />", () => {
       ).map(
         (child) =>
           child.getAttribute("data-testid") ??
+          child
+            .querySelector("[data-strip-section]")
+            ?.getAttribute("data-testid") ??
           child.querySelector('[role="tab"]')?.getAttribute("data-testid") ??
           null,
       );
@@ -2019,7 +2022,10 @@ describe("<SideTabStrip />", () => {
       for (const section of ["needs-you", "to-review", "working", "idle"]) {
         const button = header(section);
         expect(button.tagName).toBe("BUTTON");
-        expect(button.parentElement).toBe(tablist);
+        // In its sticky row, a plain box with no role of its own.
+        const row = button.parentElement;
+        expect(row?.parentElement).toBe(tablist);
+        expect(row?.getAttribute("role")).toBeNull();
         expect(button.getAttribute("aria-expanded")).toBe("true");
       }
       expect(header("needs-you").className).toContain(

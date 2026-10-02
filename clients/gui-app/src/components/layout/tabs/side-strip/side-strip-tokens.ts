@@ -74,7 +74,7 @@ export const SIDE_STRIP_SECTION_HEADER_CLASS =
  * on the list's own edge.
  */
 export const SIDE_STRIP_STICKY_SECTION_HEADER_CLASS = cn(
-  "sticky -top-2 z-10",
+  "@container/section-header sticky -top-2 z-10",
   SIDE_STRIP_GROUND_FILL_CLASS,
 );
 /**
@@ -84,25 +84,20 @@ export const SIDE_STRIP_STICKY_SECTION_HEADER_CLASS = cn(
  */
 export const SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS =
   "scroll-pt-6.5 scroll-pb-5";
-/** The same while the "↑ N need you" pill's band sits over the header. */
-export const SIDE_STRIP_SECTIONED_SCROLL_PADDING_UNDER_PILL_CLASS =
-  "scroll-pt-14.5";
 /**
- * The "↑ N need you" pill. Its seat is a 32px band of the strip's ground,
- * docked on the list's top edge above the headers, which stick under it while
- * it shows (`SIDE_STRIP_STICKY_UNDER_PILL_CLASS`): the pill never sits over a
- * header, and nothing shows between the two. Its negative margin takes back
- * its height and the list's gap, so the rows do not move when it comes and
- * goes. The pill is neutral apart from its amber text, and so is its shadow.
+ * The "↑ N need you" chip's place: laid over the stuck header's own row, on
+ * its padding and its count's line, so it sits right before the count and
+ * takes no room of its own. Only the chip takes the pointer.
  */
-export const SIDE_STRIP_NEEDS_YOU_PILL_SEAT_CLASS = cn(
-  "sticky -top-2 z-20 -mb-8.5 flex h-8 shrink-0 items-center justify-center animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none",
-  SIDE_STRIP_GROUND_FILL_CLASS,
-);
-/** A section header's stuck place while the pill shows: under its 32px band. */
-export const SIDE_STRIP_STICKY_UNDER_PILL_CLASS = "top-6";
-export const SIDE_STRIP_NEEDS_YOU_PILL_CLASS =
-  "h-6 rounded-full bg-popover px-2.5 text-ui-xs font-medium text-warning-foreground shadow-md ring-1 ring-foreground/10 outline-none select-none hover:bg-popover/80 focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]";
+export const SIDE_STRIP_NEEDS_YOU_CHIP_ROW_CLASS =
+  "pointer-events-none absolute inset-0 flex items-center justify-end gap-1 px-2 pt-2 pb-1 text-overline font-medium tracking-wide";
+/**
+ * The chip's words, which go first where the header is narrow (192px): wider
+ * than this, the longest section name, the words and the count all fit on the
+ * row, so the chip never sits over the name.
+ */
+export const SIDE_STRIP_NEEDS_YOU_CHIP_WORDS_CLASS =
+  "hidden @min-[13.5rem]/section-header:inline";
 /**
  * A row that changes section slides from its old place to its new one in
  * 200ms, on a strong ease-out: it starts fast so the eye catches it, then
