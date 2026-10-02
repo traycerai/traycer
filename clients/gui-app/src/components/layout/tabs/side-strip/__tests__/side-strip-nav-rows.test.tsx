@@ -363,6 +363,24 @@ describe("SideStripNavRows", () => {
     },
   );
 
+  it("expanded: draws no unavailable indicator beside a count, and still names the state", async () => {
+    renderStrip("left");
+    await screen.findByTestId("side-tab-strip");
+    seedApprovals(2);
+    // The summary goes stale; the waiting prompts it filed stay.
+    act(() => {
+      useHostNotificationsStore.getState().markSummaryUnknown();
+    });
+
+    expect(screen.getByTestId("side-strip-inbox-count").textContent).toBe("2");
+    expect(
+      screen.queryByTestId("side-strip-inbox-unknown-indicator"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("side-strip-inbox").getAttribute("aria-label"),
+    ).toBe("Notifications, 2 need you, status unavailable");
+  });
+
   it("hides the unavailable indicator once the host summary is known and clear", async () => {
     seedApprovals(0);
     renderStrip("left");

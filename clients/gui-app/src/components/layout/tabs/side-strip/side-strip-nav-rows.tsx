@@ -283,7 +283,11 @@ function InboxNavRow(props: {
                     <span className="tabular-nums">{pillCount}</span>
                   </Badge>
                 ) : null}
-                {unavailable ? (
+                {/* Only where no count is drawn, as on the tile: a zero with
+                    no summary behind it is the claim the dot exists to
+                    qualify. Beside a count it said nothing the tooltip and
+                    the row's name do not. */}
+                {unavailable && pillCount === 0 ? (
                   <span
                     aria-hidden
                     data-testid="side-strip-inbox-unknown-indicator"
