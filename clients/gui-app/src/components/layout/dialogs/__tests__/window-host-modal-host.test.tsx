@@ -790,28 +790,6 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.queryByTestId("window-host-modal")).toBeNull();
   });
 
-  it("a plan-restricted fleet: no retry button", async () => {
-    applySnapshot({
-      attached: true,
-      effectiveHostId: null,
-      targetHostId: null,
-      leases: [
-        deadLease("host-a", { reason: "plan-restricted" }),
-        deadLease("host-b", { reason: "plan-restricted" }),
-      ],
-    });
-
-    renderHost(EMPTY_PRESENTATION, false, undefined);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("window-host-modal")).toBeTruthy();
-    });
-    expect(
-      screen.getByTestId("window-host-modal").getAttribute("data-variant"),
-    ).toBe("plan-restricted");
-    expect(screen.queryByTestId("window-host-modal-retry")).toBeNull();
-  });
-
   it("closes by re-derivation: a later snapshot naming a ready effective host makes the modal disappear with no user interaction", async () => {
     applySnapshot({
       attached: true,

@@ -174,7 +174,7 @@ export function NotificationFocusBridge(): null {
  *
  * Routable therefore means "the transport would attempt this", which is exactly
  * `dialableHostEndpoint`: `indeterminate` dials, a CONFIRMED refusal
- * (`offline` / `plan-restricted`) does not, and a directory-absent host has
+ * (`offline`) does not, and a directory-absent host has
  * nothing to dial at all.
  */
 function isOriginHostRoutable(entry: HostDirectoryEntry | null): boolean {

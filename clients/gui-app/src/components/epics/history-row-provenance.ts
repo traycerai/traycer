@@ -73,11 +73,7 @@ export function historyRowProvenanceTitle(
     return "This task was deleted. Its unsynced edits are kept — open it and export what you need.";
   }
   if (!cloudAuthorized) {
-    // States the condition and stops: whether the task WILL sync once the
-    // sign-in is confirmed depends on the plan, which this function does not
-    // hold - the signed-in sentence below admits the no-sync plan, and this
-    // one must not promise what that one hedges.
     return "Not synced yet. Your sign-in couldn't be confirmed, so it can't sync for now.";
   }
-  return "Not synced yet. Open this task to sync it; if your plan doesn't include sync, it stays here.";
+  return "Not synced yet. Open this task to sync it.";
 }

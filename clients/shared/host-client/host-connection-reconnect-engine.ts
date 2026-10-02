@@ -47,7 +47,7 @@ const REBUILD_BACKOFF_MAX_MS = 30_000;
  * must be replaced, not left dead until the window reloads" loop.
  *
  * Without it that loop is hot: a terminal-class close (incompatible protocol,
- * plan restriction, a host too old for the negotiated method) ends every fresh
+ * a host too old for the negotiated method) ends every fresh
  * dial the same way, so rebuild -> grant mint -> relay dial -> handshake ->
  * same fatal -> rebuild, one full cycle per round trip, indefinitely.
  */

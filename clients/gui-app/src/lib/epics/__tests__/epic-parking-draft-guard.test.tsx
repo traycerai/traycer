@@ -9,8 +9,7 @@ import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host
 //
 // Copied from `providers/__tests__/epic-session-provider.test.tsx`, trimmed
 // to only what this file's real `<EpicSessionProvider>` needs to open a
-// session in jsdom: no socket, an effective host that answers "attached",
-// and a passthrough on the plan-restricted reprobe attach.
+// session in jsdom: no socket and an effective host that answers "attached".
 const hostState = vi.hoisted((): { id: string | null; attached: boolean } => ({
   id: "host-a",
   attached: true,
@@ -19,9 +18,6 @@ const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
-const reprobeCallbacks = vi.hoisted((): { callbacks: Array<() => void> } => ({
-  callbacks: [],
-}));
 const hostBindingRef = vi.hoisted(
   (): { value: { readonly hostClient: unknown } | null } => ({
     value: null,
@@ -85,24 +81,6 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
 }));
-
-vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/host/owned-durable-stream-client")
-    >();
-  return {
-    ...actual,
-    attachPlanRestrictedReprobe: (
-      wsStreamClient: unknown,
-      onReprobe: (() => void) | null,
-    ) => {
-      void wsStreamClient;
-      if (onReprobe !== null) reprobeCallbacks.callbacks.push(onReprobe);
-      return () => undefined;
-    },
-  };
-});
 
 import { TestEpicSessionTab } from "@/lib/registries/test-support/test-epic-session-tab";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
@@ -296,7 +274,6 @@ describe("renderer parking draft-guard pins", () => {
     resetFakeDurableStreamTransports();
     setDesktopEpicOwnershipBridge(null);
     resetAuth("signed-in", "alice@example.com");
-    reprobeCallbacks.callbacks.length = 0;
     // `canPark` reads `epicIsBusy`, which fails CLOSED until the agent
     // activity plane has answered at least once - without this every park
     // attempt refuses forever, not because of the draft guard.
@@ -680,7 +657,6 @@ describe("renderer parking draft-guard pins - editing a saved comment (P1)", () 
     resetFakeDurableStreamTransports();
     setDesktopEpicOwnershipBridge(null);
     resetAuth("signed-in", "alice@example.com");
-    reprobeCallbacks.callbacks.length = 0;
     __setAgentActivityPlaneAnsweringForTests();
     installStreamFactory(() => noopStreamFactory());
   });

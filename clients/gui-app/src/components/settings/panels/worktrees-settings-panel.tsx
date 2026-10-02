@@ -137,9 +137,6 @@ import {
 } from "@/lib/tab-navigation";
 import { useOpenLink } from "@/lib/links/open-link";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
@@ -595,28 +592,6 @@ function WorktreeSortMenu(props: {
   );
 }
 
-/**
- * Why this panel has nothing to show, in the hook's own terms. A
- * `plan-restricted` host is running and its worktrees are intact, so the
- * offline sentence would send someone to fix a machine that is fine.
- *
- * The remedy is the only half that moves per shell: the installed mobile app
- * may not tell the reader to upgrade (App Store review guideline 3.1.1), so it
- * points at the shell that may.
- */
-function unreachableHostMessage(
-  hostLabel: string,
-  unavailability: HostUnavailability | null,
-): string {
-  if (unavailability !== "plan-restricted") {
-    return `${hostLabel} is offline. Worktrees can only be managed on a reachable host.`;
-  }
-  const local = `${hostLabel} is local only on your current plan.`;
-  return isMobileApp()
-    ? `${local} ${PLAN_RESTRICTED_MOBILE_REMEDY}`
-    : `${local} Upgrade to manage its worktrees from here.`;
-}
-
 function WorktreesBody(props: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly openStreamTransport: (hostId: string) => DurableStreamTransport;
@@ -709,16 +684,9 @@ function WorktreesBody(props: {
       </WorktreesStateMessage>
     );
   } else if (!reachable) {
-    // The hook's REASON, not one sentence for every non-reachable result. A
-    // `plan-restricted` host is running and its worktrees are intact; saying it
-    // is offline sends someone to fix a machine that is fine and hides the only
-    // thing that would actually restore this panel.
     content = (
       <WorktreesStateMessage tone="muted" spinner={false}>
-        {unreachableHostMessage(
-          reachability.hostLabel,
-          reachability.unavailability,
-        )}
+        {`${reachability.hostLabel} is offline. Worktrees can only be managed on a reachable host.`}
       </WorktreesStateMessage>
     );
   } else if (client === null) {

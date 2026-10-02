@@ -42,9 +42,6 @@ const authServiceStub = vi.hoisted(() => ({
   revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
 }));
 const navigateMock = vi.hoisted(() => vi.fn());
-const reprobeCallbacks = vi.hoisted((): { callbacks: Array<() => void> } => ({
-  callbacks: [],
-}));
 // Real (non-null) `useHostBinding()` for the R-1 owner-identity rotation test
 // below - every other test in this file relies on the default `null` (no
 // `HostClient` needed to drive `sessionKey`, which is `activeHostId` +
@@ -158,24 +155,6 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
 }));
 
-vi.mock("@/lib/host/owned-durable-stream-client", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/host/owned-durable-stream-client")
-    >();
-  return {
-    ...actual,
-    attachPlanRestrictedReprobe: (
-      wsStreamClient: unknown,
-      onReprobe: (() => void) | null,
-    ) => {
-      void wsStreamClient;
-      if (onReprobe !== null) reprobeCallbacks.callbacks.push(onReprobe);
-      return () => undefined;
-    },
-  };
-});
-
 /**
  * A pass-through spy on `spawnEpicRuntimeWorker`, so a pin can reach the exact
  * `laneUnary` closure the provider hands each worker it spawns. The real spawn
@@ -232,11 +211,10 @@ import {
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import {
-  PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS,
-  PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
-  type PlanRestrictedSessionRebuildBackoff,
-} from "@/lib/host/plan-restricted-session-rebuild-backoff";
-import * as planRestrictedSessionRebuildBackoffModule from "@/lib/host/plan-restricted-session-rebuild-backoff";
+  SESSION_REBUILD_MAX_BACKOFF_MS,
+  type SessionRebuildBackoff,
+} from "@/lib/host/session-rebuild-backoff";
+import * as sessionRebuildBackoffModule from "@/lib/host/session-rebuild-backoff";
 import {
   __setEpicRuntimeWorkerFactoryForTests,
   getEpicRuntimeWorkerFactoryOverride,
@@ -755,8 +733,6 @@ function ownerIdentityRemoteTarget(
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -880,7 +856,6 @@ describe("<TestEpicSessionTab />", () => {
     clearSessionCreatedEpics();
     resetAuth("signed-in", "alice@example.com");
     spawnedRuntimeOptions.laneUnaries.length = 0;
-    reprobeCallbacks.callbacks.length = 0;
   });
 
   afterEach(() => {
@@ -894,7 +869,6 @@ describe("<TestEpicSessionTab />", () => {
     hostBindingRef.value = null;
     resetHostConnectionRegistryForTest();
     clearSessionCreatedEpics();
-    reprobeCallbacks.callbacks.length = 0;
   });
 
   it("builds method support for both the legacy and lane fixture arms", () => {
@@ -970,235 +944,26 @@ describe("<TestEpicSessionTab />", () => {
     }
   });
 
-  it("rebuilds a clean lane session when its attached reprobe fires", async () => {
-    const fixture = createEpicSessionFixture("lanes");
-    try {
-      installManifestDerivedWorker();
-      const seenHandles: OpenEpicStoreHandle[] = [];
-      const view = render(
-        <TestEpicSessionTab epicId="fixture-epic" tabId="fixture-epic">
-          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-        </TestEpicSessionTab>,
-      );
-      try {
-        await waitFor(() => expect(fixture.opens.state).toBe(1));
-        fixture.openLaneStreams(0);
-        fixture.deliverLaneSnapshots(0);
-        await waitFor(() => {
-          expect(seenHandles.at(-1)?.store.getState().snapshotLoaded).toBe(
-            true,
-          );
-        });
-        const firstHandle = seenHandles.at(-1);
-        const fire = reprobeCallbacks.callbacks.at(0);
-        if (firstHandle === undefined || fire === undefined) {
-          throw new Error("expected a loaded lane handle and reprobe callback");
-        }
-        await act(async () => {
-          fire();
-          await Promise.resolve();
-        });
-        await waitFor(() => expect(fixture.opens.state).toBe(2));
-        expect(fixture.opens.legacy).toBe(0);
-        expect(fixture.stateStreams[0]?.closeCount()).toBe(1);
-        expect(fixture.statusStreams[0]?.closeCount()).toBe(1);
-        expect(seenHandles.at(-1)).not.toBe(firstHandle);
-        fixture.openLaneStreams(1);
-        fixture.deliverLaneSnapshots(1);
-        await waitFor(() => {
-          const replacement = seenHandles.at(-1);
-          expect(replacement).not.toBe(firstHandle);
-          expect(replacement?.store.getState().installedArm).toBe("lanes");
-          expect(replacement?.store.getState().snapshotLoaded).toBe(true);
-        });
-      } finally {
-        view.unmount();
-      }
-    } finally {
-      fixture.dispose();
-    }
-  });
-
-  // ── Plan-restriction backoff ladder: how the provider WIRES it ────────────
-  // Oracle for the risk review's "Plan-restriction backoff ladder as the
-  // provider wires it (one controller per provider, cancel on scope change,
-  // on Retry, on original-host; `markHealthy` gate)." The ladder ITSELF -
-  // the 1m/2m/4m/8m/15m progression, `markHealthy`, `cancel`, first-owner
-  // ordering - is already exhaustively pinned in isolation by
-  // `lib/host/__tests__/plan-restricted-session-rebuild-backoff.test.ts`.
-  // What that file cannot see is whether the PROVIDER actually calls into it
-  // at the right moments; the test just above this one only exercises the
-  // ladder's very first (synchronous, attempt-zero) rung, which is
-  // indistinguishable from "no ladder at all" - a rebuild-on-every-denial
-  // provider would pass it too.
-  it("keeps one ladder across successive denials, delaying a second one until the first rung elapses, then resets once the rebuilt replica proves healthy", async () => {
-    vi.useFakeTimers();
-    try {
-      const fixture = createEpicSessionFixture("lanes");
-      try {
-        installManifestDerivedWorker();
-        const seenHandles: OpenEpicStoreHandle[] = [];
-        const view = render(
-          <TestEpicSessionTab
-            epicId="epic-plan-restricted-ladder"
-            tabId="epic-plan-restricted-ladder"
-          >
-            <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-          </TestEpicSessionTab>,
-        );
-        try {
-          await act(() => Promise.resolve());
-          fixture.openLaneStreams(0);
-          fixture.deliverLaneSnapshots(0);
-          await act(() => Promise.resolve());
-          const firstHandle = seenHandles.at(-1);
-          expect(firstHandle?.store.getState().snapshotLoaded).toBe(true);
-
-          // Attempt zero runs synchronously and rebuilds.
-          act(() => {
-            reprobeCallbacks.callbacks.at(0)?.();
-          });
-          await act(() => Promise.resolve());
-          expect(fixture.opens.state).toBe(2);
-          const secondHandle = seenHandles.at(-1);
-          expect(secondHandle).not.toBe(firstHandle);
-
-          // A second denial before the rebuilt replica has loaded - it has
-          // not proven healthy, so `markHealthy` never ran for it and this
-          // attempt is delayed rather than immediate.
-          act(() => {
-            reprobeCallbacks.callbacks.at(1)?.();
-          });
-          await act(() => Promise.resolve());
-          expect(fixture.opens.state).toBe(2);
-
-          await act(async () => {
-            await vi.advanceTimersByTimeAsync(
-              PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS,
-            );
-          });
-          expect(fixture.opens.state).toBe(3);
-          const thirdHandle = seenHandles.at(-1);
-          expect(thirdHandle).not.toBe(secondHandle);
-
-          // This time let the rebuilt replica actually load on an open
-          // transport before denying it again - `markHealthy` resets the
-          // ladder, so the NEXT denial is immediate again instead of
-          // continuing at the ladder's next (2x) rung.
-          fixture.openLaneStreams(2);
-          fixture.deliverLaneSnapshots(2);
-          await act(() => Promise.resolve());
-          expect(thirdHandle?.store.getState().snapshotLoaded).toBe(true);
-
-          act(() => {
-            reprobeCallbacks.callbacks.at(2)?.();
-          });
-          await act(() => Promise.resolve());
-          expect(fixture.opens.state).toBe(4);
-        } finally {
-          view.unmount();
-        }
-      } finally {
-        fixture.dispose();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retryRepoint cancels a pending backoff attempt, so the stale rung never rebuilds a session the user already retried", async () => {
-    vi.useFakeTimers();
-    try {
-      const fixture = createEpicSessionFixture("lanes");
-      try {
-        installManifestDerivedWorker();
-        const seenHandles: OpenEpicStoreHandle[] = [];
-        const presentations: Array<EpicSessionPresentation | null> = [];
-        const view = render(
-          <TestEpicSessionTab
-            epicId="epic-plan-restricted-retry-cancel"
-            tabId="epic-plan-restricted-retry-cancel"
-          >
-            <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-            <PresentationProbe
-              onPresentation={(presentation) =>
-                presentations.push(presentation)
-              }
-            />
-          </TestEpicSessionTab>,
-        );
-        try {
-          await act(() => Promise.resolve());
-          fixture.openLaneStreams(0);
-          fixture.deliverLaneSnapshots(0);
-          await act(() => Promise.resolve());
-
-          act(() => {
-            reprobeCallbacks.callbacks.at(0)?.();
-          });
-          await act(() => Promise.resolve());
-          const rebuiltHandle = seenHandles.at(-1);
-          if (rebuiltHandle === undefined) {
-            throw new Error("expected a rebuilt handle");
-          }
-          const retryTransportSpy = vi.spyOn(rebuiltHandle, "retryTransport");
-
-          // Denies the rebuilt (not-yet-healthy) handle - delayed, not
-          // immediate.
-          act(() => {
-            reprobeCallbacks.callbacks.at(1)?.();
-          });
-          await act(() => Promise.resolve());
-          expect(retryTransportSpy).not.toHaveBeenCalled();
-
-          // The user presses Retry before the delayed rung fires.
-          act(() => {
-            presentations.at(-1)?.retry();
-          });
-          await act(() => Promise.resolve());
-
-          // Even waiting out the FULL max backoff, the cancelled timer never
-          // fires - a fresh `request()` after a Retry starts its own ladder
-          // from attempt zero, but nothing here re-requested one.
-          await act(async () => {
-            await vi.advanceTimersByTimeAsync(
-              PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
-            );
-          });
-          expect(retryTransportSpy).not.toHaveBeenCalled();
-        } finally {
-          view.unmount();
-        }
-      } finally {
-        fixture.dispose();
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // Both fixtures below spy on `.cancel()` ITSELF, not only on the absence of
-  // a stale rebuild - Retry's cancel above is called from an explicit
-  // handler, but these two run from the provider's own effect CLEANUP
-  // (`epic-session-provider.tsx`, the backoff-reset effect around
-  // `:466-483`), which is the wiring Stage 1's extraction is most likely to
-  // drop since there is no explicit call site naming it.
-  function spyOnPlanRestrictedBackoffCancel(): {
+  // ── Session rebuild backoff ladder: how the controller WIRES it ───────────
+  // The ladder ITSELF - the 1m/2m/4m/8m/15m progression, `markHealthy`,
+  // `cancel`, first-owner ordering - is pinned in isolation by
+  // `lib/host/__tests__/session-rebuild-backoff.test.ts`. What that file cannot
+  // see is whether the controller cancels a pending rung at the right
+  // moments: a user's Retry, the tab's last close, and a change of target
+  // host. Each test below arms a real rung through a worker that cannot be
+  // constructed (the only thing that arms the ladder), then spies on
+  // `.cancel()` ITSELF, because the absence of a stale rebuild alone cannot
+  // tell a cancelled rung from one that was never armed.
+  function spyOnSessionRebuildBackoffCancel(): {
     readonly cancelSpy: () => MockInstance<
-      PlanRestrictedSessionRebuildBackoff["cancel"]
+      SessionRebuildBackoff["cancel"]
     > | null;
     readonly restore: () => void;
   } {
-    const realCreate =
-      planRestrictedSessionRebuildBackoffModule.createPlanRestrictedSessionRebuildBackoff;
-    let cancelSpy: MockInstance<
-      PlanRestrictedSessionRebuildBackoff["cancel"]
-    > | null = null;
+    const realCreate = sessionRebuildBackoffModule.createSessionRebuildBackoff;
+    let cancelSpy: MockInstance<SessionRebuildBackoff["cancel"]> | null = null;
     const createSpy = vi
-      .spyOn(
-        planRestrictedSessionRebuildBackoffModule,
-        "createPlanRestrictedSessionRebuildBackoff",
-      )
+      .spyOn(sessionRebuildBackoffModule, "createSessionRebuildBackoff")
       .mockImplementation(() => {
         const real = realCreate();
         cancelSpy = vi.spyOn(real, "cancel");
@@ -1210,159 +975,129 @@ describe("<TestEpicSessionTab />", () => {
     };
   }
 
-  it("closing the tab cancels a pending backoff attempt exactly once; unmounting the provider alone does not, so the stale rung never rebuilds a session with nothing left mounted", async () => {
+  it("Retry cancels a pending construction-failure rung, so the stale rung never rebuilds a session the user already retried", async () => {
     vi.useFakeTimers();
+    const { cancelSpy, restore } = spyOnSessionRebuildBackoffCancel();
     try {
-      const fixture = createEpicSessionFixture("lanes");
+      installWorkerThatThrowsOnSpawn();
+      const presentations: Array<EpicSessionPresentation | null> = [];
+      const view = render(
+        <TestEpicSessionTab
+          epicId="epic-rebuild-backoff-retry-cancel"
+          tabId="epic-rebuild-backoff-retry-cancel"
+        >
+          <PresentationProbe
+            onPresentation={(presentation) => presentations.push(presentation)}
+          />
+        </TestEpicSessionTab>,
+      );
       try {
-        installManifestDerivedWorker();
-        const { cancelSpy, restore } = spyOnPlanRestrictedBackoffCancel();
-        try {
-          const seenHandles: OpenEpicStoreHandle[] = [];
-          const view = render(
-            <TestEpicSessionTab
-              epicId="epic-plan-restricted-unmount-cancel"
-              tabId="epic-plan-restricted-unmount-cancel"
-            >
-              <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-            </TestEpicSessionTab>,
-          );
-          await act(() => Promise.resolve());
-          fixture.openLaneStreams(0);
-          fixture.deliverLaneSnapshots(0);
-          await act(() => Promise.resolve());
+        await act(() => Promise.resolve());
+        // The failure armed a delayed rung; nothing has cancelled it yet.
+        expect(presentations.at(-1)?.kind).toBe("failed");
+        expect(cancelSpy()).not.toBeNull();
+        expect(cancelSpy()).not.toHaveBeenCalled();
 
-          act(() => {
-            reprobeCallbacks.callbacks.at(0)?.();
-          });
-          await act(() => Promise.resolve());
-          const rebuiltHandle = seenHandles.at(-1);
-          if (rebuiltHandle === undefined) {
-            throw new Error("expected a rebuilt handle");
-          }
-          const retryTransportSpy = vi.spyOn(rebuiltHandle, "retryTransport");
-
-          // Denies the rebuilt (not-yet-healthy) handle - delayed, not
-          // immediate, so a pending timer is armed before the tab closes.
-          act(() => {
-            reprobeCallbacks.callbacks.at(1)?.();
-          });
-          await act(() => Promise.resolve());
-          expect(retryTransportSpy).not.toHaveBeenCalled();
-          expect(cancelSpy()).not.toBeNull();
-          expect(cancelSpy()).not.toHaveBeenCalled();
-
-          // The tab stays open across the unmount - a backgrounded pane, not
-          // a closed one - so the ladder is scoped to the tab's MEMBERSHIP,
-          // not the provider's mount lifecycle. Unmounting the surface alone
-          // must not cancel it.
-          view.unmount();
-          await act(() => Promise.resolve());
-          expect(cancelSpy()).not.toHaveBeenCalled();
-
-          // Closing the epic's last open tab is what cancels the ladder.
-          act(() => {
-            closeTestEpicTab("epic-plan-restricted-unmount-cancel");
-          });
-          expect(cancelSpy()).toHaveBeenCalledTimes(1);
-
-          await act(async () => {
-            await vi.advanceTimersByTimeAsync(
-              PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
-            );
-          });
-          expect(retryTransportSpy).not.toHaveBeenCalled();
-        } finally {
-          restore();
-        }
+        // The user presses Retry before the delayed rung fires.
+        act(() => {
+          presentations.at(-1)?.retry();
+        });
+        await act(() => Promise.resolve());
+        expect(cancelSpy()).toHaveBeenCalledTimes(1);
       } finally {
-        fixture.dispose();
+        view.unmount();
       }
     } finally {
+      restore();
       vi.useRealTimers();
     }
   });
 
-  it("cancels a pending backoff attempt when the provider re-points to a different target host, so the stale rung never rebuilds against the old scope", async () => {
+  it("closing the tab cancels a pending construction-failure rung exactly once; unmounting the provider alone does not, so the stale rung never rebuilds a session with nothing left mounted", async () => {
     vi.useFakeTimers();
+    const { cancelSpy, restore } = spyOnSessionRebuildBackoffCancel();
     try {
-      const fixture = createEpicSessionFixture("lanes");
+      const rig = installWorkerThatThrowsOnSpawn();
+      const view = render(
+        <TestEpicSessionTab
+          epicId="epic-rebuild-backoff-close-cancel"
+          tabId="epic-rebuild-backoff-close-cancel"
+        >
+          <PresentationProbe onPresentation={() => undefined} />
+        </TestEpicSessionTab>,
+      );
+      await act(() => Promise.resolve());
+      expect(rig.spawnCount()).toBeGreaterThan(0);
+      expect(cancelSpy()).not.toBeNull();
+      expect(cancelSpy()).not.toHaveBeenCalled();
+
+      // The tab stays open across the unmount - a backgrounded pane, not a
+      // closed one - so the ladder is scoped to the tab's MEMBERSHIP, not the
+      // provider's mount lifecycle. Unmounting the surface alone must not
+      // cancel it.
+      view.unmount();
+      await act(() => Promise.resolve());
+      expect(cancelSpy()).not.toHaveBeenCalled();
+
+      // Closing the epic's last open tab is what cancels the ladder.
+      act(() => {
+        closeTestEpicTab("epic-rebuild-backoff-close-cancel");
+      });
+      expect(cancelSpy()).toHaveBeenCalledTimes(1);
+
+      // Even waiting out the FULL max backoff, the cancelled rung never fires.
+      const spawnsAfterClose = rig.spawnCount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SESSION_REBUILD_MAX_BACKOFF_MS);
+      });
+      expect(rig.spawnCount()).toBe(spawnsAfterClose);
+    } finally {
+      restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending construction-failure rung when the provider re-points to a different target host, so the stale rung never rebuilds against the old scope", async () => {
+    vi.useFakeTimers();
+    const { cancelSpy, restore } = spyOnSessionRebuildBackoffCancel();
+    try {
+      installWorkerThatThrowsOnSpawn();
+      const view = render(
+        <TestEpicSessionTab
+          epicId="epic-rebuild-backoff-repoint-cancel"
+          tabId="epic-rebuild-backoff-repoint-cancel"
+        >
+          <PresentationProbe onPresentation={() => undefined} />
+        </TestEpicSessionTab>,
+      );
       try {
-        installManifestDerivedWorker();
-        const { cancelSpy, restore } = spyOnPlanRestrictedBackoffCancel();
-        const seenHandles: OpenEpicStoreHandle[] = [];
-        const view = render(
-          <TestEpicSessionTab
-            epicId="epic-plan-restricted-repoint-cancel"
-            tabId="epic-plan-restricted-repoint-cancel"
-          >
-            <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-          </TestEpicSessionTab>,
-        );
-        try {
-          await act(() => Promise.resolve());
-          fixture.openLaneStreams(0);
-          fixture.deliverLaneSnapshots(0);
-          await act(() => Promise.resolve());
+        await act(() => Promise.resolve());
+        expect(cancelSpy()).not.toBeNull();
+        expect(cancelSpy()).not.toHaveBeenCalled();
 
-          act(() => {
-            reprobeCallbacks.callbacks.at(0)?.();
-          });
-          await act(() => Promise.resolve());
-          const rebuiltHandle = seenHandles.at(-1);
-          if (rebuiltHandle === undefined) {
-            throw new Error("expected a rebuilt handle");
-          }
-          const retryTransportSpy = vi.spyOn(rebuiltHandle, "retryTransport");
+        // The provider's TARGET HOST changes while still mounted - the scope
+        // sync (keyed on `targetHostId` among others) cancels the ladder
+        // before the acquire pass re-points, exactly the same shape as an
+        // ownership or identity scope change would produce.
+        act(() => {
+          hostState.id = "host-rebuild-backoff-repoint";
+          view.rerender(
+            <TestEpicSessionTab
+              epicId="epic-rebuild-backoff-repoint-cancel"
+              tabId="epic-rebuild-backoff-repoint-cancel"
+            >
+              <PresentationProbe onPresentation={() => undefined} />
+            </TestEpicSessionTab>,
+          );
+        });
+        await act(() => Promise.resolve());
 
-          // Denies the rebuilt (not-yet-healthy) handle - delayed, not
-          // immediate, so a pending timer is armed when the host changes.
-          act(() => {
-            reprobeCallbacks.callbacks.at(1)?.();
-          });
-          await act(() => Promise.resolve());
-          expect(retryTransportSpy).not.toHaveBeenCalled();
-          expect(cancelSpy()).not.toBeNull();
-          expect(cancelSpy()).not.toHaveBeenCalled();
-
-          // The provider's TARGET HOST changes while still mounted - the
-          // cleanup on the backoff-reset effect (keyed on `targetHostId`
-          // among others) runs before the acquire effect re-points,
-          // exactly the same shape as an epic-id or ownership scope change
-          // would produce.
-          act(() => {
-            hostState.id = "host-plan-restricted-repoint";
-            view.rerender(
-              <TestEpicSessionTab
-                epicId="epic-plan-restricted-repoint-cancel"
-                tabId="epic-plan-restricted-repoint-cancel"
-              >
-                <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
-              </TestEpicSessionTab>,
-            );
-          });
-          await act(() => Promise.resolve());
-
-          expect(cancelSpy()).toHaveBeenCalledTimes(1);
-
-          await act(async () => {
-            await vi.advanceTimersByTimeAsync(
-              PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
-            );
-          });
-          // The stale rung never fires against the handle it denied - that
-          // handle has since been superseded by the re-point anyway, but
-          // the ladder's own `.cancel()` is what stopped the timer, not the
-          // supersession.
-          expect(retryTransportSpy).not.toHaveBeenCalled();
-        } finally {
-          view.unmount();
-          restore();
-        }
+        expect(cancelSpy()).toHaveBeenCalledTimes(1);
       } finally {
-        fixture.dispose();
+        view.unmount();
       }
     } finally {
+      restore();
       vi.useRealTimers();
     }
   });

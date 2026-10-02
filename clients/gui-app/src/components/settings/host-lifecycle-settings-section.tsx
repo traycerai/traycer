@@ -22,13 +22,12 @@ import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-ho
 import { useRunnerHostLifecycleQuery } from "@/hooks/runner/use-runner-host-lifecycle-query";
 import { useRunnerHostLifecycleSetMutation } from "@/hooks/runner/use-runner-host-lifecycle-set-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isPaid } from "@/lib/auth/traycer-subscription-content";
 import {
   HOST_FOREGROUND_RESTART_TO_APPLY_REASON,
   HOST_LIFECYCLE_FOOTNOTE_SET_COMMAND,
   HOST_LIFECYCLE_FOOTNOTE_START_COMMAND,
   HOST_LIFECYCLE_MODE_ORDER,
-  HOST_LIFECYCLE_NONE_PLAN_REASON,
+  HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON,
   HOST_LIFECYCLE_PENDING_RESTART_APP,
   HOST_LIFECYCLE_PENDING_RESTART_HOST,
   HOST_LIFECYCLE_READ_FAILED,
@@ -45,7 +44,6 @@ import {
 } from "@/lib/host/host-lifecycle-copy";
 import { isForegroundHostRun } from "@/lib/host/host-foreground-run";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
-import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * Settings → General → "When you quit Traycer": what happens to this
@@ -96,15 +94,11 @@ function HostLifecycleCard(): ReactNode {
   const machine = hostMachineNoun();
   const viewQuery = useRunnerHostLifecycleQuery();
   const setMode = useRunnerHostLifecycleSetMutation();
-  const subscriptionStatus = useAuthStore((state) => state.subscriptionStatus);
-  const admitted = useShellLocalPlaneAdmission().admitted;
-  // Remote hosts are a paid feature, so on a plan without them "no host here"
-  // leaves nothing usable. Signed out there is no plan to offer them either,
-  // so `none` is held there too, with the same reason. Admitted, `null` is a
-  // plan not yet read, which does not block. A `none` already chosen stays
-  // selectable either way (`desired` below).
-  const noneBlockedByPlan =
-    !admitted || (subscriptionStatus !== null && !isPaid(subscriptionStatus));
+  // A remote host is reached through the signed-in account, so signed out
+  // "no host here" leaves nothing usable and `none` is held. Remote hosts are
+  // available on every plan, so nothing about the subscription enters this. A
+  // `none` already chosen stays selectable either way (`desired` below).
+  const noneBlockedSignedOut = !useShellLocalPlaneAdmission().admitted;
   // The host's Scheduled Task is not this account's (the last ensure was
   // refused `E_SERVICE_TASK_NOT_OWNED`): this account has no background host
   // on this PC. The card says why (`taskNotOwnedNotice`), holds the modes that
@@ -212,7 +206,7 @@ function HostLifecycleCard(): ReactNode {
             disabledReason={hostLifecycleOptionDisabledReason(
               option.mode,
               desired,
-              noneBlockedByPlan,
+              noneBlockedSignedOut,
               taskNotOwned,
             )}
           />
@@ -255,12 +249,12 @@ function HostLifecycleCard(): ReactNode {
 function hostLifecycleOptionDisabledReason(
   mode: HostLifecycleMode,
   desired: HostLifecycleMode | null,
-  noneBlockedByPlan: boolean,
+  noneBlockedSignedOut: boolean,
   taskNotOwned: boolean,
 ): string | null {
   if (mode === desired) return null;
   if (mode === "none") {
-    return noneBlockedByPlan ? HOST_LIFECYCLE_NONE_PLAN_REASON : null;
+    return noneBlockedSignedOut ? HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON : null;
   }
   return taskNotOwned ? HOST_LIFECYCLE_TASK_NOT_OWNED_REASON : null;
 }

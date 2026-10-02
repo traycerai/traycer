@@ -25,7 +25,6 @@ function hostOption(hostId: string): HostScopeOption {
     isLocalMachine: false,
     isActive: false,
     connectable: true,
-    planRestricted: false,
     settingUp: false,
     registered: true,
     platform: null,

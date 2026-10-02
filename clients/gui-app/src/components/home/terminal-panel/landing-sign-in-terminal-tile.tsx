@@ -95,12 +95,7 @@ export function LandingSignInTerminalTile(
   }, [removeTab, tab.instanceId]);
 
   if (reachability.status === "unreachable") {
-    return (
-      <TerminalDeadState
-        hostLabel={reachability.hostLabel}
-        unavailability={reachability.unavailability}
-      />
-    );
+    return <TerminalDeadState hostLabel={reachability.hostLabel} />;
   }
   if (hostLoad.kind !== "ready") {
     return (

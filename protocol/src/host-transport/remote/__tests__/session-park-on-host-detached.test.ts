@@ -306,10 +306,9 @@ interface NoHostRefusal {
 /** Every refusal reported so far; fails on any id that is not a no-host id. */
 function noHostRefusals(spies: EvidenceSpies): NoHostRefusal[] {
   return spies.reportDialRefusal.mock.calls.map(
-    ([hostId, attemptId, transportKind, detail]) => {
+    ([hostId, attemptId, transportKind]) => {
       expect(hostId).toBe(HOST_ID);
       expect(transportKind).toBe("remote-relay");
-      expect(detail).toBeNull();
       const match = REFUSAL_ID.exec(attemptId);
       if (match === null) {
         throw new Error(`unexpected refusal attempt id ${attemptId}`);
@@ -432,7 +431,6 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
         HOST_ID,
         `${first?.scope}#1-no-host-1`,
         "remote-relay",
-        null,
       );
 
       // Every report after the first arrives exactly one handshake timeout
@@ -704,7 +702,6 @@ describe("RemoteSession parks on host_detached before the ready boundary", () =>
         HOST_ID,
         expect.stringMatching(/^remote-\d+#2-no-host-1$/),
         "remote-relay",
-        null,
       );
       // The old generation's cadence stopped with its socket.
       await vi.advanceTimersByTimeAsync(NOISE_HANDSHAKE_TIMEOUT_MS + 1_000);
