@@ -246,6 +246,23 @@ describe("<StatusBarRateLimitCluster />", () => {
     expect(trigger.getAttribute("data-state")).toBe("open");
   });
 
+  it("draws the glyph, not the connect sentence, for no-providers when Density is Compact", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { density: "compact" });
+    mocks.cluster = { kind: "no-providers" };
+    renderCluster({});
+
+    expect(screen.getByTestId("rate-limit-gauge-icon")).not.toBeNull();
+    expect(
+      screen.queryByText("Connect a supported provider to see usage here."),
+    ).toBeNull();
+
+    const trigger = screen.getByTestId("status-bar-rate-limit-trigger");
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("data-state")).toBe("open");
+  });
+
   it("renders 'Usage hidden' for the hidden cluster and still opens the panel on click", () => {
     mocks.cluster = { kind: "hidden" };
     renderCluster({});

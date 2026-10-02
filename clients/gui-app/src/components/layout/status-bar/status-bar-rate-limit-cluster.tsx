@@ -226,8 +226,10 @@ function UsageTriggerReadings(props: {
       </span>
     );
   }
-  // The same glyph the tab strip draws, unboxed at the bar's height.
-  if (props.compact && cluster.kind === "segments") {
+  // The same glyph the tab strip draws, unboxed at the bar's height. With no
+  // provider it draws empty tracks and the panel it opens carries the setup
+  // sentence; only the "hidden" state keeps its own words.
+  if (props.compact && cluster.kind !== "hidden") {
     return <UsageGlyph cluster={cluster} />;
   }
   return <StatusBarUsageReadings cluster={cluster} display={display} />;
