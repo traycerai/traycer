@@ -11,6 +11,7 @@ import type {
   StatusBarRateLimitCluster,
   StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 import "@/index.css";
 
 /**
@@ -37,6 +38,11 @@ import "@/index.css";
 const PROVIDERS = ["codex", "claude-code", "grok"] as const;
 const FIXTURE_HOST_ID = "fixture-host";
 
+function severityFor(usedPercent: number): RateLimitWindowSeverity {
+  if (usedPercent >= 80) return "limited";
+  return usedPercent >= 40 ? "running_low" : "healthy";
+}
+
 function windowFor(
   providerId: (typeof PROVIDERS)[number],
   usedPercent: number,
@@ -50,7 +56,9 @@ function windowFor(
     // Six hours out: a countdown that reads `5h 59m`-ish and does not cross
     // an hour boundary while the driver measures.
     resetsAt: Date.now() + 6 * 60 * 60_000 - 30_000,
-    severity: usedPercent >= 80 ? "limited" : "healthy",
+    // The first two accounts stay calm (a bare bar) and the rest expand, so
+    // six of them outgrow a narrow strip and two still fit a wide one.
+    severity: severityFor(usedPercent),
   };
 }
 
@@ -103,6 +111,7 @@ export function StatusBarUsageScrollFixture(props: {
               <StatusBarUsageTrigger
                 cluster={props.cluster}
                 display={display}
+                compact={false}
                 onRevealProfile={() => undefined}
               />
             </StatusBarUsageScroller>

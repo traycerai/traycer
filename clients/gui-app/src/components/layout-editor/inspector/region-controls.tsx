@@ -8,32 +8,20 @@ import { readControlValue } from "@/components/layout-editor/inspector/region-co
 import {
   regionShownOnValue,
   setRegionShown,
-  toggleHiddenProvider,
 } from "@/components/layout-editor/layout-gestures";
-import { providerDisplayName } from "@/lib/provider-ordering";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { regionFacts } from "@/components/layout-editor/regions/region-facts";
 import {
   ACCESS_DISPLAY_OPTIONS,
   AUTO_SHOWN_HIDDEN_OPTIONS,
-  BAR_HOST_OPTIONS,
   DISCLOSURE_HIDDEN_OPTIONS,
   DISCLOSURE_OPTIONS,
   DOCK_DISPLAY_OPTIONS,
   EDGE_SIDE_OPTIONS,
-  edgeSideOptions,
   SHOWN_HIDDEN_OPTIONS,
   type SegmentOption,
 } from "@/components/layout-editor/regions/region-grammar";
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
-import {
-  asBarRegionId,
-  barPlacement,
-  withBarHost,
-  withBarSide,
-  type BarRegionId,
-  type LayoutArrangement,
-} from "@/lib/layout/layout-arrangement";
+import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
 import { PRESET_VALUES } from "@/lib/layout/layout-presets";
 import { isAutoRailRegionId, RAIL_REGION_IDS } from "@/lib/layout/rail";
 import {
@@ -145,25 +133,6 @@ function inMoreOptions(
   );
 }
 
-/** A usage provider's `Shown | Hidden`, the same control in both hosts. */
-export function ProviderDisplayControl(props: {
-  readonly providerId: RateLimitProviderId;
-}): ReactNode {
-  const { providerId } = props;
-  const arrangement = useLayoutStore((state) => state.arrangement);
-  const shown = !arrangement.hiddenProviders.includes(providerId);
-  return (
-    <SegmentedControl
-      ariaLabel={`${providerDisplayName(providerId)} display`}
-      options={SHOWN_HIDDEN_OPTIONS}
-      value={shown ? "shown" : "hidden"}
-      onChange={(next) => {
-        toggleHiddenProvider(providerId, arrangement, next === "shown");
-      }}
-    />
-  );
-}
-
 /** The words a sized region's one control uses for its two sizes. */
 function sizeOptions(
   regionId: RegionId,
@@ -215,64 +184,20 @@ function writeSizeShown(
   });
 }
 
-/**
- * Which end of its surface an edge-anchored region sits at.
- *
- * Three regions have a side and they are not all the same kind of thing: the
- * minimap's is an edge of the transcript, and the two bar readings' is an end
- * of whichever bar each of them is in (L-156). The write is the model's, so
- * neither answer is spelled as a field name here.
- */
+/** Which edge of the transcript and artifact the minimap sits on. */
 export function RegionSideControl(props: {
   readonly regionId: RegionId;
   readonly arrangement: LayoutArrangement;
 }): ReactNode {
   const { regionId, arrangement } = props;
-  const bar = asBarRegionId(regionId);
-  const narrow = useIsMobileViewport();
-  const placement = bar === null ? null : barPlacement(arrangement, bar);
-  const host = narrow ? "status-bar" : placement?.host;
   return (
     <SegmentedControl
       ariaLabel={`${regionFacts(regionId).name} side`}
-      options={
-        placement === null
-          ? EDGE_SIDE_OPTIONS
-          : edgeSideOptions(host ?? "status-bar", arrangement.tabStripPlacement)
-      }
-      value={placement === null ? arrangement.minimapSide : placement.side}
+      options={EDGE_SIDE_OPTIONS}
+      value={arrangement.minimapSide}
       onChange={(next) => {
         if (next !== "left" && next !== "right") return;
-        writeArrangement(
-          bar === null
-            ? { ...arrangement, minimapSide: next }
-            : withBarSide(arrangement, bar, next),
-        );
-      }}
-    />
-  );
-}
-
-/**
- * Which of the two bars one reading lives in (L-156).
- *
- * Its own region's answer and nothing else's: usage limits and the resource
- * monitor each carry this control, and writing one leaves the other exactly
- * where it is.
- */
-export function BarHostControl(props: {
-  readonly regionId: BarRegionId;
-  readonly arrangement: LayoutArrangement;
-}): ReactNode {
-  const { regionId, arrangement } = props;
-  return (
-    <SegmentedControl
-      ariaLabel={`${regionFacts(regionId).name} position`}
-      options={BAR_HOST_OPTIONS}
-      value={barPlacement(arrangement, regionId).host}
-      onChange={(next) => {
-        if (next !== "status-bar" && next !== "header") return;
-        writeArrangement(withBarHost(arrangement, regionId, next));
+        writeArrangement({ ...arrangement, minimapSide: next });
       }}
     />
   );

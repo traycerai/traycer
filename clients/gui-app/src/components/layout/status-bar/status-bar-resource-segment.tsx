@@ -2,6 +2,7 @@ import {
   Fragment,
   useCallback,
   type ComponentPropsWithoutRef,
+  type ReactNode,
   type Ref,
 } from "react";
 import { Cpu } from "lucide-react";
@@ -13,7 +14,13 @@ import {
   type StatusBarResourceMetricView,
 } from "@/lib/resources/status-bar-resource-reading";
 import { cn } from "@/lib/utils";
-import { useStatusBarResourceMetricViews } from "@/components/layout/status-bar/use-status-bar-resource-views";
+import {
+  isCpuWarning,
+  useStatusBarResourceMetrics,
+} from "@/components/layout/status-bar/use-status-bar-resource-views";
+import { useRegionDensity } from "@/lib/layout-overrides";
+import { resolveReadingDensity } from "@/lib/layout/reading-density";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
 
 interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button"> {
   /** The watched host, for the "too old to stream" verdict and its copy. */
@@ -59,11 +66,16 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
     ref,
     ...buttonProps
   } = props;
-  const views = useStatusBarResourceMetricViews({
+  const compact =
+    resolveReadingDensity(useRegionDensity("resourceMonitor"), "status-bar") ===
+    "compact";
+  const { views, cpuPercent } = useStatusBarResourceMetrics({
     hostId,
     hostLabel,
     hasExplicitPick,
+    compact,
   });
+  const cpuWarning = isCpuWarning(cpuPercent);
   const noMetrics = views.length === 0;
   const { ref: regionRef } = useLayoutRegion({
     regionId: "resourceMonitor",
@@ -81,6 +93,72 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
     },
     [ref, regionRef],
   );
+
+  const readout = (): ReactNode => {
+    if (noMetrics) {
+      // Every metric switched off is reachable from Settings, so it gets an
+      // answer rather than a bare glyph: an icon alone is exactly what a
+      // broken readout looks like, and the remedy - turn one back on - is not
+      // guessable from it. The tooltip is the sighted half of that sentence;
+      // the button's own name above is the other. The segment stays mounted
+      // because it is also the resource panel's trigger, and the panel is
+      // where the numbers still are.
+      return (
+        <TooltipWrapper
+          label="No metrics selected"
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          <span
+            className="inline-flex items-center"
+            data-testid="status-bar-resource-no-metrics"
+          >
+            {icon}
+          </span>
+        </TooltipWrapper>
+      );
+    }
+    if (compact) {
+      // The icon already says which metric this is, so the label is dropped.
+      return (
+        <>
+          {icon}
+          <TooltipWrapper
+            label={views[0].unavailableReason}
+            side="top"
+            sideOffset={6}
+            align={undefined}
+          >
+            <span
+              data-testid="status-bar-resource-compact-cpu"
+              className={cn(cpuWarning && RUNNING_LOW_TEXT_CLASS_NAME)}
+            >
+              {views[0].value ?? UNAVAILABLE_DASH}
+            </span>
+          </TooltipWrapper>
+        </>
+      );
+    }
+    return (
+      <>
+        {icon}
+        {views.map((view, index) => (
+          <Fragment key={view.metric}>
+            {index === 0 ? null : (
+              <span aria-hidden className="text-muted-foreground/60">
+                ·
+              </span>
+            )}
+            <StatusBarMetric
+              view={view}
+              warning={view.metric === "cpu" && cpuWarning}
+            />
+          </Fragment>
+        ))}
+      </>
+    );
+  };
 
   return (
     <button
@@ -105,42 +183,7 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
         className,
       )}
     >
-      {noMetrics ? (
-        // Every metric switched off is reachable from Settings, so it gets an
-        // answer rather than a bare glyph: an icon alone is exactly what a
-        // broken readout looks like, and the remedy — turn one back on — is not
-        // guessable from it. The tooltip is the sighted half of that sentence;
-        // the button's own name above is the other. The segment stays mounted
-        // because it is also the resource panel's trigger, and the panel is
-        // where the numbers still are.
-        <TooltipWrapper
-          label="No metrics selected"
-          side="top"
-          sideOffset={6}
-          align={undefined}
-        >
-          <span
-            className="inline-flex items-center"
-            data-testid="status-bar-resource-no-metrics"
-          >
-            {icon}
-          </span>
-        </TooltipWrapper>
-      ) : (
-        <>
-          {icon}
-          {views.map((view, index) => (
-            <Fragment key={view.metric}>
-              {index === 0 ? null : (
-                <span aria-hidden className="text-muted-foreground/60">
-                  ·
-                </span>
-              )}
-              <StatusBarMetric view={view} />
-            </Fragment>
-          ))}
-        </>
-      )}
+      {readout()}
     </button>
   );
 }
@@ -157,8 +200,10 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
  */
 export function StatusBarMetric(props: {
   readonly view: StatusBarResourceMetricView;
+  /** The value reads in the warning color (CPU at the shared threshold). */
+  readonly warning: boolean;
 }) {
-  const { view } = props;
+  const { view, warning } = props;
   return (
     <TooltipWrapper
       label={view.unavailableReason}
@@ -177,7 +222,12 @@ export function StatusBarMetric(props: {
             <span className="sr-only">{view.label}: unavailable</span>
           </>
         ) : (
-          <span className="truncate">{view.value}</span>
+          <span
+            data-warning={warning ? "true" : undefined}
+            className={cn("truncate", warning && RUNNING_LOW_TEXT_CLASS_NAME)}
+          >
+            {view.value}
+          </span>
         )}
       </span>
     </TooltipWrapper>

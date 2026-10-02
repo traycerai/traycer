@@ -1,19 +1,18 @@
 import { Cpu, Gauge } from "lucide-react";
-import {
-  SHOW_HIDE_VERBS,
-  type LayoutRegion,
-  type SegmentOption,
+import type {
+  LayoutRegion,
+  SegmentOption,
 } from "@/components/layout-editor/regions/region-grammar";
 import { barPlacementStateWord } from "@/components/layout-editor/regions/region-state-words";
 
 /**
- * Full text, or the icon alone - only meaningful in the Tab strip
- * (`surface-section.tsx` drops the row entirely while Location is the Status
- * bar, which has the room for the full reading).
+ * How much a reading says. The row's description, which names what Auto is at
+ * the reading's current spot, is composed by the form (`densityDescription`).
  */
-const READING_DISPLAY_OPTIONS: ReadonlyArray<SegmentOption> = [
-  { value: "full", label: "Full" },
-  { value: "icon", label: "Icon only" },
+const READING_DENSITY_OPTIONS: ReadonlyArray<SegmentOption> = [
+  { value: "auto", label: "Auto" },
+  { value: "compact", label: "Compact" },
+  { value: "detailed", label: "Detailed" },
 ];
 
 /**
@@ -39,6 +38,10 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
     "timer",
     "reset",
     "providers",
+    "profiles",
+    "density",
+    "compact",
+    "detailed",
     "bar",
     // Where it can LIVE, not only what it says: the page's own "Show these
     // in" row carried these words and is gone with L-156, and a search entry
@@ -46,23 +49,31 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
     "header",
     "top bar",
     "status bar",
+    "tab strip",
+    "location",
     "move",
   ],
   rows: [
-    {
-      kind: "position-host",
-      description: "Which bar the cluster lives in.",
-    },
-    {
-      kind: "position-side",
-      description: "The start or end of its reading area.",
-    },
+    { kind: "position-host" },
     {
       kind: "fine-tune",
       rows: [
         {
+          id: "density",
+          label: "Density",
+          description: null,
+          pinsTransient: false,
+          liveWhileHidden: null,
+          requires: null,
+          control: {
+            kind: "segment",
+            key: "density",
+            options: READING_DENSITY_OPTIONS,
+          },
+        },
+        {
           id: "amount",
-          label: "Amount",
+          label: "Percent shows",
           description: null,
           pinsTransient: false,
           liveWhileHidden: null,
@@ -77,45 +88,20 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
           },
         },
         {
-          // The five fields had a second writer in the Style examples, which
-          // set the same keys as named combinations (L-10 overturned in part).
-          // Each field is now said once, here.
-          id: "show",
-          label: "Show",
-          description:
-            "Amount label shows “used” or “remaining” beside the percentage.",
+          id: "reset",
+          label: "Reset time",
+          description: "Shown when a profile needs attention.",
           pinsTransient: false,
           liveWhileHidden: null,
           requires: null,
-          control: {
-            kind: "checks",
-            options: [
-              { key: "bar", label: "Progress bar", requires: null },
-              { key: "percent", label: "Percentage", requires: null },
-              { key: "word", label: "Amount label", requires: "percent" },
-              { key: "reset", label: "Time until reset", requires: null },
-            ],
-          },
-        },
-        {
-          id: "display",
-          label: "Display",
-          description:
-            "Icon only drops the provider icon, the account label and every text reading down to the glyph alone.",
-          pinsTransient: false,
-          liveWhileHidden: null,
-          requires: null,
-          control: {
-            kind: "segment",
-            key: "display",
-            options: READING_DISPLAY_OPTIONS,
-          },
+          control: { kind: "switch", key: "reset" },
         },
       ],
     },
     { kind: "children", level: "usage-providers" },
   ],
-  quickVerbs: SHOW_HIDE_VERBS,
+  // The section header's Show switch replaces the Show and Hide verbs.
+  quickVerbs: [],
   stateWord: (values, arrangement) =>
     barPlacementStateWord(values, arrangement, "usageLimits"),
 };
@@ -136,25 +122,36 @@ export const RESOURCE_MONITOR_REGION: LayoutRegion<"resourceMonitor"> = {
     "ram",
     "resource",
     "monitor",
+    "density",
+    "compact",
+    "detailed",
     // The same four as the usage cluster's: since L-156 this reading picks
     // its own bar, so "header" and "move" have to find it too.
     "header",
     "top bar",
     "status bar",
+    "tab strip",
+    "location",
     "move",
   ],
   rows: [
-    {
-      kind: "position-host",
-      description: "Which bar the monitor lives in.",
-    },
-    {
-      kind: "position-side",
-      description: "The start or end of its reading area.",
-    },
+    { kind: "position-host" },
     {
       kind: "fine-tune",
       rows: [
+        {
+          id: "density",
+          label: "Density",
+          description: null,
+          pinsTransient: false,
+          liveWhileHidden: null,
+          requires: null,
+          control: {
+            kind: "segment",
+            key: "density",
+            options: READING_DENSITY_OPTIONS,
+          },
+        },
         {
           id: "metrics",
           label: "Metrics",
@@ -168,31 +165,17 @@ export const RESOURCE_MONITOR_REGION: LayoutRegion<"resourceMonitor"> = {
           control: {
             kind: "checks",
             options: [
-              { key: "cpu", label: "CPU", requires: null },
-              { key: "memory", label: "Memory", requires: null },
-              { key: "processes", label: "Processes", requires: null },
-              { key: "ramShare", label: "RAM share", requires: null },
+              { key: "cpu", label: "CPU" },
+              { key: "memory", label: "Memory" },
+              { key: "processes", label: "Processes" },
+              { key: "ramShare", label: "RAM share" },
             ],
-          },
-        },
-        {
-          id: "display",
-          label: "Display",
-          description:
-            "Icon only drops every metric reading and the “Resources” label down to the glyph alone.",
-          pinsTransient: false,
-          liveWhileHidden: null,
-          requires: null,
-          control: {
-            kind: "segment",
-            key: "display",
-            options: READING_DISPLAY_OPTIONS,
           },
         },
       ],
     },
   ],
-  quickVerbs: SHOW_HIDE_VERBS,
+  quickVerbs: [],
   stateWord: (values, arrangement) =>
     barPlacementStateWord(values, arrangement, "resourceMonitor"),
 };

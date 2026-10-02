@@ -237,8 +237,8 @@ function togglePick(
  * `providerLimits` arrangement seam as ONE recorded gesture - so a tick, a
  * clear and a mode switch are each one press of undo.
  *
- * Automatic is written by DELETING the key, exactly as `revertProvider` puts a
- * provider back: the entry and its absence mean the same thing to every reader
+ * Automatic is written by DELETING the key, exactly as reverting the change
+ * puts a provider back: the entry and its absence mean the same thing to every reader
  * (`statusBarProviderLimitSelection`), so storing one was a mark on the
  * arrangement with nothing behind it (R1-03).
  */

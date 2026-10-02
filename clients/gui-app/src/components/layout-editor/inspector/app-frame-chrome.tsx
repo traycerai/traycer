@@ -25,10 +25,10 @@ import { PanelTaskHeaderBody } from "@/components/epic-canvas/sidebar/panel-task
 import { SampleLiveAgentItems } from "@/components/sample-workspace/sample-strip-live-agents";
 import { SAMPLE_NEEDS_YOU_ROW } from "@/components/sample-workspace/sample-workspace-scene";
 import {
+  BAR_REGION_IDS,
   barClusterRegions,
+  barPlacement,
   liveAgentsInStrip,
-  type BarHost,
-  type BarRegionId,
   type EdgeSide,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
@@ -140,12 +140,11 @@ const APP_FRAME_TABS: ReadonlyArray<AppFrameTask> = [
 ];
 
 /**
- * The top bar's row, minus the row itself: its two clusters, the home tab, the
- * tab strip and the header's own glyphs.
+ * The top bar's row, minus the row itself: the home tab, the tab strip, the
+ * readings placed in it and the header's own glyphs.
  *
- * A reading that named the header draws in the end it named (L-156), as
- * `HeaderBarCluster` renders it: left of the tabs or right of them, framed as
- * the top bar.
+ * The tab strip has no side, so a reading placed there draws just before
+ * History whatever its saved side, as `HeaderBarCluster` renders it.
  *
  * Drawn with their real labels, because two blank rectangles are not a picture
  * of a top bar (I-03).
@@ -153,20 +152,9 @@ const APP_FRAME_TABS: ReadonlyArray<AppFrameTask> = [
 export function AppFrameTopBar({ values, arrangement }: AppFrame): ReactNode {
   return (
     <>
-      <AppFrameBarCluster
-        host="header"
-        side="left"
-        values={values}
-        arrangement={arrangement}
-      />
       <AppFrameTabEntries values={values} arrangement={arrangement} />
       <span className="flex-1" />
-      <AppFrameBarCluster
-        host="header"
-        side="right"
-        values={values}
-        arrangement={arrangement}
-      />
+      <AppFrameStripReadings values={values} arrangement={arrangement} />
       <History aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <Bell aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <span className="size-5 shrink-0 rounded-full border border-border bg-foreground/10" />
@@ -349,18 +337,7 @@ export function AppFrameSideStrip({
               : "grid auto-cols-fr grid-flow-col",
           )}
         >
-          <AppFrameBarCluster
-            host="header"
-            side="left"
-            values={values}
-            arrangement={arrangement}
-          />
-          <AppFrameBarCluster
-            host="header"
-            side="right"
-            values={values}
-            arrangement={arrangement}
-          />
+          <AppFrameStripReadings values={values} arrangement={arrangement} />
         </div>
         <AppFrameAccount collapsed={collapsed} />
       </div>
@@ -807,15 +784,13 @@ export function AppFrameStatusBarRow({
 }: AppFrame): ReactNode {
   return (
     <>
-      <AppFrameBarCluster
-        host="status-bar"
+      <AppFrameStatusBarCluster
         side="left"
         values={values}
         arrangement={arrangement}
       />
       <span className="flex-1" />
-      <AppFrameBarCluster
-        host="status-bar"
+      <AppFrameStatusBarCluster
         side="right"
         values={values}
         arrangement={arrangement}
@@ -825,30 +800,38 @@ export function AppFrameStatusBarRow({
 }
 
 /**
- * One end of one bar: the readings that named it, in the model's own order
- * (L-156).
- *
- * Both bars draw their clusters through this, so the picture cannot put the
- * monitor ahead of the usage limits in one place and behind it in another -
- * and neither bar has to know which regions can move.
+ * One end of the status bar: the readings that named it, in the model's own
+ * order (L-156), so the picture cannot put the monitor ahead of the usage
+ * limits where the live bar puts it behind.
  */
-function AppFrameBarCluster(props: {
-  readonly host: BarHost;
+function AppFrameStatusBarCluster(props: {
   readonly side: EdgeSide;
   readonly values: LayoutValues;
   readonly arrangement: LayoutArrangement;
 }): ReactNode {
-  const { host, side, values, arrangement } = props;
-  return barClusterRegions(arrangement, host, side).map(
-    (regionId: BarRegionId) => (
-      <AppFrameRegion
-        key={regionId}
-        regionId={regionId}
-        values={values}
-        arrangement={arrangement}
-      />
-    ),
-  );
+  const { side, values, arrangement } = props;
+  return barClusterRegions(arrangement, "status-bar", side).map((regionId) => (
+    <AppFrameRegion
+      key={regionId}
+      regionId={regionId}
+      values={values}
+      arrangement={arrangement}
+    />
+  ));
+}
+
+/** The tab strip's readings: no side, usage first, as the live strip draws them. */
+function AppFrameStripReadings({ values, arrangement }: AppFrame): ReactNode {
+  return BAR_REGION_IDS.filter(
+    (regionId) => barPlacement(arrangement, regionId).host === "header",
+  ).map((regionId) => (
+    <AppFrameRegion
+      key={regionId}
+      regionId={regionId}
+      values={values}
+      arrangement={arrangement}
+    />
+  ));
 }
 
 /**

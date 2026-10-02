@@ -101,7 +101,9 @@ function windowFixture(overrides: {
     kind: "session",
     usedPercent: overrides.usedPercent,
     resetsAt: null,
-    severity: "healthy",
+    // Expanded, so every reading prints its percentage and countdown; a
+    // healthy profile is a bare bar (`status-bar-provider-segment.test.tsx`).
+    severity: "running_low",
   };
 }
 
@@ -494,7 +496,23 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
     }
   });
 
-  it("prints the mode word, the bar and the countdown on every reading when the switches are on", () => {
+  it("draws the usage glyph instead of the readings when Density is Compact", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("usageLimits", { density: "compact" });
+    sixAccountCluster(null);
+    renderScrollingCluster();
+
+    expect(screen.getByTestId("rate-limit-gauge-icon")).not.toBeNull();
+    expect(screen.queryByTestId(/^status-bar-provider-segment-/)).toBeNull();
+    // The trigger still names every reading, so the glyph loses no information
+    // for a screen reader.
+    expect(
+      screen.getByTestId(TRIGGER_TESTID).getAttribute("aria-label"),
+    ).toContain("Codex · work 34% used");
+  });
+
+  it("prints the bar, the percentage and the countdown on every expanded reading when Reset time is on", () => {
     vi.useFakeTimers();
     sixAccountCluster(Date.now() + 4 * 60 * MINUTE_MS + 15 * MINUTE_MS + 5_000);
     renderScrollingCluster();
@@ -502,31 +520,29 @@ describe("<StatusBarRateLimitCluster /> scrolls its readings", () => {
     const windows = screen.getAllByTestId(/^status-bar-window-(?!percent-)/);
     expect(windows).toHaveLength(6);
     for (const window of windows) {
-      expect(window.textContent).toMatch(/^\d+% used 4h 15m$/);
+      expect(window.textContent).toMatch(/^\d+%4h 15m$/);
     }
     expect(screen.getAllByTestId("status-bar-provider-mini-bar")).toHaveLength(
       6,
     );
   });
 
-  it("drops the mode word, the bar and the countdown from every reading when the switches are off", () => {
-    useLayoutStore.getState().setRegionValues("usageLimits", {
-      word: false,
-      bar: false,
-      reset: false,
-    });
+  it("drops the countdown from every expanded reading when Reset time is off", () => {
+    useLayoutStore.getState().setRegionValues("usageLimits", { reset: false });
     vi.useFakeTimers();
     sixAccountCluster(Date.now() + 4 * 60 * MINUTE_MS + 15 * MINUTE_MS + 5_000);
     renderScrollingCluster();
 
     const windows = screen.getAllByTestId(/^status-bar-window-(?!percent-)/);
     expect(windows).toHaveLength(6);
-    // The percentage and the window's static name are the floor: no switch
-    // takes them away, so a reading is never a bare icon.
+    // The bar and the percentage are the floor in the detailed form: no
+    // switch takes them away.
     for (const window of windows) {
-      expect(window.textContent).toMatch(/^\d+% 5h$/);
+      expect(window.textContent).toMatch(/^\d+%$/);
     }
-    expect(screen.queryAllByTestId("status-bar-provider-mini-bar")).toEqual([]);
+    expect(screen.getAllByTestId("status-bar-provider-mini-bar")).toHaveLength(
+      6,
+    );
   });
 
   it("turns a vertical wheel over the readings into a horizontal scroll", () => {

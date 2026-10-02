@@ -153,11 +153,6 @@ export function regionRowAvailable(
 ): boolean {
   if (!narrow) return true;
   if (row.kind === "position-host") return false;
-  // The phone footer draws usage at its start and resources at its end,
-  // whatever end was picked (L-162), so a bar reading's Alignment decides
-  // nothing there.
-  if (row.kind === "position-side" && asBarRegionId(regionId) !== null)
-    return false;
   if (
     row.kind === "position-order" &&
     (row.group === "toolbarLeft" || row.group === "toolbarRight")

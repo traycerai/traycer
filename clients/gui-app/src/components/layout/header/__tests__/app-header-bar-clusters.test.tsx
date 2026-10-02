@@ -56,7 +56,7 @@ vi.mock("@/components/layout/header/desktop-menu-bar", () => ({
  * has no business standing up to answer a question about WHERE the header
  * draws them. What the stubs keep is the two props the header decides:
  * `claimsOpenAction` (the header's claim on `app.resources.open`) and `form`
- * (readings at their own width in the header, `"inline"`, since G6 - not the
+ * (the Compact `"strip"` form, or Detailed `"inline"` - not the
  * glyph either trigger drew here before).
  */
 vi.mock("@/components/layout/header/rate-limit-icon", () => ({
@@ -119,45 +119,99 @@ describe("the header's bar clusters (L-156)", () => {
     expect(screen.queryByTestId("header-resource-trigger")).toBeNull();
   });
 
-  it("draws the reading that named the header, at the end it named", () => {
+  it("draws the reading that named the header before History, whatever side it saved", () => {
     place({ usageHost: "header", usageSide: "left" });
     render(<AppHeader variant="app" />);
 
+    // A tab strip has no side: the saved side is only the status bar's.
     expect(headerRegions()).toEqual(["usageLimits"]);
-    expect(screen.getByTestId("header-usage-trigger")).not.toBeNull();
-    expect(beforeTabs(screen.getByTestId("header-usage-trigger"))).toBe(true);
+    expect(beforeTabs(screen.getByTestId("header-usage-trigger"))).toBe(false);
     cleanup();
 
     place({ usageHost: "header", usageSide: "right" });
     render(<AppHeader variant="app" />);
 
     expect(beforeTabs(screen.getByTestId("header-usage-trigger"))).toBe(false);
-    cleanup();
-
-    // The monitor ships on the right, so moving it up without touching its
-    // side puts it after the tabs.
-    place({ usageHost: "header", resourceHost: "header" });
-    render(<AppHeader variant="app" />);
-
-    expect(beforeTabs(screen.getByTestId("header-resource-trigger"))).toBe(
-      false,
-    );
   });
 
-  it("hands both readings the header's own form, not the strip's glyph (G6)", () => {
-    place({ usageHost: "header", resourceHost: "header" });
+  it("hands a lone reading its Compact strip form", () => {
+    place({ usageHost: "header" });
     render(<AppHeader variant="app" />);
 
     expect(screen.getByTestId("header-usage-trigger").dataset.form).toBe(
-      "inline",
+      "strip",
     );
-    expect(screen.getByTestId("header-resource-trigger").dataset.form).toBe(
-      "inline",
-    );
+    expect(screen.queryByTestId("activity-button")).toBeNull();
+  });
+
+  describe("the activity button", () => {
+    function activity(): HTMLElement | null {
+      return screen.queryByTestId("activity-button");
+    }
+
+    it("groups both readings when both are shown, in the strip and Compact", () => {
+      place({ usageHost: "header", resourceHost: "header" });
+      render(<AppHeader variant="app" />);
+
+      const group = screen.getByRole("group", { name: "Activity" });
+      expect(group).toBe(activity());
+      // Both halves are their own buttons, usage first, in the one group.
+      const halves = [
+        ...group.querySelectorAll("[data-testid$='-trigger']"),
+      ].map((node) => node.getAttribute("data-testid"));
+      expect(halves).toEqual([
+        "header-usage-trigger",
+        "header-resource-trigger",
+      ]);
+      expect(group.querySelector("[aria-hidden]")).not.toBeNull();
+      expect(screen.getByTestId("header-usage-trigger").dataset.form).toBe(
+        "strip",
+      );
+      expect(screen.getByTestId("header-resource-trigger").dataset.form).toBe(
+        "strip",
+      );
+    });
+
+    it("does not group when only one reading is in the strip", () => {
+      place({ resourceHost: "header" });
+      render(<AppHeader variant="app" />);
+
+      expect(activity()).toBeNull();
+      expect(screen.getByTestId("header-resource-trigger")).not.toBeNull();
+    });
+
+    it("does not group when one reading is hidden", () => {
+      place({ usageHost: "header", resourceHost: "header" });
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { shown: "hidden" });
+      render(<AppHeader variant="app" />);
+
+      expect(activity()).toBeNull();
+      expect(screen.getByTestId("header-usage-trigger").dataset.form).toBe(
+        "strip",
+      );
+    });
+
+    it("does not group when either reading is Detailed by choice", () => {
+      place({ usageHost: "header", resourceHost: "header" });
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { density: "detailed" });
+      render(<AppHeader variant="app" />);
+
+      expect(activity()).toBeNull();
+      expect(screen.getByTestId("header-usage-trigger").dataset.form).toBe(
+        "inline",
+      );
+      expect(screen.getByTestId("header-resource-trigger").dataset.form).toBe(
+        "strip",
+      );
+    });
   });
 
   it("moves the resource monitor up on its own, leaving usage in the strip", () => {
-    place({ resourceHost: "header", resourceSide: "right" });
+    place({ resourceHost: "header" });
     render(<AppHeader variant="app" />);
 
     // The monitor's trigger is here and the gauge is not: before L-156 this

@@ -65,15 +65,7 @@ describe("regionRowAvailable", () => {
     ).toBe(false);
   });
 
-  it("drops a bar reading's Alignment narrow - the phone footer's ends are fixed - but keeps the minimap's Side", () => {
-    for (const regionId of ["usageLimits", "resourceMonitor"] as const) {
-      expect(
-        regionRowAvailable(regionId, rowOf(regionId, "position-side"), true),
-      ).toBe(false);
-      expect(
-        regionRowAvailable(regionId, rowOf(regionId, "position-side"), false),
-      ).toBe(true);
-    }
+  it("keeps the minimap's Side narrow, which is device-local", () => {
     expect(
       regionRowAvailable("minimap", rowOf("minimap", "position-side"), true),
     ).toBe(true);

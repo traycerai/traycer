@@ -1,3 +1,4 @@
+import { readingSpot } from "@/components/layout-editor/regions/reading-placement";
 import { regionFacts } from "@/components/layout-editor/regions/region-facts";
 import {
   asBarRegionId,
@@ -5,7 +6,6 @@ import {
   DEFAULT_ARRANGEMENT,
   withBarHost,
   withBarSide,
-  type EdgeSide,
   type LayoutArrangement,
   type OrderGroupId,
 } from "@/lib/layout/layout-arrangement";
@@ -35,12 +35,8 @@ export function positionRowChanged(
 }
 
 /**
- * The same question asked of ONE axis, which is what a row's own dot and its
- * own revert read (L-133).
- *
- * The two bar readings have two Position rows each since L-156 - a bar and an
- * end of it - and a revert belongs to the row it sits on: putting the side
- * back must not also drag the reading to the other bar.
+ * The same question asked of ONE row kind, which is what a row's own dot and
+ * its own revert read (L-133).
  */
 export function positionAxisChanged(
   snapshot: LayoutSnapshot,
@@ -101,15 +97,12 @@ function rowChanged(
       const bar = asBarRegionId(region);
       if (bar === null) return false;
       return (
-        barPlacement(arrangement, bar).host !==
-        barPlacement(DEFAULT_ARRANGEMENT, bar).host
+        readingSpot(barPlacement(arrangement, bar)) !==
+        readingSpot(barPlacement(DEFAULT_ARRANGEMENT, bar))
       );
     }
     case "position-side":
-      return (
-        edgeSideFor(region, arrangement) !==
-        edgeSideFor(region, DEFAULT_ARRANGEMENT)
-      );
+      return arrangement.minimapSide !== DEFAULT_ARRANGEMENT.minimapSide;
     case "position-order":
       return reorderedGroups(arrangement).includes(row.group);
   }
@@ -172,23 +165,19 @@ function revertRow(
     case "position-host": {
       const bar = asBarRegionId(region);
       if (bar === null) return arrangement;
-      return withBarHost(
-        arrangement,
-        bar,
-        barPlacement(DEFAULT_ARRANGEMENT, bar).host,
-      );
-    }
-    case "position-side": {
-      const bar = asBarRegionId(region);
-      if (bar === null) {
-        return { ...arrangement, minimapSide: DEFAULT_ARRANGEMENT.minimapSide };
-      }
+      // Both axes: the one Location row writes a bar and, in the status bar, an end.
       return withBarSide(
-        arrangement,
+        withBarHost(
+          arrangement,
+          bar,
+          barPlacement(DEFAULT_ARRANGEMENT, bar).host,
+        ),
         bar,
         barPlacement(DEFAULT_ARRANGEMENT, bar).side,
       );
     }
+    case "position-side":
+      return { ...arrangement, minimapSide: DEFAULT_ARRANGEMENT.minimapSide };
     case "position-order":
       return revertOrderGroup(arrangement, row.group);
   }
@@ -213,17 +202,6 @@ function positionRows(region: RegionId): ReadonlyArray<PositionRow> {
     }
     return [];
   });
-}
-
-/** The side a `position-side` region is drawn on: a bar's end, or the minimap's. */
-function edgeSideFor(
-  region: RegionId,
-  arrangement: LayoutArrangement,
-): EdgeSide {
-  const bar = asBarRegionId(region);
-  return bar === null
-    ? arrangement.minimapSide
-    : barPlacement(arrangement, bar).side;
 }
 
 function revertOrderGroup(

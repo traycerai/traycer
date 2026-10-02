@@ -1493,10 +1493,25 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     region is Hidden. Every row reserves its grip, revert, extra and chevron
     slots (L-122), so controls share one right edge and never shift. At the
     inspector's 320px the control wraps under the label.
-  - **Usage providers are a headed list in the Usage and resources area**
-    (L-123): configured providers first, with their logos, then the rest behind
-    a Show all providers disclosure. A provider's disclosure holds
-    `ProviderLimitsControl`.
+  - **Usage and resources is two sections, not two rows**
+    (`ReadingSection`, `inspector/surface-section.tsx`). Usage limits and the
+    Resource monitor each get a header with a **Show switch**, then their rows,
+    always open. **Location** is ONE picker (`inspector/reading-location-picker.tsx`):
+    a small window with three spots - Tab strip, Status bar left, Status bar
+    right - drawn the way the app is for the stored tab strip placement. The
+    tab strip has no end, so that spot writes the host alone and the old end is
+    kept for the way back; a status bar spot writes the host and the end
+    (`regions/reading-placement.ts`). **Density** is Auto / Compact / Detailed
+    in every placement, and its description says what Auto resolves to at the
+    current spot (`densityDescription`). The rows the RESOLVED density ignores
+    are hidden (`compactIgnoredRows`): with Compact, Percent shows, Reset time
+    and Metrics go. "Percent shows" is `amount` and "Reset time" is the `reset`
+    switch. A phone's footer draws no Location or Density row and hides none.
+    The **Profiles** list sits under Usage limits (`inspector/usage-profiles.tsx`):
+    one row per provider, dragged to order (`usageProviders`), an eye on the
+    provider (`hiddenProviders`) and, for a provider with several profiles, an
+    eye on each profile (`shownProfiles` for the watched host, never emptied:
+    the last drawn profile stays).
   - **Presets and resets.** The Presets block (`inspector/presets-block.tsx`)
     applies a preset in one click, replacing visibility and style values and
     keeping placement, order and providers, with an Undo toast. Its status
@@ -1557,7 +1572,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   The rules below describe the CHROME these controls configure. They live here
   because the chrome has no other doc, not because this page owns them.
 
-  - **Which of a provider's limits the strip draws is a TWO-MODE pick**
+  - **Which of a provider's limits the strip draws is a TWO-MODE pick**,
+    edited on the provider's own page (Settings > Providers > Profiles &
+    Limits, `panels/provider-usage-limits-section.tsx`), not in the Layout form
     (L-96, L-110): a `SegmentedControl` reading `Automatic (recommended)` /
     `Choose...`, and under `Choose...` one checkbox per limit the provider
     currently reports, labelled from the window catalog (`5h`, `wk`, `Fable`).
@@ -1637,7 +1654,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     reading stays pinned to the end it named (L-156). The percentage is severity-coloured always,
     bar or no bar.
   - **Which ACCOUNTS a provider's segments describe is chosen in the usage
-    panel, not in the layout form** (`layout/header/rate-limit-popover.tsx`).
+    panel and in the layout form's Profiles list** (`layout/header/rate-limit-popover.tsx`).
     Every profile card carries an eye toggle immediately left of its accent dot
     (`aria-pressed`), and the strip draws **one segment per checked account**
     for the host it is watching, with its own limits, mini bars and countdowns.
@@ -1646,9 +1663,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     credential on ONE machine. The background poll refreshes every eligible
     account regardless of this selection. A checked id whose profile has since gone is
     skipped at read time, never pruned. It lives in the arrangement but is not
-    a display preference: no density preset carries it, and the layout form
-    draws no control for it because the form is app-level and the accounts are
-    not.
+    a display preference: no density preset carries it. The Layout form's
+    Profiles list edits it too, for the watched host.
     - **The eye exists only while the strip is on screen**, which is ONE
       predicate, `statusBarShown` / `useStatusBarShown`
       (`stores/layout/layout-store.ts`): on a desktop viewport, EITHER reading

@@ -10,6 +10,7 @@ import {
   type LayoutValues,
 } from "@/lib/layout/layout-values";
 import { PRESET_VALUES } from "@/lib/layout/layout-presets";
+import type { ReadingDensity } from "@/lib/layout/reading-density";
 import type { RailRegionId, RegionId } from "@/lib/layout/region-id";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -171,6 +172,17 @@ export function useRegionShown(
   regionId: Exclude<HideableRegionId, RailRegionId>,
 ): boolean {
   return useRegionValue(regionId, "shown") === "shown";
+}
+
+/**
+ * What the user chose for how much a reading says, before the placement
+ * resolves `auto`. Pass it to `resolveReadingDensity` with the spot the reading
+ * is drawn at; no consumer picks a form from this value directly.
+ */
+export function useRegionDensity(
+  regionId: "usageLimits" | "resourceMonitor",
+): ReadingDensity {
+  return useRegionValue(regionId, "density");
 }
 
 /**

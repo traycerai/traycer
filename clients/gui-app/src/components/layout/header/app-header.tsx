@@ -85,22 +85,6 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
     >
       <DesktopMenuBar />
       {showTabStrip ? <HistoryNavButtons /> : null}
-      {/* The header's LEFT cluster (L-156): its own box, because the header
-          row has no gap of its own and the right-hand cluster's box is the
-          one this mirrors. It sits left of the tab strip and right of the
-          window's own controls, so a reading moved here lands beside the
-          navigation rather than inside the tabs. Empty for the shipped
-          arrangement, where both readings are in the strip, and an empty box
-          takes no room. Shrinkable: its readings give way before the tabs and
-          the header's own controls do (G6 review A). */}
-      {navDisabled ? null : (
-        <div
-          className="relative z-10 flex min-w-0 items-center gap-2"
-          style={framelessDesktop ? NO_DRAG_STYLE : undefined}
-        >
-          <HeaderBarCluster side="left" />
-        </div>
-      )}
       {/* Left drag handle: breathing room beside the traffic lights +
           back/forward arrows so the window can be grabbed from the left end
           too. Desktop-only (the browser app has neither traffic lights nor
@@ -140,7 +124,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
       >
         {!navDisabled ? <AppUpdateHeaderButton layout="icon" /> : null}
-        {!navDisabled ? <HeaderBarCluster side="right" /> : null}
+        {!navDisabled ? <HeaderBarCluster /> : null}
         <div className="flex shrink-0 items-center gap-2">
           {!navDisabled ? <HistoryButton /> : null}
           {showBell ? <HeaderNotificationsBell /> : null}

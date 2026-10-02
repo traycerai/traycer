@@ -20,6 +20,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // the hostile-labeled row without fighting Radix's pointerdown-based open
 // gesture in jsdom (mirrors the established mock in
 // worktrees-settings-panel.test / folder-controls.test).
+// The provider's Limits pick reads the watched host's usage through its own
+// scope, which this suite does not stand up; it is held by
+// `provider-usage-limits-section.test.tsx`.
+vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
+  ProviderUsageLimitsSection: () => null,
+}));
+
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));

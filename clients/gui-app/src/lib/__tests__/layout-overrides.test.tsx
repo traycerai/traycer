@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   useArrangementValue,
   useReadingWidthStyle,
+  useRegionDensity,
   useRegionShown,
   useRegionValue,
   useRegionValues,
@@ -87,6 +88,27 @@ describe("layout override seam", () => {
         "left",
       );
     });
+  });
+
+  it("reads each reading's density, auto until one is chosen", () => {
+    expect(readUnder(() => useRegionDensity("usageLimits"), bare)).toBe("auto");
+
+    act(() => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "detailed" });
+    });
+
+    expect(readUnder(() => useRegionDensity("resourceMonitor"), bare)).toBe(
+      "detailed",
+    );
+    expect(readUnder(() => useRegionDensity("usageLimits"), bare)).toBe("auto");
+    expect(
+      readUnder(
+        () => useRegionDensity("resourceMonitor"),
+        under({ values: { resourceMonitor: { density: "compact" } } }),
+      ),
+    ).toBe("compact");
   });
 
   it("draws the override while the store says otherwise", () => {

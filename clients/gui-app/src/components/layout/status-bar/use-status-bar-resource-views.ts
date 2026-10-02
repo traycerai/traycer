@@ -1,11 +1,17 @@
 import { useGlobalResourcesUnsupported } from "@/hooks/resources/use-global-resources-unsupported";
+import { attributedProjection } from "@/lib/resources/headline-resource-summary";
 import {
   statusBarResourceMetricViews,
+  statusBarResourceReading,
   type StatusBarResourceMetricView,
 } from "@/lib/resources/status-bar-resource-reading";
+import { CPU_WARNING_PERCENT } from "@/lib/layout/reading-density";
 import { useGlobalResourceProjection } from "@/stores/resources/resources-registry";
 import { useRegionValues } from "@/lib/layout-overrides";
-import { shownResourceMetrics } from "@/lib/layout/layout-values";
+import {
+  shownResourceMetrics,
+  type ResourceMetric,
+} from "@/lib/layout/layout-values";
 import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
 import { SAMPLE_RESOURCE_VALUES } from "@/components/sample-workspace/sample-workspace-scene";
 
@@ -34,7 +40,37 @@ export function useStatusBarResourceMetricViews(input: {
    */
   readonly hasExplicitPick: boolean;
 }): ReadonlyArray<StatusBarResourceMetricView> {
-  const metrics = shownResourceMetrics(useRegionValues("resourceMonitor"));
+  return useStatusBarResourceMetrics({ ...input, compact: false }).views;
+}
+
+/** CPU at or above the shared threshold reads in the warning color. */
+export function isCpuWarning(cpuPercent: number | null): boolean {
+  return cpuPercent !== null && cpuPercent >= CPU_WARNING_PERCENT;
+}
+
+const CPU_ONLY: ReadonlyArray<ResourceMetric> = ["cpu"];
+
+/**
+ * The views plus the number behind the CPU one, which is what the warning color
+ * is decided from: the view carries only the formatted string, and a rule
+ * parsed back out of `"92%"` would break with the format.
+ *
+ * `compact` replaces the Metrics selection with CPU alone: a Compact reading is
+ * the CPU icon and its percent whatever Metrics says, so the selection is not
+ * consulted at all. `cpuPercent` is `null` in the sample shell, whose numbers
+ * are specimens and never a warning.
+ */
+export function useStatusBarResourceMetrics(input: {
+  readonly hostId: string | null;
+  readonly hostLabel: string;
+  readonly hasExplicitPick: boolean;
+  readonly compact: boolean;
+}): {
+  readonly views: ReadonlyArray<StatusBarResourceMetricView>;
+  readonly cpuPercent: number | null;
+} {
+  const selected = shownResourceMetrics(useRegionValues("resourceMonitor"));
+  const metrics = input.compact ? CPU_ONLY : selected;
   // Raw, and handed over raw: `statusBarResourceMetricViews` attributes it to
   // the watched host before reading a number out of it. The registry publishes
   // one projection for the window, which is not necessarily the watched host's.
@@ -51,10 +87,22 @@ export function useStatusBarResourceMetricViews(input: {
     hostLabel: input.hostLabel,
   });
   // The sample shell prints sample readings, never the host's own (C12).
-  if (!sample) return views;
-  return views.map((view) => ({
-    ...view,
-    value: SAMPLE_RESOURCE_VALUES[view.metric],
-    unavailableReason: null,
-  }));
+  if (sample) {
+    return {
+      views: views.map((view) => ({
+        ...view,
+        value: SAMPLE_RESOURCE_VALUES[view.metric],
+        unavailableReason: null,
+      })),
+      cpuPercent: null,
+    };
+  }
+  const reading = statusBarResourceReading(
+    attributedProjection({
+      scopeHostId: input.hostId,
+      hasExplicitPick: input.hasExplicitPick,
+      streamed: projection,
+    }),
+  );
+  return { views, cpuPercent: reading.cpuPercent };
 }

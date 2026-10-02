@@ -6,6 +6,7 @@ import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
 import { useRegionValues } from "@/lib/layout-overrides";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
+import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 import type { AmountMode } from "@/lib/layout/layout-values";
 
 /**
@@ -67,6 +68,30 @@ export function statusBarUsageScrollKey(
   ]);
 }
 
+const SEVERITY_RANK: Readonly<Record<RateLimitWindowSeverity, number>> = {
+  healthy: 0,
+  running_low: 1,
+  limited: 2,
+};
+
+/**
+ * The severity a profile is drawn at: the worst of the windows the strip shows
+ * for it. The host decides each window's tier (`semantics.ts`); this only picks
+ * between them, so a profile showing two limits is never calmer than either.
+ * A segment with nothing to show (cold, unavailable) is calm.
+ */
+export function statusBarSegmentSeverity(
+  segment: StatusBarProviderSegmentModel,
+): RateLimitWindowSeverity {
+  return segment.shown.reduce<RateLimitWindowSeverity>(
+    (worst, window) =>
+      SEVERITY_RANK[window.severity] > SEVERITY_RANK[worst]
+        ? window.severity
+        : worst,
+    "healthy",
+  );
+}
+
 /** One empty list for the three cluster states that draw no segments. */
 const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
 
@@ -74,65 +99,29 @@ const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
  * Everything about the readings that the user chose.
  *
  * One value because two surfaces draw these readings - the strip and the
- * Settings preview - and both need the same four answers to one question:
- * what a segment prints. Passing them together is what keeps a preview from
- * being a second opinion about the settings it exists to show. Which of a
- * provider's limits are drawn is NOT here: that is resolved into the segment
- * model itself, so a segment already carries the windows it should draw.
+ * Settings preview - and both need the same answers to one question: what a
+ * segment prints. Passing them together is what keeps a preview from being a
+ * second opinion about the settings it exists to show. Which of a provider's
+ * limits are drawn is NOT here: that is resolved into the segment model
+ * itself, so a segment already carries the windows it should draw. Neither is
+ * the density, which decides which component draws the readings at all.
  */
 export interface StatusBarUsageDisplay {
   readonly percentMode: AmountMode;
-  readonly showModeWord: boolean;
-  readonly showBar: boolean;
-  readonly showPercent: boolean;
   readonly showTimer: boolean;
-}
-
-/**
- * What a reading is made of, as three independent answers the render path
- * can test rather than a preference object it would have to interpret.
- *
- * The strip draws every drawn account at exactly this detail at every width -
- * the percentage and the window's label are always printed, and nothing is
- * taken away to make room, because what does not fit scrolls into view
- * instead. So the parts are the preferences and nothing else: a part is off
- * only when the user switched it off.
- */
-export interface StatusBarUsageParts {
-  readonly modeWord: boolean;
-  readonly bar: boolean;
-  readonly percent: boolean;
-  readonly timer: boolean;
-}
-
-export function statusBarUsageParts(
-  display: StatusBarUsageDisplay,
-): StatusBarUsageParts {
-  return {
-    modeWord: display.showModeWord,
-    bar: display.showBar,
-    percent: display.showPercent,
-    timer: display.showTimer,
-  };
 }
 
 /**
  * Through the override seam (`lib/layout-overrides.ts`), so a style example or
  * a specimen stage can draw the real readings under a different answer.
  *
- * One region read rather than five: every one of these leaves lives in the
+ * One region read rather than two: every one of these leaves lives in the
  * `usageLimits` bag, so a reader of one is a reader of the region, and the
  * delta's identity changes only when that region does.
  */
 export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
   const values = useRegionValues("usageLimits");
-  return {
-    percentMode: values.amount,
-    showModeWord: values.word,
-    showBar: values.bar,
-    showPercent: values.percent,
-    showTimer: values.reset,
-  };
+  return { percentMode: values.amount, showTimer: values.reset };
 }
 
 /** The segments a cluster is drawing, or one shared empty list for the rest. */

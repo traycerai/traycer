@@ -217,6 +217,13 @@ const providerMocks = vi.hoisted(() => ({
 // this same seam), and the row is not what any test here asserts, so both go
 // the same way. `use-gui-harness-catalog` is stubbed with only the member this
 // subtree calls.
+// The provider's Limits pick reads the watched host's usage through its own
+// scope, which this suite does not stand up; it is held by
+// `provider-usage-limits-section.test.tsx`.
+vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
+  ProviderUsageLimitsSection: () => null,
+}));
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({ data: undefined, isPending: false }),
 }));

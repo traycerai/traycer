@@ -266,7 +266,10 @@ describe("useLayoutStore", () => {
     it("counts VALUES only, never the arrangement (L-57)", () => {
       const store = useLayoutStore.getState();
       store.setRegionValues("model", { style: "bars" });
-      store.setRegionValues("usageLimits", { bar: false, word: false });
+      store.setRegionValues("usageLimits", {
+        density: "compact",
+        reset: false,
+      });
       store.setArrangement({
         ...DEFAULT_ARRANGEMENT,
         dock: ["background", "changedFiles", "runningAgents"],
@@ -281,7 +284,7 @@ describe("useLayoutStore", () => {
     it("marks the changed region and leaves the others alone", () => {
       useLayoutStore
         .getState()
-        .setRegionValues("usageLimits", { bar: false, word: false });
+        .setRegionValues("usageLimits", { density: "compact" });
       const snapshot = getLayoutSnapshot();
 
       expect(regionChanged(snapshot, "usageLimits")).toBe(true);
@@ -716,7 +719,8 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
 
   const EXPECTED_OVERRIDES = {
     homeTab: { shown: "shown" },
-    usageLimits: { bar: false, word: false, reset: false, amount: "remaining" },
+    // `showBar` and `showModeWord` are in the stored record and carry nowhere.
+    usageLimits: { reset: false, amount: "remaining" },
     resourceMonitor: { shown: "hidden", processes: false, ramShare: true },
     contextUsage: {
       style: "ring",

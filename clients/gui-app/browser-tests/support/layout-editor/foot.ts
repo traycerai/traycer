@@ -33,9 +33,12 @@ export interface ReadingsRead {
   readonly row: Box | null;
   readonly usage: Box | null;
   readonly resource: Box | null;
-  readonly usageReadings: readonly ReadingItem[] | null;
+  /**
+   * The resource tile's readings: its CPU reading in Compact (the strip's
+   * Auto), its metrics in Detailed. The usage tile's Compact glyph is a fixed
+   * picture with no text to cut, so it has no list of its own.
+   */
   readonly resourceReadings: readonly ReadingItem[] | null;
-  readonly usageFallback: boolean;
   readonly resourceFallback: boolean;
   readonly account: Box | null;
   readonly strip: Box | null;
@@ -79,9 +82,7 @@ const READINGS_PROBE = `(() => {
     row: box('[data-testid="side-strip-readings"]'),
     usage: box('[data-testid="side-strip-readings"] [data-testid="rate-limit-header-button"]'),
     resource: box('[data-testid="side-strip-readings"] [data-testid="resource-monitor-header-button"]'),
-    usageReadings: readings('[data-testid="rate-limit-header-button"]', '[data-testid^="status-bar-provider-segment-"]'),
-    resourceReadings: readings('[data-testid="resource-monitor-header-button"]', '[data-testid^="status-bar-resource-metric-"]'),
-    usageFallback: fallback('[data-testid="rate-limit-header-button"]'),
+    resourceReadings: readings('[data-testid="resource-monitor-header-button"]', '[data-testid^="status-bar-resource-metric-"], [data-testid="resource-cpu-reading"]'),
     resourceFallback: fallback('[data-testid="resource-monitor-header-button"]'),
     account: box('[data-testid="user-menu-trigger"]'),
     strip: box('[data-testid="side-tab-strip"]'),
@@ -93,10 +94,10 @@ export function readReadings(page: Page): Promise<ReadingsRead> {
 }
 
 /**
- * The seeded readings land a tick after mount (the usage poll's two fetches,
- * the resource stream's first snapshot): resolves once every wanted tile has
- * drawn a reading - or, on the rail, where a tile draws its glyph alone, once
- * every wanted tile is there.
+ * The seeded readings land a tick after mount (the resource stream's first
+ * snapshot): resolves once every wanted tile is there and, expanded, the
+ * resource tile prints its CPU percent. On the rail a tile draws its glyph
+ * alone, so being there is all it does.
  */
 export async function waitForReadings(
   page: Page,
@@ -110,13 +111,11 @@ export async function waitForReadings(
     `(() => {
       const row = document.querySelector('[data-testid="side-strip-readings"]');
       if (row === null) return false;
-      if (${String(collapsed)}) {
-        return (row.querySelector('[data-testid="rate-limit-header-button"]') !== null) === ${String(wantsUsage)}
-          && (row.querySelector('[data-testid="resource-monitor-header-button"]') !== null) === ${String(wantsResource)};
-      }
-      const usage = row.querySelectorAll('[data-testid^="status-bar-provider-segment-"]').length > 0;
-      const resource = row.querySelectorAll('[data-testid^="status-bar-resource-metric-"]').length > 0;
-      return usage === ${String(wantsUsage)} && resource === ${String(wantsResource)};
+      const resource = row.querySelector('[data-testid="resource-monitor-header-button"]');
+      const tiles = (row.querySelector('[data-testid="rate-limit-header-button"]') !== null) === ${String(wantsUsage)}
+        && (resource !== null) === ${String(wantsResource)};
+      if (!tiles || ${String(collapsed)} || resource === null) return tiles;
+      return /\\d%/.test(resource.textContent ?? "");
     })()`,
   );
   await nextFrames(page, 2);
@@ -226,72 +225,33 @@ export function collapsedReadingsProblems(read: ReadingsRead): string[] {
   if (resource.y + resource.height > account.y) {
     problems.push("the tiles overlap the avatar tile");
   }
-  for (const [key, items] of [
-    ["usage", read.usageReadings],
-    ["resource", read.resourceReadings],
-  ] as const) {
-    if (items !== null && items.length > 0) {
-      problems.push(
-        `the collapsed ${key} tile draws readings ${JSON.stringify(items)}`,
-      );
-    }
+  const items = read.resourceReadings;
+  if (items !== null && items.length > 0) {
+    problems.push(
+      `the collapsed resource tile draws readings ${JSON.stringify(items)}`,
+    );
   }
   return problems;
 }
 
 /**
- * What a tile draws: whole readings only - never one cut by the tile's edge -
- * the first always (or, when not even that fits, the tile's fallback), and at
- * full width more than one. The readings' number, per tile, is fixture data
- * and not asserted.
+ * What the resource tile draws: whole readings only - never one cut by the
+ * tile's edge - the first always (or, when not even that fits, the tile's
+ * fallback). The readings' number is fixture data and not asserted.
  */
 export function wholeReadingProblems(read: ReadingsRead): string[] {
+  const items = read.resourceReadings;
+  if (items === null) return [];
   const problems: string[] = [];
-  for (const [key, items, fellBack] of [
-    ["usage", read.usageReadings, read.usageFallback],
-    ["resource", read.resourceReadings, read.resourceFallback],
-  ] as const) {
-    if (items === null) continue;
-    const cut = items.filter((item) => item.state === "cut");
-    if (cut.length > 0)
-      problems.push(`the ${key} tile cuts ${JSON.stringify(cut)}`);
-    const shown = items.filter((item) => item.state === "shown");
-    const firstWhole = items.length > 0 && items[0].state === "shown";
-    const fallbackOnly = fellBack && shown.length === 0;
-    if (!firstWhole && !fallbackOnly) {
-      problems.push(
-        `the ${key} tile shows neither its first reading nor its fallback: ${JSON.stringify(items)}`,
-      );
-    }
-  }
-  return problems;
-}
-
-/** At full width more than one reading shows, whole. */
-export function fullWidthShowsMoreProblems(
-  items: readonly ReadingItem[] | null,
-  key: string,
-): string[] {
-  if (items === null) return [`no ${key} tile`];
+  const cut = items.filter((item) => item.state === "cut");
+  if (cut.length > 0)
+    problems.push(`the resource tile cuts ${JSON.stringify(cut)}`);
   const shown = items.filter((item) => item.state === "shown");
-  return shown.length < 2
-    ? [
-        `the full-width ${key} tile shows only ${String(shown.length)} reading(s): ${JSON.stringify(items)}`,
-      ]
-    : [];
-}
-
-/** A restyled usage tile still fits: nothing cut, the first reading whole. */
-export function restyledUsageProblems(read: ReadingsRead): string[] {
-  const items = read.usageReadings;
-  if (items === null) return ["no usage tile after the restyle"];
-  const problems: string[] = [];
-  if (items.some((item) => item.state === "cut")) {
-    problems.push(`the restyled usage tile cuts ${JSON.stringify(items)}`);
-  }
-  if (items[0]?.state !== "shown") {
+  const firstWhole = items.length > 0 && items[0].state === "shown";
+  const fallbackOnly = read.resourceFallback && shown.length === 0;
+  if (!firstWhole && !fallbackOnly) {
     problems.push(
-      `the restyled usage tile does not show its first reading: ${JSON.stringify(items)}`,
+      `the resource tile shows neither its first reading nor its fallback: ${JSON.stringify(items)}`,
     );
   }
   return problems;

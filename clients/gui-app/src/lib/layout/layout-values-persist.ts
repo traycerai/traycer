@@ -12,6 +12,7 @@ import {
   type SizedValues,
   type UsageLimitsValues,
 } from "@/lib/layout/layout-values";
+import type { ReadingDensity } from "@/lib/layout/reading-density";
 import type { RegionId } from "@/lib/layout/region-id";
 
 /**
@@ -125,20 +126,36 @@ function autoRailPatch(value: unknown): Partial<AutoRailValues> {
     : {};
 }
 
+/**
+ * A reading's density. `density` wins when it is there; an earlier build wrote
+ * `display` instead, and `icon` is the one answer that was a choice:
+ * `compact`. Every preset set `full`, so a stored `full` reads as the default,
+ * `auto`. A record with neither key says nothing and the preset answers.
+ */
+function densityPatch(
+  stored: Record<string, unknown>,
+): Partial<{ density: ReadingDensity }> {
+  if (
+    stored.density === "auto" ||
+    stored.density === "compact" ||
+    stored.density === "detailed"
+  ) {
+    return { density: stored.density };
+  }
+  if (stored.display === "icon") return { density: "compact" };
+  if (stored.display === "full") return { density: "auto" };
+  return {};
+}
+
 function usageLimitsPatch(value: unknown): Partial<UsageLimitsValues> {
   const stored: Record<string, unknown> = isRecord(value) ? value : {};
   return {
     ...shownPatch(value),
-    ...(typeof stored.bar === "boolean" ? { bar: stored.bar } : {}),
-    ...(typeof stored.percent === "boolean" ? { percent: stored.percent } : {}),
-    ...(typeof stored.word === "boolean" ? { word: stored.word } : {}),
     ...(typeof stored.reset === "boolean" ? { reset: stored.reset } : {}),
     ...(stored.amount === "used" || stored.amount === "remaining"
       ? { amount: stored.amount }
       : {}),
-    ...(stored.display === "full" || stored.display === "icon"
-      ? { display: stored.display }
-      : {}),
+    ...densityPatch(stored),
   };
 }
 
@@ -157,9 +174,7 @@ function resourceMonitorPatch(value: unknown): Partial<ResourceMonitorValues> {
     ...(typeof stored.agentRows === "boolean"
       ? { agentRows: stored.agentRows }
       : {}),
-    ...(stored.display === "full" || stored.display === "icon"
-      ? { display: stored.display }
-      : {}),
+    ...densityPatch(stored),
   };
 }
 

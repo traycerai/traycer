@@ -661,7 +661,7 @@ const LANDINGS: ReadonlyArray<{
     method: "landOnRegion",
     target: "resourceMonitor",
     area: "Usage and resources",
-    row: '[data-sortable-id="resourceMonitor"]',
+    row: '[data-region-section="resourceMonitor"]',
   },
 ];
 
@@ -753,10 +753,10 @@ test.describe("a landing puts its row in view in the area it picked", () => {
 // ── Header fit ──────────────────────────────────────────────────────────────
 
 // Header readings take a bounded share of the header and never push its
-// controls out: a 900px app column, both readings in the header, and Codex and
-// Claude Code each drawing every window they have. The tabs and every header
-// control stay inside the header, the tabs keep real room, and no reading or
-// label is drawn cut.
+// controls out: a 900px app column, both readings in the header and both
+// Detailed, the usage reading capped at two profiles. The tabs and every
+// header control stay inside the header, the tabs keep real room, and no
+// reading or label is drawn cut.
 const APP_WINDOW = { width: 1476, height: 900 } as const;
 
 interface HeaderFit {
@@ -816,7 +816,7 @@ async function readHeaderFit(page: Page): Promise<HeaderFit> {
     const cut: string[] = [];
     const shown: string[] = [];
     for (const reading of header.querySelectorAll(
-      '[data-testid^="status-bar-provider-segment-"], [data-testid^="status-bar-resource-metric-"]',
+      '[data-testid^="usage-profile-"], [data-testid^="status-bar-resource-metric-"]',
     )) {
       const line = reading.parentElement?.getBoundingClientRect();
       if (!visible(reading) || line === undefined) continue;
@@ -859,23 +859,18 @@ async function readHeaderFit(page: Page): Promise<HeaderFit> {
   });
 }
 
-/** Every window each fixture provider offers, ticked under Choose... */
-async function chooseEveryProviderWindow(page: Page): Promise<void> {
+/**
+ * Both readings picked Detailed. In the tab strip Auto is the compact glyph,
+ * which never crowds the tabs, so a crowded header is the user's own choice.
+ */
+async function chooseDetailedReadings(page: Page): Promise<void> {
   const panel = activePanel(page);
-  for (const id of ["codex", "claude-code"]) {
+  for (const id of ["usageLimits", "resourceMonitor"]) {
     await panel
-      .locator(`[data-sortable-id="${id}"]`)
-      .getByRole("radio", { name: "Choose..." })
+      .locator(`[data-region-section="${id}"]`)
+      .getByRole("radiogroup", { name: "Density" })
+      .getByRole("radio", { name: "Detailed" })
       .click();
-  }
-  await openAllDisclosures(page);
-  // One box a pass: a click re-renders the row it sits in.
-  const unticked = panel
-    .locator('[data-sortable-id="codex"], [data-sortable-id="claude-code"]')
-    .locator('[role="checkbox"][aria-checked="false"]');
-  for (let pass = 0; pass < 8; pass += 1) {
-    if ((await unticked.count()) === 0) break;
-    await unticked.first().click();
   }
 }
 
@@ -897,66 +892,38 @@ async function waitUntilHeaderSettled(page: Page): Promise<void> {
     .toBe(true);
 }
 
-const HEADER_VARIANTS: ReadonlyArray<{
-  readonly label: string;
-  /** Both readings on the right, where they share the cluster beside the header's own controls. */
-  readonly bothRight: boolean;
-}> = [
-  // Both readings where the fixture puts them: usage left, resources right.
-  { label: "split", bothRight: false },
-  { label: "both right", bothRight: true },
-];
-
 test.describe("the header readings in a 900px app column", () => {
-  for (const { label, bothRight } of HEADER_VARIANTS) {
-    test(`keep every header control, and every reading whole (${label})`, async ({
-      settingsApp,
-    }) => {
-      const { page, setWindow } = settingsApp;
-      await prepareSettings(settingsApp, "Usage and resources");
-      // The settings pane is 36rem, so this leaves the app column 900px wide.
-      await setWindow(APP_WINDOW.width, APP_WINDOW.height, 1);
-      await openAllDisclosures(page);
-      if (bothRight) {
-        await activePanel(page)
-          .getByRole("radiogroup", { name: "Usage limits side" })
-          .getByRole("radio", { name: "Right" })
-          .click();
-      }
-      await chooseEveryProviderWindow(page);
-      await waitUntilHeaderSettled(page);
-      const windows = await page.evaluate(
-        "Object.values(window.__layoutCanvasProbe.snapshot().arrangement.providerLimits).reduce((sum, entry) => sum + entry.limitKeys.length, 0)",
-      );
-      expect(
-        windows,
-        `header fit (${label}): fewer than 4 windows selected, so this is not the crowded header`,
-      ).toBeGreaterThanOrEqual(4);
+  test("keep every header control, and every reading whole, with both readings Detailed in the tab strip", async ({
+    settingsApp,
+  }) => {
+    const { page, setWindow } = settingsApp;
+    await prepareSettings(settingsApp, "Usage and resources");
+    // The settings pane is 36rem, so this leaves the app column 900px wide.
+    await setWindow(APP_WINDOW.width, APP_WINDOW.height, 1);
+    await chooseDetailedReadings(page);
+    await waitUntilHeaderSettled(page);
 
-      const fit = await readHeaderFit(page);
+    const fit = await readHeaderFit(page);
 
-      test.info().annotations.push({
-        type: `header fit (${label})`,
-        description: `tabs ${String(fit.tabs)}px of ${fit.header}px; readings shown ${JSON.stringify(fit.shown)}`,
-      });
-      expect(
-        fit.shown,
-        `header fit (${label}): no reading is drawn, so this measures nothing`,
-      ).not.toEqual([]);
-      expect(fit.outside, `header fit (${label}): leaves the header`).toEqual(
-        [],
-      );
-      expect(
-        fit.tabs ?? 0,
-        `header fit (${label}): the tab strip keeps ${String(fit.tabs)}px of a ${fit.header}px header`,
-      ).toBeGreaterThanOrEqual(fit.header * 0.25);
-      expect(fit.cut, `header fit (${label}): a reading is cut`).toEqual([]);
-      expect(
-        fit.ellipsized,
-        `header fit (${label}): a control draws ellipsized text`,
-      ).toEqual([]);
+    test.info().annotations.push({
+      type: "header fit",
+      description: `tabs ${String(fit.tabs)}px of ${fit.header}px; readings shown ${JSON.stringify(fit.shown)}`,
     });
-  }
+    expect(
+      fit.shown,
+      "header fit: no reading is drawn, so this measures nothing",
+    ).not.toEqual([]);
+    expect(fit.outside, "header fit: leaves the header").toEqual([]);
+    expect(
+      fit.tabs ?? 0,
+      `header fit: the tab strip keeps ${String(fit.tabs)}px of a ${fit.header}px header`,
+    ).toBeGreaterThanOrEqual(fit.header * 0.25);
+    expect(fit.cut, "header fit: a reading is cut").toEqual([]);
+    expect(
+      fit.ellipsized,
+      "header fit: a control draws ellipsized text",
+    ).toEqual([]);
+  });
 });
 
 // ── Page errors ─────────────────────────────────────────────────────────────

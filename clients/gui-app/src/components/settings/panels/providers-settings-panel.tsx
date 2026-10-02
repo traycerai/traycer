@@ -78,6 +78,7 @@ import { ProviderProfileScopedSection } from "./provider-profile-scoped-section"
 import { ProfileCopyIncomingSection } from "./profile-copy/profile-copy-incoming-section";
 import { ProfileCopyRecentSection } from "./profile-copy/profile-copy-recent-section";
 import { FallbackCrossLinkRow } from "./fallback/fallback-cross-link-row";
+import { ProviderUsageLimitsSection } from "./provider-usage-limits-section";
 import {
   defaultSelectedProfileId,
   profileCommitId,
@@ -1493,8 +1494,9 @@ function ProviderTabBody({
               />
             ) : null}
           </div>
-          {/* Outside the inert block: it is not profile-scoped, so dimming it
-              while a profile switch settles would suggest it is. */}
+          {/* Outside the inert block: neither is profile-scoped, so dimming
+              them while a profile switch settles would suggest it is. */}
+          <ProviderUsageLimitsSection providerId={state.providerId} />
           <FallbackCrossLinkRow />
         </div>
       );

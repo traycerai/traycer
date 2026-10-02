@@ -42,15 +42,20 @@ function Harness(): ReactNode {
 }
 
 function row(id: string): HTMLElement {
-  const node = document.querySelector(`[data-sortable-id="${id}"]`);
+  const node = document.querySelector(
+    `[data-sortable-id="${id}"], [data-region-section="${id}"]`,
+  );
   if (!(node instanceof HTMLElement)) throw new Error(`no such row: ${id}`);
   return node;
 }
 
+/** A reading's section is always open; every other row says so on its grab. */
 function rowExpanded(id: string): boolean {
+  const node = row(id);
   return (
-    row(id).querySelector("[data-row-grab]")?.getAttribute("aria-expanded") ===
-    "true"
+    node.hasAttribute("data-region-section") ||
+    node.querySelector("[data-row-grab]")?.getAttribute("aria-expanded") ===
+      "true"
   );
 }
 

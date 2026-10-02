@@ -428,8 +428,6 @@ function carriedUsageLimits(
       statusBar.placement === "header"
         ? undefined
         : shownIf(rateLimits.enabled),
-    bar: rateLimits.showBar,
-    word: rateLimits.showModeWord,
     reset: rateLimits.showTimer,
     amount: rateLimits.percentMode,
   };

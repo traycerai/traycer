@@ -731,23 +731,17 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
    * Nested Radix triggers do not both fire: the inner one defaults the shared
    * event prevented before the outer trigger's composed opener runs.
    */
-  it("answers a right-click on the resource segment with the resource monitor's verbs", () => {
+  it("answers a right-click on the resource segment with the segment's own menu", () => {
     windowedProviders = twoWindowedProviders();
     render(<AppStatusBar />);
 
     fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
 
-    expect(
-      screen.getByTestId("layout-quick-verb-resourceMonitor-hide"),
-    ).not.toBeNull();
     expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
-    // The bar's menu, not the segment's: its provider checkboxes and its own
-    // region's verbs are what must NOT be on screen here.
+    // The segment's menu, not the bar's: the bar's provider checkboxes are
+    // what must NOT be on screen here.
     expect(
       screen.queryByRole("menuitemcheckbox", { name: "Codex" }),
-    ).toBeNull();
-    expect(
-      screen.queryByTestId("layout-quick-verb-usageLimits-hide"),
     ).toBeNull();
   });
 
@@ -765,9 +759,7 @@ describe("<AppStatusBar /> right-click visibility menu", () => {
 
     fireEvent.contextMenu(screen.getByTestId("status-bar-resource-segment"));
 
-    expect(
-      screen.getByTestId("layout-quick-verb-resourceMonitor-hide"),
-    ).not.toBeNull();
+    expect(screen.getByTestId("customize-layout-menu-item")).not.toBeNull();
   });
 
   it("leaves the left click on the resource segment to the panel", () => {
@@ -923,7 +915,7 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       kind: "session",
       usedPercent: 34,
       resetsAt: null,
-      severity: "healthy",
+      severity: "running_low",
     } as const;
     const claudeWindow = {
       ...codexWindow,
@@ -958,9 +950,9 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       ],
     };
 
-    // The same readings, part by part, on both viewports: the percentage,
-    // the mode word and the window's label in the text, and one mini bar per
-    // reading - with every account drawn and none folded away.
+    // The same readings, part by part, on both viewports: the percentage in
+    // the text and one mini bar per reading (a running-low profile is the
+    // expanded form) - with every account drawn and none folded away.
     function expectFullReadings(): void {
       expect(
         screen
@@ -970,11 +962,11 @@ describe("<AppStatusBar /> on a mobile viewport", () => {
       expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
       expect(
         screen.getByTestId("status-bar-window-codex:primary").textContent,
-      ).toBe("34% used 5h");
+      ).toBe("34%");
       expect(
         screen.getByTestId("status-bar-window-claude-code:fiveHour")
           .textContent,
-      ).toBe("57% used 5h");
+      ).toBe("57%");
       expect(
         screen
           .getAllByTestId("status-bar-provider-mini-bar")

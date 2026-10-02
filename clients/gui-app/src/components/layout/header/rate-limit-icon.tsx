@@ -1,6 +1,11 @@
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { useSampleScene } from "@/components/sample-workspace/sample-scene-context";
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import { Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
@@ -30,12 +35,16 @@ import {
 import { cn } from "@/lib/utils";
 import { StatusBarProviderMountRefresh } from "@/components/layout/status-bar/status-bar-rate-limit-cluster";
 import {
+  statusBarClusterSegments,
   statusBarUsageTriggerName,
   useStatusBarUsageDisplay,
 } from "@/components/layout/status-bar/status-bar-usage-display";
-import { StatusBarUsageReadings } from "@/components/layout/status-bar/status-bar-usage-readings";
 import type { BarReadingForm } from "@/components/layout/tabs/side-strip/side-strip-tokens";
-import { ReadingsLine } from "@/components/layout/readings-line";
+import {
+  SideStripUsageRows,
+  TopStripUsageRows,
+} from "@/components/layout/header/usage-profile-rows";
+import { useResetCountdown } from "@/lib/relative-time";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
@@ -49,9 +58,6 @@ interface GlyphBar {
   readonly severity: RateLimitWindowSeverity;
   readonly degraded: boolean;
 }
-
-/** Stable identity so the placeholder path never re-renders on a new array. */
-const NO_BARS: ReadonlyArray<GlyphBar> = [];
 
 /** The cluster the placeholder path draws: nothing to read yet. */
 const NO_CLUSTER: StatusBarRateLimitCluster = { kind: "no-providers" };
@@ -84,7 +90,7 @@ const NO_CLUSTER: StatusBarRateLimitCluster = { kind: "no-providers" };
  * subtree that is not scoped still sees ambient binding updates.
  */
 export function RateLimitIconButton(props: {
-  /** The phone header's glyph, the header's readings, or a strip tile (F6). */
+  /** How the button draws at the placement it sits in. */
   readonly form: BarReadingForm;
 }): ReactNode {
   const { scope, hasExplicitPick } = useRateLimitResolveHostScope();
@@ -159,24 +165,16 @@ function ScopedRateLimitIconButton({
       ? tooltipLabel
       : `${tooltipLabel} (${formatChordForDisplay(chord)})`;
 
-  // The readings name themselves (R1-A3), and carry their own per-segment
-  // tooltips, so only the icon forms get the button's tooltip.
-  const readings = form === "inline" || form === "readout";
+  // The Detailed forms name themselves (R1-A3), and carry their own
+  // per-profile tooltips, so only the glyph forms get the button's tooltip.
+  const readings = form === "inline" || form === "rows";
   const trigger = (
     <PopoverTrigger asChild>
       <Button
         type="button"
-        variant="outline"
-        size="sm"
+        {...usageButtonLook(form)}
         aria-label={readings ? undefined : "Usage limits"}
         data-testid="rate-limit-header-button"
-        className={cn(
-          "shadow-xs",
-          (form === "tile" || form === "readout") && "w-full",
-          // A bounded share of the header, which gives way before the tabs
-          // and the header's own controls do (G6 review A).
-          form === "inline" && "min-w-0 shrink",
-        )}
       >
         {scopedToOwnHost ? (
           <LiveRateLimitGlyph profileSelection={profileSelection} form={form} />
@@ -214,6 +212,32 @@ function ScopedRateLimitIconButton({
       />
     </Popover>
   );
+}
+
+/**
+ * How the usage button draws in each form: the phone header's and the rail's
+ * outlined glyph, the expanded strip's outlined tile, the top strip's ghost
+ * glyph or Detailed readings (bounded by the two-profile cap, so never
+ * squeezed), and the side strip's Detailed block as one full-width button.
+ */
+function usageButtonLook(
+  form: BarReadingForm,
+): Pick<ComponentProps<typeof Button>, "variant" | "size" | "className"> {
+  switch (form) {
+    case "glyph":
+      return { variant: "outline", size: "sm", className: "shadow-xs" };
+    case "tile":
+    case "readout":
+      return { variant: "outline", size: "sm", className: "w-full shadow-xs" };
+    case "strip":
+      return { variant: "ghost", size: "sm", className: undefined };
+    case "inline":
+      // Never shrunk: capped at two profiles, the reading is bounded already,
+      // and a squeezed one would cut a name.
+      return { variant: "ghost", size: "sm", className: undefined };
+    case "rows":
+      return { variant: "ghost", size: "inline", className: "w-full" };
+  }
 }
 
 /**
@@ -260,10 +284,8 @@ function LiveRateLimitGlyph({
 }
 
 /**
- * The readings, where the trigger has the room for them and Display is Full -
- * the desktop header and the vertical strip's readings row (F6) - or the
- * glyph otherwise: the phone header, the collapsed rail's 40px tile, and a
- * desktop Tab strip reading whose Display is Icon only.
+ * The Detailed readings in the forms that have the room for them, or the glyph
+ * (with the limit state) everywhere else.
  */
 function RateLimitTriggerContent({
   cluster,
@@ -272,25 +294,22 @@ function RateLimitTriggerContent({
   readonly cluster: StatusBarRateLimitCluster;
   readonly form: BarReadingForm;
 }): ReactNode {
-  if (form === "inline" || form === "readout") {
+  if (form === "inline" || form === "rows") {
     return <UsageReadings cluster={cluster} form={form} />;
   }
-  return <RateLimitGlyph bars={glyphBars(cluster)} />;
+  return <UsageGlyphParts cluster={cluster} showReset={form !== "tile"} />;
 }
 
 /**
- * The status bar's readings, drawn by the status bar's own component from the
- * same display settings (`useStatusBarUsageDisplay`), so a Style, a Fine-tune
- * switch or Used / Remaining changes this reading exactly as it changes that
- * one. On the one line every bar reading uses (`ReadingsLine`): whole readings
- * only, and the glyph's bars when not even the first fits.
+ * The Detailed reading: the top strip's two most-used profiles, or the side
+ * strip's rows, over the same segments the status bar reads.
  */
 function UsageReadings({
   cluster,
   form,
 }: {
   readonly cluster: StatusBarRateLimitCluster;
-  readonly form: "inline" | "readout";
+  readonly form: "inline" | "rows";
 }): ReactNode {
   const display = useStatusBarUsageDisplay();
   if (cluster.kind !== "segments") {
@@ -309,57 +328,96 @@ function UsageReadings({
       <span className="sr-only">
         {statusBarUsageTriggerName(cluster, display.percentMode)}
       </span>
-      <ReadingsLine
-        align={form === "readout" ? "center" : "start"}
-        tone="default"
-        lead={null}
-        fallback={<RateLimitGlyph bars={glyphBars(cluster)} />}
-      >
-        <StatusBarUsageReadings cluster={cluster} display={display} />
-      </ReadingsLine>
+      {form === "inline" ? (
+        <TopStripUsageRows cluster={cluster} />
+      ) : (
+        <SideStripUsageRows cluster={cluster} />
+      )}
     </>
   );
-}
-
-/**
- * The icon forms' bars: the first two windows the readings would draw, in
- * their order - so the icon, too, follows the hidden providers, the order and
- * the limits. What an icon cannot follow is the Style and Fine-tune, which
- * are about text it has no room for.
- */
-function glyphBars(
-  cluster: StatusBarRateLimitCluster,
-): ReadonlyArray<GlyphBar> {
-  if (cluster.kind !== "segments") return NO_BARS;
-  return cluster.segments
-    .flatMap((segment) =>
-      segment.state === "unavailable"
-        ? []
-        : segment.shown.map((window) => ({
-            key: `${segment.providerId}:${segment.profileId ?? ""}:${window.windowKey}`,
-            usedPercent: window.usedPercent,
-            severity: window.severity,
-            degraded: segment.state === "degraded",
-          })),
-    )
-    .slice(0, GLYPH_BAR_COUNT);
 }
 
 /** The glyph's two slots. */
 const GLYPH_BAR_COUNT = 2;
 
-function RateLimitGlyph({
-  bars,
-}: {
+/** What the glyph draws for a cluster: its bars, and whether a limit is hit. */
+interface UsageGlyphReading {
   readonly bars: ReadonlyArray<GlyphBar>;
+  /** The soonest reset among the limited windows, when any reports one. */
+  readonly limitedResetsAt: number | null;
+  readonly limited: boolean;
+}
+
+/**
+ * The glyph's reading: the two highest-used windows among the shown profiles,
+ * and the limit state across ALL shown windows (a limit past the first two
+ * still turns the gauge). The icon follows the hidden providers, the order and
+ * the limits; what it cannot follow is the Detailed form's text.
+ */
+function usageGlyphReading(
+  cluster: StatusBarRateLimitCluster,
+): UsageGlyphReading {
+  const windows = statusBarClusterSegments(cluster).flatMap((segment) =>
+    segment.state === "unavailable"
+      ? []
+      : segment.shown.map((window) => ({
+          key: `${segment.providerId}:${segment.profileId ?? ""}:${window.windowKey}`,
+          usedPercent: window.usedPercent,
+          severity: window.severity,
+          degraded: segment.state === "degraded",
+          resetsAt: window.resetsAt,
+        })),
+  );
+  const resets = windows.flatMap((window) =>
+    window.severity === "limited" && window.resetsAt !== null
+      ? [window.resetsAt]
+      : [],
+  );
+  return {
+    bars: [...windows]
+      .sort((a, b) => b.usedPercent - a.usedPercent)
+      .slice(0, GLYPH_BAR_COUNT),
+    limitedResetsAt: resets.length === 0 ? null : Math.min(...resets),
+    limited: windows.some((window) => window.severity === "limited"),
+  };
+}
+
+/**
+ * The usage glyph with no button around it: the gauge, the two bars of the two
+ * highest-used windows, and the limit state (a destructive gauge, and the short
+ * reset time after the bars). Every Compact placement draws this, inside its
+ * own button or, in the status bar, unboxed.
+ */
+export function UsageGlyph({
+  cluster,
+}: {
+  readonly cluster: StatusBarRateLimitCluster;
 }): ReactNode {
+  return <UsageGlyphParts cluster={cluster} showReset />;
+}
+
+/** `UsageGlyph`, with the reset time optional for the 40px rail tile. */
+function UsageGlyphParts({
+  cluster,
+  showReset,
+}: {
+  readonly cluster: StatusBarRateLimitCluster;
+  readonly showReset: boolean;
+}): ReactNode {
+  const { bars, limited, limitedResetsAt } = usageGlyphReading(cluster);
+  const countdown = useResetCountdown(limitedResetsAt);
   const isEmpty = bars.length === 0;
   const isDegraded = !isEmpty && bars.some((bar) => bar.degraded);
   return (
     <>
       <Gauge
         data-testid="rate-limit-gauge-icon"
-        className={cn("size-3.5", isDegraded && RUNNING_LOW_TEXT_CLASS_NAME)}
+        data-limited={limited ? "true" : undefined}
+        className={cn(
+          "size-3.5",
+          isDegraded && RUNNING_LOW_TEXT_CLASS_NAME,
+          limited && "text-destructive",
+        )}
         aria-hidden
       />
       <span
@@ -393,6 +451,19 @@ function RateLimitGlyph({
               </span>
             ))}
       </span>
+      {limited && showReset && countdown !== null ? (
+        <span
+          data-testid="rate-limit-glyph-reset"
+          className="text-ui-xs text-destructive"
+        >
+          {shortCountdown(countdown)}
+        </span>
+      ) : null}
     </>
   );
+}
+
+/** `4h 15m` is `4h` here: the glyph has room for one unit. */
+function shortCountdown(countdown: string): string {
+  return countdown.split(" ")[0] ?? countdown;
 }

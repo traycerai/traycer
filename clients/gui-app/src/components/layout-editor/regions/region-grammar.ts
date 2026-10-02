@@ -89,8 +89,6 @@ export type ControlSpec<K extends RegionId> =
 export interface CheckOption<K extends RegionId> {
   readonly key: keyof LayoutValues[K] & string;
   readonly label: string;
-  /** A boolean key this option only means something with, or `null`. */
-  readonly requires: (keyof LayoutValues[K] & string) | null;
 }
 
 export interface FineTuneRow<K extends RegionId> {
@@ -127,7 +125,9 @@ export interface StyleExample<K extends RegionId> {
 }
 
 export type GrammarRow<K extends RegionId> =
-  | { readonly kind: "position-host"; readonly description: string }
+  // A bar reading's one Location picker (a bar and an end of it, in one row).
+  | { readonly kind: "position-host" }
+  // The minimap's edge of the transcript.
   | { readonly kind: "position-side"; readonly description: string }
   // Names its group and nothing else: how the list is operated, whether its
   // boundaries are items and what is pinned inside it are facts about the
@@ -264,45 +264,16 @@ export const EDGE_SIDE_OPTIONS: ReadonlyArray<SegmentOption> = [
 ];
 
 /**
- * The two bars a reading can live in. The `header` value is the tab strip's
- * bar in every placement - across the top beside the tabs, or the vertical
- * strip's foot - so it is named for the tab strip; the stored value stays
- * `"header"` (L-133).
+ * The two bars a reading can live in, as the change list words them. The
+ * `header` value is the tab strip's bar in every placement - across the top
+ * beside the tabs, or the vertical strip's foot - so it is named for the tab
+ * strip; the stored value stays `"header"` (L-133). The form itself picks a
+ * place through `reading-placement.ts`.
  */
 export const BAR_HOST_OPTIONS: ReadonlyArray<SegmentOption> = [
   { value: "status-bar", label: "Status bar" },
   { value: "header", label: "Tab strip" },
 ];
-
-/**
- * The two ends of a bar reading's area. In a horizontal bar they are Left and
- * Right; in the side tabs' foot the readings stack above the account, so the
- * same stored `left` / `right` read as Start and End there, with
- * {@link SIDE_TAB_ALIGNMENT_HELPER} saying what that means.
- */
-export function edgeSideOptions(
-  host: BarHost,
-  placement: TabStripPlacement,
-): ReadonlyArray<SegmentOption> {
-  if (sideTabFootAlignment(host, placement)) {
-    return [
-      { value: "left", label: "Start" },
-      { value: "right", label: "End" },
-    ];
-  }
-  return EDGE_SIDE_OPTIONS;
-}
-
-/** Whether a reading's Alignment is read as Start/End in the side tabs' foot. */
-export function sideTabFootAlignment(
-  host: BarHost,
-  placement: TabStripPlacement,
-): boolean {
-  return host === "header" && placement !== "top";
-}
-
-export const SIDE_TAB_ALIGNMENT_HELPER =
-  "In side tabs, readings sit above the account. Start comes before End.";
 
 // ── Shared verb sets ────────────────────────────────────────────────────────
 

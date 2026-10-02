@@ -75,7 +75,14 @@ import type {
   RegionId,
 } from "@/lib/layout/region-id";
 import { cn } from "@/lib/utils";
-import type { StatusBarRateLimitWindow } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import type {
+  StatusBarProviderSegmentModel,
+  StatusBarRateLimitWindow,
+} from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import type { StatusBarResourceMetricView } from "@/lib/resources/status-bar-resource-reading";
+import { UsageGlyph } from "@/components/layout/header/rate-limit-icon";
+import { StatusBarMetric } from "@/components/layout/status-bar/status-bar-resource-segment";
+import { resolvedReadingDensity } from "@/lib/layout/reading-density";
 
 /**
  * The only way a region is drawn outside the canvas (L-11).
@@ -390,39 +397,43 @@ function depictUsageProviderSegment(
       </span>
     );
   }
-  const drawn = windows ?? [specimenWindow(providerId)];
   return (
     <StatusBarUsageReadings
       display={{
         percentMode: values.amount,
-        showModeWord: values.word,
-        showBar: values.bar,
-        showPercent: values.percent,
         showTimer: values.reset,
       }}
       cluster={{
         kind: "segments",
-        segments: [
-          {
-            providerId,
-            profileId: null,
-            account: null,
-            hidden: false,
-            state: "live",
-            reason: null,
-            windows: drawn,
-            shown: drawn,
-            tightest: tightestRateLimitWindow(drawn),
-          },
-        ],
+        segments: [specimenSegment(providerId, windows)],
       }}
     />
   );
 }
 
+/** One provider's live segment over the given windows, or its specimen's. */
+function specimenSegment(
+  providerId: RateLimitProviderId,
+  windows: ReadonlyArray<StatusBarRateLimitWindow> | null,
+): StatusBarProviderSegmentModel {
+  const drawn = windows ?? [specimenWindow(providerId)];
+  return {
+    providerId,
+    profileId: null,
+    account: null,
+    hidden: false,
+    state: "live",
+    reason: null,
+    windows: drawn,
+    shown: drawn,
+    tightest: tightestRateLimitWindow(drawn),
+  };
+}
+
 /**
  * EVERY shown provider that reports windows, in the arrangement's own order
- * (P2, R3-03).
+ * (P2, R3-03): Detailed as one segment each, Compact as the one glyph over all
+ * of them, as the live reading resolves its density at its spot.
  *
  * The arrangement is the whole answer: a caller that wants only the watched
  * host's providers narrows it first (`useLiveUsageArrangement`), so a picture
@@ -433,59 +444,89 @@ function depictUsageLimits(
   values: UsageLimitsValues,
   arrangement: LayoutArrangement,
 ): ReactNode {
-  return arrangement.usageProviders
-    .filter(
-      (id) =>
-        isWindowedRateLimitProvider(id) &&
-        !arrangement.hiddenProviders.includes(id),
-    )
-    .map((providerId) => (
-      <span key={providerId} className="inline-flex shrink-0 items-center">
-        {depictUsageProviderSegment(providerId, values, null)}
+  const providers = arrangement.usageProviders.filter(
+    (id) =>
+      isWindowedRateLimitProvider(id) &&
+      !arrangement.hiddenProviders.includes(id),
+  );
+  if (
+    resolvedReadingDensity(values.density, arrangement, "usageLimits") ===
+    "compact"
+  ) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1">
+        <UsageGlyph
+          cluster={{
+            kind: "segments",
+            segments: providers.map((id) => specimenSegment(id, null)),
+          }}
+        />
       </span>
-    ));
+    );
+  }
+  return providers.map((providerId) => (
+    <span key={providerId} className="inline-flex shrink-0 items-center">
+      {depictUsageProviderSegment(providerId, values, null)}
+    </span>
+  ));
 }
 
 /**
  * The four metric readings, in the canonical order the strip prints them.
  *
- * Labels and markup mirror `StatusBarResourceSegment` rather than mounting it:
- * that component resolves its readings through `useStatusBarResourceMetricViews`,
- * which subscribes to the desktop sampler and the resource registry, so a
- * picture of it cannot be one of its mounts.
+ * Drawn through the strip's own `StatusBarMetric` rather than by mounting
+ * `StatusBarResourceSegment`: that component resolves its readings through
+ * `useStatusBarResourceMetrics`, which subscribes to the desktop sampler and
+ * the resource registry, so a picture of it cannot be one of its mounts. The
+ * specimen is the sample shell's, which never warns, exactly as the live sample
+ * shell does not.
  */
-const RESOURCE_SPECIMEN: ReadonlyArray<{
-  readonly key: keyof ResourceMonitorValues;
-  readonly label: string;
-  readonly value: string;
-}> = [
-  { key: "cpu", label: "cpu", value: SAMPLE_RESOURCE_VALUES.cpu },
-  { key: "memory", label: "mem", value: SAMPLE_RESOURCE_VALUES.memory },
-  { key: "processes", label: "procs", value: SAMPLE_RESOURCE_VALUES.processes },
-  { key: "ramShare", label: "ram", value: SAMPLE_RESOURCE_VALUES.ramShare },
-];
+const RESOURCE_SPECIMEN: ReadonlyArray<StatusBarResourceMetricView> = (
+  [
+    ["cpu", "cpu"],
+    ["memory", "mem"],
+    ["processes", "procs"],
+    ["ramShare", "ram"],
+  ] as const
+).map(([metric, label]) => ({
+  metric,
+  label,
+  value: SAMPLE_RESOURCE_VALUES[metric],
+  unavailableReason: null,
+}));
 
-function depictResourceMonitor(values: ResourceMonitorValues): ReactNode {
-  const readings = RESOURCE_SPECIMEN.filter(
-    (reading) => values[reading.key] === true,
-  );
+/**
+ * Compact is the CPU icon and its percent whatever Metrics says; Detailed is
+ * the chosen metrics, as the live reading resolves its density at its spot.
+ */
+function depictResourceMonitor(
+  values: ResourceMonitorValues,
+  arrangement: LayoutArrangement,
+): ReactNode {
+  const compact =
+    resolvedReadingDensity(values.density, arrangement, "resourceMonitor") ===
+    "compact";
+  const readings = RESOURCE_SPECIMEN.filter((view) => values[view.metric]);
   return (
     <span className="inline-flex h-6 max-w-full shrink-0 items-center gap-1.5 px-2 text-muted-foreground">
       <Cpu className="size-3 shrink-0" aria-hidden />
-      {readings.map((reading, index) => (
-        <span
-          key={reading.key}
-          className="inline-flex min-w-0 items-center gap-1"
-        >
-          {index === 0 ? null : (
-            <span aria-hidden className="text-muted-foreground/60">
-              ·
-            </span>
-          )}
-          <span className="text-muted-foreground/80">{reading.label}</span>
-          <span className="truncate">{reading.value}</span>
-        </span>
-      ))}
+      {compact ? (
+        <span>{SAMPLE_RESOURCE_VALUES.cpu}</span>
+      ) : (
+        readings.map((view, index) => (
+          <span
+            key={view.metric}
+            className="inline-flex min-w-0 items-center gap-1"
+          >
+            {index === 0 ? null : (
+              <span aria-hidden className="text-muted-foreground/60">
+                ·
+              </span>
+            )}
+            <StatusBarMetric view={view} warning={false} />
+          </span>
+        ))
+      )}
     </span>
   );
 }

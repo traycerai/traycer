@@ -15,6 +15,7 @@ import {
   useStatusBarWindowedProviders,
   type StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 
 export interface ProviderLimitWindows {
@@ -62,10 +63,19 @@ function ReadLayoutUsage(props: {
     // The Choose picker lists what the provider really reports.
     sample: false,
   });
+  const profilesByProvider: Partial<
+    Record<RateLimitProviderId, ReadonlyArray<ProviderProfile>>
+  > = {};
+  for (const provider of providers) {
+    profilesByProvider[provider.providerId] = provider.profiles;
+  }
   return (
     <LayoutUsageContext
       value={{
         providerIds: providers.map((provider) => provider.providerId),
+        profilesByProvider,
+        hostId: props.hostId,
+        profileSelection,
         cluster,
         hostName: props.hostName,
       }}

@@ -4,17 +4,27 @@ import {
   isMinimapSideRowAvailable,
   type SettingsAvailabilityContext,
 } from "@/lib/settings/settings-availability";
-import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import type { ReactNode } from "react";
 import { RevertButton } from "@/components/layout-editor/inspector/inspector-row";
-import { ProviderLimitsControl } from "@/components/layout-editor/inspector/provider-limits";
-import {
-  ProviderDisplayControl,
-  RegionDisplayControl,
-} from "@/components/layout-editor/inspector/region-controls";
+import { RegionDisplayControl } from "@/components/layout-editor/inspector/region-controls";
+import { UsageProfilesList } from "@/components/layout-editor/inspector/usage-profiles";
 import { assertNever } from "@/components/layout-editor/inspector/rows/assert-never";
-import { FineTuneRows } from "@/components/layout-editor/inspector/rows/fine-tune-row";
+import {
+  FineTuneRows,
+  type FineTuneRowFacts,
+} from "@/components/layout-editor/inspector/rows/fine-tune-row";
 import { fineTuneRowLiveWhileHidden } from "@/components/layout-editor/inspector/region-control-io";
+import { setRegionShown } from "@/components/layout-editor/layout-gestures";
+import {
+  compactIgnoredRows,
+  densityDescription,
+} from "@/components/layout-editor/regions/reading-placement";
+import {
+  readingPlacement,
+  resolvedReadingDensity,
+} from "@/lib/layout/reading-density";
+import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import {
   OrderGroupHeader,
   OrderGroupList,
@@ -59,18 +69,17 @@ import {
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
 import {
   layoutChanges,
-  providerChanged,
   regionChanged,
   reorderedGroups,
   revertLayoutChange,
-  revertProvider,
   usageProvidersChanged,
   type LayoutChange,
 } from "@/lib/layout/layout-diff";
 import {
   asBarRegionId,
-  barPlacement,
+  BAR_REGION_IDS,
   DEFAULT_ARRANGEMENT,
+  type BarRegionId,
   type LayoutArrangement,
   type OrderGroupId,
 } from "@/lib/layout/layout-arrangement";
@@ -80,8 +89,6 @@ import {
   regionValuesHidden,
   type LayoutValues,
 } from "@/lib/layout/layout-values";
-import { providerDisplayName } from "@/lib/provider-ordering";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import type { RegionId } from "@/lib/layout/region-id";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import {
@@ -117,7 +124,6 @@ export function SurfaceSection(props: {
   const { surface, snapshot, openRows, onToggleRow, onSelectRow, selectedRow } =
     props;
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
-  const arrangement = snapshot.arrangement;
   const narrow = useIsMobileViewport();
   const availability = useSettingsAvailabilityContext();
 
@@ -130,9 +136,7 @@ export function SurfaceSection(props: {
 
   function decorate(id: string): SortableRowDecoration {
     const regionId = asRegionId(id);
-    if (regionId === null) {
-      return providerRowDecoration(id, arrangement, openRows, onToggleRow);
-    }
+    if (regionId === null) return BARE_ROW;
     const changed = regionRowChanged(snapshot, regionId);
     const hint =
       narrow && regionId === "homeTab"
@@ -172,21 +176,30 @@ export function SurfaceSection(props: {
   }
 
   const loose = looseSurfaceRegions(surface);
-  const groups = SURFACE_ORDER_GROUPS[surface].filter((group) =>
-    groupIsDrawn(group, values),
-  );
+  const groups = SURFACE_ORDER_GROUPS[surface];
 
   return (
     <div data-layout-area-form={surface} className="flex flex-col">
       <SurfaceLeadingRows surface={surface} />
-      {loose.length === 0 ? null : (
+      {surface === "statusBar"
+        ? BAR_REGION_IDS.map((regionId) => (
+            <ReadingSection
+              key={regionId}
+              regionId={regionId}
+              snapshot={snapshot}
+              values={values}
+              selected={selectedRow === regionId}
+            />
+          ))
+        : null}
+      {surface !== "statusBar" && loose.length > 0 ? (
         <SortableList
           label={`${surfaceLabel(surface)} settings`}
           selectedId={selectedRow}
           items={regionRowItems(loose, values, decorate)}
           onMove={null}
         />
-      )}
+      ) : null}
       {groups.map((group) => (
         <SurfaceOrderList
           key={group}
@@ -200,15 +213,6 @@ export function SurfaceSection(props: {
       <SurfaceTrailingRows surface={surface} />
     </div>
   );
-}
-
-/**
- * Whether the list's own subject is on screen at all: the providers are the
- * segments of ONE region, so a Providers list under a hidden Usage limits row
- * would be a list of parts of something that is not there (redesign 5.4).
- */
-function groupIsDrawn(group: OrderGroupId, values: LayoutValues): boolean {
-  return group !== "usageProviders" || values.usageLimits.shown === "shown";
 }
 
 /**
@@ -265,13 +269,6 @@ function revertedOrderGroup(
   group: OrderGroupId,
   arrangement: LayoutArrangement,
 ): LayoutArrangement {
-  // The providers list is the one group no region declares.
-  if (group === "usageProviders") {
-    return {
-      ...arrangement,
-      usageProviders: DEFAULT_ARRANGEMENT.usageProviders,
-    };
-  }
   const member = LAYOUT_REGION_LIST.find((region) =>
     region.rows.some(
       (row) => row.kind === "position-order" && row.group === group,
@@ -280,53 +277,6 @@ function revertedOrderGroup(
   return member === undefined
     ? arrangement
     : revertPositionRow(arrangement, member.id);
-}
-
-/**
- * One provider row: its `Shown | Hidden` state, its revert,
- * and its own Limits pick as the row's disclosure (L-123).
- */
-function providerRowDecoration(
-  id: string,
-  arrangement: LayoutArrangement,
-  openRows: ReadonlyArray<string>,
-  onToggleRow: (rowId: string) => void,
-): SortableRowDecoration {
-  const providerId = usageProviderId(arrangement, id);
-  if (providerId === null) return BARE_ROW;
-  const changed = providerChanged(arrangement, providerId);
-  const name = providerDisplayName(providerId);
-  const windowed = isWindowedRateLimitProvider(providerId);
-  return {
-    ...BARE_ROW,
-    control: <ProviderDisplayControl providerId={providerId} />,
-    revert: changed ? (
-      <RevertButton
-        label={`Revert ${name}`}
-        onRevert={() => {
-          writeArrangement(revertProvider(arrangement, providerId));
-        }}
-      />
-    ) : null,
-    detail: windowed ? <ProviderLimitsControl providerId={providerId} /> : null,
-    open: windowed && openRows.includes(id),
-    onToggleOpen: windowed
-      ? () => {
-          onToggleRow(id);
-        }
-      : null,
-  };
-}
-
-/**
- * The row's id back as a provider id, by looking it up in the list it came
- * from rather than asserting (G1-23).
- */
-function usageProviderId(
-  arrangement: LayoutArrangement,
-  id: string,
-): RateLimitProviderId | null {
-  return arrangement.usageProviders.find((entry) => entry === id) ?? null;
 }
 
 /**
@@ -409,7 +359,6 @@ function DetailRowView(props: {
           regionId={regionId}
           arrangement={arrangement}
           snapshot={snapshot}
-          description={row.description}
         />
       );
     case "position-side":
@@ -433,15 +382,20 @@ function DetailRowView(props: {
         />
       );
     case "fine-tune": {
-      // The Display row (icon-only) only means something in the Tab strip
-      // (F6): the Status bar has the room for the full reading, so a Status
-      // bar region drops the row rather than showing it with nothing to do.
-      const rows = tabStripHosted(regionId, arrangement, narrow)
-        ? row.rows
-        : row.rows.filter((detail) => detail.id !== "display");
+      const bar = asBarRegionId(regionId);
       return (
         <FineTuneRows
-          rows={rows}
+          rows={
+            bar === null
+              ? row.rows
+              : readingFineTuneRows({
+                  rows: row.rows,
+                  region: bar,
+                  values,
+                  arrangement,
+                  narrow,
+                })
+          }
           regionId={regionId}
           regionValues={values[regionId]}
           regionHidden={regionValuesHidden(values[regionId])}
@@ -457,22 +411,99 @@ function DetailRowView(props: {
 }
 
 /**
- * Whether this region's reading is placed in the Tab strip right now - the
- * one Location the Display row (icon-only) does anything for (F6). Neither a
- * bar region nor placed there: the row is dropped by `DetailRowView` above.
- * Never on a narrow viewport, whose one bar is the footer (L-162) and whose
- * header draws every reading as its glyph anyway.
+ * A bar reading's detail rows for where it sits now: the Density row says what
+ * Auto is at that spot, and the rows a Compact reading ignores are left out.
+ * A phone's footer has one density, so it draws no Density row and hides none.
  */
-function tabStripHosted(
-  regionId: RegionId,
-  arrangement: LayoutArrangement,
-  narrow: boolean,
-): boolean {
-  const barRegion = asBarRegionId(regionId);
+function readingFineTuneRows(input: {
+  readonly rows: ReadonlyArray<FineTuneRowFacts>;
+  readonly region: BarRegionId;
+  readonly values: LayoutValues;
+  readonly arrangement: LayoutArrangement;
+  readonly narrow: boolean;
+}): ReadonlyArray<FineTuneRowFacts> {
+  const { rows, region, values, arrangement, narrow } = input;
+  if (narrow) return rows.filter((row) => row.id !== "density");
+  const density = values[region].density;
+  const compact =
+    resolvedReadingDensity(density, arrangement, region) === "compact";
+  const ignored = compactIgnoredRows(region);
+  return rows
+    .filter((row) => !compact || !ignored.includes(row.id))
+    .map((row) =>
+      row.id === "density"
+        ? {
+            ...row,
+            description: densityDescription(
+              region,
+              readingPlacement(arrangement, region),
+              arrangement.tabStripPlacement,
+            ),
+          }
+        : row,
+    );
+}
+
+/**
+ * One of the two readings as its own section: its name, a Show switch, then its
+ * Location and detail rows, with the Profiles list under Usage limits. Always
+ * open - a section this short has nothing to disclose.
+ */
+function ReadingSection(props: {
+  readonly regionId: BarRegionId;
+  readonly snapshot: LayoutSnapshot;
+  readonly values: LayoutValues;
+  readonly selected: boolean;
+}): ReactNode {
+  const { regionId, snapshot, values, selected } = props;
+  const facts = regionFacts(regionId);
+  const gutter = useSortableRowPadding();
+  const shown = !regionValuesHidden(values[regionId]);
+  const changed = regionRowChanged(snapshot, regionId);
   return (
-    !narrow &&
-    barRegion !== null &&
-    barPlacement(arrangement, barRegion).host === "header"
+    <section
+      data-region-section={regionId}
+      aria-label={facts.name}
+      className={cn(
+        "flex flex-col border-b border-border/40 last:border-b-0",
+        selected && "bg-foreground/6 shadow-[inset_2px_0_0_var(--ring)]",
+      )}
+    >
+      <div className={cn("flex items-center gap-2", gutter.row)}>
+        <facts.icon aria-hidden className="size-3.5 text-muted-foreground" />
+        <h3 className="font-medium text-foreground">{facts.name}</h3>
+        {changed ? (
+          <span className="-my-1 flex shrink-0">
+            <RevertButton
+              label={`Revert ${facts.name}`}
+              onRevert={() => {
+                revertRegion(regionId);
+              }}
+            />
+          </span>
+        ) : null}
+        <div className="ml-auto flex items-center gap-2 text-muted-foreground">
+          <label htmlFor={`show-${regionId}`}>Show</label>
+          <Switch
+            id={`show-${regionId}`}
+            data-region-show={regionId}
+            aria-label={`Show ${facts.name}`}
+            checked={shown}
+            onCheckedChange={(next) => {
+              setRegionShown(regionId, next);
+            }}
+          />
+        </div>
+      </div>
+      <RegionRowDetail
+        regionId={regionId}
+        snapshot={snapshot}
+        values={values}
+      />
+      {regionId === "usageLimits" && shown ? (
+        <UsageProfilesList arrangement={snapshot.arrangement} values={values} />
+      ) : null}
+    </section>
   );
 }
 
@@ -505,8 +536,9 @@ function regionDetailRows(
 
 /**
  * Whether this region differs from what shipped, in any of the three ways it
- * can - its values, where it sits, or (for Usage limits) the providers it
- * draws (P-6, P-7).
+ * can - its values, where it sits, or (for Usage limits) its Profiles list's
+ * hidden providers and order (P-6, P-7). A provider's limits are not counted:
+ * they are edited in Settings ▸ Providers.
  */
 function regionRowChanged(
   snapshot: LayoutSnapshot,
@@ -521,7 +553,8 @@ function regionRowChanged(
 
 /**
  * Everything this row's dot measures, put back as ONE step: its values, where
- * it sits, and - for Usage limits - its providers.
+ * it sits, and - for Usage limits - its hidden providers and their order,
+ * leaving each provider's limits alone.
  */
 function revertRegion(regionId: RegionId): void {
   const snapshot = getLayoutSnapshot();
@@ -532,8 +565,7 @@ function revertRegion(regionId: RegionId): void {
     ...(regionId === "usageLimits"
       ? layoutChanges(snapshot).arrangement.filter(
           (change) =>
-            change.kind === "provider" ||
-            (change.kind === "order" && change.group === "usageProviders"),
+            change.kind === "order" && change.group === "usageProviders",
         )
       : []),
   ];
@@ -541,12 +573,16 @@ function revertRegion(regionId: RegionId): void {
     (current, change) => revertLayoutChange(current, change),
     snapshot,
   );
-  const next: LayoutSnapshot = regionPositionMoved(snapshot, regionId)
-    ? {
-        ...reverted,
-        arrangement: revertPositionRow(reverted.arrangement, regionId),
-      }
-    : reverted;
+  const placed = regionPositionMoved(snapshot, regionId)
+    ? revertPositionRow(reverted.arrangement, regionId)
+    : reverted.arrangement;
+  const next: LayoutSnapshot = {
+    ...reverted,
+    arrangement:
+      regionId === "usageLimits"
+        ? { ...placed, hiddenProviders: DEFAULT_ARRANGEMENT.hiddenProviders }
+        : placed,
+  };
   useLayoutEditorStore.getState().recordGesture(() => {
     useLayoutStore.getState().replaceAll(next);
   });

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
 import { StatusBarUsageScroller } from "@/components/layout/status-bar/status-bar-usage-scroller";
-import type { StatusBarUsageParts } from "@/components/layout/status-bar/status-bar-usage-display";
+import type { StatusBarUsageDisplay } from "@/components/layout/status-bar/status-bar-usage-display";
 import type {
   StatusBarProviderSegmentModel,
   StatusBarRateLimitCluster,
@@ -23,11 +23,9 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
  * now lives once, on the cluster's row.
  */
 
-const PARTS: StatusBarUsageParts = {
-  modeWord: true,
-  timer: false,
-  bar: false,
-  percent: true,
+const DISPLAY: StatusBarUsageDisplay = {
+  percentMode: "used",
+  showTimer: false,
 };
 
 function segment(
@@ -72,13 +70,11 @@ function renderCluster(): void {
       >
         <StatusBarProviderSegment
           segment={segment("codex")}
-          parts={PARTS}
-          percentMode="used"
+          display={DISPLAY}
         />
         <StatusBarProviderSegment
           segment={segment("claude-code")}
-          parts={PARTS}
-          percentMode="used"
+          display={DISPLAY}
         />
       </StatusBarUsageScroller>
     </TooltipProvider>,
