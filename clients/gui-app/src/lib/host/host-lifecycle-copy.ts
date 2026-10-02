@@ -87,9 +87,9 @@ export function hostLifecycleCardSubtitle(machine: string): string {
   return `Choose what happens to the host on this ${machine}. Agents, terminals and shells run on the host.`;
 }
 
-/** Why the `none` option is disabled for a plan with no remote hosts. */
-export const HOST_LIFECYCLE_NONE_PLAN_REASON =
-  "Your plan doesn't include remote hosts, so Traycer needs a host on this machine.";
+/** Why the `none` option is disabled while signed out. */
+export const HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON =
+  "Sign in to use remote hosts. Until then, Traycer needs a host on this machine.";
 
 /**
  * Why the modes that run a host here are held while the host's Scheduled Task

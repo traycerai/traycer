@@ -1842,9 +1842,6 @@ function modelPickerHostUnavailableLabel(
   if (hostId === null) return "No device available";
   if (reachability.status === "checking") return "Checking device";
   if (reachability.status === "unreachable") {
-    if (reachability.unavailability === "plan-restricted") {
-      return `${reachability.hostLabel} isn't available on your plan`;
-    }
     return `${reachability.hostLabel} is offline`;
   }
   return `${reachability.hostLabel} is starting`;

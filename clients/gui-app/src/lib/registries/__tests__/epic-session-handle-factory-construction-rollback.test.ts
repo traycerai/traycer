@@ -137,10 +137,8 @@ function buildSpec(): EpicSessionHandleSpec {
     readRequesterTarget: unresolvedRequesterTarget,
     onAuthError: () => undefined,
     adoptLegacyPersistKey: () => undefined,
-    onPlanRestrictedDenial: () => undefined,
     markHealthy: () => undefined,
     onRuntimeFatal: () => undefined,
-    onRetryTransport: () => undefined,
   };
 }
 

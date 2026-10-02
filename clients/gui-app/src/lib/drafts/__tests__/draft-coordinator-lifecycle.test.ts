@@ -1176,21 +1176,25 @@ describe("sweepAbsentCloudDraftMirrors", () => {
   it("fences a row ingested since the directory's snapshot: retained at the ingest's own seq, dropped once the fence catches up", async () => {
     const id = "sweep-fenced";
     const document = landingCloudDocument(id, "host-b", "cloud body");
+    const dispatchedBeforeIngest = cloudDraftIngestSeq();
     await ingestCloudDraftSummary({
       hostId: "host-a",
       readOwner: null,
       summary: landingCloudSummary(document),
       document,
     });
-    const seqAfterIngest = cloudDraftIngestSeq();
-    expect(seqAfterIngest).toBeGreaterThan(0);
+    // The row's fence is the ingest's own position. A directory request
+    // dispatched BEFORE the ingest holds a position below it; one dispatched
+    // after takes a fresh position above it.
+    const dispatchedAfterIngest = cloudDraftIngestSeq();
+    expect(dispatchedAfterIngest).toBeGreaterThan(dispatchedBeforeIngest + 1);
 
-    sweepAbsentCloudDraftMirrors("host-a", new Map(), seqAfterIngest - 1);
+    sweepAbsentCloudDraftMirrors("host-a", new Map(), dispatchedBeforeIngest);
     expect(useLandingDraftStore.getState().drafts.map((d) => d.id)).toContain(
       id,
     );
 
-    sweepAbsentCloudDraftMirrors("host-a", new Map(), seqAfterIngest);
+    sweepAbsentCloudDraftMirrors("host-a", new Map(), dispatchedAfterIngest);
     expect(
       useLandingDraftStore.getState().drafts.map((d) => d.id),
     ).not.toContain(id);
@@ -1320,8 +1324,9 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     );
   });
 
-  it("cloudDraftIngestSeq starts at 0 after reset and is 1 after one successful ingest", async () => {
-    expect(cloudDraftIngestSeq()).toBe(0);
+  it("cloudDraftIngestSeq hands out a fresh position per call, from 1 after reset, and an ingest takes the next one", async () => {
+    expect(cloudDraftIngestSeq()).toBe(1);
+    expect(cloudDraftIngestSeq()).toBe(2);
 
     const document = landingCloudDocument("seq-check", "host-b", "cloud body");
     await ingestCloudDraftSummary({
@@ -1331,7 +1336,8 @@ describe("sweepAbsentCloudDraftMirrors", () => {
       document,
     });
 
-    expect(cloudDraftIngestSeq()).toBe(1);
+    // The ingest took 3; this call takes 4.
+    expect(cloudDraftIngestSeq()).toBe(4);
   });
 
   it("reserves the ingest sequence before the apply resolves, fencing a concurrent sweep against a pre-existing clean replica row", async () => {
@@ -1364,8 +1370,9 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     });
 
     // The sequence is reserved synchronously, before the apply's await
-    // settles — not after, the way it used to be.
-    expect(cloudDraftIngestSeq()).toBe(1);
+    // settles — not after, the way it used to be: the ingest took 1, so this
+    // call takes 2.
+    expect(cloudDraftIngestSeq()).toBe(2);
 
     // A directory sweep whose snapshot predates this ingest (fenceSeq 0)
     // must not drop the pre-existing replica row for this draft id, even
@@ -1437,8 +1444,8 @@ describe("sweepAbsentCloudDraftMirrors", () => {
     });
 
     // The apply reserved the fence synchronously as part of the bootstrap,
-    // exactly like an `ingestCloudDraftSummary` apply does.
-    expect(cloudDraftIngestSeq()).toBeGreaterThan(0);
+    // exactly like an `ingestCloudDraftSummary` apply does: the sweeps below
+    // are what prove it.
 
     // An older directory snapshot (fence 0) predates this apply's reserved
     // sequence, so it must not drop the row it just installed.

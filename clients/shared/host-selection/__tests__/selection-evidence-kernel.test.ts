@@ -209,8 +209,7 @@ describe("SelectionEvidenceKernel - dial evidence shapes", () => {
     kernel.reportDialSuccess("H", "a1", "local-ws");
     kernel.reportDialTimeout("H", "a2", "local-ws");
     kernel.reportDialIndeterminate("H", "a3", "local-ws");
-    kernel.reportDialRefusal("H", "a4", "local-ws", "plan-restricted");
-    kernel.reportDialRefusal("H", "a5", "local-ws", null);
+    kernel.reportDialRefusal("H", "a4", "local-ws");
 
     expect(client.reportEvidenceCalls).toEqual([
       {
@@ -242,23 +241,10 @@ describe("SelectionEvidenceKernel - dial evidence shapes", () => {
         hostId: "H",
         attemptId: "a4",
         outcome: "confirmed-refusal",
-        refusalDetail: "plan-restricted",
-        transportKind: "local-ws",
-        at: 42,
-      },
-      {
-        kind: "dial",
-        hostId: "H",
-        attemptId: "a5",
-        outcome: "confirmed-refusal",
-        refusalDetail: null,
         transportKind: "local-ws",
         at: 42,
       },
     ]);
-    expect(client.reportEvidenceCalls[0]).not.toHaveProperty("refusalDetail");
-    expect(client.reportEvidenceCalls[1]).not.toHaveProperty("refusalDetail");
-    expect(client.reportEvidenceCalls[2]).not.toHaveProperty("refusalDetail");
   });
 });
 

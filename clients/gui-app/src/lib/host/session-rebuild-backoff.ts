@@ -1,25 +1,24 @@
 /**
- * Extra OWNER-level delay after a plan-restricted transport reaches its own
- * reprobe deadline. The transport cache already waits before it permits a new
- * remote session; this ladder prevents a host that keeps denying the plan from
- * rebuilding the whole Epic session at every cache deadline forever.
+ * OWNER-level delay ladder for rebuilding an Epic session whose construction
+ * keeps failing, so a session that cannot be built is retried on a widening
+ * schedule instead of on every notification.
  *
- * Requests are owned by the handle that observed the denial. One handle may
- * claim at most one ladder attempt, including the synchronous first attempt.
- * When a replacement handle is denied while a delayed attempt is pending, its
- * callback takes over that timer; a retired handle must never strand the live
- * one by keeping the only scheduled callback.
+ * Requests are owned by whoever observed the failure. One owner may claim at
+ * most one ladder attempt, including the synchronous first attempt. When a
+ * replacement owner fails while a delayed attempt is pending, its callback
+ * takes over that timer; a retired owner must never strand the live one by
+ * keeping the only scheduled callback.
  */
-export const PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS = 60_000;
-export const PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS = 15 * 60_000;
+export const SESSION_REBUILD_INITIAL_BACKOFF_MS = 60_000;
+export const SESSION_REBUILD_MAX_BACKOFF_MS = 15 * 60_000;
 
-export interface PlanRestrictedSessionRebuildBackoff {
+export interface SessionRebuildBackoff {
   /**
    * Runs the first owner's rebuild immediately, then delays distinct
    * replacement owners. `owner` must remain stable for that handle's lifetime.
    */
   readonly request: (owner: object, rebuild: () => void) => void;
-  /** A loaded session on an open transport proves the denial loop ended. */
+  /** A loaded session on an open transport proves the failure loop ended. */
   readonly markHealthy: () => void;
   /** Ends any pending delay when the owning provider/host target goes away. */
   readonly cancel: () => void;
@@ -28,12 +27,12 @@ export interface PlanRestrictedSessionRebuildBackoff {
 function delayForAttempt(attempt: number): number {
   if (attempt === 0) return 0;
   return Math.min(
-    PLAN_RESTRICTED_SESSION_REBUILD_INITIAL_BACKOFF_MS * 2 ** (attempt - 1),
-    PLAN_RESTRICTED_SESSION_REBUILD_MAX_BACKOFF_MS,
+    SESSION_REBUILD_INITIAL_BACKOFF_MS * 2 ** (attempt - 1),
+    SESSION_REBUILD_MAX_BACKOFF_MS,
   );
 }
 
-export function createPlanRestrictedSessionRebuildBackoff(): PlanRestrictedSessionRebuildBackoff {
+export function createSessionRebuildBackoff(): SessionRebuildBackoff {
   let claimedAttempts = 0;
   let attemptedOwners = new WeakSet<object>();
   let pendingTimer: number | null = null;
@@ -56,8 +55,8 @@ export function createPlanRestrictedSessionRebuildBackoff(): PlanRestrictedSessi
       attemptedOwners.add(owner);
 
       if (pendingTimer !== null) {
-        // A replacement handle reached its own denial before the current rung
-        // fired. Keep the rung/deadline, but hand ownership to the live handle
+        // A replacement owner reached its own failure before the current rung
+        // fired. Keep the rung/deadline, but hand ownership to the live owner
         // instead of dropping its request behind a retired callback.
         pendingRebuild = rebuild;
         return;

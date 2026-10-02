@@ -54,7 +54,6 @@ const BASE = {
   isLocalMachine: false,
   hasLiveSession: false,
   service: undefined,
-  planAllowsRemote: true,
   nowMs: NOW_MS,
 };
 
@@ -192,52 +191,6 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
 });
 
 describe("deriveHostHealth — every dead reason gets its own answer", () => {
-  /**
-   * THE regression this file exists for. Rendering `plan-restricted` as
-   * "offline" is the months-long defect that sent free-tier users to debug a
-   * network fault they did not have, while the one remedy that works — an
-   * upgrade — went unmentioned. The two arms must differ in REMEDY, not just
-   * in wording, which is why the detail is asserted and not only the state.
-   */
-  it("says Local only for plan-restricted — never Offline — and names the upgrade", () => {
-    const health = deriveHostHealth({
-      ...BASE,
-      lease: {
-        hostId: "host-a",
-        status: "dead",
-        dead: { reason: "plan-restricted" },
-      },
-      authorityAttached: true,
-    });
-
-    expect(health.state).toBe("local-only");
-    expect(health.label).toBe("Local only");
-    expect(health.label).not.toBe("Offline");
-    expect(health.state).not.toBe("offline");
-    expect(health.detail).toBe(
-      "Not reachable from here — remote access needs a paid plan.",
-    );
-    // Not a fault: the host is healthy and running on its own computer.
-    expect(health.tone).toBe("idle");
-  });
-
-  it("words plan-restricted differently for THIS machine, where the host is reachable", () => {
-    const health = deriveHostHealth({
-      ...BASE,
-      isLocalMachine: true,
-      lease: {
-        hostId: "host-a",
-        status: "dead",
-        dead: { reason: "plan-restricted" },
-      },
-      authorityAttached: true,
-    });
-
-    expect(health.detail).toBe(
-      "Reachable on this computer. Remote access needs a paid plan.",
-    );
-  });
-
   it("says Removed for a host that left the account", () => {
     const health = deriveHostHealth({
       ...BASE,
@@ -283,17 +236,16 @@ describe("deriveHostHealth — every dead reason gets its own answer", () => {
   /**
    * Totality, asserted as behaviour to back up the type-level guarantee.
    *
-   * `DEAD_HEALTH` is keyed on `HostLeaseDeadState["reason"]`, so a fifth reason
+   * `DEAD_HEALTH` is keyed on `HostLeaseDeadState["reason"]`, so a new reason
    * added to the contract fails to COMPILE here rather than routing silently to
    * a generic arm — the same construction as `tile-host-load-copy.ts`. This
    * test adds the runtime half: no two reasons may collapse onto one answer,
    * which a compiler cannot see.
    */
-  it("gives the four dead reasons four distinct states", () => {
+  it("gives the three dead reasons three distinct states", () => {
     const deadStates = (
       [
         { reason: "offline" },
-        { reason: "plan-restricted" },
         { reason: "removed" },
         {
           reason: "incompatible",
@@ -314,7 +266,7 @@ describe("deriveHostHealth — every dead reason gets its own answer", () => {
         }).state,
     );
 
-    expect(new Set(deadStates).size).toBe(4);
+    expect(new Set(deadStates).size).toBe(3);
   });
 });
 

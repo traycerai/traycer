@@ -334,8 +334,8 @@ function eligibilityKeyFor(
  * un-evictable for the whole background period: the cap was inert exactly
  * when memory pressure was highest (2026-09-03 field report: 8 resident, iOS
  * jetsam at 2 GB). The transport says nothing about what would be LOST; the
- * three fields above do. `retryTransport` and `replaceMounted` made the same
- * call for their own gates, with the same reasoning. A never-loaded session
+ * three fields above do. `replaceMounted` made the same call for its own
+ * gate, with the same reasoning. A never-loaded session
  * has nothing to lose either, which is why `snapshotLoaded` is not read.
  */
 export function holdsNothingToLose(state: OpenEpicState): boolean {

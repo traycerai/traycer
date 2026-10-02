@@ -81,7 +81,6 @@ const FACES = [
   "narrator-slow",
   "narrator-failed",
   "narrator-no-host",
-  "narrator-plan",
   "narrator-update",
   "gate-provisioning-error",
   "gate-removed",
@@ -283,16 +282,6 @@ function narratorProps(which: GalleryFace): WindowHostModalProps {
         cause: "no-usable-host",
         bootBody: settledBody(),
         onRetry: noop,
-        showReportIssue: true,
-        settingsEmphasis: "button",
-        settingsOnly: false,
-      };
-    case "narrator-plan":
-      return {
-        ...HEALTHY,
-        cause: "no-usable-host",
-        variant: { kind: "plan-restricted" },
-        bootBody: null,
         showReportIssue: true,
         settingsEmphasis: "button",
         settingsOnly: false,

@@ -18,8 +18,6 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   createRemoteHostTransport,
-  PLAN_RESTRICTED_FATAL_CODE,
-  planRestrictedReprobeAtForHost,
   type IRemoteSession,
   type RemoteHostTransport,
 } from "@traycer-clients/shared/host-transport/remote/index";
@@ -55,7 +53,7 @@ const TRANSPORT_KEY_SEPARATOR = "\u0000";
  * redialing it (see `RuntimeHostMessenger.terminalVerdictByHost`). Long enough
  * that the invalidation→refetch cycle the verdict itself triggers lands on the
  * verdict rejection (an error card) rather than a fresh dial - and that a
- * fatal that WILL repeat (incompatible protocol, plan restriction) cannot
+ * fatal that WILL repeat (incompatible protocol) cannot
  * drive a mint+dial loop at the query layer's pace - while short enough that
  * a host the user just updated connects on the next natural refetch.
  */
@@ -272,7 +270,7 @@ class RuntimeHostMessenger<
   private readonly owedOrphanDetachByHost = new Map<string, () => void>();
   /**
    * Sticky per-host verdicts from sessions that closed on a terminal fatal
-   * (incompatible protocol, plan restriction, revoked credential). Without
+   * (incompatible protocol, revoked credential). Without
    * this, the stranded-spinner sequence closes over itself: the panel query
    * cached a retryable "not ready" error from racing the dial, the dial ends
    * terminal, and every refetch transparently rebuilds a FRESH dialing
@@ -281,9 +279,7 @@ class RuntimeHostMessenger<
    * with it, `rejectIfTerminalVerdict`) makes the invalidation fired at close
    * time land on an honest non-retryable error instead of a redial. Entries
    * expire after {@link TERMINAL_VERDICT_TTL_MS} - terminal describes the
-   * SESSION, not the host, which may be updated/re-entitled any moment. The
-   * one exception is PLAN_RESTRICTED, whose cache-controlled reprobe deadline
-   * keeps the query layer aligned with the transport's negative cache. They
+   * SESSION, not the host, which may be updated any moment. They
    * are dropped early when a later session for the host reaches ready, or
    * when the host's transport identity moves off the recorded `key`: the key
    * folds in version/publicKey/relay URL, so e.g. the host update that
@@ -592,7 +588,7 @@ class RuntimeHostMessenger<
     };
     unsubscribeAvailability = session.subscribeAvailabilityRecovered(() => {
       // Positive evidence beats any recorded verdict: the host is back
-      // (updated, re-entitled, re-keyed), so stop rejecting its requests.
+      // (updated, re-keyed), so stop rejecting its requests.
       this.terminalVerdictByHost.delete(hostId);
       this.onRemoteAvailabilityRecovered(hostId);
       if (released) {
@@ -620,14 +616,9 @@ class RuntimeHostMessenger<
         // superseded can, at worst, fail-fast the host for one TTL while
         // other consumers hold a working session under the new identity -
         // bounded, and cleared early by the next ready boundary heard.)
-        const at = Date.now();
-        const planRestrictedUntil =
-          fatal.code === PLAN_RESTRICTED_FATAL_CODE
-            ? planRestrictedReprobeAtForHost(hostId)
-            : null;
         this.terminalVerdictByHost.set(hostId, {
           fatal,
-          expiresAt: planRestrictedUntil ?? at + TERMINAL_VERDICT_TTL_MS,
+          expiresAt: Date.now() + TERMINAL_VERDICT_TTL_MS,
           key: transportKey,
         });
         this.onRemoteAvailabilityRecovered(hostId);

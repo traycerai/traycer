@@ -1028,10 +1028,9 @@ available for a host this client has never dialled).
 `connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
 plus a separate relay-attach bit, and with them the states that existed only to
 narrate those two disagreeing ("Reconnecting", "Not reporting"). Its remaining
-invariants are tested and load-bearing: no green dot without live evidence;
-`unknown` (liveness unreadable) never renders as a false "Offline"; and
-`local-only` - a host the account's plan will never expose remotely - is an
-upgrade prompt, not an outage.
+invariants are tested and load-bearing: no green dot without live evidence, and
+`unknown` (liveness unreadable) never renders as a false "Offline". The retired
+`local-only` wire value, which no server emits, reads as `unknown`.
 
 Two things a reader of this file will look for and not find in the DTO:
 `busy` and `busySessionCount`. They describe a _right now_ the cloud's lease
@@ -1091,8 +1090,8 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     to X · restart the host to apply" (an older supervisor is running; carries
     a Restart host button that opens `LocalHostRestartFlow`) or "Set to X ·
     takes effect at next launch" (entering or leaving No local host). No local
-    host is disabled with the reason on a plan without remote hosts (known
-    unpaid `subscriptionStatus`), and choosing it while this launch runs a
+    host is disabled with the reason while signed out (remote hosts are
+    reached through the account), and choosing it while this launch runs a
     host confirms through the quit modal's stop-only form
     (`host-lifecycle-none-confirm-dialog.tsx`). The local host's Overview
     header carries the same mode promise the tray shows ("keeps running after

@@ -218,8 +218,7 @@ export function HostIdentityCard(props: {
                 repeats the `Local` tag, and the relay route line was
                 deliberately dropped with the meta row — but an offline or
                 unknown host's detail is the actionable half of its answer:
-                "Last seen 2h ago", when reachability was checked, that remote
-                access needs an upgrade. Suppressing those left them rendered
+                "Last seen 2h ago", when reachability was checked. Suppressing those left them rendered
                 nowhere, since the picker deliberately shows only a dot. */}
             {host.health.tone === "live" ||
             (host.health.detail ?? "").length === 0 ? null : (

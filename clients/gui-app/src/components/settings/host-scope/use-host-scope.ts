@@ -159,9 +159,8 @@ export function useHostScopeFor(selection: HostScopeSelection): HostScope {
     host.hostId === activeHostId;
 
   // Gated on `connectable`, not on the entry's mere existence: an unavailable
-  // entry can still carry a stale URL, and a plan-restricted remote advertises
-  // one the server will refuse, so keying on the entry built a live-looking
-  // client for a host the status machine was about to call `unreachable`.
+  // entry can still carry a stale URL, so keying on the entry built a
+  // live-looking client for a host the status machine was about to call `unreachable`.
   // The rule itself lives in `transientClientEntry`, where a test can reach it.
   const overrideEntry = useMemo(
     () => transientClientEntry(host, isFollowing),

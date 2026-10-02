@@ -4,10 +4,7 @@ import type {
   SchemaVersion,
   VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
-import {
-  PLAN_RESTRICTED_REPROBE_MS,
-  REMOTE_SESSION_LINGER_MS,
-} from "../config";
+import { REMOTE_SESSION_LINGER_MS } from "../config";
 import type { IRemoteSession } from "../remote-session";
 import type { WakeProbeTuning } from "../../host-stream-client";
 import type { StreamMethodSupport } from "../../ws-stream-client";
@@ -438,100 +435,6 @@ describe("acquireRemoteSession", () => {
     rebuiltView.close();
     expireLinger();
     expect(fresh.closeCalls).toBe(1);
-  });
-
-  it("negative-caches PLAN_RESTRICTED across consumer rebuilds and permits one fresh probe after the suppression window", () => {
-    const identity = freshIdentity();
-    const restricted = fakeSession();
-    const recovered = fakeSession();
-    const createSession = vi
-      .fn()
-      .mockReturnValueOnce(restricted)
-      .mockReturnValueOnce(recovered);
-
-    const first = acquireRemoteSession(
-      identity,
-      ELIGIBLE_POLICY,
-      createSession,
-    );
-    restricted.fatalCode = "PLAN_RESTRICTED";
-    restricted.closedUnderneath = true;
-    restricted.emitClosed();
-
-    // A registry rebuild while the original consumer is still mounted gets
-    // the same terminal verdict. It must not mint a second attach grant.
-    const suppressed = acquireRemoteSession(
-      identity,
-      ELIGIBLE_POLICY,
-      createSession,
-    );
-    expect(createSession).toHaveBeenCalledTimes(1);
-    expect(suppressed.terminalFatal()?.code).toBe("PLAN_RESTRICTED");
-
-    first.close();
-    suppressed.close();
-    vi.advanceTimersByTime(PLAN_RESTRICTED_REPROBE_MS - 1);
-    const stillSuppressed = acquireRemoteSession(
-      identity,
-      ELIGIBLE_POLICY,
-      createSession,
-    );
-    expect(createSession).toHaveBeenCalledTimes(1);
-    stillSuppressed.close();
-
-    vi.advanceTimersByTime(1);
-    const probe = acquireRemoteSession(
-      identity,
-      ELIGIBLE_POLICY,
-      createSession,
-    );
-    expect(createSession).toHaveBeenCalledTimes(2);
-    expect(probe.isClosed()).toBe(false);
-    probe.close();
-    expireLinger();
-  });
-
-  it("replaces an in-flight linger with the full PLAN_RESTRICTED suppression window", () => {
-    const identity = freshIdentity();
-    const restricted = fakeSession();
-    const recovered = fakeSession();
-    const createSession = vi
-      .fn()
-      .mockReturnValueOnce(restricted)
-      .mockReturnValueOnce(recovered);
-
-    const first = acquireRemoteSession(
-      identity,
-      ELIGIBLE_POLICY,
-      createSession,
-    );
-    // Release before the attach result arrives: this arms ordinary linger.
-    first.close();
-    restricted.fatalCode = "PLAN_RESTRICTED";
-    restricted.closedUnderneath = true;
-    restricted.emitClosed();
-
-    vi.advanceTimersByTime(REMOTE_SESSION_LINGER_MS);
-    const stillSuppressed = acquireRemoteSession(
-      identity,
-      ELIGIBLE_POLICY,
-      createSession,
-    );
-    expect(createSession).toHaveBeenCalledTimes(1);
-    expect(stillSuppressed.terminalFatal()?.code).toBe("PLAN_RESTRICTED");
-    stillSuppressed.close();
-
-    vi.advanceTimersByTime(
-      PLAN_RESTRICTED_REPROBE_MS - REMOTE_SESSION_LINGER_MS,
-    );
-    const probe = acquireRemoteSession(
-      identity,
-      ELIGIBLE_POLICY,
-      createSession,
-    );
-    expect(createSession).toHaveBeenCalledTimes(2);
-    probe.close();
-    expireLinger();
   });
 
   it("a session that goes fatal WHILE lingering is evicted on the next acquire, and the stale linger timer never touches the successor", () => {
@@ -1565,18 +1468,20 @@ describe("wakeHeldRemoteSessions", () => {
 });
 
 describe("RemoteStreamClient reconnectAll routing", () => {
-  it("exposes PLAN_RESTRICTED as an owner-visible terminal reason", () => {
+  it("never reports a closed reason, even once the session has gone terminal", () => {
     const session = fakeSession();
-    const client = new RemoteStreamClient(session, () => 123_456);
+    const client = new RemoteStreamClient(session);
     expect(client.getClosedReason()).toBeNull();
 
-    session.fatalCode = "PLAN_RESTRICTED";
-    expect(client.getClosedReason()).toBe("plan-restricted:123456");
+    session.fatalCode = "TERMINAL_TEST_FATAL";
+    session.closedUnderneath = true;
+    expect(client.isClosed()).toBe(true);
+    expect(client.getClosedReason()).toBeNull();
   });
 
   it("routes probeFirst:false to forceReconnect and probeFirst:true to wake, never both", () => {
     const session = fakeSession();
-    const client = new RemoteStreamClient(session, () => null);
+    const client = new RemoteStreamClient(session);
 
     // The Retry-now path. Reverting the wrapper to always-wake leaves every
     // lower-level force test green - only this direct pin catches it.

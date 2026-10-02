@@ -29,10 +29,10 @@ const textFrameFields = {
  * A frame carries {@link hostListItemSchema} rows - exactly what
  * `GET /api/v3/hosts` returns and what the client already projects through
  * `hostListItemToDirectoryEntry`. Deliberately NOT the client's projected
- * `HostDirectoryEntry`: three of that shape's fields are the CLIENT's to
- * decide, not the host's - whether the account's plan allows remote hosts,
- * where the relay attach endpoint is, and how the client's own clock reads a
- * `lastSeenAt` - and a host answering those would be inventing them. The host
+ * `HostDirectoryEntry`: two of that shape's fields are the CLIENT's to
+ * decide, not the host's - where the relay attach endpoint is, and how the
+ * client's own clock reads a `lastSeenAt` - and a host answering those would
+ * be inventing them. The host
  * ships the evidence; the viewer keeps the derivation it already owns.
  *
  * ## Optional, and a fallback that is the status quo

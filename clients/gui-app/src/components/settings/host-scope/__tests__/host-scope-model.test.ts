@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type {
+  HostConnectivity,
+  HostListItem,
+} from "@traycer/protocol/host/host-status";
 import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   buildHostScopeOptions,
@@ -13,14 +16,6 @@ import {
   hostScopeOptionFixture,
 } from "@/components/settings/host-scope/host-scope-fixture";
 import { dialableHostEndpoint } from "@/lib/host/transport-key";
-
-/**
- * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
- * stamps it onto every entry at projection time. These fixtures describe an
- * entitled account unless a case says otherwise.
- */
-const PLAN_ALLOWS_REMOTE = true;
-const PLAN_GATED = false;
 
 /**
  * `connectable` is the model's answer to "can this row be administered", and
@@ -135,19 +130,9 @@ describe("buildHostScopeOptions connectable", () => {
     }
   });
 
-  it("does not derive remote-route availability from the account plan", () => {
-    expect(
-      buildOne({
-        entry: entry({ kind: "remote" }),
-        item: null,
-        localHostId: null,
-      }).connectable,
-    ).toBe(true);
-  });
-
-  it("does not let the remote plan gate touch this machine", () => {
-    // The gate is about the relay, so a local host must stay administrable on
-    // any plan — otherwise a free-plan user loses their own recovery surface.
+  it("keeps this machine's own host administrable", () => {
+    // The relay never decides whether this machine's own host can be reached,
+    // so a local host stays administrable whatever the cloud says about it.
     expect(
       buildOne({
         entry: entry({ hostId: "host-a", kind: "local" }),
@@ -158,56 +143,13 @@ describe("buildHostScopeOptions connectable", () => {
   });
 });
 
-describe("buildHostScopeOptions planRestricted", () => {
-  // `connectable: false` alone erased WHY, and consumers rendered a billing
-  // limit as "unreachable" — sending people debugging their network when the
-  // remedy is an upgrade. `planRestricted` is true exactly when the plan gate
-  // is the ONLY thing costing the route.
-  it("does not synthesize a plan restriction from client subscription state", () => {
-    const option = buildOne({
-      entry: entry({ kind: "remote" }),
-      item: null,
-      localHostId: null,
-    });
-    expect(option.connectable).toBe(true);
-    expect(option.planRestricted).toBe(false);
-  });
-
-  it("stays false for a genuinely unreachable route, restricted plan or not", () => {
-    // No URL / stale status is connectivity, not billing: an upgrade would
-    // not fix it, so the upgrade affordance must not appear.
-    expect(
-      buildOne({
-        entry: entry({ kind: "remote", websocketUrl: null }),
-        item: null,
-        localHostId: null,
-      }).planRestricted,
-    ).toBe(false);
-    expect(
-      buildOne({
-        entry: entry({ kind: "remote", transportDialability: "not-dialable" }),
-        item: null,
-        localHostId: null,
-      }).planRestricted,
-    ).toBe(false);
-  });
-
-  it("stays false on a plan that includes remote hosts", () => {
-    expect(
-      buildOne({
-        entry: entry({ kind: "remote" }),
-        item: null,
-        localHostId: null,
-      }).planRestricted,
-    ).toBe(false);
-  });
-
-  it("uses the matching authority lease to disable only the refused host", () => {
+describe("buildHostScopeOptions connectable — the route, not the lease", () => {
+  // `connectable` answers a ROUTE question and `health` answers a STATUS one.
+  // A lease says what the authority concluded about a host; it never decides
+  // whether this app has a route to it.
+  it("takes connectable from the route alone, whatever the lease says", () => {
     const options = buildHostScopeOptions({
-      directory: [
-        entry({ hostId: "restricted" }),
-        entry({ hostId: "healthy" }),
-      ],
+      directory: [entry({ hostId: "down" }), entry({ hostId: "healthy" })],
       registry: [],
       localHostId: null,
       activeHostId: null,
@@ -215,7 +157,7 @@ describe("buildHostScopeOptions planRestricted", () => {
       hasLiveSession: () => false,
       leases: [
         hostLeaseFixture("healthy", null),
-        hostLeaseFixture("restricted", { reason: "plan-restricted" }),
+        hostLeaseFixture("down", { reason: "offline" }),
       ],
       authorityAttached: true,
       localHostSettingUp: false,
@@ -223,190 +165,93 @@ describe("buildHostScopeOptions planRestricted", () => {
     });
     const byId = new Map(options.map((option) => [option.hostId, option]));
 
-    expect(byId.get("restricted")).toMatchObject({
-      connectable: false,
-      planRestricted: true,
-    });
-    expect(byId.get("healthy")).toMatchObject({
-      connectable: true,
-      planRestricted: false,
-    });
+    expect(byId.get("down")?.connectable).toBe(true);
+    expect(byId.get("down")?.health.state).toBe("offline");
+    expect(byId.get("healthy")?.connectable).toBe(true);
+    expect(byId.get("healthy")?.health.state).toBe("online");
   });
 });
 
-describe("buildHostScopeOptions planRestricted — composed against a real plan-gated mapped entry", () => {
+describe("buildHostScopeOptions connectable — composed against real mapped entries", () => {
   // `entry()` above and `buildOne`'s hard-coded `hasLiveSession: () => false`
-  // are exactly what hid the original bug: a synthetic literal has no
-  // `remoteStatus`, so `hostUnavailability` falls straight to its
-  // non-remote-entry branch (`"offline"`) no matter what `status` says, and
-  // the ENTRY half of `isPlanRestrictedRoute` — a `planAllowsRemote: false`
-  // stamp ⇒ `"plan-restricted"` — never gets exercised at all. This composes
-  // the REAL mapper output instead, and varies `hasLiveSession` (irrelevant to
-  // this particular derivation, but varying it is what the review asked for
-  // and it costs nothing to prove it stays irrelevant here).
-  function realPlanGatedEntry(): HostDirectoryEntry {
-    return hostListItemToDirectoryEntry(
-      {
-        hostId: "host-a",
-        displayName: "Free Tier Laptop",
-        platform: "darwin-arm64",
-        kind: "personal",
-        publicKey: "pk-a",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatePolicy: "manual",
-        status: {
-          // ALIVE on the wire — the plan, not the machine, is the reason there
-          // is no route.
-          connectivity: "connectable",
-          viewerReachability: "unknown",
-          clientCloud: "ok",
-          updateState: "current",
-          appVersion: "1.4.2",
-          lastSeenAt: "2026-01-01T00:00:00Z",
-        },
+  // build synthetic literals with no `remoteStatus`. This composes the REAL
+  // mapper output instead, so the route decision sees exactly the entry the
+  // directory would hand it, and varies `hasLiveSession` to prove which cases
+  // a ready session changes.
+  function mappedItem(
+    displayName: string,
+    connectivity: HostConnectivity,
+  ): HostListItem {
+    return {
+      hostId: "host-a",
+      displayName,
+      platform: "darwin-arm64",
+      kind: "personal",
+      publicKey: "pk-a",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity,
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.4.2",
+        lastSeenAt: "2026-01-01T00:00:00Z",
       },
-      "wss://relay.example.test/attach",
-      PLAN_GATED,
-    );
+    };
   }
 
-  it("is planRestricted even with the account's OWN render-time plan gate off — the entry's stamped plan is sufficient on its own", () => {
-    // This is the case `isAdministrableRoute`/`isPlanRestrictedRoute`'s old
-    // The row is not connectable because the mapper marked the entry
-    // not-dialable from the plan stamped at FETCH time regardless of the
-    // render-time flag. Requiring `status === "available"` (the old body) can
-    // never be true for this entry, so a free-tier user's own host used to
-    // fall through to generic "unreachable" with no upgrade path.
+  function buildMapped(
+    item: HostListItem,
+    hasLiveSession: boolean,
+  ): HostScopeOption {
     const [option] = buildHostScopeOptions({
       leases: [],
       authorityAttached: false,
-      directory: [realPlanGatedEntry()],
-      registry: [],
+      directory: [
+        hostListItemToDirectoryEntry(item, "wss://relay.example.test/attach"),
+      ],
+      registry: [item],
       localHostId: null,
       activeHostId: null,
       localService: undefined,
-      hasLiveSession: () => false,
+      hasLiveSession: () => hasLiveSession,
       localHostSettingUp: false,
       nowMs: 0,
     });
-    expect(option.connectable).toBe(false);
-    expect(option.planRestricted).toBe(true);
-  });
-
-  it("stays planRestricted regardless of live-session evidence — the plan gate is not a liveness question", () => {
-    const [option] = buildHostScopeOptions({
-      leases: [],
-      authorityAttached: false,
-      directory: [realPlanGatedEntry()],
-      registry: [],
-      localHostId: null,
-      activeHostId: null,
-      localService: undefined,
-      hasLiveSession: () => true,
-      localHostSettingUp: false,
-      nowMs: 0,
-    });
-    expect(option.planRestricted).toBe(true);
-  });
-
-  it("is NOT planRestricted for a plan-gated host the cloud reports OFFLINE — that row is unreachable, not unpaid", () => {
-    // Dead is dead. The remedy for a switched-off machine is not an upgrade,
-    // so the row must not carry the billing word — and under the old wire it
-    // always did, because every host on an unpaid plan arrived as
-    // `local-only` whatever it was doing.
-    const offlineOnAGatedPlan = hostListItemToDirectoryEntry(
-      {
-        hostId: "host-a",
-        displayName: "Free Tier Laptop",
-        platform: "darwin-arm64",
-        kind: "personal",
-        publicKey: "pk-a",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatePolicy: "manual",
-        status: {
-          connectivity: "offline",
-          viewerReachability: "unknown",
-          clientCloud: "ok",
-          updateState: "current",
-          appVersion: "1.4.2",
-          lastSeenAt: "2026-01-01T00:00:00Z",
-        },
-      },
-      "wss://relay.example.test/attach",
-      PLAN_GATED,
-    );
-    const [option] = buildHostScopeOptions({
-      leases: [],
-      authorityAttached: false,
-      directory: [offlineOnAGatedPlan],
-      registry: [],
-      localHostId: null,
-      activeHostId: null,
-      localService: undefined,
-      hasLiveSession: () => false,
-      localHostSettingUp: false,
-      nowMs: 0,
-    });
-    expect(option.connectable).toBe(false);
-    expect(option.planRestricted).toBe(false);
-  });
-
-  function realConnectableEntry(): HostDirectoryEntry {
-    return hostListItemToDirectoryEntry(
-      {
-        hostId: "host-a",
-        displayName: "Downgraded Desktop",
-        platform: "darwin-arm64",
-        kind: "personal",
-        publicKey: "pk-a",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatePolicy: "manual",
-        status: {
-          connectivity: "connectable",
-          viewerReachability: "unknown",
-          clientCloud: "ok",
-          updateState: "current",
-          appVersion: "1.4.2",
-          lastSeenAt: "2026-01-01T00:00:00Z",
-        },
-      },
-      "wss://relay.example.test/attach",
-      PLAN_ALLOWS_REMOTE,
-    );
+    return option;
   }
 
-  it("does not apply a client-side plan gate when no session exists", () => {
-    const [option] = buildHostScopeOptions({
-      leases: [],
-      authorityAttached: false,
-      directory: [realConnectableEntry()],
-      registry: [],
-      localHostId: null,
-      activeHostId: null,
-      localService: undefined,
-      hasLiveSession: () => false,
-      localHostSettingUp: false,
-      nowMs: 0,
-    });
-    expect(option.connectable).toBe(true);
-    expect(option.planRestricted).toBe(false);
+  it("is connectable for a host the cloud reports connectable, with or without a session", () => {
+    const connectable = mappedItem("Desktop", "connectable");
+    expect(buildMapped(connectable, false).connectable).toBe(true);
+    expect(buildMapped(connectable, true).connectable).toBe(true);
   });
 
-  it("keeps a ready session administrable without a client billing label", () => {
-    const [option] = buildHostScopeOptions({
-      leases: [],
-      authorityAttached: false,
-      directory: [realConnectableEntry()],
-      registry: [],
-      localHostId: null,
-      activeHostId: null,
-      localService: undefined,
-      hasLiveSession: () => true,
-      localHostSettingUp: false,
-      nowMs: 0,
-    });
-    expect(option.connectable).toBe(true);
-    expect(option.planRestricted).toBe(false);
+  it("is NOT connectable for a host the cloud reports OFFLINE, and reads Offline", () => {
+    const option = buildMapped(mappedItem("Laptop", "offline"), false);
+    expect(option.connectable).toBe(false);
+    expect(option.health.state).toBe("offline");
+  });
+
+  it("keeps a host the cloud could not read dialable, and reads it as Status unknown", () => {
+    // A blind liveness read is not a refusal: the transport tries, and the
+    // row claims nothing about the machine. The retired `local-only` wire
+    // value is the same absence of an answer and reads identically.
+    for (const connectivity of ["unknown", "local-only"] as const) {
+      const option = buildMapped(mappedItem("Blind", connectivity), false);
+      expect({
+        connectivity,
+        connectable: option.connectable,
+        state: option.health.state,
+        label: option.health.label,
+      }).toEqual({
+        connectivity,
+        connectable: true,
+        state: "unknown",
+        label: "Status unknown",
+      });
+    }
   });
 });
 
@@ -510,8 +355,8 @@ describe("resolveScopedHost", () => {
 describe("transientClientEntry", () => {
   it("withholds the entry for a non-connectable host, URL or not", () => {
     // Panels read `scope.client` before their gate renders, so withholding an
-    // unavailable or plan-restricted row here prevents them mounting a client
-    // for a target the scope has already ruled not administrable.
+    // unavailable row here prevents them mounting a client for a target the
+    // scope has already ruled not administrable.
     const host = hostScopeOptionFixture({
       hostId: "host-a",
       connectable: false,
@@ -664,7 +509,7 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
   it("gives each row its own lease, not the first one in the array", () => {
     const options = buildHostScopeOptions({
       leases: [
-        hostLeaseFixture("host-b", { reason: "plan-restricted" }),
+        hostLeaseFixture("host-b", { reason: "offline" }),
         hostLeaseFixture("host-a", null),
       ],
       authorityAttached: true,
@@ -684,11 +529,10 @@ describe("buildHostScopeOptions health — leases are looked up PER HOST", () =>
     const a = options.find((o) => o.hostId === "host-a");
     const b = options.find((o) => o.hostId === "host-b");
     expect(a?.health.state).toBe("online");
-    expect(b?.health.state).toBe("local-only");
-    // The words a person reads, not just the internal states — and the pair
-    // that months of "offline" wrongly collapsed into one.
+    expect(b?.health.state).toBe("offline");
+    // The words a person reads, not just the internal states.
     expect(a?.health.label).toBe("Online");
-    expect(b?.health.label).toBe("Local only");
+    expect(b?.health.label).toBe("Offline");
   });
 
   /**

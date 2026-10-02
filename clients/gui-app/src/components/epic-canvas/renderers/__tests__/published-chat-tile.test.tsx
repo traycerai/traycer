@@ -53,8 +53,6 @@ interface MockReplicaQueryResult {
 interface MockHostReachability {
   readonly status: "reachable" | "unreachable";
   readonly hostLabel: string;
-  /** Absent on most fixtures, like the real hook's `null`. */
-  readonly unavailability?: "offline" | "plan-restricted";
 }
 
 /**
@@ -728,31 +726,6 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
     expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
     expect(deadTileBannerContainerProps).toHaveLength(1);
     expect(deadTileBannerContainerProps[0]?.showsPublishedCopy).toBe(false);
-  });
-
-  it("names the plan restriction, not an outage, when that is why the owner is unreachable", () => {
-    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
-    mockUseChatReplicaRead.mockReturnValue(replicaOk());
-    mockUseHostReachability.mockReturnValue({
-      status: "unreachable",
-      hostLabel: "Ada's Mac",
-      unavailability: "plan-restricted",
-    });
-
-    render(
-      <PublishedChatTile
-        node={NODE}
-        viewTabId="tab-1"
-        tileId="pane-1"
-        isActive
-        epicId="epic-1"
-      />,
-    );
-
-    expect(deadTileBannerContainerProps).toHaveLength(1);
-    expect(deadTileBannerContainerProps[0]?.reason).toBe(
-      "host-plan-restricted",
-    );
   });
 });
 

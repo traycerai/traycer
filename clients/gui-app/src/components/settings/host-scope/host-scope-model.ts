@@ -5,7 +5,6 @@ import type {
 } from "@traycer/protocol/host/host-status";
 import type { ServiceStatusSnapshot } from "@traycer-clients/shared/platform/runner-host";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
   deriveHostHealth,
@@ -40,13 +39,6 @@ export interface HostScopeOption {
   readonly isActive: boolean;
   /** In the runtime directory with a dialable URL — i.e. administrable. */
   readonly connectable: boolean;
-  /**
-   * `connectable` is false ONLY because of the plan gate: the route is
-   * present and live, and the server would refuse the attach
-   * (`plan_restricted`). A consumer that renders this as "unreachable"
-   * erases the actual remedy — the fix is an upgrade, not a retry.
-   */
-  readonly planRestricted: boolean;
   /**
    * This machine's own host is being installed or started right now (M5).
    *
@@ -122,17 +114,13 @@ export function buildHostScopeOptions(
     const entry = entries.get(hostId) ?? null;
     const item = items.get(hostId) ?? null;
     const lease = leases.get(hostId) ?? null;
-    const leasePlanRestricted = isLeasePlanRestricted(lease);
     const isLocalMachine = hostId === input.localHostId;
     return {
       hostId,
       name: resolveHostName(hostId, entry, item),
       isLocalMachine,
       isActive: hostId === input.activeHostId,
-      connectable:
-        !leasePlanRestricted &&
-        isAdministrableRoute(entry, input.hasLiveSession(hostId)),
-      planRestricted: leasePlanRestricted || isPlanRestrictedRoute(entry),
+      connectable: isAdministrableRoute(entry, input.hasLiveSession(hostId)),
       settingUp: isLocalMachine && input.localHostSettingUp,
       registered: item !== null,
       platform: item?.platform ?? null,
@@ -144,7 +132,6 @@ export function buildHostScopeOptions(
         service: isLocalMachine ? input.localService : undefined,
         lease,
         authorityAttached: input.authorityAttached,
-        planAllowsRemote: true,
         nowMs: input.nowMs,
       }),
       updateState: item?.status.updateState ?? null,
@@ -154,10 +141,6 @@ export function buildHostScopeOptions(
   });
 
   return options.sort(compareHostOptions);
-}
-
-function isLeasePlanRestricted(lease: HostLeaseSnapshot | null): boolean {
-  return lease?.status === "dead" && lease.dead.reason === "plan-restricted";
 }
 
 /**
@@ -195,11 +178,6 @@ export function isAdministrableRoute(
   return (
     entry !== null && dialableHostEndpointFor(entry, hasLiveSession) !== null
   );
-}
-
-/** Preserve an authn-reported denial reason without deriving one from plan. */
-function isPlanRestrictedRoute(entry: HostDirectoryEntry | null): boolean {
-  return entry !== null && hostUnavailability(entry) === "plan-restricted";
 }
 
 /**
@@ -443,7 +421,6 @@ export function unavailableHostOption(
     isLocalMachine: false,
     isActive: false,
     connectable: false,
-    planRestricted: false,
     // A host the merged list has never heard of is not a machine we are
     // installing: the mutation lane only ever describes THIS machine, and this
     // stand-in is by definition some other one.

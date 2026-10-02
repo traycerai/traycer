@@ -114,12 +114,10 @@ function AddHostDialogBody(): ReactNode {
   // nothing); the body remounts per open, so it resets with the dialog.
   //
   // `registered`, not `registered && connectable`. Requiring a dialable route
-  // stranded exactly the users the plan gate applies to: a free-plan account
-  // enrolling a remote machine sees it register, stay `connectable: false`
-  // forever by design — and this dialog spun on "Watching for a new host…"
-  // over a host that was already in the account. Registration is the
-  // enrollment claim; the route is a separate fact the banner copy states
-  // honestly either way.
+  // strands a machine that registers before its relay leg is up: this dialog
+  // would spin on "Watching for a new host…" over a host that is already in
+  // the account. Registration is the enrollment claim; the route is a
+  // separate fact the banner copy states honestly either way.
   //
   // And a third rule the first two conspire to need: enrollment can BEAT the
   // deferred baseline. Waiting for a clean read is what stops pre-existing

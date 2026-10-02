@@ -1,15 +1,16 @@
-// The "When you quit Traycer" card is reachable signed out, so the plan gate on
-// its `none` option accounts for admission as well as the plan. Signed out
-// (not admitted per `useShellLocalPlaneAdmission`) the plan is `null`, which
-// alone would leave `none` enabled for a session that cannot use it; the gate
-// disables `none` with its reason unless it is already the desired mode. An
-// admitted session is unchanged: an unread plan does not block, a known
-// unpaid plan blocks, a paid plan does not.
+// The "When you quit Traycer" card is reachable signed out, so the `none`
+// option ("Don't run a host on this machine") is gated on shell admission
+// alone. Signed out (not admitted per `useShellLocalPlaneAdmission`) a remote
+// host cannot be reached either, so `none` would leave nothing usable: it is
+// disabled with `HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON` unless it is already
+// the desired mode. Remote hosts are available on every plan, so once the
+// session is admitted the subscription never enters the decision: an unread
+// status, FREE, PENDING and every paid tier all leave `none` selectable.
 //
 // Harness mirrors `host-lifecycle-settings-section.test.tsx`'s own
 // `renderSection` / `view` / `buildLifecycleHost` / `radioDisabled` pattern —
 // that file owns the rest of the card's suite, this one is scoped to the
-// plan gate's admission half.
+// sign-in gate on `none`.
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -39,7 +40,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import { HostLifecycleSettingsSection } from "@/components/settings/host-lifecycle-settings-section";
 import {
-  HOST_LIFECYCLE_NONE_PLAN_REASON,
+  HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON,
   hostLifecycleOptionCopy,
   hostMachineNoun,
 } from "@/lib/host/host-lifecycle-copy";
@@ -110,7 +111,7 @@ function radioDisabled(label: string): boolean {
 /**
  * Same reasoning as the sibling suite's `waitForReady`: the whole
  * `RadioGroup` is disabled until the mocked `get()` promise resolves, so wait
- * for `background` — never plan-gated — to come off group disablement before
+ * for `background` — never held by sign-in — to come off group disablement before
  * reading the `none` row.
  */
 async function waitForReady(): Promise<void> {
@@ -125,7 +126,19 @@ afterEach(() => {
   useAuthStore.getState().setSubscriptionStatus(null);
 });
 
-describe("<HostLifecycleSettingsSection /> - the 'none' plan gate, signed out", () => {
+function signIn(): void {
+  useAuthStore.getState().setSignedIn(
+    {
+      userId: "user-1",
+      userName: "Test User",
+      email: "user@example.invalid",
+    },
+    { userId: "user-1", username: "Test User" },
+    [],
+  );
+}
+
+describe("<HostLifecycleSettingsSection /> - the 'none' option and the sign-in gate", () => {
   it("signed out, desired background: 'none' is disabled, reasoned, and a click never calls set", async () => {
     useAuthStore.getState().setSignedOut();
     const fixture = buildLifecycleHost(view({}));
@@ -136,8 +149,8 @@ describe("<HostLifecycleSettingsSection /> - the 'none' plan gate, signed out", 
     await waitForReady();
     expect(radioDisabled(NONE_OPTION_LABEL)).toBe(true);
     expect(
-      screen.getByTestId("host-lifecycle-none-plan-reason").textContent,
-    ).toBe(HOST_LIFECYCLE_NONE_PLAN_REASON);
+      screen.getByTestId("host-lifecycle-none-signed-out-reason").textContent,
+    ).toBe(HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON);
 
     fireEvent.click(screen.getByRole("radio", { name: NONE_OPTION_LABEL }));
     expect(fixture.setMock).not.toHaveBeenCalled();
@@ -156,19 +169,13 @@ describe("<HostLifecycleSettingsSection /> - the 'none' plan gate, signed out", 
 
     await waitForReady();
     expect(radioDisabled(NONE_OPTION_LABEL)).toBe(false);
-    expect(screen.queryByTestId("host-lifecycle-none-plan-reason")).toBeNull();
+    expect(
+      screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
+    ).toBeNull();
   });
 
-  it("signed in, plan null (unread): 'none' is enabled", async () => {
-    useAuthStore.getState().setSignedIn(
-      {
-        userId: "user-1",
-        userName: "Test User",
-        email: "user@example.invalid",
-      },
-      { userId: "user-1", username: "Test User" },
-      [],
-    );
+  it("signed in, subscription not read yet: 'none' is enabled", async () => {
+    signIn();
     useAuthStore.getState().setSubscriptionStatus(null);
     const fixture = buildLifecycleHost(view({}));
     renderSection(
@@ -177,50 +184,29 @@ describe("<HostLifecycleSettingsSection /> - the 'none' plan gate, signed out", 
 
     await waitForReady();
     expect(radioDisabled(NONE_OPTION_LABEL)).toBe(false);
-    expect(screen.queryByTestId("host-lifecycle-none-plan-reason")).toBeNull();
-  });
-
-  it("signed in, known unpaid plan: 'none' is disabled with the reason", async () => {
-    useAuthStore.getState().setSignedIn(
-      {
-        userId: "user-1",
-        userName: "Test User",
-        email: "user@example.invalid",
-      },
-      { userId: "user-1", username: "Test User" },
-      [],
-    );
-    useAuthStore.getState().setSubscriptionStatus("FREE");
-    const fixture = buildLifecycleHost(view({}));
-    renderSection(
-      createFakeRunnerHost({ hostLifecycle: fixture.host, hasLocalHost: true }),
-    );
-
-    await waitForReady();
-    expect(radioDisabled(NONE_OPTION_LABEL)).toBe(true);
     expect(
-      screen.getByTestId("host-lifecycle-none-plan-reason").textContent,
-    ).toBe(HOST_LIFECYCLE_NONE_PLAN_REASON);
+      screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
+    ).toBeNull();
   });
 
-  it("signed in, paid plan: 'none' is enabled", async () => {
-    useAuthStore.getState().setSignedIn(
-      {
-        userId: "user-1",
-        userName: "Test User",
-        email: "user@example.invalid",
-      },
-      { userId: "user-1", username: "Test User" },
-      [],
-    );
-    useAuthStore.getState().setSubscriptionStatus("PRO");
-    const fixture = buildLifecycleHost(view({}));
-    renderSection(
-      createFakeRunnerHost({ hostLifecycle: fixture.host, hasLocalHost: true }),
-    );
+  it.each(["FREE", "PENDING", "PRO"] as const)(
+    "signed in on %s: 'none' is enabled with no reason",
+    async (status) => {
+      signIn();
+      useAuthStore.getState().setSubscriptionStatus(status);
+      const fixture = buildLifecycleHost(view({}));
+      renderSection(
+        createFakeRunnerHost({
+          hostLifecycle: fixture.host,
+          hasLocalHost: true,
+        }),
+      );
 
-    await waitForReady();
-    expect(radioDisabled(NONE_OPTION_LABEL)).toBe(false);
-    expect(screen.queryByTestId("host-lifecycle-none-plan-reason")).toBeNull();
-  });
+      await waitForReady();
+      expect(radioDisabled(NONE_OPTION_LABEL)).toBe(false);
+      expect(
+        screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
+      ).toBeNull();
+    },
+  );
 });

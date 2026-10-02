@@ -199,7 +199,7 @@ export function useHostOptions(): HostOptions {
   // Subscribed, not read ambiently: the session cache is pull-only, and the
   // memo below would otherwise keep answering with whatever was true at its
   // last directory/registry recompute - a session dying (or appearing) under
-  // an `offline`/plan-restricted entry would leave rows connectable/unreachable
+  // an `offline` entry would leave rows connectable/unreachable
   // until some unrelated input churned.
   const scopeHostIds = useMemo(
     () => [

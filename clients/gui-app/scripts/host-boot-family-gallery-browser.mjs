@@ -42,7 +42,6 @@ const FACES = [
   "narrator-slow",
   "narrator-failed",
   "narrator-no-host",
-  "narrator-plan",
   "narrator-update",
   "gate-provisioning-error",
   "gate-removed",
