@@ -1123,7 +1123,7 @@ describe("<SideTabStrip />", () => {
       expect(drawn).not.toContain(null);
     });
 
-    it("toggles another task's agents from its chevron without activating the task, on Enter as on a click, swapping the meter for the rows", async () => {
+    it("toggles another task's agents from its chevron without activating the task, on Enter as on a click, the rows taking the meter's place and giving it back", async () => {
       openEpicTabs(["Alpha", "Beta"]);
       warmEpic("e-beta", [
         chatProjection("b-run", { title: "B runs" }),
@@ -1151,7 +1151,15 @@ describe("<SideTabStrip />", () => {
       expect(beta.getAttribute("aria-selected")).toBe("false");
       expect(screen.getByTestId("strip-agent-group").hidden).toBe(false);
       expect(screen.getByTestId("strip-agent-b-run")).toBeTruthy();
+      // The rows show each agent's state, so the task row shows none: not the
+      // meter, and not the running glyph in its place.
       expect(within(beta).queryByTestId("side-tab-meter")).toBeNull();
+      expect(beta.querySelector("[data-status-glyph]")).toBeNull();
+
+      fireEvent.click(chevron);
+      await flushNav();
+
+      expect(within(beta).getByTestId("side-tab-meter")).toBeTruthy();
     });
 
     it("puts the chevron at the trailing edge, before a yielding glyph's cell and before the close, on a Needs you row as on a Working one", async () => {

@@ -21,8 +21,6 @@ import { sideTabAgentsAreFloor } from "./side-tab-live-agents";
 export function sideTabStatusOf(input: {
   readonly indicator: NotificationIndicatorState;
   readonly agents: SideTabLiveAgents;
-  /** The task's nested agents are showing, so they carry what the meter would. */
-  readonly meterHidden: boolean;
   /** The meter gives its place to the close, as a glyph does. */
   readonly meterYields: boolean;
   readonly glyph: ReactNode;
@@ -51,7 +49,7 @@ export function sideTabStatusOf(input: {
   }
   const several =
     agents.turn + agents.background > 1 || sideTabAgentsAreFloor(agents);
-  if (several && !indicator.pendingFork && !input.meterHidden) {
+  if (several && !indicator.pendingFork) {
     return {
       yieldsToClose: input.meterYields,
       node: (

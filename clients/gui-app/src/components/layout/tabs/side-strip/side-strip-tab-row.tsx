@@ -83,7 +83,6 @@ export function SideStripTabRow(props: {
     agents,
     activityStatus,
     titleGenerating,
-    meterHidden: groupDisclosure?.expanded === true,
     group: props.group,
     half,
   });

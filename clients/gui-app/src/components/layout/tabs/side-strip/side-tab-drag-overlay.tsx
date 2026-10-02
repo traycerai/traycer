@@ -310,7 +310,6 @@ function OverlayTabRow(props: {
         agents,
         activityStatus,
         titleGenerating,
-        meterHidden: false,
         group: null,
         half,
       })}

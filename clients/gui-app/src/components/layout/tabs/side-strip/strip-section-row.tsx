@@ -112,10 +112,13 @@ export function twoLineStatusOf(
  * you or To review row says what a chip would on its second line, so its
  * trailing edge is the time, and a pending fork keeps its glyph; a Working or
  * Idle row draws the glyph or the meter, and the meter yields to the close
- * as a glyph does. The Layered view (`row` null) draws the chip, meter or
- * glyph of the flush-title row. A split pair's half has room for its compact
- * glyph alone (the spinner, the needs-you dot, the done check, the failed
- * glyph); a chip's words are its card's and its pair's second line's.
+ * as a glyph does. While its agents are drawn under it, a Working or Idle row
+ * draws neither: they show those states themselves, so it keeps only a pending
+ * fork no drawn agent shows, and a title still generating. The Layered view
+ * (`row` null) draws the chip, meter or glyph of the flush-title row. A split
+ * pair's half has room for its compact glyph alone (the spinner, the needs-you
+ * dot, the done check, the failed glyph); a chip's words are its card's and
+ * its pair's second line's.
  */
 export function taskStatusOf(input: {
   readonly row: StripTaskRow | null;
@@ -124,9 +127,7 @@ export function taskStatusOf(input: {
   readonly agents: SideTabLiveAgents;
   readonly activityStatus: EpicActivityStatus;
   readonly titleGenerating: boolean;
-  /** The task's nested agents are showing, so they carry what the meter would. */
-  readonly meterHidden: boolean;
-  /** The agents nested under the row; their waiting rows hold their own waits. */
+  /** The agents drawn under the row, which say their own states and waits. */
   readonly group: StripTaskGroup | null;
   readonly half: boolean;
 }): SideTabRowStatus | null {
@@ -140,6 +141,17 @@ export function taskStatusOf(input: {
     />
   );
   if (input.half) return { yieldsToClose: true, node: glyph };
+  const forkGlyph = indicator.pendingFork ? (
+    <SideTabStatusGlyph
+      tabId={tabId}
+      indicatorState={{
+        ...EMPTY_NOTIFICATION_INDICATOR_STATE,
+        pendingFork: true,
+      }}
+      activityStatus="idle"
+      titleGenerating={false}
+    />
+  ) : null;
   const twoLine = twoLineRowOf(row);
   if (twoLine !== null) {
     return twoLineStatusOf(
@@ -150,23 +162,19 @@ export function taskStatusOf(input: {
             createdAt: null,
           })
         : twoLine,
-      indicator.pendingFork ? (
-        <SideTabStatusGlyph
-          tabId={tabId}
-          indicatorState={{
-            ...EMPTY_NOTIFICATION_INDICATOR_STATE,
-            pendingFork: true,
-          }}
-          activityStatus="idle"
-          titleGenerating={false}
-        />
-      ) : null,
+      forkGlyph,
     );
+  }
+  const drawn = input.group?.rows ?? [];
+  if (row !== null && drawn.length > 0 && !input.titleGenerating) {
+    const forkDrawn = drawn.some(({ agent }) => agent.kind === "fork");
+    return forkGlyph === null || forkDrawn
+      ? null
+      : { yieldsToClose: true, node: forkGlyph };
   }
   return sideTabStatusOf({
     indicator,
     agents: input.agents,
-    meterHidden: input.meterHidden,
     meterYields: row !== null,
     glyph,
   });

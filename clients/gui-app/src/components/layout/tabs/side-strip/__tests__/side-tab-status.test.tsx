@@ -15,7 +15,6 @@ describe("sideTabStatusOf", () => {
     const status = sideTabStatusOf({
       indicator: EMPTY_NOTIFICATION_INDICATOR_STATE,
       agents: { turn: 1, background: 0, coverage: "unserved" },
-      meterHidden: false,
       meterYields: false,
       glyph,
     });
@@ -30,7 +29,6 @@ describe("sideTabStatusOf", () => {
     const status = sideTabStatusOf({
       indicator: EMPTY_NOTIFICATION_INDICATOR_STATE,
       agents: { turn: 0, background: 0, coverage: "unserved" },
-      meterHidden: false,
       meterYields: false,
       glyph,
     });
