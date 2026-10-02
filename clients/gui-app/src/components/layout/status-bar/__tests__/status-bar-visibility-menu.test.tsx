@@ -142,7 +142,7 @@ describe("<StatusBarVisibilityMenu />", () => {
     );
   });
 
-  it("'Move to header' takes everything the strip is holding, and only that", () => {
+  it("'Move to tab strip' takes everything the strip is holding, and only that", () => {
     useLayoutStore.getState().setArrangement({
       ...useLayoutStore.getState().arrangement,
       usageHost: "status-bar",
@@ -152,7 +152,9 @@ describe("<StatusBarVisibilityMenu />", () => {
     renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to header" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Move to tab strip" }),
+    );
 
     // The menu belongs to the STRIP, so it moves the strip's readings - both
     // of them here - and each keeps the end it was on (L-156).
@@ -177,7 +179,9 @@ describe("<StatusBarVisibilityMenu />", () => {
     renderMenu(PROVIDERS, BOTH_READINGS);
     openMenu();
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Move to header" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Move to tab strip" }),
+    );
 
     const { arrangement } = useLayoutStore.getState();
     expect(arrangement.resourceHost).toBe("header");
@@ -185,7 +189,7 @@ describe("<StatusBarVisibilityMenu />", () => {
     expect(arrangement.usageSide).toBe("right");
   });
 
-  it("drops 'Move to header' on a narrow viewport, where it would move nothing", () => {
+  it("drops 'Move to tab strip' on a narrow viewport, where it would move nothing", () => {
     // Below `md` the shell answers with `mobileFooter` and ignores `placement`
     // altogether, while the mobile header draws its usage controls whatever
     // `placement` says. The item would write a preference the user cannot see
@@ -196,7 +200,7 @@ describe("<StatusBarVisibilityMenu />", () => {
     openMenu();
 
     expect(
-      screen.queryByRole("menuitem", { name: "Move to header" }),
+      screen.queryByRole("menuitem", { name: "Move to tab strip" }),
     ).toBeNull();
     // The gate is on that one item, not on the menu.
     expect(
@@ -264,29 +268,6 @@ describe("<StatusBarVisibilityMenu /> names what the bar holds (L-159)", () => {
     expect(
       screen.queryByRole("menuitemcheckbox", { name: "Resource monitor" }),
     ).toBeNull();
-  });
-
-  it("offers verbs for the readings the bar draws, and no others", () => {
-    renderMenu(PROVIDERS, ["resourceMonitor"]);
-    openMenu();
-
-    expect(
-      screen.getByRole("menuitem", { name: "Hide Resource monitor" }),
-    ).not.toBeNull();
-    expect(
-      screen.queryByRole("menuitem", { name: "Hide Usage limits" }),
-    ).toBeNull();
-    cleanup();
-
-    renderMenu(PROVIDERS, BOTH_READINGS);
-    openMenu();
-
-    expect(
-      screen.getByRole("menuitem", { name: "Hide Usage limits" }),
-    ).not.toBeNull();
-    expect(
-      screen.getByRole("menuitem", { name: "Hide Resource monitor" }),
-    ).not.toBeNull();
   });
 
   it("offers one way into the editor however many readings it names", () => {

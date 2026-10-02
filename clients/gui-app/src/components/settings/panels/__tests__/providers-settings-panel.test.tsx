@@ -221,6 +221,20 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: () => ({ data: undefined, isPending: false }),
 }));
 
+// The provider's Limits pick reads the watched host's usage through the layout
+// editor's own scope, which this suite does not stand up, so it is a marker
+// here: what is held is WHERE the page mounts it. Which providers it offers a
+// pick for is held by `provider-usage-limits-section.test.tsx`, and the pick
+// itself by `provider-limits-choose.test.tsx`.
+vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
+  ProviderUsageLimitsSection: (props: { readonly providerId: string }) => (
+    <div
+      data-testid="provider-usage-limits"
+      data-provider-id={props.providerId}
+    />
+  ),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
   useProvidersSetAutoJudge: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -2719,6 +2733,34 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
+  });
+
+  it("offers the provider's Limits pick on its usage tab, which the Layout page no longer carries", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+
+    expect(
+      screen
+        .getByTestId("provider-usage-limits")
+        .getAttribute("data-provider-id"),
+    ).toBe("codex");
   });
 
   it("keeps the current tab across providers when both support it", () => {

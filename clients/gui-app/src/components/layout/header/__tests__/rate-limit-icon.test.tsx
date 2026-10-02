@@ -165,14 +165,6 @@ function renderIcon() {
   return render(iconTree());
 }
 
-function readoutTree() {
-  return tree("readout");
-}
-
-function renderReadout() {
-  return render(readoutTree());
-}
-
 function renderInline() {
   return render(tree("inline"));
 }
@@ -189,6 +181,7 @@ function windowFixture(overrides: {
   readonly usedPercent: number;
   readonly severity: RateLimitWindowSeverity;
   readonly label?: string;
+  readonly resetsAt?: number | null;
 }): StatusBarRateLimitWindow {
   return {
     windowKey: overrides.windowKey,
@@ -196,7 +189,7 @@ function windowFixture(overrides: {
     labelIsDuration: true,
     kind: "session",
     usedPercent: overrides.usedPercent,
-    resetsAt: null,
+    resetsAt: overrides.resetsAt ?? null,
     severity: overrides.severity,
   };
 }
@@ -409,8 +402,9 @@ describe("<RateLimitIconButton />", () => {
     const fills = within(
       screen.getByTestId("rate-limit-header-button"),
     ).getAllByTestId("rate-limit-bar-fill");
-    expect(fills[0].className).toContain("bg-warning");
-    expect(fills[1].className).toContain("bg-destructive");
+    // Highest used first: the limited window leads.
+    expect(fills[0].className).toContain("bg-destructive");
+    expect(fills[1].className).toContain("bg-warning");
   });
 
   it("marks the gauge without dimming the whole button when data is degraded", () => {
@@ -633,9 +627,8 @@ describe("<RateLimitIconButton />", () => {
       ]);
     }
 
-    // The desktop header's inline readings are named the same way as the
-    // readout.
-    it.each(["readout", "inline"] as const)(
+    // The Detailed forms name themselves from their readings.
+    it.each(["inline", "rows"] as const)(
       "names populated %s readings from their provider, window and used percentage",
       (form) => {
         cluster = twoProviderCluster();
@@ -651,7 +644,7 @@ describe("<RateLimitIconButton />", () => {
 
     it("names an empty readout plainly", () => {
       cluster = { kind: "no-providers" };
-      renderReadout();
+      render(tree("rows"));
 
       expect(screen.getByRole("button", { name: "Usage limits" })).toBeTruthy();
     });
@@ -716,40 +709,357 @@ describe("<RateLimitIconButton />", () => {
       ]);
     }
 
-    it("renders full readings text, not a bare glyph, and honors the account's Style/Fine-tune settings", () => {
+    it("renders the profiles' value and mini bar, and honors Percent shows", () => {
       cluster = twoSegmentCluster();
       renderInline();
 
-      // Readings, not the compact icon form: no bar tracks at all here.
+      // Readings, not the compact icon form: no glyph bar tracks at all here.
       expect(screen.queryByTestId("rate-limit-bar-track")).toBeNull();
-      const readings = screen.getByTestId("rate-limit-header-button");
-      expect(readings.textContent).toContain("70% used 5h");
-      expect(readings.textContent).toContain("40% used 5h");
+      expect(screen.getByTestId("usage-profile-codex:").textContent).toContain(
+        "70%",
+      );
+      expect(
+        screen.getByTestId("usage-profile-claude-code:").textContent,
+      ).toContain("40%");
       expect(
         screen.getAllByTestId("status-bar-provider-mini-bar"),
       ).toHaveLength(2);
 
       cleanup();
-      // The same layout-store switches the status bar's cluster reads
-      // (`useStatusBarUsageDisplay`) - the tab strip used to ignore every one
-      // of them.
-      useLayoutStore.getState().setRegionValues("usageLimits", {
-        word: false,
-        bar: false,
-        amount: "remaining",
-      });
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "remaining" });
       renderInline();
 
-      const restyled = screen.getByTestId("rate-limit-header-button");
-      expect(restyled.textContent).toContain("30% 5h");
-      expect(restyled.textContent).toContain("60% 5h");
-      expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
-      // The accessible name follows the same amount setting.
+      expect(screen.getByTestId("usage-profile-codex:").textContent).toContain(
+        "30%",
+      );
       expect(
         screen.getByRole("button", {
           name: "Usage limits: Codex 30% remaining, Claude Code 60% remaining",
         }),
       ).toBeTruthy();
+    });
+  });
+
+  describe("button looks per form", () => {
+    it.each([
+      ["strip", "ghost"],
+      ["glyph", "outline"],
+      ["readout", "outline"],
+      ["tile", "outline"],
+    ] as const)("%s draws the glyph in the %s variant", (form, variant) => {
+      cluster = { kind: "no-providers" };
+      render(tree(form));
+
+      const button = screen.getByTestId("rate-limit-header-button");
+      expect(button.getAttribute("data-variant")).toBe(variant);
+      expect(within(button).getByTestId("rate-limit-gauge-icon")).toBeTruthy();
+    });
+  });
+
+  describe("the glyph's bars and limit state", () => {
+    const threeDaysAndAHour = () => Date.now() + 73 * 60 * 60 * 1000;
+
+    it("draws the two highest-used windows among the shown profiles", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:5h",
+              usedPercent: 20,
+              severity: "healthy",
+            }),
+          ],
+        }),
+        segmentFixture({
+          providerId: "claude-code",
+          windows: [
+            windowFixture({
+              windowKey: "claude-code:5h",
+              usedPercent: 90,
+              severity: "running_low",
+            }),
+            windowFixture({
+              windowKey: "claude-code:weekly",
+              usedPercent: 55,
+              severity: "healthy",
+              label: "Weekly",
+            }),
+          ],
+        }),
+      ]);
+      renderIcon();
+
+      const fills = within(
+        screen.getByTestId("rate-limit-header-button"),
+      ).getAllByTestId("rate-limit-bar-fill");
+      expect(fills.map((fill) => fill.style.width)).toEqual(["90%", "55%"]);
+    });
+
+    it("turns the gauge destructive and prints the short reset when a window is limited", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:weekly",
+              usedPercent: 100,
+              severity: "limited",
+              label: "Weekly",
+              resetsAt: threeDaysAndAHour(),
+            }),
+            windowFixture({
+              windowKey: "codex:5h",
+              usedPercent: 86,
+              severity: "running_low",
+            }),
+          ],
+        }),
+      ]);
+      renderIcon();
+
+      const button = screen.getByTestId("rate-limit-header-button");
+      expect(
+        within(button)
+          .getByTestId("rate-limit-gauge-icon")
+          .getAttribute("class"),
+      ).toContain("text-destructive");
+      const reset = within(button).getByTestId("rate-limit-glyph-reset");
+      expect(reset.textContent).toBe("3d");
+      expect(reset.className).toContain("text-destructive");
+    });
+
+    it("reads the limit off every shown window, not only the two it draws", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:a",
+              usedPercent: 90,
+              severity: "running_low",
+            }),
+            windowFixture({
+              windowKey: "codex:b",
+              usedPercent: 80,
+              severity: "running_low",
+            }),
+            windowFixture({
+              windowKey: "codex:c",
+              usedPercent: 50,
+              severity: "limited",
+              resetsAt: threeDaysAndAHour(),
+            }),
+          ],
+        }),
+      ]);
+      renderIcon();
+
+      expect(
+        within(screen.getByTestId("rate-limit-header-button")).getAllByTestId(
+          "rate-limit-bar-fill",
+        ),
+      ).toHaveLength(2);
+      expect(
+        screen.getByTestId("rate-limit-gauge-icon").getAttribute("class"),
+      ).toContain("text-destructive");
+    });
+
+    it("leaves the gauge and reset alone when nothing is limited", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:5h",
+              usedPercent: 40,
+              severity: "healthy",
+              resetsAt: threeDaysAndAHour(),
+            }),
+          ],
+        }),
+      ]);
+      renderIcon();
+
+      expect(
+        screen.getByTestId("rate-limit-gauge-icon").getAttribute("class"),
+      ).not.toContain("text-destructive");
+      expect(screen.queryByTestId("rate-limit-glyph-reset")).toBeNull();
+    });
+
+    it("drops the reset text on the 40px rail tile but keeps the destructive gauge", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:weekly",
+              usedPercent: 100,
+              severity: "limited",
+              resetsAt: threeDaysAndAHour(),
+            }),
+          ],
+        }),
+      ]);
+      render(tree("tile"));
+
+      expect(screen.queryByTestId("rate-limit-glyph-reset")).toBeNull();
+      expect(
+        screen.getByTestId("rate-limit-gauge-icon").getAttribute("class"),
+      ).toContain("text-destructive");
+    });
+  });
+
+  describe("Detailed in the top strip (inline)", () => {
+    function profile(
+      providerId: RateLimitProviderId,
+      usedPercent: number,
+    ): StatusBarProviderSegmentModel {
+      return segmentFixture({
+        providerId,
+        windows: [
+          windowFixture({
+            windowKey: `${providerId}:5h`,
+            usedPercent,
+            severity: "healthy",
+          }),
+        ],
+      });
+    }
+
+    it("draws at most the two most-used profiles, in profile order, then +N", () => {
+      cluster = segmentsCluster([
+        profile("codex", 30),
+        profile("claude-code", 80),
+        profile("cursor", 55),
+        profile("grok", 10),
+      ]);
+      renderInline();
+
+      const drawn = screen
+        .getAllByTestId(/^usage-profile-/)
+        .map((node) => node.getAttribute("data-testid"));
+      // The two highest (claude-code 80, cursor 55), kept in profile order.
+      expect(drawn).toEqual([
+        "usage-profile-claude-code:",
+        "usage-profile-cursor:",
+      ]);
+      expect(screen.getByTestId("top-strip-usage-more").textContent).toBe("+2");
+    });
+
+    it("draws no +N while every profile fits", () => {
+      cluster = segmentsCluster([
+        profile("codex", 30),
+        profile("claude-code", 80),
+      ]);
+      renderInline();
+
+      expect(screen.getAllByTestId(/^usage-profile-/)).toHaveLength(2);
+      expect(screen.queryByTestId("top-strip-usage-more")).toBeNull();
+    });
+
+    it("says Limit with the reset for a limited profile", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:weekly",
+              usedPercent: 100,
+              severity: "limited",
+              resetsAt: Date.now() + 73 * 60 * 60 * 1000,
+            }),
+          ],
+        }),
+      ]);
+      renderInline();
+
+      expect(screen.getByTestId("usage-profile-codex:").textContent).toContain(
+        "Limitresets 3d",
+      );
+    });
+
+    it("shows no reset text with Reset time off", () => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { reset: false });
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:5h",
+              usedPercent: 40,
+              severity: "healthy",
+              resetsAt: Date.now() + 73 * 60 * 60 * 1000,
+            }),
+          ],
+        }),
+      ]);
+      renderInline();
+
+      expect(
+        screen.getByTestId("usage-profile-codex:").textContent,
+      ).not.toContain("3d");
+    });
+  });
+
+  describe("Detailed in the side strip (rows)", () => {
+    it("draws one row per profile in profile order, each over a bar", () => {
+      cluster = segmentsCluster([
+        segmentFixture({
+          providerId: "codex",
+          windows: [
+            windowFixture({
+              windowKey: "codex:5h",
+              usedPercent: 30,
+              severity: "healthy",
+            }),
+          ],
+        }),
+        segmentFixture({
+          providerId: "claude-code",
+          windows: [
+            windowFixture({
+              windowKey: "claude-code:5h",
+              usedPercent: 100,
+              severity: "limited",
+            }),
+          ],
+        }),
+        segmentFixture({
+          providerId: "cursor",
+          windows: [
+            windowFixture({
+              windowKey: "cursor:5h",
+              usedPercent: 60,
+              severity: "healthy",
+            }),
+          ],
+        }),
+      ]);
+      render(tree("rows"));
+
+      // No cap here, and the order is the profile order, not the usage order.
+      expect(
+        screen
+          .getAllByTestId(/^usage-profile-/)
+          .map((node) => node.getAttribute("data-testid")),
+      ).toEqual([
+        "usage-profile-codex:",
+        "usage-profile-claude-code:",
+        "usage-profile-cursor:",
+      ]);
+      expect(screen.getAllByTestId("side-strip-usage-bar")).toHaveLength(3);
+      expect(
+        screen.getByTestId("usage-profile-claude-code:").textContent,
+      ).toContain("Limit");
+      expect(screen.getByTestId("usage-profile-codex:").textContent).toContain(
+        "30%",
+      );
+      expect(screen.queryByTestId("top-strip-usage-more")).toBeNull();
     });
   });
 

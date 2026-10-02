@@ -25,7 +25,6 @@ import {
   getLayoutSnapshot,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
-import type { ProviderLimitWindows } from "@/components/layout-editor/inspector/provider-limit-windows";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { tabItemId, tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -435,35 +434,11 @@ export function seedEpicCanvas(): void {
   }));
 }
 
-/**
- * What the providers' own limits pickers read: the windows each provider
- * reports and the ones its strip is drawing now. Read through the SAME
- * `ProviderLimitWindowsReader` the settings row's `Choose...` reads, from the
- * same query cache the app column's own segments fill, so a sweep entry seeds
- * a pick exactly as pressing the row would. It renders nothing, so it is not
- * in the column's HTML.
- */
-export const usageProbe = new Map<RateLimitProviderId, ProviderLimitWindows>();
-
-/** One provider's reported windows and the ones its strip draws, as read now. */
-export interface SweepProviderUsage {
-  readonly windows: ReadonlyArray<{
-    readonly windowKey: string;
-    readonly label: string;
-  }>;
-  readonly drawnKeys: ReadonlyArray<string>;
-}
-
 // ── Mounting ────────────────────────────────────────────────────────────────
 
 export interface SweepMount {
   /** The mounted tree's root element (the app column, or the settings panel). */
   readonly root: () => HTMLElement;
-  /** What each configured provider reports and draws right now. */
-  readonly providerUsage: () => ReadonlyMap<
-    RateLimitProviderId,
-    SweepProviderUsage
-  >;
   /** The app column's HTML now, normalised for React's minted ids. */
   readonly signature: () => string;
   /** The app column's HTML with nothing normalised. */

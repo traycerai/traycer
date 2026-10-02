@@ -11,7 +11,7 @@ import {
   type RefObject,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, Gauge, Settings } from "lucide-react";
+import { Eye, EyeOff, Gauge, Settings, TriangleAlert } from "lucide-react";
 import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
@@ -68,6 +68,13 @@ import {
   type ConfiguredRateLimitProvider,
 } from "@/hooks/rate-limits/use-configured-rate-limit-providers";
 import { useProviderRateLimitFetchScope } from "@/hooks/rate-limits/use-provider-rate-limit-fetch-scope";
+import { useStatusBarRateLimitSegments } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
+import {
+  limitedProfileBannerText,
+  limitedProfiles,
+  type LimitedProfile,
+} from "@/lib/rate-limits/limited-profiles";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import {
   resolveStatusBarProfileIds,
@@ -129,6 +136,7 @@ import {
 } from "@/stores/rate-limits/rate-limit-popover-store";
 import {
   statusBarShownProfileIds,
+  withShownProfileIds,
   type StatusBarShownProfiles,
 } from "@/lib/layout/layout-arrangement";
 import { useArrangementValue, useRegionShown } from "@/lib/layout-overrides";
@@ -813,6 +821,24 @@ function RateLimitPopoverScopedBody({
     () => orderRailTabs(providers, traycerSubscription.eligible),
     [providers, traycerSubscription.eligible],
   );
+  // Which profiles the host calls `limited`, for the banners and the rail dots.
+  // Passive: it reads the entries the strip and the blocks below already keep
+  // fresh and can never start a fetch of its own.
+  const windowedProviders = useMemo(
+    () =>
+      providers.filter((provider) =>
+        isWindowedRateLimitProvider(provider.providerId),
+      ),
+    [providers],
+  );
+  const { cluster } = useStatusBarRateLimitSegments({
+    providers: windowedProviders,
+    profileSelection,
+    mode: "passive",
+    editing: false,
+    sample: false,
+  });
+  const limited = limitedProfiles(cluster);
   const activeTab = useRateLimitPopoverStore((state) => state.activeTab);
   const setActiveTab = useRateLimitPopoverStore((state) => state.setActiveTab);
   const { openSettings } = useSystemTabModalActions();
@@ -923,11 +949,15 @@ function RateLimitPopoverScopedBody({
             isFetching: traycerSubscription.query.isFetching,
             refetch: traycerSubscription.query.refetch,
           }}
+          limitedProviders={
+            new Set(limited.map((profile) => profile.providerId))
+          }
           activeTab={resolvedTab}
           onSelect={setActiveTab}
           onClose={onClose}
         />
         <div className="min-h-0 min-w-0 overflow-y-auto p-3">
+          <LimitedProfileBanners limited={limited} />
           {resolvedTab === "overview" ? (
             <RateLimitOverview
               railTabs={railTabs}
@@ -1133,6 +1163,7 @@ function RateLimitRail({
   railTabs,
   providers,
   traycerRefreshTarget,
+  limitedProviders,
   activeTab,
   onSelect,
   onClose,
@@ -1140,6 +1171,8 @@ function RateLimitRail({
   readonly railTabs: ReadonlyArray<RailTabDescriptor>;
   readonly providers: ReadonlyArray<ConfiguredRateLimitProvider>;
   readonly traycerRefreshTarget: TraycerRefreshTarget;
+  /** Providers with a limited profile, which get a destructive dot. */
+  readonly limitedProviders: ReadonlySet<RateLimitProviderId>;
   readonly activeTab: RateLimitPopoverTab;
   readonly onSelect: (tab: RateLimitPopoverTab) => void;
   readonly onClose: () => void;
@@ -1180,6 +1213,7 @@ function RateLimitRail({
           label="Overview"
           selected={activeTab === "overview"}
           onSelect={() => onSelect("overview")}
+          limited={false}
           icon={<Gauge className="size-4" />}
         />
         <div aria-hidden className="my-0.5 h-px w-5 bg-border" />
@@ -1190,6 +1224,7 @@ function RateLimitRail({
               label={providerDisplayName("traycer")}
               selected={activeTab === "traycer"}
               onSelect={() => onSelect("traycer")}
+              limited={false}
               icon={
                 <HarnessIcon harnessId={providerIdToGuiHarnessId("traycer")} />
               }
@@ -1200,6 +1235,7 @@ function RateLimitRail({
               label={providerDisplayName(tab.providerId)}
               selected={activeTab === tab.providerId}
               onSelect={() => onSelect(tab.providerId)}
+              limited={limitedProviders.has(tab.providerId)}
               icon={
                 <HarnessIcon
                   harnessId={providerIdToGuiHarnessId(tab.providerId)}
@@ -1236,11 +1272,14 @@ function RailTab({
   label,
   selected,
   onSelect,
+  limited,
   icon,
 }: {
   readonly label: string;
   readonly selected: boolean;
   readonly onSelect: () => void;
+  /** The provider has a profile at its limit: a small destructive dot. */
+  readonly limited: boolean;
   readonly icon: ReactNode;
 }): ReactNode {
   return (
@@ -1249,16 +1288,52 @@ function RailTab({
         type="button"
         role="tab"
         aria-selected={selected}
-        aria-label={label}
+        aria-label={limited ? `${label}, limit reached` : label}
         onClick={onSelect}
         className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
+          "relative flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",
           selected && "bg-accent text-foreground",
         )}
       >
         {icon}
+        {limited ? (
+          <span
+            aria-hidden
+            data-testid="rate-limit-rail-limited-dot"
+            className="absolute top-1 right-1 size-1.5 rounded-full bg-destructive"
+          />
+        ) : null}
       </button>
     </TooltipWrapper>
+  );
+}
+
+/**
+ * One banner per limited profile, at the top of the content area and above
+ * whichever tab is open: the limit is a fact about the account, not about the
+ * tab. State only, with no action - the chat using that provider already
+ * offers the switch. Nothing renders when no profile is limited.
+ */
+function LimitedProfileBanners({
+  limited,
+}: {
+  readonly limited: ReadonlyArray<LimitedProfile>;
+}): ReactNode {
+  if (limited.length === 0) return null;
+  return (
+    <div className="mb-3 flex flex-col gap-2">
+      {limited.map((profile) => (
+        <div
+          key={`${profile.providerId}:${profile.profileId ?? ""}`}
+          role="status"
+          data-testid="rate-limit-limited-banner"
+          className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-sm text-destructive"
+        >
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0">{limitedProfileBannerText(profile)}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -3072,13 +3147,7 @@ function RateLimitZeroState({
   );
 }
 
-/**
- * One account checked or unchecked for the strip, on one host.
- *
- * An emptied entry is REMOVED rather than left as `[]`, matching what the
- * arrangement's resolver does on rehydration: one shape for "nothing checked",
- * so the same selection can never read as two different arrangements.
- */
+/** One account checked or unchecked for the strip, on one host. */
 function withProfileShown(input: {
   readonly shownProfiles: StatusBarShownProfiles;
   readonly hostId: string;
@@ -3089,18 +3158,12 @@ function withProfileShown(input: {
   const { shownProfiles, hostId, providerId, profileId, shown } = input;
   const current = statusBarShownProfileIds(shownProfiles, hostId, providerId);
   if (current.includes(profileId) === shown) return shownProfiles;
-  const next = shown
-    ? [...current, profileId]
-    : current.filter((candidate) => candidate !== profileId);
-  const hostShown: Record<string, ReadonlyArray<string | null>> = {
-    ...shownProfiles[hostId],
-  };
-  if (next.length === 0) delete hostShown[providerId];
-  else hostShown[providerId] = next;
-  const nextShownProfiles: Record<string, StatusBarShownProfiles[string]> = {
-    ...shownProfiles,
-  };
-  if (Object.keys(hostShown).length === 0) delete nextShownProfiles[hostId];
-  else nextShownProfiles[hostId] = hostShown;
-  return nextShownProfiles;
+  return withShownProfileIds(
+    shownProfiles,
+    hostId,
+    providerId,
+    shown
+      ? [...current, profileId]
+      : current.filter((candidate) => candidate !== profileId),
+  );
 }

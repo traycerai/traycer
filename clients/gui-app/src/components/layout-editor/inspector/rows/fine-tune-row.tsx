@@ -16,7 +16,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import type { LayoutValues, RegionValueKey } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
-import { cn } from "@/lib/utils";
 
 /** A region's detail rows, and the four control shapes they are operated with. */
 
@@ -46,7 +45,6 @@ export interface FineTuneRowFacts {
         readonly options: ReadonlyArray<{
           readonly key: RegionValueKey;
           readonly label: string;
-          readonly requires: RegionValueKey | null;
         }>;
       }
     | {
@@ -209,20 +207,13 @@ function FineTuneRowView(props: {
             {control.options.map((option) => {
               const checked =
                 readControlValue(regionValues, option.key) === true;
-              const unavailable =
-                option.requires !== null &&
-                readControlValue(regionValues, option.requires) !== true;
               return (
                 <label
                   key={option.key}
-                  className={cn(
-                    "flex items-center gap-2 text-ui-sm",
-                    unavailable && "opacity-40",
-                  )}
+                  className="flex items-center gap-2 text-ui-sm"
                 >
                   <Checkbox
                     checked={checked}
-                    disabled={unavailable}
                     onCheckedChange={(next) => {
                       writeControlValue(regionId, option.key, next === true);
                     }}

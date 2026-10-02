@@ -152,7 +152,7 @@ export function StatusBarVisibilityMenu(
               );
             }}
           >
-            Move to header
+            Move to tab strip
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />

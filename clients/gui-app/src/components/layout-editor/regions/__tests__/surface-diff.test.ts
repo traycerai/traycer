@@ -104,7 +104,7 @@ const LIT_CASES: ReadonlyArray<LitCase> = [
   {
     name: "statusBar: a value change on Usage limits",
     surface: "statusBar",
-    snapshot: withOverrides({ usageLimits: { bar: false } }),
+    snapshot: withOverrides({ usageLimits: { reset: false } }),
   },
   {
     name: "statusBar: moving Usage limits to the tab strip's bar (a Position move)",

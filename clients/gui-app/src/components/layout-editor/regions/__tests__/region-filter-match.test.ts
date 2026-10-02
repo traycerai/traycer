@@ -56,12 +56,14 @@ describe("layoutFindResults", () => {
   });
 
   it("carries the matched option as the detail, ranked ahead of a keyword hit", () => {
-    expect(layoutFindResults("amount", DEFAULT_LAYOUT_SNAPSHOT)).toEqual([
-      expect.objectContaining({
-        region: "usageLimits",
-        detail: { text: "Amount", match: [0, 5] },
-      }),
-    ]);
+    expect(layoutFindResults("percent shows", DEFAULT_LAYOUT_SNAPSHOT)).toEqual(
+      [
+        expect.objectContaining({
+          region: "usageLimits",
+          detail: { text: "Percent shows", match: [0, 12] },
+        }),
+      ],
+    );
     // "Cache read" is a Breakdown-rows option on Context usage (Chat), not on
     // Usage limits - a different region's detail than a query alone suggests.
     expect(layoutFindResults("cache read", DEFAULT_LAYOUT_SNAPSHOT)).toEqual([

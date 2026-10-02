@@ -208,9 +208,17 @@ describe("<SideStripViewRow /> (D8)", () => {
     const tabsAndAgents = screen.getByRole("radio", {
       name: "Tabs and agents",
     });
-    expect(within(tabsOnly).queryByTestId("app-frame-live-agents")).toBeNull();
+    // The radio sits over its card's picture, as a sibling of it.
+    const tabsOnlyCard = tabsOnly.parentElement;
+    const tabsAndAgentsCard = tabsAndAgents.parentElement;
+    if (tabsOnlyCard === null || tabsAndAgentsCard === null) {
+      throw new Error("a radio has no card");
+    }
     expect(
-      within(tabsAndAgents).getByTestId("app-frame-live-agents"),
+      within(tabsOnlyCard).queryByTestId("app-frame-live-agents"),
+    ).toBeNull();
+    expect(
+      within(tabsAndAgentsCard).getByTestId("app-frame-live-agents"),
     ).toBeTruthy();
   });
 

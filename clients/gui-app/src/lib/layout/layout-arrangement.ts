@@ -424,6 +424,33 @@ export function statusBarShownProfileIds(
   return shownProfiles[hostId]?.[providerId] ?? NO_SHOWN_PROFILE_IDS;
 }
 
+/**
+ * One provider's checked accounts on one host, replaced as a whole: the one
+ * write path, for the popover's per-profile toggle and the Profiles list.
+ *
+ * An emptied entry is REMOVED rather than stored as `[]`, matching what the
+ * resolver does on rehydration: one shape for "nothing checked", so the same
+ * selection can never read as two different arrangements.
+ */
+export function withShownProfileIds(
+  shownProfiles: StatusBarShownProfiles,
+  hostId: string,
+  providerId: RateLimitProviderId,
+  profileIds: ReadonlyArray<string | null>,
+): StatusBarShownProfiles {
+  const hostShown: Record<string, ReadonlyArray<string | null>> = {
+    ...shownProfiles[hostId],
+  };
+  if (profileIds.length === 0) delete hostShown[providerId];
+  else hostShown[providerId] = profileIds;
+  const next: Record<string, StatusBarShownProfiles[string]> = {
+    ...shownProfiles,
+  };
+  if (Object.keys(hostShown).length === 0) delete next[hostId];
+  else next[hostId] = hostShown;
+  return next;
+}
+
 // ── The two bar readings (L-156) ────────────────────────────────────────────
 
 /**

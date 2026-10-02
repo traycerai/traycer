@@ -442,10 +442,10 @@ describe("the Position row against the default arrangement (L-57)", () => {
   });
 
   /**
-   * L-133 on the two readings' rows: a revert belongs to the ROW it sits on,
-   * so putting the side back must not also bring the reading down a bar.
+   * A bar reading has ONE Location row, so its dot and its revert measure and
+   * restore the bar and the end together; the minimap's Side row stays its own.
    */
-  it("measures and reverts one axis at a time", () => {
+  it("measures and reverts a reading's Location as one row", () => {
     const moved = {
       ...DEFAULT_LAYOUT_SNAPSHOT,
       arrangement: MOVED_ARRANGEMENT,
@@ -455,25 +455,18 @@ describe("the Position row against the default arrangement (L-57)", () => {
       true,
     );
     expect(positionAxisChanged(moved, "resourceMonitor", "position-side")).toBe(
-      true,
+      false,
     );
-    // The usage cluster moved bar but not, in this fixture, off the shipped
-    // left - so its side row has nothing to put back.
-    expect(
-      positionAxisChanged(
-        { ...moved, arrangement: { ...MOVED_ARRANGEMENT, usageSide: "left" } },
-        "usageLimits",
-        "position-side",
-      ),
-    ).toBe(false);
+    expect(positionAxisChanged(moved, "minimap", "position-side")).toBe(true);
 
-    const sideBack = revertPositionAxis(
+    const back = revertPositionAxis(
       MOVED_ARRANGEMENT,
       "resourceMonitor",
-      "position-side",
+      "position-host",
     );
-    expect(sideBack.resourceSide).toBe(DEFAULT_ARRANGEMENT.resourceSide);
-    expect(sideBack.resourceHost).toBe("header");
-    expect(sideBack.usageSide).toBe("right");
+    expect(back.resourceHost).toBe(DEFAULT_ARRANGEMENT.resourceHost);
+    expect(back.resourceSide).toBe(DEFAULT_ARRANGEMENT.resourceSide);
+    expect(back.usageHost).toBe("header");
+    expect(back.usageSide).toBe("right");
   });
 });

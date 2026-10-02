@@ -331,13 +331,6 @@ interface LayoutCanvasProbe {
   readonly foldDockPills: () => void;
   readonly unfoldDockPills: () => void;
   readonly setMicShown: (shown: boolean) => void;
-  /**
-   * One of the two combinations the deleted Style row used to write as a
-   * named example (T2, L-10 partial): now written field by field, the way
-   * the "Show" checks and "Amount" segment write them - so the driver can
-   * show the strip's reading follows those fields (G6).
-   */
-  readonly applyUsageStyle: (exampleId: "barOnly" | "barPercent") => void;
   /** A Settings search result for `anchor` on the Layout page (H2). */
   readonly revealSetting: (anchor: string) => void;
   /** The editor door's deep link to a region's row, as the width gate sends it (H2). */
@@ -957,25 +950,6 @@ function buildProbe(): LayoutCanvasProbe {
     focusGuideTarget: (selector) => {
       const target = document.querySelector<HTMLElement>(selector);
       return target !== null && focusGuideTarget(target);
-    },
-    applyUsageStyle: (exampleId) => {
-      const patch =
-        exampleId === "barOnly"
-          ? {
-              bar: true,
-              percent: false,
-              word: false,
-              reset: false,
-              amount: "used" as const,
-            }
-          : {
-              bar: true,
-              percent: true,
-              word: false,
-              reset: false,
-              amount: "used" as const,
-            };
-      useLayoutStore.getState().setRegionValues("usageLimits", patch);
     },
     hideChangedFilesAsChip: () => {
       useLayoutStore

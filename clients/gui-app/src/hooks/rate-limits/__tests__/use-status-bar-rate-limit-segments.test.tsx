@@ -1482,10 +1482,10 @@ describe("useStatusBarRateLimitSegments - sample scene", () => {
       PROFILE_SELECTION,
     );
 
-    // The first segment reads sample slots 0-3 (35%, 78%, 12%, 35%), so the
-    // weekly window at 78% is the one the sample scene makes tightest.
+    // The first segment reads sample slots 0-3 (35%, 78%, 84%, 35%), so the
+    // Opus window at 84% is the one the sample scene makes tightest.
     expect(windowKeys(claudeSegment(result).shown)).toEqual([
-      "claude-code:sevenDay",
+      "claude-code:sevenDayOpus",
     ]);
   });
 

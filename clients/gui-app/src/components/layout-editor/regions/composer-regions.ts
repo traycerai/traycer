@@ -161,11 +161,20 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
   hint: null,
   keywords: ["model", "chip", "effort", "medium", "bars", "reasoning"],
   rows: [
-    { kind: "style", key: "style", label: "Style", examples: MODEL_EXAMPLES },
+    {
+      kind: "style",
+      key: "style",
+      label: "Style",
+      description: null,
+      labelPlacement: "end",
+      examples: MODEL_EXAMPLES,
+    },
     {
       kind: "style",
       key: "reasoningControl",
       label: "Reasoning control",
+      description: null,
+      labelPlacement: "end",
       examples: REASONING_CONTROL_EXAMPLES,
     },
     // The whole toolbar row's chrome (attach, access, model, mic), not just
@@ -175,6 +184,8 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
       kind: "style",
       key: "toolbarStyle",
       label: "Toolbar style",
+      description: null,
+      labelPlacement: "end",
       examples: TOOLBAR_STYLE_EXAMPLES,
     },
     TOOLBAR_RIGHT_ORDER_ROW,

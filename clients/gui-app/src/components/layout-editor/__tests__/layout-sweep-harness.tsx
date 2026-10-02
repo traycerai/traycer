@@ -17,7 +17,6 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import {
   HARNESS_LOCAL_HOST,
@@ -26,17 +25,14 @@ import {
   openEpicSession,
   seedResourceStreams,
   resetToShippedLayout,
-  usageProbe,
   tick,
   normalisedMintedIds,
   type SweepMount,
-  type SweepProviderUsage,
   type SweepWindow,
 } from "@/components/layout-editor/__tests__/layout-sweep-fixtures";
 import {
   SweepColumn,
   SweepProviders,
-  UsageProbe,
 } from "@/components/layout-editor/__tests__/layout-sweep-surfaces";
 
 /**
@@ -93,7 +89,6 @@ async function mountSweepTree(
   windowKind: SweepWindow | "panel",
 ): Promise<SweepMount> {
   localStorage.clear();
-  usageProbe.clear();
   useThemeLibraryStore.setState({ panelAnimations: false });
   useAuthStore.getState().setSignedIn(
     {
@@ -136,7 +131,6 @@ async function mountSweepTree(
         ) : (
           <SweepColumn windowKind={windowKind} session={session} />
         )}
-        <UsageProbe />
       </SweepProviders>
     ),
   });
@@ -158,19 +152,6 @@ async function mountSweepTree(
 
   const mount: SweepMount = {
     root: () => sweepRoot(container),
-    providerUsage: () => {
-      const usage = new Map<RateLimitProviderId, SweepProviderUsage>();
-      for (const [providerId, limits] of usageProbe) {
-        usage.set(providerId, {
-          windows: limits.windows.map((window) => ({
-            windowKey: window.windowKey,
-            label: window.label,
-          })),
-          drawnKeys: limits.drawnKeys,
-        });
-      }
-      return usage;
-    },
     rawHtml: () => sweepRoot(container).innerHTML,
     signature: () => normalisedMintedIds(sweepRoot(container).innerHTML),
     apply: async (write) => {

@@ -148,6 +148,8 @@ export const CONTEXT_USAGE_REGION: LayoutRegion<"contextUsage"> = {
       kind: "style",
       key: "style",
       label: "Style",
+      description: null,
+      labelPlacement: "end",
       examples: CONTEXT_USAGE_EXAMPLES,
     },
     {

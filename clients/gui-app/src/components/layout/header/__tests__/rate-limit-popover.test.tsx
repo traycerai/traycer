@@ -52,6 +52,10 @@ import {
   type RateLimitFetchEligibility,
 } from "@/lib/rate-limit-providers";
 import { formatResetFullDateTime } from "@/lib/relative-time";
+import type {
+  StatusBarProviderSegmentModel,
+  StatusBarRateLimitCluster,
+} from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 
 type QueryResult = {
   data: ProviderRateLimitEnvelope | undefined;
@@ -145,6 +149,27 @@ const mocks = vi.hoisted<MockState>(() => ({
   },
 }));
 const fetchScope = vi.hoisted(() => ({ hostId: "host-1" }));
+
+// The popover reads which profiles are limited off the status bar's segment
+// model, passively. That hook has its own suite; here it is the seam a case
+// sets to say which profiles the host reported as limited.
+const segmentsState = vi.hoisted<{ cluster: StatusBarRateLimitCluster }>(
+  () => ({
+    cluster: { kind: "hidden" },
+  }),
+);
+vi.mock("@/hooks/rate-limits/use-status-bar-rate-limit-segments", () => ({
+  useStatusBarRateLimitSegments: () => ({
+    cluster: segmentsState.cluster,
+    mountTargets: [],
+    refresh: {
+      ephemeralTargets: [],
+      ephemeralFetching: false,
+      httpRefetches: [],
+      httpFetching: false,
+    },
+  }),
+}));
 
 vi.mock("@/hooks/rate-limits/use-configured-rate-limit-providers", () => ({
   useConfiguredRateLimitProviders: () =>
@@ -835,6 +860,7 @@ function renderCodexPopover(): HTMLElement {
 }
 
 beforeEach(() => {
+  segmentsState.cluster = { kind: "hidden" };
   mocks.configured = [];
   mocks.results = {};
   mocks.traycerUsageFetching = false;
@@ -3897,5 +3923,156 @@ describe("<RateLimitPopover /> unusable explicit host pick", () => {
     expect(screen.getByTestId("rate-limit-popover-panes")).toBeTruthy();
     expect(screen.queryByTestId("rate-limit-host-unavailable")).toBeNull();
     expect(screen.queryByTestId("rate-limit-host-connecting")).toBeNull();
+  });
+});
+
+describe("<RateLimitPopover /> limited profiles", () => {
+  const WEEKLY_RESET = Date.UTC(2026, 9, 9, 14, 0);
+
+  function limitedSegment(input: {
+    readonly providerId: StatusBarProviderSegmentModel["providerId"];
+    readonly profileId: string | null;
+    readonly label: string | null;
+    readonly severity: "healthy" | "running_low" | "limited";
+    readonly kind: "session" | "weekly";
+  }): StatusBarProviderSegmentModel {
+    const window = {
+      windowKey: `${input.providerId}:${input.kind}`,
+      label: input.kind === "weekly" ? "wk" : "5h",
+      labelIsDuration: true,
+      kind: input.kind,
+      usedPercent: input.severity === "limited" ? 100 : 40,
+      resetsAt: WEEKLY_RESET,
+      severity: input.severity,
+    };
+    return {
+      providerId: input.providerId,
+      profileId: input.profileId,
+      account:
+        input.label === null
+          ? null
+          : {
+              profileId: input.profileId ?? "",
+              accentColor: "#f06565",
+              label: input.label,
+            },
+      hidden: false,
+      state: "live",
+      reason: null,
+      windows: [window],
+      shown: [window],
+      tightest: window,
+    };
+  }
+
+  function showLimited(
+    segments: ReadonlyArray<StatusBarProviderSegmentModel>,
+  ): void {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "claude-code",
+        lane: "ephemeralProcess",
+        profiles: undefined,
+      },
+    ];
+    mocks.results = {
+      codex: readyResult(codexReady()),
+      "claude-code": readyResult(codexReady()),
+    };
+    segmentsState.cluster = { kind: "segments", segments };
+    renderPopover();
+  }
+
+  it("adds one banner per limited profile, with the reset time and no action", () => {
+    showLimited([
+      limitedSegment({
+        providerId: "codex",
+        profileId: "p1",
+        label: "pro20x",
+        severity: "limited",
+        kind: "weekly",
+      }),
+      limitedSegment({
+        providerId: "codex",
+        profileId: "p2",
+        label: "team",
+        severity: "limited",
+        kind: "session",
+      }),
+      limitedSegment({
+        providerId: "claude-code",
+        profileId: null,
+        label: null,
+        severity: "healthy",
+        kind: "session",
+      }),
+    ]);
+
+    const banners = screen.getAllByTestId("rate-limit-limited-banner");
+    expect(banners).toHaveLength(2);
+    expect(banners[0].textContent).toMatch(
+      /^pro20x hit its weekly limit · Resets \w{3}, \w{3} \d+, \d+:\d{2} (AM|PM)$/,
+    );
+    expect(banners[1].textContent).toContain("team hit its 5h limit");
+    expect(within(banners[0]).queryByRole("button")).toBeNull();
+  });
+
+  it("draws no banner while no profile is limited, even one running low", () => {
+    showLimited([
+      limitedSegment({
+        providerId: "codex",
+        profileId: "p1",
+        label: "pro20x",
+        severity: "running_low",
+        kind: "weekly",
+      }),
+    ]);
+
+    expect(screen.queryByTestId("rate-limit-limited-banner")).toBeNull();
+    expect(screen.queryByTestId("rate-limit-rail-limited-dot")).toBeNull();
+  });
+
+  it("keeps the banner above the content of every tab", () => {
+    showLimited([
+      limitedSegment({
+        providerId: "codex",
+        profileId: "p1",
+        label: "pro20x",
+        severity: "limited",
+        kind: "weekly",
+      }),
+    ]);
+
+    expect(screen.getAllByTestId("rate-limit-limited-banner")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("tab", { name: /^Codex/ }));
+    expect(screen.getAllByTestId("rate-limit-limited-banner")).toHaveLength(1);
+  });
+
+  it("marks only the provider with a limited profile on the rail, leaving the order alone", () => {
+    showLimited([
+      limitedSegment({
+        providerId: "codex",
+        profileId: "p1",
+        label: "pro20x",
+        severity: "limited",
+        kind: "weekly",
+      }),
+    ]);
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
+      "Overview",
+      "Codex, limit reached",
+      "Claude Code",
+    ]);
+    expect(screen.getAllByTestId("rate-limit-rail-limited-dot")).toHaveLength(
+      1,
+    );
+    expect(
+      within(
+        screen.getByRole("tab", { name: "Codex, limit reached" }),
+      ).getByTestId("rate-limit-rail-limited-dot"),
+    ).toBeTruthy();
   });
 });

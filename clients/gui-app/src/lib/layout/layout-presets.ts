@@ -39,12 +39,10 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
   homeTab: { shown: "hidden" },
   usageLimits: {
     shown: "shown",
-    bar: true,
-    percent: true,
-    word: true,
     reset: true,
     amount: "used",
-    display: "full",
+    density: "auto",
+    readingStyle: "bar",
   },
   // CPU and process count, not memory: on a fresh install the host's memory
   // figure is the one a reader cannot act on, and it cost the scarcest row in
@@ -56,7 +54,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
     processes: true,
     ramShare: false,
     agentRows: true,
-    display: "full",
+    density: "auto",
   },
   minimap: { shown: "shown" },
   contextUsage: {
@@ -107,12 +105,10 @@ const COMPACT_VALUES: LayoutValues = {
   ...SHIPPED_DEFAULT_VALUES,
   usageLimits: {
     shown: "shown",
-    bar: false,
-    percent: true,
-    word: false,
     reset: false,
     amount: "used",
-    display: "full",
+    density: "auto",
+    readingStyle: "percent",
   },
   resourceMonitor: {
     shown: "shown",
@@ -123,7 +119,7 @@ const COMPACT_VALUES: LayoutValues = {
     // The sidebar's per-agent CPU/RSS/process readout crowds the agent titles
     // out of a narrow row; the status bar's total still reads.
     agentRows: false,
-    display: "full",
+    density: "auto",
   },
   contextUsage: {
     shown: "shown",
@@ -157,12 +153,10 @@ const DETAILED_VALUES: LayoutValues = {
   ...SHIPPED_DEFAULT_VALUES,
   usageLimits: {
     shown: "shown",
-    bar: true,
-    percent: true,
-    word: true,
     reset: true,
     amount: "used",
-    display: "full",
+    density: "auto",
+    readingStyle: "bar",
   },
   resourceMonitor: {
     shown: "shown",
@@ -171,7 +165,7 @@ const DETAILED_VALUES: LayoutValues = {
     processes: true,
     ramShare: true,
     agentRows: true,
-    display: "full",
+    density: "auto",
   },
   contextUsage: {
     shown: "shown",

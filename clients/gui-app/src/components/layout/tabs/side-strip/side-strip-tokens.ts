@@ -1,3 +1,8 @@
+import {
+  resolveReadingDensity,
+  type ReadingDensity,
+  type ReadingPlacement,
+} from "@/lib/layout/reading-density";
 import { cn } from "@/lib/utils";
 import type { SideTabRowVariant } from "./side-tab-row";
 
@@ -400,17 +405,39 @@ export const SIDE_STRIP_SECTION_LABEL_CLASS =
 /** The foot's account row: avatar, name and host line. */
 export const SIDE_STRIP_ACCOUNT_ROW_CLASS = "h-11 rounded-lg px-2 gap-2";
 /**
- * How a reading's button draws (F6): `glyph` is the header's compact icon,
+ * How a reading's button draws: `glyph` is the phone header's outlined icon,
  * `tile` the collapsed rail's rail-wide box around that same glyph, and
- * `readout` the readings row's half or whole, which has room for the readings
- * themselves.
+ * `readout` the expanded strip's Compact tile, one of an equal-width pair.
  */
 export type ReadingButtonForm = "glyph" | "tile" | "readout";
 /**
- * A bar reading's forms: the ones every bar shares, plus `inline`, the desktop
- * header's readings, in a bounded share of the header (G6).
+ * A bar reading's forms: the ones every bar shares, plus the desktop header's
+ * two. `strip` is Compact in the top strip, a ghost icon button like its
+ * neighbours; `inline` is Detailed there, in a bounded share of the header.
+ * `rows` is Detailed in the expanded side strip: one block, not a button
+ * glyph.
  */
-export type BarReadingForm = ReadingButtonForm | "inline";
+export type BarReadingForm = ReadingButtonForm | "strip" | "inline" | "rows";
+/** Where a reading's button is placed; the status bar draws its own readings. */
+export type StripReadingPlacement = Exclude<ReadingPlacement, "status-bar">;
+/**
+ * The form a reading draws at a placement: the one place the resolved density
+ * meets the button forms, so no call site picks a form from a density itself.
+ */
+export function barReadingForm(
+  placement: StripReadingPlacement,
+  density: ReadingDensity,
+): BarReadingForm {
+  const resolved = resolveReadingDensity(density, placement);
+  switch (placement) {
+    case "side-strip-collapsed":
+      return "tile";
+    case "top-strip":
+      return resolved === "compact" ? "strip" : "inline";
+    case "side-strip":
+      return resolved === "compact" ? "readout" : "rows";
+  }
+}
 /** The host-health dot on the avatar's bottom-right, cut out of the strip's ground. */
 export const SIDE_STRIP_HOST_DOT_CLASS =
   "absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full ring-2 ring-canvas md:ring-shell-ground";

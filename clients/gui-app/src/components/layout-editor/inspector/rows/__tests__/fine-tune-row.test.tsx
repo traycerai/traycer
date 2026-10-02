@@ -24,8 +24,7 @@ import {
  *
  * What is still under test here is the per-row `requires` gate (item 3, L-08
  * overturned): "Breakdown rows" only means something once "Pin breakdown" is
- * on, and a checkbox inside "Show" can require a sibling checkbox on the same
- * row.
+ * on.
  */
 
 function fineTuneRows(region: RegionId) {
@@ -127,35 +126,5 @@ describe("a row's own `requires` gate (Breakdown rows needs Pin breakdown)", () 
     expect(
       screen.queryByText("Turn on Pin breakdown to change this."),
     ).toBeNull();
-  });
-
-  it("disables the Show checkbox that requires another on the same row while that one is off", () => {
-    useLayoutStore
-      .getState()
-      .setRegionValues("usageLimits", { percent: false });
-    render(rows("usageLimits", fineTuneRows("usageLimits"), false));
-
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Amount label" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    // Unrelated to the gate: Progress bar and Time until reset stay operable.
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Progress bar" })
-        .hasAttribute("disabled"),
-    ).toBe(false);
-  });
-
-  it("enables it once the prerequisite is on", () => {
-    useLayoutStore.getState().setRegionValues("usageLimits", { percent: true });
-    render(rows("usageLimits", fineTuneRows("usageLimits"), false));
-
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Amount label" })
-        .hasAttribute("disabled"),
-    ).toBe(false);
   });
 });

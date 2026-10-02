@@ -40,10 +40,15 @@ export interface SampleUsageReading {
  * The three readings a sample usage segment is taken from, by rotation.
  *
  * One short window part-way through, one long one further along and one day
- * window barely started: three different percentages, durations and
- * countdowns, so no two neighbouring segments print the same string. All
- * three stay under `classifyProviderRateLimitWindow`'s warning thresholds - a
- * picture of the grammar is not a picture of a person about to run out.
+ * window close to its limit: three different percentages, durations and
+ * countdowns, so no two neighbouring segments print the same string.
+ *
+ * The day window is the one reading over a warning threshold (84% of a short
+ * window is `running_low`, never `limited`). The status bar draws a healthy
+ * profile as a bare bar and expands only one that needs attention, so a
+ * sample with nothing running low would never draw the expanded form - the
+ * one form Percent shows and Reset time change - and the layout editor's
+ * picture of those two rows would not move.
  */
 const SAMPLE_USAGE_READINGS: ReadonlyArray<SampleUsageReading> = [
   {
@@ -60,7 +65,7 @@ const SAMPLE_USAGE_READINGS: ReadonlyArray<SampleUsageReading> = [
   },
   {
     durationMinutes: 24 * 60,
-    usedPercent: 12,
+    usedPercent: 84,
     resetsInMinutes: 6 * 60 + 20,
     kind: "period",
   },

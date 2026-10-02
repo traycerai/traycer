@@ -5351,6 +5351,119 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
     expect(readoutButton.className).toMatch(/\bw-full\b/);
   });
 
+  describe("Compact forms (strip, readout)", () => {
+    function emitCpu(
+      stub: { readonly emit: () => ResourcesStreamCallbacks },
+      cpu: number,
+    ): void {
+      act(() => {
+        stub.emit().onSnapshot(
+          projection({
+            app: { ...app(), cpuPercent: cpu },
+            owners: [owner({})],
+          }),
+        );
+      });
+    }
+
+    it("draws the CPU icon and percent whatever Metrics says, in a fixed-width slot", () => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: false,
+        memory: true,
+      });
+      const stub = renderPopoverForm("strip");
+      emitCpu(stub, 16);
+
+      const button = screen.getByTestId("resource-monitor-header-button");
+      expect(button.getAttribute("data-variant")).toBe("ghost");
+      expect(button.getAttribute("aria-label")).toBe("Resources");
+      const reading = within(button).getByTestId("resource-cpu-reading");
+      expect(reading.textContent).toBe("16%");
+      expect(reading.querySelector("span")?.className).toContain("min-w-6");
+      expect(
+        within(button).queryByTestId("status-bar-resource-metric-memory"),
+      ).toBeNull();
+    });
+
+    it("says cpu before the percent in the expanded strip's outlined tile", () => {
+      const stub = renderPopoverForm("readout");
+      emitCpu(stub, 16);
+
+      const button = screen.getByTestId("resource-monitor-header-button");
+      expect(button.getAttribute("data-variant")).toBe("outline");
+      expect(button.className).toMatch(/\bw-full\b/);
+      expect(
+        within(button).getByTestId("resource-cpu-reading").textContent,
+      ).toBe("cpu 16%");
+    });
+
+    // The threshold itself is held once, at the status bar segment.
+    it("reads the CPU in the warning color once it crosses the threshold", () => {
+      const stub = renderPopoverForm("strip");
+      const reading = (): HTMLElement =>
+        within(
+          screen.getByTestId("resource-monitor-header-button"),
+        ).getByTestId("resource-cpu-reading");
+
+      emitCpu(stub, 16);
+      expect(reading().className).not.toContain("text-warning-foreground");
+      emitCpu(stub, 92);
+      expect(reading().className).toContain("text-warning-foreground");
+    });
+
+    it("keeps the background stream with every metric off, since CPU is always read", () => {
+      useLayoutStore.getState().setRegionValues("resourceMonitor", {
+        cpu: false,
+        memory: false,
+        processes: false,
+        ramShare: false,
+      });
+      renderPopoverForm("strip");
+
+      expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    });
+  });
+
+  it("Detailed in the side strip draws the chosen metrics as a full-width ghost block", () => {
+    const stub = renderPopoverForm("rows");
+    act(() => {
+      stub.emit().onSnapshot(projection({ app: app(), owners: [owner({})] }));
+    });
+
+    const button = screen.getByTestId("resource-monitor-header-button");
+    expect(button.getAttribute("data-variant")).toBe("ghost");
+    expect(button.className).toMatch(/\bw-full\b/);
+    expect(
+      within(button).getByTestId("status-bar-resource-metric-cpu"),
+    ).not.toBeNull();
+    expect(button.getAttribute("aria-label")).toBe(
+      "Resources: cpu 1.0%, procs 1",
+    );
+  });
+
+  it("Detailed reads the CPU value in the warning color once it crosses the threshold", () => {
+    const stub = renderPopoverForm("rows");
+    const emitCpu = (cpu: number): void => {
+      act(() => {
+        stub.emit().onSnapshot(
+          projection({
+            app: { ...app(), cpuPercent: cpu },
+            owners: [owner({})],
+          }),
+        );
+      });
+    };
+    const cpuValue = (): string | undefined =>
+      within(screen.getByTestId("resource-monitor-header-button")).getByTestId(
+        "status-bar-resource-metric-cpu",
+      ).lastElementChild?.className;
+
+    emitCpu(16);
+    expect(cpuValue()).not.toContain("text-warning-foreground");
+    emitCpu(92);
+    expect(cpuValue()).toContain("text-warning-foreground");
+  });
+
   it("stays icon-only in the glyph form, whatever the metrics say", () => {
     const stub = renderPopoverForm("glyph");
     act(() => {

@@ -30,14 +30,12 @@ import {
 import {
   HOST_ROWS,
   collapsedReadingsProblems,
-  fullWidthShowsMoreProblems,
   hostMenuProblems,
   openHostMenu,
   readHostRows,
   readReadings,
   readingPopoverProblems,
   readingsRowProblems,
-  restyledUsageProblems,
   waitForReadings,
   wholeReadingProblems,
   type ReadingsKey,
@@ -2480,7 +2478,7 @@ test.describe("the shell with the panel loaded on the right", () => {
     await assertGroupIconAndKeys(page);
   });
 
-  test("two readings split the foot's row in equal halves and one takes it all, no reading is cut and a restyled usage still fits, on each edge", async () => {
+  test("two Compact readings split the foot's row in equal halves and one takes it all, and the CPU reading is never cut, on each edge", async () => {
     const page = getPage();
     for (const edge of ["left", "right"] as const) {
       for (const readings of ["both", "usage", "resource"] as const) {
@@ -2493,41 +2491,17 @@ test.describe("the shell with the panel loaded on the right", () => {
         await probe(page, `setReadings(${JSON.stringify(readings)})`);
         await waitForReadings(page, readings, false);
         await settleShell(page);
-        const full = readings !== "both";
         await eventually(`readings ${label}`, async () => {
           const read = await readReadings(page);
           return [
             ...readingsRowProblems(read, readings),
             ...wholeReadingProblems(read),
-            ...(full && readings === "resource"
-              ? fullWidthShowsMoreProblems(read.resourceReadings, "resource")
-              : []),
           ];
         });
         const settled = await readReadings(page);
         note(
           `${label}: row ${settled.row === null ? "-" : boxText(settled.row)}, usage ${settled.usage === null ? "-" : boxText(settled.usage)}, resources ${settled.resource === null ? "-" : boxText(settled.resource)}`,
         );
-        // Usage draws the status bar's own readings, so how many fit is its
-        // Style's to say (G6): the shipped Style spells the reset time out.
-        // Under a compact one, half width shows the first reading (bar only)
-        // and full width more than one (bar and percent).
-        if (readings !== "resource") {
-          const compact = full ? "barPercent" : "barOnly";
-          await probe(page, `applyUsageStyle(${JSON.stringify(compact)})`);
-          await eventually(
-            `readings ${label}, restyled ${compact}`,
-            async () => {
-              const read = await readReadings(page);
-              return [
-                ...restyledUsageProblems(read),
-                ...(full
-                  ? fullWidthShowsMoreProblems(read.usageReadings, "usage")
-                  : []),
-              ];
-            },
-          );
-        }
       }
     }
   });

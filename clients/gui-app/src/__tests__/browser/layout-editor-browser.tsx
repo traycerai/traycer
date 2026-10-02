@@ -326,15 +326,18 @@ function LiveDockChips(): ReactNode {
 /**
  * The clip fade, on the one picture that can outgrow the inspector (LV2-14).
  *
- * The Usage limits picture draws EVERY shown provider since R3-03, and eight
- * segments do not fit the 292px a docked stage gives them. That is what
+ * The Usage limits picture draws EVERY shown windowed provider since R3-03:
+ * six segments, calm ones a bare bar and the running-low specimen expanded in
+ * place, which together do not fit the 292px a docked stage gives them. With
+ * every specimen calm they would fit exactly, so the case depends on the one
+ * running-low reading `sample-workspace-scene.ts` keeps. That is what
  * `HostContextFrame`'s measured `data-clipped` and its `CLIP_FADE` mask are
  * for, and jsdom can decide neither: `scrollWidth`, `clientWidth` and a
  * resolved `mask-image` are all real layout. The driver asserts on this node -
  * `data-clipped="true"` and a computed `mask-image` other than `none` on the
  * `[data-layout-depiction]` frame inside it.
  *
- * Its own arrangement rather than the store's, so the case is eight providers
+ * Its own arrangement rather than the store's, so the case is every provider
  * whatever this build ships as a default and whatever the preset rows above
  * leave hidden.
  */

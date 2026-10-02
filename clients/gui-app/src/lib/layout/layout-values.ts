@@ -1,4 +1,5 @@
 import type { ContextUsageRowKey } from "@/lib/context-usage-rows";
+import type { ReadingDensity } from "@/lib/layout/reading-density";
 import type { RegionId } from "@/lib/layout/region-id";
 
 /**
@@ -52,13 +53,10 @@ export type ContextStyle = "text" | "ring" | "ring-only";
 export type AmountMode = "used" | "remaining";
 
 /**
- * Whether a bar reading draws its full text or just its icon. Distinct from
- * `RegionSize` (`full` / `chip`) because that pair IS a region's own header
- * control (`RegionDisplayControl`'s `"size" in ...` branch, L-128) - this one
- * is a fine-tune row instead, and only means something in the Tab strip: the
- * Status bar has the room for the full reading (`status-bar-regions.ts`).
+ * What a calm profile draws in the status bar's Detailed form: a bar, a
+ * percent, both, or the full expanded reading for every profile.
  */
-export type ReadingDisplay = "full" | "icon";
+export type ReadingStyle = "bar" | "percent" | "both" | "full";
 
 /**
  * One row of the pinned context breakdown. The breakdown's own row keys, so
@@ -98,7 +96,14 @@ export const LAYOUT_VALUE_ENUM_MEMBERS: ReadonlyArray<string> = Object.keys({
     true
   >),
   ...({ used: true, remaining: true } satisfies Record<AmountMode, true>),
-  ...({ full: true, icon: true } satisfies Record<ReadingDisplay, true>),
+  ...({ auto: true, compact: true, detailed: true } satisfies Record<
+    ReadingDensity,
+    true
+  >),
+  ...({ bar: true, percent: true, both: true, full: true } satisfies Record<
+    ReadingStyle,
+    true
+  >),
 });
 
 export interface ShownValues {
@@ -132,12 +137,10 @@ export interface AutoRailValues {
 }
 
 export interface UsageLimitsValues extends ShownValues {
-  readonly bar: boolean;
-  readonly percent: boolean;
-  readonly word: boolean;
   readonly reset: boolean;
   readonly amount: AmountMode;
-  readonly display: ReadingDisplay;
+  readonly density: ReadingDensity;
+  readonly readingStyle: ReadingStyle;
 }
 
 /**
@@ -153,7 +156,7 @@ export interface ResourceMonitorValues extends ShownValues {
   readonly processes: boolean;
   readonly ramShare: boolean;
   readonly agentRows: boolean;
-  readonly display: ReadingDisplay;
+  readonly density: ReadingDensity;
 }
 
 /** The four readings the monitor can print, in the order it prints them. */

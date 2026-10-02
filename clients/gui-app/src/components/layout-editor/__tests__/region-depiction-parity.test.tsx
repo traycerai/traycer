@@ -121,7 +121,7 @@ const REGION_PARITY: Readonly<Record<RegionId, ReadonlyArray<ParityCase>>> = {
     {
       kind: "own-markup",
       reason:
-        "StatusBarResourceSegment resolves its readings through useStatusBarResourceMetricViews, which subscribes to the desktop sampler and the resource registry, so a picture of it cannot be one of its mounts",
+        "StatusBarResourceSegment resolves its readings through useStatusBarResourceMetrics, which subscribes to the desktop sampler and the resource registry, so a picture of it cannot be one of its mounts",
     },
   ],
   minimap: [

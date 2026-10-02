@@ -10,8 +10,14 @@ import {
   type ResourceMonitorValues,
   type ShownValues,
   type SizedValues,
+  type ReadingStyle,
   type UsageLimitsValues,
 } from "@/lib/layout/layout-values";
+import {
+  PRESET_VALUES,
+  type LayoutPresetId,
+} from "@/lib/layout/layout-presets";
+import type { ReadingDensity } from "@/lib/layout/reading-density";
 import type { RegionId } from "@/lib/layout/region-id";
 
 /**
@@ -40,10 +46,32 @@ import type { RegionId } from "@/lib/layout/region-id";
  * else: no dot, no revert, no count and no analytics property.
  */
 export function resolvePersistedOverrides(value: unknown): LayoutOverrides {
+  return resolveOverrides(value, null);
+}
+
+/**
+ * {@link resolvePersistedOverrides} for a delta read back from storage, where
+ * `basePreset` is the preset it was written against. An earlier build's keys
+ * can only be read relative to that preset: Usage limits' `bar` and `percent`
+ * checkboxes carry over as a Reading style from the values the PRESET gave
+ * them, and the preset is not part of the delta. A delta that is being written
+ * holds no such key, so the write paths have no use for it.
+ */
+export function resolvePersistedRecordOverrides(
+  value: unknown,
+  basePreset: LayoutPresetId,
+): LayoutOverrides {
+  return resolveOverrides(value, basePreset);
+}
+
+function resolveOverrides(
+  value: unknown,
+  legacyBasePreset: LayoutPresetId | null,
+): LayoutOverrides {
   const stored: Record<string, unknown> = isRecord(value) ? value : {};
   const resolved: MutableLayoutOverrides = {
     homeTab: shownPatch(stored.homeTab),
-    usageLimits: usageLimitsPatch(stored.usageLimits),
+    usageLimits: usageLimitsPatch(stored.usageLimits, legacyBasePreset),
     resourceMonitor: resourceMonitorPatch(stored.resourceMonitor),
     minimap: shownPatch(stored.minimap),
     contextUsage: contextUsagePatch(stored.contextUsage),
@@ -125,20 +153,86 @@ function autoRailPatch(value: unknown): Partial<AutoRailValues> {
     : {};
 }
 
-function usageLimitsPatch(value: unknown): Partial<UsageLimitsValues> {
+/**
+ * A reading's density. `density` wins when it is there; an earlier build wrote
+ * `display` instead, and `icon` is the one answer that was a choice:
+ * `compact`. Every preset set `full`, so a stored `full` reads as the default,
+ * `auto`. A record with neither key says nothing and the preset answers.
+ */
+function densityPatch(
+  stored: Record<string, unknown>,
+): Partial<{ density: ReadingDensity }> {
+  if (
+    stored.density === "auto" ||
+    stored.density === "compact" ||
+    stored.density === "detailed"
+  ) {
+    return { density: stored.density };
+  }
+  if (stored.display === "icon") return { density: "compact" };
+  if (stored.display === "full") return { density: "auto" };
+  return {};
+}
+
+/**
+ * A usage reading's Reading style. `readingStyle` wins when it is there; an
+ * earlier build wrote the `bar` and `percent` checkboxes instead, and their
+ * effective values are the preset's with the stored ones on top. Every earlier
+ * preset had `percent` on, and only Compact had `bar` off.
+ *
+ * Bar without percent is `bar` and percent without bar is `percent`. Both on
+ * is `both` only on Compact, where turning the bar on was a choice; on Default
+ * and Detailed both on is what nobody changed, and the preset answers. Both
+ * off says nothing either. A style equal to the preset's own is not stored:
+ * the delta holds only what differs.
+ */
+function readingStylePatch(
+  stored: Record<string, unknown>,
+  legacyBasePreset: LayoutPresetId | null,
+): Partial<{ readingStyle: ReadingStyle }> {
+  if (
+    stored.readingStyle === "bar" ||
+    stored.readingStyle === "percent" ||
+    stored.readingStyle === "both" ||
+    stored.readingStyle === "full"
+  ) {
+    return { readingStyle: stored.readingStyle };
+  }
+  if (legacyBasePreset === null) return {};
+  const style = legacyReadingStyle(stored, legacyBasePreset);
+  return style === null ||
+    style === PRESET_VALUES[legacyBasePreset].usageLimits.readingStyle
+    ? {}
+    : { readingStyle: style };
+}
+
+/** The style an earlier build's `bar` / `percent` pair meant on its preset. */
+function legacyReadingStyle(
+  stored: Record<string, unknown>,
+  basePreset: LayoutPresetId,
+): ReadingStyle | null {
+  const compact = basePreset === "compact";
+  const bar = typeof stored.bar === "boolean" ? stored.bar : !compact;
+  const percent = typeof stored.percent === "boolean" ? stored.percent : true;
+  if (bar && !percent) return "bar";
+  if (percent && !bar) return "percent";
+  if (bar && percent && compact) return "both";
+  return null;
+}
+
+function usageLimitsPatch(
+  value: unknown,
+  legacyBasePreset: LayoutPresetId | null,
+): Partial<UsageLimitsValues> {
   const stored: Record<string, unknown> = isRecord(value) ? value : {};
   return {
     ...shownPatch(value),
-    ...(typeof stored.bar === "boolean" ? { bar: stored.bar } : {}),
-    ...(typeof stored.percent === "boolean" ? { percent: stored.percent } : {}),
-    ...(typeof stored.word === "boolean" ? { word: stored.word } : {}),
     ...(typeof stored.reset === "boolean" ? { reset: stored.reset } : {}),
     ...(stored.amount === "used" || stored.amount === "remaining"
       ? { amount: stored.amount }
       : {}),
-    ...(stored.display === "full" || stored.display === "icon"
-      ? { display: stored.display }
-      : {}),
+    ...densityPatch(stored),
+    ...readingStylePatch(stored, legacyBasePreset),
   };
 }
 
@@ -157,9 +251,7 @@ function resourceMonitorPatch(value: unknown): Partial<ResourceMonitorValues> {
     ...(typeof stored.agentRows === "boolean"
       ? { agentRows: stored.agentRows }
       : {}),
-    ...(stored.display === "full" || stored.display === "icon"
-      ? { display: stored.display }
-      : {}),
+    ...densityPatch(stored),
   };
 }
 
