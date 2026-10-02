@@ -780,15 +780,17 @@ describe("useQuoteSelection - deferred mouseup read", () => {
     expect(result.current.snapshot).not.toBeNull();
   });
 
-  // macOS selects the word under the pointer on a right-click before the
-  // context menu opens; that selection is not a quote gesture.
+  // macOS selects the word under the pointer on a right-click (or a
+  // Control-click) before the context menu opens; that selection is not a
+  // quote gesture.
   it.each([
-    { name: "primary", button: 0, quotes: true },
-    { name: "middle", button: 1, quotes: false },
-    { name: "secondary", button: 2, quotes: false },
+    { name: "primary", button: 0, ctrlKey: false, quotes: true },
+    { name: "middle", button: 1, ctrlKey: false, quotes: false },
+    { name: "secondary", button: 2, ctrlKey: false, quotes: false },
+    { name: "Control+primary", button: 0, ctrlKey: true, quotes: false },
   ])(
-    "reads the selection after a $name-button release only when it is the primary button",
-    async ({ button, quotes }) => {
+    "reads the selection after a $name release only when it is a plain primary-button release",
+    async ({ button, ctrlKey, quotes }) => {
       const { container, paragraph } = makeContainerWithProse("Quotable text.");
       const ref: { current: HTMLElement | null } = { current: container };
       const { result } = renderHook(() =>
@@ -800,7 +802,7 @@ describe("useQuoteSelection - deferred mouseup read", () => {
 
       act(() => {
         container.dispatchEvent(
-          new MouseEvent("mouseup", { bubbles: true, button }),
+          new MouseEvent("mouseup", { bubbles: true, button, ctrlKey }),
         );
       });
       await act(async () => {
