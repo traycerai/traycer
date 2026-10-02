@@ -672,7 +672,7 @@ function ShareSkillsAndPluginsField({
   );
 }
 
-function WaitingStepDeviceCode(props: {
+export function WaitingStepDeviceCode(props: {
   readonly processingCode: boolean;
   readonly userCode: string | null;
 }): ReactNode {
@@ -688,7 +688,7 @@ function WaitingStepDeviceCode(props: {
   );
 }
 
-function WaitingStepUrlActions(props: {
+export function WaitingStepUrlActions(props: {
   readonly processingCode: boolean;
   readonly loginUrl: string | null;
   readonly autoOpen: boolean;

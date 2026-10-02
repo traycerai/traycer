@@ -6,7 +6,7 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import { DndContext } from "@dnd-kit/core";
+import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -20,6 +20,7 @@ import {
   MockTraycerCli,
 } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { LazyMotion, domAnimation } from "motion/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import {
@@ -381,9 +382,9 @@ export function RecoverySurface(): ReactElement {
             Reopen closed tab
           </button>
         </div>
-        <DndContext>
+        <RootDndProvider>
           <TabStrip />
-        </DndContext>
+        </RootDndProvider>
       </div>
     </SignedInFixture>
   );
@@ -419,9 +420,11 @@ function buildRouter() {
             fallback={<div data-testid="tab-recovery-runtime-fallback" />}
           >
             <WindowsBridgeContext.Provider value={windowsBridgeValue}>
-              <TooltipProvider>
-                <RecoverySurface />
-              </TooltipProvider>
+              <LazyMotion features={domAnimation}>
+                <TooltipProvider>
+                  <RecoverySurface />
+                </TooltipProvider>
+              </LazyMotion>
             </WindowsBridgeContext.Provider>
           </HostRuntimeProvider>
         </RunnerHostProvider>

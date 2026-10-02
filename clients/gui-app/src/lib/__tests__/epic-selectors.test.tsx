@@ -91,7 +91,7 @@ describe("useRegisteredEpicLiveAgents", () => {
       registry.acquire("epic-late-handle", () => handle);
     });
     expect(result.current).toEqual([
-      { kind: "chat", title: null, hostId: "host-a" },
+      { kind: "chat", title: null, hostId: "host-a", userId: null },
     ]);
 
     act(() => {
@@ -99,14 +99,23 @@ describe("useRegisteredEpicLiveAgents", () => {
         chats: {
           allIds: ["chat-1"],
           byId: {
-            "chat-1": { ...chat("chat-1", null), title: "Generated title" },
+            "chat-1": {
+              ...chat("chat-1", null),
+              title: "Generated title",
+              userId: "user-1",
+            },
           },
         },
       });
     });
 
     expect(result.current).toEqual([
-      { kind: "chat", title: "Generated title", hostId: "host-a" },
+      {
+        kind: "chat",
+        title: "Generated title",
+        hostId: "host-a",
+        userId: "user-1",
+      },
     ]);
   });
 
@@ -143,7 +152,7 @@ describe("useRegisteredEpicLiveAgents", () => {
       registry.acquire("epic-stable-refs", () => handle);
     });
     expect(result.current).toEqual([
-      { kind: "chat", title: null, hostId: "host-a" },
+      { kind: "chat", title: null, hostId: "host-a", userId: null },
     ]);
 
     act(() => {
@@ -158,7 +167,12 @@ describe("useRegisteredEpicLiveAgents", () => {
     });
 
     expect(result.current).toEqual([
-      { kind: "chat", title: "Stable refs title", hostId: "host-a" },
+      {
+        kind: "chat",
+        title: "Stable refs title",
+        hostId: "host-a",
+        userId: null,
+      },
     ]);
   });
 
@@ -193,7 +207,12 @@ describe("useRegisteredEpicLiveAgents", () => {
     );
 
     expect(result.current).toEqual([
-      { kind: "terminal-agent", title: "Codex", hostId: "host-a" },
+      {
+        kind: "terminal-agent",
+        title: "Codex",
+        hostId: "host-a",
+        userId: null,
+      },
     ]);
   });
 });

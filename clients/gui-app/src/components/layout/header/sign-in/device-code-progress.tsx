@@ -9,6 +9,26 @@ import { cn } from "@/lib/utils";
 import { DeviceCodeFallback } from "./device-code-fallback";
 import { useRemainingSeconds } from "./use-remaining-seconds";
 
+/** The panel's card and the inset inside it; unframed, a popover is its card. */
+function frameOf(
+  isHero: boolean,
+  framed: boolean,
+): { readonly card: string | null; readonly inset: string } {
+  if (!framed) return { card: null, inset: "p-1.5" };
+  if (isHero) {
+    return {
+      card: "rounded-lg border border-white/15 bg-white/[0.075] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)]",
+      inset: "p-5",
+    };
+  }
+  return {
+    card: "rounded-lg border border-border bg-card text-card-foreground shadow-sm",
+    // In a narrow `signin` container (the strip's foot), tighter insets give
+    // the device code room for one line.
+    inset: "p-4 @max-[15rem]/signin:p-3",
+  };
+}
+
 /**
  * Active device-flow progress. The app already auto-opens the pre-filled
  * approval page; this surface leads with a one-click "open approval page"
@@ -20,6 +40,8 @@ import { useRemainingSeconds } from "./use-remaining-seconds";
 export function DeviceCodeProgress(props: {
   readonly progress: DeviceFlowProgress;
   readonly isHero: boolean;
+  /** Its own card; off inside a popover, whose frame it already is. */
+  readonly framed: boolean;
 }) {
   const openVerificationPageMutation = useAuthOpenVerificationPageMutation();
   const signInMutation = useAuthSignInMutation();
@@ -33,17 +55,14 @@ export function DeviceCodeProgress(props: {
     ? "Code expired"
     : `Expires in ${formatClockDuration(remainingSeconds)}`;
 
+  const frame = frameOf(props.isHero, props.framed);
+
   return (
     <div
-      className={cn(
-        "flex w-full flex-col overflow-hidden rounded-lg border text-card-foreground shadow-sm",
-        props.isHero
-          ? "border-white/15 bg-white/[0.075] text-white shadow-[0_1.5rem_4rem_rgba(0,0,0,0.34)]"
-          : "border-border bg-card",
-      )}
+      className={cn("flex w-full flex-col overflow-hidden", frame.card)}
       data-testid="signin-device-progress"
     >
-      <div className={cn("flex flex-col gap-4", props.isHero ? "p-5" : "p-4")}>
+      <div className={cn("flex flex-col gap-4", frame.inset)}>
         <div className="space-y-1.5 text-center">
           <h2 className="font-heading font-medium tracking-normal">
             Approve in your browser
@@ -65,12 +84,18 @@ export function DeviceCodeProgress(props: {
           data-testid="signin-open-approval"
         >
           Open approval page
-          <SquareArrowOutUpRight className="size-4" aria-hidden="true" />
+          {/* At the strip's narrowest, the label alone fills the button. */}
+          <SquareArrowOutUpRight
+            className="size-4 @max-[13rem]/signin:hidden"
+            aria-hidden="true"
+          />
         </Button>
 
         <div
           className={cn(
-            "flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-3 py-2 text-ui-xs",
+            // Wraps its two halves onto two lines where they do not fit (the
+            // strip), rather than drawing one over the other.
+            "flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border px-3 py-2 text-ui-xs",
             props.isHero
               ? "border-white/10 bg-black/[0.18] text-white/[0.65]"
               : "border-border/70 bg-foreground/3 text-muted-foreground",
@@ -85,7 +110,7 @@ export function DeviceCodeProgress(props: {
             <div className="flex items-center gap-1">
               <AgentSpinningDots
                 variant="dots"
-                className="ml-0.5 shrink-0"
+                className="shrink-0"
                 testId="signin-device-spinner"
               />
               <span className="shrink-0">

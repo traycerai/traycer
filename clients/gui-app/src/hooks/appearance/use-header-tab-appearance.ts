@@ -1,5 +1,6 @@
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabRefKey } from "@/stores/tabs/layout";
+import { effectiveTabColor } from "@/stores/tabs/tab-groups";
 import type { HeaderTab } from "@/stores/tabs/types";
 
 /**
@@ -36,11 +37,10 @@ export function useHeaderTabAppearance(
     : {
         ...tab,
         appearance: {
-          color:
-            group?.color ??
-            customization?.color ??
-            tab.appearance?.color ??
-            null,
+          color: effectiveTabColor(
+            group,
+            customization?.color ?? tab.appearance?.color ?? null,
+          ),
           icon: customization?.icon ?? tab.appearance?.icon ?? null,
         },
       };

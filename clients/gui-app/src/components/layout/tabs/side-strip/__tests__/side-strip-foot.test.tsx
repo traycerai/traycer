@@ -6,7 +6,13 @@
  * stores are exactly what production reads.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -344,6 +350,21 @@ describe("SideStripFoot", () => {
 
     expect(screen.queryByTestId("user-menu-trigger")).toBeNull();
     expect(screen.getByTestId("signin-controls")).toBeTruthy();
+  });
+
+  it("collapsed and signed out: a Sign in tile starts the sign-in and shows its controls beside the rail", async () => {
+    useAuthStore.getState().setSignedOut();
+    useSideTabStripStore.setState({ collapsed: true });
+    renderStrip();
+    await screen.findByTestId("side-tab-strip");
+    expect(screen.queryByTestId("signin-controls")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    expect(await screen.findByTestId("signin-controls")).toBeTruthy();
+    await waitFor(() =>
+      expect(useAuthStore.getState().status).toBe("signing-in"),
+    );
   });
 
   it("opens the real user menu from the account row's custom trigger", async () => {

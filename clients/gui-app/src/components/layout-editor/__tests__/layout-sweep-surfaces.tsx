@@ -11,7 +11,6 @@ import {
   SidebarWidthResizeHandle,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
-import { StripLiveAgentsPortal } from "@/components/epic-canvas/sidebar/strip-live-agents";
 import { StableTileSurfaceHost } from "@/components/epic-canvas/surface-host/stable-tile-surface-host";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
 import { EpicSurfaceSheets } from "@/components/epic-tabs/epic-surface";
@@ -26,7 +25,6 @@ import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip
 import { AppStatusBar } from "@/components/layout/status-bar/app-status-bar";
 import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
 import { SampleWorkspaceBody } from "@/components/sample-workspace/sample-workspace-body";
-import { SampleStripLiveAgents } from "@/components/sample-workspace/sample-strip-live-agents";
 import { NavigatorResourceHotspotChip } from "@/components/resources/resource-usage-chip";
 import { useNavigatorResourceMetrics } from "@/hooks/resources/use-navigator-resource-metrics";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -153,10 +151,6 @@ function EpicWindowSurface(props: {
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-clip">
       <EpicSessionContext value={props.session}>
-        <StripLiveAgentsPortal
-          epicId={EPIC_SURFACE_ID}
-          tabId={EPIC_SURFACE_ID}
-        />
         <EpicSurfaceSheets
           tabId={EPIC_SURFACE_ID}
           sidebarSide={sidebarSide}
@@ -205,8 +199,8 @@ function EpicWindowSurface(props: {
 
 /**
  * The sample workspace as the app mounts it: a route surface, which is one
- * sheet, holding the sample notice, the sample body (rail, transcript, minimap,
- * dock, composer) and the strip's live agents.
+ * sheet, holding the sample notice and the sample body (rail, transcript,
+ * minimap, dock, composer).
  */
 function SampleWindowSurface(): ReactNode {
   return (
@@ -226,7 +220,6 @@ function SampleWindowSurface(): ReactNode {
         </span>
       </div>
       <SampleWorkspaceBody />
-      <SampleStripLiveAgents tabId="sample-workspace" />
     </div>
   );
 }

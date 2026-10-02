@@ -31,6 +31,8 @@ import { SideStripResizeHandle } from "./side-strip-resize-handle";
 import { SideStripRowList } from "./side-strip-row-list";
 import { SideStripSkeleton } from "./side-strip-skeleton";
 import { SideStripTopBlock } from "./side-strip-top-block";
+import { StripNeedsYouScope } from "./strip-needs-you-scope";
+import { StripSectionsScope } from "./strip-sections-scope";
 import type { SideTabRowVariant } from "./side-tab-row";
 import {
   SIDE_STRIP_MAX_WIDTH_CLASS,
@@ -119,32 +121,36 @@ export function SideTabStrip(props: {
           )}
           style={{ width: collapsed ? SIDE_STRIP_RAIL_WIDTH_PX : widthPx }}
         >
-          <SideStripTopBlock
-            edge={edge}
-            variant={variant}
-            ownsTitleBar={ownsTitleBar}
-            dragClass={dragClass}
-            homeTabDrawn={controller.homeTabDrawn}
-            homeIsActive={controller.homeIsActive}
-            onHomeTab={controller.onHomeTab}
-            onNewTab={controller.onNewTab}
-            onToggleCollapsed={widthEasing.toggle}
-            taskCount={controller.tabs.length}
-          />
-          <TabStripIndicatorScope indicators={controller.indicators}>
-            {hydrated ? (
-              <SideStripRowList
-                controller={controller}
-                edge={edge}
-                variant={variant}
-              />
-            ) : (
-              <SideStripSkeleton
-                count={persistedStripCount}
-                variant={variant}
-              />
-            )}
-          </TabStripIndicatorScope>
+          <StripNeedsYouScope controller={controller}>
+            <SideStripTopBlock
+              edge={edge}
+              variant={variant}
+              ownsTitleBar={ownsTitleBar}
+              dragClass={dragClass}
+              homeTabDrawn={controller.homeTabDrawn}
+              homeIsActive={controller.homeIsActive}
+              onHomeTab={controller.onHomeTab}
+              onNewTab={controller.onNewTab}
+              onToggleCollapsed={widthEasing.toggle}
+              taskCount={controller.tabs.length}
+            />
+            <TabStripIndicatorScope indicators={controller.indicators}>
+              <StripSectionsScope controller={controller}>
+                {hydrated ? (
+                  <SideStripRowList
+                    controller={controller}
+                    edge={edge}
+                    variant={variant}
+                  />
+                ) : (
+                  <SideStripSkeleton
+                    count={persistedStripCount}
+                    variant={variant}
+                  />
+                )}
+              </StripSectionsScope>
+            </TabStripIndicatorScope>
+          </StripNeedsYouScope>
           {/* A direct child of the nav: Electron honours a drag region reliably
             only on the title bar's top-level elements. */}
           <div

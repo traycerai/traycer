@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { CSSProperties } from "react";
 import { useId } from "react";
-import { Check, Group, Palette, Pipette } from "lucide-react";
+import { Check, Group, Palette, Pencil, Pipette } from "lucide-react";
 import {
   ContextMenuItem,
   ContextMenuSeparator,
@@ -26,9 +26,19 @@ import {
 } from "@/components/ui/context-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Input } from "@/components/ui/input";
+import {
+  useGroupEditorStore,
+  useGroupEditorTarget,
+} from "@/stores/tabs/group-editor-store";
+import { GroupFollowNote } from "./group-follow-note";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabRefKey } from "@/stores/tabs/layout";
-import { TAB_COLORS } from "@/stores/tabs/tab-groups";
+import {
+  effectiveTabColor,
+  TAB_COLORS,
+  type TabCustomization,
+  type TabGroup,
+} from "@/stores/tabs/tab-groups";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { cn } from "@/lib/utils";
 
@@ -87,7 +97,7 @@ export function TabColorPicker(props: {
             aria-pressed={props.menu ? undefined : selectedColor === value}
             onClick={() => props.onChange(value)}
             className={cn(
-              "flex size-6 items-center justify-center rounded-full bg-[var(--swatch)] text-black ring-offset-2 ring-offset-popover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "flex size-6 items-center justify-center rounded-full bg-[var(--swatch)] text-black ring-offset-2 ring-offset-popover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
               selectedColor === value && "ring-2",
             )}
             style={{ "--swatch": value } as CSSProperties}
@@ -118,7 +128,7 @@ export function TabColorPicker(props: {
         <label
           htmlFor={customColorId}
           className={cn(
-            "relative flex size-6 shrink-0 items-center justify-center rounded-full focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-popover",
+            "relative flex size-6 shrink-0 items-center justify-center rounded-full focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-popover has-disabled:cursor-not-allowed has-disabled:opacity-50",
             customColor
               ? "bg-[var(--swatch)]"
               : "bg-[conic-gradient(#e5484d,#f5b000,#46a758,#0090ff,#7c6cf0,#e5484d)]",
@@ -175,6 +185,9 @@ function EpicOrganizationMenu(props: {
         canEdit={
           task.epic.light?.createdBy === organization.userId ||
           isEditableRole(task.epic.permission?.role ?? null)
+        }
+        onEditGroup={(anchorId) =>
+          useGroupEditorStore.getState().request(anchorId)
         }
       />
     );
@@ -261,11 +274,69 @@ function OrganizationContextRetryMenu(props: {
     </ContextMenuItem>
   );
 }
+/**
+ * A tab's colour swatches. A grouped tab draws its group's colour, so its own
+ * is not offered: the swatches show the group's, disabled, beside whose it is
+ * and a way to edit the group.
+ */
+function TabColorSection(props: {
+  readonly tab: HeaderTab;
+  readonly ownColor: string | null;
+  readonly groupId: string | null;
+  readonly group: TabGroup | undefined;
+}) {
+  const { groupId, group } = props;
+  const editorAnchor = useGroupEditorTarget(groupId);
+  return (
+    <>
+      <fieldset disabled={group !== undefined} className="min-w-0">
+        <TabColorPicker
+          menu
+          color={effectiveTabColor(group, props.ownColor)}
+          onChange={(color) => {
+            useTabsStore.getState().setTabCustomization(props.tab, { color });
+          }}
+        />
+      </fieldset>
+      {groupId === null || group === undefined ? null : (
+        <>
+          <GroupFollowNote name={group.name} />
+          {editorAnchor === null ? null : (
+            <ContextMenuItem
+              className="mt-1"
+              onSelect={() =>
+                useGroupEditorStore.getState().request(editorAnchor)
+              }
+            >
+              <Pencil />
+              Edit group…
+            </ContextMenuItem>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+/**
+ * What "Reset tab appearance" clears, or `null` when there is nothing to reset.
+ * A grouped tab's own colour is not shown or editable, so it is left stored.
+ */
+function resetPatchOf(
+  customization: TabCustomization | undefined,
+  grouped: boolean,
+): Partial<Pick<TabCustomization, "color" | "icon">> | null {
+  const color = !grouped && Boolean(customization?.color);
+  const icon = Boolean(customization?.icon);
+  if (!color && !icon) return null;
+  return grouped ? { icon: null } : { color: null, icon: null };
+}
 function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
   const key = tabRefKey(props.tab);
   const customization = useTabsStore((state) => state.customizations?.[key]);
   const groups = useTabsStore((state) => state.groups);
   const groupId = customization?.groupId ?? null;
+  const group = groupId === null ? undefined : groups?.[groupId];
+  const reset = resetPatchOf(customization, group !== undefined);
   const actions = useTabsStore.getState();
   return (
     <>
@@ -275,12 +346,11 @@ function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
           Tab appearance
         </ContextMenuSubTrigger>
         <ContextMenuSubContent layout="panel" className="max-w-xs">
-          <TabColorPicker
-            menu
-            color={customization?.color ?? null}
-            onChange={(color) => {
-              actions.setTabCustomization(props.tab, { color });
-            }}
+          <TabColorSection
+            tab={props.tab}
+            ownColor={customization?.color ?? null}
+            groupId={groupId}
+            group={group}
           />
           <Label className="mt-3 mb-1.5">Icon</Label>
           <Input
@@ -300,21 +370,16 @@ function LocalTabAppearanceMenu(props: { readonly tab: HeaderTab }) {
           <p className="mt-1 text-ui-xs text-muted-foreground">
             Displays up to two characters.
           </p>
-          {customization?.color || customization?.icon ? (
+          {reset === null ? null : (
             <>
               <ContextMenuSeparator className="my-2" />
               <ContextMenuItem
-                onSelect={() =>
-                  actions.setTabCustomization(props.tab, {
-                    color: null,
-                    icon: null,
-                  })
-                }
+                onSelect={() => actions.setTabCustomization(props.tab, reset)}
               >
                 Reset tab appearance
               </ContextMenuItem>
             </>
-          ) : null}
+          )}
         </ContextMenuSubContent>
       </ContextMenuSub>
       <ContextMenuSub>

@@ -76,9 +76,14 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
   );
 }
 
+/**
+ * The split view's icon: two panes, the focused one filled. `size` is the top
+ * bar's 20px, the sidebar row's 16px, or the 12px of a caption naming a half.
+ */
 export function SplitFocusIcon(props: {
   readonly splitId: string;
   readonly focusedSide: "left" | "right";
+  readonly size: "size-5" | "size-4" | "size-3";
 }): ReactNode {
   const leftFocused = props.focusedSide === "left";
 
@@ -89,7 +94,7 @@ export function SplitFocusIcon(props: {
       aria-hidden="true"
       data-testid={`split-focus-indicator-${props.splitId}`}
       data-focused-side={props.focusedSide}
-      className="size-5"
+      className={cn("shrink-0", props.size)}
     >
       <rect
         data-split-pane="left"

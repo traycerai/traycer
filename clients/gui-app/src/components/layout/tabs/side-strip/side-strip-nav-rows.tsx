@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-notifications";
-import { useNeedsYouItems } from "@/stores/notifications/needs-you-items";
+import { useNeedsYouTaskCount } from "@/stores/notifications/needs-you-task-count-store";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { isHistoryPath } from "@/stores/tabs/kinds/history";
 import {
@@ -28,6 +28,7 @@ import {
   useSystemTabModalActions,
 } from "@/stores/tabs/use-system-tab-modal";
 import type { SideTabRowVariant } from "./side-tab-row";
+import { useLiveAgentsInStrip } from "./strip-agents-mode";
 import {
   SIDE_STRIP_NAV_TILE_CLASS,
   SIDE_STRIP_NAV_TILE_COUNT_CLASS,
@@ -60,21 +61,57 @@ export function SideStripNavRows(props: {
 }
 
 /**
- * New Task (F7): the primary button that closes the nav list - after Home
+ * New Task (F7): the button that closes the nav list - after Home
  * expanded, after All tasks on the rail - and does what the header's `+` does.
  * Expanded, a row lined up with the nav rows, its shortcut trailing as All
- * tasks' does; collapsed, a primary 32px tile.
+ * tasks' does; collapsed, a primary 32px tile. In the Activity view the
+ * expanded row is a quiet nav row instead of the solid primary, so nothing in
+ * the top block outshouts Needs you.
  */
 export function SideStripNewTask(props: {
   readonly variant: SideTabRowVariant;
   readonly onNewTab: () => void;
 }): ReactNode {
   const collapsed = props.variant === "collapsed";
+  const quiet = useLiveAgentsInStrip();
   const placement = useColumnOverlayPlacement("top");
   const chord = useBindingForAction("epic.new");
   const shortcut = chord === null ? null : formatChordForDisplay(chord);
   const tooltip =
     shortcut === null ? NEW_TASK_LABEL : `${NEW_TASK_LABEL} (${shortcut})`;
+  const content = (
+    <>
+      <Plus
+        aria-hidden
+        className={cn(SIDE_TAB_LEADING_CLASS, collapsed && "me-0", "shrink-0")}
+      />
+      {collapsed ? null : (
+        <>
+          <span
+            data-testid="side-strip-new-task-label"
+            className={cn(
+              SIDE_TAB_TITLE_CLASS,
+              "min-w-0 flex-1 truncate text-left",
+            )}
+          >
+            {NEW_TASK_LABEL}
+          </span>
+          {shortcut === null ? null : (
+            <span
+              className={cn(
+                "shrink-0 text-ui-xs",
+                quiet
+                  ? "text-muted-foreground"
+                  : "font-normal text-primary-foreground/70",
+              )}
+            >
+              {shortcut}
+            </span>
+          )}
+        </>
+      )}
+    </>
+  );
   return (
     <TooltipWrapper
       label={collapsed ? tooltip : null}
@@ -82,46 +119,32 @@ export function SideStripNewTask(props: {
       sideOffset={6}
       align={placement?.align}
     >
-      <Button
-        type="button"
-        size={collapsed ? "nav-tile" : "nav-row"}
-        // Non-editable chrome, dimmed while a layout session is live (4.2).
-        data-layout-passive
-        data-testid="side-strip-new-task"
-        aria-label={collapsed ? NEW_TASK_LABEL : undefined}
-        onClick={props.onNewTab}
-        className={cn(
-          collapsed ? "self-center" : "w-full",
-          "[-webkit-app-region:no-drag]",
-        )}
-      >
-        <Plus
-          aria-hidden
+      {quiet ? (
+        <NavRowButton
+          variant={props.variant}
+          active={false}
+          data-testid="side-strip-new-task"
+          onClick={props.onNewTab}
+        >
+          {content}
+        </NavRowButton>
+      ) : (
+        <Button
+          type="button"
+          size={collapsed ? "nav-tile" : "nav-row"}
+          // Non-editable chrome, dimmed while a layout session is live (4.2).
+          data-layout-passive
+          data-testid="side-strip-new-task"
+          aria-label={collapsed ? NEW_TASK_LABEL : undefined}
+          onClick={props.onNewTab}
           className={cn(
-            SIDE_TAB_LEADING_CLASS,
-            collapsed && "me-0",
-            "shrink-0",
+            collapsed ? "self-center" : "w-full",
+            "[-webkit-app-region:no-drag]",
           )}
-        />
-        {collapsed ? null : (
-          <>
-            <span
-              data-testid="side-strip-new-task-label"
-              className={cn(
-                SIDE_TAB_TITLE_CLASS,
-                "min-w-0 flex-1 truncate text-left",
-              )}
-            >
-              {NEW_TASK_LABEL}
-            </span>
-            {shortcut === null ? null : (
-              <span className="shrink-0 text-ui-xs font-normal text-primary-foreground/70">
-                {shortcut}
-              </span>
-            )}
-          </>
-        )}
-      </Button>
+        >
+          {content}
+        </Button>
+      )}
     </TooltipWrapper>
   );
 }
@@ -147,7 +170,7 @@ export function SideStripTasksLabel(props: {
 }
 
 /** A nav row's element: the expanded row, or the collapsed 32px tile. */
-function NavRowButton(
+export function NavRowButton(
   props: ComponentPropsWithRef<"button"> & {
     readonly variant: SideTabRowVariant;
     readonly active: boolean;
@@ -190,8 +213,19 @@ function InboxNavRow(props: {
     contentHandlers,
     popoverProps,
   } = useNotificationCenter();
-  const needsYouCount = useNeedsYouItems().length;
+  // Tasks, as the Needs you header counts them; the drawer lists requests.
+  const needsYouCount = useNeedsYouTaskCount();
   const unreadCount = useMergedNotificationUnreadCount();
+  // The Activity view's To review lists what else there is, so its pill is
+  // the Needs you count alone; the Layered view's says the rest as the bell
+  // does.
+  const needsYouOnly = useLiveAgentsInStrip();
+  const pill = inboxPillOf({
+    needsYou: needsYouCount,
+    attention: bellState.kind === "attention" ? bellState.count : 0,
+    unread: unreadCount,
+    needsYouOnly,
+  });
   // The bell's `unknown`: a summary is unavailable, so zero counts are not a
   // claim that nothing is waiting (see `useNotificationBellState`).
   const unavailable = bellState.kind === "unknown";
@@ -211,6 +245,7 @@ function InboxNavRow(props: {
             active={open}
             aria-label={inboxAccessibleLabel(
               needsYouCount,
+              pill?.tone === "attention" ? pill.count : 0,
               unreadCount,
               unavailable,
             )}
@@ -240,23 +275,23 @@ function InboxNavRow(props: {
                 >
                   Notifications
                 </span>
-                {/* One count, the unread total; a pending ask tints it
-                    rather than adding a second number. An ask already read
-                    is still pending, so with nothing unread it shows alone. */}
-                {unreadCount > 0 || needsYouCount > 0 ? (
+                {pill === null ? null : (
                   <Badge
-                    variant={needsYouCount > 0 ? "warning" : "muted"}
+                    variant={INBOX_PILL_VARIANT[pill.tone]}
                     size="sm"
                     aria-hidden
                     data-testid="side-strip-inbox-count"
-                    data-needs-you={needsYouCount > 0}
+                    data-tone={pill.tone}
+                    data-needs-you={pill.tone === "needs-you"}
                   >
-                    <span className="tabular-nums">
-                      {unreadCount > 0 ? unreadCount : needsYouCount}
-                    </span>
+                    <span className="tabular-nums">{pill.count}</span>
                   </Badge>
-                ) : null}
-                {unavailable ? (
+                )}
+                {/* Only where no count is drawn, as on the tile: a zero with
+                    no summary behind it is the claim the dot exists to
+                    qualify. Beside a count it said nothing the tooltip and
+                    the row's name do not. */}
+                {unavailable && pill === null ? (
                   <span
                     aria-hidden
                     data-testid="side-strip-inbox-unknown-indicator"
@@ -309,6 +344,31 @@ function InboxNavRow(props: {
 }
 
 const NO_SHELL_STYLE = {};
+
+/** What the Notifications pill's one count says, which its colour names. */
+type InboxPillTone = "needs-you" | "attention" | "unread";
+
+const INBOX_PILL_VARIANT: Readonly<
+  Record<InboxPillTone, "warning" | "destructive" | "muted">
+> = { "needs-you": "warning", attention: "destructive", unread: "muted" };
+
+/**
+ * The Notifications row's one count, as the header's bell picks its mark:
+ * amber, the Needs you task count, while a task needs the person; else red,
+ * what needs attention, failures among it; else muted, the unread total. The
+ * Activity view shows the amber count alone. `null` with nothing to count.
+ */
+function inboxPillOf(input: {
+  readonly needsYou: number;
+  readonly attention: number;
+  readonly unread: number;
+  readonly needsYouOnly: boolean;
+}): { readonly tone: InboxPillTone; readonly count: number } | null {
+  if (input.needsYou > 0) return { tone: "needs-you", count: input.needsYou };
+  if (input.needsYouOnly) return null;
+  if (input.attention > 0) return { tone: "attention", count: input.attention };
+  return input.unread > 0 ? { tone: "unread", count: input.unread } : null;
+}
 
 /**
  * The collapsed Notifications tile's corner: the needs-you count, else the
@@ -363,11 +423,13 @@ function inboxTooltip(unavailable: boolean, chord: ChordString | null): string {
 
 function inboxAccessibleLabel(
   needsYou: number,
+  attention: number,
   unread: number,
   unavailable: boolean,
 ): string {
   const parts = [
     needsYou > 0 ? `${needsYou} need you` : null,
+    attention > 0 ? `${attention} need attention` : null,
     unread > 0 ? `${unread} unread` : null,
     unavailable ? "status unavailable" : null,
   ].filter((part): part is string => part !== null);

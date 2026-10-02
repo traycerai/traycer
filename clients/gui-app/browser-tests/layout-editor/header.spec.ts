@@ -55,10 +55,11 @@ import { nextFrames } from "../support/fixtures.ts";
 // `h-9` frame), a 1px border, the same corners all round (a joined tab opens
 // its bottom two square) - centred in the 40px header, with ground under every
 // unjoined box (an inactive tab's hover) and the surface frame flush against the header's bottom edge.
-// Nothing of the strip reaches below the header, no folder-tab cap or baseline
-// cover is drawn, and no rule spans the strip: a tab's colour is a short mark
-// (`TAB_COLOR_MARK_CLASS`, 24x2px), never a line across it. An inactive tab's
-// real hover is the same box.
+// Nothing of the strip reaches below the header but a tab's colour line on the
+// sheets' top border, no folder-tab cap or baseline cover is drawn, and no rule
+// spans the strip: a tab's colour line (`TabColorEdgeLine`) is exactly its own
+// tab's width, never a line across the strip. An inactive tab's real hover is
+// the same box.
 //
 // What decides these is a box laid out by a real engine and the ground painted
 // under it, which jsdom has neither of.
@@ -192,9 +193,16 @@ const headerProbe = (scope: HeaderScope): string => `(() => {
     activePseudo: activeRoot === null ? [] : [...pseudo(activeRoot), ...pseudo(activeBox)],
     caps: document.querySelectorAll('[data-testid^="tab-cap"], [data-testid="tab-baseline-cover"]').length,
     newButton: box(document.querySelector('[data-testid="tab-new"]')),
-    // Every painted part of the strip: nothing may reach below the header.
+    // Every painted part of the strip: nothing may reach below the header but
+    // a tab's colour line, which lies on the sheets' 1px top border where the
+    // joined tab's feet turn out (TabColorEdgeLine), and the scroller's clip
+    // box, which reaches that far to draw it and paints nothing itself.
     below: header === null ? [] : painted
       .filter(({ r }) => r.bottom > header.getBoundingClientRect().bottom + 0.5)
+      .filter(({ node, r }) => !(
+        ["tab-color-edge-line", "header-tab-strip-scroll"].includes(node.getAttribute("data-testid") ?? "") &&
+        r.bottom <= header.getBoundingClientRect().bottom + 1.5
+      ))
       .map(({ node, r }) => label(node, r, r.bottom)),
     // Every thin FILLED element in the strip, whatever it is called: the
     // folder-baseline language F4 retired is one of these spanning the strip.

@@ -5782,6 +5782,10 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
       const relay = new FakeRelayHost();
       const lease = new MutableBearerLease("valid-token", "user-1");
       const evidence = new RecordingEvidence();
+      // `handleOpenAck` publishes the host's methods to the negotiated-manifest
+      // registry before anything else it does, so the registry is the
+      // observable for "the ack was ACCEPTED".
+      resetNegotiatedManifests();
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
         evidence,
@@ -5797,11 +5801,9 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
         expect(session.isReady()).toBe(false);
 
-        // A parked request is the milestone that proves the ack was PROCESSED,
-        // so the negative assertions below cannot pass merely by running
-        // early - and its verdict is itself the point: the ack unparked it
-        // onto a connection whose host leg is gone, which is retryable, not a
-        // dispatch. Anything that RESOLVED here would mean the session had
+        // A parked request is settled by the park itself (`onHostDetached`,
+        // pre-ready) with the retryable pre-send failure that names the
+        // reason. Anything that RESOLVED here would mean the session had
         // dispatched work at a host that cannot receive it.
         const parked: unknown = session
           .sendUnary(
@@ -5828,17 +5830,33 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
           "Remote host is detached from the relay",
         );
 
-        // The ack landed and the phase reached ready, but the session is not
-        // announced, no recovery is published, and readiness stays false.
+        // The ack landed on a connection whose host leg is gone and was
+        // REFUSED: the phase stays `opening`, so the host's methods are not
+        // published, nothing is announced, no recovery is published, and
+        // readiness stays false. The park has reported exactly one no-host
+        // refusal for this generation (the cadence continues from there).
+        // The ack's decrypt is asynchronous and a refused ack produces nothing
+        // to wait for, so the negative assertions run after a settle long
+        // enough for an ACCEPTED ack to have published (an accepted empty
+        // manifest records an empty set, so `null` is the refusal).
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(getNegotiatedHostMethods("host-1")).toBeNull();
         expect(session.isReady()).toBe(false);
         expect(recoveredEvents).toBe(0);
         expect(evidence.callsNamed("sessionEstablished")).toEqual([]);
+        expect(
+          evidence
+            .callsNamed("reportDialRefusal")
+            .map((call) => call.attemptId.replace(/^.*#/, "")),
+        ).toEqual(["1-no-host-1"]);
 
         // The host coming back is a FULL re-attach (it discarded its Noise
-        // state), and THAT crossing announces - exactly once.
+        // state), and THAT crossing announces - exactly once, publishing the
+        // host's methods once.
         relay.stallOpens = false;
         relay.sendHostAttachment("host_attached");
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(getNegotiatedHostMethods("host-1")).not.toBeNull();
         expect(recoveredEvents).toBe(1);
         expect(evidence.callsNamed("sessionEstablished")).toHaveLength(1);
         expect(relay.errors).toEqual([]);

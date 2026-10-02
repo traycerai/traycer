@@ -38,6 +38,7 @@ import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useNeedsYouTaskCountStore } from "@/stores/notifications/needs-you-task-count-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
@@ -374,6 +375,19 @@ describe("<TabStrip /> - Home placement", () => {
     const homeTab = await screen.findByTestId("tab-home");
     expect(within(homeTab).queryByTestId("tab-home-badge")).toBeNull();
     expect(homeTab.getAttribute("aria-label")).toBe("Home");
+  });
+
+  it("counts the waiting prompt's task for the header's bell, even on the empty landing route where it draws nothing", async () => {
+    const router = buildRouter("/");
+    render(<RouterProvider router={router} />);
+    await flushRouter();
+
+    expect(screen.queryByTestId("tab-strip")).toBeNull();
+    // The prompt's task has no tab: a Needs you task all the same.
+    expect(useNeedsYouTaskCountStore.getState().count).toBe(1);
+
+    cleanup();
+    expect(useNeedsYouTaskCountStore.getState().count).toBe(0);
   });
 
   it("draws no appearance of its own while every other tab carries one", async () => {

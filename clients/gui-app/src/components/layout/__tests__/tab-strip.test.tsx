@@ -1147,6 +1147,30 @@ describe("<TabStrip />", () => {
     expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
   });
 
+  it("draws a grouped tab in its group's colour, and in its own again once it leaves the group", async () => {
+    const { beta } = seedTwoEpicTabs();
+    useTabsStore.getState().setTabCustomization(beta, { color: "#ff0000" });
+    // A commit drops a group with no members, so the group comes after.
+    useTabsStore.setState({
+      groups: { g: { name: "Work", color: "#8ab4f8", collapsed: false } },
+    });
+    useTabsStore.getState().setTabGroup(beta, "g");
+    render(<RouterProvider router={buildRouter("/epics/e-a/e-a")} />);
+    const tab = await screen.findByTestId("tab-epic-e-b");
+    const edge = (): string =>
+      within(tab)
+        .getByTestId("tab-color-edge-line")
+        .style.getPropertyValue("--swatch");
+
+    expect(edge()).toBe("#8ab4f8");
+
+    act(() => {
+      useTabsStore.getState().setTabGroup(beta, null);
+    });
+
+    expect(edge()).toBe("#ff0000");
+  });
+
   describe("the task tray join (top strip)", () => {
     it("joins the active tab's chrome box to the tray, and draws no chrome box at all on the inactive one", async () => {
       seedTwoEpicTabs();
@@ -1346,12 +1370,12 @@ describe("<TabStrip />", () => {
         "x",
         null,
       );
-      // Dragging rightward onto B: the dragged tab's centre is on B's
-      // approach (left) half, so the merge is live immediately with the
-      // dragged tab taking the pair's left side.
+      // Dragging rightward onto B's middle: the split shows with the dragged
+      // tab taking the pair's left side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 0,
+        groupId: null,
         targetItemId: "tab:epic:e-b",
         targetSide: "left",
       });
@@ -1394,6 +1418,8 @@ describe("<TabStrip />", () => {
       dndStore.headerStripDragStateChanged({
         kind: "reorder",
         targetIndex: 0,
+        groupId: null,
+        joinsGroup: false,
       });
       dndStore.headerStripDropIndexChanged(1);
     });
@@ -1426,12 +1452,12 @@ describe("<TabStrip />", () => {
         "x",
         null,
       );
-      // Dragging leftward back onto B: the dragged tab's centre is on B's
-      // approach (right) half, so the dragged tab would take the pair's
-      // right side.
+      // Dragging leftward back onto B's middle: the dragged tab would take the
+      // pair's right side.
       dndStore.headerStripDragStateChanged({
         kind: "merge",
         targetIndex: 1,
+        groupId: null,
         targetItemId: "tab:epic:e-b",
         targetSide: "right",
       });
