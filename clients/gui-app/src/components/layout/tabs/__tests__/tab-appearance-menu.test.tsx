@@ -621,10 +621,9 @@ describe("tab appearance and grouping controls", () => {
     const organization = organizationFixture(view);
     const command = vi.spyOn(organization, "command");
     organizationState.organization = organization;
-    organizationState.loadTaskContext.mockResolvedValue({
-      tasksById: new Map([["epic-a", remoteTask()]]),
-      localHomedTaskIds: new Set(),
-    });
+    organizationState.loadTaskContext.mockResolvedValue(
+      taskContextsResponse({ found: ["epic-a"], localHomed: [] }),
+    );
     renderMenu(true);
 
     fireEvent.click(await screen.findByText("Task appearance"));
