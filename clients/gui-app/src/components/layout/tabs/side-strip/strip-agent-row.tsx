@@ -38,7 +38,7 @@ function Trailing(props: { readonly agent: StripAgent }): ReactNode {
       />
     ) : null;
   }
-  return (
+  const label = (
     <span
       className={cn(
         STRIP_AGENT_TRAILING_CLASS,
@@ -48,6 +48,18 @@ function Trailing(props: { readonly agent: StripAgent }): ReactNode {
     >
       {labelOf(agent)}
     </span>
+  );
+  // A waiting agent holds its request, so it holds the wait too.
+  if (agent.status !== "waiting" || agent.since <= 0) return label;
+  return (
+    <>
+      <StripElapsedTime
+        since={agent.since}
+        className={cn(STRIP_AGENT_TRAILING_CLASS, "text-warning-foreground/70")}
+        testId={undefined}
+      />
+      {label}
+    </>
   );
 }
 

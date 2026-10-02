@@ -82,9 +82,10 @@ describe("useStripTaskAgents", () => {
         since,
       })),
     ).toEqual([
-      { id: "reply", title: "Needs an answer", status: "waiting", since: 15 },
-      { id: "fork", title: "Fork to resolve", status: "waiting", since: 12 },
-      { id: "approval", title: "Needs approval", status: "waiting", since: 10 },
+      // No prompt is loaded for them, so no wait is known: no time.
+      { id: "approval", title: "Needs approval", status: "waiting", since: 0 },
+      { id: "fork", title: "Fork to resolve", status: "waiting", since: 0 },
+      { id: "reply", title: "Needs an answer", status: "waiting", since: 0 },
       { id: "failed", title: "Crashed", status: "failed", since: 20 },
       { id: "turn-new", title: "Newest turn", status: "turn", since: 90 },
       { id: "turn-old", title: null, status: "turn", since: 40 },

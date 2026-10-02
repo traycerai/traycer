@@ -311,6 +311,7 @@ function OverlayTabRow(props: {
         activityStatus,
         titleGenerating,
         meterHidden: false,
+        group: null,
         half,
       })}
       // The dragged row travels without its agents, so it names their requests.

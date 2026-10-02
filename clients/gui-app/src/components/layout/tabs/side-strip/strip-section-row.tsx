@@ -126,6 +126,8 @@ export function taskStatusOf(input: {
   readonly titleGenerating: boolean;
   /** The task's nested agents are showing, so they carry what the meter would. */
   readonly meterHidden: boolean;
+  /** The agents nested under the row; their waiting rows hold their own waits. */
+  readonly group: StripTaskGroup | null;
   readonly half: boolean;
 }): SideTabRowStatus | null {
   const { row, tabId, indicator } = input;
@@ -141,7 +143,13 @@ export function taskStatusOf(input: {
   const twoLine = twoLineRowOf(row);
   if (twoLine !== null) {
     return twoLineStatusOf(
-      twoLine,
+      twoLine.section === "needs-you"
+        ? // The oldest request no agent row below holds; none when they hold all.
+          (needsYouLineOf(twoLine, input.group) ?? {
+            ...twoLine,
+            createdAt: null,
+          })
+        : twoLine,
       indicator.pendingFork ? (
         <SideTabStatusGlyph
           tabId={tabId}

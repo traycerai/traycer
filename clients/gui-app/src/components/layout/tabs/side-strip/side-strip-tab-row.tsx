@@ -84,6 +84,7 @@ export function SideStripTabRow(props: {
     activityStatus,
     titleGenerating,
     meterHidden: groupDisclosure?.expanded === true,
+    group: props.group,
     half,
   });
   // The rail's tile falls back on the status glyph for a title with no letter.

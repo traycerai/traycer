@@ -2384,6 +2384,9 @@ describe("<SideTabStrip />", () => {
       expect(
         within(row).getByTestId("side-tab-section-detail").textContent,
       ).toBe("Approve · Waits");
+      expect(within(row).getByTestId("side-tab-section-time").textContent).toBe(
+        "1m",
+      );
       expect(screen.getByTestId("strip-agent-group").hidden).toBe(true);
       expect(screen.queryByTestId("strip-agent-c-wait")).toBeNull();
       expect(
@@ -2400,15 +2403,18 @@ describe("<SideTabStrip />", () => {
             .querySelectorAll('[data-testid^="strip-agent-"]'),
         ).map((node) => node.getAttribute("data-testid")),
       ).toEqual(["strip-agent-c-wait", "strip-agent-c-run"]);
-      // The waiting agent says what it asks, so the task's line goes.
-      expect(trailingWord("c-wait")).toBe("Approve");
+      // The waiting agent says what it asks and how long it has waited, so
+      // the task's line and wait go.
+      expect(trailingOf("c-wait")).toEqual(["1m", "Approve"]);
       expect(within(row).queryByTestId("side-tab-section-detail")).toBeNull();
+      expect(within(row).queryByTestId("side-tab-section-time")).toBeNull();
     });
 
-    /** What a nested agent row says after its name. */
-    function trailingWord(agentId: string): string | null | undefined {
-      return screen.getByTestId(`strip-agent-${agentId}`).lastElementChild
-        ?.textContent;
+    /** What a nested agent row says after its glyph and name. */
+    function trailingOf(agentId: string): ReadonlyArray<string | null> {
+      return Array.from(screen.getByTestId(`strip-agent-${agentId}`).children)
+        .slice(2)
+        .map((node) => node.textContent);
     }
 
     it("has an expanded task's waiting agent ask for a reply, with no line on the task", async () => {
@@ -2427,7 +2433,8 @@ describe("<SideTabStrip />", () => {
 
       fireEvent.click(within(row).getByTestId("side-tab-disclosure"));
 
-      expect(trailingWord("c-ask")).toBe("Reply");
+      // No prompt is loaded, so there is no wait to show.
+      expect(trailingOf("c-ask")).toEqual(["Reply"]);
       expect(within(row).queryByTestId("side-tab-section-detail")).toBeNull();
     });
 
@@ -2462,13 +2469,20 @@ describe("<SideTabStrip />", () => {
       expect(
         within(row).getByTestId("side-tab-section-detail").textContent,
       ).toBe("Approve · Waits+1");
+      expect(within(row).getByTestId("side-tab-section-time").textContent).toBe(
+        "5m",
+      );
 
       fireEvent.click(within(row).getByTestId("side-tab-disclosure"));
 
-      expect(trailingWord("c-wait")).toBe("Approve");
+      expect(trailingOf("c-wait")).toEqual(["5m", "Approve"]);
+      // The line and its wait are the request no row below holds.
       expect(
         within(row).getByTestId("side-tab-section-detail").textContent,
       ).toBe("Approve · Gone agent");
+      expect(within(row).getByTestId("side-tab-section-time").textContent).toBe(
+        "1m",
+      );
     });
 
     it("keeps a two-line row's pending-fork glyph and time, then the chevron, then the close, at the trailing edge", async () => {

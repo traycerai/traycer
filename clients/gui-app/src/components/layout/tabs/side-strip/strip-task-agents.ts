@@ -14,6 +14,7 @@ import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
   needsYouItemChatId,
+  type NeedsYouItem,
   type NeedsYouReason,
 } from "@/stores/notifications/needs-you-items";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
@@ -31,9 +32,10 @@ export interface StripAgent {
   /** The Agents panel's ladder kind behind `status`, which picks the row's glyph. */
   readonly kind: ChatDescendantStatusKind;
   /**
-   * The node's `updatedAt`, so for a running agent the time of its last
-   * update, not of its turn's start: the session projection carries no time
-   * for when the agent entered its current state.
+   * For a waiting agent, when its prompt was filed, or 0 with no prompt
+   * loaded. Otherwise the node's `updatedAt`, so for a running agent the time
+   * of its last update, not of its turn's start: the session projection
+   * carries no time for when the agent entered its current state.
    */
   readonly since: number;
 }
@@ -119,17 +121,19 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
       readonly id: string;
       readonly status: StripAgentStatus;
       readonly kind: ChatDescendantStatusKind;
+      /** When the prompt that names the agent was filed. */
+      readonly askedAt: number | null;
     }> = [];
     if (epicId === null || liveAgentIds === null) return found;
-    const asked = new Map<string, NeedsYouReason>();
+    const asked = new Map<string, NeedsYouItem>();
     for (const item of needsYou) {
       const chatId = needsYouItemChatId(item);
-      if (chatId !== null && !asked.has(chatId)) asked.set(chatId, item.reason);
+      if (chatId !== null && !asked.has(chatId)) asked.set(chatId, item);
     }
     for (const id of liveAgentIds) {
-      const reason = asked.get(id);
+      const prompt = asked.get(id);
       const kind =
-        reason === undefined
+        prompt === undefined
           ? ownChatStatusKind(
               selectNotificationIndicatorState(
                 { byId: localRows },
@@ -140,11 +144,13 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
               tiers.get(id),
               "indeterminate",
             )
-          : needsYouAgentKind(reason);
+          : needsYouAgentKind(prompt.reason);
       // "unknown" is an agent nothing says is live, which the strip skips.
       if (kind === null || kind === "unknown") continue;
       const status = STATUS_OF_KIND[kind];
-      if (status !== null) found.push({ id, status, kind });
+      if (status !== null) {
+        found.push({ id, status, kind, askedAt: prompt?.createdAt ?? null });
+      }
     }
     return found;
   }, [epicId, liveAgentIds, tiers, indicators, localRows, needsYou]);
@@ -159,19 +165,14 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
   const agents = useMemo(
     () =>
       orderStripAgents(
-        statuses.flatMap(({ id, status, kind }, index) => {
+        statuses.flatMap(({ id, status, kind, askedAt }, index) => {
           const agent = named[index] ?? null;
+          // A waiting agent's time is its prompt's; with none loaded, it has none.
+          const since =
+            status === "waiting" ? (askedAt ?? 0) : (updatedAts.at(index) ?? 0);
           return agent === null
             ? []
-            : [
-                {
-                  id,
-                  title: agent.title,
-                  status,
-                  kind,
-                  since: updatedAts.at(index) ?? 0,
-                },
-              ];
+            : [{ id, title: agent.title, status, kind, since }];
         }),
       ),
     [statuses, named, updatedAts],
