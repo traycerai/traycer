@@ -388,7 +388,8 @@ function StatusBarWindowPercent(props: {
 /**
  * One window of an expanded profile: `[32px bar] 86% 5d`, or `[bar] Limit
  * resets 3d` once the host says it is `limited`. Under Everything the percent
- * carries its "used" or "remaining" word: `[bar] 86% used 5d`.
+ * carries its "used" or "remaining" word: `[bar] 86% used 5d`. Under Percent
+ * there is no bar at all: expanding only adds the name, value and reset time.
  *
  * What follows the percentage is `windowLabelText`'s: the countdown, the
  * window's name, or both, so with Reset time off the countdown gives way to the
@@ -420,12 +421,14 @@ function StatusBarExpandedWindow(props: {
       className="inline-flex items-center gap-1 whitespace-nowrap"
       data-testid={`status-bar-window-${window.windowKey}`}
     >
-      <StatusBarMiniBar
-        windowKey={window.windowKey}
-        size="expanded"
-        usedPercent={window.usedPercent}
-        severity={window.severity}
-      />
+      {display.readingStyle === "percent" ? null : (
+        <StatusBarMiniBar
+          windowKey={window.windowKey}
+          size="expanded"
+          usedPercent={window.usedPercent}
+          severity={window.severity}
+        />
+      )}
       <StatusBarWindowPercent
         window={window}
         display={display}

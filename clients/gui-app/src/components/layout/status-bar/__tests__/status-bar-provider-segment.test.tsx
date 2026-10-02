@@ -282,8 +282,8 @@ describe("<StatusBarProviderSegment /> reading style", () => {
     expect(text("status-bar-window-codex:primary")).toBe("Limitresets 5d");
   });
 
-  it("expands a running low profile as it always does, whatever the style", () => {
-    for (const readingStyle of ["bar", "percent", "both", "full"] as const) {
+  it("expands a running low profile with a 32px bar under every style but Percent", () => {
+    for (const readingStyle of ["bar", "both", "full"] as const) {
       renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
         ...DISPLAY,
         readingStyle,
@@ -295,6 +295,28 @@ describe("<StatusBarProviderSegment /> reading style", () => {
       ).toContain("w-8");
       cleanup();
     }
+  });
+
+  it("expands a running low profile without a bar under Percent", () => {
+    renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+    expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+    expect(text("status-bar-window-codex:primary")).toBe("86%5d");
+  });
+
+  it("expands a limited profile without a bar under Percent", () => {
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+    expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+    expect(text("status-bar-window-codex:primary")).toBe("Limitresets 5d");
   });
 });
 
