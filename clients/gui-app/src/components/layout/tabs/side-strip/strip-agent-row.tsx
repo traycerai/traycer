@@ -102,7 +102,8 @@ export function StripAgentRow(props: {
       <NestedChatStatusGlyph kind={agent.kind} />
       <span
         className={cn(
-          "min-w-0 flex-1 truncate",
+          // Fades at the edge, as the task's title above does.
+          "header-tab-title-text min-w-0 flex-1",
           name.main && "text-muted-foreground",
         )}
       >

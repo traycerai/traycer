@@ -195,7 +195,8 @@ function WarmAgentList(props: { readonly epicId: string }): ReactNode {
             />
             <span
               className={cn(
-                "min-w-0 truncate",
+                // Fades at the edge, as the strip's titles do.
+                "header-tab-title-text min-w-0 flex-1",
                 name.main ? "text-muted-foreground" : "text-foreground",
               )}
             >
