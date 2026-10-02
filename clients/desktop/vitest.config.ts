@@ -40,8 +40,6 @@ export default defineConfig({
     ],
   },
   test: {
-    // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
-    clearMocks: false,
     server: ZOD_INLINE_SERVER_DEPS,
     include: ["**/__tests__/**/*.test.ts"],
     globals: false,

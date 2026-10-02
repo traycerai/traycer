@@ -51,8 +51,6 @@ export default defineConfig({
     ],
   },
   test: {
-    // Vitest 5 flipped clearMocks to true; keep the v4 behavior (mock call history persists across tests).
-    clearMocks: false,
     environment: "jsdom",
     include: [
       "src/**/*.test.ts",
