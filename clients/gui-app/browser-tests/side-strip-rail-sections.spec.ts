@@ -43,19 +43,29 @@ const moveTask = (page: Page, id: string, section: string): Promise<void> =>
     `window.__sideTabStripProbe.moveTask(${JSON.stringify(`fixture-${id}`)}, ${JSON.stringify(section)})`,
   );
 
-test("parts the runs of tiles with 24px hairlines in the rail's 8px rhythm, and puts a 4px amber dot over Needs you", async ({
+test("opens each run of tiles with a 24px hairline in the rail's 8px rhythm, and beads Needs you's with a 4px amber dot", async ({
   page,
 }) => {
   await openRail(page, RAIL);
   const first = await boxOf(tile(page, "staging"));
   const axis = first.x + first.width / 2;
 
+  // The first run's hairline divides the tiles from New Task, 8px from each.
+  const newTask = await boxOf(page.getByTestId("side-strip-new-task"));
+  const hairlines = page.getByTestId("side-strip-rail-section-separator");
+  await expect(hairlines).toHaveCount(4);
+  const opening = await boxOf(hairlines.first());
+  expect(opening.y - (newTask.y + newTask.height)).toBeCloseTo(8, 0);
+  expect(first.y - (opening.y + opening.height)).toBeCloseTo(8, 0);
+  await expect(page.getByTestId("side-strip-rail-divider")).toHaveCount(0);
+
+  // The bead sits on that hairline's centre, the run's mark where every run's is.
   const dot = page.getByTestId("side-strip-rail-needs-you-dot");
   const dotBox = await boxOf(dot);
   expect(dotBox.width).toBe(4);
   expect(dotBox.height).toBe(4);
   expect(dotBox.x + 2).toBeCloseTo(axis, 0);
-  expect(first.y - (dotBox.y + dotBox.height)).toBeCloseTo(4, 0);
+  expect(dotBox.y + 2).toBeCloseTo(opening.y + opening.height / 2, 0);
   // The warning token's own amber, where a missing colour would be transparent.
   const [fill, amber] = await dot.evaluate((node) => {
     const token = document.createElement("i");
@@ -68,12 +78,10 @@ test("parts the runs of tiles with 24px hairlines in the rail's 8px rhythm, and 
   expect(fill).toBe(amber);
   expect(amber).not.toBe("rgba(0, 0, 0, 0)");
 
-  // Needs you, To review, Working and Idle: three hairlines between them, the
-  // last tile of a run and the first of the next 8px from each.
-  const hairlines = page.getByTestId("side-strip-rail-section-separator");
-  await expect(hairlines).toHaveCount(3);
+  // Needs you, To review, Working and Idle: the three hairlines between them,
+  // the last tile of a run and the first of the next 8px from each.
   const hairlineBoxes = await hairlines.evaluateAll((nodes) =>
-    nodes.map((node) => {
+    nodes.slice(1).map((node) => {
       const box = node.getBoundingClientRect();
       return { x: box.x, y: box.y, width: box.width, height: box.height };
     }),

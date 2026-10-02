@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { z } from "zod";
 
 import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
@@ -17,6 +17,12 @@ async function open(page: Page, query: string): Promise<void> {
   await page.goto(`${PAIRS}${query}`);
   await page.waitForFunction("window.__sideTabStripProbe?.ready === true");
   await nextFrames(page, 4);
+}
+
+async function boxOf(locator: Locator) {
+  const box = await locator.boundingBox();
+  if (box === null) throw new Error(`no layout box for ${locator.toString()}`);
+  return box;
 }
 
 const frameSchema = z.array(
@@ -107,6 +113,29 @@ test("draws a pair as one 32px row of the split icon and two equal halves", asyn
   expect(left.y).toBeCloseTo(right.y, 0);
   expect(left.width).toBeCloseTo(right.width, 0);
   expect(right.x - (left.x + left.width)).toBeCloseTo(4, 0);
+});
+
+test("lines a half's caption up with the agents under it: its icon on their glyphs, its title on their names", async ({
+  page,
+}) => {
+  await open(page, "&scene=sections");
+  await page.evaluate(
+    'import("/src/__tests__/browser/side-tab-strip-seed.ts").then((seed) => seed.seedSideStripPairAgents())',
+  );
+  // Both halves list agents, so both are captioned.
+  const react = page.getByTestId("tab-epic-fixture-react");
+  await react.hover();
+  await react.getByTestId("side-tab-disclosure").click();
+  const caption = page.getByTestId("split-half-caption-left");
+  await expect(caption).toBeVisible();
+  const agent = page.getByTestId("strip-agent-c-sync");
+
+  const icon = await boxOf(caption.locator("svg"));
+  const glyph = await boxOf(agent.locator("> *").first());
+  const title = await boxOf(caption.locator(".truncate"));
+  const name = await boxOf(agent.locator(".truncate"));
+  expect(icon.x + icon.width / 2).toBeCloseTo(glyph.x + glyph.width / 2, 0);
+  expect(title.x).toBeCloseTo(name.x, 0);
 });
 
 test("joins the current pair's whole row to the sheet, its focused half selected", async ({

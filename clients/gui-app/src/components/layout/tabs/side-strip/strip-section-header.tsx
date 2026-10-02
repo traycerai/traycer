@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   SIDE_STRIP_SECTION_HEADER_CLASS,
   SIDE_STRIP_STICKY_SECTION_HEADER_CLASS,
+  SIDE_STRIP_STICKY_UNDER_PILL_CLASS,
 } from "./side-strip-tokens";
 import { useStripSectionFolded } from "./strip-section-fold";
 import { STRIP_SECTION_LABEL, type StripSection } from "./strip-sections";
@@ -19,6 +20,8 @@ import { STRIP_SECTION_LABEL, type StripSection } from "./strip-sections";
 export function StripSectionHeader(props: {
   readonly section: StripSection;
   readonly count: number;
+  /** The "↑ N need you" pill is docked on the list's top edge: stick under it. */
+  readonly underPill: boolean;
 }): ReactNode {
   const { section } = props;
   const [folded, toggle] = useStripSectionFolded(section);
@@ -38,6 +41,7 @@ export function StripSectionHeader(props: {
       className={cn(
         SIDE_STRIP_SECTION_HEADER_CLASS,
         SIDE_STRIP_STICKY_SECTION_HEADER_CLASS,
+        props.underPill && SIDE_STRIP_STICKY_UNDER_PILL_CLASS,
         section === "needs-you"
           ? "text-warning-foreground"
           : "text-muted-foreground hover:text-foreground",

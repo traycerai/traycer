@@ -157,6 +157,30 @@ test("has a one-line row's meter fade out where the close fades in, and the titl
   expect(titleHovered.width).toBeCloseTo(titleAtRest.width, 1);
 });
 
+test("draws a row's meter pips as 6px dots, never as two tall bars", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const pips = await row(page, "cookie")
+    .getByTestId("side-tab-meter")
+    .locator("[data-pip]")
+    .evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const box = node.getBoundingClientRect();
+        return {
+          width: box.width,
+          height: box.height,
+          radius: getComputedStyle(node).borderRadius,
+        };
+      }),
+    );
+  expect(pips.length).toBeGreaterThan(1);
+  for (const pip of pips) {
+    expect([pip.width, pip.height]).toEqual([6, 6]);
+    expect(parseFloat(pip.radius)).toBeGreaterThanOrEqual(3);
+  }
+});
+
 test("cuts the title short before the time and the close at 192px", async ({
   page,
 }) => {

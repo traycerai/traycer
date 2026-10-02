@@ -2897,12 +2897,12 @@ describe("<SideTabStrip />", () => {
         useSideTabStripStore.setState({ collapsed: true });
       });
 
-      it("runs the tiles in the sections, a hairline between them and a dot over Needs you, and in the tab order in the Layered view", async () => {
+      it("runs the tiles in the sections, a hairline before each run and Needs you's beaded, and in the tab order in the Layered view", async () => {
         openSectionedTasks();
         await renderStrip("/elsewhere", LEFT_STRIP);
 
         expect(listed()).toEqual([
-          "side-strip-rail-needs-you-dot",
+          "side-strip-rail-section-separator",
           "tab-epic-e-gamma",
           "side-strip-rail-section-separator",
           "tab-epic-e-delta",
@@ -2913,6 +2913,15 @@ describe("<SideTabStrip />", () => {
           "tab-epic-e-alpha",
           "tab-epic-e-zeta",
         ]);
+        // Needs you's mark sits on its own run's hairline, as every run's
+        // does; that first hairline divides the tiles from New Task.
+        const [first] = screen.getAllByTestId(
+          "side-strip-rail-section-separator",
+        );
+        expect(
+          within(first).getByTestId("side-strip-rail-needs-you-dot"),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("side-strip-rail-divider")).toBeNull();
 
         act(() => {
           setSideStripView("layered");

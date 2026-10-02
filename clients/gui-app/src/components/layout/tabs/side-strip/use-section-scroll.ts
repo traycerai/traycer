@@ -13,9 +13,12 @@ const AT_REST: SectionScroll = { moreBelow: false, needsYouAbove: false };
 /**
  * Read the scroll state of the Activity view's scroller. Needs you is the first
  * section and its header sticks, so it is out of view once the next section's
- * header has reached the top and covers it. Re-read on scroll, on a resize and
- * whenever the rows change, since either can move a row across an edge without
- * a scroll; the state only changes where an edge is crossed.
+ * header has reached the top and covers it. That is read from where the next
+ * header sits in the flow, the end of the row before it, never from where it
+ * sticks: the headers stick lower while the pill shows, and reading that would
+ * hide the pill it made room for. Re-read on scroll, on a resize and whenever
+ * the rows change, since either can move a row across an edge without a
+ * scroll; the state only changes where an edge is crossed.
  */
 export function useSectionScroll(scroller: HTMLElement | null): SectionScroll {
   const [scroll, setScroll] = useState(AT_REST);
@@ -23,15 +26,16 @@ export function useSectionScroll(scroller: HTMLElement | null): SectionScroll {
     if (scroller === null) return;
     const read = (): void => {
       const headers = scroller.querySelectorAll("[data-strip-section]");
+      const needsYouEnd = headers[1]?.previousElementSibling ?? null;
       const next: SectionScroll = {
         moreBelow:
           scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop >
           1,
         needsYouAbove:
           scroller.scrollTop > 0 &&
-          headers.length > 1 &&
+          needsYouEnd !== null &&
           headers[0].getAttribute("data-strip-section") === "needs-you" &&
-          headers[1].getBoundingClientRect().top <=
+          needsYouEnd.getBoundingClientRect().bottom <=
             scroller.getBoundingClientRect().top + 0.5,
       };
       setScroll((held) =>

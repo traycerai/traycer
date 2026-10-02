@@ -84,16 +84,25 @@ export const SIDE_STRIP_STICKY_SECTION_HEADER_CLASS = cn(
  */
 export const SIDE_STRIP_SECTIONED_SCROLL_PADDING_CLASS =
   "scroll-pt-6.5 scroll-pb-5";
+/** The same while the "↑ N need you" pill's band sits over the header. */
+export const SIDE_STRIP_SECTIONED_SCROLL_PADDING_UNDER_PILL_CLASS =
+  "scroll-pt-14.5";
 /**
- * The "↑ N need you" pill. Its seat is a zero-height row that sticks just under
- * the sticky header (its 26px, a 4px gap, less the list's 8px padding), so the
- * list below does not move when the pill comes and goes. The pill is neutral
- * apart from its amber text, and so is its shadow.
+ * The "↑ N need you" pill. Its seat is a 32px band of the strip's ground,
+ * docked on the list's top edge above the headers, which stick under it while
+ * it shows (`SIDE_STRIP_STICKY_UNDER_PILL_CLASS`): the pill never sits over a
+ * header, and nothing shows between the two. Its negative margin takes back
+ * its height and the list's gap, so the rows do not move when it comes and
+ * goes. The pill is neutral apart from its amber text, and so is its shadow.
  */
-export const SIDE_STRIP_NEEDS_YOU_PILL_SEAT_CLASS =
-  "pointer-events-none sticky top-5.5 z-20 -mb-0.5 flex h-0 justify-center";
+export const SIDE_STRIP_NEEDS_YOU_PILL_SEAT_CLASS = cn(
+  "sticky -top-2 z-20 -mb-8.5 flex h-8 shrink-0 items-center justify-center animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none",
+  SIDE_STRIP_GROUND_FILL_CLASS,
+);
+/** A section header's stuck place while the pill shows: under its 32px band. */
+export const SIDE_STRIP_STICKY_UNDER_PILL_CLASS = "top-6";
 export const SIDE_STRIP_NEEDS_YOU_PILL_CLASS =
-  "pointer-events-auto h-6 rounded-full bg-popover px-2.5 text-ui-xs font-medium text-warning-foreground shadow-md ring-1 ring-foreground/10 outline-none select-none hover:bg-popover/80 focus-visible:ring-3 focus-visible:ring-ring/50 animate-in fade-in-0 duration-120 ease-out motion-reduce:animate-none [-webkit-app-region:no-drag]";
+  "h-6 rounded-full bg-popover px-2.5 text-ui-xs font-medium text-warning-foreground shadow-md ring-1 ring-foreground/10 outline-none select-none hover:bg-popover/80 focus-visible:ring-3 focus-visible:ring-ring/50 [-webkit-app-region:no-drag]";
 /**
  * A row that changes section slides from its old place to its new one in
  * 200ms, on a strong ease-out: it starts fast so the eye catches it, then
@@ -268,14 +277,17 @@ export const SIDE_TAB_RAIL_BADGE_CLASS = cn(
 );
 export const SIDE_TAB_RAIL_BADGE_GLYPH_CLASS = "size-3";
 export const SIDE_TAB_RAIL_BADGE_POSITION_CLASS = "absolute -top-px right-px";
-/** The meter: a tile's 3px pips under the monogram, a row's 10px pips. */
+/**
+ * The meter: a tile's 3px pips under the monogram, a row's 6px dots 3px
+ * apart. A row's pips are round: two tall ones read as a pause icon.
+ */
 export const SIDE_TAB_METER_CLASS = {
   tile: "h-1 gap-0.5",
-  row: "h-2.5 gap-0.5",
+  row: "h-2.5 gap-0.75",
 } as const;
 export const SIDE_TAB_METER_PIP_CLASS = {
   tile: "h-0.75 w-1.25 rounded-[1.5px]",
-  row: "h-2.5 w-1 rounded-xs",
+  row: "size-1.5 rounded-full",
 } as const;
 export const SIDE_TAB_METER_MORE_CLASS = {
   tile: "text-[0.5rem] leading-1",
@@ -321,14 +333,19 @@ export const SIDE_SPLIT_PREVIEW_TILE_CLASS = "ring-2 ring-inset ring-info";
  */
 export const SIDE_SPLIT_RAIL_CLASS =
   "flex flex-col items-center gap-0.5 self-center rounded-[0.75rem] bg-foreground/6 p-0.5";
-/** The pair's second line starts under its first half: past the 24px icon and the 4px gap. */
-export const SIDE_SPLIT_DETAIL_INSET_CLASS = "ps-8";
+/**
+ * The pair's second line starts under its first half: past the 24px icon and
+ * the 4px gap. It ends 8px in, with the row's own 2px, so its time lines up
+ * with every other row's.
+ */
+export const SIDE_SPLIT_DETAIL_INSET_CLASS = "ps-8 pe-1.5";
 /**
  * The caption over one half's agents under a pair: a 12px split icon with that
- * half's pane filled, then its title, in 11px muted text.
+ * half's pane filled, then its title, in 11px muted text, on the agent rows'
+ * own padding and gap so the title lines up with their names.
  */
 export const SIDE_SPLIT_CAPTION_CLASS =
-  "flex h-5 min-w-0 items-center gap-1.5 px-2 text-overline font-normal text-muted-foreground";
+  "flex h-5 min-w-0 items-center gap-2 px-2 text-overline font-normal text-muted-foreground";
 /** The inline rename input in an expanded row's title slot. */
 export const SIDE_TAB_TITLE_INPUT_CLASS =
   "min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -362,16 +379,16 @@ export const SIDE_STRIP_RAIL_DIVIDER_CLASS = cn(
   SIDE_STRIP_RAIL_HAIRLINE_CLASS,
 );
 /**
- * The Activity rail's marks between runs of tiles. The hairline that parts two
- * sections sits in the list's own 8px gap, so the tiles keep their rhythm; the
- * 4px amber dot marks Needs you and stands 4px over its first tile.
+ * The Activity rail's mark before each run of tiles: the hairline, in the
+ * list's own 8px gap so the tiles keep their rhythm. Needs you's carries a 4px
+ * amber bead on its centre, so that run is marked where every run is.
  */
 export const SIDE_STRIP_RAIL_SECTION_SEPARATOR_CLASS = cn(
-  "shrink-0 self-center",
+  "relative shrink-0 self-center",
   SIDE_STRIP_RAIL_HAIRLINE_CLASS,
 );
 export const SIDE_STRIP_RAIL_NEEDS_YOU_DOT_CLASS =
-  "-mb-1 size-1 shrink-0 self-center rounded-full bg-warning";
+  "absolute top-1/2 left-1/2 size-1 -translate-1/2 rounded-full bg-warning";
 /**
  * The collapsed Notifications tile's marks, both cut out of the strip's ground and
  * seated on the 16px glyph's top-right corner as a task tile's badge sits on

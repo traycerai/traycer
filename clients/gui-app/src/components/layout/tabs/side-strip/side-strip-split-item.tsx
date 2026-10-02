@@ -63,6 +63,7 @@ import {
 } from "./strip-sections";
 import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
+import { TrimmedEllipsis } from "./trimmed-ellipsis";
 import {
   SideTabRow,
   type SideRowFrame,
@@ -306,12 +307,18 @@ function SplitHalfCaption(props: {
       data-testid={`split-half-caption-${props.side}`}
       className={SIDE_SPLIT_CAPTION_CLASS}
     >
-      <SplitFocusIcon
-        splitId={`${props.splitId}-${props.side}`}
-        focusedSide={props.side}
-        size="size-3"
-      />
-      <span className="min-w-0 flex-1 truncate">{props.title}</span>
+      {/* In the 14px cell an agent's glyph takes, so the icon centres on
+          the glyphs below and the title starts where their names do. */}
+      <span className="flex size-3.5 shrink-0 items-center justify-center">
+        <SplitFocusIcon
+          splitId={`${props.splitId}-${props.side}`}
+          focusedSide={props.side}
+          size="size-3"
+        />
+      </span>
+      <span className="min-w-0 flex-1 truncate">
+        <TrimmedEllipsis text={props.title} />
+      </span>
     </span>
   );
 }

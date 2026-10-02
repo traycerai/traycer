@@ -19,6 +19,7 @@ import { SESSION_TAB_LABEL_CLASS } from "../header-tab-visual";
 import { MonogramChip } from "../monogram-chip";
 import type { SideTabTile } from "../tab-identity";
 import { SideTabMeter, type SideTabLiveAgents } from "./agent-meter";
+import { TrimmedEllipsis } from "./trimmed-ellipsis";
 import { SideTabRailBadge } from "./side-tab-rail-badge";
 import type { RailBadgeKind } from "./rail-badge-kind";
 import {
@@ -569,7 +570,11 @@ function ExpandedContent(
                 props.tile.kind === "generating" && "text-muted-foreground",
               )}
             >
-              {props.title}
+              {props.shape === "row" ? (
+                props.title
+              ) : (
+                <TrimmedEllipsis text={props.title} />
+              )}
             </span>
           </span>
         </>

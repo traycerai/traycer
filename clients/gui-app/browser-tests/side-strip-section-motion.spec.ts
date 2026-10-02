@@ -203,6 +203,35 @@ test.describe("over a list that overflows", () => {
     await expect(pill(page)).toHaveCount(0);
   });
 
+  test("docks the pill on the list's top edge, every header below it and none under it", async ({
+    page,
+  }) => {
+    await openStrip(page);
+    const top = (await boxOf(scroller(page))).y;
+    const headers = page.locator("[data-strip-section]");
+    // Every place it shows: as Working's header reaches the top, partway
+    // through Working, and at the end with Idle's header in view below.
+    for (const at of [480, 560, 1000]) {
+      await scrollTo(page, at);
+      const band = await boxOf(pill(page).locator(".."));
+      expect(band.y).toBeCloseTo(top, 0);
+      const boxes = await headers.evaluateAll((nodes) =>
+        nodes.map((node) => node.getBoundingClientRect().toJSON() as DOMRect),
+      );
+      // A header is under the band only where a later one covers it at the top.
+      const shown = boxes.filter(
+        (box, index) =>
+          !boxes.some(
+            (later, after) =>
+              after > index && Math.abs(later.top - box.top) < 1,
+          ),
+      );
+      for (const header of shown) {
+        expect(header.top).toBeGreaterThanOrEqual(band.y + band.height - 0.5);
+      }
+    }
+  });
+
   test("takes the pill's click back to Needs you and puts focus on its header", async ({
     page,
   }) => {
@@ -231,10 +260,11 @@ test.describe("over a list that overflows", () => {
     });
     await nextFrames(page, 3);
 
-    const top = (await boxOf(scroller(page))).y;
+    // Needs you is above now, so the header sticks under the pill's band.
+    const band = await boxOf(pill(page).locator(".."));
     const header = page.getByTestId("side-strip-section-to-review");
     const headerBox = await boxOf(header);
-    expect(headerBox.y).toBeCloseTo(top, 0);
+    expect(headerBox.y).toBeCloseTo(band.y + band.height, 0);
     const hit = await page.evaluate(
       ({ x, y }) =>
         document

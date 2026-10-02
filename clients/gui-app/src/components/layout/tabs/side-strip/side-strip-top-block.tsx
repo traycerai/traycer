@@ -21,7 +21,7 @@ import {
   SideStripNewTask,
   SideStripTasksLabel,
 } from "./side-strip-nav-rows";
-import { useLiveAgentsInStrip } from "./strip-agents-mode";
+import { useLiveAgentsInStrip, useSectionedStrip } from "./strip-agents-mode";
 import type { SideTabRowVariant } from "./side-tab-row";
 import {
   SIDE_STRIP_INSET_CLASS,
@@ -63,6 +63,9 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
   const collapsed = props.variant === "collapsed";
   // The Activity view's section headers say what the "Tasks" label does.
   const sectioned = useLiveAgentsInStrip();
+  // The Activity rail opens each run of tiles with a hairline, which parts
+  // them from New Task where Home does not.
+  const sectionedRail = useSectionedStrip() && collapsed;
   const toggle = (
     <SideStripCollapseToggle
       edge={props.edge}
@@ -115,16 +118,20 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
             <SideStripNavRows variant={props.variant} />
             {newTask}
           </div>
-          <div
-            aria-hidden
-            data-testid="side-strip-rail-divider"
-            className={cn(
-              SIDE_STRIP_RAIL_DIVIDER_CLASS,
-              "shrink-0 self-center",
-              // Without Home the row list's own 8px inset is the gap below.
-              home === null && "mb-0",
-            )}
-          />
+          {/* The first run's hairline divides there, the list's 8px inset
+              above it as the divider's own margin was. */}
+          {sectionedRail && home === null ? null : (
+            <div
+              aria-hidden
+              data-testid="side-strip-rail-divider"
+              className={cn(
+                SIDE_STRIP_RAIL_DIVIDER_CLASS,
+                "shrink-0 self-center",
+                // Without Home the row list's own 8px inset is the gap below.
+                home === null && "mb-0",
+              )}
+            />
+          )}
           {home}
         </>
       ) : (
