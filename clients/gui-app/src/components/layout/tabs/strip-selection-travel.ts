@@ -2,6 +2,7 @@ import { useReducedMotion } from "motion/react";
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import { create } from "zustand";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { cssEscape } from "@/lib/dom/css-escape";
 import {
   flattenStripItemRefs,
@@ -438,7 +439,7 @@ export function useSelectionTravel(input: {
     }
     useStripTravelStore.setState({
       concealedItemId: route.itemId,
-      pane: stripItemJoinPane(destination),
+      pane: stripItemJoinPane(destination, useLandingPanelStore.getState()),
     });
     if (flight !== null) {
       // Retarget mid-flight, keeping the momentum the eye is following.

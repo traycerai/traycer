@@ -8,9 +8,12 @@
  * side and its sidebar is expanded, "rail" when that sidebar is collapsed,
  * and "canvas" for an epic tab whose sidebar sits on the OTHER edge, where the
  * strip meets the content pane instead. A non-epic tab never reads the
- * sidebar: it takes the one ground its own surface paints
- * (`surfaceJoinPane`), "surface" for a draft or Settings (both paint
- * `--background`) and "canvas" for Home and History (they paint nothing).
+ * sidebar: it takes what its own surface paints along the strip's edge
+ * (`surfaceJoinPane`). A draft paints `--background` ("surface") until its
+ * terminal panel is open, which is canvas on the right (and everywhere once
+ * maximized). Settings paints `--background` with its rail, the sidebar's
+ * fill, down its left edge: "panel" on the left strip, "surface" on the right.
+ * Home and History paint nothing and show the sheet's canvas.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -27,9 +30,18 @@ import {
   DEFAULT_SIDEBAR_WIDTH_PX,
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
+import {
+  DEFAULT_LANDING_PANEL_LAYOUT,
+  useLandingPanelStore,
+  type LandingPanelLayout,
+} from "@/stores/home/landing-panel-store";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { SheetJoinBridge, SheetJoinScope } from "../../sheet-join";
-import { joinedAttribute, useSideTabJoin } from "../side-tab-join";
+import {
+  joinedAttribute,
+  useSideTabJoin,
+  type SheetJoinPane,
+} from "../side-tab-join";
 
 /** A controllable stand-in for the real `IntersectionObserver` (jsdom has none). */
 type ObserverEntryLike = { readonly intersectionRatio: number };
@@ -134,18 +146,66 @@ const HOME_TAB: Extract<HeaderTab, { kind: "home" }> = {
 
 /**
  * What each non-epic surface paints along the edge its row runs into, so the
- * pane the join takes: a draft and Settings paint `--background` ("surface"),
- * Home and History paint nothing and show the sheet's canvas.
+ * pane the join takes, with no start-page panel open: a draft paints
+ * `--background` ("surface"), Settings paints it with its rail down the left
+ * edge ("panel" there), Home and History paint nothing and show the sheet's
+ * canvas.
  */
-const NON_EPIC_PANES: ReadonlyArray<{
-  readonly tab: HeaderTab;
-  readonly pane: "surface" | "canvas";
-}> = [
-  { tab: DRAFT_TAB, pane: "surface" },
-  { tab: SETTINGS_TAB, pane: "surface" },
-  { tab: HISTORY_TAB, pane: "canvas" },
-  { tab: HOME_TAB, pane: "canvas" },
+const NON_EPIC_PANES: ReadonlyArray<
+  { readonly tab: HeaderTab } & Readonly<Record<EdgeSide, SheetJoinPane>>
+> = [
+  { tab: DRAFT_TAB, left: "surface", right: "surface" },
+  { tab: SETTINGS_TAB, left: "panel", right: "surface" },
+  { tab: HISTORY_TAB, left: "canvas", right: "canvas" },
+  { tab: HOME_TAB, left: "canvas", right: "canvas" },
 ];
+
+const NON_EPIC_PANES_BY_EDGE = EDGES.flatMap((edge) =>
+  NON_EPIC_PANES.map((row) => ({ edge, tab: row.tab, pane: row[edge] })),
+);
+
+/**
+ * What a draft's row meets by the state of its terminal panel: the panel is
+ * canvas, on the right edge when docked and everywhere once maximized.
+ */
+const DRAFT_PANEL_CASES: ReadonlyArray<{
+  readonly state: string;
+  readonly layout: LandingPanelLayout;
+  readonly left: SheetJoinPane;
+  readonly right: SheetJoinPane;
+}> = [
+  {
+    state: "closed",
+    layout: DEFAULT_LANDING_PANEL_LAYOUT,
+    left: "surface",
+    right: "surface",
+  },
+  {
+    state: "open and docked",
+    layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+    left: "surface",
+    right: "canvas",
+  },
+  {
+    state: "open and maximized",
+    layout: {
+      ...DEFAULT_LANDING_PANEL_LAYOUT,
+      panelOpen: true,
+      maximized: true,
+    },
+    left: "canvas",
+    right: "canvas",
+  },
+];
+
+const DRAFT_PANEL_BY_EDGE = EDGES.flatMap((edge) =>
+  DRAFT_PANEL_CASES.map((row) => ({
+    edge,
+    state: row.state,
+    layout: row.layout,
+    pane: row[edge],
+  })),
+);
 
 /** The hook's own caller: a CHILD of the edge provider, as a real row is. */
 function Row(props: {
@@ -199,6 +259,7 @@ function resetStores(): void {
     mainCollapsedByTabId: {},
     sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
   });
+  useLandingPanelStore.getState().resetForTests();
   activeObserverCallbacks = [];
 }
 
@@ -295,22 +356,92 @@ describe("useSideTabJoin", () => {
   });
 
   describe("pane", () => {
-    it.each(NON_EPIC_PANES)(
-      "a $tab.kind tab joins the $pane pane, even on the sidebar's own edge",
-      ({ tab, pane }) => {
+    it.each(NON_EPIC_PANES_BY_EDGE)(
+      "a $tab.kind tab on the $edge strip joins the $pane pane, with the sidebar on that same edge",
+      ({ edge, tab, pane }) => {
         act(() => {
           useLayoutStore.setState({
-            arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: "left" },
+            arrangement: { ...DEFAULT_ARRANGEMENT, sidebarSide: edge },
           });
         });
 
-        render(<Harness edge="left" tab={tab} />);
+        render(<Harness edge={edge} tab={tab} />);
 
-        expect(joinedEdge()).toBe("left");
+        expect(joinedEdge()).toBe(edge);
         expect(joinedPane()).toBe(pane);
         expect(bridge().getAttribute("data-join-pane")).toBe(pane);
       },
     );
+
+    // Settings paints the sidebar's own fill down its left edge, so a settings
+    // row on the LEFT strip meets that rail and joins it; on the right strip
+    // it meets the page's `--background`.
+    it("a settings row on the left strip joins the panel pane, and on the right strip the surface pane", () => {
+      const { unmount } = render(<Harness edge="left" tab={SETTINGS_TAB} />);
+      expect(joinedEdge()).toBe("left");
+      expect(joinedPane()).toBe("panel");
+      expect(bridge().getAttribute("data-join-pane")).toBe("panel");
+      unmount();
+
+      render(<Harness edge="right" tab={SETTINGS_TAB} />);
+      expect(joinedEdge()).toBe("right");
+      expect(joinedPane()).toBe("surface");
+      expect(bridge().getAttribute("data-join-pane")).toBe("surface");
+    });
+
+    // The pane follows the draft's terminal panel: the panel is canvas, docked
+    // on the right and over the whole page once maximized. The store is read
+    // reactively, so opening the panel under an already-joined row moves it.
+    it.each(DRAFT_PANEL_BY_EDGE)(
+      "a draft row on the $edge strip joins the $pane pane while its panel is $state",
+      ({ edge, layout, pane }) => {
+        act(() => {
+          useLandingPanelStore.setState({
+            layoutsByLandingPageId: { [DRAFT_TAB.id]: layout },
+          });
+        });
+
+        render(<Harness edge={edge} tab={DRAFT_TAB} />);
+
+        expect(joinedEdge()).toBe(edge);
+        expect(joinedPane()).toBe(pane);
+        expect(bridge().getAttribute("data-join-pane")).toBe(pane);
+      },
+    );
+
+    it("a draft row on the right strip follows its panel opening and closing", () => {
+      render(<Harness edge="right" tab={DRAFT_TAB} />);
+      expect(joinedPane()).toBe("surface");
+
+      act(() => {
+        useLandingPanelStore.getState().setPanelOpen(DRAFT_TAB.id, true);
+      });
+      expect(joinedPane()).toBe("canvas");
+      expect(bridge().getAttribute("data-join-pane")).toBe("canvas");
+
+      act(() => {
+        useLandingPanelStore.getState().setPanelOpen(DRAFT_TAB.id, false);
+      });
+      expect(joinedPane()).toBe("surface");
+    });
+
+    it("a draft row is not moved by another draft's open panel", () => {
+      act(() => {
+        useLandingPanelStore.setState({
+          layoutsByLandingPageId: {
+            "d-other": {
+              ...DEFAULT_LANDING_PANEL_LAYOUT,
+              panelOpen: true,
+              maximized: true,
+            },
+          },
+        });
+      });
+
+      render(<Harness edge="right" tab={DRAFT_TAB} />);
+
+      expect(joinedPane()).toBe("surface");
+    });
 
     it("is canvas for a row with no tab, as a split pair's empty member has none", () => {
       render(<Harness edge="left" tab={null} />);
@@ -407,11 +538,7 @@ describe("useSideTabJoin", () => {
 
     // The rail is the EPIC panel's collapsed state; a non-epic tab on the
     // sidebar's own edge, panel collapsed, must not read it.
-    const NON_EPIC_BESIDE_COLLAPSED_PANEL = EDGES.flatMap((edge) =>
-      NON_EPIC_PANES.map((entry) => ({ edge, ...entry })),
-    );
-
-    it.each(NON_EPIC_BESIDE_COLLAPSED_PANEL)(
+    it.each(NON_EPIC_PANES_BY_EDGE)(
       "a $tab.kind tab on the $edge strip joins the $pane pane even beside a collapsed panel on its own edge",
       ({ edge, tab, pane }) => {
         act(() => {

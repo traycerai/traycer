@@ -86,6 +86,11 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
+  DEFAULT_LANDING_PANEL_LAYOUT,
+  useLandingPanelStore,
+  type LandingPanelLayout,
+} from "@/stores/home/landing-panel-store";
+import {
   DEFAULT_LAYOUT_SNAPSHOT,
   useLayoutStore,
 } from "@/stores/layout/layout-store";
@@ -447,6 +452,7 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingPanelStore.getState().resetForTests();
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useSideTabStripStore.setState({
     widthPx: 240,
@@ -492,6 +498,40 @@ function openHistoryTab(): void {
       settings: null,
     },
   });
+}
+
+/** Opens the Settings system tab as the active tab, no epic tabs. */
+function openSettingsTab(): void {
+  const ref: TabRef = { kind: "settings", id: "settings" };
+  useTabsStore.setState({
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(ref), ref }],
+    activeItemId: tabItemId(ref),
+    stripOrder: [ref],
+    systemTabs: {
+      history: null,
+      settings: {
+        id: "settings",
+        kind: "settings",
+        name: "Settings",
+        lastPath: null,
+      },
+    },
+  });
+}
+
+/** Opens one draft as the active tab, no epic tabs, and returns its id. */
+function openDraftTab(): string {
+  const draftId = useLandingDraftStore.getState().createDraft(null);
+  const ref: TabRef = { kind: "draft", id: draftId };
+  useTabsStore.setState({
+    version: 2,
+    items: [{ kind: "tab", id: tabItemId(ref), ref }],
+    activeItemId: tabItemId(ref),
+    stripOrder: [ref],
+    systemTabs: { history: null, settings: null },
+  });
+  return draftId;
 }
 
 /** Writes the arrangement's `sidebarSide` alone, leaving every other field. */
@@ -3493,6 +3533,96 @@ describe("<SideTabStrip />", () => {
             .querySelector('[data-sheet-join-bridge="left"]')
             ?.getAttribute("data-join-pane"),
         ).toBe("canvas");
+      },
+    );
+
+    // Settings paints `--background` with its rail, the sidebar's own fill,
+    // down its left edge: a row on the LEFT strip meets that rail, a row on
+    // the right strip the page's ground. Which side the sidebar panel is on
+    // is an epic's concern and moves neither.
+    it.each([
+      { edge: "left", pane: "panel", sidebar: "right" },
+      { edge: "right", pane: "surface", sidebar: "left" },
+    ] as const)(
+      "joins an active Settings row on the $edge strip to the $pane pane, with the sidebar on the $sidebar",
+      async ({ edge, pane, sidebar }) => {
+        setSidebarSide(sidebar);
+        openSettingsTab();
+        await renderStrip("/elsewhere", { ...LEFT_STRIP, edge });
+
+        const row = screen.getByTestId("tab-settings-settings");
+        expect(row.getAttribute("data-sheet-joined")).toBe(edge);
+        expect(row.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector(`[data-sheet-join-bridge="${edge}"]`)
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
+      },
+    );
+
+    // A draft paints `--background` until its terminal panel is open. The
+    // panel is canvas and docks on the right, so a right strip meets it; a
+    // maximized panel covers the page, so either strip does.
+    it.each([
+      {
+        edge: "left",
+        state: "closed",
+        layout: DEFAULT_LANDING_PANEL_LAYOUT,
+        pane: "surface",
+      },
+      {
+        edge: "left",
+        state: "open and docked",
+        layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+        pane: "surface",
+      },
+      {
+        edge: "left",
+        state: "open and maximized",
+        layout: {
+          ...DEFAULT_LANDING_PANEL_LAYOUT,
+          panelOpen: true,
+          maximized: true,
+        },
+        pane: "canvas",
+      },
+      {
+        edge: "right",
+        state: "closed",
+        layout: DEFAULT_LANDING_PANEL_LAYOUT,
+        pane: "surface",
+      },
+      {
+        edge: "right",
+        state: "open and docked",
+        layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+        pane: "canvas",
+      },
+    ] satisfies ReadonlyArray<{
+      readonly edge: EdgeSide;
+      readonly state: string;
+      readonly layout: LandingPanelLayout;
+      readonly pane: "surface" | "canvas";
+    }>)(
+      "joins an active draft row on the $edge strip to the $pane pane while its terminal panel is $state",
+      async ({ edge, layout, pane }) => {
+        const draftId = openDraftTab();
+        act(() => {
+          useLandingPanelStore.setState({
+            layoutsByLandingPageId: { [draftId]: layout },
+          });
+        });
+        await renderStrip("/elsewhere", { ...LEFT_STRIP, edge });
+
+        const row = screen.getByTestId(`tab-draft-${draftId}`);
+        expect(row.getAttribute("data-sheet-joined")).toBe(edge);
+        expect(row.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector(`[data-sheet-join-bridge="${edge}"]`)
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
       },
     );
 

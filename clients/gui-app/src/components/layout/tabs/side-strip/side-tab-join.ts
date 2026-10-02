@@ -6,13 +6,14 @@ import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { useArrangementValue } from "@/lib/layout-overrides";
 import { useMainPanelCollapsed } from "@/stores/epics/left-panel-store";
 import type { SideRowFrame } from "./side-tab-row";
-import { surfaceJoinPane } from "../surface-join-pane";
+import { useSurfaceJoinPane } from "../surface-join-pane";
 import { useWhollyInTabStrip } from "../use-wholly-in-tab-strip";
 
 /**
  * Which pane of its sheet the tab meets, so the join takes that pane's fill:
- * the epic sidebar panel when it sits on the strip's side, its collapsed rail,
- * a surface's own ground (`surfaceJoinPane`), or the canvas.
+ * a panel in the sidebar's fill (the epic sidebar panel when it sits on the
+ * strip's side, Settings' rail), the epic panel's collapsed rail, a surface's
+ * own ground, or the canvas. `surfaceJoinPane` says which.
  */
 export type SheetJoinPane = "panel" | "rail" | "surface" | "canvas";
 
@@ -43,22 +44,33 @@ export function useSideTabJoin(
   // leaves it unjoined for the same reason (`TabChromeBackground`).
   const joins = edge !== null && active && tab?.kind !== "sample-workspace";
   const inList = useWhollyInTabStrip(node, joins);
-  let pane: SheetJoinPane | null = null;
-  if (joins && inList) {
-    // A task shows the strip the pane on its side: the panel, its rail, or
-    // (the panel on the far side) the canvas. Every other surface shows the
-    // one ground it paints.
-    pane =
-      tab === null || tab.kind === "epic"
-        ? "canvas"
-        : surfaceJoinPane(tab.kind);
-    if (tab?.kind === "epic" && sidebarSide === edge) {
-      pane = collapsed ? "rail" : "panel";
-    }
-  }
+  // What the surface paints along the strip's edge. A member that holds no
+  // tab (an empty split side) keeps the canvas.
+  const surfacePane = useSurfaceJoinPane(joins ? tab : null, edge ?? "left");
+  const pane =
+    joins && inList
+      ? sideJoinPane({
+          surfacePane,
+          panelOnThisSide: tab?.kind === "epic" && sidebarSide === edge,
+          collapsed,
+        })
+      : null;
   // The side strip's colour is its accent bar / ring, never its join outline.
   usePublishSheetJoin(pane, null);
   return edge === null || pane === null ? null : { edge, pane };
+}
+
+/**
+ * A task with its panel on the strip's side shows the strip that panel, or
+ * its rail once collapsed; every other surface shows what it paints there.
+ */
+function sideJoinPane(input: {
+  readonly surfacePane: SheetJoinPane | null;
+  readonly panelOnThisSide: boolean;
+  readonly collapsed: boolean;
+}): SheetJoinPane {
+  if (input.panelOnThisSide) return input.collapsed ? "rail" : "panel";
+  return input.surfacePane ?? "canvas";
 }
 
 /** The marker the sheet join in `index.css` keys on. */

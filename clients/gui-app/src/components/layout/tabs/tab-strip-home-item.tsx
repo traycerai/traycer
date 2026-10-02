@@ -5,9 +5,10 @@ import { HomeTabContextMenu } from "./tab-strip-context-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
-import { surfaceJoinPane } from "@/components/layout/tabs/surface-join-pane";
+import { useSurfaceJoinPane } from "@/components/layout/tabs/surface-join-pane";
 import { headerTabClassName } from "@/components/layout/tabs/tab-chrome-tokens";
 import { cn } from "@/lib/utils";
+import { HOME_TAB_REF } from "@/stores/tabs/kinds/home";
 
 const HOME_TAB_LABEL = "Home";
 
@@ -64,7 +65,10 @@ export function TabStripHomeItemView(
   // Home is a surface with a sheet like any tab, so it joins it; see
   // `TabItem` for why a drag unjoins.
   const dragging = useEpicDndStore((state) => state.activeHeaderTab !== null);
-  const joined = isActive && !dragging ? surfaceJoinPane("home") : null;
+  const joined = useSurfaceJoinPane(
+    isActive && !dragging ? HOME_TAB_REF : null,
+    "top",
+  );
 
   return (
     <TooltipWrapper

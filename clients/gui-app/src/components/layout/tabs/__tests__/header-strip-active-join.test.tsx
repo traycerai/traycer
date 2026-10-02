@@ -10,8 +10,10 @@
  * lasts, which the fake row's lack of that effect doesn't undermine.)
  *
  * A joined overlay also names the pane it runs into (`surfaceJoinPane`), and
- * the top bridge it owns must name the same one: a task or a split pair joins
- * "surface", History "canvas".
+ * the top bridge it owns must name the same one: a task joins "surface",
+ * History "canvas". A split pair joins "surface" when a member that holds a
+ * tab paints `--background`, and "canvas" otherwise (`splitPairJoinPane`): an
+ * empty slot paints neither, so History beside one keeps History's canvas.
  */
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,11 +42,19 @@ import {
   type HeaderTabDragData,
 } from "@/components/layout/tabs/header-tab-dnd";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "@/components/layout/tabs/header-strip-geometry";
+import type { SheetJoinPane } from "@/components/layout/tabs/side-strip/side-tab-join";
 import { EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE } from "@/components/epic-canvas/dnd/epic-canvas-pointer-sensor";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  DEFAULT_LANDING_PANEL_LAYOUT,
+  useLandingPanelStore,
+  type LandingPanelLayout,
+} from "@/stores/home/landing-panel-store";
+import type { SplitSide } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
-import type { TabRef } from "@/stores/tabs/types";
+import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
 // Keep host notification RPCs outside the drag harness.
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
@@ -63,6 +73,18 @@ const HISTORY: TabRef = { kind: "history", id: "history" };
 const PAIR_LEFT: TabRef = { kind: "epic", id: "tab-pair-left" };
 const PAIR_RIGHT: TabRef = { kind: "epic", id: "tab-pair-right" };
 const SPLIT_ID = "split-pair";
+
+const PAIR_LEFT_SIDE: SplitSide = { kind: "tab", ref: PAIR_LEFT };
+const PAIR_RIGHT_SIDE: SplitSide = { kind: "tab", ref: PAIR_RIGHT };
+const HISTORY_SIDE: SplitSide = { kind: "tab", ref: HISTORY };
+const EMPTY_SIDE: SplitSide = { kind: "empty" };
+
+const HISTORY_SYSTEM_TAB: SystemTab = {
+  id: "history",
+  kind: "history",
+  name: "History",
+  lastPath: "/epics",
+};
 
 function itemIdOf(ref: TabRef): string {
   return `tab:${ref.kind}:${ref.id}`;
@@ -172,10 +194,14 @@ function seedActiveHistory(): void {
   });
 }
 
-/** One split pair of two tasks, active, and nothing else in the strip. */
-function seedActiveSplit(): void {
+/** One split pair, active, and nothing else in the strip. */
+function seedActiveSplit(left: SplitSide, right: SplitSide): void {
+  const members = [left, right].flatMap((side) =>
+    side.kind === "tab" ? [side.ref] : [],
+  );
   act(() => {
-    for (const ref of [PAIR_LEFT, PAIR_RIGHT]) {
+    for (const ref of members) {
+      if (ref.kind !== "epic") continue;
       useEpicCanvasStore
         .getState()
         .openEpicTabWithId(ref.id, `${ref.id}-epic`, ref.id);
@@ -186,16 +212,21 @@ function seedActiveSplit(): void {
         {
           kind: "split",
           id: SPLIT_ID,
-          left: { kind: "tab", ref: PAIR_LEFT },
-          right: { kind: "tab", ref: PAIR_RIGHT },
+          left,
+          right,
           focusedSide: "left",
           routeBackingSide: "left",
           leftRatio: 0.5,
         },
       ],
       activeItemId: SPLIT_ID,
-      stripOrder: [PAIR_LEFT, PAIR_RIGHT],
-      systemTabs: { history: null, settings: null },
+      stripOrder: members,
+      systemTabs: {
+        history: members.some((ref) => ref.kind === "history")
+          ? HISTORY_SYSTEM_TAB
+          : null,
+        settings: null,
+      },
     });
   });
 }
@@ -272,6 +303,8 @@ describe("top strip drag overlay: active/inactive chrome and sheet join", () => 
     vi.restoreAllMocks();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingPanelStore.getState().resetForTests();
   });
 
   it("keeps an inactive dragged tab's inactive appearance on the overlay - no chrome box, no join", async () => {
@@ -340,20 +373,136 @@ describe("top strip drag overlay: active/inactive chrome and sheet join", () => 
     releaseAt(drag);
   });
 
-  it("joins the active dragged split pair's one box to the surface pane, and the bridge with it", async () => {
-    seedActiveSplit();
-    await mountTopStrip(
-      <StripRow tabRef={PAIR_LEFT} stripItemId={SPLIT_ID} index={0} />,
-    );
-    const drag = pressAndActivate(screen.getByTestId(`row-${PAIR_LEFT.id}`), 5);
+  // A pair runs into the sheet under it as one box, in the pane its members
+  // paint (`splitPairJoinPane`): `--background` when any member that holds a
+  // tab paints it, the canvas otherwise. An empty slot paints neither, so
+  // History beside one is the one pair that keeps History's canvas.
+  const SPLIT_PAIR_CASES: ReadonlyArray<{
+    readonly pair: string;
+    readonly left: SplitSide;
+    readonly right: SplitSide;
+    readonly dragged: TabRef;
+    readonly pane: SheetJoinPane;
+    readonly pointerId: number;
+  }> = [
+    {
+      pair: "two tasks",
+      left: PAIR_LEFT_SIDE,
+      right: PAIR_RIGHT_SIDE,
+      dragged: PAIR_LEFT,
+      pane: "surface",
+      pointerId: 5,
+    },
+    {
+      pair: "a task and an empty slot",
+      left: PAIR_LEFT_SIDE,
+      right: EMPTY_SIDE,
+      dragged: PAIR_LEFT,
+      pane: "surface",
+      pointerId: 6,
+    },
+    {
+      pair: "History and a task",
+      left: HISTORY_SIDE,
+      right: PAIR_RIGHT_SIDE,
+      dragged: HISTORY,
+      pane: "surface",
+      pointerId: 7,
+    },
+    {
+      pair: "History and an empty slot",
+      left: HISTORY_SIDE,
+      right: EMPTY_SIDE,
+      dragged: HISTORY,
+      pane: "canvas",
+      pointerId: 8,
+    },
+  ];
 
-    const box = within(overlayContainer()).getByTestId(
-      `split-tab-joined-${SPLIT_ID}`,
-    );
-    expect(box.getAttribute("data-sheet-joined")).toBe("top");
-    expect(box.getAttribute("data-join-pane")).toBe("surface");
-    expect(topBridge().getAttribute("data-join-pane")).toBe("surface");
+  it.each(SPLIT_PAIR_CASES)(
+    "joins the active dragged pair of $pair as one box in the $pane pane, and the bridge with it",
+    async ({ left, right, dragged, pane, pointerId }) => {
+      seedActiveSplit(left, right);
+      await mountTopStrip(
+        <StripRow tabRef={dragged} stripItemId={SPLIT_ID} index={0} />,
+      );
+      const drag = pressAndActivate(
+        screen.getByTestId(`row-${dragged.id}`),
+        pointerId,
+      );
 
-    releaseAt(drag);
-  });
+      const box = within(overlayContainer()).getByTestId(
+        `split-tab-joined-${SPLIT_ID}`,
+      );
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.getAttribute("data-join-pane")).toBe(pane);
+      expect(topBridge().getAttribute("data-join-pane")).toBe(pane);
+
+      releaseAt(drag);
+    },
+  );
+
+  // A draft paints `--background` under its terminal panel, which is canvas:
+  // maximized, it covers the draft's whole page, so the pair meets canvas only
+  // when its other member is History (or an empty slot). The overlay reads the
+  // panel's recorded layout for that draft.
+  const DRAFT_PANEL_CASES: ReadonlyArray<{
+    readonly panel: string;
+    readonly layout: LandingPanelLayout;
+    readonly pane: SheetJoinPane;
+    readonly pointerId: number;
+  }> = [
+    {
+      panel: "closed",
+      layout: DEFAULT_LANDING_PANEL_LAYOUT,
+      pane: "surface",
+      pointerId: 9,
+    },
+    {
+      panel: "open and docked",
+      layout: { ...DEFAULT_LANDING_PANEL_LAYOUT, panelOpen: true },
+      pane: "surface",
+      pointerId: 10,
+    },
+    {
+      panel: "open and maximized",
+      layout: {
+        ...DEFAULT_LANDING_PANEL_LAYOUT,
+        panelOpen: true,
+        maximized: true,
+      },
+      pane: "canvas",
+      pointerId: 11,
+    },
+  ];
+
+  it.each(DRAFT_PANEL_CASES)(
+    "joins the active dragged pair of a draft and History in the $pane pane while the draft's terminal panel is $panel",
+    async ({ layout, pane, pointerId }) => {
+      const draftId = useLandingDraftStore.getState().createDraft(null);
+      const draft: TabRef = { kind: "draft", id: draftId };
+      act(() => {
+        useLandingPanelStore.setState({
+          layoutsByLandingPageId: { [draftId]: layout },
+        });
+      });
+      seedActiveSplit({ kind: "tab", ref: draft }, HISTORY_SIDE);
+      await mountTopStrip(
+        <StripRow tabRef={draft} stripItemId={SPLIT_ID} index={0} />,
+      );
+      const drag = pressAndActivate(
+        screen.getByTestId(`row-${draftId}`),
+        pointerId,
+      );
+
+      const box = within(overlayContainer()).getByTestId(
+        `split-tab-joined-${SPLIT_ID}`,
+      );
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.getAttribute("data-join-pane")).toBe(pane);
+      expect(topBridge().getAttribute("data-join-pane")).toBe(pane);
+
+      releaseAt(drag);
+    },
+  );
 });

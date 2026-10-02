@@ -7,7 +7,7 @@ import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { SplitMemberChrome } from "./split-tab-chrome";
 import { usePublishTravelOutline } from "./strip-selection-travel";
-import { surfaceJoinPane } from "./surface-join-pane";
+import { useSurfaceJoinPane } from "./surface-join-pane";
 import { TabChromeBackground, TabColorEdgeLine } from "./tab-chrome-background";
 import { useHeaderTabTitle } from "./header-tab-presentation";
 import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
@@ -81,12 +81,13 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
   const sessionColor = props.tab.kind === "sample-workspace" ? color : null;
   const badge = railBadgeOf(props.indicatorState);
   const agents = useSideTabLiveAgents(epicId);
+  const joinPane = useSurfaceJoinPane(props.joined ? props.tab : null, "top");
   return (
     <>
       {props.chrome === "own" ? (
         <TabChrome
           isActive={props.isActive}
-          joined={props.joined ? surfaceJoinPane(props.tab.kind) : null}
+          joined={joinPane}
           concealed={props.concealed}
           color={color}
           session={sessionColor !== null}
