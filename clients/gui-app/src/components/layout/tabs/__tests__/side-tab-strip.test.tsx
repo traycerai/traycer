@@ -2209,6 +2209,38 @@ describe("<SideTabStrip />", () => {
       expect(within(beta).queryByTestId("side-tab-section-time")).toBeNull();
     });
 
+    it("counts tasks in the Needs you header and the Notifications pill alike: a split pair once, a task with several requests once", async () => {
+      openSplitPair("left");
+      indicatorState.value = {
+        epics: {
+          "e-alpha": { ...NO_FLAGS, pendingApproval: true },
+          "e-beta": { ...NO_FLAGS, pendingApproval: true },
+        },
+        chats: {},
+      };
+      const prompt = (id: string, epicId: string): Prompt => ({
+        id,
+        epicId,
+        chatId: `c-${id}`,
+        agentTitle: "Deploy agent",
+        taskTitle: epicId,
+        minutesAgo: 1,
+      });
+      seedPrompts([
+        prompt("alpha-1", "e-alpha"),
+        prompt("beta-1", "e-beta"),
+        prompt("beta-2", "e-beta"),
+        prompt("elsewhere-1", "e-elsewhere"),
+      ]);
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      // The pair and the task with no tab: two tasks, from four requests.
+      expect(header("needs-you").textContent).toBe("Needs you2");
+      expect(screen.getByTestId("side-strip-inbox-count").textContent).toBe(
+        "2",
+      );
+    });
+
     it("gives a prompt whose task has no tab in the strip a Needs you row of its own, opened through the notification's activation", async () => {
       openSectionedTasks();
       seedPrompts([

@@ -27,6 +27,8 @@ import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider"
 import { EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE } from "@/components/epic-canvas/dnd/epic-canvas-pointer-sensor";
 import { HEADER_STRIP_SCROLL_TEST_ID } from "@/components/layout/tabs/header-strip-geometry";
 import { SideStripRowList } from "@/components/layout/tabs/side-strip/side-strip-row-list";
+import { StripNeedsYouScope } from "@/components/layout/tabs/side-strip/strip-needs-you-scope";
+import { StripSectionsScope } from "@/components/layout/tabs/side-strip/strip-sections-scope";
 import {
   publishTabDetachHandler,
   resetTabDetachHandler,
@@ -157,17 +159,22 @@ function installStripGeometry(): void {
   );
 }
 
+/** The row list under the scopes `SideTabStrip` mounts it in. */
 function SideStripHost(): ReactNode {
   const controller = useTabStripController();
   return (
     <>
-      <TabStripIndicatorScope indicators={controller.indicators}>
-        <SideStripRowList
-          controller={controller}
-          edge="left"
-          variant="expanded"
-        />
-      </TabStripIndicatorScope>
+      <StripNeedsYouScope controller={controller}>
+        <TabStripIndicatorScope indicators={controller.indicators}>
+          <StripSectionsScope controller={controller}>
+            <SideStripRowList
+              controller={controller}
+              edge="left"
+              variant="expanded"
+            />
+          </StripSectionsScope>
+        </TabStripIndicatorScope>
+      </StripNeedsYouScope>
       {controller.dialogs}
     </>
   );

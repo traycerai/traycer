@@ -184,11 +184,11 @@ function approvalEntry(
     severity: "needs_action",
     outcome: null,
     resolvedAt: null,
-    epicId: "epic-1",
+    epicId: `epic-${id}`,
     chatId: "chat-1",
     payload: {
       kind: "approval",
-      epicId: "epic-1",
+      epicId: `epic-${id}`,
       chatId: "chat-1",
       chatTitle: "Deploy checkout fix",
       taskTitle: "Deploy checkout fix",
@@ -197,14 +197,14 @@ function approvalEntry(
   };
 }
 
-/** Seeds the host feed with `count` unresolved approvals, driving both the
- * unread and the needs-you counts at once (a fresh prompt is unread by
- * construction). */
+/** Seeds the host feed with `count` unresolved approvals, each in a task of
+ * its own, driving both the unread and the needs-you counts at once (a fresh
+ * prompt is unread by construction). */
 function seedApprovals(count: number): void {
   seedFeed(count, count);
 }
 
-/** Seeds `needsYou` unresolved approvals under a summary of `unread` unread. */
+/** Seeds `needsYou` unresolved approvals, a task each, under a summary of `unread` unread. */
 function seedFeed(needsYou: number, unread: number): void {
   const entries = Array.from({ length: needsYou }, (_unused, index) =>
     approvalEntry(`approval-${index}`, 10 + index),
@@ -304,7 +304,7 @@ describe("SideStripNavRows", () => {
     expect(badge.dataset.needsYou).toBe("true");
   });
 
-  it("Activity view: the pill is the needs-you count, not the unread total, and is absent at 0", async () => {
+  it("Activity view: the pill is the Needs you task count, not the unread total, and is absent at 0", async () => {
     activateActivityView();
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
@@ -319,7 +319,7 @@ describe("SideStripNavRows", () => {
     expect(badge.dataset.needsYou).toBe("true");
   });
 
-  it("collapsed: shows one amber corner badge sized by the needs-you count", async () => {
+  it("collapsed: shows one amber corner badge sized by the Needs you task count", async () => {
     useSideTabStripStore.setState({ collapsed: true });
     seedApprovals(3);
     renderStrip("left");

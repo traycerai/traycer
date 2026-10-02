@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { use, useEffect, useMemo, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useActiveHeaderTab } from "@/components/epic-canvas/dnd/dnd-store";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
@@ -44,7 +44,7 @@ import {
 } from "./strip-sections";
 import { useNeedsYouActivation } from "./use-needs-you-activation";
 import { useNeedsYouAnnouncement } from "./use-needs-you-announcement";
-import { useStripSections } from "./use-strip-sections";
+import { StripSectionsContext } from "./strip-sections-context";
 
 /**
  * The Activity view's rows: each non-empty section under its header, its
@@ -74,7 +74,7 @@ export function SideStripSections(props: {
   readonly needsYouAbove: boolean;
 }): ReactNode {
   const { controller, handlers, variant, scroller, needsYouAbove } = props;
-  const assigned = useStripSections(controller);
+  const assigned = use(StripSectionsContext);
   const holds = useStripSectionHolds(scroller);
   const sections = useMemo(
     () => holdInPlace(assigned, holds),

@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
 import { useMergedNotificationUnreadCount } from "@/stores/notifications/merged-notifications";
-import { useNeedsYouItems } from "@/stores/notifications/needs-you-items";
+import { useNeedsYouTaskCount } from "@/stores/notifications/needs-you-task-count-store";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { isHistoryPath } from "@/stores/tabs/kinds/history";
 import {
@@ -213,7 +213,8 @@ function InboxNavRow(props: {
     contentHandlers,
     popoverProps,
   } = useNotificationCenter();
-  const needsYouCount = useNeedsYouItems().length;
+  // Tasks, as the Needs you header counts them; the drawer lists requests.
+  const needsYouCount = useNeedsYouTaskCount();
   const unreadCount = useMergedNotificationUnreadCount();
   // The Activity view's pill is the Needs you count alone; the Layered view's
   // is the unread total, falling back to it when nothing is unread.

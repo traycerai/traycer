@@ -217,13 +217,20 @@ export function sectionSegmentsOf(
   return segments;
 }
 
-/** The rows a section draws: a split's halves count separately, a prompt once. */
+/**
+ * How many tasks a section lists: a split pair once, as it is one row, and a
+ * task with no row once. Every count of a section in the sidebar is this one.
+ */
 export function sectionTaskCount(group: StripSectionGroup): number {
-  return group.entries.reduce(
-    (count, entry) =>
-      count + (entry.kind === "tabs" ? entry.members.length : 1),
-    0,
-  );
+  return group.entries.length;
+}
+
+/** How many tasks need the person: the Needs you section's count, 0 without one. */
+export function needsYouTaskCountOf(
+  sections: ReadonlyArray<StripSectionGroup>,
+): number {
+  const needsYou = sections.find((group) => group.section === "needs-you");
+  return needsYou === undefined ? 0 : sectionTaskCount(needsYou);
 }
 
 /**
