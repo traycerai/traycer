@@ -137,7 +137,7 @@ describe("SideTabRailBadge", () => {
     }
     const glyph = badge.querySelector('[data-status-glyph="approval"]');
     expect(glyph).not.toBeNull();
-    expect(glyph?.classList.contains("size-2.5")).toBe(true);
+    expect(glyph?.classList.contains("size-3.5")).toBe(true);
     // The wrapper already carries the accessible name; the inner glyph must
     // not double it up for assistive tech.
     expect(glyph?.getAttribute("aria-hidden")).toBe("true");

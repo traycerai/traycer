@@ -48,11 +48,40 @@ const SETTLED_VELOCITY = 8;
 interface TravelState {
   /** The strip item whose own selected box is hidden while the traveller flies to it. */
   readonly concealedItemId: string | null;
+  /**
+   * The colour that hidden box draws its outline in, which the traveller
+   * wears from its first frame; `null` for the sheets' own border.
+   */
+  readonly outline: string | null;
 }
 
 const useStripTravelStore = create<TravelState>()(() => ({
   concealedItemId: null,
+  outline: null,
 }));
+
+/** The outline colour the traveller wears: its destination's. */
+export function useTravelOutline(): string | null {
+  return useStripTravelStore((state) => state.outline);
+}
+
+/**
+ * Hands a concealed destination's outline colour to the traveller standing in
+ * for it. A layout effect in the same flush that conceals it, so the
+ * traveller's first painted frame is already in the destination's colour.
+ */
+export function usePublishTravelOutline(
+  concealed: boolean,
+  color: string | null,
+): void {
+  useLayoutEffect(() => {
+    if (!concealed) return;
+    useStripTravelStore.setState({ outline: color });
+    return () => {
+      useStripTravelStore.setState({ outline: null });
+    };
+  }, [concealed, color]);
+}
 
 export function useConcealedForTravel(stripItemId: string | null): boolean {
   return useStripTravelStore(

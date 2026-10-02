@@ -43,6 +43,14 @@ vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
   useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
 }));
 
+// The profile-copy entry button and Recent copies list label devices from the
+// account's host list, which is a real TanStack query. This suite is about the
+// panel, not copying, so the list is empty and the button renders disabled.
+// `use-host-options` is stubbed with only the member this subtree calls.
+vi.mock("@/components/settings/host-scope/use-host-options", () => ({
+  useHostOptions: () => ({ hosts: [] }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
   useProvidersSetSelection: () => ({ mutate: vi.fn(), isPending: false }),
 }));

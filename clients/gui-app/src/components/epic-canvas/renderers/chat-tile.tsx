@@ -50,7 +50,7 @@ import {
   ChatScrollToBlockContext,
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
-import { CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
+import { PENDING_CARD_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
 import {
   ChatPlanActionsContext,
   type ChatPlanActionsContextValue,
@@ -852,35 +852,30 @@ function useComposerNavigationHighlight(): {
     readonly id: string;
     readonly generation: number;
   } | null>(null);
-  const timeoutRef = useRef<number | null>(null);
+  // The ring's time runs only while the card can paint: a jump can land while
+  // this tile is kept mounted under `display:none` and shown a moment later,
+  // and the CSS animation only starts then too.
+  const paneVisible = usePaneVisible();
+  const tabSelected = useTabBodySelected();
+  const shown = paneVisible && tabSelected;
+  useEffect(() => {
+    if (composerHighlight === null || !shown) return;
+    const timer = window.setTimeout(() => {
+      setComposerHighlight(null);
+    }, PENDING_CARD_HIGHLIGHT_DURATION_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [composerHighlight, shown]);
   const clearComposerHighlight = useCallback((): void => {
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
     setComposerHighlight(null);
   }, []);
   const highlightComposerBlock = useCallback((blockId: string): void => {
-    if (timeoutRef.current !== null) {
-      window.clearTimeout(timeoutRef.current);
-    }
     setComposerHighlight((current) => ({
       id: blockId,
       generation: (current?.generation ?? 0) + 1,
     }));
-    timeoutRef.current = window.setTimeout(() => {
-      timeoutRef.current = null;
-      setComposerHighlight(null);
-    }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
   }, []);
-  useEffect(
-    () => () => {
-      if (timeoutRef.current !== null) {
-        window.clearTimeout(timeoutRef.current);
-      }
-    },
-    [],
-  );
   return {
     blockId: composerHighlight?.id ?? null,
     generation: composerHighlight?.generation ?? 0,

@@ -12,7 +12,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
-  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  PENDING_CARD_HIGHLIGHT_CLASSNAME,
   useRestartHighlightPulse,
 } from "@/components/chat/chat-navigation-highlight";
 import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
@@ -139,7 +139,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
       tabIndex={-1}
       className={cn(
         "flex flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-ui-sm shadow-sm outline-none transition-[background-color,box-shadow] duration-300",
-        props.navigationHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+        props.navigationHighlighted && PENDING_CARD_HIGHLIGHT_CLASSNAME,
       )}
     >
       {question === null ? (

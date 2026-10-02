@@ -1,7 +1,6 @@
 import { Info } from "lucide-react";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { SampleWorkspaceBody } from "./sample-workspace-body";
-import { SampleStripLiveAgents } from "./sample-strip-live-agents";
 import { useEffect } from "react";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -71,7 +70,6 @@ export function SampleWorkspaceSurface({ tabId }: { readonly tabId: string }) {
         </span>
       </div>
       <SampleWorkspaceBody />
-      <SampleStripLiveAgents tabId={tabId} />
     </div>
   );
 }

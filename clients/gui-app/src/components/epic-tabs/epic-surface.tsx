@@ -4,7 +4,6 @@ import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-sessio
 import { MobileEpicHeaderActionsBinder } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
 import { EpicSidebarColumn } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import { remeasureTileSurfaceGeometry } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
-import { StripLiveAgentsPortal } from "@/components/epic-canvas/sidebar/strip-live-agents";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useArrangementValue } from "@/lib/layout-overrides";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
@@ -88,13 +87,6 @@ export function EpicSurface(props: EpicSurfaceProps) {
                   effects below unmounted. Self-gates on mobile, so desktop
                   registers nothing either way. */}
               <MobileEpicHeaderActionsBinder tabId={props.tabId} />
-              {/* The Activity view's live agents, drawn in the strip under
-                  this tab's row but owned here, inside this pane's session
-                  (D9). */}
-              <StripLiveAgentsPortal
-                epicId={props.epicId}
-                tabId={props.tabId}
-              />
               <EpicSurfaceSheets
                 tabId={props.tabId}
                 sidebarSide={sidebarSide}

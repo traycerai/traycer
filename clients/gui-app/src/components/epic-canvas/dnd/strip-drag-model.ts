@@ -13,23 +13,43 @@
  * provisional order moves a tab under the pointer, which changes the hit, which
  * changes the provisional order - and the strip oscillates.
  *
- * Two properties are load-bearing and both fall out of the swap rule rather
- * than being tuned in:
+ * Each neighbour of the dragged tab is read in zones along the axis, against
+ * the strip as it is drawn this frame:
+ *
+ * - its **middle half** splits with it, at once;
+ * - its **near quarter**, the side the dragged tab came from, keeps the tab on
+ *   that side;
+ * - its **far quarter** passes it: the neighbour moves over to the side the tab
+ *   came from, and the gap opens beyond it.
+ *
+ * A neighbour that cannot be split with (a split pair, or any neighbour in a
+ * strip that never splits, such as a tile strip or a keyboard drag) has no
+ * middle, and is passed at its centre as Chrome passes tabs.
+ *
+ * Two properties are load-bearing and both fall out of the rule rather than
+ * being tuned in:
  *
  * - **Monotonicity.** A monotone pointer sweep yields a monotone index.
- * - **Hysteresis.** After a swap the neighbour's centre has moved, so reversing
- *   requires re-crossing `sourceExtent` - see `swapHysteresisPx`. Note this is
- *   the SOURCE's extent, not the mean of the pair: the two coincide only for
- *   equal-extent items, and a split group is one strip item of its own extent.
+ * - **No flicker.** A neighbour that has just moved over is drawn behind the
+ *   dragged tab, a whole tab and gap from where it was, so the centre that
+ *   passed it is outside it: reversing has to come back through its near
+ *   quarter and middle before it reaches the quarter that passes it back.
  *
- * Merge (pair-into-split) and reorder divide a hovered neighbour at its centre.
- * The approaching half is the merge target; crossing the midpoint starts the
- * reorder. This gives both actions a large, deterministic target without
- * requiring pixel-perfect placement, and it makes the state a pure function of
- * position: nothing is ever held in time, so there is no dwell to explain and
- * no timer to keep alive.
+ * In a strip with tab groups the neighbours the zones are read against are the
+ * ones the drag draws (`strip-group-layout.ts`): a group's header and block
+ * padding are laid out where the provisional order puts them, not carried in a
+ * slot's `advance`. The layout depends on the group the dragged tab is in, and
+ * that on the index, so each frame settles the two against each other from the
+ * previous frame's group. A split is drawn in that same layout, so showing or
+ * dropping it moves nothing.
  *
- * Both zones are resolved against the DRAGGED TAB'S CENTRE
+ * A reorder also decides group membership, by position: the group whose block
+ * (or chip and members) the dragged centre is inside, when that group is one of
+ * the insertion point's neighbours, or the group both neighbours share. A group
+ * with no tabs drawn (collapsed) has no neighbours to be one of, so the centre
+ * inside its header is enough.
+ *
+ * Both zones and the membership are resolved against the DRAGGED TAB'S CENTRE
  * (`pointer - grabOffset + extent/2`), never against the raw pointer - the same
  * reference Chrome uses for its swap rule. The user watches the tab in their
  * hand, not the invisible pointer, and the two can disagree by up to a full
@@ -38,9 +58,14 @@
  * back over the source slot. Pointer-resolved zones make that gesture a dead
  * zone - the tab overlaps the target, nothing highlights, nothing swaps -
  * which reads as the drag simply not working. The centre moves 1:1 with the
- * pointer, so monotonicity and hysteresis are unaffected by the choice; what
+ * pointer, so monotonicity and no flicker are unaffected by the choice; what
  * changes is that every boundary sits where the visible tab says it is.
  */
+import {
+  chromeLayoutFor,
+  laneGroupsOf,
+  type StripLayout,
+} from "@/components/epic-canvas/dnd/strip-group-layout";
 
 export interface StripSlot {
   readonly itemId: string;
@@ -62,10 +87,43 @@ export interface StripSlot {
    * carries a single `TabRef` and a two-ref item has no unambiguous one.
    */
   readonly isMergeTarget: boolean;
+  /**
+   * The section a sectioned strip holds the item in, `null` for a strip with
+   * none. A drag moves an item among the slots of its own lane only.
+   */
+  readonly lane: string | null;
+  /** The tab group the item is in, `null` for an ungrouped item. */
+  readonly groupId: string | null;
+}
+
+/**
+ * Where a tab group is drawn, in the strip's CONTENT box like a slot's start:
+ * its block in the sidebar, its chip (margins included) and tabs in the top
+ * bar. A group drawn in several runs (the Activity view's sections) has an
+ * extent per run, each in its own lane.
+ */
+export interface StripGroupExtent {
+  readonly groupId: string;
+  readonly start: number;
+  readonly end: number;
+  /** The section the extent is drawn in; `null` for a strip with none. */
+  readonly lane: string | null;
+  /** The gap between the group's own tabs. */
+  readonly rowGap: number;
+  /**
+   * Whether the group's membership is not this drag's to change, because the
+   * dragged tab's menu does not offer the group either (an organization's group
+   * for a tab the organization does not keep, or the other way round): the
+   * dragged tab does not join it and, when in it, does not leave it.
+   */
+  readonly locked: boolean;
 }
 
 export interface StripDragGeometry {
   readonly slots: ReadonlyArray<StripSlot>;
+  readonly groups: ReadonlyArray<StripGroupExtent>;
+  /** The gap between neighbouring items or groups of the strip. */
+  readonly runGap: number;
   readonly sourceIndex: number;
   /**
    * Press position minus the source's start edge, held for the life of the
@@ -96,13 +154,28 @@ export interface StripDragGeometry {
 export type MergeSide = "left" | "right";
 
 export type StripDragState =
-  | { readonly kind: "reorder"; readonly targetIndex: number }
+  | {
+      readonly kind: "reorder";
+      readonly targetIndex: number;
+      /** The group the drop lands in; `null` outside every group. */
+      readonly groupId: string | null;
+      /** Whether that is a group the dragged item is not in now. */
+      readonly joinsGroup: boolean;
+    }
   | {
       readonly kind: "merge";
+      /** Where the strip is drawn while the split shows: the move it sits on. */
       readonly targetIndex: number;
+      readonly groupId: string | null;
       readonly targetItemId: string;
       readonly targetSide: MergeSide;
     };
+
+/**
+ * A task's middle half is within this fraction of its extent of its centre;
+ * the quarter beyond it on either side is its near or far quarter.
+ */
+const SPLIT_ZONE_RADIUS = 0.25;
 
 export interface ResolveStripDragInput {
   readonly geometry: StripDragGeometry;
@@ -115,21 +188,13 @@ export interface ResolveStripDragInput {
    */
   readonly contentOrigin: number;
   readonly pointer: number;
+  /** False for a strip or a drag that never splits (a tile strip, a keyboard drag). */
+  readonly canSplit: boolean;
   /**
-   * Carries only the settled `targetIndex` between frames - see the swap rule.
+   * The previous frame's state: where the strip is drawn now, which every zone
+   * is read against.
    */
   readonly previous: StripDragState | null;
-}
-
-/**
- * Distance the pointer must travel back before a just-made swap reverses.
- * Both crossings use the approached tab's midpoint. After the swap that tab
- * occupies the source slot, so the midpoint shift - and therefore
- * hysteresis - is exactly the dragged source extent, independent of unequal
- * neighbour extents.
- */
-export function swapHysteresisPx(sourceExtent: number): number {
-  return sourceExtent;
 }
 
 /**
@@ -243,6 +308,22 @@ export function stripOffsetsFor(
 }
 
 /**
+ * The strip laid out with the dragged slot moved to `targetIndex` and put in
+ * `groupId` (`null` for none): every slot's displacement, and where each group's
+ * chrome is. A strip with no groups to lay out around is displaced by the
+ * slots' own advance, as it always was, and moves no group.
+ */
+export function stripLayoutFor(
+  geometry: StripDragGeometry,
+  targetIndex: number,
+  groupId: string | null,
+): StripLayout {
+  return laneGroupsOf(geometry).length === 0
+    ? { offsets: stripOffsetsFor(geometry, targetIndex), groups: [] }
+    : chromeLayoutFor(geometry, targetIndex, groupId);
+}
+
+/**
  * Offsets for a strip the dragged item is being INSERTED into from another
  * group: it has no slot here, so everything from `insertIndex` onwards opens a
  * gap of `insertExtent`.
@@ -285,21 +366,35 @@ interface LaidOutSlot {
 }
 
 /**
- * Lay the measured extents out in the provisional order and return each item's
- * viewport centre. Deliberately NOT read from live DOM rects: those are mid
- * spring animation, and feeding an animating rect back into the decision that
- * drives the animation is the feedback loop this model exists to remove.
+ * Lay the measured extents out in the provisional order, with the dragged tab
+ * in `groupId`, and return each item's viewport centre. Deliberately NOT read
+ * from live DOM rects: those are mid spring animation, and feeding an animating
+ * rect back into the decision that drives the animation is the feedback loop
+ * this model exists to remove. In a strip with groups the centres are the ones
+ * the drag draws, which place each group's chrome where it now is.
  */
 function layOutProvisional(
   geometry: StripDragGeometry,
   contentOrigin: number,
-  targetIndex: number,
+  placement: { readonly targetIndex: number; readonly groupId: string | null },
 ): ReadonlyArray<LaidOutSlot> {
+  const { targetIndex, groupId } = placement;
   const ordered = provisionalStripOrder(
     geometry.slots,
     geometry.sourceIndex,
     targetIndex,
   );
+  if (laneGroupsOf(geometry).length > 0) {
+    const { offsets } = chromeLayoutFor(geometry, targetIndex, groupId);
+    return ordered.map((slot) => ({
+      slot,
+      centre:
+        contentOrigin +
+        slot.contentStart +
+        (offsets.get(slot.itemId) ?? 0) +
+        slot.extent / 2,
+    }));
+  }
   const originOffset = geometry.slots[0]?.contentStart ?? 0;
   const laidOut: LaidOutSlot[] = [];
   let cursor = contentOrigin + originOffset;
@@ -317,6 +412,98 @@ function previousTargetIndex(
   return previous === null ? geometry.sourceIndex : previous.targetIndex;
 }
 
+/** The groups whose membership the drag does not change. */
+function lockedGroupIds(geometry: StripDragGeometry): ReadonlySet<string> {
+  return new Set(
+    geometry.groups.filter((group) => group.locked).map((g) => g.groupId),
+  );
+}
+
+/** What a frame reads its neighbours with: the dragged centre, and the groups it cannot join. */
+interface Pass {
+  readonly locked: ReadonlySet<string>;
+  readonly centre: number;
+  readonly canSplit: boolean;
+}
+
+/**
+ * How many slots passing the neighbour on `step`'s side takes: one, once the
+ * centre reaches the neighbour's far quarter (its centre, for a neighbour with
+ * no middle to split on), or the whole run of a locked group the dragged tab is
+ * not in, which is passed as one unit at the run's own centre, so the dragged
+ * tab is never left inside it. 0 when the centre has not passed.
+ */
+function slotsCrossed(
+  laidOut: ReadonlyArray<LaidOutSlot>,
+  index: number,
+  step: 1 | -1,
+  pass: Pass,
+): number {
+  const { locked, centre } = pass;
+  if (index + step < 0 || index + step >= laidOut.length) return 0;
+  const first = laidOut[index + step];
+  const groupId = first.slot.groupId;
+  const run =
+    groupId !== null &&
+    locked.has(groupId) &&
+    groupId !== laidOut[index].slot.groupId
+      ? runLength(laidOut, index + step, step, groupId)
+      : 1;
+  const middle =
+    run === 1 && pass.canSplit && first.slot.isMergeTarget
+      ? first.slot.extent * SPLIT_ZONE_RADIUS
+      : 0;
+  const threshold =
+    (run === 1
+      ? first.centre
+      : centreOfRun(first, laidOut[index + step * run])) +
+    step * middle;
+  const passed = step === 1 ? centre > threshold : centre < threshold;
+  return passed ? run : 0;
+}
+
+/** The centre of the span from one laid-out slot to another, either order. */
+function centreOfRun(first: LaidOutSlot, last: LaidOutSlot): number {
+  const edges = [first, last].flatMap((entry) => [
+    entry.centre - entry.slot.extent / 2,
+    entry.centre + entry.slot.extent / 2,
+  ]);
+  return (Math.min(...edges) + Math.max(...edges)) / 2;
+}
+
+/** The slots from `from` going `step` that share `groupId`. */
+function runLength(
+  laidOut: ReadonlyArray<LaidOutSlot>,
+  from: number,
+  step: 1 | -1,
+  groupId: string,
+): number {
+  let count = 0;
+  while (laidOut[from + step * count]?.slot.groupId === groupId) count += 1;
+  return count;
+}
+
+/**
+ * The indices the dragged tab can settle at: all of them, or a locked group's
+ * own run when it is one of that group's tabs, which reorders within the group
+ * and never leaves it.
+ */
+function movableRange(
+  geometry: StripDragGeometry,
+  locked: ReadonlySet<string>,
+): { readonly low: number; readonly high: number } {
+  const { slots, sourceIndex } = geometry;
+  const groupId = slots[sourceIndex]?.groupId ?? null;
+  if (groupId === null || !locked.has(groupId)) {
+    return { low: 0, high: Math.max(slots.length - 1, 0) };
+  }
+  let low = sourceIndex;
+  while (slots[low - 1]?.groupId === groupId) low -= 1;
+  let high = sourceIndex;
+  while (slots[high + 1]?.groupId === groupId) high += 1;
+  return { low, high };
+}
+
 /**
  * Settle the insertion index by crossing one boundary at a time. Iterated, so a
  * single fast frame spanning three tabs lands three deterministic single
@@ -327,69 +514,79 @@ function settleTargetIndex(
   geometry: StripDragGeometry,
   contentOrigin: number,
   startIndex: number,
-  centre: number,
+  dragged: {
+    readonly centre: number;
+    readonly groupId: string | null;
+    readonly canSplit: boolean;
+  },
 ): number {
-  const lastIndex = geometry.slots.length - 1;
-  let index = Math.min(Math.max(startIndex, 0), Math.max(lastIndex, 0));
-  // Bounded by the slot count: each iteration moves the index one step and the
-  // thresholds are monotone, so this cannot cycle.
+  const { groupId } = dragged;
+  const locked = lockedGroupIds(geometry);
+  const pass: Pass = {
+    locked,
+    centre: dragged.centre,
+    canSplit: dragged.canSplit,
+  };
+  const { low, high } = movableRange(geometry, locked);
+  let index = Math.min(Math.max(startIndex, low), high);
+  // Bounded by the slot count: each iteration moves the index at least one step
+  // and the thresholds are monotone, so this cannot cycle.
   for (let guard = 0; guard <= geometry.slots.length; guard += 1) {
-    const laidOut = layOutProvisional(geometry, contentOrigin, index);
-    if (index + 1 < laidOut.length) {
-      const right = laidOut[index + 1];
-      if (centre > right.centre) {
-        index += 1;
-        continue;
-      }
+    const laidOut = layOutProvisional(geometry, contentOrigin, {
+      targetIndex: index,
+      groupId,
+    });
+    const forward = slotsCrossed(laidOut, index, 1, pass);
+    if (forward > 0 && index + forward <= high) {
+      index += forward;
+      continue;
     }
-    if (index - 1 >= 0) {
-      const left = laidOut[index - 1];
-      if (centre < left.centre) {
-        index -= 1;
-        continue;
-      }
+    const back = slotsCrossed(laidOut, index, -1, pass);
+    if (back > 0 && index - back >= low) {
+      index -= back;
+      continue;
     }
     return index;
   }
   return index;
 }
 
-interface MergeCandidateResult {
+interface SplitCandidateResult {
   readonly slot: StripSlot;
   readonly side: MergeSide;
 }
 
 /**
- * The mergeable neighbour whose slot the dragged tab's centre is currently
- * inside, or null. Candidacy is purely positional - centre inside a
- * neighbour's provisional slot - with NO travel-direction filter: after a
- * swap, the passed tab sits a full `sourceExtent` behind the dragged centre,
- * so it can only re-arm when the centre genuinely re-enters its half (a
- * narrow tab still overlapping a wide neighbour it just passed, or the user
- * reversing onto it). Filtering by net travel instead re-created the dead
- * zone the module doc forbids: reverse after a swap and the tab visibly sat
- * on the neighbour's half with nothing highlighted. Both neighbours are
- * candidates; the nearer one wins on a strip narrow enough for both slots to
- * contain the centre. A candidate AHEAD of the dragged tab is approached from
- * its start (the dragged tab would take the pair's left side); one behind is
- * the mirror.
+ * The mergeable neighbour whose MIDDLE HALF the dragged tab's centre is
+ * currently inside, or null. Candidacy is purely positional - centre within
+ * `SPLIT_ZONE_RADIUS` of a neighbour's drawn centre - with NO travel-direction
+ * filter: a passed tab sits a whole tab and gap behind the dragged centre, so
+ * it can only become the target again when the centre genuinely re-enters its
+ * middle, which is the user reversing onto it. Filtering by net travel instead
+ * re-created the dead zone the module doc forbids: reverse after a pass and the
+ * tab visibly sat on the neighbour with nothing highlighted.
+ * Both neighbours are candidates; the nearer one wins on a strip narrow enough
+ * for both middles to contain the centre. A candidate AHEAD of the dragged tab
+ * is approached from its start (the dragged tab would take the pair's left
+ * side); one behind is the mirror.
  */
-function mergeCandidate(
-  geometry: StripDragGeometry,
-  contentOrigin: number,
+function splitCandidate(
+  laidOut: ReadonlyArray<LaidOutSlot>,
   targetIndex: number,
   centre: number,
-): MergeCandidateResult | null {
-  const laidOut = layOutProvisional(geometry, contentOrigin, targetIndex);
+): SplitCandidateResult | null {
   const candidateIndices = [targetIndex - 1, targetIndex + 1];
-  let best: MergeCandidateResult | null = null;
+  let best: SplitCandidateResult | null = null;
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const index of candidateIndices) {
     if (index < 0 || index >= laidOut.length) continue;
     const neighbour = laidOut[index];
     if (!neighbour.slot.isMergeTarget) continue;
     const distance = Math.abs(centre - neighbour.centre);
-    if (distance <= neighbour.slot.extent / 2 && distance < bestDistance) {
+    if (
+      distance <= neighbour.slot.extent * SPLIT_ZONE_RADIUS &&
+      distance < bestDistance
+    ) {
       best = {
         slot: neighbour.slot,
         side: index > targetIndex ? "left" : "right",
@@ -401,44 +598,161 @@ function mergeCandidate(
 }
 
 /**
+ * The group whose block, or chip and tabs, the dragged centre is inside: what
+ * is drawn on screen, which does not move as the tabs slide. Only the dragged
+ * tab's own section counts; the pointer can stray past it, but the tab cannot.
+ */
+function groupAt(
+  geometry: StripDragGeometry,
+  contentOrigin: number,
+  centre: number,
+): string | null {
+  return (
+    laneGroupsOf(geometry).find(
+      (group) =>
+        centre >= contentOrigin + group.start &&
+        centre < contentOrigin + group.end,
+    )?.groupId ?? null
+  );
+}
+
+/**
+ * The group a drop at `targetIndex` lands in, `inside` being the group the
+ * dragged centre is inside. Position decides: between two tabs of one group it
+ * is that group; at the edge of a group it is `inside` when that group is a
+ * neighbour of the drop, so the side of the boundary the centre is on decides.
+ * A collapsed group draws no tab to be a neighbour of, so its header takes the
+ * drop alone. A locked group is the exception to all of it: its tab keeps its
+ * group wherever it is dropped, and nothing else joins it.
+ */
+function dropGroupId(
+  geometry: StripDragGeometry,
+  laidOut: ReadonlyArray<LaidOutSlot>,
+  targetIndex: number,
+  inside: string | null,
+): string | null {
+  const locked = lockedGroupIds(geometry);
+  const sourceGroupId = geometry.slots[geometry.sourceIndex]?.groupId ?? null;
+  if (sourceGroupId !== null && locked.has(sourceGroupId)) return sourceGroupId;
+  const before = laidOut[targetIndex - 1]?.slot.groupId ?? null;
+  const after = laidOut[targetIndex + 1]?.slot.groupId ?? null;
+  let groupId: string | null = null;
+  if (before !== null && before === after) groupId = before;
+  else if (inside === before || inside === after) groupId = inside;
+  else if (!geometry.slots.some((slot) => slot.groupId === inside)) {
+    groupId = inside;
+  }
+  return groupId !== null && locked.has(groupId) ? null : groupId;
+}
+
+/** How often a frame settles the index and the dragged tab's group against each other. */
+const SETTLE_PASSES = 3;
+
+/**
+ * The insertion index and the group the drop lands in, and the strip laid out
+ * for them. Each depends on the other - the group the dragged tab is in moves
+ * the neighbours it swaps with, and the index decides which group is beside it -
+ * so the group of the previous frame (the source's own to begin with) starts the
+ * index settling, the group is read off the result, and the two repeat until
+ * they agree. Passing a neighbour needs the dragged centre past where that
+ * neighbour is drawn, and a group's chrome only ever moves it away from the
+ * centre that has just passed, so the pass settles in a step or two.
+ */
+function settleDrop(input: {
+  readonly geometry: StripDragGeometry;
+  readonly contentOrigin: number;
+  readonly previous: StripDragState | null;
+  readonly centre: number;
+  readonly canSplit: boolean;
+}): {
+  readonly targetIndex: number;
+  readonly groupId: string | null;
+  readonly laidOut: ReadonlyArray<LaidOutSlot>;
+} {
+  const { geometry, contentOrigin, previous, centre } = input;
+  let groupId =
+    previous === null
+      ? (geometry.slots[geometry.sourceIndex]?.groupId ?? null)
+      : previous.groupId;
+  let targetIndex = previousTargetIndex(geometry, previous);
+  for (let pass = 0; pass < SETTLE_PASSES; pass += 1) {
+    targetIndex = settleTargetIndex(geometry, contentOrigin, targetIndex, {
+      centre,
+      groupId,
+      canSplit: input.canSplit,
+    });
+    const laidOut = layOutProvisional(geometry, contentOrigin, {
+      targetIndex,
+      groupId,
+    });
+    const settled = dropGroupId(
+      geometry,
+      laidOut,
+      targetIndex,
+      groupAt(geometry, contentOrigin, centre),
+    );
+    if (settled === groupId) return { targetIndex, groupId, laidOut };
+    groupId = settled;
+  }
+  return {
+    targetIndex,
+    groupId,
+    laidOut: layOutProvisional(geometry, contentOrigin, {
+      targetIndex,
+      groupId,
+    }),
+  };
+}
+
+/**
  * The whole gesture in one pure step. Same inputs always give the same output,
- * which is what makes the monotonicity and hysteresis properties testable
+ * which is what makes the monotonicity and no-flicker properties testable
  * without a browser.
  */
 export function resolveStripDragState(
   input: ResolveStripDragInput,
 ): StripDragState {
-  const { geometry, contentOrigin, pointer, previous } = input;
+  const { geometry, contentOrigin, pointer, previous, canSplit } = input;
   if (geometry.slots.length === 0) {
-    return { kind: "reorder", targetIndex: 0 };
+    return {
+      kind: "reorder",
+      targetIndex: 0,
+      groupId: null,
+      joinsGroup: false,
+    };
   }
   // The overlay's centre: where the user sees the tab, offset from the pointer
   // by the constant grab offset. See the module doc for why zones must follow
   // this and not the raw pointer.
   const draggedCentre =
     pointer - geometry.grabOffset + geometry.sourceExtent / 2;
-  const targetIndex = settleTargetIndex(
+  const { targetIndex, groupId, laidOut } = settleDrop({
     geometry,
     contentOrigin,
-    previousTargetIndex(geometry, previous),
-    draggedCentre,
-  );
-  const candidate = mergeCandidate(
-    geometry,
-    contentOrigin,
-    targetIndex,
-    draggedCentre,
-  );
-  if (candidate === null) {
-    // Off every mergeable half: plain reorder at this very pointer position,
-    // so the merge-to-reorder transition is continuous rather than a jump.
-    return { kind: "reorder", targetIndex };
+    previous,
+    centre: draggedCentre,
+    canSplit,
+  });
+  const candidate = canSplit
+    ? splitCandidate(laidOut, targetIndex, draggedCentre)
+    : null;
+  if (candidate !== null) {
+    return {
+      kind: "merge",
+      targetIndex,
+      groupId,
+      targetItemId: candidate.slot.itemId,
+      targetSide: candidate.side,
+    };
   }
+  // Off every mergeable middle: a plain reorder at this very pointer position,
+  // drawn the same as the split it may have just left, so nothing jumps.
+  const sourceGroupId = geometry.slots[geometry.sourceIndex]?.groupId ?? null;
   return {
-    kind: "merge",
+    kind: "reorder",
     targetIndex,
-    targetItemId: candidate.slot.itemId,
-    targetSide: candidate.side,
+    groupId,
+    joinsGroup: groupId !== null && groupId !== sourceGroupId,
   };
 }
 
@@ -460,6 +774,53 @@ export function reconstructionErrorPx(slots: ReadonlyArray<StripSlot>): number {
 }
 
 /**
+ * The slots of the source item's own lane, each one's `advance` measured to
+ * the next slot of that lane. A lane is one contiguous run of the strip, so
+ * the model reorders it as a strip of its own; a source in no lane (or a strip
+ * with none) leaves the slots as measured.
+ */
+export function laneSlotsOf(
+  slots: ReadonlyArray<StripSlot>,
+  sourceItemId: string,
+): ReadonlyArray<StripSlot> {
+  const lane = slots.find((slot) => slot.itemId === sourceItemId)?.lane ?? null;
+  if (lane === null) return slots;
+  const inLane = slots.filter((slot) => slot.lane === lane);
+  return inLane.map((slot, index) => ({
+    ...slot,
+    advance:
+      index + 1 < inLane.length
+        ? inLane[index + 1].contentStart - slot.contentStart
+        : slot.extent,
+  }));
+}
+
+/**
+ * The viewport range, along the main axis, of the source's lane, which the
+ * dragged item never leaves; `null` when the source is in no lane.
+ */
+export function laneBoundsOf(
+  geometry: StripDragGeometry,
+  contentOrigin: number,
+): { readonly start: number; readonly end: number } | null {
+  const first = geometry.slots.at(0);
+  const last = geometry.slots.at(-1);
+  const source = geometry.slots.at(geometry.sourceIndex);
+  if (
+    first === undefined ||
+    last === undefined ||
+    source === undefined ||
+    source.lane === null
+  ) {
+    return null;
+  }
+  return {
+    start: contentOrigin + first.contentStart,
+    end: contentOrigin + last.contentStart + last.extent,
+  };
+}
+
+/**
  * Re-measure after the strip's item list changed mid-drag (agent activity opens
  * tabs). The source is tracked by id, not index, because everything around it
  * may have shifted. Returns null when the dragged item is gone, which the caller
@@ -468,6 +829,7 @@ export function reconstructionErrorPx(slots: ReadonlyArray<StripSlot>): number {
 export function remapGeometryToSlots(
   geometry: StripDragGeometry,
   slots: ReadonlyArray<StripSlot>,
+  groups: ReadonlyArray<StripGroupExtent>,
 ): StripDragGeometry | null {
   if (
     geometry.sourceIndex < 0 ||
@@ -476,7 +838,10 @@ export function remapGeometryToSlots(
     return null;
   }
   const sourceItemId = geometry.slots[geometry.sourceIndex].itemId;
-  const sourceIndex = slots.findIndex((slot) => slot.itemId === sourceItemId);
+  const laneSlots = laneSlotsOf(slots, sourceItemId);
+  const sourceIndex = laneSlots.findIndex(
+    (slot) => slot.itemId === sourceItemId,
+  );
   if (sourceIndex < 0) return null;
-  return { ...geometry, slots, sourceIndex };
+  return { ...geometry, slots: laneSlots, groups, sourceIndex };
 }

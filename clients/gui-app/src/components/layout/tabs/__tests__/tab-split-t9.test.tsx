@@ -394,9 +394,10 @@ describe("T9 split interactions", () => {
       ),
     ).toBeNull();
     expect(
-      tabCommandCoordinator.reorderStripItem({
+      tabCommandCoordinator.moveStripItem({
         itemId: "split-a",
         targetIndex: 2,
+        groupId: null,
       }),
     ).toBe(true);
     expect(useTabsStore.getState().items.map((item) => item.id)).toEqual([

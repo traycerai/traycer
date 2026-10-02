@@ -36,6 +36,7 @@ import { CommandPaletteProvider } from "@/providers/command-palette-provider";
 import { HostCredentialProvisionProvider } from "@/providers/host-credential-provision-provider";
 import { ComposerRunSettingsPersistLifecycleBridge } from "@/providers/composer-run-settings-persist-lifecycle-bridge";
 import { SurfaceHostSelectionPersistLifecycleBridge } from "@/providers/surface-host-selection-persist-lifecycle-bridge";
+import { ProfileCopyOperationsPersistLifecycleBridge } from "@/providers/profile-copy-operations-persist-lifecycle-bridge";
 import { GithubMentionFiltersPersistLifecycleBridge } from "@/providers/github-mention-filters-persist-lifecycle-bridge";
 import { ComposerHarnessMemoryPersistLifecycleBridge } from "@/providers/composer-harness-memory-persist-lifecycle-bridge";
 import { WorktreeIntentMemoryPersistLifecycleBridge } from "@/providers/worktree-intent-memory-persist-lifecycle-bridge";
@@ -273,6 +274,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
           <EpicSessionLifecycleBridge>
             <ComposerRunSettingsPersistLifecycleBridge>
               <SurfaceHostSelectionPersistLifecycleBridge>
+                <ProfileCopyOperationsPersistLifecycleBridge />
                 <GithubMentionFiltersPersistLifecycleBridge>
                   <ComposerHarnessMemoryPersistLifecycleBridge>
                     <WorktreeIntentMemoryPersistLifecycleBridge>
