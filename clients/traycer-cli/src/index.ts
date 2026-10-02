@@ -2338,17 +2338,26 @@ function registerServiceCommands(host: Command): void {
 // `host lifecycle get | set <mode>` - the CLI half of the host lifecycle
 // setting Traycer Desktop shows in Settings (see commands/host-lifecycle.ts).
 function registerHostLifecycleCommands(host: Command): void {
+  const modeHelp = `
+Modes:
+  background    Start the host when you log in. Keep work running after you quit Traycer Desktop.
+  linked        Start the host when you open Traycer Desktop. Quitting stops work on this host.
+  ask           Start the host with Traycer Desktop. When you quit, ask whether to keep work running or stop it.
+  stop-if-idle  Start the host with Traycer Desktop. When you quit, stop if nothing is running; otherwise, ask.
+  none          Don't start a host on this machine. Use Traycer Desktop to connect to remote hosts instead.
+`;
   const lifecycle = host
     .command("lifecycle")
     .description(
-      "Show or choose how the host's lifetime follows Traycer Desktop: background (starts at login, keeps running), linked (starts and stops with the app), ask, stop-if-idle, or none (no local host)",
-    );
+      "Show or change when the host starts and what happens to running work when you quit Traycer Desktop",
+    )
+    .addHelpText("after", modeHelp);
 
   withRunner(
     lifecycle
       .command("get")
       .description(
-        "Show the lifecycle mode, the desktop presence, who started and owns the running host, and whether the running supervisor enforces the mode. Read-only.",
+        "Show the current mode, whether Traycer Desktop is open, how the host was started, and whether it supports the selected mode.",
       ),
     () => hostLifecycleGetCommand,
   );
@@ -2357,9 +2366,10 @@ function registerHostLifecycleCommands(host: Command): void {
     lifecycle
       .command("set")
       .description(
-        "Choose the lifecycle mode. Nothing is started or stopped, and 'none' does not stop a running host. The mode applies to the next unattended host start. Choosing a mode other than background also brings the registered service definition to the current launcher (as 'traycer host service refresh' does), so login starts can be parked.",
+        "Choose when the host starts and what happens when you quit Traycer Desktop. This command does not start or stop the host, even when you choose 'none'. The mode applies the next time the host starts automatically. Startup settings are also updated when needed so the host only starts at login in background mode.",
       )
-      .argument("<mode>", "background | linked | ask | stop-if-idle | none"),
+      .argument("<mode>", "background | linked | ask | stop-if-idle | none")
+      .addHelpText("after", modeHelp),
     (_opts, args) =>
       buildHostLifecycleSetCommand({
         mode: args[0],

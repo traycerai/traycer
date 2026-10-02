@@ -54,31 +54,31 @@ export function hostLifecycleOptionCopy(
     {
       mode: "background",
       label: "Keep the host running in the background",
-      description: `Agents keep working after you quit, and your phone can still reach this ${machine}. The host starts at login.`,
+      description: `Agents keep working after you quit Traycer. You can still connect to this ${machine} from your other devices. The host starts when you log in.`,
     },
     {
       mode: "ask",
       label: "Ask me each time",
       description:
-        "If anything is running you choose whether to keep it going. The host starts with the app.",
+        "When you quit Traycer, choose whether to keep work running or stop it. The host starts when you open Traycer.",
     },
     {
       mode: "stop-if-idle",
       label: "Stop the host if nothing is running, otherwise ask",
       description:
-        "Quit is instant when the host is idle. The host starts with the app.",
+        "When you quit Traycer, the host stops if nothing is running. Otherwise, you choose whether to keep work running or stop it. The host starts when you open Traycer.",
     },
     {
       mode: "linked",
       label: "Stop the host with the app",
       description:
-        "Quitting ends any running agents. The host starts and stops with Traycer, like Docker Desktop's engine.",
+        "The host starts when you open Traycer. Quitting stops agents, terminals and other work running on this host.",
     },
     {
       mode: "none",
       label: `Don't run a host on this ${machine}`,
       description:
-        "Traycer connects only to remote hosts. Use this if your host runs in WSL or on another machine.",
+        "Traycer connects only to remote hosts, where your agents and terminals run. No host starts when you open Traycer on this machine.",
     },
   ];
 }
