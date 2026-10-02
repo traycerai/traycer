@@ -263,6 +263,10 @@ interface Scenario {
   awaitLogin: (
     dispatch: HostRpcDispatch,
   ) => Promise<ProvidersAwaitLoginResponse>;
+  /** When set, `providers.ensurePack` rejects with it instead of answering. */
+  ensurePackFailure: Error | null;
+  /** What `providers.touchLogin` (the paste-code keepalive) answers. */
+  touchLogin: (dispatch: HostRpcDispatch) => Promise<{ extended: boolean }>;
   /** What `providers.submitLoginCode` answers; the pasted-code path rides the dispatch seam. */
   submitLoginCode: (
     dispatch: HostRpcDispatch,
@@ -287,6 +291,8 @@ function defaultScenario(): Scenario {
     startAnswers: [startAnswer({ profileId: "prof_new" })],
     awaitLogin: () =>
       Promise.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) })),
+    ensurePackFailure: null,
+    touchLogin: () => Promise.resolve({ extended: true }),
     submitLoginCode: () => Promise.resolve({ outcome: "accepted" }),
   };
 }
@@ -351,10 +357,12 @@ function expectStartDispatch(dispatch: HostRpcDispatch): void {
   expect(dispatch.signal).toBeInstanceOf(AbortSignal);
 }
 
-function ensurePackCalls(): (typeof rpcMock.mock.calls)[number][] {
-  return rpcMock.mock.calls.filter(
-    (call) => call[0] === "providers.ensurePack",
-  );
+function ensurePackCalls(): DispatchCall[] {
+  return callsTo("providers.ensurePack");
+}
+
+function touchCalls(): DispatchCall[] {
+  return callsTo("providers.touchLogin");
 }
 
 const LIST_DISPATCH: HostRpcDispatch = {
@@ -528,16 +536,10 @@ beforeEach(() => {
   scenario = defaultScenario();
   startIndex = 0;
   listReads = 0;
-  rpcMock.mockImplementation((method) => {
-    switch (method) {
-      case "providers.touchLogin":
-        return Promise.resolve({ extended: true });
-      case "providers.ensurePack":
-        return Promise.resolve({ managedInstallState: null });
-      default:
-        return Promise.reject(new Error(`unexpected rpc ${method}`));
-    }
-  });
+  // Every host call rides the dispatch seam; the plain RPC helper is never used.
+  rpcMock.mockImplementation((method) =>
+    Promise.reject(new Error(`unexpected rpc ${method}`)),
+  );
   dispatchMock.mockImplementation((method, _params, dispatch) => {
     switch (method) {
       case "providers.list":
@@ -554,6 +556,12 @@ beforeEach(() => {
         return scenario.submitLoginCode(dispatch);
       case "providers.setEnabled":
         return Promise.resolve({ state: mutationState(signedInState([])) });
+      case "providers.ensurePack":
+        return scenario.ensurePackFailure === null
+          ? Promise.resolve({ managedInstallState: null })
+          : Promise.reject(scenario.ensurePackFailure);
+      case "providers.touchLogin":
+        return scenario.touchLogin(dispatch);
       default:
         return Promise.reject(new Error(`unexpected dispatch ${method}`));
     }
@@ -1393,9 +1401,11 @@ describe("start answers", () => {
       makeCtx(false, false),
     );
 
-    const ensures = ensurePackCalls();
-    expect(ensures).toHaveLength(1);
-    expect(ensures[0]?.[1]).toEqual({ providerId: "claude-code" });
+    const [, ensureParams, ensureDispatch] = onlyCallTo("providers.ensurePack");
+    expect(ensureParams).toEqual({ providerId: "claude-code" });
+    // The retry rides the run's abort signal, so Ctrl+C cuts it short.
+    expect(ensureDispatch.signal).toBeInstanceOf(AbortSignal);
+    expect(ensureDispatch.failFast).toBe(false);
     expect(callsTo("providers.startLogin")).toHaveLength(2);
     expect(callsTo("providers.awaitLogin")).toHaveLength(1);
     expect(result.exitCode).toBe(0);
@@ -1419,7 +1429,8 @@ describe("start answers", () => {
       makeCtx(false, false),
     );
 
-    expect(ensurePackCalls()).toHaveLength(1);
+    const [, , ensureDispatch] = onlyCallTo("providers.ensurePack");
+    expect(ensureDispatch.signal).toBeInstanceOf(AbortSignal);
     expect(callsTo("providers.startLogin")).toHaveLength(2);
     expect(callsTo("providers.awaitLogin")).toHaveLength(0);
     expect(result.exitCode).toBe(1);
@@ -1493,14 +1504,7 @@ describe("start answers", () => {
       }),
       startAnswer({ profileId: "prof_new" }),
     ];
-    rpcMock.mockImplementation((method) => {
-      switch (method) {
-        case "providers.ensurePack":
-          return Promise.reject(new Error("host refused the retry"));
-        default:
-          return Promise.reject(new Error(`unexpected rpc ${method}`));
-      }
-    });
+    scenario.ensurePackFailure = new Error("host refused the retry");
 
     const result = await runLogin(
       create("Work"),
@@ -2198,6 +2202,46 @@ describe("code paste", () => {
       throw new Error("unreachable: the stop and the fallback read both ran");
     }
     expect(stopOrder).toBeLessThan(fallbackOrder);
+  });
+
+  it("aborts a keepalive touch still in flight when the wait settles", async () => {
+    // Only the interval is faked, so the waits below keep their real timers.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      scenario.listState = listState({ ...NO_PROFILES, codePaste: true });
+      const settled = deferred<ProvidersAwaitLoginResponse>();
+      scenario.awaitLogin = () => settled.promise;
+      const touch = deferred<{ extended: boolean }>();
+      scenario.touchLogin = () => touch.promise;
+      const fake = makeIo(true);
+
+      const run = runLogin(create("Work"), fake, makeCtx(false, false));
+      await vi.waitFor(() => {
+        expect(callsTo("providers.awaitLogin")).toHaveLength(1);
+      });
+      expect(touchCalls()).toHaveLength(0);
+      vi.advanceTimersByTime(60_000);
+
+      const [, touchParams, touchDispatch] = onlyCallTo("providers.touchLogin");
+      expect(touchParams).toEqual({
+        providerId: "claude-code",
+        profileId: "prof_new",
+      });
+      const touchSignal = touchDispatch.signal;
+      expect(touchSignal).toBeInstanceOf(AbortSignal);
+      expect(touchSignal?.aborted).toBe(false);
+
+      // The touch never answers; the sign-in settling must still end the command.
+      settled.resolve(awaitResult({ state: signedInState([NEW_PROFILE]) }));
+      const result = await run;
+
+      expect(result.exitCode).toBe(0);
+      expect(touchSignal?.aborted).toBe(true);
+      vi.advanceTimersByTime(120_000);
+      expect(touchCalls()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("prints the paste hint only when a reader was returned", async () => {

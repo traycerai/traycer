@@ -13,7 +13,6 @@ import type {
 } from "../../../shared/host-transport/host-messenger";
 import { openInBrowser } from "../auth/login-flow";
 import {
-  callHostRpc,
   callHostRpcWithDispatch,
   PLAIN_DISPATCH,
   toAgentCliError,
@@ -387,28 +386,39 @@ async function runLogin(
       ? acceptPastedCode(ctx, io, providerId, heldProfileId, interrupt)
       : null;
     announce(ctx, io, state, answer, stopPaste !== null);
+    // Ticks stop and a touch still in flight is aborted the moment the wait
+    // settles, so no call outlives the outcome and holds the process open.
+    const touches = new AbortController();
     const keepalive = !acceptsPastedCode
       ? null
       : setInterval(() => {
-          void callHostRpc("providers.touchLogin", {
-            providerId,
-            profileId: heldProfileId,
-          }).catch(() => undefined);
+          void callHostRpcWithDispatch(
+            "providers.touchLogin",
+            { providerId, profileId: heldProfileId },
+            { ...PLAIN_DISPATCH, signal: touches.signal },
+          ).catch(() => undefined);
         }, KEEPALIVE_INTERVAL_MS);
+    const stopKeepalive = (): void => {
+      if (keepalive !== null) clearInterval(keepalive);
+      touches.abort();
+    };
     try {
       const result = await awaitUntilSettled(
         io,
         providerId,
         heldProfileId,
         abort.signal,
-      ).finally(() => stopPaste?.());
+      ).finally(() => {
+        stopKeepalive();
+        stopPaste?.();
+      });
       if (result === null) {
         await release();
         return { status: "cancelled" };
       }
       return await outcomeOf(providerId, target, heldProfileId, result);
     } finally {
-      if (keepalive !== null) clearInterval(keepalive);
+      stopKeepalive();
     }
   } catch (error) {
     // A call failed partway: the start timed out after the host had begun
@@ -474,9 +484,11 @@ async function startUntilSettled(
       // GUI's retry button uses), once, and best effort: the next answer
       // reports the pack either way.
       packRetried = true;
-      await callHostRpc("providers.ensurePack", {
-        providerId: request.providerId,
-      }).catch(() => undefined);
+      await callHostRpcWithDispatch(
+        "providers.ensurePack",
+        { providerId: request.providerId },
+        { ...PLAIN_DISPATCH, signal },
+      ).catch(() => undefined);
       continue;
     }
     if (answer.pending === null || signal.aborted) return answer;
