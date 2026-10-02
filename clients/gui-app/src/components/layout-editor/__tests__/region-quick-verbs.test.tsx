@@ -26,6 +26,7 @@ import {
   SIZED_VERBS,
 } from "@/components/layout-editor/regions/region-grammar";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { NESTED_CONTEXT_MENU_PROPS } from "@/lib/dom/nested-context-menu";
 import { PRESET_VALUES } from "@/lib/layout/layout-presets";
 import type { RegionId } from "@/lib/layout/region-id";
 import {
@@ -509,6 +510,49 @@ describe("a press the operating system's own menu serves", () => {
       expect(event.defaultPrevented).toBe(false);
       expect(verbsShowing()).toBe(false);
     }
+  });
+
+  // The transcript's web links own an app menu of their own. The stand-down
+  // above would stop their press before React sees it, so they carry the
+  // nested-menu mark that lets it through.
+  it("lets a link that marks its own menu open that menu instead of standing down", () => {
+    render(
+      <LayoutClusterContextMenu>
+        <div data-testid="dock">
+          <span data-layout-region="changedFiles" data-testid="row">
+            <ContextMenu>
+              <ContextMenuTrigger asChild {...NESTED_CONTEXT_MENU_PROPS}>
+                <a href="https://example.com" data-testid="menu-link">
+                  with a menu
+                </a>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem data-testid="link-menu-item">
+                  Open in Browser
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+            <a href="https://example.com" data-testid="plain-link">
+              without one
+            </a>
+          </span>
+        </div>
+      </LayoutClusterContextMenu>,
+    );
+
+    const onMarkedLink = press(screen.getByTestId("menu-link"));
+
+    expect(screen.queryByTestId("link-menu-item")).not.toBeNull();
+    // The inner menu prevented the event, which is also what keeps the
+    // cluster's verbs from opening on top of it.
+    expect(onMarkedLink.defaultPrevented).toBe(true);
+    expect(verbsShowing()).toBe(false);
+
+    // A link without the mark is still the operating system's.
+    const onPlainLink = press(screen.getByTestId("plain-link"));
+
+    expect(onPlainLink.defaultPrevented).toBe(false);
+    expect(verbsShowing()).toBe(false);
   });
 
   it("leaves a press inside a text selection alone", () => {

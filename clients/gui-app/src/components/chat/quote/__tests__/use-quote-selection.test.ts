@@ -780,6 +780,37 @@ describe("useQuoteSelection - deferred mouseup read", () => {
     expect(result.current.snapshot).not.toBeNull();
   });
 
+  // macOS selects the word under the pointer on a right-click before the
+  // context menu opens; that selection is not a quote gesture.
+  it.each([
+    { name: "primary", button: 0, quotes: true },
+    { name: "middle", button: 1, quotes: false },
+    { name: "secondary", button: 2, quotes: false },
+  ])(
+    "reads the selection after a $name-button release only when it is the primary button",
+    async ({ button, quotes }) => {
+      const { container, paragraph } = makeContainerWithProse("Quotable text.");
+      const ref: { current: HTMLElement | null } = { current: container };
+      const { result } = renderHook(() =>
+        useQuoteSelection({ containerRef: ref, enabled: true }),
+      );
+      const range = document.createRange();
+      range.selectNodeContents(paragraph);
+      selectRange(range);
+
+      act(() => {
+        container.dispatchEvent(
+          new MouseEvent("mouseup", { bubbles: true, button }),
+        );
+      });
+      await act(async () => {
+        await flushFrame();
+      });
+
+      expect(result.current.snapshot !== null).toBe(quotes);
+    },
+  );
+
   it("cancels a pending deferred read when a new gesture starts", async () => {
     const { container, paragraph } = makeContainerWithProse("Quotable text.");
     const ref: { current: HTMLElement | null } = { current: container };

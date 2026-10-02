@@ -53,6 +53,7 @@ const neutralToast = vi.hoisted(() =>
     () => "toast-id",
   ),
 );
+const toastSuccess = vi.hoisted(() => vi.fn<(message: ReactNode) => string>());
 const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
   Promise.resolve({
     sessionId: "session-markdown",
@@ -61,11 +62,14 @@ const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
   }),
 );
 
-vi.mock("sonner", () => ({ toast: neutralToast }));
+vi.mock("sonner", () => ({
+  toast: Object.assign(neutralToast, { success: toastSuccess }),
+}));
 
 afterEach(() => {
   cleanup();
   neutralToast.mockClear();
+  toastSuccess.mockClear();
   openTab.mockClear();
   useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
@@ -574,6 +578,178 @@ describe("MarkdownAnchor", () => {
     fireEvent.click(link);
     expect(openFileLink).not.toHaveBeenCalled();
     expect(host.openedExternalLinks).toEqual([]);
+  });
+});
+
+describe("MarkdownAnchor right-click menu", () => {
+  const DOCS_HREF = "https://example.com/docs";
+
+  function openLinkMenu(name: string): void {
+    fireEvent.contextMenu(screen.getByRole("link", { name }));
+  }
+
+  function stubClipboard() {
+    const writeText = vi.fn<(text: string) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    return writeText;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("offers the browser choices and Copy Link on a web link", () => {
+    renderMarkdownWithBrowserRouting(
+      `[Docs](${DOCS_HREF})`,
+      createRunnerHost(),
+    );
+
+    openLinkMenu("Docs");
+
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Open in Browser", "Open in External Browser", "Copy Link"]);
+  });
+
+  it("leaves out Open in Browser where no canvas is behind the link", () => {
+    renderMarkdown(`[Docs](${DOCS_HREF})`, createRunnerHost());
+
+    openLinkMenu("Docs");
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Open in Browser" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: "Open in External Browser" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Copy Link" })).toBeTruthy();
+  });
+
+  it("opens the link in the OS browser from Open in External Browser", async () => {
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting(`[Docs](${DOCS_HREF})`, host);
+    openLinkMenu("Docs");
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Open in External Browser" }),
+    );
+
+    await waitFor(() => {
+      expect(host.openedExternalLinks).toEqual([DOCS_HREF]);
+    });
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it("opens the link in-app from Open in Browser, even when the setting says external", async () => {
+    useSettingsStore.setState({
+      linkOpen: {
+        default: "external",
+        markdown: "external",
+        terminal: "external",
+        github: "external",
+        image: "external",
+      },
+    });
+    const host = createRunnerHost();
+    renderMarkdownWithBrowserRouting(`[Docs](${DOCS_HREF})`, host);
+    openLinkMenu("Docs");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open in Browser" }));
+
+    await waitFor(() => {
+      expect(openTab).toHaveBeenCalledWith(null, DOCS_HREF);
+    });
+    expect(host.openedExternalLinks).toEqual([]);
+  });
+
+  it("copies the link from Copy Link without a success toast", async () => {
+    const writeText = stubClipboard();
+    renderMarkdown(`[Docs](${DOCS_HREF})`, createRunnerHost());
+    openLinkMenu("Docs");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Link" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(DOCS_HREF);
+    });
+    // The menu closing is the feedback; a toast on top would be noise.
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  describe("with a text selection", () => {
+    afterEach(() => {
+      window.getSelection()?.removeAllRanges();
+    });
+
+    function requireTextNode(node: Node | null): Text {
+      if (!(node instanceof Text)) throw new Error("Expected a text node.");
+      return node;
+    }
+
+    function selectRange(range: Range): void {
+      const selection = window.getSelection();
+      if (selection === null) throw new Error("Expected a document selection.");
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    function renderLinkInParagraph(): HTMLAnchorElement {
+      renderMarkdown(
+        `Read the [Docs](${DOCS_HREF}) before you start.`,
+        createRunnerHost(),
+      );
+      const link = screen.getByRole("link", { name: "Docs" });
+      if (!(link instanceof HTMLAnchorElement)) {
+        throw new Error("Expected an anchor.");
+      }
+      return link;
+    }
+
+    it("leaves the OS menu when the selection runs past the link", () => {
+      const link = renderLinkInParagraph();
+      const range = document.createRange();
+      range.setStart(requireTextNode(link.firstChild), 0);
+      range.setEnd(requireTextNode(link.nextSibling), " before".length);
+      selectRange(range);
+
+      // The app menu would default-prevent the event and hide the OS menu,
+      // which is the one that offers Copy for the wider selection.
+      const osMenuAllowed = fireEvent.contextMenu(link);
+
+      expect(osMenuAllowed).toBe(true);
+      expect(screen.queryAllByRole("menuitem")).toEqual([]);
+    });
+
+    it("still opens the menu when the selection is inside the link", () => {
+      const link = renderLinkInParagraph();
+      const range = document.createRange();
+      range.setStart(requireTextNode(link.firstChild), 1);
+      range.setEnd(requireTextNode(link.firstChild), "Docs".length);
+      selectRange(range);
+
+      fireEvent.contextMenu(link);
+
+      expect(
+        screen.getAllByRole("menuitem").map((item) => item.textContent),
+      ).toContain("Copy Link");
+    });
+  });
+
+  it.each([
+    ["a local file link", "[App](src/app.ts)", "App"],
+    ["a mailto link", "[Mail](mailto:someone@example.com)", "Mail"],
+  ])("keeps the OS menu for %s", (_name, markdown, linkName) => {
+    renderMarkdownWithBrowserRouting(markdown, createRunnerHost());
+    const link = screen.getByRole("link", { name: linkName });
+
+    // Radix prevents the event once its menu opens, which is what would keep
+    // the OS menu from showing; a link with no app menu leaves it alone.
+    const osMenuAllowed = fireEvent.contextMenu(link);
+
+    expect(osMenuAllowed).toBe(true);
+    expect(screen.queryAllByRole("menuitem")).toEqual([]);
   });
 });
 

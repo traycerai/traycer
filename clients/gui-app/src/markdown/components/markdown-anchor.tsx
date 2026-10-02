@@ -1,11 +1,13 @@
 import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import { toast } from "sonner";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { parseHttpUrl } from "@/lib/browser-view/browser-tab-display";
 import { useOpenLink } from "@/lib/links/open-link";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import { WebLinkContextMenu } from "@/markdown/components/web-link-context-menu";
 
 const MARKDOWN_LINK_REPORT_CONTEXT = createReportIssueContext({
   title: "Markdown link could not be opened",
@@ -121,7 +123,7 @@ export function MarkdownAnchor({
   // `title` is where a Markdown link title belongs. Routing it through the
   // app's tooltip surface would restyle author content as UI and strip the
   // attribute off the rendered anchor.
-  return (
+  const anchor = (
     <a
       href={navigableHref}
       className={className}
@@ -132,4 +134,10 @@ export function MarkdownAnchor({
       {children}
     </a>
   );
+  // Only a web link gets the app menu: its choices are about which browser
+  // opens it. File links and `mailto:` keep the OS menu.
+  const webUrl =
+    navigableHref === undefined ? null : parseHttpUrl(navigableHref.trim());
+  if (webUrl === null) return anchor;
+  return <WebLinkContextMenu url={webUrl.href}>{anchor}</WebLinkContextMenu>;
 }
