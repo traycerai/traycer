@@ -96,7 +96,7 @@ export function SubagentChatView(props: SubagentChatViewProps) {
       // z-10 with the tile's composer dock and after the transcript's own
       // z-10 chrome (the scroll pill) in tree order: the view covers the
       // transcript and the dock stays on top of it, still usable.
-      className="absolute inset-0 z-10 flex flex-col bg-background outline-none"
+      className="absolute inset-0 z-10 flex flex-col bg-canvas outline-none"
     >
       <SubagentChatBreadcrumb path={path ?? []} drillIn={drillIn} />
       <div
