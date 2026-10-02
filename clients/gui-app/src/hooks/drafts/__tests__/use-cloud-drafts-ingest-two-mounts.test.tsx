@@ -262,7 +262,7 @@ describe("useCloudDraftsIngest across mounts, on the real coordinator", () => {
     }
 
     // A third mount, after the mirrors are installed: the coordinator's
-    // settled record answers, and the per-mount set it starts with is empty.
+    // settled record answers, and that record is the only memory there is.
     mount();
     await nextTick();
     expect(readMock.pending).toHaveLength(3);
@@ -708,5 +708,48 @@ describe("useCloudDraftsIngest across mounts, on the real coordinator", () => {
       expect(landingIds()).toEqual(["draft-10", "draft-11", "draft-12"]);
     });
     expect(readMock.pending).toHaveLength(heads.length * 2);
+  });
+
+  it("the mount that ingested a head reads it again when its mirror leaves the store outside the sweep, and restores the mirror", async () => {
+    const listed = row("draft-20");
+    directoryMock.chats = [listed];
+
+    // ONE long-lived mount: it reads the head itself, so it is the mount
+    // that once held the head, not one that skipped a head another mount
+    // settled.
+    const view = mount();
+    await vi.waitFor(() => {
+      expect(readsFor("draft-20")).toHaveLength(1);
+    });
+    readsFor("draft-20")[0].resolve({ kind: "ok", record: HEAD });
+    await vi.waitFor(() => {
+      expect(landingIds()).toEqual(["draft-20"]);
+    });
+    expect(cloudDraftHeadSettled(listed)).toBe(true);
+
+    // The mirror leaves the store outside the absence sweep, as a delete
+    // route removes it. The coordinator notices the absence and forgets the
+    // head.
+    useLandingDraftStore.setState({
+      drafts: useLandingDraftStore
+        .getState()
+        .drafts.filter((draft) => draft.id !== "draft-20"),
+    });
+    expect(landingIds()).toEqual([]);
+
+    // A new delivery of the SAME row at the same publication time.
+    directoryMock.chats = [row("draft-20")];
+    view.rerender();
+
+    // The mount reads the head again: its own earlier read is no vote.
+    await vi.waitFor(() => {
+      expect(readsFor("draft-20")).toHaveLength(2);
+    });
+    expect(landingIds()).toEqual([]);
+    readsFor("draft-20")[1].resolve({ kind: "ok", record: HEAD });
+    await vi.waitFor(() => {
+      expect(landingIds()).toEqual(["draft-20"]);
+    });
+    expect(cloudDraftHeadSettled(directoryMock.chats[0])).toBe(true);
   });
 });

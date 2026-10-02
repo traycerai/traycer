@@ -1885,10 +1885,10 @@ export function cloudDraftIngestSeq(): number {
 }
 
 /**
- * The row's identity plus the head it currently publishes: the ingest hook's
- * per-mount key. `headSha256` is part of it because the identity alone is
- * stable across publishes: a newer head for the same draft must be a new key,
- * or the replica goes stale.
+ * The row's identity plus the head it currently publishes: the key a mount
+ * tracks its own in-flight reads under. `headSha256` is part of it because
+ * the identity alone is stable across publishes: a newer head for the same
+ * draft must be a new key, or the replica goes stale.
  */
 export function cloudDraftHeadKey(summary: CloudChatSummary): string {
   return `${cloudDraftIdentityKey(summary)}:${summary.headSha256}`;
@@ -1983,11 +1983,9 @@ function listingIsLaterThanRecord(
 /**
  * Whether `later` is a LATER publication time than `earlier`: the one rule
  * for "the same digest was republished since". Unknown on either side
- * compares as not later. Shared with the ingest hook, whose per-mount set
- * must not outvote this coordinator when it forgets a head for exactly this
- * reason.
+ * compares as not later.
  */
-export function publishedLaterThan(
+function publishedLaterThan(
   later: number | null,
   earlier: number | null,
 ): boolean {

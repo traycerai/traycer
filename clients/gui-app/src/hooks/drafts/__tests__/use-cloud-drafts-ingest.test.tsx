@@ -135,15 +135,8 @@ vi.mock("@/lib/drafts/cloud-draft-reader", () => ({
   readCloudDraft: (): Promise<{ kind: string; record: unknown }> =>
     readMock.read(),
 }));
-vi.mock("@/lib/drafts/draft-mirror-coordinator", async (importOriginal) => {
-  // The one real rule for "a later publication", shared with the hook: pulled
-  // from the coordinator rather than re-implemented here.
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/drafts/draft-mirror-coordinator")
-    >();
+vi.mock("@/lib/drafts/draft-mirror-coordinator", () => {
   return {
-    publishedLaterThan: actual.publishedLaterThan,
     cloudDraftHeadKey: (summary: CloudChatSummary): string =>
       `${summary.ownerHostId}:${summary.identity.taskId}:${summary.identity.ownerUserId}:${summary.identity.chatId}:${summary.headSha256}`,
     cloudDraftHeadSettled: (summary: CloudChatSummary): boolean =>
@@ -788,8 +781,11 @@ describe("useCloudDraftsIngest", () => {
     expect(ingestArgs.summary.headSha256).toBe(DIGEST_ONE);
     expect(ingestArgs.document).toBeDefined();
 
-    // Same head, new array reference each time: the key is already marked
-    // ingested, so no further ingest calls should happen.
+    // From here the coordinator answers as it does in production: the head
+    // is settled, and that settled record is what stops the re-read. Same
+    // head, new array reference each time, so no further ingest calls
+    // should happen.
+    settledMock.settled.mockReturnValue(true);
     directoryMock.chats = [summary(DIGEST_ONE, null)];
     view.rerender();
     directoryMock.chats = [summary(DIGEST_ONE, null)];
@@ -972,8 +968,9 @@ describe("useCloudDraftsIngest", () => {
     directoryMock.snapshotSeq = 4;
     directoryMock.chats = [summary(DIGEST_ONE, null)];
 
-    // A second mount of the hook (a new tab) starts with an empty per-mount
-    // set; the coordinator's record is what stops the fan-out.
+    // A second mount of the hook (a new tab) holds no memory of its own; the
+    // coordinator's record is the only memory, and it is what stops the
+    // fan-out.
     renderHook(() => useCloudDraftsIngest(CLIENT as never, HOST_ID));
     renderHook(() => useCloudDraftsIngest(CLIENT as never, HOST_ID));
 
@@ -1425,7 +1422,9 @@ describe("useCloudDraftsIngest", () => {
     expect(claimMock.begin.mock.calls[0][0]).toBe(row);
     expect(ingestMock.ingest.mock.calls[0][0].summary).toBe(row);
 
-    // The same abandon delivered again finds the key this mount now holds.
+    // The same abandon delivered again: the coordinator holds this mount's
+    // own claim and settlement now, and answers as it does in production.
+    settledMock.settled.mockReturnValue(true);
     deliverAbandon({ ...row }, "released");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(readMock.read).toHaveBeenCalledTimes(1);
@@ -1798,8 +1797,8 @@ describe("useCloudDraftsIngest", () => {
     noteHostMock.note.mockClear();
 
     // The same identity and digest listed again at a later publication time:
-    // the coordinator is asked first, and it answers false (it forgot the
-    // head), so this mount's own set must not outvote it.
+    // the coordinator is asked, and it answers false (it forgot the head), so
+    // the head is read again; this mount keeps no vote of its own.
     const republished = summary(DIGEST_ONE, { publishedAt: 9 });
     directoryMock.chats = [republished];
     view.rerender();
@@ -1820,7 +1819,7 @@ describe("useCloudDraftsIngest", () => {
     expect(noteHostMock.note.mock.calls[0][0]).toBe(republished);
   });
 
-  it("keeps skipping a head this mount already ingested when it is listed again at the same or an earlier publication time and the coordinator does not hold it", async () => {
+  it("reads a head this mount already ingested again whenever the coordinator no longer holds it, at the same, an earlier or a null publication time", async () => {
     readMock.read.mockResolvedValue({ kind: "ok", record: HEAD });
     ingestMock.ingest.mockResolvedValue(undefined);
     directoryMock.chats = [summary(DIGEST_ONE, null)];
@@ -1839,18 +1838,24 @@ describe("useCloudDraftsIngest", () => {
       summary(DIGEST_ONE, { publishedAt: 0 }),
       summary(DIGEST_ONE, { publishedAt: null }),
     ];
+    // The coordinator is the only memory: this mount ingested the head once,
+    // but the coordinator no longer holds it (settled answers false), so
+    // every listing is read again, whatever its publication time.
+    let expectedReads = 1;
     for (const listing of listings) {
       noteHostMock.note.mockClear();
       directoryMock.chats = [listing];
       view.rerender();
+      expectedReads += 1;
 
       await vi.waitFor(() => {
-        expect(noteHostMock.note).toHaveBeenCalledTimes(1);
+        expect(ingestMock.ingest).toHaveBeenCalledTimes(expectedReads);
       });
+      // The only note is this listing's read start.
+      expect(noteHostMock.note).toHaveBeenCalledTimes(1);
       expect(noteHostMock.note).toHaveBeenCalledWith(listing, HOST_ID);
-      expect(readMock.read).toHaveBeenCalledTimes(1);
-      expect(claimMock.begin).toHaveBeenCalledTimes(1);
-      expect(ingestMock.ingest).toHaveBeenCalledTimes(1);
+      expect(readMock.read).toHaveBeenCalledTimes(expectedReads);
+      expect(claimMock.begin).toHaveBeenCalledTimes(expectedReads);
     }
   });
 
