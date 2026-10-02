@@ -588,7 +588,7 @@ class RuntimeHostMessenger<
     };
     unsubscribeAvailability = session.subscribeAvailabilityRecovered(() => {
       // Positive evidence beats any recorded verdict: the host is back
-      // (updated, re-entitled, re-keyed), so stop rejecting its requests.
+      // (updated, re-keyed), so stop rejecting its requests.
       this.terminalVerdictByHost.delete(hostId);
       this.onRemoteAvailabilityRecovered(hostId);
       if (released) {

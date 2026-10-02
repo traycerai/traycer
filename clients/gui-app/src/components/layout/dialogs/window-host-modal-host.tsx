@@ -411,7 +411,7 @@ function resolveUpdateHost(
   if (variant.kind !== "update-host") return null;
   // `canManageHost` asks "is the TARGET this machine"; the card asks "which
   // host is incompatible". Arm 1 of `deriveNoHostVariant` makes those the same
-  // host, arm 3 does not - so `canManageHost` alone is a guard argued against
+  // host, arm 2 does not - so `canManageHost` alone is a guard argued against
   // only the population it can see. Without this line the button offers to
   // update the host the card names and re-provisions THIS machine instead.
   //

@@ -16,17 +16,15 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
  *    remedy is to open it and take the edits somewhere - the canvas offers
  *    "Export artifacts" for exactly this row.
  *  - `local-only`: the task has not been synced yet. Promotion runs on open
- *    when the account is entitled (`promotion-scheduler.ts`), so opening the
- *    task IS the remedy for a signed-in account. Under an unverified session
+ *    (`promotion-scheduler.ts`), so opening the task IS the remedy for a
+ *    signed-in account. Under an unverified session
  *    nothing syncs until the sign-in is confirmed, and the sentence says
  *    exactly that and no more: `unverified` covers authn being unreachable
  *    (which recovers on its own) as well as a refused credential and an
  *    unavailable account (`stores/auth/auth-store.ts`), and only one of those
  *    is fixed by signing in again - so the copy states the condition, like
  *    the pin and delete tooltips do, rather than prescribing a remedy the
- *    boolean it receives cannot pick. A plan without sync keeps the row here
- *    for good, which the sentence admits rather than promising a sync that
- *    never comes.
+ *    boolean it receives cannot pick.
  *
  * Phases have no home of their own and never carry either marker.
  */

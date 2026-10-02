@@ -149,7 +149,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and the sign-in g
     await waitForReady();
     expect(radioDisabled(NONE_OPTION_LABEL)).toBe(true);
     expect(
-      screen.getByTestId("host-lifecycle-none-plan-reason").textContent,
+      screen.getByTestId("host-lifecycle-none-signed-out-reason").textContent,
     ).toBe(HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON);
 
     fireEvent.click(screen.getByRole("radio", { name: NONE_OPTION_LABEL }));
@@ -169,7 +169,9 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and the sign-in g
 
     await waitForReady();
     expect(radioDisabled(NONE_OPTION_LABEL)).toBe(false);
-    expect(screen.queryByTestId("host-lifecycle-none-plan-reason")).toBeNull();
+    expect(
+      screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
+    ).toBeNull();
   });
 
   it("signed in, subscription not read yet: 'none' is enabled", async () => {
@@ -182,7 +184,9 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and the sign-in g
 
     await waitForReady();
     expect(radioDisabled(NONE_OPTION_LABEL)).toBe(false);
-    expect(screen.queryByTestId("host-lifecycle-none-plan-reason")).toBeNull();
+    expect(
+      screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
+    ).toBeNull();
   });
 
   it.each(["FREE", "PENDING", "PRO"] as const)(
@@ -201,7 +205,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and the sign-in g
       await waitForReady();
       expect(radioDisabled(NONE_OPTION_LABEL)).toBe(false);
       expect(
-        screen.queryByTestId("host-lifecycle-none-plan-reason"),
+        screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
       ).toBeNull();
     },
   );

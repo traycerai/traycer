@@ -958,8 +958,8 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("window-host-modal-update-host")).toBeTruthy();
   });
 
-  it("arm 3: a non-target incompatible host is named, and no local action is offered for it", async () => {
-    // `deriveNoHostVariant` arm 3 - "some OTHER lease is dead because it is
+  it("arm 2: a non-target incompatible host is named, and no local action is offered for it", async () => {
+    // `deriveNoHostVariant` arm 2 - "some OTHER lease is dead because it is
     // incompatible", reached when the target is dead for an unrelated reason.
     // Arm 1 (target IS the incompatible host) is what the two tests around this
     // one cover, and on that arm the named host and the acted-on host are the
@@ -1009,7 +1009,7 @@ describe("<WindowHostModalHost />", () => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
     });
 
-    // Premise, positively: the narration really is arm 3 - `update-host`, and
+    // Premise, positively: the narration really is arm 2 - `update-host`, and
     // quoting the REMOTE lease's version rather than the target's. Without
     // this the assertion below could pass on an arm-1 render.
     expect(

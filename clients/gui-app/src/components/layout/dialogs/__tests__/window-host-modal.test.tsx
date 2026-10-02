@@ -158,7 +158,7 @@ describe("<WindowHostModal />", () => {
   });
 
   it("update-host: a NON-target incompatible host explains why it cannot be updated here", () => {
-    // Arm 3 of `deriveNoHostVariant`. The action is withheld upstream because
+    // Arm 2 of `deriveNoHostVariant`. The action is withheld upstream because
     // this machine's provisioning cannot fix another machine's host - so the
     // copy has to say that, or the card reads as "update the host" beside no
     // button, which is an unexplained gap rather than an honest absence.

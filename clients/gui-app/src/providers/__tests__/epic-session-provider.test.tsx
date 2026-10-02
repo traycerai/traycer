@@ -211,6 +211,7 @@ import {
   type EpicSessionPresentation,
 } from "@/lib/registries/epic-session-registry";
 import {
+  SESSION_REBUILD_INITIAL_BACKOFF_MS,
   SESSION_REBUILD_MAX_BACKOFF_MS,
   type SessionRebuildBackoff,
 } from "@/lib/host/session-rebuild-backoff";
@@ -405,6 +406,53 @@ function installWorkerThatThrowsOnSpawn(): { spawnCount(): number } {
     throw new Error("Worker construction blocked by CSP");
   });
   return { spawnCount: () => spawns };
+}
+
+/**
+ * What {@link installWorkerWithTogglableConstruction} hands back.
+ *
+ * `spawnCount` counts every construction attempt, failed or not, so a test can
+ * tell "a rebuild was attempted" from "nothing happened" whichever way the
+ * attempt then went.
+ */
+interface TogglableWorkerRig {
+  /** From now on a spawn builds a real in-process worker on the stream factory. */
+  allowConstruction(): void;
+  /** From now on a spawn throws, as {@link installWorkerThatThrowsOnSpawn} does. */
+  blockConstruction(): void;
+  spawnCount(): number;
+}
+
+/**
+ * A worker factory that starts BLOCKED and can be switched either way mid-test.
+ *
+ * One test needs a session to fail to construct, then construct and run, then
+ * fail to construct again, and the two fixed rigs above each do only one of
+ * those. Blocked it throws the same CSP-style error; allowed it is the same
+ * real in-process worker `installStreamFactory` builds.
+ */
+function installWorkerWithTogglableConstruction(
+  factory: EpicStreamClientFactory,
+): TogglableWorkerRig {
+  let spawns = 0;
+  let blocked = true;
+  __setEpicRuntimeWorkerFactoryForTests(() => {
+    spawns += 1;
+    if (blocked) throw new Error("Worker construction blocked by CSP");
+    return createInProcessEpicRuntimeWorker({
+      streamClientFactory: factory,
+      laneSelection: null,
+    }).createWorker();
+  });
+  return {
+    allowConstruction: (): void => {
+      blocked = false;
+    },
+    blockConstruction: (): void => {
+      blocked = true;
+    },
+    spawnCount: () => spawns,
+  };
 }
 
 function installStreamFactory(factory: EpicStreamClientFactory): void {
@@ -949,11 +997,12 @@ describe("<TestEpicSessionTab />", () => {
   // `cancel`, first-owner ordering - is pinned in isolation by
   // `lib/host/__tests__/session-rebuild-backoff.test.ts`. What that file cannot
   // see is whether the controller cancels a pending rung at the right
-  // moments: a user's Retry, the tab's last close, and a change of target
-  // host. Each test below arms a real rung through a worker that cannot be
-  // constructed (the only thing that arms the ladder), then spies on
-  // `.cancel()` ITSELF, because the absence of a stale rebuild alone cannot
-  // tell a cancelled rung from one that was never armed.
+  // moments (a user's Retry, the tab's last close, and a change of target
+  // host) and whether a session turning healthy resets the ladder. Each test
+  // below arms a real rung through a worker that cannot be constructed (the
+  // only thing that arms the ladder). The cancel tests spy on `.cancel()`
+  // ITSELF, because the absence of a stale rebuild alone cannot tell a
+  // cancelled rung from one that was never armed, and then check the clock too.
   function spyOnSessionRebuildBackoffCancel(): {
     readonly cancelSpy: () => MockInstance<
       SessionRebuildBackoff["cancel"]
@@ -975,11 +1024,18 @@ describe("<TestEpicSessionTab />", () => {
     };
   }
 
+  /** Moves the fake clock inside `act`, so a fired rung's re-render is flushed. */
+  async function advanceFakeClock(ms: number): Promise<void> {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
   it("Retry cancels a pending construction-failure rung, so the stale rung never rebuilds a session the user already retried", async () => {
     vi.useFakeTimers();
     const { cancelSpy, restore } = spyOnSessionRebuildBackoffCancel();
     try {
-      installWorkerThatThrowsOnSpawn();
+      const rig = installWorkerThatThrowsOnSpawn();
       const presentations: Array<EpicSessionPresentation | null> = [];
       const view = render(
         <TestEpicSessionTab
@@ -997,13 +1053,27 @@ describe("<TestEpicSessionTab />", () => {
         expect(presentations.at(-1)?.kind).toBe("failed");
         expect(cancelSpy()).not.toBeNull();
         expect(cancelSpy()).not.toHaveBeenCalled();
+        expect(rig.spawnCount()).toBe(1);
 
-        // The user presses Retry before the delayed rung fires.
+        // The user presses Retry halfway to the delayed rung.
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS / 2);
+        expect(rig.spawnCount()).toBe(1);
         act(() => {
           presentations.at(-1)?.retry();
         });
         await act(() => Promise.resolve());
         expect(cancelSpy()).toHaveBeenCalledTimes(1);
+        // Retry's own attempt, which fails too: the worker still cannot be built.
+        expect(rig.spawnCount()).toBe(2);
+
+        // The stale rung's deadline passes without a rebuild. Retry's failure
+        // armed a fresh ladder, so the next rebuild waits a full initial delay
+        // from Retry, not from the first failure. A rung that survived the
+        // Retry would have rebuilt at the old deadline instead.
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS / 2);
+        expect(rig.spawnCount()).toBe(2);
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS / 2);
+        expect(rig.spawnCount()).toBe(3);
       } finally {
         view.unmount();
       }
@@ -1061,7 +1131,7 @@ describe("<TestEpicSessionTab />", () => {
     vi.useFakeTimers();
     const { cancelSpy, restore } = spyOnSessionRebuildBackoffCancel();
     try {
-      installWorkerThatThrowsOnSpawn();
+      const rig = installWorkerThatThrowsOnSpawn();
       const view = render(
         <TestEpicSessionTab
           epicId="epic-rebuild-backoff-repoint-cancel"
@@ -1074,6 +1144,9 @@ describe("<TestEpicSessionTab />", () => {
         await act(() => Promise.resolve());
         expect(cancelSpy()).not.toBeNull();
         expect(cancelSpy()).not.toHaveBeenCalled();
+        expect(rig.spawnCount()).toBe(1);
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS / 2);
+        expect(rig.spawnCount()).toBe(1);
 
         // The provider's TARGET HOST changes while still mounted - the scope
         // sync (keyed on `targetHostId` among others) cancels the ladder
@@ -1093,11 +1166,121 @@ describe("<TestEpicSessionTab />", () => {
         await act(() => Promise.resolve());
 
         expect(cancelSpy()).toHaveBeenCalledTimes(1);
+        // The re-point's own attempt, which fails too: the worker still cannot
+        // be built for the new host either.
+        expect(rig.spawnCount()).toBe(2);
+
+        // The old scope's rung never fires. The re-point's failure armed a
+        // fresh ladder, so the next rebuild waits a full initial delay from
+        // the re-point. A rung that survived it would have rebuilt at the old
+        // deadline instead.
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS / 2);
+        expect(rig.spawnCount()).toBe(2);
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS / 2);
+        expect(rig.spawnCount()).toBe(3);
       } finally {
         view.unmount();
       }
     } finally {
       restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps one ladder across successive construction failures and resets it only once a session is healthy, so a later failure waits the initial delay again", async () => {
+    vi.useFakeTimers();
+    try {
+      const streams: ControlledEpicStream[] = [];
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const presentations: Array<EpicSessionPresentation | null> = [];
+      const rig = installWorkerWithTogglableConstruction(
+        (_epicId, callbacks) => {
+          const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+          streams.push(stream);
+          return {
+            applyUpdate: () => undefined,
+            awareness: () => undefined,
+            applyArtifactRoomUpdate: () => undefined,
+            artifactRoomAwareness: () => undefined,
+            retryMigration: () => undefined,
+            close: () => {
+              stream.closeCount += 1;
+            },
+          };
+        },
+      );
+      // The later failure comes from a same-host key rotation, the one forced
+      // rebuild that does not touch the ladder itself. A Retry, a re-point and
+      // a tab close all cancel it, which resets it whether or not a healthy
+      // session ever did, so none of them could tell the two resets apart.
+      const rotateRow = installOwnerIdentityRows();
+      rotateRow("host-a", "pubkey-a0");
+      const view = render(
+        <TestEpicSessionTab
+          epicId="epic-rebuild-backoff-reset-on-health"
+          tabId="epic-rebuild-backoff-reset-on-health"
+        >
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+          <PresentationProbe
+            onPresentation={(presentation) => presentations.push(presentation)}
+          />
+        </TestEpicSessionTab>,
+      );
+      try {
+        // The first failure arms the initial rung: nothing rebuilds before it,
+        // and one attempt happens at it.
+        await act(() => Promise.resolve());
+        expect(presentations.at(-1)?.kind).toBe("failed");
+        expect(rig.spawnCount()).toBe(1);
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS - 1);
+        expect(rig.spawnCount()).toBe(1);
+        await advanceFakeClock(1);
+        expect(rig.spawnCount()).toBe(2);
+
+        // That attempt failed too, so the next rung is double. A fresh ladder
+        // per failure would rebuild at the initial delay again, one ladder
+        // doubles. The third attempt is allowed to construct.
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS);
+        expect(rig.spawnCount()).toBe(2);
+        rig.allowConstruction();
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS);
+        expect(rig.spawnCount()).toBe(3);
+
+        // Constructing is not healthy: the ladder resets only once the
+        // session has a loaded snapshot on an open transport.
+        expect(streams).toHaveLength(1);
+        act(() => {
+          deliverSnapshot(streams[0], "room-a");
+        });
+        await act(() => Promise.resolve());
+        const healthy = seenHandles.at(-1)?.store.getState();
+        expect(healthy?.snapshotLoaded).toBe(true);
+        expect(healthy?.hostTransportStatus).toBe("open");
+        expect(presentations.at(-1)?.kind).toBe("ready");
+
+        // The live session is rebuilt by a key rotation and construction fails
+        // again. The rung is back at the initial delay, not the next one up
+        // (four times the initial delay, had the earlier failures kept counting).
+        // The rotation's own rebuild is attempted more than once in the same
+        // pass (discarding the session releases its demand unit, which moves
+        // the run key), so the count right after it is not the subject. Only
+        // growth after it is.
+        rig.blockConstruction();
+        act(() => {
+          rotateRow("host-a", "pubkey-a1");
+        });
+        await act(() => Promise.resolve());
+        expect(presentations.at(-1)?.kind).toBe("failed");
+        const spawnsAfterRotation = rig.spawnCount();
+        expect(spawnsAfterRotation).toBeGreaterThan(3);
+        await advanceFakeClock(SESSION_REBUILD_INITIAL_BACKOFF_MS - 1);
+        expect(rig.spawnCount()).toBe(spawnsAfterRotation);
+        await advanceFakeClock(1);
+        expect(rig.spawnCount()).toBe(spawnsAfterRotation + 1);
+      } finally {
+        view.unmount();
+      }
+    } finally {
       vi.useRealTimers();
     }
   });

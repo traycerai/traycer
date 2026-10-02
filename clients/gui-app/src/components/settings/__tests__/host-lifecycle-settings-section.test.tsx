@@ -726,7 +726,7 @@ describe("<HostLifecycleSettingsSection /> - the 'none' option and the subscript
       await waitForReady();
       expect(radioDisabled(OPTION_COPY[4].label)).toBe(false);
       expect(
-        screen.queryByTestId("host-lifecycle-none-plan-reason"),
+        screen.queryByTestId("host-lifecycle-none-signed-out-reason"),
       ).toBeNull();
     },
   );
@@ -1441,7 +1441,7 @@ describe("<HostLifecycleSettingsSection /> - another Windows user's task", () =>
     }
     expect(
       screen
-        .getAllByTestId("host-lifecycle-none-plan-reason")
+        .getAllByTestId("host-lifecycle-none-signed-out-reason")
         .map((el) => el.textContent),
     ).toEqual(
       OPTION_COPY.filter((o) => o.mode !== "linked" && o.mode !== "none").map(

@@ -294,7 +294,7 @@ function HostLifecycleOption(props: {
           {props.disabledReason === null ? null : (
             <>
               {" "}
-              <span data-testid="host-lifecycle-none-plan-reason">
+              <span data-testid="host-lifecycle-none-signed-out-reason">
                 {props.disabledReason}
               </span>
             </>
