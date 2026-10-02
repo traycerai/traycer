@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 // What the side strip's section-move specs read off the page: the animations a
-// row's move started, slowed so a geometry read lands on an animation's first
+// row's move started, frozen so a geometry read lands on an animation's first
 // frame.
 
 /** An animation a row's move started: on its frame (the slide) or on its row (the glow). */
@@ -11,13 +11,16 @@ export interface StartedAnimation {
 }
 
 /**
- * Runs the page's animations at a hundredth of their speed, so geometry can be
- * read at an animation's first frame however long the test takes to ask.
+ * Holds the page's animations on their first frame, so geometry can be read
+ * there however long the test takes to ask. A slowed rate is not enough: an
+ * ease-out slide covers its first few pixels in the first percent of its
+ * time, which a loaded CI runner spends before the read lands.
+ * `finishAnimations` still plays them out.
  */
-export async function slowAnimations(page: Page): Promise<void> {
+export async function freezeAnimations(page: Page): Promise<void> {
   const session = await page.context().newCDPSession(page);
   await session.send("Animation.enable");
-  await session.send("Animation.setPlaybackRate", { playbackRate: 0.01 });
+  await session.send("Animation.setPlaybackRate", { playbackRate: 0 });
 }
 
 export const startedAnimations = (

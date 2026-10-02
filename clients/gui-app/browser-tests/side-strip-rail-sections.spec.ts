@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 import {
   finishAnimations,
-  slowAnimations,
+  freezeAnimations,
   startedAnimations,
 } from "./support/section-motion.ts";
 
@@ -181,7 +181,7 @@ test("slides a tile that changes section from where it was, by transform alone, 
   page,
 }) => {
   await openRail(page, RAIL_OF_TWENTY);
-  await slowAnimations(page);
+  await freezeAnimations(page);
   const watcher = tile(page, "watcher");
   const before = await boxOf(watcher);
 
