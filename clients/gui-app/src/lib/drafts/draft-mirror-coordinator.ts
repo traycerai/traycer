@@ -1738,13 +1738,18 @@ async function recoverCloudStashImages(input: {
   // walk's attempt cap, and it loses nothing (the miss may have been a
   // transient of that pipe).
   let missing = hashes.filter((hash) => !recovered.has(hash));
-  for (const fallback of stashImageFallbackHosts(input)) {
+  for (const fallbackHostId of stashImageFallbackHostIds(input)) {
     if (missing.length === 0) break;
+    // Looked up as its turn comes, never ahead of the earlier hosts' awaits:
+    // a session released and re-acquired meanwhile has a new requester, and
+    // the old one would be recorded over the rebind and fail for nothing.
+    const fallbackClient = sessionClients.get(fallbackHostId);
+    if (fallbackClient === undefined) continue;
     try {
       const more = await recoverCloudDraftImages({
         identity: input.summary.identity,
-        hostId: fallback.hostId,
-        client: fallback.client,
+        hostId: fallbackHostId,
+        client: fallbackClient,
         hashes: missing,
       });
       recovered = new Map([...recovered, ...more]);
@@ -1776,24 +1781,18 @@ async function recoverCloudStashImages(input: {
 }
 
 /**
- * Every host remembered on the row, other than the reading one, whose
- * session is mounted here, in the order they were remembered.
+ * Every host remembered on the row other than the reading one, in the order
+ * they were remembered. Ids only: whether a host's session is mounted, and
+ * through which requester, is read when that host is asked.
  */
-function stashImageFallbackHosts(input: {
+function stashImageFallbackHostIds(input: {
   readonly hostId: string;
   readonly summary: CloudChatSummary;
-}): ReadonlyArray<{ hostId: string; client: HostRequester<HostRpcRegistry> }> {
+}): ReadonlyArray<string> {
   const key = cloudDraftIdentityKey(input.summary);
-  const hosts: Array<{
-    hostId: string;
-    client: HostRequester<HostRpcRegistry>;
-  }> = [];
-  for (const rowHostId of cloudDraftRowHosts.get(key) ?? []) {
-    if (rowHostId === input.hostId) continue;
-    const client = sessionClients.get(rowHostId);
-    if (client !== undefined) hosts.push({ hostId: rowHostId, client });
-  }
-  return hosts;
+  return [...(cloudDraftRowHosts.get(key) ?? [])].filter(
+    (rowHostId) => rowHostId !== input.hostId,
+  );
 }
 
 function recoverIngestedCloudDraftImages(input: {

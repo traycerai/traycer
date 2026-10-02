@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
@@ -819,6 +819,137 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
       ]);
       expect(payloadReadCount(laterCalls)).toBe(0);
       expect(await getImageBytes(hash)).toEqual(bytes);
+    });
+
+    /**
+     * Mounts `OTHER_MOUNTED_HOST` so its payload read stays pending until the
+     * returned `open` is called, then answers it as a miss. `asks` records the
+     * hash of each read it receives, so a test can tell the read is in flight.
+     */
+    function mountHostWithHeldRead(asks: string[]): { open: () => void } {
+      let open: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      mountHostSession(OTHER_MOUNTED_HOST, (method, params) => {
+        if (method !== "epic.readCloudChatPayload") {
+          throw new Error(`unexpected ${String(method)}`);
+        }
+        const hash = cloudPayloadImageHash(params);
+        if (hash === null) throw new Error("payload read without a hash");
+        asks.push(hash);
+        return gate.then(() => ({
+          outcome: { status: "unavailable" as const },
+        }));
+      });
+      return { open };
+    }
+
+    it("asks a fallback host through the requester it holds when its turn comes, not the one it held when the pass began", async () => {
+      // host-d is released and re-acquired (a new requester) while host-c's
+      // read is pending. The pass snapshotted host ids only, so host-d is
+      // looked up after host-c answers and reaches the NEW requester; the old
+      // one is closed and would have failed for nothing.
+      const bytes = pngBytesWithTail(160);
+      const hash = await sha256HexOf(bytes);
+      const ingestingAsks: PayloadAsk[] = [];
+      const heldReadAsks: string[] = [];
+      const staleAsks: PayloadAsk[] = [];
+      const freshAsks: PayloadAsk[] = [];
+
+      mountHoldingHost(INGESTING_HOST, new Map(), ingestingAsks);
+      const heldRead = mountHostWithHeldRead(heldReadAsks);
+      const staleCalls = mountHoldingHost(
+        SECOND_OTHER_MOUNTED_HOST,
+        new Map([[hash, bytes]]),
+        staleAsks,
+      );
+      await Promise.resolve();
+
+      const cloudSummary = summary();
+      noteCloudDraftHeadHost(cloudSummary, OTHER_MOUNTED_HOST);
+      noteCloudDraftHeadHost(cloudSummary, SECOND_OTHER_MOUNTED_HOST);
+      const ingest = ingestCloudDraftSummary({
+        hostId: INGESTING_HOST,
+        readOwner: OWNER,
+        summary: cloudSummary,
+        document: stashDocument(
+          cloudSummary,
+          [hash],
+          "image/png",
+          bytes.byteLength,
+        ),
+      });
+      await vi.waitFor(() => {
+        expect(heldReadAsks).toEqual([hash]);
+      });
+
+      // The pass is parked on host-c. Replace host-d's session underneath it.
+      releaseDraftMirrorSession(SECOND_OTHER_MOUNTED_HOST);
+      const freshCalls = mountHoldingHost(
+        SECOND_OTHER_MOUNTED_HOST,
+        new Map([[hash, bytes]]),
+        freshAsks,
+      );
+      await Promise.resolve();
+
+      heldRead.open();
+      await ingest;
+
+      expect(freshAsks).toEqual([{ hostId: SECOND_OTHER_MOUNTED_HOST, hash }]);
+      expect(payloadReadCount(freshCalls)).toBe(1);
+      expect(staleAsks).toEqual([]);
+      expect(payloadReadCount(staleCalls)).toBe(0);
+      const drafts = useLandingDraftStore.getState().drafts;
+      expect(drafts).toHaveLength(1);
+      expect(JSON.stringify(drafts[0]?.content)).toContain("imageAttachment");
+      expect(await getImageBytes(hash)).toEqual(bytes);
+    });
+
+    it("skips a fallback host whose session was released while an earlier host was being asked, and converts hash-only", async () => {
+      const bytes = pngBytesWithTail(162);
+      const hash = await sha256HexOf(bytes);
+      const ingestingAsks: PayloadAsk[] = [];
+      const heldReadAsks: string[] = [];
+      const releasedAsks: PayloadAsk[] = [];
+
+      mountHoldingHost(INGESTING_HOST, new Map(), ingestingAsks);
+      const heldRead = mountHostWithHeldRead(heldReadAsks);
+      const releasedCalls = mountHoldingHost(
+        SECOND_OTHER_MOUNTED_HOST,
+        new Map([[hash, bytes]]),
+        releasedAsks,
+      );
+      await Promise.resolve();
+
+      const cloudSummary = summary();
+      noteCloudDraftHeadHost(cloudSummary, OTHER_MOUNTED_HOST);
+      noteCloudDraftHeadHost(cloudSummary, SECOND_OTHER_MOUNTED_HOST);
+      const ingest = ingestCloudDraftSummary({
+        hostId: INGESTING_HOST,
+        readOwner: OWNER,
+        summary: cloudSummary,
+        document: stashDocument(
+          cloudSummary,
+          [hash],
+          "image/png",
+          bytes.byteLength,
+        ),
+      });
+      await vi.waitFor(() => {
+        expect(heldReadAsks).toEqual([hash]);
+      });
+
+      releaseDraftMirrorSession(SECOND_OTHER_MOUNTED_HOST);
+      heldRead.open();
+      await expect(ingest).resolves.toBeUndefined();
+
+      expect(releasedAsks).toEqual([]);
+      expect(payloadReadCount(releasedCalls)).toBe(0);
+      const drafts = useLandingDraftStore.getState().drafts;
+      expect(drafts).toHaveLength(1);
+      expect(JSON.stringify(drafts[0]?.content)).toContain(hash);
+      expect(await getImageBytes(hash)).toBeUndefined();
     });
   });
 
