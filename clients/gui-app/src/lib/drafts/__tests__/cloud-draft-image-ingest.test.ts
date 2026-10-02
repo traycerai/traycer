@@ -29,6 +29,7 @@ const INGESTING_HOST = "host-a";
 const OWNER_HOST = "host-b"; // never mirrored on this window
 const OTHER_MOUNTED_HOST = "host-c"; // mirrored here, and lists the same row
 const SECOND_OTHER_MOUNTED_HOST = "host-d"; // mirrored here, remembered after host-c
+const LATE_MOUNTED_HOST = "host-e"; // mounts and is remembered mid-pass
 const EMPTY_DOC = {
   type: "doc" as const,
   content: [{ type: "paragraph" }],
@@ -950,6 +951,113 @@ describe("ingestCloudDraftSummary - cloud image recovery", () => {
       expect(drafts).toHaveLength(1);
       expect(JSON.stringify(drafts[0]?.content)).toContain(hash);
       expect(await getImageBytes(hash)).toBeUndefined();
+    });
+
+    it("asks a host that mounts and is noted on the row while an earlier host's read is pending, once and after that host", async () => {
+      // The pass re-reads the row's hosts before every turn, so a host whose
+      // mount noted it on the row DURING the pass is asked too, behind the host
+      // being waited on, and only once.
+      const bytes = pngBytesWithTail(164);
+      const hash = await sha256HexOf(bytes);
+      const ingestingAsks: PayloadAsk[] = [];
+      const heldReadAsks: string[] = [];
+      const lateAsks: PayloadAsk[] = [];
+
+      mountHoldingHost(INGESTING_HOST, new Map(), ingestingAsks);
+      const heldRead = mountHostWithHeldRead(heldReadAsks);
+      await Promise.resolve();
+
+      const cloudSummary = summary();
+      noteCloudDraftHeadHost(cloudSummary, OTHER_MOUNTED_HOST);
+      const ingest = ingestCloudDraftSummary({
+        hostId: INGESTING_HOST,
+        readOwner: OWNER,
+        summary: cloudSummary,
+        document: stashDocument(
+          cloudSummary,
+          [hash],
+          "image/png",
+          bytes.byteLength,
+        ),
+      });
+      await vi.waitFor(() => {
+        expect(heldReadAsks).toEqual([hash]);
+      });
+
+      // The pass is parked on host-c. host-e mounts and notes the row now.
+      const lateCalls = mountHoldingHost(
+        LATE_MOUNTED_HOST,
+        new Map([[hash, bytes]]),
+        lateAsks,
+      );
+      await Promise.resolve();
+      noteCloudDraftHeadHost(cloudSummary, LATE_MOUNTED_HOST);
+      // Not asked while host-c's read is still pending: it comes after it.
+      expect(lateAsks).toEqual([]);
+
+      heldRead.open();
+      await ingest;
+
+      expect(heldReadAsks).toEqual([hash]);
+      expect(lateAsks).toEqual([{ hostId: LATE_MOUNTED_HOST, hash }]);
+      expect(payloadReadCount(lateCalls)).toBe(1);
+      const drafts = useLandingDraftStore.getState().drafts;
+      expect(drafts).toHaveLength(1);
+      expect(JSON.stringify(drafts[0]?.content)).toContain("imageAttachment");
+      expect(await getImageBytes(hash)).toEqual(bytes);
+    });
+
+    it("asks a host remembered on the row without a session at its first turn once its session mounts during the pass", async () => {
+      // host-d is remembered BEFORE host-c but has no session when the pass
+      // reaches it, so host-c is asked first. A host skipped for want of a
+      // session is not counted as asked: when host-d mounts while host-c's read
+      // is pending, it gets its turn after host-c, once.
+      const bytes = pngBytesWithTail(166);
+      const hash = await sha256HexOf(bytes);
+      const ingestingAsks: PayloadAsk[] = [];
+      const heldReadAsks: string[] = [];
+      const laterAsks: PayloadAsk[] = [];
+
+      mountHoldingHost(INGESTING_HOST, new Map(), ingestingAsks);
+      const heldRead = mountHostWithHeldRead(heldReadAsks);
+      await Promise.resolve();
+
+      const cloudSummary = summary();
+      noteCloudDraftHeadHost(cloudSummary, SECOND_OTHER_MOUNTED_HOST);
+      noteCloudDraftHeadHost(cloudSummary, OTHER_MOUNTED_HOST);
+      const ingest = ingestCloudDraftSummary({
+        hostId: INGESTING_HOST,
+        readOwner: OWNER,
+        summary: cloudSummary,
+        document: stashDocument(
+          cloudSummary,
+          [hash],
+          "image/png",
+          bytes.byteLength,
+        ),
+      });
+      await vi.waitFor(() => {
+        expect(heldReadAsks).toEqual([hash]);
+      });
+
+      const laterCalls = mountHoldingHost(
+        SECOND_OTHER_MOUNTED_HOST,
+        new Map([[hash, bytes]]),
+        laterAsks,
+      );
+      await Promise.resolve();
+      expect(laterAsks).toEqual([]);
+
+      heldRead.open();
+      await ingest;
+
+      expect(heldReadAsks).toEqual([hash]);
+      expect(laterAsks).toEqual([{ hostId: SECOND_OTHER_MOUNTED_HOST, hash }]);
+      expect(payloadReadCount(laterCalls)).toBe(1);
+      const drafts = useLandingDraftStore.getState().drafts;
+      expect(drafts).toHaveLength(1);
+      expect(JSON.stringify(drafts[0]?.content)).toContain("imageAttachment");
+      expect(await getImageBytes(hash)).toEqual(bytes);
     });
   });
 

@@ -1738,18 +1738,24 @@ async function recoverCloudStashImages(input: {
   // walk's attempt cap, and it loses nothing (the miss may have been a
   // transient of that pipe).
   let missing = hashes.filter((hash) => !recovered.has(hash));
-  for (const fallbackHostId of stashImageFallbackHostIds(input)) {
-    if (missing.length === 0) break;
-    // Looked up as its turn comes, never ahead of the earlier hosts' awaits:
-    // a session released and re-acquired meanwhile has a new requester, and
-    // the old one would be recorded over the rebind and fail for nothing.
-    const fallbackClient = sessionClients.get(fallbackHostId);
-    if (fallbackClient === undefined) continue;
+  // The row's hosts are re-read before every turn, and each host's
+  // requester is looked up as its turn comes, never ahead of the earlier
+  // hosts' awaits: a mount that starts during the pass notes its host on
+  // the row then and is asked too, and a session released and re-acquired
+  // meanwhile has a new requester (the old one would be recorded over the
+  // rebind and fail for nothing). A remembered host without a session is
+  // not counted as asked, so one that mounts later in the pass gets its
+  // turn.
+  const asked = new Set<string>([input.hostId]);
+  while (missing.length !== 0) {
+    const fallback = nextStashImageFallbackHost(input.summary, asked);
+    if (fallback === null) break;
+    asked.add(fallback.hostId);
     try {
       const more = await recoverCloudDraftImages({
         identity: input.summary.identity,
-        hostId: fallbackHostId,
-        client: fallbackClient,
+        hostId: fallback.hostId,
+        client: fallback.client,
         hashes: missing,
       });
       recovered = new Map([...recovered, ...more]);
@@ -1781,18 +1787,21 @@ async function recoverCloudStashImages(input: {
 }
 
 /**
- * Every host remembered on the row other than the reading one, in the order
- * they were remembered. Ids only: whether a host's session is mounted, and
- * through which requester, is read when that host is asked.
+ * The first host remembered on the row, in the order they were remembered,
+ * that is not in `asked` and has a session mounted here, with the requester
+ * it holds right now; `null` when there is none.
  */
-function stashImageFallbackHostIds(input: {
-  readonly hostId: string;
-  readonly summary: CloudChatSummary;
-}): ReadonlyArray<string> {
-  const key = cloudDraftIdentityKey(input.summary);
-  return [...(cloudDraftRowHosts.get(key) ?? [])].filter(
-    (rowHostId) => rowHostId !== input.hostId,
-  );
+function nextStashImageFallbackHost(
+  summary: CloudChatSummary,
+  asked: ReadonlySet<string>,
+): { hostId: string; client: HostRequester<HostRpcRegistry> } | null {
+  const key = cloudDraftIdentityKey(summary);
+  for (const rowHostId of cloudDraftRowHosts.get(key) ?? []) {
+    if (asked.has(rowHostId)) continue;
+    const client = sessionClients.get(rowHostId);
+    if (client !== undefined) return { hostId: rowHostId, client };
+  }
+  return null;
 }
 
 function recoverIngestedCloudDraftImages(input: {
