@@ -117,13 +117,16 @@ test.describe("the vertical strip", () => {
     // inside it.
     const block = page.getByTestId("side-tab-group-block-fixture-group");
     await expect(block).toHaveAttribute("data-joining", "true");
-    const blockBox = await block.boundingBox();
+    // The drawn block is the fill, which grows around the room the drop opens.
+    // The block's own box keeps its pre-drag height, and with Delta coming from
+    // below the line sits exactly on that old bottom edge, so measuring it
+    // passed or failed on sub-pixel rounding.
+    await nextFrames(page, 40);
+    const fillBox = await page.getByTestId("side-tab-group-fill").boundingBox();
     const lineBox = await page.getByTestId("tab-drop-indicator").boundingBox();
-    if (blockBox === null || lineBox === null) throw new Error("no layout");
-    expect(lineBox.y).toBeGreaterThan(blockBox.y);
-    expect(lineBox.y + lineBox.height).toBeLessThan(
-      blockBox.y + blockBox.height,
-    );
+    if (fillBox === null || lineBox === null) throw new Error("no layout");
+    expect(lineBox.y).toBeGreaterThan(fillBox.y);
+    expect(lineBox.y + lineBox.height).toBeLessThan(fillBox.y + fillBox.height);
     await page.mouse.up();
 
     // Delta sits after Alpha, inside the group, and is not paired with it.
