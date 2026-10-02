@@ -91,6 +91,7 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
               <SplitFocusIcon
                 splitId={item.id}
                 focusedSide={item.focusedSide}
+                size="size-5"
               />
             </span>
           }

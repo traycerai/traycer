@@ -8,6 +8,8 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { __resetAgentActivityStoreForTests } from "@/stores/agent-activity-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import {
@@ -204,6 +206,8 @@ async function mountSweepTree(
     unmount: () => {
       view.unmount();
       session?.dispose();
+      __getOpenEpicRegistryForTests().disposeAll();
+      __resetAgentActivityStoreForTests();
     },
   };
   await mount.settle();

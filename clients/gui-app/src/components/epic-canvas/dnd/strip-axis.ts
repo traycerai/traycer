@@ -34,6 +34,22 @@ export interface StripAxis {
    * excluded.
    */
   readonly layoutOffset: (element: HTMLElement) => number;
+  /**
+   * The scroller's `scroll-padding` at the start and at the end of the axis
+   * (`left` and `right`, or `top` and `bottom`), in px: the part of the
+   * scrollport something else covers. 0 for `auto` or unset.
+   */
+  readonly scrollPadding: (style: CSSStyleDeclaration) => ScrollPadding;
+}
+
+export interface ScrollPadding {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** A computed `scroll-padding-*` as px; `auto` and an unset value are 0. */
+function paddingPx(value: string): number {
+  return Number.parseFloat(value) || 0;
 }
 
 export const HORIZONTAL_STRIP_AXIS: StripAxis = {
@@ -50,6 +66,10 @@ export const HORIZONTAL_STRIP_AXIS: StripAxis = {
     element.scrollLeft += delta;
   },
   layoutOffset: (element) => element.offsetLeft,
+  scrollPadding: (style) => ({
+    start: paddingPx(style.scrollPaddingLeft),
+    end: paddingPx(style.scrollPaddingRight),
+  }),
 };
 
 export const VERTICAL_STRIP_AXIS: StripAxis = {
@@ -66,6 +86,10 @@ export const VERTICAL_STRIP_AXIS: StripAxis = {
     element.scrollTop += delta;
   },
   layoutOffset: (element) => element.offsetTop,
+  scrollPadding: (style) => ({
+    start: paddingPx(style.scrollPaddingTop),
+    end: paddingPx(style.scrollPaddingBottom),
+  }),
 };
 
 export function stripAxisOf(id: StripAxisId): StripAxis {
@@ -92,17 +116,30 @@ export function contentDirectionOf(edge: StripEdge): ContentDirection {
 /**
  * Scroll the strip the least amount that brings `member` into view, instantly.
  * The end edge is tested first, so a member longer than the strip keeps its
- * end edge in view.
+ * end edge in view. The scroller's `scroll-padding` counts as covered: a strip
+ * with a sticky header or an edge fade keeps the member clear of it, and one
+ * with no scroll-padding reveals exactly to the edge. `displacement` is how far
+ * the member is drawn from its place along the axis (a commit settling it),
+ * which is taken off: what is revealed is where the member will be, not a
+ * frame of its way there.
  */
 export function revealMemberAlongAxis(
   scroller: HTMLElement,
   member: HTMLElement,
   axis: StripAxis,
+  displacement: number,
 ): void {
   const memberBox = member.getBoundingClientRect();
   const viewBox = scroller.getBoundingClientRect();
-  const pastEnd = axis.mainEnd(memberBox) - axis.mainEnd(viewBox);
-  const pastStart = axis.mainStart(viewBox) - axis.mainStart(memberBox);
+  const padding = axis.scrollPadding(getComputedStyle(scroller));
+  const pastEnd =
+    axis.mainEnd(memberBox) -
+    displacement -
+    (axis.mainEnd(viewBox) - padding.end);
+  const pastStart =
+    axis.mainStart(viewBox) +
+    padding.start -
+    (axis.mainStart(memberBox) - displacement);
   if (pastEnd > 0) axis.scrollBy(scroller, pastEnd);
   else if (pastStart > 0) axis.scrollBy(scroller, -pastStart);
 }

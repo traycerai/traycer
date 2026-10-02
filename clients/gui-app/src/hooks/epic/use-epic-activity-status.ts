@@ -1,15 +1,18 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import {
+  liveAgentIdsSnapshot,
   useRegisteredEpicAgentActivityTiers,
   useRegisteredEpicLiveAgentIds,
   type AgentActivityTier,
 } from "@/lib/epic-selectors";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
 import {
   type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import {
   chatActivityIndicator,
   type ChatActivityIndicator,
@@ -17,6 +20,7 @@ import {
 import { approvalAwaitingJudge } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 
 const CHAT_REGISTRY = getChatSessionRegistry();
+const EPIC_REGISTRY = getOpenEpicRegistry();
 
 export type EpicActivityStatus = "idle" | "turn" | "background";
 
@@ -219,26 +223,122 @@ export function epicWaitingReasonFromSessions(
   return reason;
 }
 
+const NO_EPIC_IDS: ReadonlyArray<string> = [];
+const NO_WAITING_REASONS: ReadonlyMap<string, EpicWaitingReason> = new Map();
+
+/** Each epic of `epicIds` whose live chats are waiting on the user, and for what. */
+function waitingReasonsOf(
+  epicIds: ReadonlyArray<string>,
+): ReadonlyMap<string, EpicWaitingReason> {
+  const reasons = new Map<string, EpicWaitingReason>();
+  for (const epicId of epicIds) {
+    const reason = epicWaitingReasonFromSessions(
+      epicId,
+      liveAgentIdsSnapshot(EPIC_REGISTRY.peek(epicId)),
+    );
+    if (reason !== null) reasons.set(epicId, reason);
+  }
+  return reasons;
+}
+
+/**
+ * Calls `onChange` when a live chat of one of `epicIds` starts or stops
+ * waiting, when a chat session of theirs opens or closes, or when their live
+ * chats change.
+ */
+function subscribeWaitingReasons(
+  epicIds: ReadonlyArray<string>,
+  onChange: () => void,
+): () => void {
+  if (epicIds.length === 0) return noopUnsubscribe;
+  const wanted = new Set(epicIds);
+  const chatSubscriptions = new Map<ChatSessionStoreHandle, () => void>();
+  const epicSubscriptions = new Map<OpenEpicStoreHandle, () => void>();
+  const resyncChats = (): void => {
+    reconcileStoreSubscriptions(
+      CHAT_REGISTRY.listHandles().filter((handle) => wanted.has(handle.epicId)),
+      chatSubscriptions,
+      (handle) =>
+        handle.store.subscribe((state, previous) => {
+          if (
+            chatSessionWaitingReason(state) !==
+            chatSessionWaitingReason(previous)
+          ) {
+            onChange();
+          }
+        }),
+    );
+    onChange();
+  };
+  const resyncEpics = (): void => {
+    reconcileStoreSubscriptions(
+      EPIC_REGISTRY.liveHandles().filter((handle) => wanted.has(handle.epicId)),
+      epicSubscriptions,
+      (handle) =>
+        handle.store.subscribe((state, previous) => {
+          if (
+            state.chats.allIds !== previous.chats.allIds ||
+            state.tuiAgents.allIds !== previous.tuiAgents.allIds
+          ) {
+            onChange();
+          }
+        }),
+    );
+    onChange();
+  };
+  const unsubscribeChatRegistry = CHAT_REGISTRY.subscribe(resyncChats);
+  const unsubscribeEpicRegistry = EPIC_REGISTRY.subscribe(resyncEpics);
+  resyncChats();
+  resyncEpics();
+  return () => {
+    unsubscribeChatRegistry();
+    unsubscribeEpicRegistry();
+    for (const unsubscribe of chatSubscriptions.values()) unsubscribe();
+    for (const unsubscribe of epicSubscriptions.values()) unsubscribe();
+    chatSubscriptions.clear();
+    epicSubscriptions.clear();
+  };
+}
+
+/**
+ * What each of `epicIds` has live chats waiting on the user for; an epic
+ * that is not waiting is absent. The batched form of
+ * {@link useEpicWaitingReason}, for a surface that reads many tasks, which
+ * cannot call a hook per task. Pass a stable list.
+ */
+export function useEpicWaitingReasons(
+  epicIds: ReadonlyArray<string>,
+): ReadonlyMap<string, EpicWaitingReason> {
+  const subscribe = useCallback(
+    (onChange: () => void) => subscribeWaitingReasons(epicIds, onChange),
+    [epicIds],
+  );
+  // A flat string, so `useSyncExternalStore`'s identity check is exact; the
+  // map is read again from the same sessions whenever it changes.
+  const getKey = useCallback(
+    () =>
+      [...waitingReasonsOf(epicIds)]
+        .map(([epicId, reason]) => `${reason}:${epicId}`)
+        .join("\n"),
+    [epicIds],
+  );
+  const key = useSyncExternalStore(subscribe, getKey, () => "");
+  return useMemo(
+    () => (key === "" ? NO_WAITING_REASONS : waitingReasonsOf(epicIds)),
+    [epicIds, key],
+  );
+}
+
 /** What this epic's live chats are waiting on the user for, if anything. */
 export function useEpicWaitingReason(
   epicId: string | null,
 ): EpicWaitingReason | null {
-  const liveAgentIds = useRegisteredEpicLiveAgentIds(epicId);
-  const subscribeWaiting = useCallback(
-    (onChange: () => void) =>
-      subscribeLiveChatSessions(
-        epicId,
-        liveAgentIds,
-        chatSessionWaitingReason,
-        onChange,
-      ),
-    [epicId, liveAgentIds],
+  const epicIds = useMemo(
+    () => (epicId === null ? NO_EPIC_IDS : [epicId]),
+    [epicId],
   );
-  const getWaiting = useCallback(
-    () => epicWaitingReasonFromSessions(epicId, liveAgentIds),
-    [epicId, liveAgentIds],
-  );
-  return useSyncExternalStore(subscribeWaiting, getWaiting, () => null);
+  const reasons = useEpicWaitingReasons(epicIds);
+  return epicId === null ? null : (reasons.get(epicId) ?? null);
 }
 
 function noopUnsubscribe(): void {}

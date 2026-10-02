@@ -3,7 +3,9 @@ import { useLayoutSurface } from "@/components/layout-editor/use-layout-surface"
 import { HiddenTabsMenu } from "./hidden-tabs-menu";
 import { useHiddenHeaderTabs } from "./use-hidden-header-tabs";
 import { TabGroupChip } from "./tab-group-chip";
+import { TabGroupChipFrame } from "./tab-group-chip-frame";
 import { stripRowsOf, taskPinReadOf } from "./tab-strip-rows";
+import { stripDropLine, tabDropSide } from "./strip-drop-line";
 import {
   memo,
   Fragment,
@@ -28,8 +30,13 @@ import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { HomeStripSlot } from "@/components/layout/tabs/tab-strip-home-item";
 import { useHomeTabDrawn } from "@/components/layout/tabs/use-home-tab-drawn";
-import { useTabStripController } from "@/components/layout/tabs/tab-strip-controller";
+import {
+  useTabStripController,
+  type TabStripController,
+} from "@/components/layout/tabs/tab-strip-controller";
 import { TabStripIndicatorScope } from "@/components/layout/tabs/tab-strip-indicator-scope";
+import { StripNeedsYouScope } from "@/components/layout/tabs/side-strip/strip-needs-you-scope";
+import { StripSectionsScope } from "@/components/layout/tabs/side-strip/strip-sections-scope";
 import { useArrangementValue } from "@/lib/layout-overrides";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
@@ -65,6 +72,8 @@ function TabStripBody() {
     customizations,
     activeItemId,
     dropIndicatorIndex,
+    dropGroupId,
+    dragSourceItemId,
   } = controller;
   const allTabs = controller.tabs;
   const navigate = useNavigate();
@@ -91,6 +100,20 @@ function TabStripBody() {
     () => stripRowsOf(headerItemIds, layoutItems, groups, customizations),
     [headerItemIds, layoutItems, groups, customizations],
   );
+  // The drop's line, among the tabs that are drawn (a collapsed group's are
+  // not), which is how the drag model counts them.
+  const drawnRows = useMemo(() => rows.filter((row) => !row.hidden), [rows]);
+  const dropLine = useMemo(() => {
+    const sourceIndex = drawnRows.findIndex(
+      (row) => row.itemId === dragSourceItemId,
+    );
+    return stripDropLine(
+      drawnRows.map((row) => row.group?.groupId ?? null),
+      dropIndicatorIndex,
+      dropGroupId,
+      sourceIndex < 0 ? null : sourceIndex,
+    );
+  }, [drawnRows, dropIndicatorIndex, dropGroupId, dragSourceItemId]);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const travellerRef = useRef<HTMLSpanElement | null>(null);
   const setScrollExtras = useCallback(
@@ -159,13 +182,18 @@ function TabStripBody() {
   );
 
   // On the empty landing route the strip draws nothing; the header's own
-  // actions stay, so no control is lost.
+  // actions stay, so no control is lost. Its sections are still read: the
+  // bell counts the tasks that need the person as the sidebar would.
   if (controller.isEmptyLanding) {
-    return null;
+    return (
+      <TabStripSectionsScope controller={controller}>
+        {null}
+      </TabStripSectionsScope>
+    );
   }
 
   return (
-    <TabStripIndicatorScope indicators={controller.indicators}>
+    <TabStripSectionsScope controller={controller}>
       <div
         ref={stripRef}
         tabIndex={-1}
@@ -215,8 +243,10 @@ function TabStripBody() {
             data-strip-edge="top"
             onWheel={handleWheel}
             // `relative` so the selection traveller is placed in the strip's
-            // own scrolling content, scrolled and clipped with the tabs.
-            className="no-scrollbar relative flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
+            // own scrolling content, scrolled and clipped with the tabs. The
+            // clip reaches 3px under the tabs, as far as their colour lines
+            // drop (`TabColorEdgeLine`), with no change to the layout.
+            className="no-scrollbar relative -mb-0.75 flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain pb-0.75 [-webkit-app-region:no-drag]"
           >
             <StripSelectionTraveller ref={travellerRef} />
             {rows.map((row) => {
@@ -226,11 +256,13 @@ function TabStripBody() {
                   {row.groupStart !== null ? (
                     <>
                       {renderGhost(`chip:${row.groupStart.groupId}`)}
-                      <TabGroupChip
-                        groupId={row.groupStart.groupId}
-                        group={row.groupStart.group}
-                        onClose={controller.onCloseGroup}
-                      />
+                      <TabGroupChipFrame groupId={row.groupStart.groupId}>
+                        <TabGroupChip
+                          groupId={row.groupStart.groupId}
+                          group={row.groupStart.group}
+                          onClose={controller.onCloseGroup}
+                        />
+                      </TabGroupChipFrame>
                     </>
                   ) : null}
                   {!row.hidden ? renderGhost(`item:${itemId}`) : null}
@@ -244,10 +276,13 @@ function TabStripBody() {
                       isNextActive={headerItemIds[index + 1] === activeItemId}
                       nextIsSplit={layoutItems[index + 1]?.kind === "split"}
                       isLastItem={index === headerItemIds.length - 1}
-                      showDropIndicatorBefore={dropIndicatorIndex === index}
+                      showDropIndicatorBefore={
+                        tabDropSide(dropLine, drawnRows.indexOf(row)) ===
+                        "before"
+                      }
                       showDropIndicatorAfter={
-                        dropIndicatorIndex === index + 1 &&
-                        index === headerItemIds.length - 1
+                        tabDropSide(dropLine, drawnRows.indexOf(row)) ===
+                        "after"
                       }
                       onClose={controller.onClose}
                       onCloseOtherTabs={controller.onCloseOtherTabs}
@@ -284,7 +319,27 @@ function TabStripBody() {
         </div>
         {controller.dialogs}
       </div>
-    </TabStripIndicatorScope>
+    </TabStripSectionsScope>
+  );
+}
+
+/**
+ * The strip's indicator scope, under the sections it publishes the Needs you
+ * task count from, as the side strip reads them.
+ */
+function TabStripSectionsScope(props: {
+  readonly controller: TabStripController;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { controller } = props;
+  return (
+    <StripNeedsYouScope controller={controller}>
+      <TabStripIndicatorScope indicators={controller.indicators}>
+        <StripSectionsScope controller={controller}>
+          {props.children}
+        </StripSectionsScope>
+      </TabStripIndicatorScope>
+    </StripNeedsYouScope>
   );
 }
 

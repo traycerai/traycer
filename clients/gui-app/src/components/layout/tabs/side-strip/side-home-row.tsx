@@ -34,6 +34,9 @@ function SideHomeRowBody(props: SideHomeRowProps): ReactNode {
   const { variant, isActive, onActivate } = props;
   const { ref } = useLayoutRegion({ regionId: "homeTab", instanceId: null });
   const icon = <House className="size-4" />;
+  // Home sits in the nav block: its label stands where the nav rows' do, after
+  // a 16px icon and a 16px space.
+  const titleIcon = <House className="size-4 me-4" />;
   const frame: SideRowFrame = {
     ref,
     role: "tab",
@@ -54,19 +57,23 @@ function SideHomeRowBody(props: SideHomeRowProps): ReactNode {
     <SideTabRow
       frame={frame}
       variant={variant}
+      shape="row"
       active={isActive}
       session={null}
       tint={null}
-      groupLine={null}
-      leading={icon}
+      inBlock={false}
+      titleIcon={titleIcon}
       tile={{ kind: "icon", icon }}
       badge={null}
       agents={NO_LIVE_AGENTS}
+      status={null}
+      section={null}
+      disclosure={null}
       title={HOME_LABEL}
       hoverCardBody={HOME_LABEL}
+      hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}
-      waitingLabel={null}
       dropIndicator={null}
       pairPreview={null}
       dragSource={false}

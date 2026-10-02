@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { agentActivityTiers } from "@/lib/agent-activity";
+import { liveAgentIdsSnapshot } from "@/lib/epic-selectors";
 import {
   chatSessionActivity,
   epicActivityStatusFromSources,
@@ -64,7 +65,7 @@ function workingEpicIdsSnapshot(tier: WorkingEpicTier): ReadonlySet<string> {
     const activity = epicActivityStatusFromSources(
       epicId,
       agentActivityTiers(getEpicAgentActivity(epicId)),
-      liveAgentIdsForEpic(epicId),
+      liveAgentIdsSnapshot(EPIC_REGISTRY.peek(epicId)),
     );
     if (countsAsWorking(activity, tier)) ids.add(epicId);
   }
@@ -154,13 +155,6 @@ function subscribeWorkingEpicIdsForTier(
     chatSubscriptions.clear();
     epicSubscriptions.clear();
   };
-}
-
-function liveAgentIdsForEpic(epicId: string): ReadonlySet<string> | null {
-  const handle = EPIC_REGISTRY.peek(epicId);
-  if (handle === null) return null;
-  const state = handle.store.getState();
-  return new Set([...state.chats.allIds, ...state.tuiAgents.allIds]);
 }
 
 /** Host-published working epics unioned with activity in warm chat sessions. */

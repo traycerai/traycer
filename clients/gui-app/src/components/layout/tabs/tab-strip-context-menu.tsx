@@ -8,6 +8,7 @@ import {
 import { useTabRecovery } from "@/lib/tab-recovery/use-tab-recovery";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
+import { useGroupEditorStore } from "@/stores/tabs/group-editor-store";
 import {
   ArrowLeftRight,
   CopyPlus,
@@ -335,7 +336,13 @@ export function TabContextMenuContent(
   const showOpenInNewWindow = tab.canOpenInNewWindow;
 
   return (
-    <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
+    <ContextMenuContent
+      onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        // An "Edit group…" the menu was closed for, now that it is gone.
+        useGroupEditorStore.getState().openRequested();
+      }}
+    >
       <TabAppearanceMenu tab={tab} />
       {tab.kind === "epic" ? (
         <EpicTabMenuItems

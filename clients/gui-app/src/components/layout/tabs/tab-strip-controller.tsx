@@ -2,6 +2,8 @@ import { useCallback, useEffect, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
+  useActiveHeaderTab,
+  useHeaderStripDropGroupId,
   useHeaderStripDropIndex,
   useHeaderStripOffsets,
 } from "@/components/epic-canvas/dnd/dnd-store";
@@ -73,6 +75,10 @@ export interface TabStripController {
   /** Home off, no tabs, on the landing route: the strip has nothing to draw. */
   readonly isEmptyLanding: boolean;
   readonly dropIndicatorIndex: number | null;
+  /** The group the drop under way lands in, which decides where its line sits. */
+  readonly dropGroupId: string | null;
+  /** The strip item being dragged, which the drop's line is placed around. */
+  readonly dragSourceItemId: string | null;
   readonly offsets: ReadonlyMap<string, number>;
   readonly indicators: HeaderTabIndicators;
   readonly onClose: (tab: HeaderTab) => void;
@@ -120,6 +126,8 @@ export function useTabStripController(): TabStripController {
   // Single insertion index covering header-tab reorder AND canvas tear-off
   // hovers - both flow through the root DndContext into the drag store.
   const dropIndicatorIndex = useHeaderStripDropIndex();
+  const dropGroupId = useHeaderStripDropGroupId();
+  const dragSourceItemId = useActiveHeaderTab()?.stripItemId ?? null;
   // Explicit per-item displacement resolved by the drag model - the same
   // mechanism the tile strip uses. No provisional CSS `order`, no layout
   // projection, so no projection can be stranded mid-flight.
@@ -262,6 +270,8 @@ export function useTabStripController(): TabStripController {
     isEmptyLanding:
       !homeTabDrawn && allTabs.length === 0 && activePathname === "/",
     dropIndicatorIndex,
+    dropGroupId,
+    dragSourceItemId,
     offsets,
     indicators,
     onClose: closeTabFlow.requestCloseTab,

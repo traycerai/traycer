@@ -39,8 +39,9 @@ export function DeviceCodeFallback(props: {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div
+          data-testid="signin-device-fallback-content"
           className={cn(
-            "grid gap-3 border-t px-3 py-3 text-left",
+            "grid gap-3 border-t px-3 py-3 text-left @max-[15rem]/signin:px-2",
             props.isHero
               ? "border-white/10 text-white/[0.65]"
               : "border-border/70 text-muted-foreground",

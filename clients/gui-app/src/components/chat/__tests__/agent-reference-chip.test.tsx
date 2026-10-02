@@ -47,8 +47,7 @@ afterEach(() => {
 /**
  * `EpicSessionGate` only checks for a non-null handle - the mocked
  * `@/lib/epic-selectors` above is what actually reads from it - so an empty
- * stand-in with a host on the liveness map (the same shape
- * `strip-live-agents.test.tsx` builds) is enough to route through
+ * stand-in with a host on the liveness map is enough to route through
  * `ResolvedAgentReferenceChip` instead of the id-as-written fallback.
  */
 function handle(): OpenEpicStoreHandle {

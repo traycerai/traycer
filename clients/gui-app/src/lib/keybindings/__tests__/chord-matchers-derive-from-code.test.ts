@@ -157,10 +157,11 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/layout-editor/layout-editor.tsx": 2,
   "gui-app/src/components/layout/find-in-page-bar.tsx": 2,
   "gui-app/src/components/layout/header/desktop-menu-buttons.tsx": 3,
-  // A group's chip and its side-strip header open the group editor on F2,
-  // ContextMenu and Shift+F10: named keys, none of them a registered chord.
-  "gui-app/src/components/layout/tabs/side-strip/side-tab-group-header.tsx": 3,
-  "gui-app/src/components/layout/tabs/tab-group-chip.tsx": 3,
+  // Every group surface (the chip, the side-strip header, the Activity view's
+  // label and rail column) opens the group editor through this one anchor: F2,
+  // ContextMenu and Shift+F10, plus Enter and Space on a surface that opts in
+  // (the Activity label). Named keys, none of them a registered chord.
+  "gui-app/src/components/layout/tabs/group-editor-anchor.tsx": 5,
   // The guided tour's card answers arrows, Enter and Escape by name; none is
   // a registered chord.
   // Arrows, Home and End walking the minimap's own list - named keys inside an

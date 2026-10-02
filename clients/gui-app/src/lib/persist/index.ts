@@ -24,6 +24,7 @@ export {
   scopeBucket,
   scopedPersistKey,
   surfaceHostSelectionKey,
+  profileCopyOperationsKey,
   worktreeActivityCacheKey,
   worktreeIntentMemoryKey,
   worktreeIntentStagingKey,

@@ -23,13 +23,28 @@ import {
   type HostRpcRegistry,
   type MessengerFactory,
 } from "@/lib/host";
-import type { EdgeSide } from "@/lib/layout/layout-arrangement";
+import {
+  DEFAULT_ARRANGEMENT,
+  type EdgeSide,
+} from "@/lib/layout/layout-arrangement";
+import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
-import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
+import { tabItemId, tabRefKey, type StripItem } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
-import { seedSideStripTabs } from "./side-tab-strip-seed";
+import {
+  moveSideStripLongListTask,
+  seedSideStripIdleGroup,
+  seedSideStripLongList,
+  seedSideStripPairs,
+  seedSideStripSections,
+  seedSideStripTabs,
+  seedSideStripWaitingAgents,
+  type SeededSection,
+} from "./side-tab-strip-seed";
 import "@/lib/theme-applier";
 import "@/index.css";
 
@@ -60,6 +75,28 @@ import "@/index.css";
  * that owner publishes on, so the product's own tear-off decision is what
  * calls it. Opening the window is the Staging pass's.
  *
+ * `?scene=sections` puts the strip in the Activity view over a seeded set of
+ * tasks that fills every section (Needs you, To review, Working, Idle), for
+ * the claims only real layout answers: the rows' heights and what truncates
+ * first at the narrowest width.
+ *
+ * `?scene=sections&tasks=20` is that view over twenty tasks, enough to overflow
+ * the list, and `moveTask` puts one of them in another section as its state
+ * changing would.
+ *
+ * `?tasks=idle-group` is the owner's grouping report instead: four idle tasks,
+ * the second alone in an organization's group, in either view (add
+ * `scene=sections` for the Activity view).
+ *
+ * `?tasks=pairs` is the split pairs' boards: a task, the current pair, a second
+ * pair and Start Page, in either view.
+ *
+ * `&agents=waiting` names the agent behind each waiting prompt (sections and
+ * pairs), so a Needs you task can expand to the agent that asks.
+ *
+ * `&rail=1` collapses the strip to the rail, which in the sections scene runs
+ * the same tasks as tiles in the same sections.
+ *
  * `window.__sideTabStripProbe.ready` gates all of it.
  */
 
@@ -74,6 +111,14 @@ interface SideTabStripProbe {
   readonly tearOffPreview: () => boolean;
   /** The tab keys a released tear-off asked to open in a new window. */
   readonly detachRequests: () => ReadonlyArray<string>;
+  /** Puts a task's title back to generating, so its row shows the spinner glyph. */
+  readonly markTitlePending: (epicId: string, title: string) => void;
+  /** Sets the expanded strip's width, in CSS pixels. */
+  readonly setWidth: (widthPx: number) => void;
+  /** Moves a long-list task to a section (`tasks=20` only). */
+  readonly moveTask: (epicId: string, section: SeededSection) => void;
+  /** Makes a task's tab the active one, as a shortcut or a palette jump would. */
+  readonly activate: (epicId: string) => void;
 }
 
 declare global {
@@ -89,6 +134,34 @@ function readEdge(): EdgeSide {
 }
 
 const EDGE = readEdge();
+const SECTIONS_SCENE =
+  new URLSearchParams(window.location.search).get("scene") === "sections";
+const LONG_LIST =
+  new URLSearchParams(window.location.search).get("tasks") === "20";
+const RAIL = new URLSearchParams(window.location.search).get("rail") === "1";
+const IDLE_GROUP =
+  new URLSearchParams(window.location.search).get("tasks") === "idle-group";
+const PAIRS =
+  new URLSearchParams(window.location.search).get("tasks") === "pairs";
+const WAITING_AGENTS =
+  new URLSearchParams(window.location.search).get("agents") === "waiting";
+
+function seedScene(): void {
+  if (SECTIONS_SCENE) {
+    useLayoutStore.setState({
+      arrangement: {
+        ...DEFAULT_ARRANGEMENT,
+        tabStripPlacement: EDGE,
+        sideStripView: "activity",
+      },
+    });
+  }
+  if (IDLE_GROUP) seedSideStripIdleGroup();
+  else if (PAIRS) seedSideStripPairs();
+  else if (!SECTIONS_SCENE) seedSideStripTabs(false);
+  else if (LONG_LIST) seedSideStripLongList();
+  else seedSideStripSections();
+}
 const detachRequests: string[] = [];
 
 const queryClient = new QueryClient({
@@ -142,12 +215,22 @@ function buildProbe(): SideTabStripProbe {
   return {
     ready: true,
     edge: EDGE,
-    reset: () => {
-      seedSideStripTabs(false);
-    },
+    reset: seedScene,
     items: () => useTabsStore.getState().items.map(itemKeys),
     tearOffPreview: () => useEpicDndStore.getState().headerTearOffPreview,
     detachRequests: () => [...detachRequests],
+    markTitlePending: (epicId, title) => {
+      useEpicCanvasStore.getState().markEpicTitlePending(epicId, title);
+    },
+    setWidth: (widthPx) => {
+      useSideTabStripStore.setState({ widthPx });
+    },
+    moveTask: moveSideStripLongListTask,
+    activate: (epicId) => {
+      useTabsStore.setState({
+        activeItemId: tabItemId({ kind: "epic", id: epicId }),
+      });
+    },
   };
 }
 
@@ -176,8 +259,8 @@ export function StripFixture(): ReactNode {
   const content = (
     <main data-fixture-content className="min-w-0 flex-1 bg-background" />
   );
-  return (
-    <div className="flex h-dvh bg-canvas text-canvas-foreground">
+  const shell = (
+    <div className="flex h-dvh bg-canvas text-canvas-foreground md:bg-shell-ground">
       <TabNavigationRouteBridge />
       <RootDndProvider>
         {EDGE === "left" ? margin : content}
@@ -185,6 +268,14 @@ export function StripFixture(): ReactNode {
         {EDGE === "left" ? content : margin}
       </RootDndProvider>
     </div>
+  );
+  // The sections scene's prompts and finished tasks are cloud-feed rows.
+  return SECTIONS_SCENE ? (
+    <NotificationFeedModeContext.Provider value="cloud">
+      {shell}
+    </NotificationFeedModeContext.Provider>
+  ) : (
+    shell
   );
 }
 
@@ -260,8 +351,9 @@ function buildRouter() {
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 useSideTabStripStore.getState().resetWidth();
-useSideTabStripStore.getState().setCollapsed(false);
-seedSideStripTabs(false);
+useSideTabStripStore.getState().setCollapsed(RAIL);
+seedScene();
+if (WAITING_AGENTS) seedSideStripWaitingAgents(PAIRS);
 
 const container = document.getElementById("root");
 if (container !== null)

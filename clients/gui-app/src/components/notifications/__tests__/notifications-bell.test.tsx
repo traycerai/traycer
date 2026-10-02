@@ -31,6 +31,7 @@ import {
   __resetHostNotificationsStoreForTests,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
+import { useNeedsYouTaskCountStore } from "@/stores/notifications/needs-you-task-count-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
   __resetNotificationsStoreForTests,
@@ -296,6 +297,7 @@ function pressNotificationsChord(): void {
 }
 
 function expectNoBellIndicators(): void {
+  expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
   expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
   expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
   expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
@@ -320,6 +322,7 @@ describe("NotificationsBell", () => {
     cleanup();
     useNotificationsPopoverStore.getState().setOpen(false);
     useTitleBarDragStore.setState({ suppressors: new Set() });
+    useNeedsYouTaskCountStore.setState({ count: 0 });
   });
 
   it("keeps bell click open and close behavior unchanged", async () => {
@@ -469,7 +472,7 @@ describe("NotificationsBell", () => {
     expect(document.activeElement).not.toBe(heading);
   });
 
-  it("renders the exact uncapped attention badge and label", () => {
+  it("draws the Needs you task count in amber, and with no task waiting the failures' red count", () => {
     const runnerHost = createRunnerHost();
     mountBell(runnerHost, undefined);
 
@@ -512,34 +515,48 @@ describe("NotificationsBell", () => {
       });
     });
 
-    const badge = screen.getByTestId("notifications-attention-badge");
-    expect(badge.textContent).toBe("150");
+    // 150 to attend to, the app's own transport failures among them, and no
+    // task waiting on the person: the failures keep their red count, exact
+    // and uncapped; amber would claim a task is waiting.
+    const failures = screen.getByTestId("notifications-attention-badge");
+    expect(failures.textContent).toBe("150");
+    expect(failures.classList.contains("bg-destructive")).toBe(true);
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
+    expect(
+      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+    ).toBe("Notifications, 150 notifications need attention");
+
+    act(() => {
+      useNeedsYouTaskCountStore.setState({ count: 2 });
+    });
+
+    const badge = screen.getByTestId("notifications-needs-you-badge");
+    expect(badge.textContent).toBe("2");
+    expect(badge.classList.contains("bg-warning")).toBe(true);
+    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, 150 notifications need attention");
+    ).toBe("Notifications, 2 tasks need you");
   });
 
   it("rolls the badge count through the shared primitive, ungrouped, and lets the badge leave", () => {
     const runnerHost = createRunnerHost();
     mountBell(runnerHost, undefined);
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
 
     act(() => {
-      useHostNotificationsStore.getState().applySnapshot({
-        attention: { entries: [], nextCursor: null },
-        recent: { entries: [], nextCursor: null },
-        summary: { unreadCount: 0, attentionCount: 1234 },
-      });
+      useNeedsYouTaskCountStore.setState({ count: 1234 });
     });
 
-    const badge = screen.getByTestId("notifications-attention-badge");
+    const badge = screen.getByTestId("notifications-needs-you-badge");
     // Four figures stay four figures. This badge is 16px tall and has no
     // `99+` cap of its own, so a thousands separator would both widen it and
     // have to roll in and out on the way past 999.
     expect(
-      screen.getByTestId("notifications-attention-count").textContent,
+      screen.getByTestId("notifications-needs-you-count").textContent,
     ).toBe("1234");
     expect(badge.textContent).toBe("1234");
     // The count sits inside an already-hidden badge; the button's own sentence
@@ -547,17 +564,13 @@ describe("NotificationsBell", () => {
     expect(badge.getAttribute("aria-hidden")).toBe("true");
 
     act(() => {
-      useHostNotificationsStore.getState().applySnapshot({
-        attention: { entries: [], nextCursor: null },
-        recent: { entries: [], nextCursor: null },
-        summary: { unreadCount: 0, attentionCount: 0 },
-      });
+      useNeedsYouTaskCountStore.setState({ count: 0 });
     });
 
     // `AnimatePresence` holds an exiting child until its exit resolves. This
     // asserts the hold always ends, so a state change can never strand a
     // stale count on the bell.
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
   });
 
   it("renders unknown DISTINGUISHABLY from clear, and the quiet-dot for quietDot", () => {
@@ -582,7 +595,7 @@ describe("NotificationsBell", () => {
       screen.getByTestId("notifications-unknown-indicator"),
     ).not.toBeNull();
     // And it is not wearing either of the two states that DO make a claim.
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Notifications, status unavailable" }),
@@ -597,7 +610,7 @@ describe("NotificationsBell", () => {
     });
 
     expect(screen.getByTestId("notifications-quiet-dot")).not.toBeNull();
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expect(screen.queryByTestId("notifications-needs-you-badge")).toBeNull();
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),

@@ -40,7 +40,16 @@ import {
   WORKTREE_SETUP_STALE_ERROR_POLL_LANE,
   assertExactHostMethodPollTableKeys,
   hostRpcSchedulingPolicy,
+  PROFILE_COPY_ACTIVE_POLL_LANE,
+  PROFILE_COPY_WAITING_POLL_LANE,
+  PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
+  PROFILE_COPY_STALE_ERROR_POLL_LANE,
 } from "@/lib/host-rpc-policy/host-method-policy-table";
+import {
+  incomingDraft,
+  profileCopyOutcome,
+  recordedOutcome,
+} from "@/lib/profile-copy/__tests__/profile-copy-test-fixtures";
 import type {
   ConditionPollLane,
   ErasedConditionPollPolicy,
@@ -118,6 +127,50 @@ function checkResponse(
   };
 }
 
+const PROFILE_COPY_UNPOLLED_LATEST_METHODS = [
+  "providers.profileCopy.preview",
+  "host.profileCopy.preflight",
+  "host.profileCopy.receipt",
+] as const;
+
+const PROFILE_COPY_CONDITION_LATEST_METHODS = [
+  "providers.profileCopy.status",
+  "providers.profileCopy.incoming",
+  "providers.profileCopy.draftStatus",
+] as const;
+
+const PROFILE_COPY_LATEST_METHODS = [
+  ...PROFILE_COPY_UNPOLLED_LATEST_METHODS,
+  ...PROFILE_COPY_CONDITION_LATEST_METHODS,
+] as const;
+
+const PROFILE_COPY_FIFO_METHODS = [
+  "providers.profileCopy.start",
+  "providers.profileCopy.cancel",
+  "providers.profileCopy.cancelDraft",
+  "providers.profileCopy.setPreference",
+  "providers.profileCopy.verify",
+  "providers.profileCopy.confirmVerification",
+  "providers.profileCopy.confirmIdentity",
+  "providers.profileCopy.retry",
+  "providers.profileCopy.login.start",
+  "providers.profileCopy.login.touch",
+  "providers.profileCopy.login.submitCode",
+  "providers.profileCopy.login.cancel",
+  "host.profileCopy.import",
+  "host.profileCopy.cancel",
+] as const;
+
+const PROFILE_COPY_JOIN_METHODS = [
+  "providers.profileCopy.login.await",
+] as const;
+
+const PROFILE_COPY_METHODS = [
+  ...PROFILE_COPY_LATEST_METHODS,
+  ...PROFILE_COPY_FIFO_METHODS,
+  ...PROFILE_COPY_JOIN_METHODS,
+] as const;
+
 // @ts-expect-error The phantom method field must reject a policy under another key.
 const wrongKeyPolicy: ErasedConditionPollPolicy<"agent.gui.listHarnesses"> =
   typedToErasedPolicy;
@@ -150,6 +203,141 @@ describe("host method poll policy table", () => {
         entry.joinResponseTimeoutMs === null || entry.joinResponseTimeoutMs > 0,
       ).toBe(true);
     }
+  });
+
+  it("covers every profile-copy method with an explicit scheduling posture", () => {
+    const registryProfileCopyMethods = Object.keys(hostRpcRegistry)
+      .filter((method) => method.includes("profileCopy"))
+      .sort();
+    expect([...PROFILE_COPY_METHODS].sort()).toEqual(
+      registryProfileCopyMethods,
+    );
+
+    for (const method of PROFILE_COPY_UNPOLLED_LATEST_METHODS) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
+        mode: "latest",
+        joinResponseTimeoutMs: null,
+        poll: null,
+      });
+    }
+    for (const method of PROFILE_COPY_CONDITION_LATEST_METHODS) {
+      const entry = HOST_METHOD_POLL_TABLE[method];
+      expect(entry.mode).toBe("latest");
+      expect(entry.joinResponseTimeoutMs).toBe(null);
+      expect(entry.poll).toMatchObject({
+        kind: "condition",
+        method,
+        initialErrorLane: PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
+        staleDataErrorLane: PROFILE_COPY_STALE_ERROR_POLL_LANE,
+      });
+    }
+    for (const method of PROFILE_COPY_FIFO_METHODS) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
+        mode: "fifo",
+        joinResponseTimeoutMs: null,
+        poll: null,
+      });
+    }
+    for (const method of PROFILE_COPY_JOIN_METHODS) {
+      expect(HOST_METHOD_POLL_TABLE[method]).toEqual({
+        mode: "join",
+        joinResponseTimeoutMs: 16 * 60 * 1_000,
+        poll: null,
+      });
+    }
+  });
+
+  it("classifies profile-copy status, draftStatus and incoming onto the condition lanes", () => {
+    const statusPoll =
+      HOST_METHOD_POLL_TABLE["providers.profileCopy.status"].poll;
+    const draftPoll =
+      HOST_METHOD_POLL_TABLE["providers.profileCopy.draftStatus"].poll;
+    const incomingPoll =
+      HOST_METHOD_POLL_TABLE["providers.profileCopy.incoming"].poll;
+    expect(statusPoll.kind).toBe("condition");
+    expect(draftPoll.kind).toBe("condition");
+    expect(incomingPoll.kind).toBe("condition");
+
+    expect(statusPoll.classify(undefined)).toBe(false);
+    expect(draftPoll.classify(undefined)).toBe(false);
+    expect(incomingPoll.classify(undefined)).toBe(false);
+
+    expect(
+      statusPoll.classify({
+        sourceHostId: "source-host",
+        operationId: "11111111-1111-4111-8111-111111111111",
+        outcomes: [profileCopyOutcome({ state: "preparing" })],
+      }),
+    ).toBe(PROFILE_COPY_ACTIVE_POLL_LANE);
+    expect(
+      statusPoll.classify({
+        sourceHostId: "source-host",
+        operationId: "11111111-1111-4111-8111-111111111111",
+        outcomes: [recordedOutcome({ state: "sign-in-required" })],
+      }),
+    ).toBe(PROFILE_COPY_WAITING_POLL_LANE);
+    expect(
+      statusPoll.classify({
+        sourceHostId: "source-host",
+        operationId: "11111111-1111-4111-8111-111111111111",
+        outcomes: [recordedOutcome({ state: "signed-in" })],
+      }),
+    ).toBe(false);
+
+    expect(
+      draftPoll.classify({
+        result: "current",
+        outcome: recordedOutcome({ state: "preparing" }),
+      }),
+    ).toBe(PROFILE_COPY_ACTIVE_POLL_LANE);
+    expect(
+      draftPoll.classify({
+        result: "current",
+        outcome: recordedOutcome({ state: "signing-in" }),
+      }),
+    ).toBe(PROFILE_COPY_WAITING_POLL_LANE);
+    expect(
+      draftPoll.classify({
+        result: "current",
+        outcome: recordedOutcome({ state: "signed-in" }),
+      }),
+    ).toBe(false);
+
+    expect(
+      incomingPoll.classify({
+        drafts: [
+          incomingDraft({ outcome: recordedOutcome({ state: "preparing" }) }),
+        ],
+        nextCursor: null,
+      }),
+    ).toBe(PROFILE_COPY_WAITING_POLL_LANE);
+    // A copy started on another device reaches this list with no push and no
+    // focus refetch, so an observed list keeps the slow lane even when every
+    // draft waits on a person, or when there is none yet.
+    expect(
+      incomingPoll.classify({
+        drafts: [
+          incomingDraft({ outcome: recordedOutcome({ state: "quarantined" }) }),
+        ],
+        nextCursor: null,
+      }),
+    ).toBe(PROFILE_COPY_WAITING_POLL_LANE);
+    expect(incomingPoll.classify({ drafts: [], nextCursor: null })).toBe(
+      PROFILE_COPY_WAITING_POLL_LANE,
+    );
+
+    expect(statusPoll.initialErrorLane).toBe(
+      PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
+    );
+    expect(statusPoll.staleDataErrorLane).toBe(
+      PROFILE_COPY_STALE_ERROR_POLL_LANE,
+    );
+    expect(draftPoll.initialErrorLane).toBe(
+      PROFILE_COPY_INITIAL_ERROR_POLL_LANE,
+    );
+    expect(incomingPoll.staleDataErrorLane).toBe(
+      PROFILE_COPY_STALE_ERROR_POLL_LANE,
+    );
   });
 
   it("keeps usage summary above the host and server response budgets", () => {

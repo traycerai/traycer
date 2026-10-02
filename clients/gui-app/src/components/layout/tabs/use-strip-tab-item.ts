@@ -31,10 +31,7 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
-import {
-  useEpicWaitingReason,
-  type EpicWaitingReason,
-} from "@/hooks/epic/use-epic-activity-status";
+import { useEpicWaitingReason } from "@/hooks/epic/use-epic-activity-status";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
@@ -58,7 +55,7 @@ import {
 import type { HeaderTabDragGhost } from "@/components/epic-canvas/dnd/dnd-store";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { useHeaderTabTitle } from "./header-tab-presentation";
-import { tabWaitingReason, withWaitingIndicator } from "./tab-waiting";
+import { withWaitingIndicator } from "./tab-waiting";
 import { mergeRefs } from "@/lib/merge-refs";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
@@ -140,7 +137,6 @@ export interface StripTabItem {
   readonly appearance: HeaderTabAppearance | null;
   /** The notification indicator with the waiting reason merged in. */
   readonly indicatorState: NotificationIndicatorState;
-  readonly waitingReason: EpicWaitingReason | null;
   readonly displayName: string;
   readonly displayTab: HeaderTab;
   readonly canClose: boolean;
@@ -217,10 +213,6 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
     null,
   );
   const sessionWaitingReason = useEpicWaitingReason(tabEpicId);
-  const waitingReason = tabWaitingReason(
-    notificationState,
-    sessionWaitingReason,
-  );
   const indicatorState = withWaitingIndicator(
     notificationState,
     sessionWaitingReason,
@@ -443,6 +435,8 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
       if (rename.isEditing) return;
+      // A key on a button inside the tab (close, chevron) is that button's.
+      if (event.target !== event.currentTarget) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       activateTab();
@@ -516,7 +510,6 @@ export function useStripTabItem(input: StripTabItemInput): StripTabItem {
     isDragging,
     appearance,
     indicatorState,
-    waitingReason,
     displayName,
     displayTab,
     canClose,

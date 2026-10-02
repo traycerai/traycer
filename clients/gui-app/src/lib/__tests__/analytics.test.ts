@@ -112,6 +112,39 @@ describe("analytics", () => {
     ).toEqual({ provider: "antigravity", mode: "create" });
   });
 
+  it("keeps a profile copy's source kind, which is what splits Terminal-account copies from managed ones", async () => {
+    // A property on the event type but missing from the runtime key list is
+    // dropped silently by the sanitizer, with the event still sent - which is
+    // exactly how `source_kind` first shipped.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 2,
+        source_kind: "ambient",
+      }),
+    ).toEqual({
+      provider: "codex",
+      destination_count: 2,
+      source_kind: "ambient",
+    });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 1,
+        source_kind: "terminal",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "codex",
+        destination_count: 1,
+      }),
+    ).toBeNull();
+  });
+
   it("accepts every settings section the type union declares", async () => {
     // The runtime allowlist is what `section` is validated against, and a
     // union member missing from it drops the event with no error anywhere -
@@ -1683,6 +1716,106 @@ describe("Layout page settings analytics", () => {
         }),
       ).toEqual({ source: "direct_ui", section: "general", setting });
     }
+  });
+});
+
+describe("profile copy analytics allowlists", () => {
+  it("keeps profile_copy_attempt_settled with a wire-enum reason and none", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "signed-in",
+        reason: "none",
+      }),
+    ).toEqual({
+      provider: "claude-code",
+      state: "signed-in",
+      reason: "none",
+    });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "antigravity",
+        state: "quarantined",
+        reason: "writer-unconfirmed",
+      }),
+    ).toEqual({
+      provider: "antigravity",
+      state: "quarantined",
+      reason: "writer-unconfirmed",
+    });
+  });
+
+  it("drops a settled event for free-text reason or unknown state", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "signed-in",
+        reason: "the host timed out",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "mystery",
+        reason: "none",
+      }),
+    ).toBeNull();
+  });
+
+  it("strips undeclared keys such as a host id or label", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyAttemptSettled, {
+        provider: "claude-code",
+        state: "signed-in",
+        reason: "none",
+        hostId: "source-host",
+        label: "Work",
+      }),
+    ).toEqual({
+      provider: "claude-code",
+      state: "signed-in",
+      reason: "none",
+    });
+  });
+
+  it("bounds destination_count on profile_copy_started", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "claude-code",
+        destination_count: 2,
+        source_kind: "managed",
+      }),
+    ).toEqual({
+      provider: "claude-code",
+      destination_count: 2,
+      source_kind: "managed",
+    });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "claude-code",
+        destination_count: 10_001,
+        source_kind: "managed",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProfileCopyStarted, {
+        provider: "claude-code",
+        destination_count: -1,
+        source_kind: "managed",
+      }),
+    ).toBeNull();
   });
 });
 

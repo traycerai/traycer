@@ -24,7 +24,7 @@ import {
   type JoinSide,
   type SheetJoinRead,
 } from "./support/canvas-geometry.ts";
-import { nextFrames } from "./support/fixtures.ts";
+import { centreOf, nextFrames } from "./support/fixtures.ts";
 
 // Every test here runs in one worker, so the worker-scoped pages boot once
 // per run instead of once per worker that gets a test (the config is
@@ -110,6 +110,87 @@ test.describe("offsets: the arcs meet the bridge's true inner edge", () => {
         edge,
       );
     });
+  }
+});
+
+// A tab group's colour line runs under its inactive members and meets the
+// joined active member's outline at its feet, so the group reads as one line.
+// The feet sit on the task frame's top border (the bridge's bottom), 3px below
+// the tabs' own frames, so a line drawn along a tab's bottom floats over them.
+test("top: a group's line meets the joined tab's feet on both sides", async ({
+  topCanvas,
+}) => {
+  const { page, setWindow } = topCanvas;
+  // Wide enough that the group's three tabs and its chip fit unscrolled: the
+  // active tab joins only when it is wholly in the strip.
+  await setWindow(1700, DESKTOP_WINDOW.height, 1);
+  await prepareCanvas(page, "top", "left");
+  await page.evaluate(`(async () => {
+    const { useTabsStore } = await import("/src/stores/tabs/store.ts");
+    const store = useTabsStore.getState();
+    const ref = (id) => ({ kind: "epic", id: "fixture-" + id });
+    const groupId = store.createGroup(ref("delta"));
+    if (groupId === null) throw new Error("tab group was not created");
+    store.setTabGroup(ref("epsilon"), groupId);
+    store.setTabGroup(ref("zeta"), groupId);
+    store.updateGroup(groupId, { name: "Group", color: "#fdd663", collapsed: false });
+    window.__junctionGroupId = groupId;
+  })()`);
+  try {
+    await activateEpsilon(page);
+    await page.waitForSelector(
+      '[data-sheet-join-bridge="top"][data-join-active]',
+    );
+    await nextFrames(page, 2);
+    const read = await page.evaluate(() => {
+      const box = (selector: string) => {
+        const node = document.querySelector(selector);
+        if (node === null) throw new Error(`no ${selector}`);
+        return node.getBoundingClientRect();
+      };
+      const line = (id: string) =>
+        box(
+          `[data-testid="tab-epic-fixture-${id}"] [data-testid="tab-color-edge-line"]`,
+        );
+      const bridge = document.querySelector(
+        '[data-sheet-join-bridge="top"][data-join-active]',
+      );
+      if (bridge === null) throw new Error("no joined top bridge");
+      const radius = parseFloat(getComputedStyle(bridge, "::after").width);
+      return {
+        bridge: bridge.getBoundingClientRect(),
+        radius,
+        before: line("delta"),
+        after: line("zeta"),
+        clip: box('[data-testid="header-tab-strip-scroll"]').bottom,
+      };
+    });
+
+    for (const [side, line] of [
+      ["before", read.before],
+      ["after", read.after],
+    ] as const) {
+      // On the feet's row, and inside the strip's clip, so it is drawn there.
+      expect(
+        Math.abs(line.bottom - read.bridge.bottom),
+        `${side}: the line's foot against the bridge's`,
+      ).toBeLessThanOrEqual(EPSILON);
+      expect(line.bottom, `${side}: clipped by the strip`).toBeLessThanOrEqual(
+        read.clip + EPSILON,
+      );
+    }
+    // Reaching each foot's flare, which runs `radius` out from the bridge.
+    expect(read.before.right).toBeGreaterThanOrEqual(
+      read.bridge.left - read.radius,
+    );
+    expect(read.after.left).toBeLessThanOrEqual(
+      read.bridge.right + read.radius,
+    );
+  } finally {
+    await page.evaluate(`(async () => {
+      const { useTabsStore } = await import("/src/stores/tabs/store.ts");
+      useTabsStore.getState().ungroup(window.__junctionGroupId);
+    })()`);
   }
 });
 
@@ -253,6 +334,46 @@ test.describe("corners: an arc never extends past the surface frame", () => {
       );
     });
   }
+});
+
+test.describe("the top strip's split preview", () => {
+  // Over another tab's middle the dragged tab's overlay fades out, since the
+  // preview names the task. Its join must go with it: the bridge is drawn
+  // outside the overlay, so left anchored to the faded box it painted the
+  // sheet's notch and feet into the strip with no tab above them.
+  test("the dragged active tab's join goes while the preview names the task", async ({
+    topCanvas,
+  }) => {
+    const { page, setWindow } = topCanvas;
+    await setWindow(DESKTOP_WINDOW.width, DESKTOP_WINDOW.height, 1);
+    await prepareCanvas(page, "top", "left");
+    await activateEpsilon(page);
+    await readRenderedJoin(page, "top", "split preview, baseline");
+
+    const epsilon = await centreOf(
+      page.getByTestId("tab-epic-fixture-epsilon"),
+    );
+    const delta = await centreOf(page.getByTestId("tab-epic-fixture-delta"));
+    await page.mouse.move(epsilon.x, epsilon.y);
+    await page.mouse.down();
+    await page.mouse.move(delta.x, delta.y, { steps: 12 });
+
+    await expect(
+      page.getByTestId("tab-strip-pair-preview-epic-fixture-delta"),
+    ).toHaveText("Epsilon cleanup");
+    await expect
+      .poll(() => joinState(page), {
+        message: "no joined box and no bridge while the split preview shows",
+      })
+      .toEqual({ joined: false, bridgeVisible: false });
+
+    // Back where it began, so the release reorders nothing, and then off the
+    // strip: the page is shared, and a tab's hover card left opening under
+    // the pointer would cover the join a later test measures.
+    await page.mouse.move(epsilon.x, epsilon.y, { steps: 12 });
+    await page.mouse.up();
+    await page.mouse.move(1, 1);
+  });
 });
 
 test.describe("the top strip's overflow", () => {
