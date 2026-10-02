@@ -19,7 +19,6 @@ import { SESSION_TAB_LABEL_CLASS } from "../header-tab-visual";
 import { MonogramChip } from "../monogram-chip";
 import type { SideTabTile } from "../tab-identity";
 import { SideTabMeter, type SideTabLiveAgents } from "./agent-meter";
-import { TrimmedEllipsis } from "./trimmed-ellipsis";
 import { SideTabRailBadge } from "./side-tab-rail-badge";
 import type { RailBadgeKind } from "./rail-badge-kind";
 import {
@@ -563,18 +562,13 @@ function ExpandedContent(
             <span
               ref={titleRef}
               className={cn(
-                // A half is too short for the row's fade: it ends in an ellipsis.
-                props.shape === "row"
-                  ? "header-tab-title-text"
-                  : "block truncate",
+                // A half fades at its edge as a row does: the strip cuts
+                // every title one way.
+                "header-tab-title-text",
                 props.tile.kind === "generating" && "text-muted-foreground",
               )}
             >
-              {props.shape === "row" ? (
-                props.title
-              ) : (
-                <TrimmedEllipsis text={props.title} />
-              )}
+              {props.title}
             </span>
           </span>
         </>

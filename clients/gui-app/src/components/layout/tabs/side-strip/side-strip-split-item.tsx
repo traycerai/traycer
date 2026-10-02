@@ -63,7 +63,6 @@ import {
 } from "./strip-sections";
 import { useStripTaskGroup, type StripTaskGroup } from "./strip-task-group";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
-import { TrimmedEllipsis } from "./trimmed-ellipsis";
 import {
   SideTabRow,
   type SideRowFrame,
@@ -316,8 +315,9 @@ function SplitHalfCaption(props: {
           size="size-3"
         />
       </span>
-      <span className="min-w-0 flex-1 truncate">
-        <TrimmedEllipsis text={props.title} />
+      {/* Fades at the edge, as the agent names below it do. */}
+      <span className="header-tab-title-text min-w-0 flex-1">
+        {props.title}
       </span>
     </span>
   );

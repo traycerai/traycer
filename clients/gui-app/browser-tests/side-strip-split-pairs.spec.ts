@@ -115,6 +115,24 @@ test("draws a pair as one 32px row of the split icon and two equal halves", asyn
   expect(right.x - (left.x + left.width)).toBeCloseTo(4, 0);
 });
 
+test("fades a half's cut title at its edge, as a row's title does, with no ellipsis", async ({
+  page,
+}) => {
+  await open(page, "");
+  const title = page
+    .getByTestId("tab-epic-fixture-react")
+    .getByTestId("side-tab-title")
+    .locator(".header-tab-title-text");
+  const cut = await title.evaluate((node) => ({
+    overflows: node.scrollWidth > node.clientWidth,
+    mask: getComputedStyle(node).maskImage,
+    overflow: getComputedStyle(node).textOverflow,
+  }));
+  expect(cut.overflows).toBe(true);
+  expect(cut.mask).not.toBe("none");
+  expect(cut.overflow).toBe("clip");
+});
+
 test("lines a half's caption up with the agents under it: its icon on their glyphs, its title on their names", async ({
   page,
 }) => {
@@ -132,8 +150,8 @@ test("lines a half's caption up with the agents under it: its icon on their glyp
 
   const icon = await boxOf(caption.locator("svg"));
   const glyph = await boxOf(agent.locator("> *").first());
-  const title = await boxOf(caption.locator(".truncate"));
-  const name = await boxOf(agent.locator(".truncate"));
+  const title = await boxOf(caption.locator(".header-tab-title-text"));
+  const name = await boxOf(agent.locator(".header-tab-title-text"));
   expect(icon.x + icon.width / 2).toBeCloseTo(glyph.x + glyph.width / 2, 0);
   expect(title.x).toBeCloseTo(name.x, 0);
 });
