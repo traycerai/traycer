@@ -13,7 +13,11 @@ import { useStripAgentsMode } from "./strip-agents-mode";
 import { useStripTaskExpanded } from "./strip-disclosure";
 import { useStripTaskNeedsYou } from "./strip-needs-you-context";
 import type { StripTaskRow } from "./strip-sections";
-import { useStripTaskAgents, type StripAgent } from "./strip-task-agents";
+import {
+  needsYouAgentKind,
+  useStripTaskAgents,
+  type StripAgent,
+} from "./strip-task-agents";
 
 /** One nested row: an agent, and the notification behind it for a needs-you row. */
 export interface StripGroupRow {
@@ -107,7 +111,7 @@ export function useStripTaskGroup(
         id: item.row.feedId,
         title: item.agentTitle,
         status: "waiting",
-        kind: item.reason === "approval" ? "approval" : "interview",
+        kind: needsYouAgentKind(item.reason),
         since: item.createdAt,
       },
       notification: item.row,

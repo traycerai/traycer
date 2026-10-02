@@ -2355,10 +2355,17 @@ describe("<SideTabStrip />", () => {
         chatProjection("c-run", { title: "Runs", updatedAt: 1 }),
         chatProjection("c-wait", { title: "Waits", updatedAt: 2 }),
       ]);
-      isWorking("e-gamma", "c-run");
+      // The waiting agent's own chat indicator has not arrived, and the
+      // activity plane still has it busy in the background: the prompt that
+      // names it is what says it waits, as it does for the task's line.
+      __setAgentActivityStateForTests(
+        { "e-gamma": { working: ["c-run", "c-wait"], turn: ["c-run"] } },
+        "local",
+        "connected",
+      );
       indicatorState.value = {
         epics: { "e-gamma": { ...NO_FLAGS, pendingApproval: true } },
-        chats: { "c-wait": { ...NO_FLAGS, pendingApproval: true } },
+        chats: {},
       };
       seedPrompts([
         {

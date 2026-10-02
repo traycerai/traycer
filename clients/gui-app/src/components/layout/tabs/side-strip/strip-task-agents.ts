@@ -12,7 +12,12 @@ import {
 } from "@/lib/epic-selectors";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import {
+  needsYouItemChatId,
+  type NeedsYouReason,
+} from "@/stores/notifications/needs-you-items";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import { useStripTaskNeedsYou } from "./strip-needs-you-context";
 
 /** What a nested agent row says, in the order the strip lists them. */
 export type StripAgentStatus = "waiting" | "failed" | "turn" | "background";
@@ -84,20 +89,31 @@ const STATUS_OF_KIND: Readonly<
   "terminal-failure": null,
 };
 
+/** The Agents panel's glyph kind of an agent a prompt is waiting on. */
+export function needsYouAgentKind(
+  reason: NeedsYouReason,
+): ChatDescendantStatusKind {
+  return reason === "approval" ? "approval" : "interview";
+}
+
 /**
  * What the strip nests under one task's row, for any task; a tab that is not
  * a task (`null`) has none.
  *
- * Names come from the task's open-epic session, which only a warm task has;
- * the busy tiers come from the activity plane and each agent's waiting or
- * failed state from the strip's notification indicators, which already cover
- * every warm tab's chats. Read it under `TabStripIndicatorScope`.
+ * Names come from the task's open-epic session, which only a warm task has.
+ * An agent a prompt of the task names is waiting, with that prompt's kind:
+ * the task's own line reads the same prompts, so the two cannot disagree.
+ * Otherwise the busy tiers come from the activity plane and each agent's
+ * waiting or failed state from the strip's notification indicators, which
+ * already cover every warm tab's chats. Read it under `TabStripIndicatorScope`
+ * and the strip's needs-you scope.
  */
 export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
   const liveAgentIds = useRegisteredEpicLiveAgentIds(epicId);
   const tiers = agentActivityTiers(useEpicAgentActivity(epicId));
   const indicators = useContext(NotificationIndicatorsContext);
   const localRows = useAppLocalNotificationsStore((state) => state.byId);
+  const needsYou = useStripTaskNeedsYou(epicId);
   const statuses = useMemo(() => {
     const found: Array<{
       readonly id: string;
@@ -105,24 +121,33 @@ export function useStripTaskAgents(epicId: string | null): StripTaskAgents {
       readonly kind: ChatDescendantStatusKind;
     }> = [];
     if (epicId === null || liveAgentIds === null) return found;
+    const asked = new Map<string, NeedsYouReason>();
+    for (const item of needsYou) {
+      const chatId = needsYouItemChatId(item);
+      if (chatId !== null && !asked.has(chatId)) asked.set(chatId, item.reason);
+    }
     for (const id of liveAgentIds) {
-      const kind = ownChatStatusKind(
-        selectNotificationIndicatorState(
-          { byId: localRows },
-          { epicId, chatId: id },
-          null,
-          indicators,
-        ),
-        tiers.get(id),
-        "indeterminate",
-      );
+      const reason = asked.get(id);
+      const kind =
+        reason === undefined
+          ? ownChatStatusKind(
+              selectNotificationIndicatorState(
+                { byId: localRows },
+                { epicId, chatId: id },
+                null,
+                indicators,
+              ),
+              tiers.get(id),
+              "indeterminate",
+            )
+          : needsYouAgentKind(reason);
       // "unknown" is an agent nothing says is live, which the strip skips.
       if (kind === null || kind === "unknown") continue;
       const status = STATUS_OF_KIND[kind];
       if (status !== null) found.push({ id, status, kind });
     }
     return found;
-  }, [epicId, liveAgentIds, tiers, indicators, localRows]);
+  }, [epicId, liveAgentIds, tiers, indicators, localRows, needsYou]);
   const listedIds = useMemo(() => statuses.map(({ id }) => id), [statuses]);
   const refs = useMemo(
     () =>
