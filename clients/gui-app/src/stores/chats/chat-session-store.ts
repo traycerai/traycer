@@ -1088,8 +1088,8 @@ export interface ChatSessionState {
    * When a LOADED session was last dropped back into a pre-snapshot wait, or
    * `null` while this session has never finished one.
    *
-   * `retry()` clears `snapshotLoaded`, and its three automatic callers - the
-   * wake pulse, the plan-restricted reprobe and the host-version move - all
+   * `retry()` clears `snapshotLoaded`, and its two automatic callers - the
+   * wake pulse and the host-version move - both
    * reach a session whose transcript is already on screen. The tile's own
    * anchor is its FIRST render for the chat, so without this stamp a tile
    * mounted longer than the deadline would declare the replacement
@@ -1853,11 +1853,10 @@ export interface ChatSessionState {
    * again.
    *
    * Deliberately a SECOND action rather than a gate inside `retry()`.
-   * `retry()` has three automatic callers - the wake pulse, the plan-restricted
-   * reprobe, and the host-version move - and none of them may drop a socket:
-   * they fire on their own schedule, against sessions that are usually
-   * healthy, and a gate inside `retry()` would hand all three a redial as a
-   * side effect.
+   * `retry()` has two automatic callers - the wake pulse and the host-version
+   * move - and neither may drop a socket: they fire on their own schedule,
+   * against sessions that are usually healthy, and a gate inside `retry()`
+   * would hand both a redial as a side effect.
    */
   retryFromUser: () => void;
   /**

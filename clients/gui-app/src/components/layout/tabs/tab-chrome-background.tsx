@@ -1,14 +1,16 @@
 import { useState, type CSSProperties } from "react";
 import { usePublishSheetJoin } from "./sheet-join-context";
 import { cn } from "@/lib/utils";
+import type { SheetJoinPane } from "./side-strip/side-tab-join";
 import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
 import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
 
 /**
  * The selected header tab's box. `joined` runs it into its task's sheet (the
  * sheet join in `index.css`, which supersedes staging round 1's F4 "boxy"
- * ruling): from md the box takes the canvas fill and the sheet's border,
- * opens at the bottom, and the column's bridge runs it down onto the sheet.
+ * ruling) and names the pane it meets there (`surfaceJoinPane`): from md the
+ * box takes that pane's fill and the sheet's border, opens at the bottom, and
+ * the column's bridge runs it down onto the sheet.
  * Joined, the whole outline - the box's sides and top, then the bridge's sides
  * and its two feet - is drawn in `borderColor` (`--join-outline`), so a
  * coloured tab traces its full silhouette in its colour exactly as an
@@ -19,21 +21,21 @@ import { useWhollyInTabStrip } from "./use-wholly-in-tab-strip";
 export function TabChromeBackground(props: {
   readonly fill: string;
   readonly borderColor: string;
-  readonly joined: boolean;
+  readonly joined: SheetJoinPane | null;
   readonly className: string | undefined;
 }) {
   const [node, setNode] = useState<HTMLSpanElement | null>(null);
-  const inStrip = useWhollyInTabStrip(node, props.joined);
-  usePublishSheetJoin(
-    props.joined && inStrip ? "canvas" : null,
-    props.borderColor,
-  );
+  const inStrip = useWhollyInTabStrip(node, props.joined !== null);
+  const pane = inStrip ? props.joined : null;
+  usePublishSheetJoin(pane, props.borderColor);
   return (
     <span
       ref={setNode}
       aria-hidden
       data-testid="tab-chrome-box"
-      {...(props.joined && inStrip ? { "data-sheet-joined": "top" } : {})}
+      {...(pane === null
+        ? {}
+        : { "data-sheet-joined": "top", "data-join-pane": pane })}
       className={cn(
         TAB_BOX_CLASS,
         "border border-(--swatch-border) bg-(--swatch)",

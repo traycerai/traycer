@@ -59,8 +59,8 @@ export type StreamCloseReason =
  * check, so a caller reading this gets one answer on both transports.
  *
  * Deliberately a WHITELIST rather than "any fatal". `CLIENT_CLOSED` (a late
- * subscribe on a torn-down client), `UNAUTHORIZED`, `STREAM_MESSAGE_TOO_LARGE`,
- * `PLAN_RESTRICTED` and the transport timeouts all arrive through this same
+ * subscribe on a torn-down client), `UNAUTHORIZED`, `STREAM_MESSAGE_TOO_LARGE`
+ * and the transport timeouts all arrive through this same
  * channel and say nothing about what the host can serve. Reading any of them as
  * incompatibility would pin a permanent "this host is too old" verdict on a
  * failure the next dial clears - and worse, on hosts that are perfectly capable.

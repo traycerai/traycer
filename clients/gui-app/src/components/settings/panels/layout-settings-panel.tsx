@@ -2,7 +2,6 @@ import { LayoutUsageProvider } from "@/components/layout-editor/inspector/provid
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -31,6 +30,11 @@ import {
   SettingsMasterDetail,
   SettingsMasterSelect,
 } from "@/components/settings/settings-master-detail";
+import {
+  SETTINGS_AREA_BODY_PROPS,
+  useSettingsAnchorArea,
+  useSettingsAreaStartsAtTop,
+} from "@/components/settings/settings-master-detail-area";
 import { settingsRailRowClassName } from "@/components/settings/settings-rail-row";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -49,7 +53,6 @@ import {
   subscribePendingLayoutLanding,
   takePendingLayoutLanding,
 } from "@/lib/settings-navigation";
-import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 import { useLayoutSnapshot } from "@/stores/layout/layout-store";
 
 /**
@@ -68,7 +71,7 @@ import { useLayoutSnapshot } from "@/stores/layout/layout-store";
  * children a commit AFTER the pick (Presence flips in a layout effect), so a
  * region landing or a search reveal that switches area would look for its row
  * in an empty pane and have nothing to re-run it. Settings search lands on
- * every row here, and picks its area first (`useLayoutAnchorArea`,
+ * every row here, and picks its area first (`useSettingsAnchorArea`,
  * `useLayoutRegionLanding`).
  */
 export function LayoutSettingsPanel(): ReactNode {
@@ -86,7 +89,7 @@ export function LayoutSettingsPanel(): ReactNode {
     );
   }, []);
 
-  useLayoutAnchorArea(setArea);
+  useSettingsAnchorArea("layout", layoutAreaForAnchor, setArea);
   useLayoutRegionLanding({
     paneRef: rootRef,
     tab: area,
@@ -94,7 +97,7 @@ export function LayoutSettingsPanel(): ReactNode {
     openRows,
     setOpenRows,
   });
-  useAreaStartsAtTop(rootRef, area);
+  useSettingsAreaStartsAtTop(rootRef, area);
 
   const changed = (id: LayoutAreaId): boolean =>
     layoutAreaChanged(id, snapshot);
@@ -193,6 +196,7 @@ export function LayoutSettingsPanel(): ReactNode {
                   an opaque fill over the card's translucent surface. */}
                   <div
                     data-layout-area-body
+                    {...SETTINGS_AREA_BODY_PROPS}
                     className="-mx-5 flex flex-col gap-4 px-5 pt-4 pb-5 md:min-h-0 md:flex-1 md:overflow-y-auto"
                   >
                     <LayoutAreaBody
@@ -290,42 +294,6 @@ function layoutAreaForAnchor(anchor: string): LayoutAreaId | null {
   const groupKey =
     definition.kind === "row" ? definition.group : definition.key;
   return groupKey === null ? null : (AREA_FOR_GROUP[groupKey] ?? null);
-}
-
-/**
- * A Settings search result for a row on this page, taken to its area.
- *
- * The reveal watcher (`useSettingsAnchorReveal`) finds the anchor and flashes
- * it, and polls until it can - but only the picked area is visible, so the row
- * cannot be seen until this has picked its area.
- */
-function useLayoutAnchorArea(setArea: (area: LayoutAreaId) => void): void {
-  const pendingReveal = useSettingsSearchStore((state) => state.pendingReveal);
-  useEffect(() => {
-    if (pendingReveal === null || pendingReveal.section !== "layout") return;
-    if (pendingReveal.anchor === null) return;
-    const target = layoutAreaForAnchor(pendingReveal.anchor);
-    if (target !== null) setArea(target);
-  }, [pendingReveal, setArea]);
-}
-
-/**
- * A newly picked area starts at its top, as a newly picked provider does.
- *
- * Each area keeps its own scroll box while hidden, so without this one left
- * scrolled far down would come back there. A layout effect, so it runs before
- * a region landing or a search reveal scrolls the same box to a row.
- */
-function useAreaStartsAtTop(
-  root: { current: HTMLDivElement | null },
-  area: LayoutAreaId,
-): void {
-  useLayoutEffect(() => {
-    const body = root.current?.querySelector(
-      '[role="tabpanel"]:not([hidden]) [data-layout-area-body]',
-    );
-    if (body !== null && body !== undefined) body.scrollTop = 0;
-  }, [root, area]);
 }
 
 /** The same dot a changed row draws, said in words for a screen reader. */

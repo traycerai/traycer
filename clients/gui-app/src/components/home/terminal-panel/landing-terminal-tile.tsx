@@ -30,7 +30,6 @@ import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schema
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   useHostReachability,
   resolvedHostLabel,
@@ -59,8 +58,6 @@ import {
   peekXtermHostGridForSession,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { useTerminalSessionHandle } from "@/lib/registries/terminal-session-registry";
-import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 
 const INDEPENDENT_SCOPE: TerminalScope = { kind: "independent" };
 const TERMINAL_DEFAULT_COLS = 80;
@@ -200,12 +197,7 @@ export function LandingTerminalLegacyBootstrap(
   }, [bootstrap.createError?.code, props.tab.instanceId, rekeyTab]);
 
   if (reachability.status === "unreachable") {
-    return (
-      <TerminalDeadState
-        hostLabel={reachability.hostLabel}
-        unavailability={reachability.unavailability}
-      />
-    );
+    return <TerminalDeadState hostLabel={reachability.hostLabel} />;
   }
   if (hostLoad.kind !== "ready") {
     // The directory has not answered yet, or is empty because this machine's
@@ -419,12 +411,7 @@ function LandingTerminalDurableState(props: {
   readonly authoritativeTerminal: PlainTerminalViewModel | null;
 }): ReactNode {
   if (props.reachability.status === "unreachable") {
-    return (
-      <TerminalDeadState
-        hostLabel={props.reachability.hostLabel}
-        unavailability={props.reachability.unavailability}
-      />
-    );
+    return <TerminalDeadState hostLabel={props.reachability.hostLabel} />;
   }
   if (
     props.reachability.status === "checking" ||
@@ -675,42 +662,16 @@ function LandingTerminalWaiting(): ReactNode {
 /**
  * The tile replaced by an explanation of why its host cannot be reached.
  *
- * `plan-restricted` gets its own sentence rather than the offline one, because
- * "is offline" is false for it in a way that costs the reader real time: the
- * machine is running and healthy, it simply has no remote route on this
- * account's plan. Telling them it is off sends them to restart it, and hides
- * the only thing that would actually help.
- *
  * `indeterminate` never reaches here — `useHostReachability` reports it as
  * reachable, so the live path runs and the dial either succeeds or fails on its
  * own evidence.
  */
 export function TerminalDeadState(props: {
   readonly hostLabel: string;
-  readonly unavailability: HostUnavailability | null;
 }): ReactNode {
   return (
     <div className="flex h-full min-h-0 w-full items-center justify-center bg-canvas p-4 text-center text-ui-sm text-muted-foreground">
-      {terminalDeadStateMessage(props.hostLabel, props.unavailability)}
+      {`${props.hostLabel} is offline. This terminal stays bound to that host.`}
     </div>
   );
-}
-
-/**
- * The fact is the same on every shell; only the remedy differs. The installed
- * mobile app may not tell the reader to upgrade (App Store review guideline
- * 3.1.1), so it points at the shell that may carry that offer, and keeps the
- * note that the terminal stays bound either way.
- */
-function terminalDeadStateMessage(
-  hostLabel: string,
-  unavailability: HostUnavailability | null,
-): string {
-  if (unavailability !== "plan-restricted") {
-    return `${hostLabel} is offline. This terminal stays bound to that host.`;
-  }
-  const reached = `${hostLabel} is local only on your current plan, so it can't be reached from here.`;
-  return isMobileApp()
-    ? `${reached} ${PLAN_RESTRICTED_MOBILE_REMEDY} This terminal stays bound to it.`
-    : `${reached} Upgrade to use it remotely; this terminal stays bound to it.`;
 }

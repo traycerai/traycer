@@ -228,11 +228,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // Same reason gate as `terminal-tile`: a `plan-restricted` host is running,
-    // so nothing closed and a persisted "closed" entry would be a lie an
-    // upgrade immediately contradicts.
-    if (reachability.unavailability === "plan-restricted") return;
-    // And the same basis gate: since F4 this verdict also arrives from a
+    // The same basis gate as `terminal-tile`: since F4 this verdict also arrives from a
     // starting host that overran its budget, which is the UI's patience
     // expiring rather than proof the agent's session ended. The tile stops
     // waiting; the persisted notification still needs directory evidence.
@@ -272,7 +268,6 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }, [
     reachability.status,
     reachability.hostLabel,
-    reachability.unavailability,
     reachability.basis,
     reachability.hostKind,
     epicId,
@@ -288,7 +283,6 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
         reason="host-unreachable"
         hostLabel={reachability.hostLabel}
         ownerKind="agent"
-        unavailability={reachability.unavailability}
         onClose={closeCanvasTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
@@ -810,7 +804,6 @@ function TuiAgentTileLive(
         reason="not-running-remotely"
         hostLabel={hostLabel}
         ownerKind="agent"
-        unavailability={null}
         onClose={closeTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />

@@ -413,6 +413,7 @@ vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
 import { LANDING_BROWSER_WATCHED_HOST_CAP } from "@/components/home/terminal-panel/landing-browser-presentation";
 import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
+import { useLandingPaneAnchorStore } from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
@@ -6596,5 +6597,307 @@ describe("<LandingTerminalPanel />", () => {
         (tab) => tab.hostId === "host-b",
       ),
     ).toBe(false);
+  });
+
+  /**
+   * What the panel publishes for the tab that joins its start page
+   * (`panelCoverage`): the tab takes the panel's ground where the panel covers
+   * the page, so the entry has to say what is RENDERED, never what the stored
+   * layout remembers. The layout stays open and maximized while the panel is
+   * unmounted for a target that cannot serve it (`panelUnavailable`), and a tab
+   * that read it then painted a panel nobody could see.
+   */
+  describe("the coverage it publishes for the tab that joins its page", () => {
+    beforeEach(() => {
+      useLandingPaneAnchorStore.setState(
+        useLandingPaneAnchorStore.getInitialState(),
+        true,
+      );
+    });
+
+    function coverageFor(landingPageId: string) {
+      return useLandingPaneAnchorStore
+        .getState()
+        .panelCoverage.get(landingPageId);
+    }
+
+    /** A target host that can serve a terminal: the panel mounts. */
+    function serveTerminalTarget(): void {
+      mocks.activeHostId = "host-a";
+      mocks.clientActiveHostId = "host-a";
+      mocks.primaryWorkspacePath = "/workspace/project";
+      mocks.probeData = emptyList("/Users/dev");
+      mocks.freshProbeData = mocks.probeData;
+    }
+
+    /** No host is selected (`no-active-host`): the panel unmounts. */
+    function selectNoHost(): void {
+      mocks.activeHostId = null;
+      mocks.clientActiveHostId = null;
+      mocks.primaryWorkspacePath = null;
+      mocks.probeData = undefined;
+      mocks.freshProbeData = undefined;
+    }
+
+    /** A target host too old to list terminals (`unsupported`): the panel unmounts. */
+    function selectUnsupportedHost(): void {
+      mocks.activeHostId = "host-a";
+      mocks.clientActiveHostId = "host-a";
+      mocks.primaryWorkspacePath = "/workspace/project";
+      mocks.probeData = undefined;
+      mocks.freshProbeData = undefined;
+      mocks.probeError = new HostRpcError({
+        code: "DOWNGRADE_UNSUPPORTED",
+        message: "terminal.list is not supported by this host",
+        requestId: "req-unsupported",
+        method: "terminal.list",
+        fatalDetails: null,
+      });
+    }
+
+    function storeLayout(layout: {
+      readonly panelOpen: boolean;
+      readonly maximized: boolean;
+    }): void {
+      const store = useLandingPanelStore.getState();
+      store.setPanelOpen(TEST_LANDING_PAGE_ID, layout.panelOpen);
+      store.setPanelMaximized(TEST_LANDING_PAGE_ID, layout.maximized);
+    }
+
+    function addBrowserRow(): void {
+      mocks.browserSessionsByHost = {
+        "host-b": browserSessionsState({ hostId: "host-b" }),
+      };
+      addBrowserTab("host-b", "browser-instance");
+    }
+
+    it("publishes full while the open panel is maximized", () => {
+      serveTerminalTarget();
+      storeLayout({ panelOpen: true, maximized: true });
+
+      render(panelUi());
+
+      expect(screen.getByTestId("landing-terminal-panel")).toBeTruthy();
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("full");
+    });
+
+    it("publishes docked while the open panel is not maximized on a desktop viewport", () => {
+      serveTerminalTarget();
+      storeLayout({ panelOpen: true, maximized: false });
+
+      render(panelUi());
+
+      expect(screen.getByTestId("landing-terminal-panel")).toBeTruthy();
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("docked");
+    });
+
+    it("publishes full for an open panel that is not maximized at phone width, where it covers the page", () => {
+      mocks.isMobile = true;
+      serveTerminalTarget();
+      storeLayout({ panelOpen: true, maximized: false });
+
+      render(panelUi());
+
+      expect(screen.getByTestId("landing-terminal-panel")).toBeTruthy();
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("full");
+    });
+
+    it("publishes nothing while the panel is collapsed, though it stays mounted", () => {
+      serveTerminalTarget();
+      storeLayout({ panelOpen: false, maximized: false });
+
+      render(panelUi());
+
+      expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
+        "false",
+      );
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+    });
+
+    it("publishes nothing for a collapsed panel that remembers a maximize", () => {
+      serveTerminalTarget();
+      storeLayout({ panelOpen: false, maximized: true });
+
+      render(panelUi());
+
+      expect(screen.getByTestId("landing-terminal-panel").dataset.open).toBe(
+        "false",
+      );
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+    });
+
+    // The reviewer's case: the layout is open and maximized, and the target
+    // cannot serve a terminal, so no panel is rendered at all.
+    it("publishes nothing when the layout is open and maximized but no host is selected", async () => {
+      selectNoHost();
+      storeLayout({ panelOpen: true, maximized: true });
+
+      render(panelUi());
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
+      });
+      expect(testLayout().panelOpen).toBe(true);
+      expect(testLayout().maximized).toBe(true);
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+    });
+
+    it("publishes nothing when the layout is open and maximized but the target host is unsupported", async () => {
+      selectUnsupportedHost();
+      storeLayout({ panelOpen: true, maximized: true });
+
+      render(panelUi());
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
+      });
+      expect(testLayout().panelOpen).toBe(true);
+      expect(testLayout().maximized).toBe(true);
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+    });
+
+    it("publishes nothing when only terminal rows are held and the target host is unsupported", async () => {
+      selectUnsupportedHost();
+      useLandingPanelStore.getState().addTab({
+        kind: "terminal",
+        instanceId: "terminal-instance",
+        sessionId: "terminal-session",
+        hostId: "host-a",
+        cwd: "/workspace/project",
+        name: "project",
+        titleSource: "default",
+      });
+      storeLayout({ panelOpen: true, maximized: true });
+
+      render(panelUi());
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
+      });
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+    });
+
+    // The other half: the verdict is the terminal target's, and a browser row
+    // is served by its own device, so the panel stays mounted and covers the
+    // page - which is exactly when the tab must take its ground.
+    it("publishes full for a maximized panel that a browser row keeps mounted past a no-host verdict", async () => {
+      selectNoHost();
+      addBrowserRow();
+      storeLayout({ panelOpen: true, maximized: true });
+
+      render(panelUi());
+
+      expect(
+        await screen.findByTestId("landing-browser-tile-browser-instance"),
+      ).toBeTruthy();
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("full");
+    });
+
+    it("publishes docked for an open panel that a browser row keeps mounted past an unsupported verdict", async () => {
+      selectUnsupportedHost();
+      addBrowserRow();
+      storeLayout({ panelOpen: true, maximized: false });
+
+      render(panelUi());
+
+      expect(
+        await screen.findByTestId("landing-browser-tile-browser-instance"),
+      ).toBeTruthy();
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("docked");
+    });
+
+    it("retracts the entry when the target stops serving the panel, and publishes it again when it serves it", async () => {
+      serveTerminalTarget();
+      storeLayout({ panelOpen: true, maximized: true });
+      const view = render(panelUi());
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("full");
+
+      selectNoHost();
+      view.rerender(panelUi());
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("landing-terminal-panel")).toBeNull();
+      });
+      // Nothing about the stored layout moved: only what is rendered did.
+      expect(testLayout().panelOpen).toBe(true);
+      expect(testLayout().maximized).toBe(true);
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+
+      serveTerminalTarget();
+      mocks.dataUpdatedAt += 1;
+      view.rerender(panelUi());
+
+      await waitFor(() => {
+        expect(screen.getByTestId("landing-terminal-panel")).toBeTruthy();
+      });
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("full");
+    });
+
+    it("follows the panel through maximize, restore and collapse", async () => {
+      serveTerminalTarget();
+      storeLayout({ panelOpen: true, maximized: false });
+      render(panelUi());
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("docked");
+
+      fireEvent.click(screen.getByRole("button", { name: "Maximize panel" }));
+      await waitFor(() => {
+        expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("full");
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Restore panel" }));
+      await waitFor(() => {
+        expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("docked");
+      });
+
+      fireEvent.click(screen.getByTestId("landing-terminal-collapse"));
+      await waitFor(() => {
+        expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+      });
+
+      fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+      await waitFor(() => {
+        expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("docked");
+      });
+    });
+
+    it("retracts the entry when the panel unmounts", () => {
+      serveTerminalTarget();
+      storeLayout({ panelOpen: true, maximized: true });
+      const view = render(panelUi());
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBe("full");
+
+      view.unmount();
+
+      expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
+      expect(useLandingPaneAnchorStore.getState().panelCoverage.size).toBe(0);
+    });
+
+    it("publishes for the page the panel is on, and moves the entry when the page changes", () => {
+      serveTerminalTarget();
+      useLandingPanelStore.getState().setPanelOpen("draft-a", true);
+      useLandingPanelStore.getState().setPanelMaximized("draft-b", true);
+      useLandingPanelStore.getState().setPanelOpen("draft-b", true);
+      const view = render(panelUiForDraft("draft-a"));
+      expect(coverageFor("draft-a")).toBe("docked");
+      expect(coverageFor("draft-b")).toBeUndefined();
+
+      view.rerender(panelUiForDraft("draft-b"));
+
+      expect(coverageFor("draft-a")).toBeUndefined();
+      expect(coverageFor("draft-b")).toBe("full");
+      expect(useLandingPaneAnchorStore.getState().panelCoverage.size).toBe(1);
+    });
+
+    it("publishes nothing for a page the panel is not on, whatever that page's own layout says", () => {
+      serveTerminalTarget();
+      useLandingPanelStore.getState().setPanelOpen("draft-a", true);
+      useLandingPanelStore.getState().setPanelMaximized("draft-a", true);
+      useLandingPanelStore.getState().setPanelOpen("draft-b", false);
+
+      render(panelUiForDraft("draft-b"));
+
+      expect(coverageFor("draft-b")).toBeUndefined();
+      expect(coverageFor("draft-a")).toBeUndefined();
+    });
   });
 });

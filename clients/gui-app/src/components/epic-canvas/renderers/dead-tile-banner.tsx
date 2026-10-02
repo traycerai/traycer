@@ -1,10 +1,7 @@
 import type { ReactNode } from "react";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
 
@@ -61,25 +58,11 @@ export type DeadTileReason = "host-unreachable" | "not-running-remotely";
 
 function terminalDeadTileMessage(
   reason: DeadTileReason,
-  unavailability: HostUnavailability | null,
   ownerKind: DeadTileOwnerKind,
   hostLabel: string,
 ): string {
   if (reason === "not-running-remotely") {
     return `This agent is not running on "${hostLabel}" right now, and it can only be started on that machine. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
-  }
-  if (unavailability === "plan-restricted") {
-    // The fact holds on every shell; only the remedy differs. The installed
-    // mobile app may not tell the reader to upgrade (App Store guideline
-    // 3.1.1), so it points at the shell that may.
-    if (isMobileApp()) {
-      return ownerKind === "agent"
-        ? `Host "${hostLabel}" is local only on your current plan, so this agent cannot be reached from here. ${PLAN_RESTRICTED_MOBILE_REMEDY} The agent and its transcript are kept either way.`
-        : `Host "${hostLabel}" is local only on your current plan, so this terminal cannot be reached from here. ${PLAN_RESTRICTED_MOBILE_REMEDY} Or open this terminal on that machine.`;
-    }
-    return ownerKind === "agent"
-      ? `Host "${hostLabel}" is local only on your current plan, so this agent cannot be reached from here. Upgrade to use that host remotely — the agent and its transcript are kept either way.`
-      : `Host "${hostLabel}" is local only on your current plan, so this terminal cannot be reached from here. Upgrade to use that host remotely, or open this terminal on that machine.`;
   }
   return ownerKind === "agent"
     ? `Host "${hostLabel}" is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
@@ -95,24 +78,6 @@ export interface TerminalDeadTileBannerProps {
    * silently pick one for a call site that had not thought about it.
    */
   readonly reason: DeadTileReason;
-  /**
-   * WHY the bound host cannot be reached, from `useHostReachability`.
-   *
-   * `plan-restricted` is the reason this is a prop rather than one string. The
-   * account's plan has no remote route to that host — the machine itself is
-   * not the problem, and is very probably running. Telling its owner the
-   * terminal is "permanently closed" is false about a session that is likely
-   * still alive on the other side, and it names a remedy (there is none)
-   * instead of the one that exists.
-   *
-   * Since connectivity became pure liveness, this verdict is reached ONLY for
-   * a host the cloud reports `connectable` or could not read. A plan-gated
-   * host the cloud reports `offline` is `offline` here, and gets the
-   * unreachable copy — which is the honest one for a machine that is off.
-   *
-   * `indeterminate` never arrives here: the hook reports it as reachable.
-   */
-  readonly unavailability: HostUnavailability | null;
   readonly onClose: () => void;
   readonly testId: string;
 }
@@ -128,7 +93,6 @@ export function TerminalDeadTileBanner(
       <p className="max-w-md">
         {terminalDeadTileMessage(
           props.reason,
-          props.unavailability,
           props.ownerKind,
           props.hostLabel,
         )}
@@ -355,20 +319,11 @@ export function ChatHostStartingBanner(
 }
 
 /**
- * Five distinct causes land on this ONE banner, and no two of them are the
+ * Four distinct causes land on this ONE banner, and no two of them are the
  * same sentence (chat-sync-v2 tickets 35 and 49):
  *
  * - `host-offline` - the bound host is genuinely unreachable. Nothing was
  *   asked and nothing answered, so the host is what has to come back.
- * - `host-plan-restricted` - the account's plan has no remote route to the
- *   host, which is otherwise alive (or at least not known to be dead - a
- *   plan-gated host the cloud reports `offline` reads `host-offline`). It exists because the
- *   reason had a producer (`useHostReachability`) and no consumer: every
- *   unreachable result was rendered as `host-offline`, so a free-tier account
- *   with a persisted remote chat was told a healthy machine was off, and
- *   offered a restart it could not do instead of the upgrade that is the
- *   actual remedy. Clone stays offered - moving the thread to a host you CAN
- *   reach is exactly the way out.
  * - `chat-not-visible` - a reachable host that is NOT this device answered,
  *   and answered that it has nothing for this chat (`chat.subscribe`
  *   terminated `CHAT_NOT_VISIBLE`). "is offline" would be false here.
@@ -385,12 +340,11 @@ export function ChatHostStartingBanner(
  *   or epic-membership loss). The one member of this taxonomy that is not about
  *   a host at all - the chat exists, its host is fine, and it is the VIEWER's
  *   entitlement that changed. It is also the only one with nothing to offer:
- *   the other four all end in "clone it and carry on", which needs read access
+ *   the other three all end in "clone it and carry on", which needs read access
  *   to a transcript this viewer no longer has.
  */
 export type ChatDeadTileBannerReason =
   | "host-offline"
-  | "host-plan-restricted"
   | "chat-not-visible"
   | "chat-not-on-this-host"
   | "chat-no-longer-shared";
@@ -488,36 +442,6 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
     ),
     reportTitle: "Agent host is offline",
     reportMessage: "The agent's bound host is offline.",
-    offersClone: true,
-  },
-  "host-plan-restricted": {
-    // The clone alternative is the same on both shells; only the upgrade
-    // clause is withheld from the installed mobile app (App Store guideline
-    // 3.1.1), which points at the desktop app instead.
-    message: (hostLabel) =>
-      isMobileApp() ? (
-        <>
-          Bound host &quot;{hostLabel}&quot; is local only on your current plan,
-          so it can&apos;t be reached from here. {PLAN_RESTRICTED_MOBILE_REMEDY}{" "}
-          Or continue here to create a new agent on the active host.
-        </>
-      ) : (
-        <>
-          Bound host &quot;{hostLabel}&quot; is local only on your current plan,
-          so it can&apos;t be reached from here. Upgrade to use it remotely, or
-          continue here to create a new agent on the active host.
-        </>
-      ),
-    messageWithoutClone: (hostLabel) => (
-      <>
-        Bound host &quot;{hostLabel}&quot; is local only on your current plan,
-        so it can&apos;t be reached from here. You have view-only access to this
-        task, so it can&apos;t be cloned onto another host.
-      </>
-    ),
-    reportTitle: "Agent host is not reachable on this plan",
-    reportMessage:
-      "The agent's bound host has no remote route on the current plan.",
     offersClone: true,
   },
   "chat-not-visible": {

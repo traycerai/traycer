@@ -14,21 +14,29 @@ import { LocalHostRestartFlow } from "@/components/host/local-host-restart-flow"
 import { HostLifecycleNoneConfirmDialog } from "@/components/settings/host-lifecycle-none-confirm-dialog";
 import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { SettingsRow } from "@/components/settings/settings-row";
+import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerHostLifecycleQuery } from "@/hooks/runner/use-runner-host-lifecycle-query";
 import { useRunnerHostLifecycleSetMutation } from "@/hooks/runner/use-runner-host-lifecycle-set-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isPaid } from "@/lib/auth/traycer-subscription-content";
 import {
   HOST_FOREGROUND_RESTART_TO_APPLY_REASON,
   HOST_LIFECYCLE_FOOTNOTE_SET_COMMAND,
   HOST_LIFECYCLE_FOOTNOTE_START_COMMAND,
   HOST_LIFECYCLE_MODE_ORDER,
-  HOST_LIFECYCLE_NONE_PLAN_REASON,
+  HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON,
   HOST_LIFECYCLE_PENDING_RESTART_APP,
   HOST_LIFECYCLE_PENDING_RESTART_HOST,
   HOST_LIFECYCLE_READ_FAILED,
@@ -45,18 +53,19 @@ import {
 } from "@/lib/host/host-lifecycle-copy";
 import { isForegroundHostRun } from "@/lib/host/host-foreground-run";
 import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
-import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Settings → General → "When you quit Traycer": what happens to this
- * machine's host when the app quits.
+ * "When you quit Traycer" as a card of its own: what happens to this machine's
+ * host when the app quits, as five radios with a sentence each.
+ *
+ * This is the signed-out presentation. Signed out the settings shell is not
+ * reachable, so the card renders alone at `/when-you-quit`, which is where the
+ * desktop's "Settings…" (menu, tray, jump list) goes then. Signed in the same
+ * setting is one row in Settings → General (`HostLifecycleSettingsRow`).
  *
  * A machine-local desktop preference read and written through desktop main
  * (`runnerHost.hostLifecycle`), never a host RPC, so it needs no host: it
  * works before any host exists and in a launch with no local host at all.
- * Signed in it sits in Settings → General. Signed out the settings shell is
- * not reachable, so this card renders on its own at `/when-you-quit`, which
- * is where the desktop's "Settings…" (menu, tray, jump list) goes then.
  */
 export function HostLifecycleSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
@@ -65,7 +74,7 @@ export function HostLifecycleSettingsSection(): ReactNode {
   }
   return (
     <SettingsGroup
-      group={GENERAL.definitions.hostLifecycle}
+      group={GENERAL.definitions.hostLifecycleCard}
       showTitle
       tone="default"
       dataTestId="settings-host-lifecycle"
@@ -74,6 +83,23 @@ export function HostLifecycleSettingsSection(): ReactNode {
       <HostLifecycleCard />
     </SettingsGroup>
   );
+}
+
+/**
+ * Settings → General → Agents → "When you quit Traycer": the same setting as
+ * one row. The dropdown lists the five modes with their sentences, and the
+ * row's description is the chosen mode's own sentence, so what the current
+ * choice does is readable without opening anything.
+ *
+ * The gate is the only thing rendered above the hooks: they reach the runner
+ * host's lifecycle bridge, which a shell without one does not have.
+ */
+export function HostLifecycleSettingsRow(): ReactNode {
+  const availability = useSettingsAvailabilityContext();
+  if (!GENERAL.definitions.hostLifecycle.availableWhen(availability)) {
+    return null;
+  }
+  return <AvailableHostLifecycleSettingsRow />;
 }
 
 /**
@@ -92,29 +118,49 @@ function taskNotOwnedNotice(failure: HostEnsureFailure | null): string | null {
     : SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE;
 }
 
-function HostLifecycleCard(): ReactNode {
+/** Everything both presentations of the setting read and do. */
+interface HostLifecycleModel {
+  readonly machine: string;
+  /** `undefined` until desktop main answers. */
+  readonly view: HostLifecycleView | undefined;
+  /** The read failed and nothing is cached to show in its place. */
+  readonly readFailed: boolean;
+  readonly readRetrying: boolean;
+  readonly retryRead: () => void;
+  readonly desired: HostLifecycleMode | null;
+  /** The mode a write in flight is setting, or `null`. */
+  readonly pendingMode: HostLifecycleMode | null;
+  readonly busy: boolean;
+  /** Why this account has no background host on this PC, or `null`. */
+  readonly taskNotOwnedMessage: string | null;
+  readonly inlineError: string | null;
+  readonly confirmingNone: boolean;
+  readonly closeConfirmNone: () => void;
+  readonly choose: (mode: HostLifecycleMode) => void;
+  /** Why a mode cannot be chosen, or `null`. */
+  readonly disabledReason: (mode: HostLifecycleMode) => string | null;
+}
+
+function useHostLifecycleModel(): HostLifecycleModel {
   const machine = hostMachineNoun();
   const viewQuery = useRunnerHostLifecycleQuery();
   const setMode = useRunnerHostLifecycleSetMutation();
-  const subscriptionStatus = useAuthStore((state) => state.subscriptionStatus);
-  const admitted = useShellLocalPlaneAdmission().admitted;
-  // Remote hosts are a paid feature, so on a plan without them "no host here"
-  // leaves nothing usable. Signed out there is no plan to offer them either,
-  // so `none` is held there too, with the same reason. Admitted, `null` is a
-  // plan not yet read, which does not block. A `none` already chosen stays
-  // selectable either way (`desired` below).
-  const noneBlockedByPlan =
-    !admitted || (subscriptionStatus !== null && !isPaid(subscriptionStatus));
+  // A remote host is reached through the signed-in account, so signed out
+  // "no host here" leaves nothing usable and `none` is held. Remote hosts are
+  // available on every plan, so nothing about the subscription enters this. A
+  // `none` already chosen stays selectable either way (`desired` below).
+  const noneBlockedSignedOut = !useShellLocalPlaneAdmission().admitted;
   // The host's Scheduled Task is not this account's (the last ensure was
   // refused `E_SERVICE_TASK_NOT_OWNED`): this account has no background host
-  // on this PC. The card says why (`taskNotOwnedNotice`), holds the modes that
-  // would run one here - the service refresh a switch between them makes is
-  // refused - and keeps `none`, the one choice that still means something.
+  // on this PC. The notice says why (`taskNotOwnedNotice`), the modes that
+  // would run one here are held - the service refresh a switch between them
+  // makes is refused - and `none` stays, the one choice that still means
+  // something.
   const taskNotOwnedMessage = taskNotOwnedNotice(
     useRunnerHostControllerStatusQuery().data?.lastEnsureFailure ?? null,
   );
   const taskNotOwned = taskNotOwnedMessage !== null;
-  const [confirmNone, setConfirmNone] = useState(false);
+  const [confirmingNone, setConfirmingNone] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
   const view = viewQuery.data;
   const desired = view === undefined ? null : view.desired.mode;
@@ -127,7 +173,7 @@ function HostLifecycleCard(): ReactNode {
     // confirmed with the list of what it would end. A launch that already runs
     // none has nothing to stop.
     if (mode === "none" && view.applied.localHostCapability === "managed") {
-      setConfirmNone(true);
+      setConfirmingNone(true);
       return;
     }
     setMode.mutate(
@@ -148,6 +194,72 @@ function HostLifecycleCard(): ReactNode {
     );
   };
 
+  return {
+    machine,
+    view,
+    readFailed: viewQuery.isError && view === undefined,
+    readRetrying: viewQuery.isFetching,
+    retryRead: () => {
+      void viewQuery.refetch();
+    },
+    desired,
+    pendingMode,
+    busy: setMode.isPending,
+    taskNotOwnedMessage,
+    inlineError,
+    confirmingNone,
+    closeConfirmNone: () => {
+      setConfirmingNone(false);
+    },
+    choose,
+    disabledReason: (mode) =>
+      hostLifecycleOptionDisabledReason(
+        mode,
+        desired,
+        noneBlockedSignedOut,
+        taskNotOwned,
+      ),
+  };
+}
+
+/** The read failure and its retry, where either presentation puts it. */
+function HostLifecycleReadError(props: {
+  readonly model: HostLifecycleModel;
+}): ReactNode {
+  const { model } = props;
+  if (!model.readFailed) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <p
+        className="min-w-0 text-ui-sm text-destructive"
+        data-testid="host-lifecycle-read-error"
+      >
+        {HOST_LIFECYCLE_READ_FAILED}
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={model.readRetrying}
+        onClick={model.retryRead}
+      >
+        {model.readRetrying ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        Try again
+      </Button>
+    </div>
+  );
+}
+
+function HostLifecycleCard(): ReactNode {
+  const model = useHostLifecycleModel();
+  const { machine, view, desired, pendingMode } = model;
+
   return (
     <div
       className="flex flex-col gap-3 px-3.5 py-3"
@@ -156,51 +268,24 @@ function HostLifecycleCard(): ReactNode {
       <p className="text-ui-sm text-muted-foreground">
         {hostLifecycleCardSubtitle(machine)}
       </p>
-      {taskNotOwned ? (
+      {model.taskNotOwnedMessage === null ? null : (
         <p
           className="text-ui-sm text-warning-foreground"
           data-testid="host-lifecycle-task-not-owned"
         >
-          {taskNotOwnedMessage}
+          {model.taskNotOwnedMessage}
         </p>
-      ) : null}
-      {viewQuery.isError && view === undefined ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <p
-            className="min-w-0 text-ui-sm text-destructive"
-            data-testid="host-lifecycle-read-error"
-          >
-            {HOST_LIFECYCLE_READ_FAILED}
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={viewQuery.isFetching}
-            onClick={() => {
-              void viewQuery.refetch();
-            }}
-          >
-            {viewQuery.isFetching ? (
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-            Try again
-          </Button>
-        </div>
-      ) : null}
+      )}
+      <HostLifecycleReadError model={model} />
       <RadioGroup
         value={pendingMode ?? desired ?? ""}
         onValueChange={(value) => {
           const mode = HOST_LIFECYCLE_MODE_ORDER.find(
             (candidate) => candidate === value,
           );
-          if (mode !== undefined) choose(mode);
+          if (mode !== undefined) model.choose(mode);
         }}
-        disabled={view === undefined || setMode.isPending}
+        disabled={view === undefined || model.busy}
         aria-label={GENERAL.definitions.hostLifecycle.label}
         data-testid="host-lifecycle-options"
       >
@@ -209,25 +294,23 @@ function HostLifecycleCard(): ReactNode {
             key={option.mode}
             option={option}
             pending={pendingMode === option.mode}
-            disabledReason={hostLifecycleOptionDisabledReason(
-              option.mode,
-              desired,
-              noneBlockedByPlan,
-              taskNotOwned,
-            )}
+            disabledReason={model.disabledReason(option.mode)}
           />
         ))}
       </RadioGroup>
-      {inlineError === null ? null : (
+      {model.inlineError === null ? null : (
         <p
           className="text-ui-sm text-destructive"
           data-testid="host-lifecycle-error"
         >
-          {inlineError}
+          {model.inlineError}
         </p>
       )}
       {view === undefined ? null : (
-        <HostLifecycleAppliedLine view={view} taskNotOwned={taskNotOwned} />
+        <HostLifecycleAppliedLine
+          view={view}
+          taskNotOwned={model.taskNotOwnedMessage !== null}
+        />
       )}
       <p className="border-t border-border/60 pt-3 text-ui-xs text-muted-foreground">
         Hosts you start from the terminal with{" "}
@@ -239,12 +322,147 @@ function HostLifecycleCard(): ReactNode {
         .
       </p>
       <HostLifecycleNoneConfirmDialog
-        open={confirmNone}
-        onClose={() => {
-          setConfirmNone(false);
-        }}
+        open={model.confirmingNone}
+        onClose={model.closeConfirmNone}
       />
     </div>
+  );
+}
+
+function AvailableHostLifecycleSettingsRow(): ReactNode {
+  const model = useHostLifecycleModel();
+  const { machine, view, desired, pendingMode } = model;
+  const shown = pendingMode ?? desired;
+  const options = hostLifecycleOptionCopy(machine);
+  const shownOption = options.find((option) => option.mode === shown);
+
+  return (
+    <>
+      <SettingsRow
+        row={GENERAL.definitions.hostLifecycle}
+        // The chosen mode's own sentence, so the row always says what
+        // quitting will do. Until the mode is read it says what the setting
+        // is about.
+        status={
+          <div className="flex flex-col gap-1.5">
+            <p data-testid="host-lifecycle-row-description">
+              {shownOption?.description ?? hostLifecycleCardSubtitle(machine)}
+            </p>
+            <HostLifecycleReadError model={model} />
+            {model.inlineError === null ? null : (
+              <p
+                className="text-destructive"
+                data-testid="host-lifecycle-error"
+              >
+                {model.inlineError}
+              </p>
+            )}
+            {view === undefined ? null : (
+              <HostLifecycleAppliedLine
+                view={view}
+                taskNotOwned={model.taskNotOwnedMessage !== null}
+              />
+            )}
+          </div>
+        }
+        hint={
+          model.taskNotOwnedMessage === null ? null : (
+            <span data-testid="host-lifecycle-task-not-owned">
+              {model.taskNotOwnedMessage}
+            </span>
+          )
+        }
+        control={
+          <div className="flex items-center gap-2">
+            {pendingMode === null ? null : (
+              <AgentSpinningDots
+                className={undefined}
+                testId="host-lifecycle-row-pending"
+                variant={undefined}
+              />
+            )}
+            <HostLifecycleSelect
+              model={model}
+              shown={shown}
+              options={options}
+            />
+          </div>
+        }
+      />
+      <HostLifecycleNoneConfirmDialog
+        open={model.confirmingNone}
+        onClose={model.closeConfirmNone}
+      />
+    </>
+  );
+}
+
+/**
+ * The row's dropdown. The closed trigger shows the mode's short name - the
+ * one the "Set to X" line uses - and each option carries its full label and
+ * sentence, with the reason appended on one that cannot be chosen.
+ */
+function HostLifecycleSelect(props: {
+  readonly model: HostLifecycleModel;
+  readonly shown: HostLifecycleMode | null;
+  readonly options: readonly HostLifecycleOptionCopy[];
+}): ReactNode {
+  const { model, shown } = props;
+  // The row's description, spoken after the name instead of being lost.
+  const describedById = useSettingsRowDescriptionId();
+  return (
+    <Select
+      // `""` is Radix's "nothing chosen", which draws the placeholder.
+      value={shown ?? ""}
+      disabled={model.view === undefined || model.busy}
+      onValueChange={(value) => {
+        const mode = HOST_LIFECYCLE_MODE_ORDER.find(
+          (candidate) => candidate === value,
+        );
+        if (mode !== undefined) model.choose(mode);
+      }}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={GENERAL.definitions.hostLifecycle.label}
+        aria-describedby={describedById}
+        className="w-[min(60vw,12rem)]"
+        data-testid="host-lifecycle-select"
+      >
+        <SelectValue placeholder="Loading">
+          {shown === null ? null : hostLifecycleModeName(shown)}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent align="end" className="w-[min(90vw,24rem)]">
+        {props.options.map((option) => {
+          const disabledReason = model.disabledReason(option.mode);
+          return (
+            <SelectItem
+              key={option.mode}
+              value={option.mode}
+              textValue={option.label}
+              disabled={disabledReason !== null}
+              data-testid={`host-lifecycle-option-${option.mode}`}
+            >
+              <span className="flex min-w-0 flex-col gap-0.5 py-1">
+                <span className="font-medium">{option.label}</span>
+                <span className="text-ui-xs text-muted-foreground">
+                  {option.description}
+                  {disabledReason === null ? null : (
+                    <>
+                      {" "}
+                      <span data-testid="host-lifecycle-none-signed-out-reason">
+                        {disabledReason}
+                      </span>
+                    </>
+                  )}
+                </span>
+              </span>
+            </SelectItem>
+          );
+        })}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -255,12 +473,12 @@ function HostLifecycleCard(): ReactNode {
 function hostLifecycleOptionDisabledReason(
   mode: HostLifecycleMode,
   desired: HostLifecycleMode | null,
-  noneBlockedByPlan: boolean,
+  noneBlockedSignedOut: boolean,
   taskNotOwned: boolean,
 ): string | null {
   if (mode === desired) return null;
   if (mode === "none") {
-    return noneBlockedByPlan ? HOST_LIFECYCLE_NONE_PLAN_REASON : null;
+    return noneBlockedSignedOut ? HOST_LIFECYCLE_NONE_SIGNED_OUT_REASON : null;
   }
   return taskNotOwned ? HOST_LIFECYCLE_TASK_NOT_OWNED_REASON : null;
 }
@@ -300,7 +518,7 @@ function HostLifecycleOption(props: {
           {props.disabledReason === null ? null : (
             <>
               {" "}
-              <span data-testid="host-lifecycle-none-plan-reason">
+              <span data-testid="host-lifecycle-none-signed-out-reason">
                 {props.disabledReason}
               </span>
             </>

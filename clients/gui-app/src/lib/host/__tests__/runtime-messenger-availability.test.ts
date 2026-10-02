@@ -38,7 +38,6 @@ import { buildRuntimeHostMessenger } from "../host-messenger";
 // stays REAL, matching `stream-runtime.test.tsx`.
 const mocks = vi.hoisted(() => ({
   createRemoteHostTransport: vi.fn(),
-  planRestrictedReprobeAtForHost: vi.fn<() => number | null>(() => null),
 }));
 
 vi.mock(
@@ -51,7 +50,6 @@ vi.mock(
     return {
       ...actual,
       createRemoteHostTransport: mocks.createRemoteHostTransport,
-      planRestrictedReprobeAtForHost: mocks.planRestrictedReprobeAtForHost,
     };
   },
 );
@@ -204,8 +202,6 @@ const remoteEntry: RemoteHostDirectoryEntry = {
   },
   publicKey: "pubkey-b",
   relayFuseGrace: false,
-  recentHostCheckIn: false,
-  planAllowsRemote: true,
 };
 
 const localEntry: HostDirectoryEntry = {
@@ -737,8 +733,8 @@ describe("RuntimeHostMessenger availability forwarding", () => {
     h.requestRemote();
     expect(h.recovered).toEqual([]);
 
-    // The dial ends terminally (incompatible handshake / plan restriction /
-    // revoked credential) - the ready boundary the stranded query was owed
+    // The dial ends terminally (incompatible handshake / revoked
+    // credential) - the ready boundary the stranded query was owed
     // will never come, so the close itself must deliver the invalidation.
     h.session.fatal = incompatibleFatal();
     h.session.emitClosed();
@@ -792,54 +788,6 @@ describe("RuntimeHostMessenger availability forwarding", () => {
       vi.advanceTimersByTime(30_000);
       h.requestRemote();
       expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
-
-      h.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not extend a non-plan verdict with another cached session's plan-denial deadline", () => {
-    vi.useFakeTimers();
-    try {
-      const h = harness();
-      h.requestRemote();
-      mocks.planRestrictedReprobeAtForHost.mockReturnValueOnce(
-        Date.now() + 15 * 60_000,
-      );
-
-      h.session.fatal = incompatibleFatal();
-      h.session.emitClosed();
-      expect(mocks.planRestrictedReprobeAtForHost).not.toHaveBeenCalled();
-
-      vi.advanceTimersByTime(30_000);
-      h.requestRemote();
-      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
-
-      h.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a plan verdict through the cache-controlled reprobe deadline", () => {
-    vi.useFakeTimers();
-    try {
-      const h = harness();
-      h.requestRemote();
-      mocks.planRestrictedReprobeAtForHost.mockReturnValueOnce(
-        Date.now() + 15 * 60_000,
-      );
-
-      h.session.fatal = planRestrictedFatal();
-      h.session.emitClosed();
-      expect(mocks.planRestrictedReprobeAtForHost).toHaveBeenCalledWith(
-        REMOTE_HOST_ID,
-      );
-
-      vi.advanceTimersByTime(30_000);
-      h.requestRemote();
-      expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(1);
 
       h.dispose();
     } finally {
@@ -929,15 +877,6 @@ function incompatibleFatal(): FatalErrorDetails {
   return {
     code: "INCOMPATIBLE",
     reason: "protocol manifests do not overlap",
-    incompatibleMethods: null,
-    upgradeGuidance: null,
-  };
-}
-
-function planRestrictedFatal(): FatalErrorDetails {
-  return {
-    code: "PLAN_RESTRICTED",
-    reason: "remote hosts are unavailable on this plan",
     incompatibleMethods: null,
     upgradeGuidance: null,
   };

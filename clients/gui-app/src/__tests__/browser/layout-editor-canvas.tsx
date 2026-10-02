@@ -226,7 +226,7 @@ function SessionTabSpecimen(): ReactNode {
     <span data-fixture-session-tab className="relative h-9 w-48 shrink-0">
       <TabChrome
         isActive
-        joined={false}
+        joined={null}
         concealed={false}
         color={SESSION_TAB_COLOR}
         session

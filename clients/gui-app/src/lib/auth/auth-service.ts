@@ -1086,11 +1086,10 @@ export class AuthService {
    * apply, which means "carry on and await the verdict as before".
    *
    * Identity only. `commitSubscriptionStatus` is deliberately NOT called here:
-   * a stored `free` would render the remote-hosts upsell for one round trip to
-   * anyone who upgraded since their last session, and `null` is the documented
-   * not-yet-known state that `useRemoteHostsPlanRestricted` already reads as
-   * not-restricted. Entitlement lands with the verdict, which is exactly where
-   * it lands today for the whole of boot.
+   * a stored tier may be stale for anyone whose subscription changed since
+   * their last session, and `null` is the documented not-yet-known state. The
+   * tier lands with the verdict, which is exactly where it lands today for the
+   * whole of boot.
    *
    * The host never needed the cloud's answer either way: every `/rpc` and
    * `/stream` socket validates the bearer itself, so host traffic may start on
@@ -4317,11 +4316,8 @@ export class AuthService {
    * provisional boot apply must NOT do.
    *
    * `"defer"` commits identity and leaves `currentSubscription` at `null`. A
-   * stored `free` would render the remote-hosts upsell for one round trip to
-   * anyone who upgraded since their last session; `null` is the documented
-   * not-yet-known state, which `useRemoteHostsPlanRestricted` and
-   * `planAllowsRemoteHosts` both already read as not-restricted, and the
-   * server enforces the grant authoritatively regardless.
+   * stored tier may be stale for anyone whose subscription changed since their
+   * last session; `null` is the documented not-yet-known state.
    *
    * Everything else is deliberately shared, the broadcast included: the
    * provisional session is genuinely live in this renderer, and it is the ONE
@@ -4547,8 +4543,7 @@ export class AuthService {
 
   /**
    * The signed-in account's subscription tier, or `null` when signed out or
-   * not yet known. Synchronous, and readable without React — the host-directory
-   * projection reads it once per fetch.
+   * not yet known. Synchronous, and readable without React.
    */
   currentSubscriptionStatus(): SubscriptionStatus | null {
     return this.currentSubscription;

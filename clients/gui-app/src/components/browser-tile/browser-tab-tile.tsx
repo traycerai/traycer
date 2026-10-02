@@ -11,7 +11,6 @@ import { X } from "lucide-react";
 import { toast } from "sonner";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { isBrowserSessionsV1NoWindowBindingRefusal } from "@traycer-clients/shared/host-transport/browser-contracts-v1-bridge";
 import { ElectronTabSurface } from "./agent-browser-tile";
 import {
@@ -580,21 +579,6 @@ function BrowserTabOtherWindowNote(props: {
 }
 
 /**
- * `plan-restricted` is not an outage (see `useHostReachability`'s doc): the
- * machine is very probably running, only this account's plan has no remote
- * route to it. Worded the same way `TerminalDeadTileBanner` words it for
- * that reason. `offline` also covers `indeterminate`/`starting-deadline`
- * fall-through - neither of those reaches `status: "unreachable"` with a
- * `plan-restricted` reason.
- */
-function dormantStatusLine(unavailability: HostUnavailability | null): string {
-  if (unavailability === "plan-restricted") {
-    return "This host is local only on your current plan, so it can't be reached from here.";
-  }
-  return "Host is unreachable. This tile will reconnect on its own.";
-}
-
-/**
  * Dormant placeholder for a tile whose OWN host is `unreachable`
  * (decision #9). Never rendered for `busy` - a busy host is still
  * reachable (`useHostReachability`/`isHostReachable`), and the live tile
@@ -612,7 +596,6 @@ function dormantStatusLine(unavailability: HostUnavailability | null): string {
 function BrowserTabDormantPlaceholder(props: {
   readonly node: BrowserTileNode;
   readonly hostLabel: string;
-  readonly unavailability: HostUnavailability | null;
 }) {
   const cached = useLastBrowserPeekFrame(browserPeekFrameKey(props.node));
   // First non-null frame wins for this placeholder's life. The cache read is a
@@ -640,7 +623,7 @@ function BrowserTabDormantPlaceholder(props: {
       )}
       <div className="relative z-10 max-w-md text-ui-sm text-muted-foreground">
         <div className="font-medium text-foreground">{props.hostLabel}</div>
-        <div>{dormantStatusLine(props.unavailability)}</div>
+        <div>Host is unreachable. This tile will reconnect on its own.</div>
       </div>
     </div>
   );
@@ -987,7 +970,6 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
       <BrowserTabDormantPlaceholder
         node={props.node}
         hostLabel={reachability.hostLabel}
-        unavailability={reachability.unavailability}
       />
     );
   }

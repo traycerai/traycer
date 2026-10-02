@@ -85,6 +85,8 @@ interface Sample {
   readonly traveller: {
     readonly left: number;
     readonly joined: boolean;
+    /** The pane it wears (`data-join-pane`), which picks the join's fill. */
+    readonly pane: string | null;
   } | null;
   readonly glowing: boolean;
 }
@@ -170,6 +172,7 @@ async function record(
               : {
                   left: travellerBox.left - view.left + scroller.scrollLeft,
                   joined: traveller.getAttribute("data-sheet-joined") === "top",
+                  pane: traveller.getAttribute("data-join-pane"),
                 },
           glowing: strip.hasAttribute("data-join-glow"),
         });
@@ -449,6 +452,17 @@ async function expectSelectionTravelled(
     "one joined box remains, the destination's own",
   ).toHaveCount(1);
   await expect(selectedFrame(page).locator(JOINED_BOX)).toHaveCount(1);
+  // The traveller wears the pane its destination's own box takes (a task's tab
+  // joins the surface pane), so the two swap on landing without a change of
+  // fill.
+  await expect(
+    selectedFrame(page).locator(JOINED_BOX),
+    "the destination's own box joins the surface pane",
+  ).toHaveAttribute("data-join-pane", "surface");
+  expect(
+    flight.every(({ pane }) => pane === "surface"),
+    'traveller carries data-join-pane="surface" throughout, the pane it lands on',
+  ).toBe(true);
 }
 
 test("closing an inactive tab holds its space, then closes the gap", async ({

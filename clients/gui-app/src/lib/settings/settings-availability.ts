@@ -114,8 +114,8 @@ export function isMinimapSideRowAvailable(
   return !context.mobileApp;
 }
 
-/** General › Experimental — the desktop feature-settings bridge. */
-export function isExperimentalGroupAvailable(
+/** General › Agent roles — the desktop feature-settings bridge. */
+export function isAgentRolesRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return context.featureSettings !== null;
@@ -126,7 +126,7 @@ export function isExperimentalGroupAvailable(
  * Present in every desktop launch, including one with no local host (where
  * it is the only way back), and absent on the phone and in the browser.
  */
-export function isHostLifecycleGroupAvailable(
+export function isHostLifecycleRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (
@@ -146,8 +146,8 @@ export function isZoomRowAvailable(
   );
 }
 
-/** Notifications › System — the OS notification-settings pointer. */
-export function isSystemNotificationsGroupAvailable(
+/** Sounds › OS notifications — the OS notification-settings pointer. */
+export function isSystemNotificationsRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (
@@ -156,8 +156,8 @@ export function isSystemNotificationsGroupAvailable(
   );
 }
 
-/** Notifications › This phone — the OS push permission of a phone shell. */
-export function isPushPermissionGroupAvailable(
+/** Sounds › Push notifications — the OS push permission of a phone shell. */
+export function isPushPermissionRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (

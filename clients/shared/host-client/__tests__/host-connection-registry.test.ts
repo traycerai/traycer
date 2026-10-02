@@ -122,8 +122,6 @@ function remoteEntry(
     transportDialability: "not-dialable",
     publicKey: `pubkey-${hostId}`,
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "offline",
       viewerReachability: "unknown",
@@ -422,12 +420,12 @@ describe("hostLeaseSnapshotEquals", () => {
       status: "dead",
       dead: { reason: "offline" },
     };
-    const planRestricted: HostLeaseSnapshot = {
+    const removed: HostLeaseSnapshot = {
       hostId: "h",
       status: "dead",
-      dead: { reason: "plan-restricted" },
+      dead: { reason: "removed" },
     };
-    expect(hostLeaseSnapshotEquals(offline, planRestricted)).toBe(false);
+    expect(hostLeaseSnapshotEquals(offline, removed)).toBe(false);
   });
 
   // `HostLeaseDeadState` is a discriminated union, and only the

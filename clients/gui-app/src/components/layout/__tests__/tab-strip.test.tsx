@@ -20,6 +20,10 @@ import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import {
+  useLandingPaneAnchorStore,
+  type LandingPanelCoverage,
+} from "@/components/home/terminal-panel/landing-pane-anchor-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
@@ -34,7 +38,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { tabItemId } from "@/stores/tabs/layout";
+import { tabItemId, type SplitSide } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -318,6 +322,60 @@ function seedSplitHeaderTabs(): void {
   });
 }
 
+/** One split pair, active with its first side focused, alone in the strip. */
+function seedActiveSplit(left: SplitSide, right: SplitSide): void {
+  openEpicFixture(EPIC_A);
+  openEpicFixture(EPIC_B);
+  const refs = [left, right].flatMap((side) =>
+    side.kind === "tab" ? [side.ref] : [],
+  );
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      {
+        kind: "split",
+        id: "split-a",
+        left,
+        right,
+        focusedSide: "left",
+        routeBackingSide: "left",
+        leftRatio: 0.5,
+      },
+    ],
+    activeItemId: "split-a",
+    stripOrder: refs,
+    systemTabs: {
+      history: refs.some((ref) => ref.kind === "history")
+        ? { id: "history", kind: "history", name: "History", lastPath: null }
+        : null,
+      settings: null,
+    },
+  });
+}
+
+/**
+ * Publishes what the start page `draftId`'s terminal panel renders, as the
+ * panel does: `null` is a page that shows no panel (closed, or its target
+ * cannot serve one).
+ */
+function publishDraftPanel(
+  draftId: string,
+  coverage: LandingPanelCoverage | null,
+): void {
+  act(() => {
+    useLandingPaneAnchorStore.getState().setPanelCoverage(draftId, coverage);
+  });
+}
+
+/** The pane the top bridge paints onto the sheet, or null when it names none. */
+function topBridgePane(): string | null {
+  return (
+    document
+      .querySelector('[data-sheet-join-bridge="top"]')
+      ?.getAttribute("data-join-pane") ?? null
+  );
+}
+
 function canvasTabIds(tabId: string): ReadonlyArray<string> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId] ?? null;
   if (canvas === null) return [];
@@ -491,7 +549,6 @@ function buildHeaderEpicHandle(
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
-    retryTransport: () => undefined,
     wakeTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
@@ -542,6 +599,10 @@ function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingPaneAnchorStore.setState(
+    useLandingPaneAnchorStore.getInitialState(),
+    true,
+  );
   useEpicDndStore.getState().dragEnded();
   useTabsStore.setState({
     stripOrder: [],
@@ -785,6 +846,97 @@ function seedTwoEpicTabs(): { readonly alpha: TabRef; readonly beta: TabRef } {
   return { alpha, beta };
 }
 
+// The pane an active tab joins is the ground its own surface paints along
+// the top edge (`surfaceJoinPane`): a task, a draft and Settings paint
+// `--background`, so their tab takes it; History paints nothing and shows
+// the sheet's canvas. The bridge under the tab paints that same fill onto
+// the sheet, so it must name the box's pane - a canvas bridge under a
+// background tab (or the reverse) would be the two-colour seam this fixes.
+interface ActiveTabCase {
+  readonly kind: string;
+  readonly pane: "surface" | "canvas";
+  /** Opens the tab the way the app does and says where to land and what to click. */
+  readonly open: () => { readonly path: string; readonly testId: string };
+}
+const ACTIVE_TAB_CASES: ReadonlyArray<ActiveTabCase> = [
+  {
+    kind: "epic",
+    pane: "surface",
+    open: () => {
+      seedTwoEpicTabs();
+      return { path: "/epics/e-a/e-a", testId: "tab-epic-e-a" };
+    },
+  },
+  {
+    kind: "draft",
+    pane: "surface",
+    open: () => {
+      seedTwoEpicTabs();
+      const draftId = useLandingDraftStore.getState().createDraft(null);
+      return { path: "/epics/e-a/e-a", testId: `tab-draft-${draftId}` };
+    },
+  },
+  {
+    kind: "settings",
+    pane: "surface",
+    open: () => {
+      ensureSettingsTab({ subSection: null, resetToGeneral: true });
+      return { path: "/settings/general", testId: "tab-settings-settings" };
+    },
+  },
+  {
+    kind: "history",
+    pane: "canvas",
+    open: () => {
+      ensureHistoryTab();
+      return { path: "/epics", testId: "tab-history-history" };
+    },
+  },
+];
+
+// A split pair joins as one box, in the pane its members paint
+// (`splitPairJoinPane`): `--background` when a member that holds a tab paints
+// it, the canvas otherwise. An empty slot paints neither, so History beside
+// one is the pair that keeps History's canvas.
+interface ActiveSplitCase {
+  readonly pair: string;
+  readonly pane: "surface" | "canvas";
+  readonly left: SplitSide;
+  readonly right: SplitSide;
+  /** The route the focused (left) side backs. */
+  readonly path: string;
+}
+const ACTIVE_SPLIT_CASES: ReadonlyArray<ActiveSplitCase> = [
+  {
+    pair: "two tasks",
+    pane: "surface",
+    left: { kind: "tab", ref: { kind: "epic", id: EPIC_A.id } },
+    right: { kind: "tab", ref: { kind: "epic", id: EPIC_B.id } },
+    path: "/epics/e-a/e-a",
+  },
+  {
+    pair: "a task and an empty slot",
+    pane: "surface",
+    left: { kind: "tab", ref: { kind: "epic", id: EPIC_A.id } },
+    right: { kind: "empty" },
+    path: "/epics/e-a/e-a",
+  },
+  {
+    pair: "History and a task",
+    pane: "surface",
+    left: { kind: "tab", ref: { kind: "history", id: "history" } },
+    right: { kind: "tab", ref: { kind: "epic", id: EPIC_A.id } },
+    path: "/epics",
+  },
+  {
+    pair: "History and an empty slot",
+    pane: "canvas",
+    left: { kind: "tab", ref: { kind: "history", id: "history" } },
+    right: { kind: "empty" },
+    path: "/epics",
+  },
+];
+
 // Reconciliation install is owned by `WindowsBridgeProvider` in
 // production. Test mounts skip the provider, so install once here.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -848,7 +1000,7 @@ describe("<TabStrip />", () => {
     render(
       <TabChrome
         isActive
-        joined={false}
+        joined={null}
         concealed={false}
         color="#12ab34"
         session={false}
@@ -866,7 +1018,7 @@ describe("<TabStrip />", () => {
     const { container } = render(
       <TabChrome
         isActive={false}
-        joined={false}
+        joined={null}
         concealed={false}
         color="#12ab34"
         session={false}
@@ -882,7 +1034,7 @@ describe("<TabStrip />", () => {
     const { rerender } = render(
       <TabChrome
         isActive={false}
-        joined={false}
+        joined={null}
         concealed={false}
         color="#12ab34"
         session={false}
@@ -897,7 +1049,7 @@ describe("<TabStrip />", () => {
     rerender(
       <TabChrome
         isActive
-        joined={false}
+        joined={null}
         concealed={false}
         color="#12ab34"
         session={false}
@@ -924,7 +1076,7 @@ describe("<TabStrip />", () => {
     render(
       <TabChrome
         isActive
-        joined={false}
+        joined={null}
         concealed={false}
         color="var(--warning-foreground)"
         session
@@ -949,7 +1101,7 @@ describe("<TabStrip />", () => {
     render(
       <TabChrome
         isActive={false}
-        joined={false}
+        joined={null}
         concealed={false}
         color="var(--warning-foreground)"
         session
@@ -957,6 +1109,62 @@ describe("<TabStrip />", () => {
     );
 
     expect(screen.queryByTestId("tab-color-edge-line")).toBeNull();
+  });
+
+  /**
+   * `joined` names the pane the active tab runs into, and `TabChrome` writes
+   * it beside the join marker so the CSS can pick that pane's fill
+   * (`[data-join-pane]` in `index.css`). Unjoined, it writes neither.
+   */
+  it.each(["surface", "canvas"] as const)(
+    "writes the %s pane it is handed beside the join marker, and neither when unjoined",
+    (pane) => {
+      const { rerender } = render(
+        <TabChrome
+          isActive
+          joined={pane}
+          concealed={false}
+          color={null}
+          session={false}
+        />,
+      );
+      const box = screen.getByTestId("tab-chrome-box");
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.getAttribute("data-join-pane")).toBe(pane);
+
+      rerender(
+        <TabChrome
+          isActive
+          joined={null}
+          concealed={false}
+          color={null}
+          session={false}
+        />,
+      );
+      expect(box.hasAttribute("data-sheet-joined")).toBe(false);
+      expect(box.hasAttribute("data-join-pane")).toBe(false);
+    },
+  );
+
+  /**
+   * The editor's own tab is a mode, not a place: whatever pane `TabChrome` is
+   * handed, a session tab keeps its coloured box and never joins the sheet, so
+   * neither the join marker nor a pane reaches it.
+   */
+  it("never joins the editor's own tab, whichever pane it is handed", () => {
+    render(
+      <TabChrome
+        isActive
+        joined="surface"
+        concealed={false}
+        color="var(--warning-foreground)"
+        session
+      />,
+    );
+
+    const box = screen.getByTestId("tab-chrome-box");
+    expect(box.hasAttribute("data-sheet-joined")).toBe(false);
+    expect(box.hasAttribute("data-join-pane")).toBe(false);
   });
 
   /**
@@ -1188,6 +1396,112 @@ describe("<TabStrip />", () => {
       expect(within(inactiveTab).queryByTestId("tab-chrome-box")).toBeNull();
     });
 
+    it.each(ACTIVE_TAB_CASES)(
+      "joins the active $kind tab and the bridge under it to the $pane pane",
+      async ({ pane, open }) => {
+        const { path, testId } = open();
+        const router = buildRouter(path);
+        render(<RouterProvider router={router} />);
+
+        fireEvent.click(await screen.findByTestId(testId));
+        await flushNav();
+
+        const box = await within(screen.getByTestId(testId)).findByTestId(
+          "tab-chrome-box",
+        );
+        expect(box.getAttribute("data-sheet-joined")).toBe("top");
+        expect(box.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector('[data-sheet-join-bridge="top"]')
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
+      },
+    );
+
+    it.each(ACTIVE_SPLIT_CASES)(
+      "joins the active pair of $pair as one box in the $pane pane, and the bridge under it with it",
+      async ({ left, right, pane, path }) => {
+        seedActiveSplit(left, right);
+        const router = buildRouter(path);
+        render(<RouterProvider router={router} />);
+
+        const box = await screen.findByTestId("split-tab-joined-split-a");
+        expect(box.getAttribute("data-sheet-joined")).toBe("top");
+        expect(box.getAttribute("data-join-pane")).toBe(pane);
+        expect(
+          document
+            .querySelector('[data-sheet-join-bridge="top"]')
+            ?.getAttribute("data-join-pane"),
+        ).toBe(pane);
+      },
+    );
+
+    // A draft paints `--background` along its top edge, under its terminal
+    // panel. The top row of a docked panel is still that ground; full, the
+    // panel (canvas) covers the whole page, so the tab joins the canvas. The
+    // pane follows what the panel publishes live, so a change under an
+    // already-joined tab moves the box and the bridge with it.
+    it("joins the active draft tab and the bridge to the surface pane, and to the canvas pane while its terminal panel renders full", async () => {
+      seedTwoEpicTabs();
+      const draftId = useLandingDraftStore.getState().createDraft(null);
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      const testId = `tab-draft-${draftId}`;
+      fireEvent.click(await screen.findByTestId(testId));
+      await flushNav();
+      const draftBox = () =>
+        within(screen.getByTestId(testId)).getByTestId("tab-chrome-box");
+      await within(screen.getByTestId(testId)).findByTestId("tab-chrome-box");
+
+      expect(draftBox().getAttribute("data-sheet-joined")).toBe("top");
+      expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+
+      publishDraftPanel(draftId, "docked");
+      expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+
+      publishDraftPanel(draftId, "full");
+      expect(draftBox().getAttribute("data-sheet-joined")).toBe("top");
+      expect(draftBox().getAttribute("data-join-pane")).toBe("canvas");
+      expect(topBridgePane()).toBe("canvas");
+
+      publishDraftPanel(draftId, null);
+      expect(draftBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+    });
+
+    // The pair reads the same panel through `useHeaderSplitJoinPane`: a draft
+    // whose full panel covers its page leaves History's canvas the only ground
+    // the pair meets.
+    it("joins the active pair of a draft and History to the canvas pane while the draft's terminal panel renders full", async () => {
+      const draftId = useLandingDraftStore.getState().createDraft(null);
+      seedActiveSplit(
+        { kind: "tab", ref: { kind: "draft", id: draftId } },
+        { kind: "tab", ref: { kind: "history", id: "history" } },
+      );
+      const router = buildRouter(`/draft/${draftId}`);
+      render(<RouterProvider router={router} />);
+
+      const pairBox = () => screen.getByTestId("split-tab-joined-split-a");
+      await screen.findByTestId("split-tab-joined-split-a");
+      expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+
+      publishDraftPanel(draftId, "docked");
+      expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
+
+      publishDraftPanel(draftId, "full");
+      expect(pairBox().getAttribute("data-join-pane")).toBe("canvas");
+      expect(topBridgePane()).toBe("canvas");
+
+      publishDraftPanel(draftId, null);
+      expect(pairBox().getAttribute("data-join-pane")).toBe("surface");
+      expect(topBridgePane()).toBe("surface");
+    });
+
     it("keeps the active tab joined while another tab is dragged", async () => {
       const { beta } = seedTwoEpicTabs();
       const router = buildRouter("/epics/e-a/e-a");
@@ -1279,15 +1593,15 @@ describe("<TabStrip />", () => {
       expect(bridge.style.getPropertyValue("--join-outline")).toBe("#12ab34");
     });
 
-    it("joins the active Home tab", () => {
+    it("joins the active Home tab, on the canvas pane: Home paints no ground of its own", () => {
       render(
         <TooltipProvider>
           <TabStripHomeItemView isActive onActivate={() => undefined} />
         </TooltipProvider>,
       );
-      expect(
-        screen.getByTestId("tab-chrome-box").getAttribute("data-sheet-joined"),
-      ).toBe("top");
+      const box = screen.getByTestId("tab-chrome-box");
+      expect(box.getAttribute("data-sheet-joined")).toBe("top");
+      expect(box.getAttribute("data-join-pane")).toBe("canvas");
     });
 
     // The active overlay DOES join during a real drag - `HeaderTabDragOverlay`
@@ -1318,35 +1632,39 @@ describe("<TabStrip />", () => {
       ).toBe(false);
     });
 
-    it("joins an active split pair as one container, and draws no marker when inactive", () => {
-      const { rerender } = render(
-        <SplitTabLayout
-          splitId="split-a"
-          selectedSide="left"
-          joined
-          control={null}
-          left={<span>left</span>}
-          right={<span>right</span>}
-        />,
-      );
-      expect(
-        screen
-          .getByTestId("split-tab-joined-split-a")
-          .getAttribute("data-sheet-joined"),
-      ).toBe("top");
+    // `joined` names the pane the pair runs into (`splitPairJoinPane`), so the
+    // layout writes whichever one it is handed: a pair that holds History and
+    // an empty slot is handed the canvas, not a hardcoded surface.
+    it.each(["surface", "canvas"] as const)(
+      "joins an active split pair as one container on the %s pane it is handed, and draws no marker when inactive",
+      (pane) => {
+        const { rerender } = render(
+          <SplitTabLayout
+            splitId="split-a"
+            selectedSide="left"
+            joined={pane}
+            control={null}
+            left={<span>left</span>}
+            right={<span>right</span>}
+          />,
+        );
+        const box = screen.getByTestId("split-tab-joined-split-a");
+        expect(box.getAttribute("data-sheet-joined")).toBe("top");
+        expect(box.getAttribute("data-join-pane")).toBe(pane);
 
-      rerender(
-        <SplitTabLayout
-          splitId="split-a"
-          selectedSide="left"
-          joined={false}
-          control={null}
-          left={<span>left</span>}
-          right={<span>right</span>}
-        />,
-      );
-      expect(screen.queryByTestId("split-tab-joined-split-a")).toBeNull();
-    });
+        rerender(
+          <SplitTabLayout
+            splitId="split-a"
+            selectedSide="left"
+            joined={null}
+            control={null}
+            left={<span>left</span>}
+            right={<span>right</span>}
+          />,
+        );
+        expect(screen.queryByTestId("split-tab-joined-split-a")).toBeNull();
+      },
+    );
   });
 
   it("shows the pair highlight on the approach half during a merge", async () => {

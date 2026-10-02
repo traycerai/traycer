@@ -14,11 +14,6 @@ import { useHostLease } from "@/hooks/host/use-host-lease";
 import { isUnknownHost } from "@/lib/host/constants";
 import { isLocalHostBootingEntry } from "@/lib/host/transport-key";
 import { HOST_STARTING_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
-import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
-
-function isPlanRestrictedLease(lease: HostLeaseSnapshot | null): boolean {
-  return lease?.status === "dead" && lease.dead.reason === "plan-restricted";
-}
 
 export type HostReachabilityStatus =
   | "checking"
@@ -79,11 +74,7 @@ export type HostReachabilityHostKind = HostKind | "unknown";
 export interface HostReachability {
   readonly status: HostReachabilityStatus;
   readonly hostLabel: string;
-  /**
-   * Why, when `status` is `unreachable`. `plan-restricted` is not an outage —
-   * a surface that renders "this host is offline" for it is wrong about the
-   * machine AND about the remedy. `null` for every other status.
-   */
+  /** Why, when `status` is `unreachable`. `null` for every other status. */
   readonly unavailability: HostUnavailability | null;
   /** How strong the evidence behind `status` is. See `HostReachabilityBasis`. */
   readonly basis: HostReachabilityBasis;
@@ -251,15 +242,6 @@ export function useHostReachability(hostId: string): HostReachability {
     // actually evidence about the host.
     const hostLabel = entry.label.length > 0 ? entry.label : hostId;
     const hostKind = entry.kind;
-    if (!hasReadySession && isPlanRestrictedLease(lease)) {
-      return {
-        status: "unreachable",
-        hostLabel,
-        unavailability: "plan-restricted",
-        basis: "directory",
-        hostKind,
-      };
-    }
     const unavailability = hostUnavailability(entry);
     if (unavailability === null) {
       return {
@@ -298,10 +280,8 @@ export function useHostReachability(hostId: string): HostReachability {
         hostKind,
       };
     }
-    // `offline` and `plan-restricted` both mean this client cannot open a
-    // session, which is what the tab-open gate exists to decide. They read
-    // differently to a person, though, so the reason travels with the verdict
-    // and the banners branch on it rather than all saying "offline".
+    // `offline`: this client cannot open a session, which is what the
+    // tab-open gate exists to decide. The reason travels with the verdict.
     return {
       status: "unreachable",
       hostLabel,
@@ -309,7 +289,7 @@ export function useHostReachability(hostId: string): HostReachability {
       basis: "directory",
       hostKind,
     };
-  }, [hostId, list.data, list.fetchStatus, hasReadySession, lease]);
+  }, [hostId, list.data, list.fetchStatus, hasReadySession]);
 
   // D4. An announced restart is not an outage. While the lease says
   // `restarting-expected`, the authority expects the host back: inside a
@@ -319,8 +299,7 @@ export function useHostReachability(hostId: string): HostReachability {
   // directory `offline` in that window is the restart itself, so it reads
   // `host-starting`, and every tile keeps its non-destructive wait instead of
   // the dead-tile banner, the Clone offer and the terminal's "permanently
-  // closed" notification. `plan-restricted` is an entitlement verdict, not an
-  // outage, and is left alone. A crash announces nothing and opens no episode,
+  // closed" notification. A crash announces nothing and opens no episode,
   // so it still reads `offline`.
   const restartExpected = lease?.status === "restarting-expected";
   const heldVerdict = useMemo<HostReachability>(() => {
@@ -376,9 +355,7 @@ export function useHostReachability(hostId: string): HostReachability {
       status: "unreachable",
       hostLabel: heldVerdict.hostLabel,
       // `offline` is the retryable reason, and it is the honest one: the host
-      // did not come up. It is deliberately NOT `plan-restricted` (an
-      // entitlement verdict this arm has no evidence for) - the two read
-      // differently to a person and name different remedies.
+      // did not come up.
       unavailability: "offline",
       basis: "starting-deadline",
       // Carried through unchanged: whose machine this is does not change

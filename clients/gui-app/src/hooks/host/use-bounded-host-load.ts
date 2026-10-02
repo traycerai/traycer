@@ -60,7 +60,7 @@ export interface UseBoundedHostLoadArgs {
  * between them is not knowledge the reader can act on.
  *
  * A `dead` lease short-circuits the deadline. F13 says to render the LEASE
- * state, and a lease that already answered `plan-restricted` must not make
+ * state, and a lease that already answered `offline` must not make
  * the reader wait out a 15s budget to be told a fact the authority has
  * already published.
  *

@@ -43,21 +43,6 @@ import {
  * informational — which is exactly why they must not be flattened into
  * "Offline". A remote host that is off simply reads `offline`.
  *
- * `local-only` is a different thing wearing a similar word, and the two must
- * not be conflated. It is not about which machine is doing the reading: it is
- * the account's plan saying this host will never be reachable remotely, which
- * is why it carries an upgrade as its remedy where `stopped` carries a Start
- * button. Any host — including a remote one on someone else's desk — can be
- * `local-only`.
- *
- * Where that state comes from changed, though the state and its copy did not.
- * It used to be a wire value (`connectivity: "local-only"`), which meant the
- * server decided it and liveness was lost behind it. Now the wire carries
- * pure liveness and this reads the ACCOUNT's plan alongside it
- * (`planAllowsRemote`) — so a plan-gated host that is genuinely `offline`
- * reaches `offline` here, with a last-seen detail, instead of being dressed
- * as a billing state forever.
- *
  * `reported-reachable` is the state that exists because the honest answer for
  * a never-dialled host is neither "Online" nor "Offline" (F26). See
  * `deriveHostPresence`.
@@ -66,7 +51,6 @@ export type HostHealthState =
   | "online"
   | "reported-reachable"
   | "restarting"
-  | "local-only"
   | "unknown"
   | "offline"
   | "update-required"
@@ -100,10 +84,6 @@ export const HOST_HEALTH_TONE: Record<HostHealthState, HostHealthTone> = {
   "reported-reachable": "idle",
   // A restart we asked for or expect is not a failure in progress.
   restarting: "idle",
-  // Not a fault, so not a warning: the host is exactly as reachable as the
-  // plan says it should be. `idle` keeps it visually alongside a host that is
-  // simply not running rather than alongside one that is failing.
-  "local-only": "idle",
   unknown: "warn",
   offline: "idle",
   // Actionable, like `stopped`: something a person can fix, and the row offers
@@ -154,8 +134,6 @@ export interface DeriveHostHealthOptions {
    * cold start.
    */
   readonly authorityAttached: boolean;
-  /** Legacy projection input; production always allows remote connectivity. */
-  readonly planAllowsRemote: boolean;
   readonly nowMs: number;
 }
 
@@ -245,22 +223,15 @@ function localServiceHealth(
 /** What the dead-reason table needs to word an answer. */
 interface DeadHealthContext {
   readonly item: HostListItem | null;
-  readonly isLocalMachine: boolean;
   readonly nowMs: number;
 }
 
 /**
  * Keyed on the CONTRACT's own `reason` union, not on a hand-written copy of
  * it — the same construction as `tile-host-load-copy.ts`'s `DEAD_MESSAGE`, and
- * for the same reason. A fifth dead reason added to `HostLeaseDeadState` fails
+ * for the same reason. A new dead reason added to `HostLeaseDeadState` fails
  * to compile HERE, naming its missing key, rather than arriving at runtime and
  * routing silently to whichever arm a `default` happened to point at.
- *
- * That failure mode is not hypothetical, and this surface is where it did the
- * most damage: rendering `plan-restricted` hosts as "offline" is the months-long
- * defect that sent free-tier users to debug a network fault they did not have,
- * while the one thing that would have fixed it — an upgrade — went unmentioned.
- * The two arms below are deliberately different in remedy, not just in wording.
  */
 const DEAD_HEALTH: Record<
   HostLeaseDeadState["reason"],
@@ -273,21 +244,6 @@ const DEAD_HEALTH: Record<
       formatLastSeen(context.item?.status.lastSeenAt ?? null, context.nowMs),
     ),
     tone: HOST_HEALTH_TONE.offline,
-    live: false,
-  }),
-  "plan-restricted": (context) => ({
-    state: "local-only",
-    label: "Local only",
-    // The copy has to depend on WHOSE machine this is, because the claim
-    // "reachable from this computer" is only true for one of them. It said
-    // that unconditionally once, and for a remote row it was a fabrication
-    // twice over: the machine is somewhere else, and the plan is the reason no
-    // route to it exists. Both arms state the remedy — an upgrade — because
-    // that is the one thing a person can act on.
-    detail: context.isLocalMachine
-      ? "Reachable on this computer. Remote access needs a paid plan."
-      : "Not reachable from here — remote access needs a paid plan.",
-    tone: HOST_HEALTH_TONE["local-only"],
     live: false,
   }),
   removed: () => ({
@@ -363,7 +319,6 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
     case "dead":
       return DEAD_HEALTH[lease.dead.reason]({
         item: options.item,
-        isLocalMachine: options.isLocalMachine,
         nowMs: options.nowMs,
       });
   }
@@ -374,7 +329,7 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
  * dialled. Reached only when the two firsthand steps above declined.
  */
 function registryHealth(options: DeriveHostHealthOptions): HostHealth {
-  const { item, isLocalMachine, hasLiveSession, nowMs } = options;
+  const { item, hasLiveSession, nowMs } = options;
   if (item === null) {
     // In the runtime directory but not the cloud registry, and no lease: we
     // can reach it, yet nothing vouches for its liveness. Claiming either
@@ -390,8 +345,6 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
   const presence = deriveHostPresence({
     status: item.status,
     hasLiveSession,
-    planAllowsRemote: options.planAllowsRemote,
-    nowMs,
   });
   switch (presence.reading) {
     case "online":
@@ -417,8 +370,6 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
         tone: HOST_HEALTH_TONE["reported-reachable"],
         live: false,
       };
-    case "local-only":
-      return DEAD_HEALTH["plan-restricted"]({ item, isLocalMachine, nowMs });
     case "unknown":
       return {
         state: "unknown",
@@ -436,7 +387,7 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
         live: false,
       };
     case "offline":
-      return DEAD_HEALTH.offline({ item, isLocalMachine, nowMs });
+      return DEAD_HEALTH.offline({ item, nowMs });
   }
 }
 

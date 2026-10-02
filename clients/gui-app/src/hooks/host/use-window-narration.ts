@@ -18,8 +18,8 @@ import { useRunnerHostOrNull } from "@/providers/use-runner-host";
  *
  * Reads the authority projection jointly - attached, effective, target and the
  * lease fleet - because the verdict is a function of all four together and no
- * per-host answer can express it: "every lease is dead and every reason is
- * plan-restricted" is a question about the fleet, not about a host. The
+ * per-host answer can express it: "no host can serve this window" is a
+ * question about the fleet, not about a host. The
  * per-host projection stays `useHostLease`, whose single-owner rule this does
  * not touch; `useHostLeases()` is that module's own fleet read.
  *

@@ -161,28 +161,40 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
     expect(absentRow.textContent).not.toContain("needs update");
   });
 
-  it("inert silences unreachable and requires-upgrade on a non-connectable row", () => {
+  it("inert silences the offline and update-required words on a non-connectable row", () => {
     const tab = hostScopeOptionFixture({
       hostId: "tab-host",
       name: "Tab host",
     });
     const offline = hostScopeOptionFixture({
       hostId: "offline-host",
-      name: "Offline host",
+      name: "Down host",
       connectable: false,
-      planRestricted: false,
+      health: {
+        state: "offline",
+        label: "Offline",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
     });
-    const gated = hostScopeOptionFixture({
-      hostId: "gated-host",
-      name: "Gated host",
+    const outdated = hostScopeOptionFixture({
+      hostId: "outdated-host",
+      name: "Old host",
       connectable: false,
-      planRestricted: true,
+      health: {
+        state: "update-required",
+        label: "Update required",
+        detail: null,
+        tone: "idle",
+        live: false,
+      },
     });
     render(
       <HostSwitcher
         refusalByHostId={new Map()}
         inertExceptHostId="tab-host"
-        hosts={[tab, offline, gated]}
+        hosts={[tab, offline, outdated]}
         selected={tab}
         activeHostId={tab.hostId}
         onSelect={() => undefined}
@@ -201,12 +213,12 @@ describe("<HostSwitcher /> surface refusals for a fork target", () => {
     const offlineRow = screen.getByTestId(
       "settings-host-switcher-option-offline-host",
     );
-    const gatedRow = screen.getByTestId(
-      "settings-host-switcher-option-gated-host",
+    const outdatedRow = screen.getByTestId(
+      "settings-host-switcher-option-outdated-host",
     );
     expect(offlineRow.getAttribute("aria-disabled")).toBe("true");
-    expect(gatedRow.getAttribute("aria-disabled")).toBe("true");
-    expect(offlineRow.textContent).not.toContain("unreachable");
-    expect(gatedRow.textContent).not.toContain("requires upgrade");
+    expect(outdatedRow.getAttribute("aria-disabled")).toBe("true");
+    expect(offlineRow.textContent).not.toContain("offline");
+    expect(outdatedRow.textContent).not.toContain("update required");
   });
 });

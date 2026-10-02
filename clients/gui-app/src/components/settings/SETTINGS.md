@@ -63,6 +63,47 @@ The gate now exists and is a test rather than the compiler:
 `stores/tabs/__tests__/settings-kind.test.ts` asserts every section id is in
 the set.
 
+## Page shapes
+
+A settings page takes one of two shapes, and which one is decided by its
+content, not by taste.
+
+- **Stacked groups** (`settings-group.tsx`) is the default: named groups of
+  rows down one scroll, everything on the page visible at once. General,
+  Browser, Sounds, Opening behavior and most others.
+- **The rail** (`settings-master-detail.tsx`) is for a page that is a
+  collection of like things (Providers) or too long to scan in one scroll
+  (Layout, Appearance). It shows one area at a time, so it costs a click per
+  area and a third column beside the settings sidebar. On a short page that is
+  all cost: General on a rail would be a rail entry per row.
+
+Two rules for a stacked page:
+
+- **A group holds at least two rows.** A heading and a border around one row
+  is a container, not a group, and a page of them reads as nested boxes with
+  small titles. Danger Zone is the exception, because its tone is the point.
+- **Detail appears when a setting is being changed.** A long choice is a
+  dropdown with a sentence per option (General ▸ When you quit Traycer), not a
+  permanent block of radios.
+
+One rule for a rail page, and it has three callers. **Whatever points at a
+control has to pick that control's area first**, because only the picked area
+is on screen (`settings-master-detail-area.ts`):
+
+- **A search result** picks the area of its anchor (`useSettingsAnchorArea`).
+  A row with no anchor of its own contributes its name to its GROUP, never to
+  the page: a page result opens the page on its first area, so the page's own
+  keywords name only what that first area holds.
+- **A setup guide step** picks the area that holds its target
+  (`useSettingsGuideArea`), found through the `data-settings-area` each area's
+  panel carries. Without it the coachmark has no visible target and the guide
+  has no card to continue from. An armed reveal for a row of the page outranks
+  it: a guide stays active while Settings is closed, so the page can mount
+  with both, and the reveal is what the person asked for a moment ago.
+- **A link from outside Settings** to something that is not in the first area
+  arms the same reveal a search result does, with the group's anchor (the
+  start page's "Customize start page" button).
+
 ## Getting started
 
 `/settings/getting-started` is the persistent setup checklist for agent selection,
@@ -201,8 +242,10 @@ predicates; it never imports the assembled index or the search consumer.
 - A group's `breadcrumb` is the group segment of its result's breadcrumb —
   `null` for a rendered card, `"Providers"` for that page's region groups.
 - **Availability composes for containment only.** A row's effective
-  `availableWhen` is its own AND its group's (Agent roles is gated by
-  Experimental, not by its own predicate). A contribution target is not a
+  `availableWhen` is its own AND its group's. The merged groups (General ▸
+  Agents, Browser ▸ Agents, Sounds ▸ Notifications) are drawn in every shell,
+  so each gated row in them carries its own predicate (Agent roles, OS
+  notifications, Push notifications). A contribution target is not a
   container: contributing never changes the target's availability.
 - **`status` replaces the static description.** `SettingsRow` takes
   an optional `status?: ReactNode`, selected by `!== undefined` — omitted and
@@ -332,8 +375,8 @@ rather than the page — and it is small enough that a page still wins on its ow
 name.
 
 **Anchors.** `SettingsRow`, `SettingsGroup` and `SettingsSubgroup` take an
-`anchor` prop and emit `data-settings-anchor`; a hand-built row writes the attribute directly (see
-`worktree-branch-prefix-section.tsx`). `LogDetailGroup` takes its anchor as a
+`anchor` prop and emit `data-settings-anchor`; a hand-built target writes the attribute directly (see
+`OpenEditorAction` in `panels/layout-settings-panel.tsx`). `LogDetailGroup` takes its anchor as a
 required `string | null` prop because the same card is the "Log detail" group
 on two different pages, and only the app's is indexed — the host page passes
 `null`.
@@ -375,8 +418,8 @@ different answers:
   `contributesTo: "page"`, or the row that stands in for the set. No shell can
   promise the row, so no shell offers it. "Detected dev origins" shipped as a
   result that navigated to General and lit nothing.
-- **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
-  desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
+- **Gated on the SHELL** (Zoom, Agent roles and OS notifications need a
+  desktop bridge; Push notifications needs `pushPermission`; Voice input and Prevent
   sleep hide in the mobile app, and Layout's "Show the status bar on small
   screens" row exists only there) - indexed, with
   the definition's
@@ -553,12 +596,10 @@ to join.
   setting's only consumer, `PreventSleepController`, holds an OS power-save
   blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
   returns null there. Extracted from `general-settings-panel.tsx` for exactly
-  this reason. It is now the group's ONLY row - the two resource-visibility
-  toggles that used to keep it populated moved to Layout - so the component
-  returns the whole **Running agents** `SettingsGroup`, heading included, and
-  one gate hides both. The panel gates nothing (the `BrowserSettingsSection`
-  shape); a second gate there would stay on the build identity the day this one
-  narrows to the capability it is really about, and the empty card would return.
+  this reason. It is one row of General ▸ **Agents**: the component returns
+  the row alone and gates it, and the panel draws the group. The panel gates
+  nothing; the group holds the branch prefix in every shell, so it is never a
+  heading over an empty card.
 - **Layout's "Show the status bar on small screens" ROW** - a
   surface-level row of the layout form (L-51), and the only Layout row the
   installed mobile app ADDS.
@@ -1028,10 +1069,9 @@ available for a host this client has never dialled).
 `connectivity` is the ONE cloud liveness signal. It replaced a heartbeat lease
 plus a separate relay-attach bit, and with them the states that existed only to
 narrate those two disagreeing ("Reconnecting", "Not reporting"). Its remaining
-invariants are tested and load-bearing: no green dot without live evidence;
-`unknown` (liveness unreadable) never renders as a false "Offline"; and
-`local-only` - a host the account's plan will never expose remotely - is an
-upgrade prompt, not an outage.
+invariants are tested and load-bearing: no green dot without live evidence, and
+`unknown` (liveness unreadable) never renders as a false "Offline". The retired
+`local-only` wire value, which no server emits, reads as `unknown`.
 
 Two things a reader of this file will look for and not find in the DTO:
 `busy` and `busySessionCount`. They describe a _right now_ the cloud's lease
@@ -1063,40 +1103,70 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       Permissions ▸ Modes; its search vocabulary moved with it. General keeps
       no alias for it (nothing stores an anchor token, so there is nothing an
       alias would redirect).
-  - **Running agents**: Prevent sleep while running
-    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
-    "Two different mobile questions") is the only row left. The two
-    resource-visibility toggles that used to sit beside it are gone. Both
-    answers now come from ONE switch, Layout ▸ Status bar ▸ Resource monitor ▸
-    Shown (L-48, L-60): off means no status-bar segment, no header button, no
-    sidebar or task-navigator chips, and no `resources.subscribe` stream at
-    all. The sidebar chips have no control of their own and never moved to a
-    Sidebar row. Because that leaves one self-hiding row, the group
-    itself is returned by `prevent-sleep-settings-section.tsx` rather than
-    wrapped here, so the heading disappears with the row instead of drawing
-    over an empty card.
-  - **When you quit Traycer** (`host-lifecycle-settings-section.tsx`, anchor
-    `general-host-lifecycle`, gated by `isHostLifecycleGroupAvailable`: the
-    desktop's `runnerHost.hostLifecycle` bridge and not the mobile app): the
-    host lifecycle mode for THIS machine - Background (default), Ask, Stop if
-    idle, Linked, No local host - as five radios whose copy is the host
-    lifecycle UX artifact's, with the machine noun platform-substituted (Mac /
-    PC / machine; never "device"). It is here, on the app-wide page, and not
-    under a host scope, because it is a machine-local desktop preference read
-    and written through desktop main (`hostLifecycle.get/set/onChange`), never
-    a host RPC: it has to render signed out, before any host is installed,
-    and in a launch with no local host, where it is the only way back. A CLI
-    `traycer host lifecycle set` arrives through `onChange` and is reflected,
-    never replayed. Below the radios, while desired and applied differ: "Set
-    to X · restart the host to apply" (an older supervisor is running; carries
-    a Restart host button that opens `LocalHostRestartFlow`) or "Set to X ·
-    takes effect at next launch" (entering or leaving No local host). No local
-    host is disabled with the reason on a plan without remote hosts (known
-    unpaid `subscriptionStatus`), and choosing it while this launch runs a
-    host confirms through the quit modal's stop-only form
-    (`host-lifecycle-none-confirm-dialog.tsx`). The local host's Overview
-    header carries the same mode promise the tray shows ("keeps running after
-    quit") as a link back here (`host-scope/host-lifecycle-mode-line.tsx`).
+  - **Agents** (anchor `general-agents`, `data-testid="settings-general-agents"`):
+    Prevent sleep while running, When you quit Traycer, Worktree branch prefix
+    and Agent roles. These were four groups of one setting each (Running
+    agents, When you quit Traycer, Worktrees, Experimental), which drew four
+    headings and four borders around four settings. The rule now is the one
+    under "Page shapes": a group holds at least two rows. Each row gates
+    itself, and the branch prefix is drawn in every shell, so the card is never
+    empty.
+    - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`,
+      hidden in the mobile app - see "Two different mobile questions"). The
+      two resource-visibility toggles that used to sit beside it are gone. Both
+      answers now come from ONE switch, Layout ▸ Status bar ▸ Resource monitor
+      ▸ Shown (L-48, L-60): off means no status-bar segment, no header button,
+      no sidebar or task-navigator chips, and no `resources.subscribe` stream
+      at all. The sidebar chips have no control of their own and never moved
+      to a Sidebar row.
+    - **When you quit Traycer** (`HostLifecycleSettingsRow` in
+      `host-lifecycle-settings-section.tsx`, anchor `general-host-lifecycle`,
+      gated by `isHostLifecycleRowAvailable`: the desktop's
+      `runnerHost.hostLifecycle` bridge and not the mobile app): the host
+      lifecycle mode for THIS machine - Background (default), Ask, Stop if
+      idle, Linked, No local host - as ONE row with a dropdown. It was a card
+      of five radios with a sentence each, the tallest block on the page for
+      one choice. The closed trigger shows the mode's short name (the one the
+      "Set to X" line uses), each option in the list carries its full label
+      and sentence, and the row's description is the chosen mode's own
+      sentence, so what quitting will do is readable without opening anything.
+      The copy is the host lifecycle UX artifact's, with the machine noun
+      platform-substituted (Mac / PC / machine; never "device"). It is here,
+      on the app-wide page, and not under a host scope, because it is a
+      machine-local desktop preference read and written through desktop main
+      (`hostLifecycle.get/set/onChange`), never a host RPC: it has to work
+      before any host is installed, and in a launch with no local host, where
+      it is the only way back. A CLI `traycer host lifecycle set` arrives
+      through `onChange` and is reflected, never replayed. Under the
+      description, while desired and applied differ: "Set to X · restart the
+      host to apply" (an older supervisor is running; carries a Restart host
+      button that opens `LocalHostRestartFlow`) or "Set to X · takes effect at
+      next launch" (entering or leaving No local host). No local host is
+      disabled in the list, with the reason after its sentence, while signed
+      out (remote hosts are reached through the account), and choosing it
+      while this launch runs a host confirms through the quit modal's
+      stop-only form (`host-lifecycle-none-confirm-dialog.tsx`). The local
+      host's Overview header carries the same mode promise the tray shows
+      ("keeps running after quit") as a link back here
+      (`host-scope/host-lifecycle-mode-line.tsx`).
+      - **The radio card still exists, at `/when-you-quit`**
+        (`HostLifecycleSettingsSection`, definition `hostLifecycleCard`, a
+        contributor with no entry of its own). Signed out there is no settings
+        shell, so that route renders the card alone, CLI footnote included.
+        Both presentations read one model (`useHostLifecycleModel`): the
+        query, the write, the signed-out and task-ownership holds and the None
+        confirmation are written once.
+    - **Worktree branch prefix** (`worktree-branch-prefix-section.tsx`): a
+      plain `SettingsRow` now. Its sentence, with the live preview of the next
+      branch name, is the row's `status`, and a validation error sits under it
+      in the same described region. It used to draw a bordered card of its own
+      inside the group's card. The label was "Default branch prefix" under a
+      Worktrees heading; with the heading gone the label names worktrees
+      itself.
+    - **Agent roles**: gated by `isAgentRolesRowAvailable` (the desktop
+      feature-settings bridge) and marked with the muted xs **Experimental**
+      badge the permission modes use, in place of an Experimental heading over
+      one row.
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
     your work and Data migration used to share this group under the name
     "Setup & migration"; both moved to the scoped host's **Overview**, because
@@ -1124,16 +1194,29 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   placement, agent-opened tab surfacing, and saved website sessions. Search
   entries belong to this section, including conditional host/desktop controls.
   Host and desktop scope remain explicit in each control's copy.
-  - **Search** selects Google (default), DuckDuckGo, Bing, or Kagi. The shared
-    address-bar normalizer navigates recognizable addresses and encodes other
-    input as a query in native and streamed tabs. The preference is persisted
-    and invalid or missing values fall back to Google.
-  - **Browser placement** shows the effective browser destination. Selecting
-    one enables per-category placement while preserving other categories'
-    current effective values. No preference keys or defaults are migrated.
-  - **Agent-opened tabs** keeps `agentTabSurfacing` and the existing canvas/PiP
-    rules. It controls explicit REPL opens; page-created tabs keep their
-    existing popup/link behavior.
+  - **Three groups**: Browsing, Agents, Website sessions. Search, Browser
+    placement, Browser and Agent-opened tabs used to be four groups holding
+    five rows between them.
+  - **Browsing** (anchor `browser-browsing`): the two choices about the
+    person's own browsing.
+    - **Default search engine** selects Google (default), DuckDuckGo, Bing, or
+      Kagi. The shared address-bar normalizer navigates recognizable addresses
+      and encodes other input as a query in native and streamed tabs. The
+      preference is persisted and invalid or missing values fall back to
+      Google.
+    - **Open browser tabs** shows the effective browser destination. Selecting
+      one enables per-category placement while preserving other categories'
+      current effective values. No preference keys or defaults are migrated.
+      The click-modifier legend sits directly under this group, because it is
+      about where a tile opens.
+  - **Agents** (anchor `browser-agents`, drawn by `BrowserSettingsSection`):
+    what agents may do with the browser. **Agent-opened tabs** is drawn in
+    every shell, so the group is never empty; the panel owns that row and
+    hands it in. It keeps `agentTabSurfacing` and the existing canvas/PiP
+    rules, and controls explicit REPL opens; page-created tabs keep their
+    existing popup/link behavior. **Let agents use the in-app browser** sits
+    above it when the active host advertises both `config.browser.*` methods,
+    and **Detected dev origins** below it once a terminal has printed one.
   - **Website sessions** (`browser-settings-section.tsx`'s second group,
     `data-testid="settings-saved-logins"`): where session data from the in-app
     browser is kept, and the only place it can be turned off, removed, or
@@ -1262,6 +1345,19 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       again instead of hiding it for the session. **Remove all** calls the
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
+- `Sounds` (`panels/app-notifications-settings-panel.tsx`,
+  `/settings/app-notifications`): two groups.
+  - **Chimes** (`panels/notification-chime-settings-section.tsx`): one
+    dropdown per kind of alert. Untitled, because the page is already named
+    for it.
+  - **Notifications** (anchor `app-notifications-notifications`): where the
+    alerts themselves are configured. **OS notifications** on a desktop with
+    the system-settings bridge (`system-notification-settings-section.tsx`),
+    **Push notifications on this phone** in the phone app
+    (`push-permission-section.tsx`; "this phone", never "this device", which
+    is the UI word for a host), and **Notification events**, a pointer to the
+    selected host's Notifications page, in every shell. System, This phone
+    and Events were three groups of one row each.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
   `/settings/opening-behavior`): link routing (Open links and per-link-type
   choices), general tile placement and per-type overrides
@@ -1269,14 +1365,32 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   to all categories, including browsers; browser-specific controls live in
   Browser. `settings-enum-select.tsx` supplies the shared accessible select.
   Existing store keys and their legacy migrations remain unchanged.
-- `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
-  followed by **Start page**, **Interface**, **Layout**, **Fonts and text**,
-  **Motion and readability**, **Terminal**, **Agent office**, and **Icon
-  colors** via `settings-group.tsx`.
-  Each group has an `<h2>` label outside its bordered card. Settings apply
-  immediately; the theme editor previews a draft until Save theme or Cancel.
-  `themes/appearance-details.tsx` supplies the prompt font and ligature rows
-  inside Fonts and text, plus the separate Motion and readability group.
+- `Appearance` (`panels/appearance-settings-panel.tsx`): seven areas in the
+  master-detail card Providers and Layout use (`settings-master-detail.tsx`):
+  **Themes**, **Start page**, **Interface**, **Fonts and text**,
+  **Terminal**, **Diff viewer** and **Tasks**. It was one scroll of nine
+  titled groups; at thirty rows it is the long page of the Application group,
+  which is what the rail is for (see "Page shapes").
+  - **The rail.** A vertical Radix tab list beside the picked area from `md`
+    up, a select above it below `md`. Each area has a pinned header (its
+    group's label and one line) over a body that owns the scroll. Every area
+    stays mounted, hidden while another is picked, so a search result that
+    picks an area finds its row in the same commit. The pick and the
+    scroll-to-top on a new area are the hooks Layout uses
+    (`settings-master-detail-area.ts`).
+  - **An area is a group of the definitions**, so its label and anchor come
+    from there and a search result finds its area by the group its row sits
+    in (`appearanceAreaForAnchor`). The area header names the group, so no
+    group card draws its own `<h2>` (`showTitle={false}`).
+  - **Interface** holds zoom, the pointer cursor, panel animations, animation
+    duration and contrast. Motion and readability was a group of its own;
+    both were app-wide chrome and neither was long.
+  - **Tasks** holds the agent office default view and Color icons by type.
+    Agent office and Icon colors were each a heading over one row.
+    Settings apply immediately; the theme editor previews a draft until Save
+    theme or Cancel. `themes/appearance-details.tsx` supplies the prompt font
+    and ligature rows of Fonts and text, and the motion and contrast rows of
+    Interface.
   - **Theme**: light/dark/system mode (`theme`/`setTheme`) plus the theme
     library - selection, editing, import/export - lives in `ThemeGallery`,
     backed by `stores/settings/theme-library-store.ts` and applied by
@@ -1424,7 +1538,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       visually distinct. `TerminalPreview` reflects the chosen shape/blink with a
       CSS-only cursor (reads the store directly, no xterm instance) so the effect
       is visible without spawning a real terminal.
-  - **Agent office** (group). One row, `Default view` (a `Select` over
+  - **Agent office default view** (a row of the Tasks area; a `Select` over
     `agentOfficeDefaultView`, `"auto"` plus every id in `OFFICE_VIEW_IDS`,
     default `"auto"`) - which office view an epic's comm-graph tile opens on
     when nobody has picked one for that tile. The options are read from the

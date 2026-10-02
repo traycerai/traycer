@@ -150,8 +150,8 @@ export interface ChatTilePreContentFrame {
  *
  * The anchor is the tile's first render for this chat, which is the start of
  * the FIRST wait and of no other. `retry()` puts a loaded session back into a
- * pre-snapshot wait - the wake pulse, the plan-restricted reprobe and the
- * host-version move all do it to a tile whose transcript is on screen - and
+ * pre-snapshot wait - the wake pulse and the
+ * host-version move both do it to a tile whose transcript is on screen - and
  * the session stamps that instant (`preSnapshotReloadStartedAt`). A tile
  * mounted longer ago than the deadline would otherwise call the replacement
  * subscription overdue on its first frame, which is the one thing this whole

@@ -343,6 +343,27 @@ export function recordCloudDraftImageSources(
 }
 
 /**
+ * Whether `hostId` is currently a recorded source for EVERY one of `hashes`
+ * under this identity. The registry is the truth about what it holds: a
+ * candidate it evicted (more than `CLOUD_DRAFT_IMAGE_SOURCES_PER_HASH` hosts
+ * for one hash) is no longer a source, whatever a caller remembered about
+ * having recorded it, so a caller deciding whether to record again asks here
+ * rather than keeping its own list. An empty `hashes` is recorded.
+ */
+export function cloudDraftImageSourcesRecorded(
+  identity: CloudChatIdentity,
+  hostId: string,
+  hashes: readonly string[],
+): boolean {
+  const wanted: CloudDraftImageSourceAddress = { identity, hostId };
+  return hashes.every((hash) =>
+    (sourcesByHash.get(hash) ?? []).some((candidate) =>
+      sameCloudDraftImageSource(candidate, wanted),
+    ),
+  );
+}
+
+/**
  * Two addresses are the same when they name the same draft through the same
  * host. The `client` is deliberately not compared: a re-ingest of the same
  * draft on a remounted mirror carries a fresh requester for the same address,
@@ -354,9 +375,15 @@ function cloudDraftImageSourcesFor(
   return sourcesByHash.get(hash) ?? [];
 }
 
+/** A source without its requester: the draft and the host it is read through. */
+type CloudDraftImageSourceAddress = Pick<
+  CloudDraftImageSource,
+  "identity" | "hostId"
+>;
+
 function sameCloudDraftImageSource(
-  left: CloudDraftImageSource,
-  right: CloudDraftImageSource,
+  left: CloudDraftImageSourceAddress,
+  right: CloudDraftImageSourceAddress,
 ): boolean {
   return (
     left.hostId === right.hostId &&

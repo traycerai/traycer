@@ -197,21 +197,16 @@ export function parseTransportKind(value: unknown): SelectionTransportKind {
 }
 
 /**
- * One dial attempt's outcome (window → authority), discriminated on the
- * outcome so impossible states are unrepresentable: only the
- * `confirmed-refusal` arm carries `refusalDetail`.
+ * One dial attempt's outcome (window → authority).
  *
  * `confirmed-refusal` means a REAL dial attempt was terminally refused by
  * the transport itself: connection refused, Noise/relay handshake rejection,
  * a relay attach refusal. It is deliberately NOT the directory-level
  * `isConfirmedTransportRefusal` gate (`host-client/remote-fetcher.ts`) - that
- * helper is a pre-dial gate folding cloud-DTO verdicts (`offline`,
- * `plan-restricted`) into its answer, and feeding it here would let a DTO
- * flip advance the death counter, which invariant 5 forbids. Reporters
- * classify from the attempt's transport error, never from directory state.
- * `refusalDetail: "plan-restricted"` (a refusal whose transport error
- * carried the plan restriction) is the ONLY provenance for
- * `dead("plan-restricted")`.
+ * helper is a pre-dial gate folding the cloud-DTO verdict (`offline`) into
+ * its answer, and feeding it here would let a DTO flip advance the death
+ * counter, which invariant 5 forbids. Reporters classify from the attempt's
+ * transport error, never from directory state.
  *
  * Death aggregation is ATTEMPT-scoped and deduplicated: `attemptId` is
  * unique within the reporter incarnation, and the authority counts each
@@ -222,29 +217,18 @@ export function parseTransportKind(value: unknown): SelectionTransportKind {
  * `indeterminate` (liveness-read failure, attempt abandoned for unrelated
  * reasons) never advances a counter.
  */
-export type SelectionDialEvidence =
-  | {
-      kind: "dial";
-      hostId: string;
-      attemptId: string;
-      outcome: "success" | "timeout" | "indeterminate";
-      transportKind: SelectionTransportKind;
-      /**
-       * Reporting window's clock, epoch ms. Diagnostic only - identity and
-       * ordering come from attemptId/revisions, never from this.
-       */
-      at: number;
-    }
-  | {
-      kind: "dial";
-      hostId: string;
-      attemptId: string;
-      outcome: "confirmed-refusal";
-      refusalDetail: "plan-restricted" | null;
-      transportKind: SelectionTransportKind;
-      /** Same caveat. */
-      at: number;
-    };
+export type SelectionDialEvidence = {
+  kind: "dial";
+  hostId: string;
+  attemptId: string;
+  outcome: "success" | "timeout" | "indeterminate" | "confirmed-refusal";
+  transportKind: SelectionTransportKind;
+  /**
+   * Reporting window's clock, epoch ms. Diagnostic only - identity and
+   * ordering come from attemptId/revisions, never from this.
+   */
+  at: number;
+};
 
 /**
  * A live transport session appearing or disappearing (window → authority).
@@ -405,23 +389,10 @@ export function parseSelectionEvidenceReport(
       const attemptId = record["attemptId"];
       if (typeof attemptId !== "string") return null;
       const outcome = record["outcome"];
-      if (outcome === "confirmed-refusal") {
-        const refusalDetail =
-          record["refusalDetail"] === "plan-restricted"
-            ? ("plan-restricted" as const)
-            : null;
-        return {
-          kind: "dial",
-          hostId,
-          attemptId,
-          outcome,
-          refusalDetail,
-          transportKind,
-          at,
-        };
-      }
       const inertOutcome =
-        outcome === "success" || outcome === "timeout"
+        outcome === "success" ||
+        outcome === "timeout" ||
+        outcome === "confirmed-refusal"
           ? outcome
           : ("indeterminate" as const);
       return {
@@ -539,7 +510,6 @@ export type HostLeaseStatus =
  */
 export type HostLeaseDeadState =
   | { reason: "offline" }
-  | { reason: "plan-restricted" }
   | { reason: "removed" }
   | { reason: "incompatible"; detail: SelectionIncompatibility };
 
@@ -704,8 +674,7 @@ export function parseLeaseSnapshot(raw: unknown): HostLeaseSnapshot | null {
         },
       };
     }
-    const safeReason =
-      reason === "plan-restricted" || reason === "removed" ? reason : "offline";
+    const safeReason = reason === "removed" ? reason : "offline";
     return { hostId, status: "dead", dead: { reason: safeReason } };
   }
   const safeStatus =

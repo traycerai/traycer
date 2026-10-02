@@ -7,6 +7,7 @@ import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { SplitMemberChrome } from "./split-tab-chrome";
 import { usePublishTravelOutline } from "./strip-selection-travel";
+import { useSurfaceJoinPane } from "./surface-join-pane";
 import { TabChromeBackground, TabColorEdgeLine } from "./tab-chrome-background";
 import { useHeaderTabTitle } from "./header-tab-presentation";
 import { TAB_BOX_CLASS } from "./tab-chrome-tokens";
@@ -18,6 +19,7 @@ import {
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import type { HeaderTabDragGhost } from "@/components/epic-canvas/dnd/dnd-store";
 import { TabLeadingIcon } from "./tab-leading-icon";
+import type { SheetJoinPane } from "./side-strip/side-tab-join";
 import { SideTabHoverCardBody } from "./side-strip/side-tab-hover-card";
 import { railBadgeOf } from "./side-strip/rail-badge-kind";
 import { useSideTabLiveAgents } from "./side-strip/side-tab-live-agents";
@@ -79,12 +81,13 @@ export function HeaderTabVisual(props: HeaderTabVisualProps) {
   const sessionColor = props.tab.kind === "sample-workspace" ? color : null;
   const badge = railBadgeOf(props.indicatorState);
   const agents = useSideTabLiveAgents(epicId);
+  const joinPane = useSurfaceJoinPane(props.joined ? props.tab : null, "top");
   return (
     <>
       {props.chrome === "own" ? (
         <TabChrome
           isActive={props.isActive}
-          joined={props.joined}
+          joined={joinPane}
           concealed={props.concealed}
           color={color}
           session={sessionColor !== null}
@@ -269,7 +272,8 @@ function InactiveColorMark(props: {
 
 export function TabChrome(props: {
   readonly isActive: boolean;
-  readonly joined: boolean;
+  /** The pane of its sheet the active tab runs into, or `null` unjoined. */
+  readonly joined: SheetJoinPane | null;
   /**
    * The selection traveller is still on its way to this tab: the box stays
    * laid out but unpainted, so the traveller lands on exactly its rect and
@@ -304,7 +308,7 @@ export function TabChrome(props: {
   // coloured active tab traces the pre-#2021 cap in its own colour (see
   // `TabChromeBackground`). The editor's own tab is a mode, not a place: it
   // keeps its coloured box and never joins the sheet.
-  const joined = props.joined && !props.session;
+  const joined = props.session ? null : props.joined;
   return (
     <>
       {/* Concealed, it keeps its colour line until the traveller lands, so a

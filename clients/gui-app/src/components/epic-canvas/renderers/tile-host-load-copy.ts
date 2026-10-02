@@ -1,7 +1,5 @@
 import type { HostLeaseDeadState } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { BoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
-import { PLAN_RESTRICTED_MOBILE_REMEDY } from "@/lib/host/plan-restricted-copy";
-import { isMobileApp } from "@/lib/mobile-app";
 
 /**
  * The words for every bounded tile-load state, as pure functions.
@@ -40,12 +38,11 @@ export function tileLoadNoun(subject: TileLoadSubject): string {
 
 /**
  * Keyed on the CONTRACT's own `reason` union (`HostLeaseDeadState`), not on a
- * hand-written copy of it. A sixth dead reason added to the contract fails to
+ * hand-written copy of it. A new dead reason added to the contract fails to
  * compile HERE, naming its missing key - rather than arriving at runtime and
  * routing silently to a generic fallback. That failure mode is not
  * hypothetical: it is exactly how `activateRefusalMessage` shipped a broker
- * message instead of a compile error during P1.2, and how this very tile
- * family rendered every `plan-restricted` host as "offline" for months.
+ * message instead of a compile error during P1.2.
  */
 const DEAD_MESSAGE: Record<
   HostLeaseDeadState["reason"],
@@ -54,13 +51,6 @@ const DEAD_MESSAGE: Record<
 > = {
   offline: (noun, named) =>
     `Host ${named} is offline, so this ${noun} can't be loaded. It will load once that host is back.`,
-  // The fact is the same everywhere; only the remedy differs. The installed
-  // mobile app may not tell the reader to upgrade (App Store guideline 3.1.1),
-  // so it points at the shell that may, and keeps the local alternative.
-  "plan-restricted": (noun, named) =>
-    isMobileApp()
-      ? `Host ${named} is local only on your current plan, so this ${noun} can't be reached from here. ${PLAN_RESTRICTED_MOBILE_REMEDY} Or open it on that machine.`
-      : `Host ${named} is local only on your current plan, so this ${noun} can't be reached from here. Upgrade to use that host remotely, or open it on that machine.`,
   removed: (noun, named) =>
     `Host ${named} was removed from your account, so this ${noun} can't be loaded.`,
   incompatible: (noun, named) =>

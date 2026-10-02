@@ -8,10 +8,8 @@ import { hostUpdateActionApplies } from "@/lib/host/window-narration";
  * The remedy for a host whose version this app cannot talk to: an update, not
  * a retry and not a wait.
  *
- * It sits in its own file for the reason its sibling
- * `plan-restricted-upgrade-action.tsx` states about itself — more than one
- * surface has to offer it, and a second copy of the button is how the two
- * would drift. The window modal has offered it since P3.1
+ * It sits in its own file because more than one surface has to offer it, and
+ * a second copy of the button is how the two would drift. The window modal has offered it since P3.1
  * (`window-host-modal-update-host`); Settings' hosts list is the second
  * surface, added here because a person who opens Settings to look at a host
  * the modal told them to update should not find a row that names the problem

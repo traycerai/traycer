@@ -71,9 +71,8 @@ interface NotificationRowProps {
  * and fails on its own evidence, which is recoverable, where a disabled row is
  * a dead end the user cannot argue with.
  *
- * A CONFIRMED refusal still disables, because for those the action really has
- * nowhere to go: `offline` (the host is detached) and `plan-restricted` (no
- * remote route exists to it on this account's plan).
+ * A CONFIRMED refusal still disables, because for it the action really has
+ * nowhere to go: `offline` (the host is detached).
  *
  * "Confirmed" is asked through `isConfirmedTransportRefusal` - the SAME
  * ready-session-aware gate the activation path itself dials through
@@ -108,8 +107,7 @@ function originRefusal(input: {
   if (!isConfirmedTransportRefusal(input.originEntry, input.hasReadySession)) {
     return null;
   }
-  // Confirmed refusals are exactly `offline` / `plan-restricted`; the verdict
-  // read here only picks which copy the row renders.
+  // A confirmed refusal is exactly `offline`.
   return hostUnavailability(input.originEntry);
 }
 
@@ -381,9 +379,7 @@ function NotificationRowMain(props: {
           data-testid="notification-origin-unavailable"
           className="block text-ui-xs text-muted-foreground"
         >
-          {props.originUnavailability === "plan-restricted"
-            ? "The originating host is local only on your current plan."
-            : "The originating host is unavailable."}
+          The originating host is unavailable.
         </span>
       )}
       {props.packRemote ? (

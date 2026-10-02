@@ -352,8 +352,6 @@ function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
     transportDialability: "dialable",
     publicKey,
     relayFuseGrace: false,
-    recentHostCheckIn: false,
-    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "connectable",
       viewerReachability: "ok",
@@ -481,7 +479,7 @@ function installRemoteTransport(sessionsByKey: {
       return {
         session,
         messenger: new RemoteHostMessenger(session),
-        streamClient: new RemoteStreamClient(session, () => null),
+        streamClient: new RemoteStreamClient(session),
       };
     },
   );
@@ -807,7 +805,7 @@ describe("HostStreamProvider", () => {
   });
 
   it("backs off consecutive quick underneath-closes instead of hot-looping the rebuild", () => {
-    // A terminal-class close (incompatible protocol, plan restriction) would
+    // A terminal-class close (incompatible protocol, revoked access) would
     // otherwise loop: rebuild -> fresh dial (grant mint included) -> same
     // fatal -> onClosed -> rebuild, one full mint/dial cycle per round trip.
     // The first quick close still rebuilds immediately (the wedge-recovery

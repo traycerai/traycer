@@ -63,7 +63,7 @@
  * ## What moved here from the provider
  *
  * Desktop ownership claims (per TAB, before acquisition), the create-host seed
- * and effective-host selection, the plan-restriction backoff ladder, the
+ * and effective-host selection, the session rebuild backoff ladder, the
  * `failed` presentation, retry generation, owner-key rotation (R-1), warm-handle
  * adoption and the safe re-point (F1). They are controller state, not provider
  * callbacks: passing the provider's closures in would have preserved the mount
@@ -149,9 +149,9 @@ import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { armCarriesRootWrites } from "@/stores/epics/open-epic/runtime/epic-adapter-selection";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
 import {
-  createPlanRestrictedSessionRebuildBackoff,
-  type PlanRestrictedSessionRebuildBackoff,
-} from "@/lib/host/plan-restricted-session-rebuild-backoff";
+  createSessionRebuildBackoff,
+  type SessionRebuildBackoff,
+} from "@/lib/host/session-rebuild-backoff";
 import { openEpicKey } from "@/lib/persist";
 import { adoptLegacyPersistedKey } from "@/lib/persist/zustand-persist-lifecycle";
 import { sessionCreatedEpicHostId } from "@/lib/epics/session-created-epics";
@@ -438,10 +438,10 @@ interface ControllerEntry {
   presentation: EpicSessionPresentationState;
   /**
    * One ladder per entry, so handle replacement cannot reset its owner-level
-   * backoff when a host repeatedly denies the plan. Cancelled on scope change
+   * backoff while construction keeps failing. Cancelled on scope change
    * (identity, target, ownership) and when the last tab leaves.
    */
-  readonly backoff: PlanRestrictedSessionRebuildBackoff;
+  readonly backoff: SessionRebuildBackoff;
   /** The scope the ladder was last armed for; a change cancels it. */
   backoffScopeKey: string | null;
   run: ActiveRun | null;
@@ -1001,7 +1001,7 @@ function createEpicSessionController(): EpicSessionController {
         targetHostId: requestedHostId ?? effectiveHostId,
         originalHostId: null,
       },
-      backoff: createPlanRestrictedSessionRebuildBackoff(),
+      backoff: createSessionRebuildBackoff(),
       backoffScopeKey: null,
       run: null,
       runKey: null,
@@ -1577,11 +1577,6 @@ function createEpicSessionController(): EpicSessionController {
         adoptLegacyPersistKey: (adoptForUserId) => {
           adoptLegacyOpenEpicKey(epicId, adoptForUserId);
         },
-        onPlanRestrictedDenial: (owner) => {
-          entry.backoff.request(owner, () => {
-            owner.retryTransport();
-          });
-        },
         markHealthy: () => {
           entry.backoff.markHealthy();
         },
@@ -1594,12 +1589,6 @@ function createEpicSessionController(): EpicSessionController {
             targetHostId,
             originalHostId: entry.originalHostId,
           });
-        },
-        // No presentation: a clean session rebuilding after a deadline the
-        // user never saw should not flash a failure. The acquire pass presents
-        // `establishing` on its own.
-        onRetryTransport: () => {
-          bumpRetry(entry);
         },
       });
   }

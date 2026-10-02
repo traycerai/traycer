@@ -1,9 +1,11 @@
 import type { CSSProperties, Ref } from "react";
 import { usePublishSheetJoin } from "./sheet-join-context";
+import { useHeaderStripItem } from "@/stores/tabs/use-header-tabs";
 import {
-  useSelectionTravelling,
+  useTravelDestinationId,
   useTravelOutline,
 } from "./strip-selection-travel";
+import { useHeaderItemJoinPane } from "./surface-join-pane";
 
 /**
  * The stand-in selected box that slides between tabs; see
@@ -15,21 +17,29 @@ export function StripSelectionTraveller({
 }: {
   readonly ref: Ref<HTMLSpanElement>;
 }) {
-  const travelling = useSelectionTravelling();
+  // The destination's pane, read live through the rule its own box reads, so
+  // the two wear one fill for the whole slide and swap without a change.
+  const destinationId = useTravelDestinationId();
+  const destination = useHeaderStripItem(destinationId ?? "");
+  const pane = useHeaderItemJoinPane(
+    destinationId === null ? null : destination,
+  );
   // The destination's outline colour, so the traveller and its bridge are
   // the box they stand in for (`TabChromeBackground`), never the sheets'
   // border under a coloured tab.
   const outline = useTravelOutline();
-  usePublishSheetJoin(travelling ? "canvas" : null, outline);
+  usePublishSheetJoin(pane, outline);
   return (
     <span
       ref={ref}
       aria-hidden
       data-testid="tab-selection-traveller"
-      hidden={!travelling}
+      hidden={pane === null}
       // The join rule in `index.css` paints it exactly like a joined tab box:
-      // the canvas fill, the outline, open at the bottom.
-      {...(travelling ? { "data-sheet-joined": "top" } : {})}
+      // its destination's fill, the outline, open at the bottom.
+      {...(pane === null
+        ? {}
+        : { "data-sheet-joined": "top", "data-join-pane": pane })}
       className="pointer-events-none absolute top-0 left-0 rounded-xl border"
       style={
         outline === null
