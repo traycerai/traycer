@@ -54,9 +54,95 @@ test.describe.configure({ mode: "default" });
 // fill) is a pure rule, `useSideTabJoin`, and its matrix is jsdom's:
 // `side-strip-tab-row.test.tsx`. Each bridge still gets a presence check here,
 // because "the bridge lays out with real size" is a fact only a layout engine
-// can state.
+// can state. So does one fill claim, the one CSS alone decides: that a pane
+// name (`data-join-pane`) resolves, on the joined box and on the bridge, to the
+// token it stands for (`index.css`).
 
 const EDGES: ReadonlyArray<EdgeSide> = ["left", "right"];
+
+const GROUND_OVERRIDE_STYLE_ID = "sheet-join-ground-override";
+/**
+ * `--background` and `--canvas` set to two unrelated colours. The shipped
+ * palettes keep them a few levels apart (AMOLED's dark mode makes them the same
+ * black), so without this a join that took the wrong one could read as the
+ * right one. `!important` so it wins over the theme applier's inline tokens.
+ */
+const GROUND_OVERRIDE_CSS =
+  ":root { --background: rgb(10, 200, 30) !important; --canvas: rgb(200, 30, 120) !important; }";
+
+/** Runs `measure` with `--background` and `--canvas` told apart. */
+async function withDistinctGrounds<T>(
+  page: Page,
+  measure: () => Promise<T>,
+): Promise<T> {
+  await page.evaluate(
+    `{
+       const el = document.createElement("style");
+       el.id = ${JSON.stringify(GROUND_OVERRIDE_STYLE_ID)};
+       el.textContent = ${JSON.stringify(GROUND_OVERRIDE_CSS)};
+       document.head.append(el);
+     }`,
+  );
+  try {
+    await nextFrames(page, 2);
+    return await measure();
+  } finally {
+    await page.evaluate(
+      `document.getElementById(${JSON.stringify(GROUND_OVERRIDE_STYLE_ID)})?.remove()`,
+    );
+  }
+}
+
+interface TopJoinFills {
+  /** The joined tab box's own painted background. */
+  readonly box: string;
+  readonly bridge: string;
+  /** What `var(--background)` and `var(--canvas)` resolve to, read off a probe. */
+  readonly background: string;
+  readonly canvas: string;
+}
+
+/** The top join's two fills beside the two tokens they may take, all as Chrome serialises them. */
+function readTopJoinFills(page: Page): Promise<TopJoinFills> {
+  return page.evaluate(() => {
+    const resolve = (token: string): string => {
+      const probeNode = document.createElement("div");
+      probeNode.style.backgroundColor = `var(${token})`;
+      document.body.append(probeNode);
+      const colour = getComputedStyle(probeNode).backgroundColor;
+      probeNode.remove();
+      return colour;
+    };
+    const box = document.querySelector('[data-sheet-joined="top"]');
+    const bridge = document.querySelector('[data-sheet-join-bridge="top"]');
+    if (box === null || bridge === null) {
+      throw new Error("the top join's box or its bridge is missing");
+    }
+    return {
+      box: getComputedStyle(box).backgroundColor,
+      bridge: getComputedStyle(bridge).backgroundColor,
+      background: resolve("--background"),
+      canvas: resolve("--canvas"),
+    };
+  });
+}
+
+interface TopFillCase {
+  readonly label: string;
+  readonly activate: (page: Page) => Promise<void>;
+  /** The token the join takes: the surface's own ground, or the sheet's canvas. */
+  readonly ground: "background" | "canvas";
+}
+
+const TOP_FILL_CASES: ReadonlyArray<TopFillCase> = [
+  { label: "an active task", activate: activateEpsilon, ground: "background" },
+  {
+    label: "an active split pair",
+    activate: activateFirstSplit,
+    ground: "background",
+  },
+  { label: "Home", activate: activateHome, ground: "canvas" },
+];
 
 function expectArcsOnBridgeEdges(read: SheetJoinRead, side: JoinSide): void {
   for (const { what, delta } of offsetDeltas(read, side)) {
@@ -220,6 +306,59 @@ test.describe("presence: the bridge lays out with real size", () => {
 
       await probe(page, "setCollapsed(true)");
       await readRenderedJoin(page, edge, `${edge} strip, collapsed (a tile)`);
+    });
+  }
+});
+
+test.describe("fill: the top join takes the ground its surface paints", () => {
+  // A task, a draft and Settings paint `--background` along their top edge, so
+  // a tab joined to one must paint it too, or the tab and the row under it are
+  // two colours (the bug: every top tab took `--canvas`). Home and History
+  // paint nothing and show the sheet's canvas. The pane's choice is jsdom's
+  // (`surface-join-pane.test.ts`); that `data-join-pane` becomes this fill, on
+  // the box AND on the bridge that carries it onto the sheet, is CSS's.
+  for (const { label, activate, ground } of TOP_FILL_CASES) {
+    test(`top: ${label}'s tab and its bridge paint --${ground}`, async ({
+      topCanvas,
+    }) => {
+      const { page, setWindow } = topCanvas;
+      await setWindow(DESKTOP_WINDOW.width, DESKTOP_WINDOW.height, 1);
+      await prepareCanvas(page, "top", "left");
+      await activate(page);
+      await readRenderedJoin(page, "top", label);
+
+      await withDistinctGrounds(page, async () => {
+        const other = ground === "background" ? "canvas" : "background";
+        // The premise, asserted positively: the two tokens read as two colours,
+        // or a join that took the wrong one would still pass.
+        await expect
+          .poll(
+            async () => {
+              const read = await readTopJoinFills(page);
+              return read.background !== read.canvas;
+            },
+            {
+              message:
+                "the token override must make --background and --canvas differ",
+            },
+          )
+          .toBe(true);
+        // Colour transitions on the box settle over a few frames.
+        await expect
+          .poll(
+            async () => {
+              const read = await readTopJoinFills(page);
+              return {
+                box: read.box === read[ground],
+                bridge: read.bridge === read[ground],
+              };
+            },
+            {
+              message: `${label}: the joined tab box and the bridge must both paint --${ground}, not --${other}`,
+            },
+          )
+          .toEqual({ box: true, bridge: true });
+      });
     });
   }
 });

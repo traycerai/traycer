@@ -23,6 +23,7 @@ import type {
 import type { SplitSide } from "@/stores/tabs/layout";
 import { tabRefKey } from "@/stores/tabs/layout";
 import { useConcealedForTravel } from "./strip-selection-travel";
+import { useHeaderSplitJoinPane } from "./surface-join-pane";
 import { useStripEntrance } from "./use-strip-entrance";
 import { useStripItemJoining } from "./use-strip-item-joining";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -98,7 +99,8 @@ export const SplitTabItem = memo(function SplitTabItem(
   );
   // While the selection slides here, the traveller draws the joined box.
   const concealed = useConcealedForTravel(props.item.id);
-  const joined = props.isActive && !isDragging && !concealed;
+  const joinPane = useHeaderSplitJoinPane(props.item);
+  const joined = props.isActive && !isDragging && !concealed ? joinPane : null;
   const quickActionsTab =
     memberTab(props.item.left) ?? memberTab(props.item.right);
 

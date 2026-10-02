@@ -440,7 +440,7 @@ function DioramaWindow(props: {
                     <TabChromeBackground
                       fill="var(--background)"
                       borderColor="var(--canvas-border)"
-                      joined={false}
+                      joined={null}
                       className={undefined}
                     />
                   ) : null}
