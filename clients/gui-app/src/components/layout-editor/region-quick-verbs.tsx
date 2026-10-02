@@ -1,4 +1,10 @@
-import { useId, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  useId,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { Eye, EyeOff, Layers, PanelTop } from "lucide-react";
 import { toast } from "sonner";
@@ -357,6 +363,19 @@ export function LayoutClusterContextMenu(props: {
           // Only ever reached with a region under the pointer: the refusal
           // above has already taken the event out of React's reach otherwise.
           setRegionId(regionUnder(event.target));
+        }}
+        onPointerDown={(event: PointerEvent<HTMLElement>) => {
+          // A touch or pen press arms Radix's long-press timer on every
+          // trigger it bubbles through, and the inner menu's contextmenu
+          // default-prevent never reaches this one's timer. Default-preventing
+          // here makes Radix skip arming it, so a nested menu's long-press
+          // opens that menu alone.
+          if (
+            event.pointerType !== "mouse" &&
+            opensNestedContextMenu(event.target)
+          ) {
+            event.preventDefault();
+          }
         }}
       >
         {props.children}

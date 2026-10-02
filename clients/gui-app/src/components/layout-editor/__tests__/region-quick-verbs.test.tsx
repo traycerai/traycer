@@ -118,6 +118,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
   useLayoutEditorStore.getState().endSession();
   useLayoutStore.getState().replaceAll(DEFAULT_LAYOUT_SNAPSHOT);
@@ -512,14 +513,12 @@ describe("a press the operating system's own menu serves", () => {
     }
   });
 
-  // The transcript's web links own an app menu of their own. The stand-down
-  // above would stop their press before React sees it, so they carry the
-  // nested-menu mark that lets it through.
-  it("lets a link that marks its own menu open that menu instead of standing down", () => {
+  function renderDockWithMarkedLink(): void {
     render(
       <LayoutClusterContextMenu>
         <div data-testid="dock">
           <span data-layout-region="changedFiles" data-testid="row">
+            <span data-testid="row-header">3 files changed</span>
             <ContextMenu>
               <ContextMenuTrigger asChild {...NESTED_CONTEXT_MENU_PROPS}>
                 <a href="https://example.com" data-testid="menu-link">
@@ -539,6 +538,13 @@ describe("a press the operating system's own menu serves", () => {
         </div>
       </LayoutClusterContextMenu>,
     );
+  }
+
+  // The transcript's web links own an app menu of their own. The stand-down
+  // above would stop their press before React sees it, so they carry the
+  // nested-menu mark that lets it through.
+  it("lets a link that marks its own menu open that menu instead of standing down", () => {
+    renderDockWithMarkedLink();
 
     const onMarkedLink = press(screen.getByTestId("menu-link"));
 
@@ -552,6 +558,36 @@ describe("a press the operating system's own menu serves", () => {
     const onPlainLink = press(screen.getByTestId("plain-link"));
 
     expect(onPlainLink.defaultPrevented).toBe(false);
+    expect(verbsShowing()).toBe(false);
+  });
+
+  // Touch has no contextmenu event to default-prevent: Radix arms a long-press
+  // timer on every trigger the pointerdown bubbles through, so the inner
+  // menu's press would also open the cluster's unless the cluster declines it.
+  it("opens only a marked link's menu on a touch long-press, not the cluster's verbs", () => {
+    renderDockWithMarkedLink();
+    // The cluster only has content once an earlier right-click named a region,
+    // and it keeps that region after closing. Without this, the long-press
+    // could not show the verbs even if the cluster did open, and the test
+    // would pass for the wrong reason.
+    press(screen.getByTestId("row-header"));
+    expect(verbsShowing()).toBe(true);
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    expect(verbsShowing()).toBe(false);
+
+    vi.useFakeTimers();
+    fireEvent.pointerDown(screen.getByTestId("menu-link"), {
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+    });
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+
+    expect(screen.queryByTestId("link-menu-item")).not.toBeNull();
     expect(verbsShowing()).toBe(false);
   });
 
