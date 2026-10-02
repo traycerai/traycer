@@ -60,13 +60,13 @@ export function hostLifecycleOptionCopy(
       mode: "ask",
       label: "Ask me each time",
       description:
-        "When you quit Traycer, choose whether to keep work running or stop it. The host starts when you open Traycer.",
+        "The host starts when you open Traycer. When you quit, choose whether to keep work running or stop it. A host you started in a terminal keeps running.",
     },
     {
       mode: "stop-if-idle",
       label: "Stop the host if nothing is running, otherwise ask",
       description:
-        "When you quit Traycer, the host stops if nothing is running. Otherwise, you choose whether to keep work running or stop it. The host starts when you open Traycer.",
+        "The host starts when you open Traycer. When you quit, it stops if nothing is running; otherwise, you choose whether to keep work running or stop it. A host you started in a terminal keeps running.",
     },
     {
       mode: "linked",
