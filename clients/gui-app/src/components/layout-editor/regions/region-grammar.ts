@@ -139,6 +139,13 @@ export type GrammarRow<K extends RegionId> =
       /** The one key every example writes, and the row's own label. */
       readonly key: keyof LayoutValues[K] & string;
       readonly label: string;
+      /** A sentence under the label, or `null` where the pictures say it. */
+      readonly description: string | null;
+      /**
+       * Where each example's name sits: `end` beside a small picture, `above`
+       * over one wide enough to want the card's whole width.
+       */
+      readonly labelPlacement: "end" | "above";
       readonly examples: ReadonlyArray<StyleExample<K>>;
     }
   | { readonly kind: "fine-tune"; readonly rows: ReadonlyArray<FineTuneRow<K>> }

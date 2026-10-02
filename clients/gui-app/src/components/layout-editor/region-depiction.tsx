@@ -239,7 +239,7 @@ export function regionDepiction<K extends RegionId>(
 /**
  * What one style row's examples draw: the region itself, except for Model's
  * Reasoning control, whose values change the picker's footer rather than the
- * chip.
+ * chip, and Usage limits' Reading style, whose card has room for two profiles.
  */
 export function regionStyleDepiction(
   region: RegionId,
@@ -249,8 +249,19 @@ export function regionStyleDepiction(
 ): ReactNode {
   if (region === "model" && styleKey === "reasoningControl")
     return <ModelFooterDepiction control={values.model.reasoningControl} />;
+  if (region === "usageLimits" && styleKey === "readingStyle")
+    return regionDepiction(region, values, {
+      ...arrangement,
+      usageProviders: depictedUsageProviders(arrangement).slice(
+        0,
+        READING_STYLE_CARD_PROFILES,
+      ),
+    });
   return regionDepiction(region, values, arrangement);
 }
+
+/** What a Reading style card shows of the status bar: this many profiles. */
+const READING_STYLE_CARD_PROFILES = 2;
 
 /**
  * Every full-size dock row in ONE joined frame (L-97).
@@ -381,6 +392,7 @@ function depictUsageProviderSegment(
       display={{
         percentMode: values.amount,
         showTimer: values.reset,
+        readingStyle: values.readingStyle,
       }}
       cluster={{
         kind: "segments",
@@ -408,6 +420,17 @@ function specimenSegment(
   };
 }
 
+/** The providers a usage picture draws: shown, and reporting windows at all. */
+function depictedUsageProviders(
+  arrangement: LayoutArrangement,
+): ReadonlyArray<RateLimitProviderId> {
+  return arrangement.usageProviders.filter(
+    (id) =>
+      isWindowedRateLimitProvider(id) &&
+      !arrangement.hiddenProviders.includes(id),
+  );
+}
+
 /**
  * EVERY shown provider that reports windows, in the arrangement's own order
  * (P2, R3-03): Detailed as one segment each, Compact as the one glyph over all
@@ -422,11 +445,7 @@ function depictUsageLimits(
   values: UsageLimitsValues,
   arrangement: LayoutArrangement,
 ): ReactNode {
-  const providers = arrangement.usageProviders.filter(
-    (id) =>
-      isWindowedRateLimitProvider(id) &&
-      !arrangement.hiddenProviders.includes(id),
-  );
+  const providers = depictedUsageProviders(arrangement);
   if (
     resolvedReadingDensity(values.density, arrangement, "usageLimits") ===
     "compact"

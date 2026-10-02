@@ -76,9 +76,7 @@ export function densityDescription(
 ): string {
   const cpuOnly = region === "resourceMonitor" ? ", showing CPU only" : "";
   if (placement === "status-bar") {
-    return region === "usageLimits"
-      ? "Auto is detailed in the status bar, with calm profiles shrunk to an icon and bar."
-      : "Auto is detailed in the status bar.";
+    return "Auto is detailed in the status bar.";
   }
   if (tabStrip === "top") {
     return `Auto is compact in the top tab strip${cpuOnly}.`;

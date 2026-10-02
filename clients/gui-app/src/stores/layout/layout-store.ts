@@ -33,7 +33,10 @@ import {
   SHIPPED_DEFAULT_VALUES,
   type LayoutPresetId,
 } from "@/lib/layout/layout-presets";
-import { resolvePersistedOverrides } from "@/lib/layout/layout-values-persist";
+import {
+  resolvePersistedOverrides,
+  resolvePersistedRecordOverrides,
+} from "@/lib/layout/layout-values-persist";
 import {
   legacyLeftPanelRecord,
   legacySettingsRecord,
@@ -162,7 +165,10 @@ export const useLayoutStore = create<LayoutStoreState>()(
         return {
           ...currentState,
           basePreset,
-          overrides: resolvePersistedOverrides(persisted.overrides),
+          overrides: resolvePersistedRecordOverrides(
+            persisted.overrides,
+            basePreset,
+          ),
           arrangement: resolvePersistedArrangement(persisted.arrangement),
         };
       },

@@ -132,6 +132,7 @@ function drawn(id: "usageLimits" | "resourceMonitor"): {
   readonly percentShows: boolean;
   readonly resetTime: boolean;
   readonly metrics: boolean;
+  readonly readingStyle: boolean;
 } {
   const scope = within(section(id));
   return {
@@ -140,6 +141,8 @@ function drawn(id: "usageLimits" | "resourceMonitor"): {
       scope.queryByRole("radiogroup", { name: "Percent shows" }) !== null,
     resetTime: scope.queryByRole("switch", { name: "Reset time" }) !== null,
     metrics: scope.queryByRole("checkbox", { name: "CPU" }) !== null,
+    readingStyle:
+      scope.queryByRole("radiogroup", { name: "Reading style" }) !== null,
   };
 }
 
@@ -173,12 +176,14 @@ describe("the rows a Compact reading ignores are hidden", () => {
       percentShows: true,
       resetTime: true,
       metrics: false,
+      readingStyle: true,
     });
     expect(drawn("resourceMonitor")).toEqual({
       density: true,
       percentShows: false,
       resetTime: false,
       metrics: true,
+      readingStyle: false,
     });
   });
 
@@ -198,6 +203,7 @@ describe("the rows a Compact reading ignores are hidden", () => {
       percentShows: false,
       resetTime: false,
       metrics: false,
+      readingStyle: false,
     });
     expect(drawn("resourceMonitor").metrics).toBe(false);
     expect(drawn("resourceMonitor").density).toBe(true);
@@ -227,6 +233,52 @@ describe("the rows a Compact reading ignores are hidden", () => {
       resetTime: true,
     });
     expect(drawn("resourceMonitor").metrics).toBe(true);
+  });
+
+  it("hides Reading style wherever the status bar is not drawing the reading, even for Detailed", () => {
+    act(() => {
+      useLayoutStore.getState().setRegionValues("usageLimits", {
+        density: "detailed",
+      });
+    });
+    setArrangement({ usageHost: "header" });
+    render(<StatusBarSurface />);
+
+    // Detailed in the tab strip is the strip's own form, with no calm profile.
+    expect(drawn("usageLimits")).toMatchObject({
+      percentShows: true,
+      readingStyle: false,
+    });
+
+    setArrangement({ tabStripPlacement: "left" });
+    expect(drawn("usageLimits").readingStyle).toBe(false);
+
+    setArrangement({ usageHost: "status-bar" });
+    expect(drawn("usageLimits").readingStyle).toBe(true);
+  });
+
+  it("writes the Reading style pick", () => {
+    render(<StatusBarSurface />);
+
+    const group = within(section("usageLimits")).getByRole("radiogroup", {
+      name: "Reading style",
+    });
+    expect(
+      within(group)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-label")),
+    ).toEqual(["Bar", "Percent", "Bar and percent", "Everything"]);
+    expect(
+      within(group)
+        .getByRole("radio", { name: "Bar" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+
+    fireEvent.click(within(group).getByRole("radio", { name: "Everything" }));
+
+    expect(useLayoutStore.getState().overrides.usageLimits?.readingStyle).toBe(
+      "full",
+    );
   });
 
   it("names what Auto resolves to at the current spot", () => {

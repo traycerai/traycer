@@ -15,6 +15,7 @@ import {
 } from "@/components/layout-editor/regions/reading-placement";
 import {
   readingPlacement,
+  readingStyleApplies,
   resolvedReadingDensity,
 } from "@/lib/layout/reading-density";
 import {
@@ -564,12 +565,54 @@ function positionSideEntries(
   });
 }
 
+/**
+ * Reading style is drawn by the status bar's Detailed form alone, so the page
+ * hides its row anywhere else: a person moves the reading to the status bar
+ * first, and picks Detailed if it was Compact.
+ */
+function styleGiven(
+  region: RegionId,
+  row: StyleGrammarRow,
+  values: LayoutValues,
+  arrangement: LayoutArrangement,
+): ReadonlyArray<SweepStep> {
+  if (
+    region !== "usageLimits" ||
+    row.key !== "readingStyle" ||
+    readingStyleApplies(values.usageLimits.density, arrangement)
+  ) {
+    return NO_GIVEN;
+  }
+  const name = regionFacts(region).name;
+  return [
+    ...(readingPlacement(arrangement, region) === "status-bar"
+      ? NO_GIVEN
+      : [
+          arrangementStep(`${name} location: Status bar left`, (now) =>
+            withReadingSpot(now, region, "status-bar-left"),
+          ),
+        ]),
+    ...(values.usageLimits.density === "compact"
+      ? [
+          controlStep(
+            region,
+            "density",
+            "detailed",
+            `${name} density: Detailed`,
+          ),
+        ]
+      : NO_GIVEN),
+  ];
+}
+
 function styleEntries(
   region: RegionId,
   row: StyleGrammarRow,
   values: LayoutValues,
+  arrangement: LayoutArrangement,
 ): ReadonlyArray<SweepEntry> {
   const regionValues = values[region];
+  const given = styleGiven(region, row, values, arrangement);
   return row.examples
     .filter(
       (example) =>
@@ -581,7 +624,7 @@ function styleEntries(
       id: `region-style:${region}:${row.key}:${example.id}`,
       source: "region-style",
       mirrors: "StyleExamples onChange",
-      given: NO_GIVEN,
+      given,
       write: {
         label: `${row.label}: ${example.label}`,
         run: () => {
@@ -608,7 +651,7 @@ function grammarRowEntries(
     case "children":
       return [];
     case "style":
-      return styleEntries(region, row, values);
+      return styleEntries(region, row, values, arrangement);
     case "fine-tune":
       return fineTuneEntries(region, row.rows, values, arrangement);
     default:

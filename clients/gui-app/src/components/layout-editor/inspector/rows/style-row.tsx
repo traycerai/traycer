@@ -20,8 +20,10 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  */
 export function StyleRow(props: {
   readonly label: string;
+  readonly description: string | null;
   /** The one key every example writes. */
   readonly styleKey: string;
+  readonly labelPlacement: "end" | "above";
   readonly examples: ReadonlyArray<{
     readonly id: string;
     readonly label: string;
@@ -31,7 +33,7 @@ export function StyleRow(props: {
   readonly values: LayoutValues;
   readonly arrangement: LayoutArrangement;
 }): ReactNode {
-  const { label, styleKey, examples, regionId, values } = props;
+  const { label, styleKey, labelPlacement, examples, regionId, values } = props;
   const arrangement = useLiveUsageArrangement(props.arrangement);
   const regionValues = values[regionId];
   const matches = examples.map((example) =>
@@ -47,7 +49,7 @@ export function StyleRow(props: {
       anchor={null}
       icon={null}
       label={label}
-      description={null}
+      description={props.description}
       onRevert={
         changed
           ? () => {
@@ -62,6 +64,7 @@ export function StyleRow(props: {
         <StyleExamples
           label={label}
           styleKey={styleKey}
+          labelPlacement={labelPlacement}
           examples={examples}
           regionId={regionId}
           values={values}
@@ -76,6 +79,7 @@ export function StyleRow(props: {
 function StyleExamples(props: {
   readonly label: string;
   readonly styleKey: string;
+  readonly labelPlacement: "end" | "above";
   readonly examples: ReadonlyArray<{
     readonly id: string;
     readonly label: string;
@@ -86,15 +90,23 @@ function StyleExamples(props: {
   readonly arrangement: LayoutArrangement;
   readonly matches: ReadonlyArray<boolean>;
 }): ReactNode {
-  const { label, styleKey, examples, regionId, values, arrangement, matches } =
-    props;
+  const {
+    label,
+    styleKey,
+    labelPlacement,
+    examples,
+    regionId,
+    values,
+    arrangement,
+    matches,
+  } = props;
   const checked = examples.findIndex((_, index) => matches[index]);
   return (
     <PicturedOptions
       label={label}
       value={checked === -1 ? null : examples[checked].id}
       disabled={false}
-      labelPlacement="end"
+      labelPlacement={labelPlacement}
       onChange={(id) => {
         const example = examples.find((candidate) => candidate.id === id);
         if (example === undefined) return;

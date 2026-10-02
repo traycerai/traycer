@@ -92,7 +92,11 @@ function renderSegment(
   );
 }
 
-const DISPLAY: StatusBarUsageDisplay = { percentMode: "used", showTimer: true };
+const DISPLAY: StatusBarUsageDisplay = {
+  percentMode: "used",
+  showTimer: true,
+  readingStyle: "bar",
+};
 
 const WORK = { profileId: "work", accentColor: "#ff0000", label: "Work" };
 
@@ -117,6 +121,9 @@ describe("<StatusBarProviderSegment /> severity forms", () => {
       screen.getByTestId("status-bar-provider-mini-bar").className,
     ).toContain("w-4");
     expect(screen.queryByTestId("status-bar-window-codex:primary")).toBeNull();
+    expect(
+      screen.queryByTestId("status-bar-window-percent-codex:primary"),
+    ).toBeNull();
     expect(screen.queryByTestId("status-bar-provider-name")).toBeNull();
   });
 
@@ -213,6 +220,84 @@ describe("<StatusBarProviderSegment /> severity forms", () => {
   });
 });
 
+describe("<StatusBarProviderSegment /> reading style", () => {
+  // The Bar style, which is the default, is the calm form pinned above.
+  let resetsAt = 0;
+  beforeEach(() => {
+    resetsAt = resetsAtIn(5, 1);
+  });
+
+  it("draws a calm profile as its percentage alone under Percent", () => {
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+    expect(text("status-bar-window-percent-codex:primary")).toBe("41%");
+    expect(screen.queryByTestId("status-bar-window-codex:primary")).toBeNull();
+    expect(screen.queryByTestId("status-bar-provider-name")).toBeNull();
+  });
+
+  it("draws a calm profile as the 16px bar then the percentage under Bar and percent", () => {
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "both",
+    });
+
+    expect(
+      screen.getByTestId("status-bar-provider-mini-bar").className,
+    ).toContain("w-4");
+    expect(text("status-bar-window-percent-codex:primary")).toBe("41%");
+    expect(screen.queryByTestId("status-bar-provider-name")).toBeNull();
+  });
+
+  it("expands a healthy profile under Everything, with the word after the percentage", () => {
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "full",
+    });
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+    expect(
+      screen.getByTestId("status-bar-provider-mini-bar").className,
+    ).toContain("w-8");
+    expect(text("status-bar-window-codex:primary")).toBe("41%used5d");
+    cleanup();
+
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      percentMode: "remaining",
+      showTimer: true,
+      readingStyle: "full",
+    });
+    expect(text("status-bar-window-codex:primary")).toBe("59%remaining5d");
+  });
+
+  it("keeps 'Limit' without a word under Everything", () => {
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "full",
+    });
+
+    expect(text("status-bar-window-codex:primary")).toBe("Limitresets 5d");
+  });
+
+  it("expands a running low profile as it always does, whatever the style", () => {
+    for (const readingStyle of ["bar", "percent", "both", "full"] as const) {
+      renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
+        ...DISPLAY,
+        readingStyle,
+      });
+
+      expect(text("status-bar-provider-name")).toBe("Codex");
+      expect(
+        screen.getByTestId("status-bar-provider-mini-bar").className,
+      ).toContain("w-8");
+      cleanup();
+    }
+  });
+});
+
 describe("<StatusBarProviderSegment /> in place", () => {
   it("keeps every profile where it was when one expands", () => {
     const profiles = ["a", "b", "c"];
@@ -265,6 +350,7 @@ describe("<StatusBarProviderSegment /> settings", () => {
     renderSegment(singleWindowSegment("running_low", 86, null), {
       percentMode: "remaining",
       showTimer: false,
+      readingStyle: "bar",
     });
 
     expect(text("status-bar-window-percent-codex:primary")).toBe("14%");
@@ -276,6 +362,7 @@ describe("<StatusBarProviderSegment /> settings", () => {
     renderSegment(singleWindowSegment("running_low", 33.5, null), {
       percentMode: "used",
       showTimer: false,
+      readingStyle: "bar",
     });
     expect(text("status-bar-window-percent-codex:primary")).toBe("34%");
     cleanup();
@@ -283,6 +370,7 @@ describe("<StatusBarProviderSegment /> settings", () => {
     renderSegment(singleWindowSegment("running_low", 33.5, null), {
       percentMode: "remaining",
       showTimer: false,
+      readingStyle: "bar",
     });
     expect(text("status-bar-window-percent-codex:primary")).toBe("66%");
   });
@@ -292,6 +380,7 @@ describe("<StatusBarProviderSegment /> settings", () => {
     renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
       percentMode: "used",
       showTimer: false,
+      readingStyle: "bar",
     });
 
     // A bare percentage under an icon names no limit at all.
@@ -301,6 +390,7 @@ describe("<StatusBarProviderSegment /> settings", () => {
     renderSegment(singleWindowSegment("limited", 100, resetsAt), {
       percentMode: "used",
       showTimer: false,
+      readingStyle: "bar",
     });
     expect(text("status-bar-window-codex:primary")).toBe("Limit5h");
   });
@@ -408,6 +498,7 @@ describe("<StatusBarProviderSegment /> settings", () => {
     renderSegment(singleWindowSegment("running_low", 104, null), {
       percentMode: "used",
       showTimer: false,
+      readingStyle: "bar",
     });
     expect(text("status-bar-window-percent-codex:primary")).toBe("100%");
     cleanup();
@@ -415,6 +506,7 @@ describe("<StatusBarProviderSegment /> settings", () => {
     renderSegment(singleWindowSegment("running_low", 104, null), {
       percentMode: "remaining",
       showTimer: false,
+      readingStyle: "bar",
     });
     expect(text("status-bar-window-percent-codex:primary")).toBe("0%");
   });

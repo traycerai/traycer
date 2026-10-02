@@ -1506,7 +1506,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     current spot (`densityDescription`). The rows the RESOLVED density ignores
     are hidden (`compactIgnoredRows`): with Compact, Percent shows, Reset time
     and Metrics go. "Percent shows" is `amount` and "Reset time" is the `reset`
-    switch. A phone's footer draws no Location or Density row and hides none.
+    switch. **Reading style** (`readingStyle`: Bar, Percent, Bar and percent,
+    Everything) is a pictured style row between Density and Percent shows. It
+    is drawn only while the status bar's Detailed form is (`readingStyleApplies`),
+    so it is hidden under Compact and whenever usage is in a tab strip. A phone's footer draws no Location or Density row and hides none.
     The **Profiles** list sits under Usage limits (`inspector/usage-profiles.tsx`):
     one row per provider, dragged to order (`usageProviders`), an eye on the
     provider (`hiddenProviders`) and, for a provider with several profiles, an

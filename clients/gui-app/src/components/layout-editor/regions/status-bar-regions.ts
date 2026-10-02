@@ -2,6 +2,7 @@ import { Cpu, Gauge } from "lucide-react";
 import type {
   LayoutRegion,
   SegmentOption,
+  StyleExample,
 } from "@/components/layout-editor/regions/region-grammar";
 import { barPlacementStateWord } from "@/components/layout-editor/regions/region-state-words";
 
@@ -13,6 +14,17 @@ const READING_DENSITY_OPTIONS: ReadonlyArray<SegmentOption> = [
   { value: "auto", label: "Auto" },
   { value: "compact", label: "Compact" },
   { value: "detailed", label: "Detailed" },
+];
+
+/**
+ * What a calm profile shows in the status bar's Detailed form. Everything is
+ * the full reading on every profile, not only on one that needs attention.
+ */
+const READING_STYLE_EXAMPLES: ReadonlyArray<StyleExample<"usageLimits">> = [
+  { id: "bar", label: "Bar", patch: { readingStyle: "bar" } },
+  { id: "percent", label: "Percent", patch: { readingStyle: "percent" } },
+  { id: "both", label: "Bar and percent", patch: { readingStyle: "both" } },
+  { id: "full", label: "Everything", patch: { readingStyle: "full" } },
 ];
 
 /**
@@ -43,6 +55,8 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
     "compact",
     "detailed",
     "bar",
+    "reading style",
+    "everything",
     // Where it can LIVE, not only what it says: the page's own "Show these
     // in" row carried these words and is gone with L-156, and a search entry
     // is generated from this list (L-126).
@@ -71,6 +85,20 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
             options: READING_DENSITY_OPTIONS,
           },
         },
+      ],
+    },
+    {
+      kind: "style",
+      key: "readingStyle",
+      label: "Reading style",
+      description:
+        "What a calm profile shows. A profile running low or at its limit always shows its name, percent and reset.",
+      labelPlacement: "above",
+      examples: READING_STYLE_EXAMPLES,
+    },
+    {
+      kind: "fine-tune",
+      rows: [
         {
           id: "amount",
           label: "Percent shows",
@@ -90,7 +118,8 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
         {
           id: "reset",
           label: "Reset time",
-          description: "Shown when a profile needs attention.",
+          description:
+            "Shown when a profile needs attention, or always with Everything.",
           pinsTransient: false,
           liveWhileHidden: null,
           requires: null,

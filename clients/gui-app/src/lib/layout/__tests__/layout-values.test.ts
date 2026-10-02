@@ -2,9 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   regionValuesHidden,
   type AccessValues,
+  type ReadingStyle,
 } from "@/lib/layout/layout-values";
-import { PRESET_VALUES } from "@/lib/layout/layout-presets";
-import { resolvePersistedOverrides } from "@/lib/layout/layout-values-persist";
+import {
+  effectiveLayoutValues,
+  PRESET_VALUES,
+  type LayoutPresetId,
+} from "@/lib/layout/layout-presets";
+import {
+  resolvePersistedOverrides,
+  resolvePersistedRecordOverrides,
+} from "@/lib/layout/layout-values-persist";
 import type { RegionId } from "@/lib/layout/region-id";
 
 describe("regionValuesHidden", () => {
@@ -140,6 +148,110 @@ describe("resolvePersistedOverrides carries a saved display over to density", ()
         },
       }).usageLimits,
     ).toEqual({ reset: false, amount: "remaining" });
+  });
+});
+
+describe("resolvePersistedRecordOverrides carries the saved bar and percent over to a Reading style", () => {
+  /**
+   * What the Reading style reads back as, resolved through the record's own
+   * preset: the delta laid over that preset, as the app reads it. The earlier
+   * presets had `percent` on everywhere and `bar` off on Compact alone.
+   */
+  function readBack(
+    basePreset: LayoutPresetId,
+    usageLimits: Record<string, unknown>,
+  ): ReadingStyle {
+    return effectiveLayoutValues(
+      basePreset,
+      resolvePersistedRecordOverrides({ usageLimits }, basePreset),
+    ).usageLimits.readingStyle;
+  }
+
+  it.each<{
+    readonly preset: LayoutPresetId;
+    readonly stored: Record<string, unknown>;
+    readonly style: ReadingStyle;
+    readonly why: string;
+  }>([
+    { preset: "default", stored: {}, style: "bar", why: "no saved keys" },
+    { preset: "detailed", stored: {}, style: "bar", why: "no saved keys" },
+    {
+      preset: "compact",
+      stored: {},
+      style: "percent",
+      why: "Compact never had a bar, so its users keep seeing the percent",
+    },
+    {
+      preset: "default",
+      stored: { bar: false },
+      style: "percent",
+      why: "bar off leaves the percent",
+    },
+    {
+      preset: "default",
+      stored: { percent: false },
+      style: "bar",
+      why: "percent off leaves the bar",
+    },
+    {
+      preset: "default",
+      stored: { bar: false, percent: false },
+      style: "bar",
+      why: "both off says nothing, so the preset answers",
+    },
+    {
+      preset: "default",
+      stored: { bar: true, percent: true },
+      style: "bar",
+      why: "both on says nothing, so the preset answers",
+    },
+    {
+      preset: "compact",
+      stored: { bar: true },
+      style: "both",
+      why: "turning the bar on beside Compact's percent was a choice",
+    },
+    {
+      preset: "detailed",
+      stored: { bar: true, percent: true },
+      style: "bar",
+      why: "both on outside Compact is what nobody changed",
+    },
+    {
+      preset: "compact",
+      stored: { percent: false },
+      style: "percent",
+      why: "Compact's bar is off, so with percent off too both are off",
+    },
+    {
+      preset: "detailed",
+      stored: { percent: false, word: false },
+      style: "bar",
+      why: "the word has no style of its own",
+    },
+    {
+      preset: "default",
+      stored: { readingStyle: "full", bar: false },
+      style: "full",
+      why: "a stored style wins over the legacy keys",
+    },
+    {
+      preset: "default",
+      stored: { readingStyle: "wide", bar: false },
+      style: "percent",
+      why: "a style outside the union is not read, and the legacy keys answer",
+    },
+  ])("reads $why ($preset, $stored) as $style", ({ preset, stored, style }) => {
+    expect(readBack(preset, stored)).toBe(style);
+  });
+
+  it("drops the legacy keys once they have been read", () => {
+    expect(
+      resolvePersistedRecordOverrides(
+        { usageLimits: { bar: false, percent: true, word: true } },
+        "default",
+      ).usageLimits,
+    ).toEqual({ readingStyle: "percent" });
   });
 });
 

@@ -195,11 +195,13 @@ export function StatusBarProviderSegment(
 /**
  * The reading itself, in the form the profile's severity earns.
  *
- * **Calm** (`healthy`): the bar alone, at 16px. The numbers are one hover away
- * (the tooltip wraps the whole segment) and one click away (the panel).
- * **Expanded** (`running_low`, `limited`): the profile's name, then per window a
- * 32px bar, the percentage - or "Limit" - and the reset time. The segment grows
- * where it stands: the form depends on severity alone, never on position.
+ * **Calm** (`healthy`): what the Reading style draws - the 16px bar by default,
+ * or the percentage, or both. The rest is one hover away (the tooltip wraps the
+ * whole segment) and one click away (the panel).
+ * **Expanded** (`running_low`, `limited`, or every profile under Everything):
+ * the profile's name, then per window a 32px bar, the percentage - or "Limit" -
+ * and the reset time. The segment grows where it stands: the form depends on
+ * severity and the chosen style alone, never on position.
  *
  * The form is decided per segment, from the worst of its shown windows
  * (`statusBarSegmentSeverity`). Inside an expanded segment each window still
@@ -214,7 +216,9 @@ function SegmentBody(props: {
   const { segment, display, now } = props;
   const motionEnabled = useMotionEnabled();
   const isCold = segment.state === "cold";
-  const expanded = statusBarSegmentSeverity(segment) !== "healthy";
+  const expanded =
+    display.readingStyle === "full" ||
+    statusBarSegmentSeverity(segment) !== "healthy";
   // The account's name before the reading rather than after, so `Work 57%`
   // and `Personal 12%` read as two labelled figures rather than one figure
   // with two trailing words. A profile with no account tells nothing apart, so
@@ -302,11 +306,10 @@ function SegmentBody(props: {
                       motionEnabled={motionEnabled}
                     />
                   ) : (
-                    <StatusBarMiniBar
-                      windowKey={window.windowKey}
-                      size="calm"
-                      usedPercent={window.usedPercent}
-                      severity={window.severity}
+                    <StatusBarCalmWindow
+                      window={window}
+                      display={display}
+                      motionEnabled={motionEnabled}
                     />
                   )}
                 </Fragment>
@@ -320,13 +323,76 @@ function SegmentBody(props: {
 }
 
 /**
- * One window of an expanded profile: `[32px bar] 86% 5d`, or `[bar] Limit
- * resets 3d` once the host says it is `limited`.
+ * One window of a calm profile, drawn as the Reading style says: the 16px bar,
+ * the percentage, or the bar then the percentage. A calm window is `healthy`,
+ * so its percentage is never "Limit".
+ */
+function StatusBarCalmWindow(props: {
+  readonly window: StatusBarRateLimitWindow;
+  readonly display: StatusBarUsageDisplay;
+  readonly motionEnabled: boolean;
+}): ReactNode {
+  const { window, display } = props;
+  return (
+    <>
+      {display.readingStyle === "percent" ? null : (
+        <StatusBarMiniBar
+          windowKey={window.windowKey}
+          size="calm"
+          usedPercent={window.usedPercent}
+          severity={window.severity}
+        />
+      )}
+      {display.readingStyle === "bar" ? null : (
+        <StatusBarWindowPercent
+          window={window}
+          display={display}
+          motionEnabled={props.motionEnabled}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * A window's percentage, or "Limit" once the host says it is `limited`.
  *
- * The percentage (or "Limit") is the only tinted span - severity is a fact
- * about the reading rather than a preference about it. What follows it is
- * `windowLabelText`'s: the countdown, the window's name, or both, so with Reset
- * time off the countdown gives way to the name.
+ * It is the only tinted span - severity is a fact about the reading rather
+ * than a preference about it, so the tone crossing a threshold is bridged and
+ * the digits do not roll.
+ */
+function StatusBarWindowPercent(props: {
+  readonly window: StatusBarRateLimitWindow;
+  readonly display: StatusBarUsageDisplay;
+  readonly motionEnabled: boolean;
+}): ReactNode {
+  const { window } = props;
+  const severityClassName = props.motionEnabled
+    ? cn(
+        rateLimitWindowSeverityTextClassName(window.severity),
+        SEVERITY_TRANSITION_CLASS_NAME,
+      )
+    : rateLimitWindowSeverityTextClassName(window.severity);
+  return (
+    <span
+      data-testid={`status-bar-window-percent-${window.windowKey}`}
+      className={cn("font-medium", severityClassName)}
+    >
+      {window.severity === "limited"
+        ? "Limit"
+        : windowPercentValueText(window.usedPercent, props.display.percentMode)}
+    </span>
+  );
+}
+
+/**
+ * One window of an expanded profile: `[32px bar] 86% 5d`, or `[bar] Limit
+ * resets 3d` once the host says it is `limited`. Under Everything the percent
+ * carries its "used" or "remaining" word: `[bar] 86% used 5d`.
+ *
+ * What follows the percentage is `windowLabelText`'s: the countdown, the
+ * window's name, or both, so with Reset time off the countdown gives way to the
+ * name.
  */
 function StatusBarExpandedWindow(props: {
   readonly window: StatusBarRateLimitWindow;
@@ -336,10 +402,10 @@ function StatusBarExpandedWindow(props: {
   /** Resolved once per segment, not once per window. */
   readonly motionEnabled: boolean;
 }): ReactNode {
-  const { window } = props;
+  const { window, display } = props;
   const limited = window.severity === "limited";
   const countdown =
-    props.display.showTimer && window.resetsAt !== null
+    display.showTimer && window.resetsAt !== null
       ? formatResetCountdown(window.resetsAt, props.now)
       : null;
   const label = windowLabelText({
@@ -349,14 +415,6 @@ function StatusBarExpandedWindow(props: {
       countdown !== null && limited ? `resets ${countdown}` : countdown,
     visibleWindowCount: props.liveWindowCount,
   });
-  // The tone crossing a threshold is a state change worth bridging; the digits
-  // do not roll.
-  const severityClassName = props.motionEnabled
-    ? cn(
-        rateLimitWindowSeverityTextClassName(window.severity),
-        SEVERITY_TRANSITION_CLASS_NAME,
-      )
-    : rateLimitWindowSeverityTextClassName(window.severity);
   return (
     <span
       className="inline-flex items-center gap-1 whitespace-nowrap"
@@ -368,17 +426,14 @@ function StatusBarExpandedWindow(props: {
         usedPercent={window.usedPercent}
         severity={window.severity}
       />
-      <span
-        data-testid={`status-bar-window-percent-${window.windowKey}`}
-        className={cn("font-medium", severityClassName)}
-      >
-        {limited
-          ? "Limit"
-          : windowPercentValueText(
-              window.usedPercent,
-              props.display.percentMode,
-            )}
-      </span>
+      <StatusBarWindowPercent
+        window={window}
+        display={display}
+        motionEnabled={props.motionEnabled}
+      />
+      {display.readingStyle === "full" && !limited ? (
+        <span>{display.percentMode}</span>
+      ) : null}
       <span>{label}</span>
     </span>
   );

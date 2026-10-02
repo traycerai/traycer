@@ -53,6 +53,12 @@ export type ContextStyle = "text" | "ring" | "ring-only";
 export type AmountMode = "used" | "remaining";
 
 /**
+ * What a calm profile draws in the status bar's Detailed form: a bar, a
+ * percent, both, or the full expanded reading for every profile.
+ */
+export type ReadingStyle = "bar" | "percent" | "both" | "full";
+
+/**
  * One row of the pinned context breakdown. The breakdown's own row keys, so
  * the picker can only name a row the strip knows how to draw.
  */
@@ -94,6 +100,10 @@ export const LAYOUT_VALUE_ENUM_MEMBERS: ReadonlyArray<string> = Object.keys({
     ReadingDensity,
     true
   >),
+  ...({ bar: true, percent: true, both: true, full: true } satisfies Record<
+    ReadingStyle,
+    true
+  >),
 });
 
 export interface ShownValues {
@@ -130,6 +140,7 @@ export interface UsageLimitsValues extends ShownValues {
   readonly reset: boolean;
   readonly amount: AmountMode;
   readonly density: ReadingDensity;
+  readonly readingStyle: ReadingStyle;
 }
 
 /**

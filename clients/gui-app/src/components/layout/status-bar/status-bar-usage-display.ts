@@ -7,7 +7,7 @@ import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
 import { useRegionValues } from "@/lib/layout-overrides";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
-import type { AmountMode } from "@/lib/layout/layout-values";
+import type { AmountMode, ReadingStyle } from "@/lib/layout/layout-values";
 
 /**
  * The box the readings sit in, at its NATURAL width.
@@ -109,6 +109,7 @@ const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
 export interface StatusBarUsageDisplay {
   readonly percentMode: AmountMode;
   readonly showTimer: boolean;
+  readonly readingStyle: ReadingStyle;
 }
 
 /**
@@ -121,7 +122,11 @@ export interface StatusBarUsageDisplay {
  */
 export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
   const values = useRegionValues("usageLimits");
-  return { percentMode: values.amount, showTimer: values.reset };
+  return {
+    percentMode: values.amount,
+    showTimer: values.reset,
+    readingStyle: values.readingStyle,
+  };
 }
 
 /** The segments a cluster is drawing, or one shared empty list for the rest. */

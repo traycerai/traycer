@@ -42,6 +42,7 @@ export const SHIPPED_DEFAULT_VALUES: LayoutValues = {
     reset: true,
     amount: "used",
     density: "auto",
+    readingStyle: "bar",
   },
   // CPU and process count, not memory: on a fresh install the host's memory
   // figure is the one a reader cannot act on, and it cost the scarcest row in
@@ -107,6 +108,7 @@ const COMPACT_VALUES: LayoutValues = {
     reset: false,
     amount: "used",
     density: "auto",
+    readingStyle: "percent",
   },
   resourceMonitor: {
     shown: "shown",
@@ -154,6 +156,7 @@ const DETAILED_VALUES: LayoutValues = {
     reset: true,
     amount: "used",
     density: "auto",
+    readingStyle: "bar",
   },
   resourceMonitor: {
     shown: "shown",

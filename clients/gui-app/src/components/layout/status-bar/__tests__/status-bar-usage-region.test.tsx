@@ -26,6 +26,7 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 const DISPLAY: StatusBarUsageDisplay = {
   percentMode: "used",
   showTimer: false,
+  readingStyle: "bar",
 };
 
 function segment(

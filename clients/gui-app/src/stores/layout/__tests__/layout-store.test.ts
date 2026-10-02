@@ -328,6 +328,29 @@ describe("useLayoutStore", () => {
       expect(changeCount(getLayoutSnapshot())).toBe(1);
     });
 
+    it("reads a saved bar checkbox against the record's own preset", async () => {
+      // The same stored key means opposite things on two presets: bar off on
+      // Default leaves the percent, and bar on on Compact adds a bar beside
+      // the percent Compact always had.
+      await rehydrateFrom({
+        basePreset: "default",
+        overrides: { usageLimits: { bar: false } },
+        arrangement: DEFAULT_ARRANGEMENT,
+      });
+      expect(getLayoutSnapshot().overrides).toEqual({
+        usageLimits: { readingStyle: "percent" },
+      });
+
+      await rehydrateFrom({
+        basePreset: "compact",
+        overrides: { usageLimits: { bar: true } },
+        arrangement: DEFAULT_ARRANGEMENT,
+      });
+      expect(getLayoutSnapshot().overrides).toEqual({
+        usageLimits: { readingStyle: "both" },
+      });
+    });
+
     /**
      * The whole of L-142's durability story, end to end through the real
      * persist path: a record written before Todo was a dock member carries a

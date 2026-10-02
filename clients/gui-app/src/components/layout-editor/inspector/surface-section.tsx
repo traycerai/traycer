@@ -21,6 +21,7 @@ import {
 } from "@/components/layout-editor/regions/reading-placement";
 import {
   readingPlacement,
+  readingStyleApplies,
   resolvedReadingDensity,
 } from "@/lib/layout/reading-density";
 import { Switch } from "@/components/ui/switch";
@@ -297,7 +298,14 @@ function RegionRowDetail(props: {
   const narrow = useIsMobileViewport();
   const availability = useSettingsAvailabilityContext();
   const gutter = useSortableRowPadding();
-  const rows = regionDetailRows(regionId, narrow, availability);
+  const rows = regionDetailRows(regionId, narrow, availability).filter(
+    (row) =>
+      // A phone's footer hides no row by density, as `readingFineTuneRows` has it.
+      narrow ||
+      row.kind !== "style" ||
+      row.key !== "readingStyle" ||
+      readingStyleApplies(values.usageLimits.density, snapshot.arrangement),
+  );
   if (rows.length === 0) return null;
   const hidden = regionValuesHidden(values[regionId]);
   const someLive =
@@ -321,7 +329,7 @@ function RegionRowDetail(props: {
       ) : null}
       {rows.map((row) => (
         <fieldset
-          key={row.kind === "style" ? `style:${row.key}` : row.kind}
+          key={detailRowKey(row)}
           // Fine-tune rows decide per row, so one can outlive a Hidden region.
           disabled={hidden ? row.kind !== "fine-tune" : false}
           className="m-0 min-w-0 border-0 p-0"
@@ -336,6 +344,22 @@ function RegionRowDetail(props: {
       ))}
     </div>
   );
+}
+
+/**
+ * A detail row's identity among its siblings. A region can hold several style
+ * rows and several fine-tune groups (Usage limits' Reading style sits between
+ * two), so the kind alone names no one of them.
+ */
+function detailRowKey(row: AnyGrammarRow): string {
+  switch (row.kind) {
+    case "style":
+      return `style:${row.key}`;
+    case "fine-tune":
+      return `fine-tune:${row.rows.map((detail) => detail.id).join("+")}`;
+    default:
+      return row.kind;
+  }
 }
 
 /**
@@ -374,7 +398,9 @@ function DetailRowView(props: {
       return (
         <StyleRow
           label={row.label}
+          description={row.description}
           styleKey={row.key}
+          labelPlacement={row.labelPlacement}
           examples={row.examples}
           regionId={regionId}
           values={values}
