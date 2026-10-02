@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LayoutFormHostContext } from "@/components/layout-editor/inspector/layout-form-host";
@@ -33,6 +34,18 @@ beforeEach(() => {
   toast.mockClear();
   toast.dismiss.mockClear();
 });
+
+/** A preset's control: the button laid over its card. */
+function applyButton(name: string): HTMLElement {
+  return screen.getByRole("button", { name: `Apply ${name}` });
+}
+
+/** What the person sees as the card: the control's sibling content holds the picture, name and caption. */
+function cardOf(name: string): HTMLElement {
+  const card = applyButton(name).parentElement;
+  if (card === null) throw new Error(`Apply ${name} has no card`);
+  return card;
+}
 
 afterEach(() => {
   cleanup();
@@ -241,8 +254,9 @@ describe("View changes (L-89 overturned: no separate level)", () => {
       "Default · Modified",
     );
     // The applied card carries the same label; the others do not.
-    const applied = screen.getByRole("button", { name: "Apply Default" });
-    expect(within(applied).getByTestId("preset-card-modified")).not.toBeNull();
+    expect(
+      within(cardOf("Default")).getByTestId("preset-card-modified"),
+    ).not.toBeNull();
     expect(screen.getAllByTestId("preset-card-modified")).toHaveLength(1);
     const toggle = screen.getByRole("button", { name: "View changes" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -430,7 +444,8 @@ describe("a preset card: one inert miniature, then the name and its aria-describ
 
     for (const presetId of LAYOUT_PRESET_IDS) {
       const name = PRESET_LABELS[presetId];
-      const card = screen.getByRole("button", { name: `Apply ${name}` });
+      const control = applyButton(name);
+      const card = cardOf(name);
 
       const miniatures = within(card).getAllByTestId("preset-miniature");
       expect(miniatures).toHaveLength(1);
@@ -439,7 +454,7 @@ describe("a preset card: one inert miniature, then the name and its aria-describ
 
       expect(within(card).getByText(name)).not.toBeNull();
 
-      const captionId = card.getAttribute("aria-describedby");
+      const captionId = control.getAttribute("aria-describedby");
       expect(captionId).not.toBeNull();
       const caption = document.getElementById(captionId ?? "");
       expect(caption).not.toBeNull();
@@ -454,11 +469,12 @@ describe("selected state: aria-current and the check mark on exactly the applied
     render(<PresetsBlock reveal={vi.fn()} />);
 
     for (const presetId of LAYOUT_PRESET_IDS) {
-      const card = screen.getByRole("button", {
-        name: `Apply ${PRESET_LABELS[presetId]}`,
-      });
+      const name = PRESET_LABELS[presetId];
+      const card = cardOf(name);
       const selected = presetId === useLayoutStore.getState().basePreset;
-      expect(card.getAttribute("aria-current")).toBe(selected ? "true" : null);
+      expect(applyButton(name).getAttribute("aria-current")).toBe(
+        selected ? "true" : null,
+      );
       if (selected) {
         expect(within(card).getByTestId("preset-applied-check")).not.toBeNull();
       } else {
@@ -474,13 +490,13 @@ describe("selected state: aria-current and the check mark on exactly the applied
     render(<PresetsBlock reveal={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Apply Compact" }));
 
-    const compactCard = screen.getByRole("button", { name: "Apply Compact" });
-    const defaultCard = screen.getByRole("button", { name: "Apply Default" });
-    expect(compactCard.getAttribute("aria-current")).toBe("true");
+    const compactCard = cardOf("Compact");
+    const defaultCard = cardOf("Default");
+    expect(applyButton("Compact").getAttribute("aria-current")).toBe("true");
     expect(
       within(compactCard).getByTestId("preset-applied-check"),
     ).not.toBeNull();
-    expect(defaultCard.getAttribute("aria-current")).toBeNull();
+    expect(applyButton("Default").getAttribute("aria-current")).toBeNull();
     expect(
       within(defaultCard).queryByTestId("preset-applied-check"),
     ).toBeNull();
@@ -488,9 +504,9 @@ describe("selected state: aria-current and the check mark on exactly the applied
 });
 
 describe("keyboard applies a preset exactly like a click, as one undo step (R2-B)", () => {
-  it.each(["Enter", " "] as const)(
-    "key %s applies the preset, replaces density, and offers Undo/View changes",
-    (key) => {
+  it.each(["{Enter}", " "] as const)(
+    "key %j applies the preset, replaces density, and offers Undo/View changes",
+    async (key) => {
       act(() => {
         useLayoutEditorStore.getState().beginSession({
           entry: "keyboard",
@@ -501,9 +517,8 @@ describe("keyboard applies a preset exactly like a click, as one undo step (R2-B
       });
       render(<PresetsBlock reveal={vi.fn()} />);
 
-      fireEvent.keyDown(screen.getByRole("button", { name: "Apply Compact" }), {
-        key,
-      });
+      applyButton("Compact").focus();
+      await userEvent.keyboard(key);
 
       expect(useLayoutStore.getState().basePreset).toBe("compact");
       expect(useLayoutStore.getState().overrides).toEqual({});
@@ -524,11 +539,10 @@ describe("keyboard applies a preset exactly like a click, as one undo step (R2-B
     },
   );
 
-  it("ignores every other key", () => {
+  it("ignores every other key", async () => {
     render(<PresetsBlock reveal={vi.fn()} />);
-    fireEvent.keyDown(screen.getByRole("button", { name: "Apply Compact" }), {
-      key: "Tab",
-    });
+    applyButton("Compact").focus();
+    await userEvent.keyboard("a");
     expect(useLayoutStore.getState().basePreset).toBe("default");
     expect(toast).not.toHaveBeenCalled();
   });
@@ -538,12 +552,12 @@ describe("a preset's miniature draws that PRESET's density, not the current one 
   it("Compact's miniature folds the dock to chips while Default's still shows full rows", () => {
     render(<PresetsBlock reveal={vi.fn()} />);
 
-    const defaultMiniature = within(
-      screen.getByRole("button", { name: "Apply Default" }),
-    ).getByTestId("preset-miniature");
-    const compactMiniature = within(
-      screen.getByRole("button", { name: "Apply Compact" }),
-    ).getByTestId("preset-miniature");
+    const defaultMiniature = within(cardOf("Default")).getByTestId(
+      "preset-miniature",
+    );
+    const compactMiniature = within(cardOf("Compact")).getByTestId(
+      "preset-miniature",
+    );
 
     expect(
       within(defaultMiniature).queryByTestId("app-frame-dock-chips"),
