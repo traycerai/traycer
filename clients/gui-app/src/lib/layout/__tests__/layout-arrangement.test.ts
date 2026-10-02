@@ -11,6 +11,7 @@ import {
   toggleStatusBarSurface,
   withBarHost,
   withBarSide,
+  withShownProfileIds,
   insertRailDivider,
   liveAgentsInStrip,
   moveCanvasOrderMember,
@@ -2048,5 +2049,35 @@ describe("where Add divider puts one when the rail ends in a stack", () => {
       "stack:railSharing+railComments",
       "railComments",
     ]);
+  });
+});
+
+describe("withShownProfileIds", () => {
+  const HOST_ID = "host-1";
+
+  it("replaces one provider's list and leaves the rest of the host alone", () => {
+    const before = { [HOST_ID]: { codex: [null], "claude-code": ["work"] } };
+    expect(withShownProfileIds(before, HOST_ID, "codex", [null, "a"])).toEqual({
+      [HOST_ID]: { codex: [null, "a"], "claude-code": ["work"] },
+    });
+  });
+
+  it("drops an emptied provider, and an emptied host, rather than storing []", () => {
+    expect(
+      withShownProfileIds(
+        { [HOST_ID]: { codex: ["a"], "claude-code": ["b"] } },
+        HOST_ID,
+        "codex",
+        [],
+      ),
+    ).toEqual({ [HOST_ID]: { "claude-code": ["b"] } });
+    expect(
+      withShownProfileIds(
+        { [HOST_ID]: { codex: ["a"] } },
+        HOST_ID,
+        "codex",
+        [],
+      ),
+    ).toEqual({});
   });
 });

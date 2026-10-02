@@ -14,7 +14,6 @@ import { SurfaceSection } from "@/components/layout-editor/inspector/surface-sec
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
 import {
   DEFAULT_ARRANGEMENT,
-  withShownProfileIds,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -253,7 +252,7 @@ describe("the rows a Compact reading ignores are hidden", () => {
     ).toBeTruthy();
   });
 
-  it("writes the Density pick, and reverts it", () => {
+  it("writes the Density pick", () => {
     render(<StatusBarSurface />);
 
     fireEvent.click(
@@ -432,33 +431,5 @@ describe("the Profiles list", () => {
     expect(
       screen.queryByRole("button", { name: "Revert Profiles order" }),
     ).toBeNull();
-  });
-});
-
-describe("withShownProfileIds", () => {
-  it("replaces one provider's list and leaves the rest of the host alone", () => {
-    const before = { [HOST_ID]: { codex: [null], "claude-code": ["work"] } };
-    expect(withShownProfileIds(before, HOST_ID, "codex", [null, "a"])).toEqual({
-      [HOST_ID]: { codex: [null, "a"], "claude-code": ["work"] },
-    });
-  });
-
-  it("drops an emptied provider, and an emptied host, rather than storing []", () => {
-    expect(
-      withShownProfileIds(
-        { [HOST_ID]: { codex: ["a"], "claude-code": ["b"] } },
-        HOST_ID,
-        "codex",
-        [],
-      ),
-    ).toEqual({ [HOST_ID]: { "claude-code": ["b"] } });
-    expect(
-      withShownProfileIds(
-        { [HOST_ID]: { codex: ["a"] } },
-        HOST_ID,
-        "codex",
-        [],
-      ),
-    ).toEqual({});
   });
 });

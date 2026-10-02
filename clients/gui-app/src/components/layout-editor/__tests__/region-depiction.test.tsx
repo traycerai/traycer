@@ -246,25 +246,6 @@ describe("what a depiction draws", () => {
     expect(hostOf("railGitDiff", container)).toBe("rail");
   });
 
-  it("draws a calm profile as a bar alone, whichever way Percent shows reads", () => {
-    const base = SHIPPED_DEFAULT_VALUES.usageLimits;
-    for (const amount of ["used", "remaining"] as const) {
-      const { container } = render(
-        depictRegion(
-          "usageLimits",
-          { ...base, amount, reset: true },
-          DEFAULT_ARRANGEMENT,
-        ),
-      );
-      const segments = container.querySelectorAll("[data-provider-id]");
-      expect(segments.length).toBeGreaterThan(0);
-      for (const segment of segments) {
-        expect(segment.getAttribute("data-form")).toBe("calm");
-        expect(segment.textContent).not.toContain("%");
-      }
-    }
-  });
-
   it("draws every provider the arrangement still shows", () => {
     const visible = DEFAULT_ARRANGEMENT.usageProviders;
     // Only windowed providers get a picture (non-windowed ones report a

@@ -16,17 +16,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * injected elements, and the panel doesn't crash.
  */
 
-// Render the profile dropdown inline + always-open so the test can select
-// the hostile-labeled row without fighting Radix's pointerdown-based open
-// gesture in jsdom (mirrors the established mock in
-// worktrees-settings-panel.test / folder-controls.test).
-// The provider's Limits pick reads the watched host's usage through its own
-// scope, which this suite does not stand up; it is held by
-// `provider-usage-limits-section.test.tsx`.
+// The provider's Limits pick reads the watched host's usage through the layout
+// editor's own scope, which this suite does not stand up, and no label is
+// rendered through it. Where the page mounts it is held by
+// `providers-settings-panel.test.tsx`.
 vi.mock("@/components/settings/panels/provider-usage-limits-section", () => ({
   ProviderUsageLimitsSection: () => null,
 }));
 
+// Render the profile dropdown inline + always-open so the test can select
+// the hostile-labeled row without fighting Radix's pointerdown-based open
+// gesture in jsdom (mirrors the established mock in
+// worktrees-settings-panel.test / folder-controls.test).
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));

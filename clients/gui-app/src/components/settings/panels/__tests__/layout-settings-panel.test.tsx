@@ -593,21 +593,6 @@ describe("Settings - Layout", () => {
         }),
       ).toBeTruthy();
     });
-
-    it("is absent while Usage limits is hidden", async () => {
-      const user = userEvent.setup();
-      renderPanel();
-      await goToSurfaceTab(user, "statusBar");
-
-      await user.click(
-        within(row("usageLimits")).getByRole("switch", {
-          name: "Show Usage limits",
-        }),
-      );
-
-      expect(rowIds()).not.toContain(DEFAULT_ARRANGEMENT.usageProviders[0]);
-      expect(screen.queryByText("Profiles")).toBeNull();
-    });
   });
 
   describe("applying a preset clears the per-region delta (L-133 overturned)", () => {

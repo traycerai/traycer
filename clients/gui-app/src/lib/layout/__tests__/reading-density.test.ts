@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_ARRANGEMENT,
+  type LayoutArrangement,
+} from "@/lib/layout/layout-arrangement";
+import {
+  readingPlacement,
   resolveReadingDensity,
   type ReadingDensity,
   type ReadingPlacement,
@@ -33,12 +38,24 @@ describe("resolveReadingDensity", () => {
       );
     }
   });
+});
 
-  it("resolves Auto to Detailed only in the status bar", () => {
-    const detailed = TABLE.filter(
-      ([placement]) => resolveReadingDensity("auto", placement) === "detailed",
-    ).map(([placement]) => placement);
+describe("readingPlacement", () => {
+  it("is the status bar, the top strip or a side strip", () => {
+    const inStatusBar: LayoutArrangement = {
+      ...DEFAULT_ARRANGEMENT,
+      usageHost: "status-bar",
+      tabStripPlacement: "top",
+    };
+    const inStrip: LayoutArrangement = { ...inStatusBar, usageHost: "header" };
 
-    expect(detailed).toEqual(["status-bar"]);
+    expect(readingPlacement(inStatusBar, "usageLimits")).toBe("status-bar");
+    expect(readingPlacement(inStrip, "usageLimits")).toBe("top-strip");
+    expect(
+      readingPlacement(
+        { ...inStrip, tabStripPlacement: "left" },
+        "usageLimits",
+      ),
+    ).toBe("side-strip");
   });
 });
