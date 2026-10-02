@@ -1,6 +1,5 @@
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
-  act,
   cleanup,
   fireEvent,
   render as renderUi,
@@ -610,6 +609,22 @@ describe("MarkdownAnchor right-click menu", () => {
     return writeText;
   }
 
+  // The global test shim answers every media query with `matches: false`, so
+  // the other tests here already run on a fine pointer. This flips the coarse
+  // query alone; `unstubAllGlobals` below restores the shim.
+  function stubCoarsePointer(): void {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(pointer: coarse)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+  }
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -787,54 +802,23 @@ describe("MarkdownAnchor right-click menu", () => {
         screen.getAllByRole("menuitem").map((item) => item.textContent),
       ).toContain("Copy Link");
     });
+  });
 
-    describe("on a touch long-press", () => {
-      // Radix arms its long-press opener at this delay on a touch pointerdown.
-      const LONG_PRESS_OPEN_MS = 700;
+  it("leaves the OS menu on a touch device, where long-press already offers one", () => {
+    // The app menu's Radix trigger disables the native long-press callout, so a
+    // coarse pointer must get the plain anchor and keep the OS menu.
+    stubCoarsePointer();
+    renderMarkdownWithBrowserRouting(
+      `[Docs](${DOCS_HREF})`,
+      createRunnerHost(),
+    );
 
-      afterEach(() => {
-        vi.useRealTimers();
-      });
+    const osMenuAllowed = fireEvent.contextMenu(
+      screen.getByRole("link", { name: "Docs" }),
+    );
 
-      function longPress(link: HTMLElement): void {
-        fireEvent.pointerDown(link, {
-          pointerId: 1,
-          pointerType: "touch",
-          isPrimary: true,
-        });
-        act(() => {
-          vi.advanceTimersByTime(LONG_PRESS_OPEN_MS + 100);
-        });
-      }
-
-      it("leaves the OS selection menu when the selection runs past the link", () => {
-        vi.useFakeTimers();
-        const link = renderLinkInParagraph();
-        const range = document.createRange();
-        range.setStart(requireTextNode(link.firstChild), 0);
-        range.setEnd(requireTextNode(link.nextSibling), " before".length);
-        selectRange(range);
-
-        longPress(link);
-
-        expect(screen.queryAllByRole("menuitem")).toEqual([]);
-      });
-
-      it("still opens the menu when the selection is inside the link", () => {
-        vi.useFakeTimers();
-        const link = renderLinkInParagraph();
-        const range = document.createRange();
-        range.setStart(requireTextNode(link.firstChild), 1);
-        range.setEnd(requireTextNode(link.firstChild), "Docs".length);
-        selectRange(range);
-
-        longPress(link);
-
-        expect(
-          screen.getAllByRole("menuitem").map((item) => item.textContent),
-        ).toContain("Copy Link");
-      });
-    });
+    expect(osMenuAllowed).toBe(true);
+    expect(screen.queryAllByRole("menuitem")).toEqual([]);
   });
 
   it.each([

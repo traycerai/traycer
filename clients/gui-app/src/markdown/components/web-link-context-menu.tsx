@@ -1,4 +1,4 @@
-import { use, type PointerEvent, type ReactElement } from "react";
+import { use, type ReactElement } from "react";
 import { Copy, ExternalLink, Globe2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -39,7 +39,6 @@ export function WebLinkContextMenu(props: WebLinkContextMenuProps) {
       <ContextMenuTrigger
         asChild
         ref={standDownForWiderSelection}
-        onPointerDown={skipLongPressForWiderSelection}
         {...NESTED_CONTEXT_MENU_PROPS}
       >
         {props.children}
@@ -71,21 +70,6 @@ function standDownForWiderSelection(
   return () => {
     node.removeEventListener("contextmenu", standDown, true);
   };
-}
-
-/**
- * The same rule on the touch path: a touch or pen press arms Radix's 700 ms
- * long-press opener on `pointerdown`, before any `contextmenu`. Default-
- * preventing it makes Radix skip arming the timer, so a wider selection keeps
- * the OS's own selection menu there too.
- */
-function skipLongPressForWiderSelection(event: PointerEvent<HTMLElement>) {
-  if (
-    event.pointerType !== "mouse" &&
-    selectionReachesPast(event.currentTarget)
-  ) {
-    event.preventDefault();
-  }
 }
 
 function selectionReachesPast(link: HTMLElement): boolean {

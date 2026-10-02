@@ -7,6 +7,7 @@ import { classifyHref } from "@/markdown/links/classify-href";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { WebLinkContextMenu } from "@/markdown/components/web-link-context-menu";
 
 const MARKDOWN_LINK_REPORT_CONTEXT = createReportIssueContext({
@@ -48,6 +49,7 @@ export function MarkdownAnchor({
 }: MarkdownAnchorProps) {
   const linkPolicy = use(MarkdownLinkContext);
   const openLink = useOpenLink();
+  const coarsePointer = useCoarsePointer();
 
   const reportIssueAvailable = useDesktopDialogStore(
     (state) => state.reportIssueAvailable,
@@ -135,9 +137,11 @@ export function MarkdownAnchor({
     </a>
   );
   // Only a web link gets the app menu: its choices are about which browser
-  // opens it. File links and `mailto:` keep the OS menu.
+  // opens it. File links and `mailto:` keep the OS menu. So does a touch
+  // device, whose long-press menu already offers open and copy and which a
+  // Radix trigger would replace (it disables the native callout outright).
   const webUrl =
     navigableHref === undefined ? null : parseHttpUrl(navigableHref.trim());
-  if (webUrl === null) return anchor;
+  if (webUrl === null || coarsePointer) return anchor;
   return <WebLinkContextMenu url={webUrl.href}>{anchor}</WebLinkContextMenu>;
 }
