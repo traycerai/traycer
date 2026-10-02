@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import { use, type ReactElement } from "react";
 import { Copy, ExternalLink, Globe2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/context-menu";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { NESTED_CONTEXT_MENU_PROPS } from "@/lib/dom/nested-context-menu";
-import { useOpenLinkIn } from "@/lib/links/open-link";
+import { useOpenLinkIn, type LinkDestination } from "@/lib/links/open-link";
+import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 
 // The menu closing is the feedback for Copy Link, so the copied flag this
 // hook keeps is never read; it still needs a reset window.
@@ -88,7 +89,14 @@ function selectionReachesPast(link: HTMLElement): boolean {
 // Mounted only while the menu is open, so a transcript full of links does not
 // carry an opener and a clipboard hook per anchor.
 function WebLinkContextMenuItems(props: { readonly url: string }) {
+  const linkPolicy = use(MarkdownLinkContext);
   const { openLinkIn, canOpenInApp } = useOpenLinkIn();
+  const openIn = (destination: LinkDestination): void => {
+    // As on a plain click: opening a web link supersedes a file link that is
+    // still resolving, so a slow artifact lookup cannot land over this page.
+    linkPolicy?.supersedePendingFileLink();
+    openLinkIn(props.url, destination);
+  };
   const { copy } = useClipboardCopy({
     resetMs: COPY_FEEDBACK_RESET_MS,
     onSuccess: null,
@@ -100,12 +108,12 @@ function WebLinkContextMenuItems(props: { readonly url: string }) {
   return (
     <>
       {canOpenInApp ? (
-        <ContextMenuItem onSelect={() => openLinkIn(props.url, "in-app")}>
+        <ContextMenuItem onSelect={() => openIn("in-app")}>
           <Globe2 className="size-3.5" aria-hidden />
           <span>Open in Browser</span>
         </ContextMenuItem>
       ) : null}
-      <ContextMenuItem onSelect={() => openLinkIn(props.url, "external")}>
+      <ContextMenuItem onSelect={() => openIn("external")}>
         <ExternalLink className="size-3.5" aria-hidden />
         <span>Open in External Browser</span>
       </ContextMenuItem>

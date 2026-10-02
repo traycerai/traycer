@@ -14,7 +14,10 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TraycerMarkdown } from "@/markdown";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { markdownUrlTransform } from "@/markdown/links/markdown-url-transform";
-import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
+import {
+  MarkdownLinkContext,
+  type MarkdownLinkPolicy,
+} from "@/markdown/links/markdown-link-context";
 import { LinkTargetProvider } from "@/lib/links/link-target-provider";
 import {
   BrowserSessionsContext,
@@ -123,6 +126,14 @@ function renderMarkdownWithBrowserRouting(
   markdown: string,
   host: MockRunnerHost,
 ) {
+  return renderMarkdownWithBrowserRoutingAndLinkPolicy(markdown, host, null);
+}
+
+function renderMarkdownWithBrowserRoutingAndLinkPolicy(
+  markdown: string,
+  host: MockRunnerHost,
+  linkPolicy: MarkdownLinkPolicy | null,
+) {
   const canvas = createSingleTileCanvas(SOURCE_TILE);
   useEpicCanvasStore.setState({
     tabsById: {
@@ -162,17 +173,19 @@ function renderMarkdownWithBrowserRouting(
         {/* The click-time reader lives on the snapshot context (C8). */}
         <BrowserSessionsSnapshotProvider value={sessions}>
           <LinkTargetProvider epicId="epic-markdown" viewTabId={VIEW_TAB_ID}>
-            <TraycerMarkdown
-              className={null}
-              proseSize="normal"
-              components={null}
-              remarkPlugins={null}
-              rehypePlugins={null}
-              quotable={false}
-              isStreaming={false}
-            >
-              {markdown}
-            </TraycerMarkdown>
+            <MarkdownLinkContext.Provider value={linkPolicy}>
+              <TraycerMarkdown
+                className={null}
+                proseSize="normal"
+                components={null}
+                remarkPlugins={null}
+                rehypePlugins={null}
+                quotable={false}
+                isStreaming={false}
+              >
+                {markdown}
+              </TraycerMarkdown>
+            </MarkdownLinkContext.Provider>
           </LinkTargetProvider>
         </BrowserSessionsSnapshotProvider>
       </BrowserSessionsContext.Provider>
@@ -662,6 +675,44 @@ describe("MarkdownAnchor right-click menu", () => {
       expect(openTab).toHaveBeenCalledWith(null, DOCS_HREF);
     });
     expect(host.openedExternalLinks).toEqual([]);
+  });
+
+  // A slow file-link lookup must not land over the page the user just chose
+  // to open, so the menu's open items supersede it exactly as a plain click
+  // does. Copy Link opens nothing, so it must leave a pending lookup alone.
+  function renderLinkMenuWithSupersedeSpy() {
+    const supersedePendingFileLink = vi.fn<() => void>();
+    renderMarkdownWithBrowserRoutingAndLinkPolicy(
+      `[Docs](${DOCS_HREF})`,
+      createRunnerHost(),
+      { openFileLink: vi.fn(() => true), supersedePendingFileLink },
+    );
+    openLinkMenu("Docs");
+    return supersedePendingFileLink;
+  }
+
+  it.each(["Open in Browser", "Open in External Browser"])(
+    "%s supersedes a pending file link",
+    (itemName) => {
+      const supersedePendingFileLink = renderLinkMenuWithSupersedeSpy();
+
+      fireEvent.click(screen.getByRole("menuitem", { name: itemName }));
+
+      expect(supersedePendingFileLink).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("Copy Link leaves a pending file link alone", async () => {
+    const writeText = stubClipboard();
+    const supersedePendingFileLink = renderLinkMenuWithSupersedeSpy();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Link" }));
+
+    // Wait for the copy to land so the spy is read after the item has run.
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(DOCS_HREF);
+    });
+    expect(supersedePendingFileLink).not.toHaveBeenCalled();
   });
 
   it("copies the link from Copy Link without a success toast", async () => {
