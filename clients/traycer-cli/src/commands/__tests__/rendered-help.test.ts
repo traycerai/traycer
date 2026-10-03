@@ -252,6 +252,7 @@ const NAMED_PARENT_PATHS: ReadonlyArray<readonly string[]> = [
   ["config", "env"],
   ["comments"],
   ["terminal"],
+  ["profile"],
   ["workspace"],
   ["worktree"],
   ["agent"],
@@ -763,6 +764,88 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--quiet", mandatory: false },
     ],
     args: [{ name: "terminal-id", required: true, variadic: false }],
+  },
+  { path: "profile", options: [], args: [] },
+  {
+    path: "profile list",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "provider", required: false, variadic: false }],
+  },
+  {
+    path: "profile add",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--label <name>", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [{ name: "provider", required: true, variadic: false }],
+  },
+  {
+    path: "profile login",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile rename",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+      { name: "label", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile enable",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile disable",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
+  },
+  {
+    path: "profile remove",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--yes", mandatory: false },
+    ],
+    args: [
+      { name: "provider", required: true, variadic: false },
+      { name: "profile", required: true, variadic: false },
+    ],
   },
   { path: "workspace", options: [], args: [] },
   {

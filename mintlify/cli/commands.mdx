@@ -3,7 +3,7 @@ title: "CLI"
 description: "Reference for the traycer command: sign-in, running and updating the host, configuration, worktrees, and agent automation."
 ---
 
-The Traycer CLI is the `traycer` command. Use it to sign in, run and update the host on a machine, configure the shell Traycer uses, manage worktrees, and let agents work with other agents in a Task.
+The Traycer CLI is the `traycer` command. Use it to sign in, run and update the host on a machine, configure the shell Traycer uses, manage provider profiles and worktrees, and let agents work with other agents in a Task.
 
 ## Installation
 
@@ -179,6 +179,29 @@ The shell and environment settings apply when Traycer starts the host and opens 
 
 Provider credentials are not set here. Configure them in [Settings › Providers](/settings/providers).
 
+## Provider Profile Commands
+
+A profile is an account a provider runs under. The provider's own CLI login is the Terminal account, which these commands call `ambient`. [Managed profiles](/settings/providers#managed-profiles) are extra accounts next to it, available for Claude Code, Codex, Grok, and Antigravity. These commands change the same profiles as **Profiles & Limits** in [Settings › Providers](/settings/providers), on the host running on this machine.
+
+| Command | Purpose |
+| --- | --- |
+| `traycer profile list` | List every provider that has profiles, with each profile's ID, name, account, whether it is enabled and signed in, and its last known usage-limit status. |
+| `traycer profile list <provider>` | List one provider's profiles. |
+| `traycer profile add <provider>` | Create a managed profile and sign it in. The CLI prints a sign-in URL, and a code where the provider uses one, opens the page in your browser when it can, and waits until the sign-in finishes. The profile is named after the part of the account's email before the `@`. |
+| `traycer profile add <provider> --label <name>` | Create the profile with a name of your own, up to 64 characters. |
+| `traycer profile login <provider> <profile>` | Sign an existing profile in again. |
+| `traycer profile rename <provider> <profile> <label>` | Rename a profile. |
+| `traycer profile disable <provider> <profile>` | Stop Traycer using a profile without removing it. |
+| `traycer profile enable <provider> <profile>` | Let Traycer use the profile again. |
+| `traycer profile remove <provider> <profile>` | Remove a managed profile and its stored sign-in, after asking you to confirm. The Terminal account cannot be removed. |
+| `traycer profile remove <provider> <profile> --yes` | Remove without asking. Required with `--json` and when the terminal cannot ask. |
+
+- `<provider>` is `claude`, `codex`, `grok`, or `antigravity`.
+- `<profile>` is `ambient` or a profile ID from `traycer profile list`.
+- `add` and `login` need a person at a terminal, so they are refused with `--json` and in CI. Claude Code is also refused when input is piped or redirected, because you may need to paste a code. Press Ctrl-C to cancel a sign-in; a profile that was being created is discarded.
+- For Claude Code, if the browser shows a code instead of finishing, paste it into the terminal and press Enter.
+- If the account you sign in to already belongs to another profile, `add` reports that profile and adds nothing.
+
 ## Workspace and Worktree Commands
 
 | Command | Purpose |
@@ -313,7 +336,7 @@ Run outside an agent, these commands fail with "epic id required - set TRAYCER_E
 
 ### Read-Only Agents
 
-Traycer sets `TRAYCER_AGENT_CLI_SURFACE=readonly` for Codex and OpenCode agents on the Terminal interface. These agents can list agents and read transcripts, but these commands are hidden from their help and refused if they run them: `agent create`, `agent fork`, `agent configure`, `agent stop`, `agent archive`, `agent send`, `agent role claim`, `agent role relinquish`, and `worktree delete`.
+Traycer sets `TRAYCER_AGENT_CLI_SURFACE=readonly` for Codex and OpenCode agents on the Terminal interface. These agents can list agents and read transcripts, but these commands are hidden from their help and refused if they run them: `agent create`, `agent fork`, `agent configure`, `agent stop`, `agent archive`, `agent send`, `agent role claim`, `agent role relinquish`, and `worktree delete`. The `profile` commands that change a profile (`add`, `login`, `rename`, `enable`, `disable`, `remove`) are refused too; `profile list` still works.
 
 ## JSON Output
 
@@ -333,7 +356,7 @@ For example, an agent command run outside an agent ends with:
 
 - `--no-progress` drops the `progress` lines. Setting `CI` or `TRAYCER_NONINTERACTIVE` does the same.
 - `--help` and `--version` with `--json` return one `result` line with the text in `data.output`.
-- A few commands differ: `monitor` ignores `--json`, `link-phone` does not support it, `host logs` ignores `--follow` with it, and `host capabilities --json` prints a single JSON document instead of NDJSON.
+- A few commands differ: `monitor` ignores `--json`, `link-phone`, `profile add`, and `profile login` do not support it, `host logs` ignores `--follow` with it, and `host capabilities --json` prints a single JSON document instead of NDJSON.
 
 ### Exit Codes
 
@@ -343,6 +366,7 @@ For example, an agent command run outside an agent ends with:
 | `1` | The command failed. With `--json`, the `result` line carries the error code. |
 | `2` | The Traycer sign-in service could not be reached (`login`, `whoami`, `link-phone`). |
 | `75` | Another Traycer command, such as a host install or update, is already in progress. Try again when it finishes. |
+| `130` | You cancelled a `profile add` or `profile login` sign-in with Ctrl-C. |
 
 ## Paths and Logs
 

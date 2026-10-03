@@ -49,6 +49,16 @@ import { buildAgentTranscriptCommand } from "./commands/agent-transcript";
 import { buildAgentInboxCommand } from "./commands/agent-inbox";
 import { buildTerminalListCommand } from "./commands/terminal-list";
 import { buildTerminalOutputCommand } from "./commands/terminal-output";
+import { buildProfileListCommand } from "./commands/profile-list";
+import {
+  buildProfileLoginCommand,
+  PROCESS_PROFILE_LOGIN_IO,
+} from "./commands/profile-login";
+import {
+  buildProfileRemoveCommand,
+  buildProfileRenameCommand,
+  buildProfileSetEnabledCommand,
+} from "./commands/profile-mutations";
 import { buildWorkspaceListCommand } from "./commands/workspace-list";
 import { buildWorktreeCreateCommand } from "./commands/worktree-create";
 import { buildWorktreeListCommand } from "./commands/worktree-list";
@@ -834,6 +844,7 @@ function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerConfigCommands(program);
   registerCommentsCommands(program);
   registerTerminalCommands(program);
+  registerProfileCommands(program);
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
   registerAgentCommands(program, agentRolesEnabled);
@@ -2737,6 +2748,128 @@ function registerTerminalCommands(program: Command): void {
       buildTerminalOutputCommand({
         epicId: null,
         terminalId: expectRequiredPositional(args[0], "terminal id"),
+      }),
+  );
+}
+
+// The terminal counterpart of the GUI's provider settings: both drive the same
+// `providers.*` host methods, so a change made in one shows in the other. The
+// mutating commands are refused on the readonly agent surface
+// (`READONLY_REFUSED_COMMANDS`); `list` is a read and is not.
+function registerProfileCommands(program: Command): void {
+  const profile = program
+    .command("profile")
+    .description(
+      "Manage provider profiles: the accounts each provider can run under",
+    );
+  const providerArgument = "Provider name: claude, codex, grok or antigravity";
+  const profileArgument =
+    "'ambient' for the provider's own CLI login, or a managed profile id from 'traycer profile list'";
+
+  withRunner(
+    profile
+      .command("list")
+      .description(
+        "List provider profiles with their account, state and cached limit status",
+      )
+      .argument("[provider]", `${providerArgument}. Omit to list every one.`),
+    (_opts, args) => buildProfileListCommand({ provider: args[0] ?? null }),
+  );
+
+  withRunner(
+    profile
+      .command("add")
+      .description(
+        "Create a managed profile and sign it in. Prints a sign-in link and waits for it to finish.",
+      )
+      .argument("<provider>", providerArgument)
+      .option(
+        "--label <name>",
+        "Name for the profile (defaults to the account's email prefix)",
+      ),
+    (opts, args) =>
+      buildProfileLoginCommand(
+        {
+          provider: expectRequiredPositional(args[0], "provider"),
+          target: {
+            kind: "create",
+            label: typeof opts.label === "string" ? opts.label : null,
+          },
+        },
+        PROCESS_PROFILE_LOGIN_IO,
+      ),
+  );
+
+  withRunner(
+    profile
+      .command("login")
+      .description(
+        "Sign an existing profile in again. Prints a sign-in link and waits for it to finish.",
+      )
+      .argument("<provider>", providerArgument)
+      .argument("<profile>", profileArgument),
+    (_opts, args) =>
+      buildProfileLoginCommand(
+        {
+          provider: expectRequiredPositional(args[0], "provider"),
+          target: {
+            kind: "existing",
+            profile: expectRequiredPositional(args[1], "profile"),
+          },
+        },
+        PROCESS_PROFILE_LOGIN_IO,
+      ),
+  );
+
+  withRunner(
+    profile
+      .command("rename")
+      .description("Rename a profile")
+      .argument("<provider>", providerArgument)
+      .argument("<profile>", profileArgument)
+      .argument("<label>", "New name, 1 to 64 characters"),
+    (_opts, args) =>
+      buildProfileRenameCommand({
+        provider: expectRequiredPositional(args[0], "provider"),
+        profile: expectRequiredPositional(args[1], "profile"),
+        label: expectRequiredPositional(args[2], "label"),
+      }),
+  );
+
+  for (const enabled of [true, false]) {
+    withRunner(
+      profile
+        .command(enabled ? "enable" : "disable")
+        .description(
+          enabled
+            ? "Let Traycer use a profile again"
+            : "Stop Traycer using a profile without removing it",
+        )
+        .argument("<provider>", providerArgument)
+        .argument("<profile>", profileArgument),
+      (_opts, args) =>
+        buildProfileSetEnabledCommand({
+          provider: expectRequiredPositional(args[0], "provider"),
+          profile: expectRequiredPositional(args[1], "profile"),
+          enabled,
+        }),
+    );
+  }
+
+  withRunner(
+    profile
+      .command("remove")
+      .description(
+        "Remove a managed profile and its stored sign-in. The ambient profile cannot be removed.",
+      )
+      .argument("<provider>", providerArgument)
+      .argument("<profile>", "Managed profile id from 'traycer profile list'")
+      .option("--yes", "Remove without asking for confirmation"),
+    (opts, args) =>
+      buildProfileRemoveCommand({
+        provider: expectRequiredPositional(args[0], "provider"),
+        profile: expectRequiredPositional(args[1], "profile"),
+        yes: opts.yes === true,
       }),
   );
 }
