@@ -716,8 +716,7 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     });
     writeLeftPanelRecord({
       panelGroups: [
-        // Five members: only four make a stack, the fifth stands alone
-        // (lossy, `MAX_RAIL_STACK_MEMBERS`).
+        // Five members, all carried into one stack: a stack has no cap.
         {
           panelIds: [
             "file-tree",
@@ -796,7 +795,7 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
     expect(railStacks(state.arrangement.rail)).toEqual([
       {
         kind: "stack",
-        id: "stack:railFileTree+railSharing+railComments+railBrowsers",
+        id: "stack:railFileTree+railSharing+railComments+railBrowsers+railTerminals",
       },
       { kind: "stack", id: "stack:railArtifacts+railGitDiff" },
     ]);
