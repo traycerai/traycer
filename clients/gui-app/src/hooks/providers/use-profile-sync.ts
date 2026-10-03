@@ -31,7 +31,8 @@ export function useProfileSyncPending(hostId: string | null): boolean {
           hostId !== null &&
           key?.[1] === hostId &&
           typeof method === "string" &&
-          method.startsWith("providers.profileCopy.sync.")
+          (method.startsWith("providers.profileCopy.sync.") ||
+            method === "providers.profileCopy.retry")
         );
       },
     }) > 0

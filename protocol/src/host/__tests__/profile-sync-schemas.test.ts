@@ -764,3 +764,123 @@ describe("profile sync apply result", () => {
     },
   );
 });
+
+describe("profile sync opaque host ids", () => {
+  const OPAQUE_SOURCE = "host:source/1.local";
+  const OPAQUE_DEST = "host:dest+2@lan";
+  const TOO_LONG = "h".repeat(129);
+  const MAX = "h".repeat(128);
+
+  // The whole item, receipt and preview included, re-pointed at opaque hosts.
+  function opaqueItem(): ProfileSyncItem {
+    const base = item();
+    if (base.preview === null || base.outcome === null)
+      throw new Error("fixture has a preview and an outcome");
+    return {
+      ...base,
+      destinationHostId: OPAQUE_DEST,
+      preview: {
+        ...base.preview,
+        source: { ...base.preview.source, sourceHostId: OPAQUE_SOURCE },
+        destinations: base.preview.destinations.map((entry) => ({
+          ...entry,
+          destinationHostId: OPAQUE_DEST,
+        })),
+      },
+      outcome: {
+        ...base.outcome,
+        attempt: {
+          ...base.outcome.attempt,
+          sourceHostId: OPAQUE_SOURCE,
+          destinationHostId: OPAQUE_DEST,
+        },
+      },
+    };
+  }
+
+  it("admits colons and punctuation through a batch, preview, list and rule with nested receipts", () => {
+    expect(
+      profileSyncBatchSchema.safeParse(batch(OPAQUE_SOURCE, [opaqueItem()]))
+        .success,
+    ).toBe(true);
+    expect(
+      profileSyncPreviewSchema.safeParse({
+        selection: {
+          sourceHostId: OPAQUE_SOURCE,
+          scope: { kind: "all" },
+          destinationHostIds: [OPAQUE_DEST],
+        },
+        revision: REVISION,
+        items: [opaqueItem()],
+      }).success,
+    ).toBe(true);
+    const opaqueRule: ProfileSyncRule = {
+      ...rule(1),
+      sourceHostId: OPAQUE_SOURCE,
+      destinationHostId: OPAQUE_DEST,
+    };
+    expect(profileSyncRuleSchema.safeParse(opaqueRule).success).toBe(true);
+    expect(
+      profileSyncListSchema.safeParse({
+        batches: [batch(OPAQUE_SOURCE, [opaqueItem()])],
+        rules: [opaqueRule],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("admits a 128-character host id", () => {
+    expect(
+      profileSyncRuleSchema.safeParse({
+        ...rule(1),
+        sourceHostId: MAX,
+        destinationHostId: OPAQUE_DEST,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["over 128 characters", TOO_LONG],
+  ])(
+    "rejects a %s host id on the source and the destination",
+    (_label, bad) => {
+      expect(
+        profileSyncRuleSchema.safeParse({ ...rule(1), sourceHostId: bad })
+          .success,
+      ).toBe(false);
+      expect(
+        profileSyncRuleSchema.safeParse({ ...rule(1), destinationHostId: bad })
+          .success,
+      ).toBe(false);
+      expect(profileSyncBatchSchema.safeParse(batch(bad, [])).success).toBe(
+        false,
+      );
+    },
+  );
+
+  it("still refuses a rule whose opaque source and destination are the same host", () => {
+    expect(
+      profileSyncRuleSchema.safeParse({
+        ...rule(1),
+        sourceHostId: OPAQUE_SOURCE,
+        destinationHostId: OPAQUE_SOURCE,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still refuses an item whose nested receipt names a different opaque source", () => {
+    const wrong = opaqueItem();
+    if (wrong.outcome === null) throw new Error("fixture has an outcome");
+    const mismatched: ProfileSyncItem = {
+      ...wrong,
+      outcome: {
+        ...wrong.outcome,
+        attempt: { ...wrong.outcome.attempt, sourceHostId: "host:other" },
+      },
+    };
+    expect(
+      profileSyncBatchSchema.safeParse(batch(OPAQUE_SOURCE, [mismatched]))
+        .success,
+    ).toBe(false);
+  });
+});

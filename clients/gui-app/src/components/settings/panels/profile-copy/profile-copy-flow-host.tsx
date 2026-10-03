@@ -72,38 +72,44 @@ function ProfileCopyFlowBody(props: {
  */
 export function ProfileCopyFlowHost(): ReactNode {
   const view = useProfileCopyFlowStore((state) => state.view);
+  return view === null ? null : <ProfileCopyFlowDialog view={view} />;
+}
+
+/** Only an open flow subscribes to its source's pending sync requests. */
+function ProfileCopyFlowDialog(props: {
+  readonly view: ProfileCopyFlowView;
+}): ReactNode {
+  const { view } = props;
   const session = useProfileCopyFlowStore((state) => state.session);
   const close = useProfileCopyFlowStore((state) => state.close);
   const pending = useProfileSyncPending(
-    view?.kind === "sync" ? view.sourceHostId : null,
+    view.kind === "sync" ? view.sourceHostId : null,
   );
   return (
     <Dialog
-      open={view !== null}
+      open
       onOpenChange={(open) => {
         if (!open && !pending) close();
       }}
     >
-      {view !== null ? (
-        <DialogContent
-          layout="banded"
-          showCloseButton={!pending}
-          onEscapeKeyDown={(event) => {
-            if (pending) event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            if (pending) event.preventDefault();
-          }}
-          className={cn(
-            "flex max-h-[min(85dvh,44rem)] flex-col overflow-hidden",
-            view.kind === "sync"
-              ? "sm:max-w-2xl"
-              : "sm:max-w-[min(34rem,var(--safe-area-width))]",
-          )}
-        >
-          <ProfileCopyFlowBody key={session} view={view} />
-        </DialogContent>
-      ) : null}
+      <DialogContent
+        layout="banded"
+        showCloseButton={!pending}
+        onEscapeKeyDown={(event) => {
+          if (pending) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (pending) event.preventDefault();
+        }}
+        className={cn(
+          "flex max-h-[min(85dvh,44rem)] flex-col overflow-hidden",
+          view.kind === "sync"
+            ? "sm:max-w-2xl"
+            : "sm:max-w-[min(34rem,var(--safe-area-width))]",
+        )}
+      >
+        <ProfileCopyFlowBody key={session} view={view} />
+      </DialogContent>
     </Dialog>
   );
 }

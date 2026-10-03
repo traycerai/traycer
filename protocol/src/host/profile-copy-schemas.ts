@@ -12,12 +12,9 @@ export const profileCopyIdSchema = lazySchema(() => z.string().uuid());
 export const profileCopySourceProfileIdSchema = lazySchema(() =>
   z.union([profileCopyIdSchema, z.literal("ambient")]),
 );
+/** Canonical host ids are opaque; preserve their bytes within wire bounds. */
 export const profileCopyHostIdSchema = lazySchema(() =>
-  z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[A-Za-z0-9_-]+$/),
+  z.string().min(1).max(128),
 );
 export const profileCopyRevisionSchema = lazySchema(() =>
   z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),

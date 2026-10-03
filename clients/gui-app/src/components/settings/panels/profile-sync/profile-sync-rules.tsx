@@ -158,6 +158,7 @@ export function ProfileSyncRules(props: {
                 <Button
                   size="xs"
                   variant="ghost"
+                  disabled={save.isPending || remove.isPending}
                   onClick={() => {
                     if (rule.batchId !== null) props.onViewRun(rule.batchId);
                   }}

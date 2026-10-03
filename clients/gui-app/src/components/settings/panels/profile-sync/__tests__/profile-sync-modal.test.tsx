@@ -12,8 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ProfileCopyOutcome } from "@traycer/protocol/host/profile-copy-schemas";
+import { profileCopyRetryRequestSchema } from "@traycer/protocol/host/profile-copy-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
   profileSyncSaveRuleSchema,
@@ -141,6 +143,7 @@ let saveRuleThrows = false;
 let saveRuleGate: Promise<void> | null = null;
 // Likewise for the start and stop answers.
 let startGate: Promise<void> | null = null;
+let retryGate: Promise<void> | null = null;
 let stopRuleGate: Promise<void> | null = null;
 let stopRuleThrows = false;
 
@@ -254,7 +257,17 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         lastStarted = answered;
         return answered;
       },
-      "providers.profileCopy.retry": () => {
+      "providers.profileCopy.retry": ():
+        | ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.retry">
+        | Promise<
+            ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.retry">
+          > => {
+        if (retryGate !== null) {
+          return retryGate.then(() => ({
+            result: retryResult,
+            outcome: retryOutcome ?? profileCopyOutcome({}),
+          }));
+        }
         if (retryThrows) {
           throw new HostRpcError({
             code: "RPC_ERROR",
@@ -622,6 +635,7 @@ describe("ProfileSyncModal review regressions", () => {
     saveRuleThrows = false;
     saveRuleGate = null;
     startGate = null;
+    retryGate = null;
     stopRuleGate = null;
     stopRuleThrows = false;
     resetStores();
@@ -1950,6 +1964,48 @@ describe("ProfileSyncModal review regressions", () => {
       );
     });
 
+    it("keeps the results open while a retry is in flight, then shows the stale notice, re-enables exits and reuses the retry request id", async () => {
+      let release: () => void = () => undefined;
+      retryGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      retryResult = "stale-revision";
+      retryOutcome = quarantined(ATTEMPT_ID, 3);
+      const messenger = await openRetry();
+      const retryCalls = () =>
+        messenger.calls.filter(
+          (call) => call.method === "providers.profileCopy.retry",
+        );
+      try {
+        await waitFor(() => expect(retryCalls()).toHaveLength(1));
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+        fireEvent.keyDown(document.activeElement ?? document.body, {
+          key: "Escape",
+        });
+        expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+        expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+        expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+      } finally {
+        release();
+      }
+      expect(await screen.findByText(STALE_TEXT)).toBeTruthy();
+      // Settled: the exits are available again and the notice stays.
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Done" }).hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      expect(screen.getByText(STALE_TEXT)).toBeTruthy();
+      // The same unchanged attempt and revision retries under the same id.
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(retryCalls()).toHaveLength(2));
+      const [first, second] = retryCalls().map((call) =>
+        profileCopyRetryRequestSchema.parse(call.params),
+      );
+      expect(second.retryRequestId).toBe(first.retryRequestId);
+    });
+
     it("shows no notice for a current retry", async () => {
       retryResult = "current";
       retryOutcome = quarantined(ATTEMPT_ID, 3);
@@ -2678,6 +2734,62 @@ describe("ProfileSyncModal review regressions", () => {
       } finally {
         held.release();
       }
+    });
+
+    describe.each([
+      ["Pause", "save"],
+      ["Stop", "stop"],
+    ] as const)("%s in flight", (_action, which) => {
+      it("holds View results, so the pending observer stays mounted until settlement", async () => {
+        const held = gate();
+        if (which === "save") saveRuleGate = held.promise;
+        else stopRuleGate = held.promise;
+        const RUN = "00000000-0000-4000-8000-0000000000d1";
+        listBatches = [
+          {
+            batchId: RUN,
+            sourceHostId: SOURCE_HOST_ID,
+            createdAt: 1_700_000_000_000,
+            automatic: true,
+            items: [listedItem(DEST_HOST_ID)],
+          },
+        ];
+        mount([{ ...SAVED_RULE, batchId: RUN }]);
+        try {
+          openSync(null);
+          fireEvent.mouseDown(
+            await screen.findByRole("tab", { name: /Automatic sync/ }),
+            { button: 0 },
+          );
+          await screen.findByRole("heading", { name: "Linux box" });
+          if (which === "save") {
+            fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+          } else {
+            fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+            fireEvent.click(
+              await screen.findByRole("button", {
+                name: "Stop automatic sync",
+              }),
+            );
+          }
+          const view = await screen.findByRole("button", {
+            name: "View results",
+          });
+          await waitFor(() => expect(view.hasAttribute("disabled")).toBe(true));
+          fireEvent.click(view);
+          // Still the automatic list, with the pending control's UI intact.
+          expect(
+            screen.getByRole("heading", { name: "Linux box" }),
+          ).toBeTruthy();
+          expect(
+            screen.getByRole("button", { name: "View results" }),
+          ).toBeTruthy();
+          if (which === "stop")
+            expect(screen.getByText(/Stop future updates\?/)).toBeTruthy();
+        } finally {
+          held.release();
+        }
+      });
     });
 
     it("disables Keep rule while the stop is in flight, so the confirmation cannot be dismissed as if nothing happens", async () => {
