@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { SHIPPED_DEFAULT_VALUES } from "@/lib/layout/layout-presets";
@@ -244,6 +244,33 @@ describe("what a depiction draws", () => {
     );
     expect(container.querySelectorAll("svg")).toHaveLength(1);
     expect(hostOf("railGitDiff", container)).toBe("rail");
+  });
+
+  it("draws Reset time on the calm profile under every reading style", () => {
+    const calmResets = (
+      reset: boolean,
+      readingStyle: "bar" | "percent" | "both",
+    ) => {
+      const { container } = render(
+        depictRegion(
+          "usageLimits",
+          { ...SHIPPED_DEFAULT_VALUES.usageLimits, reset, readingStyle },
+          DEFAULT_ARRANGEMENT,
+        ),
+      );
+      // The first windowed provider's specimen is the one calm (35%) reading.
+      const calm = container.querySelector("[data-provider-id]");
+      const count =
+        calm?.querySelectorAll('[data-testid^="status-bar-window-reset-"]')
+          .length ?? -1;
+      cleanup();
+      return count;
+    };
+
+    for (const readingStyle of ["bar", "percent", "both"] as const) {
+      expect(calmResets(true, readingStyle)).toBe(1);
+      expect(calmResets(false, readingStyle)).toBe(0);
+    }
   });
 
   it("draws every provider the arrangement still shows", () => {
