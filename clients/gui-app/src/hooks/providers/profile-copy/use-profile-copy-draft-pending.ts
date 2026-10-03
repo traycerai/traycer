@@ -3,6 +3,7 @@ import {
   profileCopyAttemptSchema,
   type ProfileCopyAttempt,
 } from "@traycer/protocol/host/profile-copy-schemas";
+import { profileCopyTransferKey } from "@/lib/profile-copy/profile-copy-model";
 
 const DRAFT_METHODS = new Set([
   "providers.profileCopy.verify",
@@ -60,6 +61,62 @@ export function useProfileCopyDraftPending(
           attempt.sourceHostId === sourceHostId &&
           attempt.operationId === operationId &&
           attempt.destinationHostId === destinationHostId
+        );
+      },
+    }) > 0
+  );
+}
+
+function isResolveForAttempt(
+  variables: object,
+  attempt: ProfileCopyAttempt,
+): boolean {
+  return (
+    "sourceHostId" in variables &&
+    variables.sourceHostId === attempt.sourceHostId &&
+    "operationId" in variables &&
+    variables.operationId === attempt.operationId &&
+    "destinationHostId" in variables &&
+    variables.destinationHostId === attempt.destinationHostId &&
+    "providerId" in variables &&
+    variables.providerId === attempt.providerId &&
+    "sourceProfileId" in variables &&
+    variables.sourceProfileId === attempt.sourceProfileId
+  );
+}
+
+/** Source actions compete with this transfer's destination draft writes. */
+export function useProfileCopySourcePending(
+  attempt: ProfileCopyAttempt,
+): boolean {
+  return (
+    useIsMutating({
+      predicate: (mutation) => {
+        const key = mutation.options.mutationKey;
+        const variables = mutation.state.variables;
+        if (
+          key?.[1] !== attempt.sourceHostId ||
+          typeof variables !== "object" ||
+          variables === null
+        )
+          return false;
+        if (
+          key[0] === "providers.profileCopy.retry" &&
+          "attempt" in variables
+        ) {
+          const requested = profileCopyAttemptSchema.safeParse(
+            variables.attempt,
+          );
+          return (
+            requested.success &&
+            key[2] === attempt.operationId &&
+            profileCopyTransferKey(requested.data) ===
+              profileCopyTransferKey(attempt)
+          );
+        }
+        return (
+          key[0] === "providers.profileCopy.sync.resolve" &&
+          isResolveForAttempt(variables, attempt)
         );
       },
     }) > 0

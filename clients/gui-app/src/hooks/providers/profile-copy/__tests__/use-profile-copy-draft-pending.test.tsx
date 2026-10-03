@@ -3,12 +3,14 @@ import {
   MutationObserver,
   QueryClient,
   QueryClientProvider,
+  useIsMutating,
 } from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProfileCopyAttempt } from "@traycer/protocol/host/profile-copy-schemas";
 import { useProfileSyncPending } from "@/hooks/providers/use-profile-sync";
 import { profileCopyMutationKeys } from "@/lib/query-keys";
+import { profileSyncMutationKeys } from "@/lib/query-keys/profile-sync-keys";
 import {
   ATTEMPT_ID,
   ATTEMPT_TWO_ID,
@@ -20,6 +22,7 @@ import {
 import {
   profileCopyDraftMutationAttempt,
   useProfileCopyDraftPending,
+  useProfileCopySourcePending,
 } from "../use-profile-copy-draft-pending";
 
 // The ten destination-served draft and sign-in verbs a source dialog must
@@ -261,6 +264,132 @@ describe("useProfileCopyDraftPending", () => {
         });
       }
       await waitFor(() => expect(own.result.current).toBe(false));
+    },
+  );
+});
+
+describe("useProfileCopySourcePending", () => {
+  afterEach(cleanup);
+
+  interface ResolveVariables {
+    readonly sourceHostId: string;
+    readonly batchId: string;
+    readonly operationId: string;
+    readonly action: "check";
+    readonly expectedDestination: null;
+    readonly providerId: ProfileCopyAttempt["providerId"];
+    readonly sourceProfileId: string;
+    readonly destinationHostId: string;
+  }
+  const resolveFor = (a: ProfileCopyAttempt): ResolveVariables => ({
+    sourceHostId: a.sourceHostId,
+    batchId: "44444444-4444-4444-8444-444444444444",
+    operationId: a.operationId,
+    action: "check",
+    expectedDestination: null,
+    providerId: a.providerId,
+    sourceProfileId: a.sourceProfileId,
+    destinationHostId: a.destinationHostId,
+  });
+
+  async function pendingWith(
+    watched: ProfileCopyAttempt,
+    key: readonly string[],
+    variables: ResolveVariables | DraftVariables,
+  ): Promise<boolean> {
+    const queryClient = new QueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    // The unfiltered count tells us React has published the mutation, so the
+    // filtered answer is read only after the observation could have reached it.
+    const view = renderHook(
+      () => ({
+        sourcePending: useProfileCopySourcePending(watched),
+        allPending: useIsMutating(),
+      }),
+      { wrapper },
+    );
+    let release: () => void = () => undefined;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const observer = new MutationObserver<
+      void,
+      Error,
+      ResolveVariables | DraftVariables
+    >(queryClient, { mutationKey: key, mutationFn: () => promise });
+    try {
+      await act(async () => {
+        void observer.mutate(variables).catch(() => undefined);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(view.result.current.allPending).toBe(1));
+      return view.result.current.sourcePending;
+    } finally {
+      await act(async () => {
+        release();
+        await Promise.resolve();
+      });
+    }
+  }
+
+  const watched = profileCopyAttempt({});
+
+  it("holds for a source Check status of the same transfer", async () => {
+    expect(
+      await pendingWith(
+        watched,
+        profileSyncMutationKeys.resolve(watched.sourceHostId),
+        resolveFor(watched),
+      ),
+    ).toBe(true);
+  });
+
+  it("holds for a source Retry of the same attempt", async () => {
+    expect(
+      await pendingWith(
+        watched,
+        profileCopyMutationKeys.retry(
+          watched.sourceHostId,
+          watched.operationId,
+        ),
+        variablesFor(watched),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "another operation",
+      { operationId: "00000000-0000-4000-8000-0000000000ff" },
+    ],
+    ["another destination", { destinationHostId: DEST_HOST_TWO_ID }],
+    [
+      "another source profile",
+      { sourceProfileId: "00000000-0000-4000-8000-0000000000ee" },
+    ],
+  ])("does not hold for a Check status of %s", async (_label, overrides) => {
+    const other = { ...watched, ...overrides };
+    expect(
+      await pendingWith(
+        watched,
+        profileSyncMutationKeys.resolve(watched.sourceHostId),
+        resolveFor(other),
+      ),
+    ).toBe(false);
+  });
+
+  it.each(DRAFT_KEYS)(
+    "excludes the destination's own %s, so its sign-in Cancel stays usable",
+    async (_name, keyFor) => {
+      expect(
+        await pendingWith(
+          watched,
+          keyFor(watched.destinationHostId, watched.attemptId),
+          variablesFor(watched),
+        ),
+      ).toBe(false);
     },
   );
 });

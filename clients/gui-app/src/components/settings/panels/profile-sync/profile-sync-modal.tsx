@@ -988,12 +988,14 @@ function useProfileSyncModalState(props: {
             });
             return;
           }
+          // A confirmed response retires the uncertain request identity.
+          // Going Back and starting again is a new run, even at this revision.
+          forgetSyncStartBatchId(
+            request.selection,
+            request.revision,
+            request.batchId,
+          );
           if (result.items.length === 0) {
-            forgetSyncStartBatchId(
-              request.selection,
-              request.revision,
-              request.batchId,
-            );
             setEmptyStart({ selectionKey, revision: request.revision });
             void preview.refetch();
             return;

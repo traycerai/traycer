@@ -1,4 +1,4 @@
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -46,6 +46,7 @@ import { ProfileCopyFlowHost } from "@/components/settings/panels/profile-copy/p
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
+import { profileCopyDraftStatusKey } from "@/hooks/providers/profile-copy/profile-copy-cache";
 import { clearProfileCopyObservations } from "@/hooks/providers/profile-copy/profile-copy-observations";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
@@ -155,6 +156,8 @@ let saveRuleThrows = false;
 let saveRuleGate: Promise<void> | null = null;
 // Likewise for the start and stop answers.
 let startGate: Promise<void> | null = null;
+// The mounted harness's real Query client, for exact cache invalidations.
+let mountedQueryClient: QueryClient | null = null;
 // One-shot: the next sync.list read dispatches, then waits for it.
 let listGate: Promise<void> | null = null;
 let retryGate: Promise<void> | null = null;
@@ -226,6 +229,7 @@ function mount(
 
 function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
   const queryClient = createAppQueryClient();
+  mountedQueryClient = queryClient;
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "req-sync",
@@ -545,6 +549,7 @@ function resetModuleKnobs(): void {
   saveRuleThrows = false;
   saveRuleGate = null;
   startGate = null;
+  mountedQueryClient = null;
   listGate = null;
   retryGate = null;
   resolveGate = null;
@@ -5559,7 +5564,7 @@ describe("ProfileSyncModal review regressions", () => {
           },
         ]),
       ];
-      mountWith({
+      const messenger = mountWith({
         rules: [],
         providers: defaultProviders(),
         previewItems: noItems,
@@ -5581,10 +5586,31 @@ describe("ProfileSyncModal review regressions", () => {
               .hasAttribute("disabled"),
           ).toBe(true),
         );
-        // Meanwhile Verify lands a newer signed-in receipt; lists fail.
+        // While Check status is held, the embedded Verify is held too.
+        expect(
+          screen
+            .getByRole("button", { name: "Verify" })
+            .hasAttribute("disabled"),
+        ).toBe(true);
+        // The destination advances on its own (not through this window) while
+        // lists fail. A verification-pending draft is not timer-polled, so the
+        // real exact draft-status read is invalidated instead.
         listFails = true;
         draftStatusOutcome = signedIn;
-        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+        const client = mountedQueryClient;
+        if (client === null) throw new Error("harness query client missing");
+        const draftReads = (): number =>
+          messenger.calls.filter(
+            (call) => call.method === "providers.profileCopy.draftStatus",
+          ).length;
+        const readsBefore = draftReads();
+        await act(async () => {
+          await client.invalidateQueries({
+            queryKey: profileCopyDraftStatusKey({ attempt: pending.attempt }),
+          });
+        });
+        // A second real draft-status request observed the newer receipt.
+        await waitFor(() => expect(draftReads()).toBeGreaterThan(readsBefore));
         await waitFor(() =>
           expect(screen.queryByRole("button", { name: "Verify" })).toBeNull(),
         );
@@ -5678,6 +5704,267 @@ describe("ProfileSyncModal review regressions", () => {
       expect(screen.getByText(/The source account changed\./)).toBeTruthy();
       expect(screen.getByText("Needs attention")).toBeTruthy();
       expect(screen.queryByText("Synced")).toBeNull();
+    });
+
+    it("holds the embedded draft controls while the same transfer's Check status is pending", async () => {
+      const held = gate();
+      const readiness = {
+        preparation: "complete" as const,
+        verification: "not-checked" as const,
+        verificationRevision: null,
+        acceptedVerificationRevision: null,
+        identity: "not-checked" as const,
+        identityRevision: null,
+        acceptedIdentityRevision: null,
+        writer: "none" as const,
+        writerGeneration: 0,
+        quarantined: false,
+      };
+      const pending = recordedOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "verification-pending",
+        revision: 6,
+        readiness,
+      });
+      draftStatusOutcome = pending;
+      listBatches = [
+        runWith([
+          {
+            ...syncItem(1, DEST_HOST_ID, "copying", []),
+            preview: null,
+            outcome: pending,
+          },
+        ]),
+      ];
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      const writes = (): number =>
+        messenger.calls.filter((call) =>
+          [
+            "providers.profileCopy.verify",
+            "providers.profileCopy.setPreference",
+            "providers.profileCopy.cancelDraft",
+          ].includes(call.method),
+        ).length;
+      let verifyRef: HTMLElement | null = null;
+      try {
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        const verify = await screen.findByRole("button", { name: "Verify" });
+        verifyRef = verify;
+        const preference = screen.getByRole("switch");
+        // Capture the row's own controls first: an open confirmation hides
+        // the outer buttons from accessible queries.
+        const check = screen.getByRole("button", { name: "Check status" });
+        // An already-open cancel confirmation must be held as well.
+        fireEvent.click(
+          screen.getByRole("button", { name: "Cancel this device" }),
+        );
+        const confirm = within(
+          await screen.findByTestId("confirm-destructive-dialog"),
+        ).getByRole("button", { name: "Cancel copy" });
+        resolveGate = held.promise;
+        fireEvent.click(check);
+        await waitFor(() =>
+          expect(confirm.hasAttribute("disabled")).toBe(true),
+        );
+        expect(verify.hasAttribute("disabled")).toBe(true);
+        expect(
+          preference.hasAttribute("disabled") ||
+            preference.getAttribute("aria-disabled") === "true" ||
+            preference.hasAttribute("data-disabled"),
+        ).toBe(true);
+        for (const control of [verify, preference, confirm])
+          fireEvent.click(control);
+        // No destination write was sent for any held control.
+        expect(writes()).toBe(0);
+      } finally {
+        held.release();
+      }
+      // The confirmation may still hide the outer buttons from queries, so
+      // read the captured control.
+      await waitFor(() =>
+        expect(verifyRef.hasAttribute("disabled")).toBe(false),
+      );
+      expect(writes()).toBe(0);
+    });
+
+    it("forgets the batch id of an accepted, non-empty start so the same selection starts a new batch", async () => {
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: () => [
+          { ...syncItem(1, DEST_HOST_ID, "synced", []), preview: null },
+        ],
+      });
+      openSync(null);
+      await pickDestinations([/Linux box/]);
+      await screen.findByText("1 profile transfers selected");
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      fireEvent.click(await screen.findByRole("button", { name: "← Back" }));
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Sync now" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      await waitFor(() => expect(startCalls(messenger)).toHaveLength(2));
+      const [first, second] = startCalls(messenger).map((call) =>
+        profileSyncStartSchema.parse(call.params),
+      );
+      expect(second.selection).toEqual(first.selection);
+      expect(second.revision).toBe(first.revision);
+      expect(second.batchId).not.toBe(first.batchId);
+    });
+
+    describe("a stale-revision Retry that carries the current receipt", () => {
+      const ATTEMPT_C = "55555555-5555-4555-8555-555555555557";
+      const receiptA = (
+        revision: number,
+        state: "blocked" | "sign-in-required",
+      ): ProfileCopyOutcome =>
+        state === "blocked"
+          ? profileCopyOutcome({
+              attempt: profileCopyAttempt({ operationId: OP }),
+              revision,
+              state: "blocked",
+              reason: "unreachable",
+            })
+          : recordedOutcome({
+              attempt: profileCopyAttempt({ operationId: OP }),
+              revision,
+              state: "sign-in-required",
+            });
+      const itemWith = (outcome: ProfileCopyOutcome): ProfileSyncItem => ({
+        ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+        preview: null,
+        outcome,
+      });
+      const retries = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+        messenger.calls
+          .filter((call) => call.method === "providers.profileCopy.retry")
+          .map((call) => profileCopyRetryRequestSchema.parse(call.params));
+      const STALE = "This changed since you last looked. Review it again.";
+
+      async function openRun(
+        outcome: ProfileCopyOutcome,
+      ): Promise<MockHostMessenger<HostRpcRegistry>> {
+        listBatches = [runWith([itemWith(outcome)])];
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: noItems,
+          startItems: noItems,
+        });
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        await screen.findByRole("button", { name: "Retry" });
+        return messenger;
+      }
+
+      it("withdraws the old Retry, keeps the notice and reads the draft of the same attempt at its newer revision", async () => {
+        const current = receiptA(4, "sign-in-required");
+        retryResult = "stale-revision";
+        retryOutcome = current;
+        draftStatusOutcome = current;
+        const messenger = await openRun(receiptA(3, "blocked"));
+        listFails = true;
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(await screen.findByText(STALE)).toBeTruthy();
+        await waitFor(() =>
+          expect(screen.queryByRole("button", { name: "Retry" })).toBeNull(),
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        expect(
+          await screen.findByRole("button", { name: /Sign in on Linux box/ }),
+        ).toBeTruthy();
+        expect(screen.getByText(STALE)).toBeTruthy();
+        expect(retries(messenger)).toHaveLength(1);
+      });
+
+      it("advances the expected revision and the request id when the returned receipt is still retryable", async () => {
+        retryResult = "stale-revision";
+        retryOutcome = receiptA(4, "blocked");
+        const messenger = await openRun(receiptA(3, "blocked"));
+        listFails = true;
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(await screen.findByText(STALE)).toBeTruthy();
+        await waitFor(() =>
+          expect(
+            screen
+              .getByRole("button", { name: "Retry" })
+              .hasAttribute("disabled"),
+          ).toBe(false),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(retries(messenger)).toHaveLength(2));
+        const [first, second] = retries(messenger);
+        expect(first.expectedRevision).toBe(3);
+        expect(second.expectedRevision).toBe(4);
+        expect(second.retryRequestId).not.toBe(first.retryRequestId);
+      });
+
+      it("does not regress a newer polled attempt when a held stale answer lands", async () => {
+        const held = gate();
+        retryGate = held.promise;
+        retryResult = "stale-revision";
+        retryOutcome = receiptA(4, "blocked");
+        const messenger = await openRun(receiptA(3, "blocked"));
+        try {
+          fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+          await waitFor(() => expect(retries(messenger)).toHaveLength(1));
+          listBatches = [
+            runWith([
+              itemWith(
+                profileCopyOutcome({
+                  attempt: profileCopyAttempt({
+                    operationId: OP,
+                    attemptId: ATTEMPT_C,
+                  }),
+                  revision: 5,
+                  state: "blocked",
+                  reason: "unreachable",
+                }),
+              ),
+            ]),
+          ];
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(6_000);
+          });
+          listFails = true;
+        } finally {
+          held.release();
+        }
+        await waitFor(() =>
+          expect(
+            screen
+              .getByRole("button", { name: "Retry" })
+              .hasAttribute("disabled"),
+          ).toBe(false),
+        );
+        retryGate = null;
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(retries(messenger)).toHaveLength(2));
+        // The next retry is for the newer polled attempt, not the stale one.
+        expect(retries(messenger)[1].attempt.attemptId).toBe(ATTEMPT_C);
+        expect(retries(messenger)[1].expectedRevision).toBe(5);
+      });
     });
 
     it("keeps an already-present Retry answer queued, not final, when the list refetch fails", async () => {

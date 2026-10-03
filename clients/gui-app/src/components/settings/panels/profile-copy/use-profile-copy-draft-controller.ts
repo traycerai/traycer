@@ -16,6 +16,7 @@ import type {
 } from "@/lib/profile-copy/profile-copy-model";
 import type { ProfileCopyDraftAction } from "@/lib/profile-copy/profile-copy-presentation";
 import { useProfileSyncPending } from "@/hooks/providers/use-profile-sync";
+import { useProfileCopySourcePending } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopySettingsNavigation } from "./profile-copy-shared";
 import type { ProfileImportLoginFlow } from "./use-profile-import-login-flow";
@@ -102,8 +103,10 @@ export function useProfileCopyDraftController(
     state.view?.kind === "sync" ? state.view.sourceHostId : null,
   );
   // Opening Settings closes the whole flow, including other result rows.
-  // Only navigation waits for their requests; login cancellation stays live.
+  // Navigation waits for every row; draft writes wait for this transfer's
+  // source actions. Own destination login.await must not prevent Cancel.
   const syncPending = useProfileSyncPending(syncSourceHostId);
+  const sourcePending = useProfileCopySourcePending(attempt);
   const recordDirectBlock = useProfileCopyFlowStore(
     (state) => state.recordDirectBlock,
   );
@@ -212,6 +215,7 @@ export function useProfileCopyDraftController(
   };
 
   const setPreference = (desiredEnabled: boolean): void => {
+    if (preferenceDisabled) return;
     beginAction();
     setPreferenceMutation.mutate(
       { attempt, expectedRevision: outcome.revision, desiredEnabled },
@@ -220,6 +224,7 @@ export function useProfileCopyDraftController(
   };
 
   const confirmCancel = (): void => {
+    if (anyPending) return;
     // This window drives the sign-in: cancel it by its login id. Otherwise
     // the draft itself, at the revision on screen. Both cancel the draft.
     if (pendingConfirm === "cancel-sign-in" && login.phase.kind === "waiting") {
@@ -240,6 +245,7 @@ export function useProfileCopyDraftController(
 
   const targetProfileId = outcome.targetProfileId;
   const runAction = (action: ProfileCopyDraftAction): void => {
+    if (anyPending) return;
     switch (action.kind) {
       case "sign-in":
       case "continue-sign-in":
@@ -263,7 +269,7 @@ export function useProfileCopyDraftController(
         onConfirmIdentity("accept-unavailable");
         return;
       case "open-profile":
-        if (targetProfileId === null || anyPending || syncPending) return;
+        if (targetProfileId === null || syncPending) return;
         navigation.openDestinationProfile({
           destinationHostId: attempt.destinationHostId,
           provider: attempt.providerId,
@@ -294,6 +300,7 @@ export function useProfileCopyDraftController(
     }
   };
   const anyPending =
+    sourcePending ||
     verify.isPending ||
     confirmVerification.isPending ||
     confirmIdentity.isPending ||
@@ -329,7 +336,9 @@ export function useProfileCopyDraftController(
     actionPending,
     actionDisabled,
     setPreference,
-    requestCancel: setPendingConfirm,
+    requestCancel: (confirm) => {
+      if (!anyPending) setPendingConfirm(confirm);
+    },
     dismissCancel: () => setPendingConfirm(null),
     confirmCancel,
   };

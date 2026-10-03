@@ -192,7 +192,7 @@ export function useProfileCopyRetryMutation(
             queryKey: profileCopyStatusKey(sourceHostId, operationId),
           }),
         ]);
-        if (response.result === "current")
+        if (response.result !== "unavailable")
           writeProfileCopyRetryOutcome(
             queryClient,
             request.attempt,

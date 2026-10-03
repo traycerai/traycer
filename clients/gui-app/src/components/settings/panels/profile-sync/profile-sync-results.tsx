@@ -312,13 +312,14 @@ function useProfileSyncItemRetry(
       },
       {
         onSuccess: (response) => {
-          if (response.result === "current") {
+          if (response.result !== "unavailable") {
             onRetried({
               batchId,
               requested: outcome.attempt,
               outcome: response.outcome,
             });
-          } else {
+          }
+          if (response.result !== "current") {
             setNotice({
               kind: response.result,
               attemptId: outcome.attempt.attemptId,
