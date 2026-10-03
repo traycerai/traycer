@@ -25,6 +25,7 @@ export function ProfileSyncProviderPicker(props: {
   readonly providers: readonly ProviderCliState[];
   readonly selected: readonly ProfileCopyWireProvider[];
   readonly onChange: (selected: ProfileCopyWireProvider[]) => void;
+  readonly disabled: boolean;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const eligible = props.providers.flatMap((p) => {
@@ -51,6 +52,7 @@ export function ProfileSyncProviderPicker(props: {
             variant="outline"
             className="w-full justify-between"
             aria-label="Choose providers"
+            disabled={props.disabled}
           >
             <span className="min-w-0 truncate">
               {props.selected.length
@@ -66,11 +68,15 @@ export function ProfileSyncProviderPicker(props: {
           className="w-[var(--radix-popover-trigger-width)]"
         >
           <Command variant="embedded" selection="flat">
-            <CommandInput placeholder="Find a provider…" />
+            <CommandInput
+              placeholder="Find a provider…"
+              disabled={props.disabled}
+            />
             <div className="flex justify-end px-2">
               <Button
                 size="xs"
                 variant="ghost"
+                disabled={props.disabled}
                 onClick={() =>
                   props.onChange(
                     allEligibleSelected
@@ -93,6 +99,7 @@ export function ProfileSyncProviderPicker(props: {
                 <CommandItem
                   key={p.id}
                   value={p.id}
+                  disabled={props.disabled}
                   onSelect={() =>
                     props.onChange(
                       props.selected.includes(p.id)

@@ -1,5 +1,6 @@
 import {
   useQueryClient,
+  useIsMutating,
   type UseQueryResult,
   type UseMutationResult,
 } from "@tanstack/react-query";
@@ -18,6 +19,24 @@ import type {
   ProfileSyncPreview,
   ProfileSyncList,
 } from "@traycer/protocol/host/profile-sync-schemas";
+
+/** Keep the source's mutation observers mounted until its RPCs settle. */
+export function useProfileSyncPending(hostId: string | null): boolean {
+  return (
+    useIsMutating({
+      predicate: (mutation) => {
+        const key = mutation.options.mutationKey;
+        const method = key?.[0];
+        return (
+          hostId !== null &&
+          key?.[1] === hostId &&
+          typeof method === "string" &&
+          method.startsWith("providers.profileCopy.sync.")
+        );
+      },
+    }) > 0
+  );
+}
 
 export function useProfileSyncList(
   hostId: string,

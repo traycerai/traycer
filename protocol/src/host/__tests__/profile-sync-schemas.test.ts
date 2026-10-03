@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   PROFILE_SYNC_MAX_BATCHES,
   PROFILE_SYNC_MAX_RULES,
+  profileSyncApplyResultSchema,
   profileSyncBatchSchema,
   profileSyncItemSchema,
   profileSyncListSchema,
@@ -729,4 +730,37 @@ describe("profile sync list identity and conflict contract", () => {
       }).success,
     ).toBe(true);
   });
+});
+
+describe("profile sync apply result", () => {
+  const SETTINGS = { name: "Work", color: "#ef4444", enabled: true };
+
+  it("rejects a conflict that names no current destination, for that reason alone", () => {
+    const result = profileSyncApplyResultSchema.safeParse({
+      state: "conflict",
+      current: null,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.code)).toEqual(["custom"]);
+  });
+
+  it("accepts a conflict carrying the current destination settings", () => {
+    expect(
+      profileSyncApplyResultSchema.safeParse({
+        state: "conflict",
+        current: SETTINGS,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(["synced", "unlinked", "removed", "pending"] as const)(
+    "still allows a null current for %s",
+    (state) => {
+      expect(
+        profileSyncApplyResultSchema.safeParse({ state, current: null })
+          .success,
+      ).toBe(true);
+    },
+  );
 });

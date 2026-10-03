@@ -10,6 +10,7 @@ import { ProfileCopyIncomingDraftView } from "./profile-copy-incoming-draft-view
 import { ProfileCopyNewCopy } from "./profile-copy-new-copy";
 import { ProfileCopyOperationView } from "./profile-copy-operation-view";
 import { useProfileCopyHosts } from "./profile-copy-shared";
+import { useProfileSyncPending } from "@/hooks/providers/use-profile-sync";
 
 /**
  * The open dialog's body. It - not the always-mounted host - reads the
@@ -66,21 +67,33 @@ function ProfileCopyFlowBody(props: {
  * navigation "Open profile" performs. Every host this renders against comes
  * from the flow store's captured ids; nothing here reads a scoped, active or
  * effective host. Closing stops this window's reads and nothing on any host.
+ * Sync RPCs keep their observers mounted until they settle, so leaving cannot
+ * discard the submitted draft or its eventual inline answer.
  */
 export function ProfileCopyFlowHost(): ReactNode {
   const view = useProfileCopyFlowStore((state) => state.view);
   const session = useProfileCopyFlowStore((state) => state.session);
   const close = useProfileCopyFlowStore((state) => state.close);
+  const pending = useProfileSyncPending(
+    view?.kind === "sync" ? view.sourceHostId : null,
+  );
   return (
     <Dialog
       open={view !== null}
       onOpenChange={(open) => {
-        if (!open) close();
+        if (!open && !pending) close();
       }}
     >
       {view !== null ? (
         <DialogContent
           layout="banded"
+          showCloseButton={!pending}
+          onEscapeKeyDown={(event) => {
+            if (pending) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (pending) event.preventDefault();
+          }}
           className={cn(
             "flex max-h-[min(85dvh,44rem)] flex-col overflow-hidden",
             view.kind === "sync"

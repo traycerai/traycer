@@ -53,6 +53,7 @@ describe("ProfileSyncProviderPicker", () => {
         providers={claudeOnly()}
         selected={saved}
         onChange={onChange}
+        disabled={false}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Choose providers" }));
@@ -70,6 +71,7 @@ describe("ProfileSyncProviderPicker", () => {
         providers={claudeAndCodex()}
         selected={["claude", "codex"]}
         onChange={onChange}
+        disabled={false}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Choose providers" }));
@@ -79,9 +81,56 @@ describe("ProfileSyncProviderPicker", () => {
         providers={claudeAndCodex()}
         selected={["codex"]}
         onChange={onChange}
+        disabled={false}
       />,
     );
     expect(screen.getByRole("button", { name: "Select all" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Clear" })).toBeNull();
+  });
+
+  it("holds the trigger and ignores selection while disabled", () => {
+    const onChange = vi.fn<(selected: ProfileCopyWireProvider[]) => void>();
+    render(
+      <ProfileSyncProviderPicker
+        providers={claudeAndCodex()}
+        selected={["claude"]}
+        onChange={onChange}
+        disabled
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Choose providers" });
+    expect(trigger.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("button", { name: "Select all" })).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("goes inert when disabled while the popover is already open", async () => {
+    const onChange = vi.fn<(selected: ProfileCopyWireProvider[]) => void>();
+    const { rerender } = render(
+      <ProfileSyncProviderPicker
+        providers={claudeAndCodex()}
+        selected={["claude"]}
+        onChange={onChange}
+        disabled={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose providers" }));
+    expect(
+      await screen.findByRole("button", { name: "Select all" }),
+    ).toBeTruthy();
+    rerender(
+      <ProfileSyncProviderPicker
+        providers={claudeAndCodex()}
+        selected={["claude"]}
+        onChange={onChange}
+        disabled
+      />,
+    );
+    const selectAll = screen.getByRole("button", { name: "Select all" });
+    expect(selectAll.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(selectAll);
+    fireEvent.click(screen.getByRole("option", { name: /Codex/ }));
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

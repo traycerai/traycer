@@ -322,10 +322,17 @@ export const profileSyncApplySchema = lazySchema(() =>
 );
 export type ProfileSyncApply = z.infer<typeof profileSyncApplySchema>;
 export const profileSyncApplyResultSchema = lazySchema(() =>
-  z.strictObject({
-    state: z.enum(["synced", "conflict", "unlinked", "removed", "pending"]),
-    current: profileSyncSettingsSchema.nullable(),
-  }),
+  z
+    .strictObject({
+      state: z.enum(["synced", "conflict", "unlinked", "removed", "pending"]),
+      current: profileSyncSettingsSchema.nullable(),
+    })
+    .refine(
+      (result) => result.state !== "conflict" || result.current !== null,
+      {
+        message: "Sync conflicts must include current destination settings",
+      },
+    ),
 );
 export type ProfileSyncApplyResult = z.infer<
   typeof profileSyncApplyResultSchema

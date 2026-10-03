@@ -32,6 +32,7 @@ import {
   useProfileSyncList,
   useProfileSyncPreview,
   useProfileSyncStart,
+  useProfileSyncPending,
 } from "@/hooks/providers/use-profile-sync";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
@@ -90,6 +91,7 @@ export function ProfileSyncModal(props: {
     startRefusal,
     run,
   } = useProfileSyncModalState(props);
+  const pending = useProfileSyncPending(sourceHostId);
   return (
     <>
       <DialogHeader>
@@ -103,13 +105,16 @@ export function ProfileSyncModal(props: {
           <Tabs
             value={tab}
             onValueChange={(value) => {
+              if (pending) return;
               setTab(value);
               setBatchId(null);
             }}
           >
             <TabsList>
-              <TabsTrigger value="now">Sync now</TabsTrigger>
-              <TabsTrigger value="automatic">
+              <TabsTrigger value="now" disabled={pending}>
+                Sync now
+              </TabsTrigger>
+              <TabsTrigger value="automatic" disabled={pending}>
                 {automaticTabLabel(list.data)}
               </TabsTrigger>
             </TabsList>
@@ -127,6 +132,7 @@ export function ProfileSyncModal(props: {
                 size="xs"
                 variant="ghost"
                 className="self-start"
+                disabled={pending}
                 onClick={() => setBatchId(null)}
               >
                 ← Back
@@ -172,6 +178,7 @@ export function ProfileSyncModal(props: {
         </div>
       </div>
       <ProfileSyncFooter
+        pending={pending}
         tab={tab}
         batch={batch}
         selected={selected}
@@ -193,6 +200,7 @@ function automaticTabLabel(list: ProfileSyncList | undefined): string {
 }
 
 function ProfileSyncFooter({
+  pending,
   tab,
   batch,
   selected,
@@ -203,7 +211,7 @@ function ProfileSyncFooter({
   canStart,
   run,
   start,
-}: Pick<
+}: { readonly pending: boolean } & Pick<
   SyncModalModel,
   | "tab"
   | "batch"
@@ -228,7 +236,7 @@ function ProfileSyncFooter({
               selectionTooLarge,
             )}
           </p>
-          <Button variant="outline" onClick={close}>
+          <Button variant="outline" disabled={pending} onClick={close}>
             Cancel
           </Button>
           <Button disabled={!canStart} onClick={run}>
@@ -236,7 +244,9 @@ function ProfileSyncFooter({
           </Button>
         </>
       ) : (
-        <Button onClick={close}>Done</Button>
+        <Button disabled={pending} onClick={close}>
+          Done
+        </Button>
       )}
     </DialogFooter>
   );
@@ -408,6 +418,7 @@ function ProfileSyncSelectionContent({
         providers={providers}
         selected={selected}
         onChange={setSelected}
+        disabled={false}
       />
       <ProfileSyncDestinations
         sourceHostId={sourceHostId}

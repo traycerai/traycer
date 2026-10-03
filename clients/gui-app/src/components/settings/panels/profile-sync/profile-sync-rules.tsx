@@ -179,6 +179,7 @@ export function ProfileSyncRules(props: {
                   <Button
                     size="xs"
                     variant="outline"
+                    disabled={remove.isPending}
                     onClick={() => setStop(null)}
                   >
                     Keep rule
@@ -315,6 +316,15 @@ function ProfileSyncRuleEditor(props: {
   const scope: ProfileSyncScope = all
     ? { kind: "all" }
     : { kind: "selected", providers: selected };
+  const request: ProfileSyncSaveRule = {
+    sourceHostId: props.hostId,
+    ruleId,
+    destinationHostId: destination,
+    scope,
+    paused: rulePaused(props.rule),
+    expectedRevision,
+  };
+  const saveError = ruleSaveError(save.variables, request, save.error);
   const canSave = canSaveRule({
     rule: props.rule,
     changed,
@@ -326,7 +336,12 @@ function ProfileSyncRuleEditor(props: {
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <Button size="xs" variant="ghost" onClick={props.close}>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={save.isPending}
+          onClick={props.close}
+        >
           ← Automatic sync
         </Button>
         <h3 className="mt-2 text-ui-sm font-medium">
@@ -349,7 +364,7 @@ function ProfileSyncRuleEditor(props: {
         <Select
           value={destination}
           onValueChange={setDestination}
-          disabled={props.rule !== null}
+          disabled={props.rule !== null || save.isPending}
         >
           <SelectTrigger className="w-full" aria-label="Destination device">
             <SelectValue placeholder="Choose a device" />
@@ -370,6 +385,7 @@ function ProfileSyncRuleEditor(props: {
         <Checkbox
           id={id}
           checked={all}
+          disabled={save.isPending}
           onCheckedChange={(v) => setAll(v === true)}
         />
         <span>
@@ -387,39 +403,32 @@ function ProfileSyncRuleEditor(props: {
           providers={props.providers}
           selected={selected}
           onChange={setSelected}
+          disabled={save.isPending}
         />
       ) : null}
       <p className="text-ui-xs text-muted-foreground">
         Offline devices wait until both devices are connected. Profiles removed
         from the source or this rule stay on the destination.
       </p>
-      {save.error ? (
+      {saveError ? (
         <p role="alert" className="text-ui-xs text-destructive">
           {profileCopyRequestErrorText(
-            save.error,
+            saveError,
             props.hosts.nameFor(props.hostId),
           )}
         </p>
       ) : null}
       <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={props.close}>
+        <Button
+          variant="outline"
+          disabled={save.isPending}
+          onClick={props.close}
+        >
           Cancel
         </Button>
         <Button
           disabled={!canSave}
-          onClick={() =>
-            save.mutate(
-              {
-                sourceHostId: props.hostId,
-                ruleId,
-                destinationHostId: destination,
-                scope,
-                paused: rulePaused(props.rule),
-                expectedRevision,
-              },
-              { onSuccess: props.close },
-            )
-          }
+          onClick={() => save.mutate(request, { onSuccess: props.close })}
         >
           {save.isPending ? <MutedAgentSpinner /> : null}
           {props.rule === null ? "Enable automatic sync" : "Save changes"}
@@ -437,6 +446,30 @@ function ProfileSyncRuleCapacity(props: {
       {RULE_CAPACITY_NOTICE}
     </p>
   ) : null;
+}
+
+function ruleSaveError(
+  request: ProfileSyncSaveRule | undefined,
+  draft: ProfileSyncSaveRule,
+  error: HostRpcError | null,
+): HostRpcError | null {
+  return request !== undefined && ruleSaveKey(request) === ruleSaveKey(draft)
+    ? error
+    : null;
+}
+
+function ruleSaveKey(request: ProfileSyncSaveRule): string {
+  return JSON.stringify([
+    request.sourceHostId,
+    request.ruleId,
+    request.destinationHostId,
+    request.scope.kind,
+    request.scope.kind === "selected"
+      ? [...request.scope.providers].sort()
+      : [],
+    request.paused,
+    request.expectedRevision,
+  ]);
 }
 
 function canViewRuleRun(
@@ -488,9 +521,9 @@ function ruleProviders(
   chosen: ProfileCopyWireProvider[],
   providers: readonly ProviderCliState[],
 ): ProfileCopyWireProvider[] {
-  // Preserve saved scopes, including providers that may return to the source.
-  // A new explicit scope defaults to providers currently in its catalog.
-  if (rule !== null) return chosen;
+  // Preserve saved explicit scopes, including providers that may return.
+  // New explicit scopes, including conversions from all, use the catalog.
+  if (rule?.scope.kind === "selected") return chosen;
   return chosen.filter((provider) =>
     providers.some((p) => profileCopyWireProvider(p.providerId) === provider),
   );

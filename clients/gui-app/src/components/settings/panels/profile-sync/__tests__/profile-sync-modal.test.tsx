@@ -24,6 +24,7 @@ import type {
   ProfileSyncBatch,
   ProfileSyncItem,
   ProfileSyncRule,
+  ProfileSyncSaveRule,
   ProfileSyncSelection,
 } from "@traycer/protocol/host/profile-sync-schemas";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -136,6 +137,11 @@ let retryOutcome: ProfileCopyOutcome | null = null;
 let retryThrows = false;
 let resolveThrows = false;
 let saveRuleThrows = false;
+// While set, a saveRule answer waits for it: the save stays in flight.
+let saveRuleGate: Promise<void> | null = null;
+// Likewise for the start and stop answers.
+let startGate: Promise<void> | null = null;
+let stopRuleGate: Promise<void> | null = null;
 let stopRuleThrows = false;
 
 interface MountOptions {
@@ -221,7 +227,9 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         revision: previewRevision,
         items: [...options.previewItems(params)],
       }),
-      "providers.profileCopy.sync.start": (params): ProfileSyncBatch => {
+      "providers.profileCopy.sync.start": (
+        params,
+      ): ProfileSyncBatch | Promise<ProfileSyncBatch> => {
         if (startFailures > 0) {
           startFailures -= 1;
           // An answer lost on the wire: the host may or may not have started.
@@ -242,6 +250,7 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         };
         const answered =
           startBatchMutator === null ? started : startBatchMutator(started);
+        if (startGate !== null) return startGate.then(() => answered);
         lastStarted = answered;
         return answered;
       },
@@ -260,7 +269,29 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
           outcome: retryOutcome ?? profileCopyOutcome({}),
         };
       },
-      "providers.profileCopy.sync.saveRule": (params): ProfileSyncRule => {
+      "providers.profileCopy.sync.saveRule": (
+        params,
+      ): ProfileSyncRule | Promise<ProfileSyncRule> => {
+        if (saveRuleGate !== null) {
+          return saveRuleGate.then((): ProfileSyncRule => {
+            if (saveRuleThrows) {
+              throw new HostRpcError({
+                code: "RPC_ERROR",
+                message: "save unreachable",
+                requestId: "req-sync",
+                method: "providers.profileCopy.sync.saveRule",
+                fatalDetails: null,
+              });
+            }
+            return {
+              ...SAVED_RULE,
+              ruleId: params.ruleId,
+              scope: params.scope,
+              paused: params.paused,
+              revision: params.expectedRevision + 1,
+            };
+          });
+        }
         if (saveRuleThrows) {
           throw new HostRpcError({
             code: "RPC_ERROR",
@@ -279,6 +310,8 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         };
       },
       "providers.profileCopy.sync.stopRule": () => {
+        if (stopRuleGate !== null)
+          return stopRuleGate.then(() => ({ batches: [], rules: [] }));
         if (stopRuleThrows) {
           throw new HostRpcError({
             code: "RPC_ERROR",
@@ -587,6 +620,9 @@ describe("ProfileSyncModal review regressions", () => {
     retryThrows = false;
     resolveThrows = false;
     saveRuleThrows = false;
+    saveRuleGate = null;
+    startGate = null;
+    stopRuleGate = null;
     stopRuleThrows = false;
     resetStores();
     harness.spine = null;
@@ -2386,6 +2422,302 @@ describe("ProfileSyncModal review regressions", () => {
         expect(first.selection.scope.providers).toEqual(
           [...first.selection.scope.providers].sort(),
         );
+    });
+  });
+
+  describe("round 17: rule editor in flight, error scope and catalog scope", () => {
+    const REACH_ERROR = /Couldn't reach Studio Mac right now/;
+
+    function saveCalls(messenger: MockHostMessenger<HostRpcRegistry>) {
+      return messenger.calls.filter(
+        (call) => call.method === "providers.profileCopy.sync.saveRule",
+      );
+    }
+
+    async function openAutomaticTab(): Promise<void> {
+      openSync(null);
+      fireEvent.mouseDown(
+        await screen.findByRole("tab", { name: /Automatic sync/ }),
+        { button: 0 },
+      );
+      await screen.findByRole("button", { name: "Add device" });
+    }
+
+    async function chooseDestination(name: RegExp): Promise<void> {
+      fireEvent.keyDown(
+        await screen.findByRole("combobox", { name: "Destination device" }),
+        { key: "ArrowDown" },
+      );
+      fireEvent.click(await screen.findByRole("option", { name }));
+    }
+
+    async function openNewRuleEditor(): Promise<void> {
+      await openAutomaticTab();
+      fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+      await chooseDestination(/Linux box/);
+    }
+
+    // Every way out of the dialog a user can try: a tab, Done, Escape.
+    function attemptExits(): void {
+      fireEvent.mouseDown(screen.getByRole("tab", { name: /Sync now/ }), {
+        button: 0,
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      fireEvent.keyDown(document.activeElement ?? document.body, {
+        key: "Escape",
+      });
+    }
+
+    function expectEditorHeld(): void {
+      expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Enable automatic sync" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("combobox", { name: "Destination device" }),
+      ).toBeTruthy();
+    }
+
+    it("keeps the draft through every exit attempt, and shows the inline error when the held save is rejected", async () => {
+      let release: () => void = () => undefined;
+      saveRuleGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const messenger = mount([]);
+      try {
+        await openNewRuleEditor();
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Enable automatic sync" }),
+        );
+        await waitFor(() => expect(saveCalls(messenger)).toHaveLength(1));
+        attemptExits();
+        expectEditorHeld();
+        // While the request is pending there is no way to dismiss the dialog.
+        expect(screen.queryByRole("button", { name: /^close$/i })).toBeNull();
+        saveRuleThrows = true;
+      } finally {
+        release();
+      }
+      expect(await screen.findByText(REACH_ERROR)).toBeTruthy();
+      expectEditorHeld();
+      // Settled: the dialog may be dismissed again.
+      expect(screen.getByRole("button", { name: /^close$/i })).toBeTruthy();
+    });
+
+    it("holds every editor control while a save is in flight, and frees the editor once it lands", async () => {
+      let release: () => void = () => undefined;
+      saveRuleGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const messenger = mount([]);
+      try {
+        await openNewRuleEditor();
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Enable automatic sync" }),
+        );
+        await waitFor(() => expect(saveCalls(messenger)).toHaveLength(1));
+        const disabled = (element: HTMLElement): boolean =>
+          element.hasAttribute("disabled") ||
+          element.getAttribute("aria-disabled") === "true" ||
+          element.hasAttribute("data-disabled");
+        expect(disabled(screen.getByRole("button", { name: "Cancel" }))).toBe(
+          true,
+        );
+        expect(
+          disabled(screen.getByRole("button", { name: "← Automatic sync" })),
+        ).toBe(true);
+        expect(
+          disabled(
+            screen.getByRole("combobox", { name: "Destination device" }),
+          ),
+        ).toBe(true);
+        expect(
+          disabled(
+            screen.getByRole("checkbox", { name: /All supported providers/ }),
+          ),
+        ).toBe(true);
+        expect(
+          disabled(screen.getByRole("button", { name: "Choose providers" })),
+        ).toBe(true);
+      } finally {
+        release();
+      }
+      // The save lands and the editor closes.
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Enable automatic sync" }),
+        ).toBeNull(),
+      );
+    });
+
+    it("scopes a failed save's error to the exact submitted draft", async () => {
+      saveRuleThrows = true;
+      mount([]);
+      await openNewRuleEditor();
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Enable automatic sync" }),
+      );
+      expect(await screen.findByText(REACH_ERROR)).toBeTruthy();
+      // Another destination is another draft: the old error is not its error.
+      await chooseDestination(/Old Mac/);
+      await waitFor(() => expect(screen.queryByText(REACH_ERROR)).toBeNull());
+      // Back on the submitted draft it speaks for it again.
+      await chooseDestination(/Linux box/);
+      expect(await screen.findByText(REACH_ERROR)).toBeTruthy();
+      // Another scope is another draft too.
+      const all = screen.getByRole("checkbox", {
+        name: /All supported providers/,
+      });
+      fireEvent.click(all);
+      await waitFor(() => expect(screen.queryByText(REACH_ERROR)).toBeNull());
+      fireEvent.click(all);
+      expect(await screen.findByText(REACH_ERROR)).toBeTruthy();
+    });
+
+    describe("converting a rule's scope to a chosen list", () => {
+      const claudeOnly = (): readonly ProviderCliState[] => [
+        claudeProviderState([managedProfile(SOURCE_PROFILE_ID, "Work")]),
+      ];
+
+      async function saveEditedRule(
+        rule: ProfileSyncRule,
+        uncheckAll: boolean,
+      ): Promise<ProfileSyncSaveRule> {
+        const messenger = mountWith({
+          rules: [rule],
+          providers: claudeOnly(),
+          previewItems: noItems,
+          startItems: noItems,
+        });
+        await openAutomaticTab();
+        fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+        if (uncheckAll)
+          fireEvent.click(
+            await screen.findByRole("checkbox", {
+              name: /All supported providers/,
+            }),
+          );
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Save changes" }),
+        );
+        await waitFor(() => expect(saveCalls(messenger)).toHaveLength(1));
+        return profileSyncSaveRuleSchema.parse(saveCalls(messenger)[0].params);
+      }
+
+      it("saves only the catalog's providers when an all-providers rule becomes a chosen list", async () => {
+        const sent = await saveEditedRule(
+          { ...SAVED_RULE, scope: { kind: "all" } },
+          true,
+        );
+        expect(sent.scope).toEqual({ kind: "selected", providers: ["claude"] });
+      });
+
+      it("keeps a saved chosen list's providers even when the catalog lacks them", async () => {
+        const sent = await saveEditedRule(
+          {
+            ...SAVED_RULE,
+            scope: { kind: "selected", providers: ["claude", "codex"] },
+          },
+          false,
+        );
+        expect(sent.scope).toEqual({
+          kind: "selected",
+          providers: ["claude", "codex"],
+        });
+      });
+    });
+  });
+
+  describe("round 18: Cancel and Keep rule cannot close over an active request", () => {
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    it("disables the footer Cancel while the start is in flight, so it cannot dismiss a running request", async () => {
+      const held = gate();
+      startGate = held.promise;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: noItems,
+      });
+      try {
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(1));
+        const cancel = screen.getByRole("button", { name: "Cancel" });
+        expect(cancel.hasAttribute("disabled")).toBe(true);
+        fireEvent.click(cancel);
+        expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+        expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+        // The tabs are held too: Automatic sync cannot be opened mid-start.
+        fireEvent.mouseDown(
+          screen.getByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        expect(
+          screen
+            .getByRole("tab", { name: /Sync now/ })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+        fireEvent.keyDown(document.activeElement ?? document.body, {
+          key: "Escape",
+        });
+        expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+      } finally {
+        held.release();
+      }
+    });
+
+    it("disables Keep rule while the stop is in flight, so the confirmation cannot be dismissed as if nothing happens", async () => {
+      const held = gate();
+      stopRuleGate = held.promise;
+      mount([SAVED_RULE]);
+      try {
+        openSync(null);
+        fireEvent.mouseDown(
+          await screen.findByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        await screen.findByRole("heading", { name: "Linux box" });
+        fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Stop automatic sync" }),
+        );
+        const keep = await screen.findByRole("button", { name: "Keep rule" });
+        await waitFor(() => expect(keep.hasAttribute("disabled")).toBe(true));
+        fireEvent.click(keep);
+        // The confirmation is still up: the stop has not been abandoned.
+        expect(screen.getByText(/Stop future updates\?/)).toBeTruthy();
+        // No other exit while the stop is pending: not the tab, Done or Escape.
+        fireEvent.mouseDown(screen.getByRole("tab", { name: /Sync now/ }), {
+          button: 0,
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        fireEvent.keyDown(document.activeElement ?? document.body, {
+          key: "Escape",
+        });
+        expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+        expect(
+          screen
+            .getByRole("tab", { name: /Automatic sync/ })
+            .getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(screen.getByText(/Stop future updates\?/)).toBeTruthy();
+      } finally {
+        held.release();
+      }
     });
   });
 });
