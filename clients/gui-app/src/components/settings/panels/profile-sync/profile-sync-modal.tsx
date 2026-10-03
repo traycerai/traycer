@@ -10,7 +10,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileSyncBatch } from "@traycer/protocol/host/profile-sync-schemas";
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import type {
   ProfileSyncSelection,
@@ -653,7 +653,12 @@ function useProfileSyncModalState(props: {
     null,
   );
   const [emptyStart, setEmptyStart] = useState<ScopedStartNotice | null>(null);
-  const requests = useRef(new Map<string, string>());
+  const getSyncStartBatchId = useProfileCopyFlowStore(
+    (s) => s.getSyncStartBatchId,
+  );
+  const forgetSyncStartBatchId = useProfileCopyFlowStore(
+    (s) => s.forgetSyncStartBatchId,
+  );
   const close = useProfileCopyFlowStore((s) => s.close);
   const catalog = useProvidersListForClient(
     useHostClientForHostId(sourceHostId),
@@ -719,12 +724,7 @@ function useProfileSyncModalState(props: {
     if (!canStart || selection === null) return;
     setEmptyStart(null);
     setRefusedStart(null);
-    const requestKey = JSON.stringify([selection, currentPreview.revision]);
-    let id = requests.current.get(requestKey);
-    if (id === undefined) {
-      id = crypto.randomUUID();
-      requests.current.set(requestKey, id);
-    }
+    const id = getSyncStartBatchId(selection, currentPreview.revision);
     start.mutate(
       {
         selection,
@@ -743,7 +743,11 @@ function useProfileSyncModalState(props: {
             return;
           }
           if (result.items.length === 0) {
-            requests.current.delete(requestKey);
+            forgetSyncStartBatchId(
+              request.selection,
+              request.revision,
+              request.batchId,
+            );
             setEmptyStart({ selectionKey, revision: request.revision });
             void preview.refetch();
             return;

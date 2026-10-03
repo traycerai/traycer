@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { ProfileSyncSelection } from "@traycer/protocol/host/profile-sync-schemas";
 import type {
   ProfileCopyAttempt,
   ProfileCopyWireProvider,
@@ -64,6 +65,18 @@ interface ProfileCopyFlowState {
   /** Bumped on every open so re-opening the same view remounts it fresh. */
   readonly session: number;
   readonly activeLogin: ProfileCopyActiveLogin | null;
+  /** Start IDs survive closing/reopening an uncertain run in this account. */
+  readonly syncStartBatchIds: ReadonlyMap<string, string>;
+  readonly getSyncStartBatchId: (
+    selection: ProfileSyncSelection,
+    revision: string,
+  ) => string;
+  /** Only a confirmed empty start releases its ID for a fresh attempt. */
+  readonly forgetSyncStartBatchId: (
+    selection: ProfileSyncSelection,
+    revision: string,
+    batchId: string,
+  ) => void;
   /**
    * attemptId → the last direct answer that refused Sign in or Verify, keyed
    * by the verb and the draft revision it answered at (Q4 ruling). The host
@@ -116,6 +129,24 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
     view: null,
     session: 0,
     activeLogin: null,
+    syncStartBatchIds: new Map(),
+    getSyncStartBatchId: (selection, revision) => {
+      const key = JSON.stringify([selection, revision]);
+      const previous = get().syncStartBatchIds;
+      const existing = previous.get(key);
+      if (existing !== undefined) return existing;
+      const batchId = crypto.randomUUID();
+      set({ syncStartBatchIds: new Map(previous).set(key, batchId) });
+      return batchId;
+    },
+    forgetSyncStartBatchId: (selection, revision, batchId) => {
+      const key = JSON.stringify([selection, revision]);
+      const previous = get().syncStartBatchIds;
+      if (previous.get(key) !== batchId) return;
+      const next = new Map(previous);
+      next.delete(key);
+      set({ syncStartBatchIds: next });
+    },
     directBlocks: {},
     open: (view) => set({ view, session: get().session + 1 }),
     close: () => set({ view: null }),
@@ -147,6 +178,12 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
         ),
       });
     },
-    reset: () => set({ view: null, activeLogin: null, directBlocks: {} }),
+    reset: () =>
+      set({
+        view: null,
+        activeLogin: null,
+        directBlocks: {},
+        syncStartBatchIds: new Map(),
+      }),
   }),
 );

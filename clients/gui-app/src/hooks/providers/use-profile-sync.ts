@@ -11,7 +11,11 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
+import {
+  useHostQuery,
+  useHostQueryWithResponseMap,
+  useHostMutation,
+} from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { profileSyncMutationKeys } from "@/lib/query-keys/profile-sync-keys";
 import { profileCopyDraftMutationAttempt } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
@@ -49,12 +53,27 @@ export function useProfileSyncPending(hostId: string | null): boolean {
 export function useProfileSyncList(
   hostId: string,
 ): UseQueryResult<ProfileSyncList, HostRpcError> {
-  return useHostQuery<HostRpcRegistry, "providers.profileCopy.sync.list">({
+  return useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "providers.profileCopy.sync.list",
+    ProfileSyncList
+  >({
     client: useHostClientForHostId(hostId),
     method: "providers.profileCopy.sync.list",
     params: { sourceHostId: hostId },
     cacheKeyIdentity: undefined,
     options: { poll: true, retry: false },
+    mapResponse: ({ response }) => {
+      // Validate against this request before caching: a rejected poll must
+      // retain the last valid source-local history and its mounted editors.
+      if (
+        response.batches.some((batch) => batch.sourceHostId !== hostId) ||
+        response.rules.some((rule) => rule.sourceHostId !== hostId)
+      ) {
+        throw new Error("The device returned sync history for another source.");
+      }
+      return response;
+    },
   });
 }
 export function useProfileSyncPreview(

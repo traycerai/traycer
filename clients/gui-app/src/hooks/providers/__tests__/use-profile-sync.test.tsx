@@ -12,8 +12,10 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { profileSyncListSchema } from "@traycer/protocol/host/profile-sync-schemas";
 import type {
   ProfileSyncBatch,
+  ProfileSyncList,
   ProfileSyncRule,
 } from "@traycer/protocol/host/profile-sync-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -74,6 +76,9 @@ const RULE: ProfileSyncRule = {
   status: "waiting",
 };
 
+// What sync.list answers; a test moves it to model a foreign or later list.
+let listAnswer: ProfileSyncList = { batches: [], rules: [] };
+
 function setup(): {
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
@@ -83,6 +88,7 @@ function setup(): {
     registry: hostRpcRegistry,
     requestId: () => "req-sync-hook",
     handlers: {
+      "providers.profileCopy.sync.list": () => listAnswer,
       "providers.profileCopy.sync.start": () => BATCH,
       "providers.profileCopy.sync.saveRule": () => RULE,
       "providers.profileCopy.sync.stopRule": () => ({ batches: [], rules: [] }),
@@ -111,6 +117,10 @@ function setup(): {
       </QueryClientProvider>
     ),
   };
+}
+
+function uuid(): string {
+  return "77777777-7777-4777-8777-777777777777";
 }
 
 function callsOf(
@@ -286,4 +296,84 @@ describe("a successful transfer retry refreshes the sync history", () => {
     await waitFor(() => expect(listCalls(SOURCE)).toBe(2));
     expect(listCalls(OTHER_SOURCE)).toBe(1);
   });
+});
+
+describe("useProfileSyncList source validation", () => {
+  const FOREIGN = "other-host";
+  const local = (): ProfileSyncList => ({ batches: [BATCH], rules: [RULE] });
+
+  beforeEach(() => {
+    harness.spine = null;
+    listAnswer = { batches: [], rules: [] };
+  });
+  afterEach(() => {
+    cleanup();
+    harness.spine = null;
+  });
+
+  it.each([
+    ["a local list", local()],
+    ["an empty list", { batches: [], rules: [] }],
+  ])("accepts %s", async (_label, answer) => {
+    listAnswer = answer;
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useProfileSyncList(SOURCE), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual(answer);
+  });
+
+  it.each([
+    [
+      "a batch from another source",
+      { batches: [{ ...BATCH, sourceHostId: FOREIGN }], rules: [] },
+    ],
+    [
+      "a rule from another source",
+      { batches: [], rules: [{ ...RULE, sourceHostId: FOREIGN }] },
+    ],
+    [
+      "a mixed list with one foreign rule",
+      {
+        batches: [BATCH],
+        rules: [
+          RULE,
+          {
+            ...RULE,
+            ruleId: uuid(),
+            sourceHostId: FOREIGN,
+            destinationHostId: "dest-host-2",
+          },
+        ],
+      },
+    ],
+  ] as const)(
+    "errors on %s and keeps the last valid cached list instead of poisoning it",
+    async (_label, foreign) => {
+      listAnswer = local();
+      const { wrapper } = setup();
+      const { result } = renderHook(() => useProfileSyncList(SOURCE), {
+        wrapper,
+      });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(result.current.data).toEqual(local());
+      listAnswer = { batches: [...foreign.batches], rules: [...foreign.rules] };
+      // The foreign list is wire-valid: only the source check can refuse it.
+      expect(profileSyncListSchema.safeParse(listAnswer).success).toBe(true);
+      await act(async () => {
+        await result.current.refetch();
+      });
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      // The cached Rules and editor source stay the last valid local list.
+      expect(result.current.data).toEqual(local());
+      // A later valid answer recovers.
+      listAnswer = { batches: [], rules: [] };
+      await act(async () => {
+        await result.current.refetch();
+      });
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+      expect(result.current.data).toEqual({ batches: [], rules: [] });
+    },
+  );
 });

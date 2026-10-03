@@ -15,6 +15,7 @@ import type {
   ProfileCopyOutcome,
 } from "@/lib/profile-copy/profile-copy-model";
 import type { ProfileCopyDraftAction } from "@/lib/profile-copy/profile-copy-presentation";
+import { useProfileSyncPending } from "@/hooks/providers/use-profile-sync";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopySettingsNavigation } from "./profile-copy-shared";
 import type { ProfileImportLoginFlow } from "./use-profile-import-login-flow";
@@ -97,6 +98,12 @@ export function useProfileCopyDraftController(
   const attemptId = attempt.attemptId;
   const queryClient = useQueryClient();
   const navigation = useProfileCopySettingsNavigation();
+  const syncSourceHostId = useProfileCopyFlowStore((state) =>
+    state.view?.kind === "sync" ? state.view.sourceHostId : null,
+  );
+  // Opening Settings closes the whole flow, including other result rows.
+  // Only navigation waits for their requests; login cancellation stays live.
+  const syncPending = useProfileSyncPending(syncSourceHostId);
   const recordDirectBlock = useProfileCopyFlowStore(
     (state) => state.recordDirectBlock,
   );
@@ -256,7 +263,7 @@ export function useProfileCopyDraftController(
         onConfirmIdentity("accept-unavailable");
         return;
       case "open-profile":
-        if (targetProfileId === null) return;
+        if (targetProfileId === null || anyPending || syncPending) return;
         navigation.openDestinationProfile({
           destinationHostId: attempt.destinationHostId,
           provider: attempt.providerId,
@@ -302,7 +309,8 @@ export function useProfileCopyDraftController(
   const preferenceDisabled =
     anyPending || login.phase.kind !== "idle" || outcome.state === "signing-in";
   const actionDisabled = (action: ProfileCopyDraftAction): boolean => {
-    if (action.kind === "open-profile") return targetProfileId === null;
+    if (action.kind === "open-profile")
+      return targetProfileId === null || anyPending || syncPending;
     if (isProfileCopySignInAction(action) && otherLoginHostId !== null) {
       return true;
     }

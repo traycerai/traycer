@@ -8,9 +8,12 @@ import {
   SOURCE_PROFILE_ID,
   profileCopyAttempt,
 } from "@/lib/profile-copy/__tests__/profile-copy-test-fixtures";
+import type { ProfileSyncSelection } from "@traycer/protocol/host/profile-sync-schemas";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 
 function resetFlowStore(): void {
+  // reset() also forgets the account-scoped uncertain start ids.
+  useProfileCopyFlowStore.getState().reset();
   useProfileCopyFlowStore.setState({
     view: null,
     session: 0,
@@ -157,5 +160,57 @@ describe("useProfileCopyFlowStore", () => {
     expect(useProfileCopyFlowStore.getState().activeLogin).toBeNull();
     expect(useProfileCopyFlowStore.getState().directBlocks).toEqual({});
     expect(useProfileCopyFlowStore.getState().session).toBe(session);
+  });
+});
+
+describe("useProfileCopyFlowStore uncertain sync start ids", () => {
+  afterEach(resetFlowStore);
+
+  const selection = (sourceHostId: string): ProfileSyncSelection => ({
+    sourceHostId,
+    scope: { kind: "all" },
+    destinationHostIds: [DEST_HOST_ID],
+  });
+  const REVISION = "a".repeat(64);
+  const NEXT_REVISION = "b".repeat(64);
+  const idFor = (source: string, revision: string): string =>
+    useProfileCopyFlowStore
+      .getState()
+      .getSyncStartBatchId(selection(source), revision);
+
+  it("returns the same id for the same selection and revision", () => {
+    const first = idFor(SOURCE_HOST_ID, REVISION);
+    expect(first).toBeTruthy();
+    expect(idFor(SOURCE_HOST_ID, REVISION)).toBe(first);
+  });
+
+  it("gives a new revision or a different source its own id", () => {
+    const base = idFor(SOURCE_HOST_ID, REVISION);
+    expect(idFor(SOURCE_HOST_ID, NEXT_REVISION)).not.toBe(base);
+    expect(idFor(DEST_HOST_TWO_ID, REVISION)).not.toBe(base);
+  });
+
+  it("survives closing the dialog but not an account reset", () => {
+    const base = idFor(SOURCE_HOST_ID, REVISION);
+    useProfileCopyFlowStore.getState().close();
+    expect(idFor(SOURCE_HOST_ID, REVISION)).toBe(base);
+    useProfileCopyFlowStore.getState().reset();
+    expect(idFor(SOURCE_HOST_ID, REVISION)).not.toBe(base);
+  });
+
+  it("forgets an id only when the batch id matches", () => {
+    const base = idFor(SOURCE_HOST_ID, REVISION);
+    useProfileCopyFlowStore
+      .getState()
+      .forgetSyncStartBatchId(
+        selection(SOURCE_HOST_ID),
+        REVISION,
+        "00000000-0000-4000-8000-0000000000aa",
+      );
+    expect(idFor(SOURCE_HOST_ID, REVISION)).toBe(base);
+    useProfileCopyFlowStore
+      .getState()
+      .forgetSyncStartBatchId(selection(SOURCE_HOST_ID), REVISION, base);
+    expect(idFor(SOURCE_HOST_ID, REVISION)).not.toBe(base);
   });
 });

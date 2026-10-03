@@ -113,6 +113,8 @@ const SAVED_RULE: ProfileSyncRule = {
 };
 
 function resetStores(): void {
+  // reset() also forgets the account-scoped uncertain start ids.
+  useProfileCopyFlowStore.getState().reset();
   useProfileCopyFlowStore.setState({
     view: null,
     session: 0,
@@ -363,19 +365,31 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
           revision: params.expectedRevision + 1,
         };
       },
-      "providers.profileCopy.sync.stopRule": () => {
-        if (stopRuleGate !== null)
-          return stopRuleGate.then(() => ({ batches: [], rules: [] }));
-        if (stopRuleThrows) {
-          throw new HostRpcError({
-            code: "RPC_ERROR",
-            message: "stop unreachable",
-            requestId: "req-sync",
-            method: "providers.profileCopy.sync.stopRule",
-            fatalDetails: null,
-          });
-        }
-        return { batches: [], rules: [] };
+      "providers.profileCopy.sync.stopRule": ():
+        | ResponseOfMethod<
+            HostRpcRegistry,
+            "providers.profileCopy.sync.stopRule"
+          >
+        | Promise<
+            ResponseOfMethod<
+              HostRpcRegistry,
+              "providers.profileCopy.sync.stopRule"
+            >
+          > => {
+        // Evaluated when the answer settles, so a held stop can still fail.
+        const answer = () => {
+          if (stopRuleThrows) {
+            throw new HostRpcError({
+              code: "RPC_ERROR",
+              message: "stop unreachable",
+              requestId: "req-sync",
+              method: "providers.profileCopy.sync.stopRule",
+              fatalDetails: null,
+            });
+          }
+          return { batches: [], rules: [] };
+        };
+        return stopRuleGate === null ? answer() : stopRuleGate.then(answer);
       },
       "providers.profileCopy.sync.resolve": (
         params,
@@ -3936,39 +3950,110 @@ describe("ProfileSyncModal review regressions", () => {
       expect(sent.selection.destinationHostIds).toEqual([DEST_HOST_ID]);
     });
 
-    it("confirms a Stop at the revision it was opened at, not the latest polled one", async () => {
-      const messenger = mount([SAVED_RULE]);
-      openSync(null);
-      fireEvent.mouseDown(
-        await screen.findByRole("tab", { name: /Automatic sync/ }),
-        { button: 0 },
-      );
-      await screen.findByRole("heading", { name: "Linux box" });
-      fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
-      const confirm = await screen.findByRole("button", {
-        name: "Stop automatic sync",
+    describe("a Stop confirmation and the rule's revision", () => {
+      const CHANGED_GUIDANCE =
+        "This rule changed. Choose Keep rule, review its current settings, then choose Stop again.";
+      const stopCalls = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+        callsOf(messenger, "providers.profileCopy.sync.stopRule");
+      const moved = (): ProfileSyncRule => ({
+        ...SAVED_RULE,
+        paused: true,
+        status: "paused",
+        revision: 2,
       });
-      // The same rule moves on while the confirmation is up.
-      listRules = [
-        { ...SAVED_RULE, paused: true, status: "paused", revision: 2 },
-      ];
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
+
+      async function openStopConfirmation(): Promise<
+        MockHostMessenger<HostRpcRegistry>
+      > {
+        const messenger = mount([SAVED_RULE]);
+        openSync(null);
+        fireEvent.mouseDown(
+          await screen.findByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        await screen.findByRole("heading", { name: "Linux box" });
+        fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+        await screen.findByRole("button", { name: "Stop automatic sync" });
+        return messenger;
+      }
+
+      async function pollToMoved(): Promise<void> {
+        listRules = [moved()];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        await screen.findByText("Paused");
+      }
+
+      it("sends the captured revision when the rule has not changed", async () => {
+        const messenger = await openStopConfirmation();
+        expect(screen.queryByText(CHANGED_GUIDANCE)).toBeNull();
+        fireEvent.click(
+          screen.getByRole("button", { name: "Stop automatic sync" }),
+        );
+        await waitFor(() => expect(stopCalls(messenger)).toHaveLength(1));
+        const sent = profileSyncStopRuleSchema.parse(
+          stopCalls(messenger)[0].params,
+        );
+        expect(sent.expectedRevision).toBe(SAVED_RULE.revision);
       });
-      await screen.findByText("Paused");
-      fireEvent.click(
-        screen.getByRole("button", { name: "Stop automatic sync" }),
-      );
-      expect(confirm).toBeTruthy();
-      await waitFor(() =>
+
+      it("refuses a stale confirmation without any request, then stops the reviewed current revision after Keep rule", async () => {
+        const messenger = await openStopConfirmation();
+        await pollToMoved();
+        expect(await screen.findByText(CHANGED_GUIDANCE)).toBeTruthy();
+        const confirm = screen.getByRole("button", {
+          name: "Stop automatic sync",
+        });
+        expect(confirm.hasAttribute("disabled")).toBe(true);
+        fireEvent.click(confirm);
+        // It never silently advances to the latest revision.
+        expect(stopCalls(messenger)).toHaveLength(0);
+        fireEvent.click(screen.getByRole("button", { name: "Keep rule" }));
         expect(
-          callsOf(messenger, "providers.profileCopy.sync.stopRule"),
-        ).toHaveLength(1),
-      );
-      const sent = profileSyncStopRuleSchema.parse(
-        callsOf(messenger, "providers.profileCopy.sync.stopRule")[0].params,
-      );
-      expect(sent.expectedRevision).toBe(SAVED_RULE.revision);
+          screen.queryByRole("button", { name: "Stop automatic sync" }),
+        ).toBeNull();
+        // Reopened on the current rule, the confirmation captures revision 2.
+        fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+        const reopened = await screen.findByRole("button", {
+          name: "Stop automatic sync",
+        });
+        expect(reopened.hasAttribute("disabled")).toBe(false);
+        expect(screen.queryByText(CHANGED_GUIDANCE)).toBeNull();
+        fireEvent.click(reopened);
+        await waitFor(() => expect(stopCalls(messenger)).toHaveLength(1));
+        const sent = profileSyncStopRuleSchema.parse(
+          stopCalls(messenger)[0].params,
+        );
+        expect(sent.expectedRevision).toBe(2);
+      });
+
+      it("shows the review-change guidance, not a hidden failure, when a held Stop is rejected after the rule moved on", async () => {
+        const held = gate();
+        stopRuleGate = held.promise;
+        const messenger = await openStopConfirmation();
+        try {
+          fireEvent.click(
+            screen.getByRole("button", { name: "Stop automatic sync" }),
+          );
+          await waitFor(() => expect(stopCalls(messenger)).toHaveLength(1));
+          expect(
+            profileSyncStopRuleSchema.parse(stopCalls(messenger)[0].params)
+              .expectedRevision,
+          ).toBe(SAVED_RULE.revision);
+          await pollToMoved();
+          stopRuleThrows = true;
+        } finally {
+          held.release();
+        }
+        expect(await screen.findByText(CHANGED_GUIDANCE)).toBeTruthy();
+        const keep = screen.getByRole("button", { name: "Keep rule" });
+        await waitFor(() => expect(keep.hasAttribute("disabled")).toBe(false));
+        fireEvent.click(keep);
+        expect(
+          screen.queryByRole("button", { name: "Stop automatic sync" }),
+        ).toBeNull();
+      });
     });
 
     describe.each([
@@ -4052,5 +4137,238 @@ describe("ProfileSyncModal review regressions", () => {
         ).toBeTruthy();
       });
     });
+  });
+
+  describe("round 23: reopened uncertain starts and rows that wait on a sibling's request", () => {
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    const readyItems = (): ProfileSyncItem[] => [
+      syncItem(1, DEST_HOST_ID, "ready", [
+        previewDestination(DEST_HOST_ID, "automatic"),
+      ]),
+    ];
+
+    async function startOnce(): Promise<void> {
+      openSync(null);
+      await pickDestinations([/Linux box/]);
+      await screen.findByText("1 profile transfers selected");
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    }
+
+    describe("an uncertain start across Cancel and reopen", () => {
+      async function cancelAndReopen(): Promise<void> {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        await waitFor(() =>
+          expect(useProfileCopyFlowStore.getState().view).toBeNull(),
+        );
+      }
+
+      it("retries under the same batch id for the same selection and revision", async () => {
+        startFailures = 1;
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: readyItems,
+          startItems: noItems,
+        });
+        await startOnce();
+        expect(await screen.findByText(/could not be confirmed/)).toBeTruthy();
+        await cancelAndReopen();
+        await startOnce();
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(2));
+        const [first, second] = startCalls(messenger).map((call) =>
+          profileSyncStartSchema.parse(call.params),
+        );
+        expect(second.selection).toEqual(first.selection);
+        expect(second.revision).toBe(first.revision);
+        expect(second.batchId).toBe(first.batchId);
+      });
+
+      it("uses a new batch id once the preview revision changed", async () => {
+        startFailures = 1;
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: readyItems,
+          startItems: noItems,
+        });
+        await startOnce();
+        expect(await screen.findByText(/could not be confirmed/)).toBeTruthy();
+        await cancelAndReopen();
+        previewRevision = "b".repeat(64);
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        // The fresh cached preview is reused on reopen; ask again to see the
+        // new revision before starting.
+        const previewsBefore = previewCalls(messenger).length;
+        fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+        await waitFor(() =>
+          expect(previewCalls(messenger).length).toBeGreaterThan(
+            previewsBefore,
+          ),
+        );
+        await waitFor(() =>
+          expect(
+            screen
+              .getByRole("button", { name: "Sync now" })
+              .hasAttribute("disabled"),
+          ).toBe(false),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(2));
+        const [first, second] = startCalls(messenger).map((call) =>
+          profileSyncStartSchema.parse(call.params),
+        );
+        expect(second.revision).not.toBe(first.revision);
+        expect(second.batchId).not.toBe(first.batchId);
+      });
+
+      it("uses a new batch id after an account reset", async () => {
+        startFailures = 1;
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: readyItems,
+          startItems: noItems,
+        });
+        await startOnce();
+        expect(await screen.findByText(/could not be confirmed/)).toBeTruthy();
+        await cancelAndReopen();
+        act(() => {
+          useProfileCopyFlowStore.getState().reset();
+        });
+        await startOnce();
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(2));
+        const [first, second] = startCalls(messenger).map((call) =>
+          profileSyncStartSchema.parse(call.params),
+        );
+        expect(second.batchId).not.toBe(first.batchId);
+      });
+    });
+
+    describe.each([
+      ["Check status", "resolve"],
+      ["Retry", "retry"],
+    ] as const)(
+      "Open profile on another row while %s is in flight",
+      (button, which) => {
+        it("waits for the sibling request, keeps its notice, and opens afterwards", async () => {
+          const PROFILE_B = "33333333-3333-4333-8333-333333333334";
+          const OPERATION_B = "00000000-0000-4000-8000-000000000002";
+          const receiptA = profileCopyOutcome({
+            attempt: profileCopyAttempt({
+              operationId: "00000000-0000-4000-8000-000000000001",
+            }),
+            state: "blocked",
+            reason: "unreachable",
+          });
+          const receiptB = recordedOutcome({
+            attempt: profileCopyAttempt({
+              operationId: OPERATION_B,
+              sourceProfileId: PROFILE_B,
+              attemptId: ATTEMPT_TWO_ID,
+            }),
+            state: "already-present",
+          });
+          draftStatusOutcome = receiptB;
+          retryResult = "stale-revision";
+          retryOutcome = receiptA;
+          const held = gate();
+          mountWith({
+            rules: [],
+            providers: defaultProviders(),
+            // The preview names both rows, so the started run is inside it.
+            previewItems: () => [
+              syncItem(1, DEST_HOST_ID, "ready", [
+                previewDestination(DEST_HOST_ID, "automatic"),
+              ]),
+              withSourceProfile(
+                syncItem(2, DEST_HOST_ID, "ready", [
+                  previewDestination(DEST_HOST_ID, "automatic"),
+                ]),
+                PROFILE_B,
+              ),
+            ],
+            startItems: () => [
+              {
+                ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+                preview: null,
+                outcome: receiptA,
+              },
+              {
+                ...withSourceProfile(
+                  syncItem(2, DEST_HOST_ID, "already-present", []),
+                  PROFILE_B,
+                ),
+                preview: null,
+                outcome: receiptB,
+              },
+            ],
+          });
+          try {
+            openSync(null);
+            await pickDestinations([/Linux box/]);
+            await screen.findByText("2 profile transfers selected");
+            fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+            await screen.findByRole("button", { name: button });
+            // Open the already-present row's details first: Open profile is live.
+            const reviews = await screen.findAllByRole("button", {
+              name: "Review…",
+            });
+            fireEvent.click(reviews[1]);
+            const open = await screen.findByRole("button", {
+              name: "Open profile",
+            });
+            expect(open.hasAttribute("disabled")).toBe(false);
+            // Now hold the other row's request.
+            if (which === "resolve") resolveGate = held.promise;
+            else retryGate = held.promise;
+            fireEvent.click(screen.getByRole("button", { name: button }));
+            await waitFor(() =>
+              expect(
+                screen
+                  .getByRole("button", { name: "Open profile" })
+                  .hasAttribute("disabled"),
+              ).toBe(true),
+            );
+            fireEvent.click(
+              screen.getByRole("button", { name: "Open profile" }),
+            );
+            expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+          } finally {
+            held.release();
+          }
+          if (which === "retry")
+            expect(
+              await screen.findByText(
+                "This changed since you last looked. Review it again.",
+              ),
+            ).toBeTruthy();
+          const settled = await screen.findByRole("button", {
+            name: "Open profile",
+          });
+          await waitFor(() =>
+            expect(settled.hasAttribute("disabled")).toBe(false),
+          );
+          if (which === "retry")
+            expect(
+              screen.getByText(
+                "This changed since you last looked. Review it again.",
+              ),
+            ).toBeTruthy();
+          fireEvent.click(settled);
+          await waitFor(() =>
+            expect(useProfileCopyFlowStore.getState().view).toBeNull(),
+          );
+        });
+      },
+    );
   });
 });

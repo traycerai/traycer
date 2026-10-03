@@ -185,6 +185,12 @@ export function ProfileSyncRules(props: {
                   Stop future updates? Profiles already on this device will
                   remain.
                 </p>
+                {stop.revision !== rule.revision ? (
+                  <p role="alert" className="text-ui-xs text-muted-foreground">
+                    This rule changed. Choose Keep rule, review its current
+                    settings, then choose Stop again.
+                  </p>
+                ) : null}
                 <div className="flex gap-2">
                   <Button
                     size="xs"
@@ -196,8 +202,9 @@ export function ProfileSyncRules(props: {
                   </Button>
                   <Button
                     size="xs"
-                    disabled={pending}
-                    onClick={() =>
+                    disabled={pending || stop.revision !== rule.revision}
+                    onClick={() => {
+                      if (pending || stop.revision !== rule.revision) return;
                       remove.mutate(
                         {
                           sourceHostId: props.hostId,
@@ -205,8 +212,8 @@ export function ProfileSyncRules(props: {
                           expectedRevision: stop.revision,
                         },
                         { onSuccess: () => setStop(null) },
-                      )
-                    }
+                      );
+                    }}
                   >
                     {remove.isPending ? <MutedAgentSpinner /> : null}Stop
                     automatic sync
