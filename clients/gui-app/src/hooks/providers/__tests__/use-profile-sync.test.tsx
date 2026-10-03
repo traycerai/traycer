@@ -10,11 +10,17 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import { profileSyncListSchema } from "@traycer/protocol/host/profile-sync-schemas";
+import {
+  profileSyncListSchema,
+  profileSyncRuleSchema,
+} from "@traycer/protocol/host/profile-sync-schemas";
 import type {
   ProfileSyncBatch,
+  ProfileSyncSaveRule,
+  ProfileSyncItem,
   ProfileSyncList,
   ProfileSyncRule,
 } from "@traycer/protocol/host/profile-sync-schemas";
@@ -76,6 +82,36 @@ const RULE: ProfileSyncRule = {
   status: "waiting",
 };
 
+function resolvedItem(operationId: string): ProfileSyncItem {
+  return {
+    providerId: "claude",
+    sourceProfileId: "88888888-8888-4888-8888-888888888888",
+    name: "Work",
+    destinationHostId: DEST,
+    operationId,
+    preview: null,
+    outcome: null,
+    state: "synced",
+    sourceSettings: { name: "Work", color: "#ef4444", enabled: true },
+    sourceIdentityStamp: "c".repeat(64),
+    identityChanged: false,
+    destinationSettings: null,
+    baseline: null,
+  };
+}
+
+// Overrides for the rule answers; reset by the describe that uses them.
+let saveAnswer: ((request: ProfileSyncSaveRule) => ProfileSyncRule) | null =
+  null;
+let stopAnswer:
+  | ((
+      request: RequestOfMethod<
+        HostRpcRegistry,
+        "providers.profileCopy.sync.stopRule"
+      >,
+    ) => ProfileSyncList)
+  | null = null;
+
 // What sync.list answers; a test moves it to model a foreign or later list.
 let listAnswer: ProfileSyncList = { batches: [], rules: [] };
 
@@ -90,9 +126,22 @@ function setup(): {
     handlers: {
       "providers.profileCopy.sync.list": () => listAnswer,
       "providers.profileCopy.sync.start": () => BATCH,
-      "providers.profileCopy.sync.saveRule": () => RULE,
-      "providers.profileCopy.sync.stopRule": () => ({ batches: [], rules: [] }),
-      "providers.profileCopy.sync.resolve": () => BATCH,
+      // Positive answers echo the request's identity, as a host would.
+      "providers.profileCopy.sync.saveRule": (params) =>
+        saveAnswer?.(params) ?? {
+          ...RULE,
+          ruleId: params.ruleId,
+          sourceHostId: params.sourceHostId,
+          destinationHostId: params.destinationHostId,
+        },
+      "providers.profileCopy.sync.stopRule": (params) =>
+        stopAnswer?.(params) ?? { batches: [], rules: [] },
+      // The authoritative answer names the operation that was asked about.
+      "providers.profileCopy.sync.resolve": (params) => ({
+        ...BATCH,
+        batchId: params.batchId,
+        items: [resolvedItem(params.operationId)],
+      }),
     },
   });
   const spine = new HostClient<HostRpcRegistry>({
@@ -376,4 +425,96 @@ describe("useProfileSyncList source validation", () => {
       expect(result.current.data).toEqual({ batches: [], rules: [] });
     },
   );
+});
+
+describe("rule answers are correlated with their request", () => {
+  const FOREIGN = "other-host";
+  const saveRequest = {
+    sourceHostId: SOURCE,
+    ruleId: RULE_ID,
+    destinationHostId: DEST,
+    scope: { kind: "all" as const },
+    paused: false,
+    expectedRevision: 0,
+  };
+  const stopRequest = {
+    sourceHostId: SOURCE,
+    ruleId: RULE_ID,
+    expectedRevision: 1,
+  };
+
+  beforeEach(() => {
+    harness.spine = null;
+    saveAnswer = null;
+    stopAnswer = null;
+  });
+  afterEach(() => {
+    cleanup();
+    harness.spine = null;
+    saveAnswer = null;
+    stopAnswer = null;
+  });
+
+  it.each([
+    ["another source's rule", { ...RULE, sourceHostId: FOREIGN }],
+    [
+      "another rule id",
+      { ...RULE, ruleId: "99999999-9999-4999-8999-999999999999" },
+    ],
+    ["another destination", { ...RULE, destinationHostId: "dest-host-2" }],
+  ])("rejects a saveRule answer naming %s", async (_label, answer) => {
+    // Wire-valid: only the correlation can refuse it.
+    expect(profileSyncRuleSchema.safeParse(answer).success).toBe(true);
+    saveAnswer = () => answer;
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useProfileSyncSaveRule(SOURCE), {
+      wrapper,
+    });
+    const onSuccess = vi.fn();
+    act(() => result.current.mutate(saveRequest, { onSuccess }));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("accepts a saveRule answer that echoes the request", async () => {
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useProfileSyncSaveRule(SOURCE), {
+      wrapper,
+    });
+    const onSuccess = vi.fn();
+    act(() => result.current.mutate(saveRequest, { onSuccess }));
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "still containing the stopped rule",
+      { batches: [], rules: [RULE] } satisfies ProfileSyncList,
+    ],
+    [
+      "naming another source's rule",
+      {
+        batches: [],
+        rules: [
+          {
+            ...RULE,
+            ruleId: "99999999-9999-4999-8999-999999999999",
+            sourceHostId: FOREIGN,
+          },
+        ],
+      } satisfies ProfileSyncList,
+    ],
+  ])("rejects a stopRule answer %s", async (_label, answer) => {
+    expect(profileSyncListSchema.safeParse(answer).success).toBe(true);
+    stopAnswer = () => answer;
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useProfileSyncStopRule(SOURCE), {
+      wrapper,
+    });
+    const onSuccess = vi.fn();
+    act(() => result.current.mutate(stopRequest, { onSuccess }));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
 });

@@ -30,6 +30,7 @@ export function ProfileSyncResults(props: {
   readonly sourceHostId: string;
   readonly batch: ProfileSyncBatch;
   readonly hosts: ProfileCopyHosts;
+  readonly onResolved: (batch: ProfileSyncBatch) => void;
 }): ReactNode {
   if (props.batch.sourceHostId !== props.sourceHostId)
     return (
@@ -59,6 +60,7 @@ export function ProfileSyncResults(props: {
                   item={item}
                   batch={props.batch}
                   hosts={props.hosts}
+                  onResolved={props.onResolved}
                 />
               ))}
           </div>
@@ -72,6 +74,7 @@ function ProfileSyncResultItem(props: {
   readonly batch: ProfileSyncBatch;
   readonly item: ProfileSyncItem;
   readonly hosts: ProfileCopyHosts;
+  readonly onResolved: (batch: ProfileSyncBatch) => void;
 }): ReactNode {
   const { item, batch, hosts, sourceHostId } = props;
   const [expanded, setExpanded] = useState(false);
@@ -90,13 +93,16 @@ function ProfileSyncResultItem(props: {
   ): void => {
     if (pending || (action === "use-source" && item.identityChanged)) return;
     resolveError.capture();
-    resolve.mutate({
-      sourceHostId,
-      batchId: batch.batchId,
-      operationId: item.operationId,
-      action,
-      expectedDestination: item.destinationSettings,
-    });
+    resolve.mutate(
+      {
+        sourceHostId,
+        batchId: batch.batchId,
+        operationId: item.operationId,
+        action,
+        expectedDestination: item.destinationSettings,
+      },
+      { onSuccess: props.onResolved },
+    );
   };
   const error = resolveError.error ?? retry.error;
   return (

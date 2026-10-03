@@ -83,6 +83,17 @@ interface ProfileCopyFlowState {
     attempt: ProfileCopyAttempt,
     revision: number,
   ) => string;
+  /** A new rule keeps its identity until a valid list confirms its creation. */
+  readonly syncRuleIds: ReadonlyMap<string, string>;
+  readonly getSyncRuleId: (
+    sourceHostId: string,
+    destinationHostId: string,
+  ) => string;
+  readonly forgetSyncRuleId: (
+    sourceHostId: string,
+    destinationHostId: string,
+    ruleId: string,
+  ) => void;
   /**
    * attemptId → the last direct answer that refused Sign in or Verify, keyed
    * by the verb and the draft revision it answered at (Q4 ruling). The host
@@ -173,6 +184,24 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
       });
       return requestId;
     },
+    syncRuleIds: new Map(),
+    getSyncRuleId: (sourceHostId, destinationHostId) => {
+      const key = JSON.stringify([sourceHostId, destinationHostId]);
+      const previous = get().syncRuleIds;
+      const existing = previous.get(key);
+      if (existing !== undefined) return existing;
+      const ruleId = crypto.randomUUID();
+      set({ syncRuleIds: new Map(previous).set(key, ruleId) });
+      return ruleId;
+    },
+    forgetSyncRuleId: (sourceHostId, destinationHostId, ruleId) => {
+      const key = JSON.stringify([sourceHostId, destinationHostId]);
+      const previous = get().syncRuleIds;
+      if (previous.get(key) !== ruleId) return;
+      const next = new Map(previous);
+      next.delete(key);
+      set({ syncRuleIds: next });
+    },
     directBlocks: {},
     open: (view) => set({ view, session: get().session + 1 }),
     close: () => set({ view: null }),
@@ -211,6 +240,7 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
         directBlocks: {},
         syncStartBatchIds: new Map(),
         profileCopyRetryRequestIds: new Map(),
+        syncRuleIds: new Map(),
       }),
   }),
 );

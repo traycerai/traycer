@@ -19,6 +19,7 @@ import {
 import { hostQueryKeys } from "@/lib/query-keys";
 import { profileSyncMutationKeys } from "@/lib/query-keys/profile-sync-keys";
 import { profileCopyDraftMutationAttempt } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
+import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import type {
   ProfileSyncSelection,
   ProfileSyncPreview,
@@ -72,6 +73,9 @@ export function useProfileSyncList(
       ) {
         throw new Error("The device returned sync history for another source.");
       }
+      const { forgetSyncRuleId } = useProfileCopyFlowStore.getState();
+      for (const rule of response.rules)
+        forgetSyncRuleId(hostId, rule.destinationHostId, rule.ruleId);
       return response;
     },
   });
@@ -140,6 +144,16 @@ export function useProfileSyncSaveRule(
     client: useHostClientForHostId(hostId),
     method: "providers.profileCopy.sync.saveRule",
     mapVariables: (variables) => variables,
+    onResponse: (response, request) => {
+      if (
+        request.sourceHostId !== hostId ||
+        response.sourceHostId !== request.sourceHostId ||
+        response.ruleId !== request.ruleId ||
+        response.destinationHostId !== request.destinationHostId
+      ) {
+        throw new Error("The device returned another sync rule.");
+      }
+    },
     options: {
       mutationKey: profileSyncMutationKeys.saveRule(hostId),
       onSuccess: () => {
@@ -175,6 +189,16 @@ export function useProfileSyncStopRule(
     client: useHostClientForHostId(hostId),
     method: "providers.profileCopy.sync.stopRule",
     mapVariables: (variables) => variables,
+    onResponse: (response, request) => {
+      if (
+        request.sourceHostId !== hostId ||
+        response.batches.some((batch) => batch.sourceHostId !== hostId) ||
+        response.rules.some((rule) => rule.sourceHostId !== hostId) ||
+        response.rules.some((rule) => rule.ruleId === request.ruleId)
+      ) {
+        throw new Error("The device did not confirm stopping this sync rule.");
+      }
+    },
     options: {
       mutationKey: profileSyncMutationKeys.stopRule(hostId),
       onSuccess: () => {
@@ -208,6 +232,18 @@ export function useProfileSyncResolve(
       client: useHostClientForHostId(hostId),
       method: "providers.profileCopy.sync.resolve",
       mapVariables: (variables) => variables,
+      onResponse: (response, request) => {
+        if (
+          request.sourceHostId !== hostId ||
+          response.sourceHostId !== request.sourceHostId ||
+          response.batchId !== request.batchId ||
+          !response.items.some(
+            (item) => item.operationId === request.operationId,
+          )
+        ) {
+          throw new Error("The device returned another sync resolution.");
+        }
+      },
       options: {
         mutationKey: profileSyncMutationKeys.resolve(hostId),
         onSuccess: () => {

@@ -1,10 +1,14 @@
 import type { HostRpcRegistry } from "@/lib/host";
-import type { ProfileSyncList } from "@traycer/protocol/host/profile-sync-schemas";
+import type {
+  ProfileSyncList,
+  ProfileSyncRule,
+} from "@traycer/protocol/host/profile-sync-schemas";
 import { PROFILE_SYNC_MAX_ITEMS } from "@traycer/protocol/host/profile-sync-schemas";
 import type { Dispatch, SetStateAction } from "react";
 import {
   useQueryClient,
   type QueryClient,
+  type QueryKey,
   type UseQueryResult,
   type UseMutationResult,
 } from "@tanstack/react-query";
@@ -81,6 +85,9 @@ export function ProfileSyncModal(props: {
     close,
     catalog,
     list,
+    rules,
+    acceptSavedRule,
+    acceptStoppedRule,
     selection,
     selectionKey,
     settledKey,
@@ -90,6 +97,7 @@ export function ProfileSyncModal(props: {
     start,
     startError,
     batch,
+    acceptResolved,
     sourceName,
     canStart,
     selectionTooLarge,
@@ -121,7 +129,7 @@ export function ProfileSyncModal(props: {
                 Sync now
               </TabsTrigger>
               <TabsTrigger value="automatic" disabled={pending}>
-                {automaticTabLabel(list.data)}
+                {automaticTabLabel(rules)}
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -147,6 +155,7 @@ export function ProfileSyncModal(props: {
                 sourceHostId={sourceHostId}
                 batch={batch}
                 hosts={hosts}
+                onResolved={acceptResolved}
               />
             </>
           ) : null}
@@ -155,9 +164,11 @@ export function ProfileSyncModal(props: {
               hostId={sourceHostId}
               hosts={hosts}
               providers={catalog.data?.providers ?? []}
-              rules={list.data.rules}
+              rules={rules}
               batches={list.data.batches}
               onViewRun={setBatchId}
+              onSaved={acceptSavedRule}
+              onStopped={acceptStoppedRule}
             />
           ) : null}
           {batch === null && tab === "now" ? (
@@ -200,9 +211,9 @@ export function ProfileSyncModal(props: {
     </>
   );
 }
-function automaticTabLabel(list: ProfileSyncList | undefined): string {
-  return list && list.rules.length > 0
-    ? `Automatic sync (${list.rules.length})`
+function automaticTabLabel(rules: readonly ProfileSyncRule[]): string {
+  return rules.length > 0
+    ? `Automatic sync (${rules.length})`
     : "Automatic sync";
 }
 
@@ -607,18 +618,97 @@ interface ViewedSyncBatch {
   readonly listObservation: SyncListObservation;
 }
 
+function syncListQueryKey(sourceHostId: string): QueryKey {
+  return hostQueryKeys.method<
+    HostRpcRegistry,
+    "providers.profileCopy.sync.list"
+  >(sourceHostId, "providers.profileCopy.sync.list", { sourceHostId });
+}
+
 function currentSyncListObservation(
   queryClient: QueryClient,
   sourceHostId: string,
 ): SyncListObservation {
   const query = queryClient.getQueryCache().find({
-    queryKey: hostQueryKeys.method<
-      HostRpcRegistry,
-      "providers.profileCopy.sync.list"
-    >(sourceHostId, "providers.profileCopy.sync.list", { sourceHostId }),
+    queryKey: syncListQueryKey(sourceHostId),
     exact: true,
   });
   return { query, successes: query?.state.dataUpdateCount ?? 0 };
+}
+
+function newerSyncListObservation(
+  observed: SyncListObservation,
+  accepted: SyncListObservation,
+): boolean {
+  return (
+    observed.successes > 0 &&
+    (observed.query !== accepted.query ||
+      observed.successes > accepted.successes)
+  );
+}
+
+interface AcceptedSyncRules {
+  readonly rules: readonly ProfileSyncRule[];
+  readonly listObservation: SyncListObservation;
+}
+
+function useProfileSyncAcceptedRules(
+  sourceHostId: string,
+  list: UseQueryResult<ProfileSyncList, HostRpcError>,
+): {
+  readonly rules: readonly ProfileSyncRule[];
+  readonly acceptSavedRule: (rule: ProfileSyncRule) => void;
+  readonly acceptStoppedRule: (list: ProfileSyncList) => void;
+} {
+  const queryClient = useQueryClient();
+  // Keep acknowledged rule writes above the tab/editor branches. Only a
+  // later successful list can supersede them, including after navigation.
+  const [accepted, setAccepted] = useState<AcceptedSyncRules | null>(null);
+  const observed = currentSyncListObservation(queryClient, sourceHostId);
+  const superseded =
+    accepted !== null &&
+    !list.isFetching &&
+    newerSyncListObservation(observed, accepted.listObservation);
+  if (superseded) setAccepted(null);
+  return {
+    rules:
+      accepted !== null && !superseded
+        ? accepted.rules
+        : (list.data?.rules ?? []),
+    acceptSavedRule: (rule) => {
+      const listObservation = currentSyncListObservation(
+        queryClient,
+        sourceHostId,
+      );
+      const listed = queryClient.getQueryData<ProfileSyncList>(
+        syncListQueryKey(sourceHostId),
+      );
+      setAccepted((current) => {
+        const baseline =
+          current !== null &&
+          !newerSyncListObservation(listObservation, current.listObservation)
+            ? current.rules
+            : (listed?.rules ?? []);
+        return {
+          rules: [
+            ...baseline.filter(
+              (prior) =>
+                prior.ruleId !== rule.ruleId &&
+                prior.destinationHostId !== rule.destinationHostId,
+            ),
+            rule,
+          ],
+          listObservation,
+        };
+      });
+    },
+    acceptStoppedRule: (response) => {
+      setAccepted({
+        rules: response.rules,
+        listObservation: currentSyncListObservation(queryClient, sourceHostId),
+      });
+    },
+  };
 }
 
 function useProfileSyncViewedBatch(
@@ -628,6 +718,7 @@ function useProfileSyncViewedBatch(
   readonly batch: ProfileSyncBatch | null;
   readonly setBatchId: (batchId: string | null) => void;
   readonly acceptStarted: (batch: ProfileSyncBatch) => void;
+  readonly acceptResolved: (batch: ProfileSyncBatch) => void;
 } {
   const queryClient = useQueryClient();
   // A bounded history poll can omit the opened run; its pending action
@@ -637,16 +728,14 @@ function useProfileSyncViewedBatch(
     (b) => b.batchId === viewedBatch?.batch.batchId,
   );
   const listObservation = currentSyncListObservation(queryClient, sourceHostId);
-  // A successful start is fresher than the list already cached when its
+  // A successful response is fresher than the list already cached when its
   // response arrived. Only a subsequent list success may replace it; a failed
   // refetch has no new success. Query identity also fences cache recreation.
   const newerListBatch =
     viewedBatch !== null &&
     observedBatch !== undefined &&
     !list.isFetching &&
-    listObservation.successes > 0 &&
-    (listObservation.query !== viewedBatch.listObservation.query ||
-      listObservation.successes > viewedBatch.listObservation.successes)
+    newerSyncListObservation(listObservation, viewedBatch.listObservation)
       ? observedBatch
       : null;
   if (newerListBatch !== null && newerListBatch !== viewedBatch?.batch)
@@ -674,6 +763,17 @@ function useProfileSyncViewedBatch(
         listObservation: currentSyncListObservation(queryClient, sourceHostId),
       });
     },
+    acceptResolved: (batch) => {
+      const listObservation = currentSyncListObservation(
+        queryClient,
+        sourceHostId,
+      );
+      setViewedBatch((current) =>
+        current?.batch.batchId === batch.batchId
+          ? { batch, listObservation }
+          : current,
+      );
+    },
   };
 }
 
@@ -693,6 +793,9 @@ interface SyncModalModel {
     HostRpcError
   >;
   readonly list: UseQueryResult<ProfileSyncList, HostRpcError>;
+  readonly rules: readonly ProfileSyncRule[];
+  readonly acceptSavedRule: (rule: ProfileSyncRule) => void;
+  readonly acceptStoppedRule: (list: ProfileSyncList) => void;
   readonly selection: ProfileSyncSelection | null;
   readonly selectionKey: string;
   readonly settledKey: string;
@@ -705,6 +808,7 @@ interface SyncModalModel {
     RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">
   >;
   readonly batch: ProfileSyncBatch | null;
+  readonly acceptResolved: (batch: ProfileSyncBatch) => void;
   readonly startError: HostRpcError | null;
   readonly sourceName: string;
   readonly canStart: boolean;
@@ -747,10 +851,10 @@ function useProfileSyncModalState(props: {
     { enabled: true, subscribed: true },
   );
   const list = useProfileSyncList(sourceHostId);
-  const { batch, setBatchId, acceptStarted } = useProfileSyncViewedBatch(
-    sourceHostId,
-    list,
-  );
+  const { rules, acceptSavedRule, acceptStoppedRule } =
+    useProfileSyncAcceptedRules(sourceHostId, list);
+  const { batch, setBatchId, acceptStarted, acceptResolved } =
+    useProfileSyncViewedBatch(sourceHostId, list);
   const { selected, profileCount } = selectedCatalogProfiles(
     catalog.data?.providers,
     chosenProviders,
@@ -841,6 +945,9 @@ function useProfileSyncModalState(props: {
     close,
     catalog,
     list,
+    rules,
+    acceptSavedRule,
+    acceptStoppedRule,
     selection,
     selectionKey,
     settledKey,
@@ -850,6 +957,7 @@ function useProfileSyncModalState(props: {
     start,
     startError,
     batch,
+    acceptResolved,
     sourceName,
     canStart,
     selectionTooLarge,

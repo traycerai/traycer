@@ -4,6 +4,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import {
   PROFILE_SYNC_MAX_RULES,
   type ProfileSyncBatch,
+  type ProfileSyncList,
   type ProfileSyncRule,
   type ProfileSyncSaveRule,
   type ProfileSyncScope,
@@ -33,6 +34,7 @@ import {
   type ProfileCopyHosts,
 } from "../profile-copy/profile-copy-shared";
 import { ProfileSyncProviderPicker } from "./profile-sync-provider-picker";
+import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 
 const RULE_CAPACITY_NOTICE = `Automatic sync supports up to ${String(PROFILE_SYNC_MAX_RULES)} device rules. Stop a rule to add another device.`;
 
@@ -43,6 +45,8 @@ export function ProfileSyncRules(props: {
   readonly rules: readonly ProfileSyncRule[];
   readonly batches: readonly ProfileSyncBatch[];
   readonly onViewRun: (batchId: string) => void;
+  readonly onSaved: (rule: ProfileSyncRule) => void;
+  readonly onStopped: (list: ProfileSyncList) => void;
 }): ReactNode {
   const [editor, setEditor] = useState<string | null>(null);
   const [stop, setStop] = useState<ProfileSyncRule | null>(null);
@@ -79,6 +83,7 @@ export function ProfileSyncRules(props: {
         atCapacity={atCapacity}
         providers={props.providers}
         close={() => setEditor(null)}
+        onSaved={props.onSaved}
       />
     );
   return (
@@ -143,14 +148,17 @@ export function ProfileSyncRules(props: {
                 variant="outline"
                 disabled={pending}
                 onClick={() =>
-                  save.mutate({
-                    ruleId: rule.ruleId,
-                    sourceHostId: props.hostId,
-                    destinationHostId: rule.destinationHostId,
-                    scope: rule.scope,
-                    paused: !rulePaused(rule),
-                    expectedRevision: rule.revision,
-                  })
+                  save.mutate(
+                    {
+                      ruleId: rule.ruleId,
+                      sourceHostId: props.hostId,
+                      destinationHostId: rule.destinationHostId,
+                      scope: rule.scope,
+                      paused: !rulePaused(rule),
+                      expectedRevision: rule.revision,
+                    },
+                    { onSuccess: props.onSaved },
+                  )
                 }
               >
                 {save.isPending && save.variables.ruleId === rule.ruleId ? (
@@ -211,7 +219,12 @@ export function ProfileSyncRules(props: {
                           ruleId: stop.ruleId,
                           expectedRevision: stop.revision,
                         },
-                        { onSuccess: () => setStop(null) },
+                        {
+                          onSuccess: (list) => {
+                            props.onStopped(list);
+                            setStop(null);
+                          },
+                        },
                       );
                     }}
                   >
@@ -275,6 +288,7 @@ function ProfileSyncRuleEditView(props: {
   readonly atCapacity: boolean;
   readonly providers: readonly ProviderCliState[];
   readonly close: () => void;
+  readonly onSaved: (rule: ProfileSyncRule) => void;
 }): ReactNode {
   const rule = props.rules.find((rule) => rule.ruleId === props.editor) ?? null;
   return (
@@ -287,6 +301,7 @@ function ProfileSyncRuleEditView(props: {
       atCapacity={props.atCapacity}
       providers={props.providers}
       close={props.close}
+      onSaved={props.onSaved}
     />
   );
 }
@@ -300,6 +315,7 @@ interface RuleEditorProps {
   readonly atCapacity: boolean;
   readonly providers: readonly ProviderCliState[];
   readonly close: () => void;
+  readonly onSaved: (rule: ProfileSyncRule) => void;
 }
 
 function useProfileSyncRuleDraft(props: RuleEditorProps) {
@@ -307,7 +323,10 @@ function useProfileSyncRuleDraft(props: RuleEditorProps) {
   // Polling can remove a rule while its save is still running. Keep the
   // draft and mutation observer mounted, with the original CAS identity.
   const [originalRule] = useState(props.rule);
-  const [ruleId] = useState(() => props.existingRuleId ?? crypto.randomUUID());
+  const [ruleId, setRuleId] = useState(
+    () => props.existingRuleId ?? crypto.randomUUID(),
+  );
+  const getSyncRuleId = useProfileCopyFlowStore((state) => state.getSyncRuleId);
   const [expectedRevision] = useState(() => ruleRevision(originalRule));
   const stopped = props.existingRuleId !== null && props.rule === null;
   const changed = ruleRevision(props.rule) !== expectedRevision;
@@ -361,6 +380,23 @@ function useProfileSyncRuleDraft(props: RuleEditorProps) {
     request,
     saveError,
     canSave,
+    submit: () => {
+      if (!canSave) return;
+      const submission = {
+        ...request,
+        ruleId:
+          props.existingRuleId === null
+            ? getSyncRuleId(props.hostId, destination)
+            : ruleId,
+      };
+      setRuleId(submission.ruleId);
+      save.mutate(submission, {
+        onSuccess: (rule) => {
+          props.onSaved(rule);
+          props.close();
+        },
+      });
+    },
   };
 }
 
@@ -377,9 +413,9 @@ function ProfileSyncRuleEditor(props: RuleEditorProps): ReactNode {
     selected,
     setSelected,
     save,
-    request,
     saveError,
     canSave,
+    submit,
   } = useProfileSyncRuleDraft(props);
   if (stopped && !save.isPending && saveError === null)
     return (
@@ -487,10 +523,7 @@ function ProfileSyncRuleEditor(props: RuleEditorProps): ReactNode {
         >
           Cancel
         </Button>
-        <Button
-          disabled={!canSave}
-          onClick={() => save.mutate(request, { onSuccess: props.close })}
-        >
+        <Button disabled={!canSave} onClick={submit}>
           {save.isPending ? <MutedAgentSpinner /> : null}
           {props.existingRuleId === null
             ? "Enable automatic sync"

@@ -255,3 +255,46 @@ describe("useProfileCopyFlowStore retry request ids", () => {
     expect(idFor({}, 3)).not.toBe(base);
   });
 });
+
+describe("useProfileCopyFlowStore uncertain rule ids", () => {
+  afterEach(resetFlowStore);
+
+  const idFor = (source: string, destination: string): string =>
+    useProfileCopyFlowStore.getState().getSyncRuleId(source, destination);
+
+  it("returns the same id for the same source and destination", () => {
+    const first = idFor(SOURCE_HOST_ID, DEST_HOST_ID);
+    expect(first).toBeTruthy();
+    expect(idFor(SOURCE_HOST_ID, DEST_HOST_ID)).toBe(first);
+  });
+
+  it("separates different sources and destinations", () => {
+    const base = idFor(SOURCE_HOST_ID, DEST_HOST_ID);
+    const otherDestination = idFor(SOURCE_HOST_ID, DEST_HOST_TWO_ID);
+    const otherSource = idFor(DEST_HOST_TWO_ID, DEST_HOST_ID);
+    expect(new Set([base, otherDestination, otherSource]).size).toBe(3);
+  });
+
+  it("survives closing the dialog but not an account reset", () => {
+    const base = idFor(SOURCE_HOST_ID, DEST_HOST_ID);
+    useProfileCopyFlowStore.getState().close();
+    expect(idFor(SOURCE_HOST_ID, DEST_HOST_ID)).toBe(base);
+    useProfileCopyFlowStore.getState().reset();
+    expect(idFor(SOURCE_HOST_ID, DEST_HOST_ID)).not.toBe(base);
+  });
+
+  it("forgets an id only when the rule id matches, and only for that pair", () => {
+    const base = idFor(SOURCE_HOST_ID, DEST_HOST_ID);
+    const other = idFor(SOURCE_HOST_ID, DEST_HOST_TWO_ID);
+    const store = useProfileCopyFlowStore.getState();
+    store.forgetSyncRuleId(
+      SOURCE_HOST_ID,
+      DEST_HOST_ID,
+      "00000000-0000-4000-8000-0000000000aa",
+    );
+    expect(idFor(SOURCE_HOST_ID, DEST_HOST_ID)).toBe(base);
+    store.forgetSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID, base);
+    expect(idFor(SOURCE_HOST_ID, DEST_HOST_ID)).not.toBe(base);
+    expect(idFor(SOURCE_HOST_ID, DEST_HOST_TWO_ID)).toBe(other);
+  });
+});

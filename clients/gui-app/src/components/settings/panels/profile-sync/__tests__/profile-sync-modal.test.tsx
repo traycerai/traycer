@@ -12,7 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ProfileCopyOutcome } from "@traycer/protocol/host/profile-copy-schemas";
 import {
@@ -21,6 +24,7 @@ import {
 } from "@traycer/protocol/host/profile-copy-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
+  profileSyncBatchSchema,
   profileSyncListSchema,
   profileSyncSaveRuleSchema,
   profileSyncStopRuleSchema,
@@ -152,6 +156,15 @@ let saveRuleGate: Promise<void> | null = null;
 let startGate: Promise<void> | null = null;
 let retryGate: Promise<void> | null = null;
 let resolveGate: Promise<void> | null = null;
+// Overrides what sync.resolve answers; otherwise it echoes the captured batch.
+let resolveAnswer:
+  | ((
+      request: RequestOfMethod<
+        HostRpcRegistry,
+        "providers.profileCopy.sync.resolve"
+      >,
+    ) => ProfileSyncBatch)
+  | null = null;
 // The destination's draft: what draftStatus reads and how verify answers.
 let draftStatusOutcome: ProfileCopyOutcome | null = null;
 let verifyGate: Promise<void> | null = null;
@@ -343,6 +356,8 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
             return {
               ...SAVED_RULE,
               ruleId: params.ruleId,
+              sourceHostId: params.sourceHostId,
+              destinationHostId: params.destinationHostId,
               scope: params.scope,
               paused: params.paused,
               revision: params.expectedRevision + 1,
@@ -361,6 +376,8 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         return {
           ...SAVED_RULE,
           ruleId: params.ruleId,
+          sourceHostId: params.sourceHostId,
+          destinationHostId: params.destinationHostId,
           scope: params.scope,
           paused: params.paused,
           revision: params.expectedRevision + 1,
@@ -395,31 +412,39 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
       "providers.profileCopy.sync.resolve": (
         params,
       ): ProfileSyncBatch | Promise<ProfileSyncBatch> => {
-        if (resolveGate !== null) {
-          return resolveGate.then((): ProfileSyncBatch => ({
+        // The batch as it stood at dispatch, which is what a host answers
+        // from: read now, so a later omission from the list changes nothing.
+        const listed = listBatches.find((b) => b.batchId === params.batchId);
+        const started =
+          lastStarted !== null && lastStarted.batchId === params.batchId
+            ? lastStarted
+            : null;
+        // For a started batch prefer its newest listed state (receipt B over A).
+        const newest =
+          started !== null && updateStarted !== null
+            ? updateStarted(started)
+            : started;
+        const captured = [...(listed?.items ?? newest?.items ?? [])];
+        const answer = (): ProfileSyncBatch => {
+          if (resolveThrows) {
+            throw new HostRpcError({
+              code: "RPC_ERROR",
+              message: "resolve unreachable",
+              requestId: "req-sync",
+              method: "providers.profileCopy.sync.resolve",
+              fatalDetails: null,
+            });
+          }
+          if (resolveAnswer !== null) return resolveAnswer(params);
+          return {
             batchId: params.batchId,
             sourceHostId: params.sourceHostId,
             createdAt: 1,
             automatic: false,
-            items: [],
-          }));
-        }
-        if (resolveThrows) {
-          throw new HostRpcError({
-            code: "RPC_ERROR",
-            message: "resolve unreachable",
-            requestId: "req-sync",
-            method: "providers.profileCopy.sync.resolve",
-            fatalDetails: null,
-          });
-        }
-        return {
-          batchId: params.batchId,
-          sourceHostId: params.sourceHostId,
-          createdAt: 1,
-          automatic: false,
-          items: [],
+            items: captured,
+          };
         };
+        return resolveGate === null ? answer() : resolveGate.then(answer);
       },
     },
   });
@@ -513,6 +538,7 @@ function resetModuleKnobs(): void {
   startGate = null;
   retryGate = null;
   resolveGate = null;
+  resolveAnswer = null;
   draftStatusOutcome = null;
   verifyGate = null;
   verifyResult = "current";
@@ -4619,6 +4645,443 @@ describe("ProfileSyncModal review regressions", () => {
       });
       expect(screen.getByText("Profile removed")).toBeTruthy();
       expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+    });
+  });
+
+  describe("round 26: authoritative resolve answers and remembered rule ids", () => {
+    const OP = "00000000-0000-4000-8000-000000000001";
+    const RUN = "00000000-0000-4000-8000-0000000000f1";
+    const retryableItem = (): ProfileSyncItem => ({
+      ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+      preview: null,
+      outcome: profileCopyOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "blocked",
+        reason: "unreachable",
+      }),
+    });
+    const runWith = (items: ProfileSyncItem[]): ProfileSyncBatch => ({
+      batchId: RUN,
+      sourceHostId: SOURCE_HOST_ID,
+      createdAt: 1_700_000_000_000,
+      automatic: false,
+      items,
+    });
+    const settled = (state: ProfileSyncItem["state"]): ProfileSyncItem => ({
+      ...syncItem(1, DEST_HOST_ID, state, []),
+      preview: null,
+    });
+
+    function mountRun(): MockHostMessenger<HostRpcRegistry> {
+      listBatches = [runWith([retryableItem()])];
+      return mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+    }
+
+    async function openRun(): Promise<void> {
+      openSync(null);
+      fireEvent.click(
+        await screen.findByRole("button", { name: /profile transfers/ }),
+      );
+      await screen.findByRole("button", { name: "Check status" });
+    }
+
+    it("keeps a successful Check status answer through a failed refetch, until a newer poll supersedes it and survives omission", async () => {
+      resolveAnswer = (request) => ({
+        batchId: request.batchId,
+        sourceHostId: request.sourceHostId,
+        createdAt: 1,
+        automatic: false,
+        items: [settled("synced")],
+      });
+      mountRun();
+      await openRun();
+      // The next refetch will fail; the answer must not be undone by it.
+      listFails = true;
+      fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+      expect(await screen.findByText("Synced")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Check status" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByText("Synced")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      // A later successful poll with newer state supersedes it...
+      listFails = false;
+      listBatches = [runWith([settled("source-removed")])];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(await screen.findByText("Profile removed")).toBeTruthy();
+      // ...and survives the run leaving the bounded history.
+      listBatches = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByText("Profile removed")).toBeTruthy();
+    });
+
+    it("keeps a successful conflict resolution through a failed refetch, with no conflict controls left", async () => {
+      const conflict: ProfileSyncItem = {
+        ...settled("conflict"),
+        destinationSettings: {
+          name: "Edited on destination",
+          color: "#10b981",
+          enabled: true,
+        },
+      };
+      listBatches = [runWith([conflict])];
+      mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      // The resolution lands as the source applied: synced, destination agrees.
+      resolveAnswer = (request) => ({
+        batchId: request.batchId,
+        sourceHostId: request.sourceHostId,
+        createdAt: 1,
+        automatic: false,
+        items: [settled("synced")],
+      });
+      openSync(null);
+      fireEvent.click(
+        await screen.findByRole("button", { name: /profile transfers/ }),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+      const useSource = await screen.findByRole("button", {
+        name: "Use source settings",
+      });
+      // The next refetch fails, so only the answer can show the new state.
+      listFails = true;
+      fireEvent.click(useSource);
+      expect(await screen.findByText("Synced")).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByText("Synced")).toBeTruthy();
+      for (const name of ["Use source settings", "Keep destination & pause"])
+        expect(screen.queryByRole("button", { name })).toBeNull();
+      expect(screen.queryByText(/edited on the destination/)).toBeNull();
+    });
+
+    it.each([
+      [
+        "another source's batch",
+        (
+          request: RequestOfMethod<
+            HostRpcRegistry,
+            "providers.profileCopy.sync.resolve"
+          >,
+        ): ProfileSyncBatch => ({
+          batchId: request.batchId,
+          sourceHostId: "foreign-source-host",
+          createdAt: 1,
+          automatic: false,
+          items: [settled("synced")],
+        }),
+      ],
+      [
+        "another batch id",
+        (
+          request: RequestOfMethod<
+            HostRpcRegistry,
+            "providers.profileCopy.sync.resolve"
+          >,
+        ): ProfileSyncBatch => ({
+          batchId: "00000000-0000-4000-8000-0000000000f2",
+          sourceHostId: request.sourceHostId,
+          createdAt: 1,
+          automatic: false,
+          items: [settled("synced")],
+        }),
+      ],
+      [
+        "a batch missing the requested operation",
+        (
+          request: RequestOfMethod<
+            HostRpcRegistry,
+            "providers.profileCopy.sync.resolve"
+          >,
+        ): ProfileSyncBatch => ({
+          batchId: request.batchId,
+          sourceHostId: request.sourceHostId,
+          createdAt: 1,
+          automatic: false,
+          items: [],
+        }),
+      ],
+    ])("does not let %s replace the active run", async (_label, answer) => {
+      resolveAnswer = answer;
+      const messenger = mountRun();
+      await openRun();
+      // The answer is wire-valid; only its correlation is wrong.
+      expect(
+        profileSyncBatchSchema.safeParse(
+          answer({
+            sourceHostId: SOURCE_HOST_ID,
+            batchId: RUN,
+            operationId: OP,
+            action: "check",
+            expectedDestination: null,
+          }),
+        ).success,
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+      await waitFor(() =>
+        expect(
+          messenger.calls.filter(
+            (call) => call.method === "providers.profileCopy.sync.resolve",
+          ),
+        ).toHaveLength(1),
+      );
+      // The active run is untouched: still unavailable, still actionable.
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Check status" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      expect(screen.queryByText("Synced")).toBeNull();
+      expect(screen.getByText("Unavailable")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    describe("a new rule's id across an uncertain save", () => {
+      const sentRuleIds = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+        messenger.calls
+          .filter(
+            (call) => call.method === "providers.profileCopy.sync.saveRule",
+          )
+          .map((call) => profileSyncSaveRuleSchema.parse(call.params).ruleId);
+
+      async function openAutomatic(): Promise<void> {
+        fireEvent.mouseDown(
+          await screen.findByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        await screen.findByRole("button", { name: "Add device" });
+      }
+
+      async function saveFor(name: RegExp): Promise<void> {
+        fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+        fireEvent.keyDown(
+          await screen.findByRole("combobox", { name: "Destination device" }),
+          { key: "ArrowDown" },
+        );
+        fireEvent.click(await screen.findByRole("option", { name }));
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Enable automatic sync" }),
+        );
+        expect(
+          await screen.findByText(/Couldn't reach Studio Mac right now/),
+        ).toBeTruthy();
+      }
+
+      async function failedSave(): Promise<MockHostMessenger<HostRpcRegistry>> {
+        saveRuleThrows = true;
+        const messenger = mount([]);
+        openSync(null);
+        await openAutomatic();
+        await saveFor(/Linux box/);
+        return messenger;
+      }
+
+      it("keeps the id across Back and a remounted editor for the same destination", async () => {
+        const messenger = await failedSave();
+        fireEvent.click(
+          screen.getByRole("button", { name: "← Automatic sync" }),
+        );
+        await saveFor(/Linux box/);
+        const [first, second] = sentRuleIds(messenger);
+        expect(second).toBe(first);
+      });
+
+      it("keeps the id across closing and reopening the dialog", async () => {
+        const messenger = await failedSave();
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        await waitFor(() =>
+          expect(useProfileCopyFlowStore.getState().view).toBeNull(),
+        );
+        openSync(null);
+        await openAutomatic();
+        await saveFor(/Linux box/);
+        const [first, second] = sentRuleIds(messenger);
+        expect(second).toBe(first);
+      });
+
+      it("uses a new id for another destination, and after an account reset", async () => {
+        const messenger = await failedSave();
+        fireEvent.click(
+          screen.getByRole("button", { name: "← Automatic sync" }),
+        );
+        await saveFor(/Old Mac/);
+        act(() => {
+          useProfileCopyFlowStore.getState().reset();
+        });
+        openSync(null);
+        await openAutomatic();
+        await saveFor(/Linux box/);
+        const [first, other, afterReset] = sentRuleIds(messenger);
+        expect(other).not.toBe(first);
+        expect(afterReset).not.toBe(first);
+      });
+
+      it("forgets the id only when a successful list names that rule", async () => {
+        const messenger = await failedSave();
+        const [sent] = sentRuleIds(messenger);
+        const remembered = (): string =>
+          useProfileCopyFlowStore
+            .getState()
+            .getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID);
+        expect(remembered()).toBe(sent);
+        // An unsuccessful list must not clear it.
+        listFails = true;
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        expect(remembered()).toBe(sent);
+        // A successful list naming a different rule must not clear it either.
+        listFails = false;
+        listRules = [
+          { ...SAVED_RULE, ruleId: "00000000-0000-4000-8000-0000000000ab" },
+        ];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        expect(remembered()).toBe(sent);
+        // A successful list naming the remembered rule confirms the outcome.
+        listRules = [{ ...SAVED_RULE, ruleId: sent }];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        await waitFor(() => expect(remembered()).not.toBe(sent));
+      });
+    });
+  });
+
+  describe("round 27: accepted rule answers survive a failed list refetch", () => {
+    async function openRules(wait: "rule" | "empty"): Promise<void> {
+      openSync(null);
+      fireEvent.mouseDown(
+        await screen.findByRole("tab", { name: /Automatic sync/ }),
+        { button: 0 },
+      );
+      if (wait === "rule")
+        await screen.findByRole("heading", { name: "Linux box" });
+      else await screen.findByRole("button", { name: "Add device" });
+    }
+
+    const saveParams = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+      messenger.calls
+        .filter((call) => call.method === "providers.profileCopy.sync.saveRule")
+        .map((call) => profileSyncSaveRuleSchema.parse(call.params));
+
+    it("shows a successful Pause as Resume and sends the new revision next", async () => {
+      const messenger = mount([SAVED_RULE]);
+      await openRules("rule");
+      listFails = true;
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      expect(
+        await screen.findByRole("button", { name: "Resume" }),
+      ).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+      expect(screen.getByText("Paused")).toBeTruthy();
+      // Navigating away and back does not discard the acknowledgement.
+      fireEvent.mouseDown(screen.getByRole("tab", { name: /Sync now/ }), {
+        button: 0,
+      });
+      await screen.findByRole("button", { name: "Cancel" });
+      fireEvent.mouseDown(screen.getByRole("tab", { name: /Automatic sync/ }), {
+        button: 0,
+      });
+      expect(
+        await screen.findByRole("button", { name: "Resume" }),
+      ).toBeTruthy();
+      expect(screen.getByText("Paused")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+      await waitFor(() => expect(saveParams(messenger)).toHaveLength(2));
+      expect(saveParams(messenger)[1].expectedRevision).toBe(
+        SAVED_RULE.revision + 1,
+      );
+    });
+
+    it("lets a later valid list supersede the locally accepted Pause", async () => {
+      mount([SAVED_RULE]);
+      await openRules("rule");
+      listFails = true;
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      expect(
+        await screen.findByRole("button", { name: "Resume" }),
+      ).toBeTruthy();
+      listFails = false;
+      listRules = [
+        { ...SAVED_RULE, paused: false, status: "active", revision: 5 },
+      ];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(await screen.findByRole("button", { name: "Pause" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+    });
+
+    it("removes a successfully stopped rule and its actions", async () => {
+      mount([SAVED_RULE]);
+      await openRules("rule");
+      listFails = true;
+      fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Stop automatic sync" }),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("heading", { name: "Linux box" })).toBeNull(),
+      );
+      for (const name of ["Edit", "Pause", "Resume", "Stop…"])
+        expect(screen.queryByRole("button", { name })).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.queryByRole("heading", { name: "Linux box" })).toBeNull();
+    });
+
+    it("keeps a successfully created rule listed and refuses a second rule for its destination", async () => {
+      mount([]);
+      await openRules("empty");
+      fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+      fireEvent.keyDown(
+        await screen.findByRole("combobox", { name: "Destination device" }),
+        { key: "ArrowDown" },
+      );
+      fireEvent.click(await screen.findByRole("option", { name: /Linux box/ }));
+      listFails = true;
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Enable automatic sync" }),
+      );
+      expect(
+        await screen.findByRole("heading", { name: "Linux box" }),
+      ).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByRole("heading", { name: "Linux box" })).toBeTruthy();
+      // Its destination is taken, so a new rule cannot target it again.
+      fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+      fireEvent.keyDown(
+        await screen.findByRole("combobox", { name: "Destination device" }),
+        { key: "ArrowDown" },
+      );
+      await screen.findByRole("option", { name: /Old Mac/ });
+      expect(screen.queryByRole("option", { name: /Linux box/ })).toBeNull();
     });
   });
 });
