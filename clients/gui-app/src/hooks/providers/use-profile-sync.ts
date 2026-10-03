@@ -24,7 +24,21 @@ import type {
   ProfileSyncSelection,
   ProfileSyncPreview,
   ProfileSyncList,
+  ProfileSyncScope,
 } from "@traycer/protocol/host/profile-sync-schemas";
+
+function sameSyncScope(
+  left: ProfileSyncScope,
+  right: ProfileSyncScope,
+): boolean {
+  if (left.kind === "all" || right.kind === "all")
+    return left.kind === right.kind;
+  const providers = new Set(right.providers);
+  return (
+    left.providers.length === right.providers.length &&
+    left.providers.every((provider) => providers.has(provider))
+  );
+}
 
 /** Keep source and nested destination observers mounted until their RPCs settle. */
 export function useProfileSyncPending(hostId: string | null): boolean {
@@ -149,7 +163,10 @@ export function useProfileSyncSaveRule(
         request.sourceHostId !== hostId ||
         response.sourceHostId !== request.sourceHostId ||
         response.ruleId !== request.ruleId ||
-        response.destinationHostId !== request.destinationHostId
+        response.destinationHostId !== request.destinationHostId ||
+        response.paused !== request.paused ||
+        response.revision <= request.expectedRevision ||
+        !sameSyncScope(response.scope, request.scope)
       ) {
         throw new Error("The device returned another sync rule.");
       }

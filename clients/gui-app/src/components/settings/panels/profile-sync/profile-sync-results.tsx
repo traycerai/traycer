@@ -1,4 +1,7 @@
-import { SYNC_STATE_LABELS } from "./profile-sync-state";
+import {
+  SYNC_STATE_LABELS,
+  type ProfileSyncRetryReceipt,
+} from "./profile-sync-state";
 import { useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -30,7 +33,8 @@ export function ProfileSyncResults(props: {
   readonly sourceHostId: string;
   readonly batch: ProfileSyncBatch;
   readonly hosts: ProfileCopyHosts;
-  readonly onResolved: (batch: ProfileSyncBatch) => void;
+  readonly onResolved: (batch: ProfileSyncBatch, operationId: string) => void;
+  readonly onRetried: (receipt: ProfileSyncRetryReceipt) => void;
 }): ReactNode {
   if (props.batch.sourceHostId !== props.sourceHostId)
     return (
@@ -61,6 +65,7 @@ export function ProfileSyncResults(props: {
                   batch={props.batch}
                   hosts={props.hosts}
                   onResolved={props.onResolved}
+                  onRetried={props.onRetried}
                 />
               ))}
           </div>
@@ -74,13 +79,19 @@ function ProfileSyncResultItem(props: {
   readonly batch: ProfileSyncBatch;
   readonly item: ProfileSyncItem;
   readonly hosts: ProfileCopyHosts;
-  readonly onResolved: (batch: ProfileSyncBatch) => void;
+  readonly onResolved: (batch: ProfileSyncBatch, operationId: string) => void;
+  readonly onRetried: (receipt: ProfileSyncRetryReceipt) => void;
 }): ReactNode {
   const { item, batch, hosts, sourceHostId } = props;
   const [expanded, setExpanded] = useState(false);
   const resolve = useProfileSyncResolve(sourceHostId);
   const resolveError = useProfileSyncItemError(item, resolve.error);
-  const retry = useProfileSyncItemRetry(sourceHostId, item);
+  const retry = useProfileSyncItemRetry(
+    sourceHostId,
+    batch.batchId,
+    item,
+    props.onRetried,
+  );
   const draftPending = useProfileCopyDraftPending(
     sourceHostId,
     item.operationId,
@@ -101,7 +112,10 @@ function ProfileSyncResultItem(props: {
         action,
         expectedDestination: item.destinationSettings,
       },
-      { onSuccess: props.onResolved },
+      {
+        onSuccess: (response, request) =>
+          props.onResolved(response, request.operationId),
+      },
     );
   };
   const error = resolveError.error ?? retry.error;
@@ -260,7 +274,9 @@ interface SyncItemRetry {
 }
 function useProfileSyncItemRetry(
   sourceHostId: string,
+  batchId: string,
   item: ProfileSyncItem,
+  onRetried: (receipt: ProfileSyncRetryReceipt) => void,
 ): SyncItemRetry {
   const retry = useProfileCopyRetryMutation(sourceHostId, item.operationId);
   const error = useProfileSyncItemError(item, retry.error);
@@ -282,7 +298,13 @@ function useProfileSyncItemRetry(
       },
       {
         onSuccess: (response) => {
-          if (response.result !== "current") {
+          if (response.result === "current") {
+            onRetried({
+              batchId,
+              requested: outcome.attempt,
+              outcome: response.outcome,
+            });
+          } else {
             setNotice({
               kind: response.result,
               attemptId: outcome.attempt.attemptId,

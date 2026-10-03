@@ -10,7 +10,11 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProfileCopyAttempt } from "@traycer/protocol/host/profile-copy-schemas";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
@@ -100,6 +104,12 @@ function resolvedItem(operationId: string): ProfileSyncItem {
   };
 }
 
+let retryAnswer:
+  | ((
+      request: RequestOfMethod<HostRpcRegistry, "providers.profileCopy.retry">,
+    ) => ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.retry">)
+  | null = null;
+
 // Overrides for the rule answers; reset by the describe that uses them.
 let saveAnswer: ((request: ProfileSyncSaveRule) => ProfileSyncRule) | null =
   null;
@@ -133,6 +143,14 @@ function setup(): {
           ruleId: params.ruleId,
           sourceHostId: params.sourceHostId,
           destinationHostId: params.destinationHostId,
+          scope: params.scope,
+          paused: params.paused,
+          revision: params.expectedRevision + 1,
+        },
+      "providers.profileCopy.retry": (params) =>
+        retryAnswer?.(params) ?? {
+          result: "current" as const,
+          outcome: profileCopyOutcome({ attempt: params.attempt }),
         },
       "providers.profileCopy.sync.stopRule": (params) =>
         stopAnswer?.(params) ?? { batches: [], rules: [] },
@@ -516,5 +534,166 @@ describe("rule answers are correlated with their request", () => {
     act(() => result.current.mutate(stopRequest, { onSuccess }));
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(onSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveRule answers bind scope, paused flag and an advancing revision", () => {
+  const request = {
+    sourceHostId: SOURCE,
+    ruleId: RULE_ID,
+    destinationHostId: DEST,
+    scope: {
+      kind: "selected" as const,
+      providers: ["codex" as const, "claude" as const],
+    },
+    paused: false,
+    expectedRevision: 3,
+  };
+  const echo = (): ProfileSyncRule => ({
+    ...RULE,
+    scope: { kind: "selected", providers: ["claude", "codex"] },
+    paused: false,
+    revision: 4,
+  });
+
+  beforeEach(() => {
+    harness.spine = null;
+    saveAnswer = null;
+  });
+  afterEach(() => {
+    cleanup();
+    harness.spine = null;
+    saveAnswer = null;
+  });
+
+  it("accepts a canonically reordered provider list at the next revision", async () => {
+    saveAnswer = echo;
+    expect(profileSyncRuleSchema.safeParse(echo()).success).toBe(true);
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useProfileSyncSaveRule(SOURCE), {
+      wrapper,
+    });
+    const onSuccess = vi.fn();
+    act(() => result.current.mutate(request, { onSuccess }));
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "a changed scope",
+      (): ProfileSyncRule => ({
+        ...echo(),
+        scope: { kind: "selected", providers: ["claude"] },
+      }),
+    ],
+    [
+      "a different scope kind",
+      (): ProfileSyncRule => ({ ...echo(), scope: { kind: "all" } }),
+    ],
+    [
+      "a changed paused flag",
+      (): ProfileSyncRule => ({ ...echo(), paused: true }),
+    ],
+    [
+      "a revision that did not advance",
+      (): ProfileSyncRule => ({ ...echo(), revision: 3 }),
+    ],
+    [
+      "a revision that went backwards",
+      (): ProfileSyncRule => ({ ...echo(), revision: 2 }),
+    ],
+  ])("rejects an answer with %s", async (_label, answer) => {
+    // Wire-valid: only the correlation can refuse it.
+    expect(profileSyncRuleSchema.safeParse(answer()).success).toBe(true);
+    saveAnswer = answer;
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useProfileSyncSaveRule(SOURCE), {
+      wrapper,
+    });
+    const onSuccess = vi.fn();
+    act(() => result.current.mutate(request, { onSuccess }));
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe("retry answers are correlated with their request", () => {
+  beforeEach(() => {
+    harness.spine = null;
+    retryAnswer = null;
+  });
+  afterEach(() => {
+    cleanup();
+    harness.spine = null;
+    retryAnswer = null;
+  });
+
+  const attempt = (): ProfileCopyAttempt =>
+    profileCopyAttempt({ sourceHostId: SOURCE });
+  const answerWith = (
+    overrides: Partial<ProfileCopyAttempt>,
+  ): ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.retry"> => ({
+    result: "current",
+    outcome: profileCopyOutcome({
+      attempt: { ...attempt(), ...overrides },
+    }),
+  });
+
+  it.each([
+    [
+      "another operation",
+      { operationId: "00000000-0000-4000-8000-0000000000cc" },
+    ],
+    ["another source", { sourceHostId: "other-source-host" }],
+    ["another provider", { providerId: "codex" as const }],
+    [
+      "another source profile",
+      { sourceProfileId: "00000000-0000-4000-8000-0000000000dd" },
+    ],
+    ["another destination", { destinationHostId: "dest-host-2" }],
+  ])("rejects an answer for %s", async (_label, overrides) => {
+    retryAnswer = () => answerWith(overrides);
+    const { wrapper } = setup();
+    const { result } = renderHook(
+      () => useProfileCopyRetryMutation(SOURCE, COPY_OPERATION_ID),
+      { wrapper },
+    );
+    const onSuccess = vi.fn();
+    act(() =>
+      result.current.mutate(
+        {
+          attempt: attempt(),
+          expectedRevision: 1,
+          retryRequestId: RETRY_REQUEST_ID,
+        },
+        { onSuccess },
+      ),
+    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(onSuccess).not.toHaveBeenCalled();
+  });
+
+  it("accepts a replacement attempt of the same transfer", async () => {
+    retryAnswer = () =>
+      answerWith({ attemptId: "55555555-5555-4555-8555-555555555556" });
+    const { wrapper } = setup();
+    const { result } = renderHook(
+      () => useProfileCopyRetryMutation(SOURCE, COPY_OPERATION_ID),
+      { wrapper },
+    );
+    const onSuccess = vi.fn();
+    act(() =>
+      result.current.mutate(
+        {
+          attempt: attempt(),
+          expectedRevision: 1,
+          retryRequestId: RETRY_REQUEST_ID,
+        },
+        { onSuccess },
+      ),
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onSuccess).toHaveBeenCalledTimes(1);
   });
 });

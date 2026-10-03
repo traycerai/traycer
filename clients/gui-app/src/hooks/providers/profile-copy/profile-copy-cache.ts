@@ -5,6 +5,8 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import {
   isOutcomePromoted,
+  reconcileProfileCopyRetryOutcome,
+  type ProfileCopyAttempt,
   type ProfileCopyDraftResponse,
   type ProfileCopyOperationResponse,
   type ProfileCopyOutcome,
@@ -98,6 +100,33 @@ export function writeProfileCopyOperation(
   queryClient.setQueryData<ProfileCopyOperationResponse>(
     profileCopyStatusKey(response.sourceHostId, response.operationId),
     response,
+  );
+}
+
+/** Keep a current Retry receipt even when the following source read fails. */
+export function writeProfileCopyRetryOutcome(
+  queryClient: QueryClient,
+  requested: ProfileCopyAttempt,
+  outcome: ProfileCopyOutcome,
+): void {
+  queryClient.setQueryData<ProfileCopyOperationResponse>(
+    profileCopyStatusKey(requested.sourceHostId, requested.operationId),
+    (previous) => {
+      if (
+        previous === undefined ||
+        previous.sourceHostId !== requested.sourceHostId ||
+        previous.operationId !== requested.operationId
+      )
+        return previous;
+      const outcomes = previous.outcomes.map((current) =>
+        reconcileProfileCopyRetryOutcome(current, requested, outcome),
+      );
+      return outcomes.some(
+        (current, index) => current !== previous.outcomes[index],
+      )
+        ? { ...previous, outcomes }
+        : previous;
+    },
   );
 }
 

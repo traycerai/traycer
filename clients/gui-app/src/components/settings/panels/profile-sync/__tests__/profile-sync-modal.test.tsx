@@ -5084,4 +5084,276 @@ describe("ProfileSyncModal review regressions", () => {
       expect(screen.queryByRole("option", { name: /Linux box/ })).toBeNull();
     });
   });
+
+  describe("round 28: a current Retry answer is kept when the list refetch fails", () => {
+    const OP = "00000000-0000-4000-8000-000000000001";
+    const RUN = "00000000-0000-4000-8000-0000000000f8";
+    const ATTEMPT_C = "55555555-5555-4555-8555-555555555557";
+
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    const retryable = (
+      attemptId: string,
+      revision: number,
+    ): ProfileCopyOutcome =>
+      profileCopyOutcome({
+        attempt: profileCopyAttempt({ operationId: OP, attemptId }),
+        revision,
+        state: "blocked",
+        reason: "unreachable",
+      });
+    const replacement = (): ProfileCopyOutcome =>
+      recordedOutcome({
+        attempt: profileCopyAttempt({
+          operationId: OP,
+          attemptId: ATTEMPT_TWO_ID,
+        }),
+        revision: 4,
+        state: "sign-in-required",
+      });
+    const runWith = (outcome: ProfileCopyOutcome): ProfileSyncBatch => ({
+      batchId: RUN,
+      sourceHostId: SOURCE_HOST_ID,
+      createdAt: 1_700_000_000_000,
+      automatic: false,
+      items: [
+        {
+          ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+          preview: null,
+          outcome,
+        },
+      ],
+    });
+
+    function mountRun(): MockHostMessenger<HostRpcRegistry> {
+      listBatches = [runWith(retryable(ATTEMPT_ID, 3))];
+      return mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+    }
+
+    async function openRun(): Promise<void> {
+      openSync(null);
+      fireEvent.click(
+        await screen.findByRole("button", { name: /profile transfers/ }),
+      );
+      await screen.findByRole("button", { name: "Retry" });
+    }
+
+    const draftReads = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+      messenger.calls
+        .filter((call) => call.method === "providers.profileCopy.draftStatus")
+        .map((call) => profileCopyDraftRequestSchema.parse(call.params));
+
+    it("shows the replacement attempt through a failed refetch, sends follow-ups to it, and is superseded by a later poll", async () => {
+      retryOutcome = replacement();
+      draftStatusOutcome = replacement();
+      const messenger = mountRun();
+      await openRun();
+      listFails = true;
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      // The new receipt is sign-in required, so the old Retry is withdrawn.
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull(),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      // A follow-up (the draft read behind Review) goes to the replacement.
+      fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+      await waitFor(() =>
+        expect(
+          draftReads(messenger).some(
+            (read) => read.attempt.attemptId === ATTEMPT_TWO_ID,
+          ),
+        ).toBe(true),
+      );
+      expect(
+        draftReads(messenger).every(
+          (read) => read.attempt.attemptId === ATTEMPT_TWO_ID,
+        ),
+      ).toBe(true);
+      // A later valid poll supersedes it, and survives the run's omission.
+      listFails = false;
+      listBatches = [runWith(retryable(ATTEMPT_C, 5))];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
+      listBatches = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("keeps one item's accepted Retry replacement when another item's older Check status snapshot lands", async () => {
+      const held = gate();
+      resolveGate = held.promise;
+      const OP_X = "00000000-0000-4000-8000-000000000001";
+      const OP_Y = "00000000-0000-4000-8000-000000000002";
+      const PROFILE_Y = "33333333-3333-4333-8333-333333333334";
+      const ATTEMPT_Y = "55555555-5555-4555-8555-555555555556";
+      const itemX: ProfileSyncItem = {
+        ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+        preview: null,
+        outcome: retryable(ATTEMPT_ID, 3),
+      };
+      const itemY: ProfileSyncItem = {
+        ...withSourceProfile(
+          syncItem(2, DEST_HOST_ID, "unavailable", []),
+          PROFILE_Y,
+        ),
+        preview: null,
+        outcome: profileCopyOutcome({
+          attempt: profileCopyAttempt({
+            operationId: OP_Y,
+            sourceProfileId: PROFILE_Y,
+            attemptId: ATTEMPT_Y,
+          }),
+          revision: 3,
+          state: "blocked",
+          reason: "unreachable",
+        }),
+      };
+      expect(itemX.operationId).toBe(OP_X);
+      expect(itemY.operationId).toBe(OP_Y);
+      const replacementY = recordedOutcome({
+        attempt: profileCopyAttempt({
+          operationId: OP_Y,
+          sourceProfileId: PROFILE_Y,
+          attemptId: ATTEMPT_C,
+        }),
+        revision: 4,
+        state: "sign-in-required",
+      });
+      retryOutcome = replacementY;
+      draftStatusOutcome = replacementY;
+      listBatches = [
+        { ...runWith(retryable(ATTEMPT_ID, 3)), items: [itemX, itemY] },
+      ];
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      const retries = () =>
+        messenger.calls.filter(
+          (call) => call.method === "providers.profileCopy.retry",
+        );
+      const draftReads = () =>
+        messenger.calls
+          .filter((call) => call.method === "providers.profileCopy.draftStatus")
+          .map((call) => profileCopyDraftRequestSchema.parse(call.params));
+      try {
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        await waitFor(() =>
+          expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(
+            2,
+          ),
+        );
+        // Hold X's Check status: its dispatch captured Y at attempt A.
+        fireEvent.click(
+          screen.getAllByRole("button", { name: "Check status" })[0],
+        );
+        await waitFor(() =>
+          expect(
+            messenger.calls.filter(
+              (call) => call.method === "providers.profileCopy.sync.resolve",
+            ),
+          ).toHaveLength(1),
+        );
+        // Meanwhile Y's Retry is accepted, with the list refetch failing.
+        listFails = true;
+        fireEvent.click(screen.getAllByRole("button", { name: "Retry" })[1]);
+        await waitFor(() => expect(retries()).toHaveLength(1));
+        expect(
+          profileCopyRetryRequestSchema.parse(retries()[0].params).attempt
+            .attemptId,
+        ).toBe(ATTEMPT_Y);
+        // Y's old Retry is gone; only X's remains.
+        await waitFor(() =>
+          expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(
+            1,
+          ),
+        );
+      } finally {
+        held.release();
+      }
+      // X's older snapshot (with Y at attempt A) lands and must not undo Y.
+      await waitFor(() =>
+        expect(
+          screen
+            .getAllByRole("button", { name: "Check status" })[0]
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+      // Y's follow-ups still go to the replacement attempt.
+      fireEvent.click(screen.getAllByRole("button", { name: "Review…" })[1]);
+      await waitFor(() =>
+        expect(
+          draftReads().some((read) => read.attempt.attemptId === ATTEMPT_C),
+        ).toBe(true),
+      );
+      expect(
+        draftReads().every((read) => read.attempt.attemptId !== ATTEMPT_Y),
+      ).toBe(true);
+    });
+
+    it("does not regress a newer polled receipt when an older attempt's held Retry answers", async () => {
+      const held = gate();
+      retryGate = held.promise;
+      retryOutcome = replacement();
+      const messenger = mountRun();
+      await openRun();
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() =>
+          expect(
+            messenger.calls.filter(
+              (call) => call.method === "providers.profileCopy.retry",
+            ),
+          ).toHaveLength(1),
+        );
+        // While held, the list moves on to a newer, unrelated attempt.
+        listBatches = [runWith(retryable(ATTEMPT_C, 5))];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        listFails = true;
+      } finally {
+        held.release();
+      }
+      const sent = profileCopyRetryRequestSchema.parse(
+        messenger.calls.filter(
+          (call) => call.method === "providers.profileCopy.retry",
+        )[0].params,
+      );
+      expect(sent.attempt.attemptId).toBe(ATTEMPT_ID);
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Retry" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      // The older answer does not overwrite the newer attempt's receipt.
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+  });
 });

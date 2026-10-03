@@ -10,7 +10,9 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import {
   profileCopyStatusKey,
   writeProfileCopyOperation,
+  writeProfileCopyRetryOutcome,
 } from "@/hooks/providers/profile-copy/profile-copy-cache";
+import { profileCopyTransferKey } from "@/lib/profile-copy/profile-copy-model";
 import { reportProfileCopyStarted } from "@/hooks/providers/profile-copy/profile-copy-observations";
 import { hostQueryKeys, profileCopyMutationKeys } from "@/lib/query-keys";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
@@ -170,9 +172,25 @@ export function useProfileCopyRetryMutation(
   return useHostMutation<HostRpcRegistry, "providers.profileCopy.retry">({
     client,
     method: "providers.profileCopy.retry",
+    onResponse: (response, request) => {
+      if (
+        request.attempt.sourceHostId !== sourceHostId ||
+        request.attempt.operationId !== operationId ||
+        profileCopyTransferKey(response.outcome.attempt) !==
+          profileCopyTransferKey(request.attempt)
+      ) {
+        throw new Error("The device returned another profile copy retry.");
+      }
+    },
     options: {
       mutationKey: profileCopyMutationKeys.retry(sourceHostId, operationId),
-      onSuccess: () => {
+      onSuccess: (response, request) => {
+        if (response.result === "current")
+          writeProfileCopyRetryOutcome(
+            queryClient,
+            request.attempt,
+            response.outcome,
+          );
         void queryClient.invalidateQueries({
           queryKey: profileCopyStatusKey(sourceHostId, operationId),
         });

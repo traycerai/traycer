@@ -65,7 +65,11 @@ import {
 import { ProfileSyncProviderPicker } from "./profile-sync-provider-picker";
 import { ProfileSyncRules } from "./profile-sync-rules";
 import { ProfileSyncResults } from "./profile-sync-results";
-import { SYNC_STATE_LABELS } from "./profile-sync-state";
+import {
+  SYNC_STATE_LABELS,
+  reconcileSyncRetryBatch,
+  type ProfileSyncRetryReceipt,
+} from "./profile-sync-state";
 
 export function ProfileSyncModal(props: {
   readonly sourceHostId: string;
@@ -98,6 +102,7 @@ export function ProfileSyncModal(props: {
     startError,
     batch,
     acceptResolved,
+    acceptRetried,
     sourceName,
     canStart,
     selectionTooLarge,
@@ -156,6 +161,7 @@ export function ProfileSyncModal(props: {
                 batch={batch}
                 hosts={hosts}
                 onResolved={acceptResolved}
+                onRetried={acceptRetried}
               />
             </>
           ) : null}
@@ -718,7 +724,11 @@ function useProfileSyncViewedBatch(
   readonly batch: ProfileSyncBatch | null;
   readonly setBatchId: (batchId: string | null) => void;
   readonly acceptStarted: (batch: ProfileSyncBatch) => void;
-  readonly acceptResolved: (batch: ProfileSyncBatch) => void;
+  readonly acceptResolved: (
+    batch: ProfileSyncBatch,
+    operationId: string,
+  ) => void;
+  readonly acceptRetried: (receipt: ProfileSyncRetryReceipt) => void;
 } {
   const queryClient = useQueryClient();
   // A bounded history poll can omit the opened run; its pending action
@@ -763,16 +773,40 @@ function useProfileSyncViewedBatch(
         listObservation: currentSyncListObservation(queryClient, sourceHostId),
       });
     },
-    acceptResolved: (batch) => {
+    acceptResolved: (batch, operationId) => {
       const listObservation = currentSyncListObservation(
         queryClient,
         sourceHostId,
       );
-      setViewedBatch((current) =>
-        current?.batch.batchId === batch.batchId
-          ? { batch, listObservation }
-          : current,
+      const resolved = batch.items.find(
+        (item) => item.operationId === operationId,
       );
+      setViewedBatch((current) => {
+        if (current?.batch.batchId !== batch.batchId || resolved === undefined)
+          return current;
+        // Resolve changes one operation. Its sibling snapshot can predate a
+        // concurrent Retry or resolution already accepted in this dialog.
+        return {
+          batch: {
+            ...current.batch,
+            items: current.batch.items.map((item) =>
+              item.operationId === operationId ? resolved : item,
+            ),
+          },
+          listObservation,
+        };
+      });
+    },
+    acceptRetried: (receipt) => {
+      const listObservation = currentSyncListObservation(
+        queryClient,
+        sourceHostId,
+      );
+      setViewedBatch((current) => {
+        if (current === null) return current;
+        const batch = reconcileSyncRetryBatch(current.batch, receipt);
+        return batch === current.batch ? current : { batch, listObservation };
+      });
     },
   };
 }
@@ -808,7 +842,11 @@ interface SyncModalModel {
     RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">
   >;
   readonly batch: ProfileSyncBatch | null;
-  readonly acceptResolved: (batch: ProfileSyncBatch) => void;
+  readonly acceptResolved: (
+    batch: ProfileSyncBatch,
+    operationId: string,
+  ) => void;
+  readonly acceptRetried: (receipt: ProfileSyncRetryReceipt) => void;
   readonly startError: HostRpcError | null;
   readonly sourceName: string;
   readonly canStart: boolean;
@@ -853,7 +891,7 @@ function useProfileSyncModalState(props: {
   const list = useProfileSyncList(sourceHostId);
   const { rules, acceptSavedRule, acceptStoppedRule } =
     useProfileSyncAcceptedRules(sourceHostId, list);
-  const { batch, setBatchId, acceptStarted, acceptResolved } =
+  const { batch, setBatchId, acceptStarted, acceptResolved, acceptRetried } =
     useProfileSyncViewedBatch(sourceHostId, list);
   const { selected, profileCount } = selectedCatalogProfiles(
     catalog.data?.providers,
@@ -958,6 +996,7 @@ function useProfileSyncModalState(props: {
     startError,
     batch,
     acceptResolved,
+    acceptRetried,
     sourceName,
     canStart,
     selectionTooLarge,
