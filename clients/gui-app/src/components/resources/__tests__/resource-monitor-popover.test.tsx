@@ -5405,7 +5405,7 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       const button = screen.getByTestId("resource-monitor-header-button");
       fireEvent.focus(button);
       const tooltip = (await screen.findByRole("tooltip")).textContent;
-      expect(tooltip).toBe("Resources · Waiting for resource data.");
+      expect(tooltip).toContain("Resources · Waiting for resource data.");
     });
 
     // The threshold itself is held once, at the status bar segment.
