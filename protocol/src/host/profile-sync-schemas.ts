@@ -125,6 +125,12 @@ export type ProfileSyncItem = z.infer<typeof profileSyncItemSchema>;
 function uniqueOperations(items: readonly ProfileSyncItem[]): boolean {
   return new Set(items.map((item) => item.operationId)).size === items.length;
 }
+function uniqueAttempts(items: readonly ProfileSyncItem[]): boolean {
+  const attempts = items.flatMap((item) =>
+    item.outcome === null ? [] : [item.outcome.attempt.attemptId],
+  );
+  return new Set(attempts).size === attempts.length;
+}
 function uniqueTransfers(items: readonly ProfileSyncItem[]): boolean {
   return (
     new Set(
@@ -163,7 +169,19 @@ export const profileSyncPreviewSchema = lazySchema(() =>
     })
     .refine((preview) => uniqueTransfers(preview.items), {
       message: "Sync transfers must be unique within a preview",
-    }),
+    })
+    .refine((preview) => uniqueAttempts(preview.items), {
+      message: "Sync attempt IDs must be unique within a preview",
+    })
+    .refine(
+      (preview) =>
+        preview.items.every(
+          (item) =>
+            !item.identityChanged ||
+            !["ready", "synced", "queued", "copying"].includes(item.state),
+        ),
+      { message: "Source identity changes cannot be startable in a preview" },
+    ),
 );
 export type ProfileSyncPreview = z.infer<typeof profileSyncPreviewSchema>;
 export const profileSyncStartSchema = lazySchema(() =>
@@ -196,6 +214,9 @@ export const profileSyncBatchSchema = lazySchema(() =>
     })
     .refine((batch) => uniqueTransfers(batch.items), {
       message: "Sync transfers must be unique within a batch",
+    })
+    .refine((batch) => uniqueAttempts(batch.items), {
+      message: "Sync attempt IDs must be unique within a batch",
     }),
 );
 export type ProfileSyncBatch = z.infer<typeof profileSyncBatchSchema>;
@@ -234,6 +255,12 @@ export const profileSyncListSchema = lazySchema(() =>
         new Set(list.rules.map((rule) => rule.ruleId)).size ===
         list.rules.length,
       { message: "Sync rule IDs must be unique within a list" },
+    )
+    .refine(
+      (list) =>
+        new Set(list.rules.map((rule) => rule.destinationHostId)).size ===
+        list.rules.length,
+      { message: "Sync rule destinations must be unique within a list" },
     ),
 );
 export type ProfileSyncList = z.infer<typeof profileSyncListSchema>;

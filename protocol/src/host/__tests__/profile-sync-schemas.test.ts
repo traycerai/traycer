@@ -102,6 +102,14 @@ interface ItemIdentity {
   readonly sourceProfileId?: string;
   readonly destinationHostId?: string;
   readonly operationId?: string;
+  readonly attemptId?: string;
+}
+
+/** Fresh attempt ids for constructed fixtures, as production mints one per attempt. */
+let nextAttempt = 1000;
+function freshAttemptId(): string {
+  nextAttempt += 1;
+  return uuid(nextAttempt);
 }
 
 /** The base item with the given identity applied consistently everywhere. */
@@ -114,6 +122,7 @@ function itemWith(identity: ItemIdentity): ProfileSyncItem {
   const destinationHostId =
     identity.destinationHostId ?? base.destinationHostId;
   const operationId = identity.operationId ?? base.operationId;
+  const attemptId = identity.attemptId ?? freshAttemptId();
   return {
     ...base,
     providerId,
@@ -136,6 +145,7 @@ function itemWith(identity: ItemIdentity): ProfileSyncItem {
         sourceProfileId,
         destinationHostId,
         operationId,
+        attemptId,
       },
     },
   };
@@ -447,6 +457,167 @@ describe("profile sync operation uniqueness and self-targeted rules", () => {
       profileSyncListSchema.safeParse({ batches: [], rules: [selfTargeted] })
         .success,
     ).toBe(false);
+  });
+});
+
+describe("profile sync list rule destinations", () => {
+  it("rejects two rules with distinct ids that target the same destination", () => {
+    const result = profileSyncListSchema.safeParse({
+      batches: [],
+      rules: [
+        rule(1),
+        { ...rule(2), destinationHostId: rule(1).destinationHostId },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.code)).toEqual(["custom"]);
+  });
+
+  it("accepts rules with distinct ids and distinct destinations", () => {
+    expect(
+      profileSyncListSchema.safeParse({
+        batches: [],
+        rules: [rule(1), rule(2)],
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("profile sync preview identity-change rule", () => {
+  const previewOf = (items: ProfileSyncItem[]) => ({
+    selection: {
+      sourceHostId: SOURCE_HOST,
+      scope: { kind: "all" as const },
+      destinationHostIds: [DEST_HOST],
+    },
+    revision: REVISION,
+    items,
+  });
+  const changed = (state: ProfileSyncItem["state"]): ProfileSyncItem => ({
+    ...item(),
+    state,
+    identityChanged: true,
+  });
+
+  it.each(["ready", "synced", "queued", "copying"] as const)(
+    "rejects a %s preview item whose source identity changed",
+    (state) => {
+      const result = profileSyncPreviewSchema.safeParse(
+        previewOf([changed(state)]),
+      );
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error.issues.map((issue) => issue.code)).toEqual([
+        "custom",
+      ]);
+      // Unchanged identity in the same state is valid: identity is the reason.
+      expect(
+        profileSyncPreviewSchema.safeParse(
+          previewOf([{ ...changed(state), identityChanged: false }]),
+        ).success,
+      ).toBe(true);
+    },
+  );
+
+  it("accepts a changed-identity preview item that needs attention", () => {
+    expect(
+      profileSyncPreviewSchema.safeParse(
+        previewOf([{ ...changed("needs-action"), outcome: null }]),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("keeps a changed-identity synced item valid in batch history", () => {
+    expect(
+      profileSyncBatchSchema.safeParse(batch(SOURCE_HOST, [changed("synced")]))
+        .success,
+    ).toBe(true);
+    expect(profileSyncItemSchema.safeParse(changed("synced")).success).toBe(
+      true,
+    );
+  });
+});
+
+describe("profile sync attempt id uniqueness", () => {
+  const ALT_OPERATION = "00000000-0000-4000-8000-0000000000ee";
+  const ALT_PROFILE = "00000000-0000-4000-8000-0000000000ef";
+  const previewOf = (items: ProfileSyncItem[]) => ({
+    selection: {
+      sourceHostId: SOURCE_HOST,
+      scope: { kind: "all" as const },
+      destinationHostIds: [DEST_HOST],
+    },
+    revision: REVISION,
+    items,
+  });
+  // Different operation, profile and tuple; only the attempt id is shared.
+  const sharesAttempt = (): ProfileSyncItem =>
+    itemWith({
+      operationId: ALT_OPERATION,
+      sourceProfileId: ALT_PROFILE,
+      attemptId: ATTEMPT_ID,
+    });
+  const noOutcome = (
+    operationId: string,
+    profile: string,
+  ): ProfileSyncItem => ({
+    ...itemWith({ operationId, sourceProfileId: profile }),
+    outcome: null,
+    state: "queued",
+  });
+
+  it("rejects one attempt id on two items in a batch and in a preview", () => {
+    expect(sharesAttempt().outcome?.attempt.attemptId).toBe(ATTEMPT_ID);
+    expect(
+      profileSyncBatchSchema.safeParse(
+        batch(SOURCE_HOST, [item(), sharesAttempt()]),
+      ).success,
+    ).toBe(false);
+    expect(
+      profileSyncPreviewSchema.safeParse(previewOf([item(), sharesAttempt()]))
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts distinct attempt ids on distinct work", () => {
+    const distinct = itemWith({
+      operationId: ALT_OPERATION,
+      sourceProfileId: ALT_PROFILE,
+    });
+    expect(distinct.outcome?.attempt.attemptId).not.toBe(ATTEMPT_ID);
+    expect(
+      profileSyncBatchSchema.safeParse(batch(SOURCE_HOST, [item(), distinct]))
+        .success,
+    ).toBe(true);
+    expect(
+      profileSyncPreviewSchema.safeParse(previewOf([item(), distinct])).success,
+    ).toBe(true);
+  });
+
+  it("lets items without an outcome repeat the absent attempt", () => {
+    const items = [
+      noOutcome(ALT_OPERATION, ALT_PROFILE),
+      noOutcome(uuid(7), uuid(8)),
+    ];
+    expect(
+      profileSyncBatchSchema.safeParse(batch(SOURCE_HOST, items)).success,
+    ).toBe(true);
+    expect(profileSyncPreviewSchema.safeParse(previewOf(items)).success).toBe(
+      true,
+    );
+  });
+
+  it("lets separate history batches reuse one relationship receipt and operation", () => {
+    expect(
+      profileSyncListSchema.safeParse({
+        batches: [
+          batch(SOURCE_HOST, [item()]),
+          { ...batch(SOURCE_HOST, [item()]), batchId: uuid(2) },
+        ],
+        rules: [],
+      }).success,
+    ).toBe(true);
   });
 });
 
