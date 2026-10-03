@@ -35,7 +35,6 @@ function renderOptions(onChange: (id: string) => void): void {
           picture: (
             <StripAgentRow
               agent={AGENT}
-              taskTitle={null}
               onScreen={false}
               onClick={undefined}
               onHoverChange={undefined}

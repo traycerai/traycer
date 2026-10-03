@@ -69,7 +69,7 @@ export interface StatusBarProviderSegmentProps {
  * when its segments outgrow the strip - except the account NAME on a phone,
  * which truncates to a floor first. The form never changes with the width of
  * the window. What the user chose arrives as `display`: Used or Remaining, and
- * whether an expanded profile prints its reset time.
+ * whether a profile prints its reset time.
  *
  * A provider with several accounts checked draws one of these per account,
  * and what tells them apart is the profile's accent dot after the provider
@@ -196,7 +196,8 @@ export function StatusBarProviderSegment(
  * The reading itself, in the form the profile's severity earns.
  *
  * **Calm** (`healthy`): what the Reading style draws - the 16px bar by default,
- * or the percentage, or both. The rest is one hover away (the tooltip wraps the
+ * or the percentage, or both - then the short reset time when Reset time is
+ * on. The rest is one hover away (the tooltip wraps the
  * whole segment) and one click away (the panel).
  * **Expanded** (`running_low`, `limited`, or every profile under Everything):
  * the profile's name, then per window a 32px bar, the percentage - or "Limit" -
@@ -309,6 +310,7 @@ function SegmentBody(props: {
                     <StatusBarCalmWindow
                       window={window}
                       display={display}
+                      now={now}
                       motionEnabled={motionEnabled}
                     />
                   )}
@@ -323,16 +325,34 @@ function SegmentBody(props: {
 }
 
 /**
+ * The short time until a window resets (`5h`), or null when Reset time is off
+ * or the window has no reset instant. One owner for the calm and expanded
+ * forms, so the switch governs both the same way.
+ */
+function windowResetCountdown(
+  window: StatusBarRateLimitWindow,
+  display: StatusBarUsageDisplay,
+  now: number,
+): string | null {
+  return display.showTimer && window.resetsAt !== null
+    ? formatResetCountdown(window.resetsAt, now)
+    : null;
+}
+
+/**
  * One window of a calm profile, drawn as the Reading style says: the 16px bar,
- * the percentage, or the bar then the percentage. A calm window is `healthy`,
- * so its percentage is never "Limit".
+ * the percentage, or the bar then the percentage, then the short reset time
+ * when Reset time is on. A calm window is `healthy`, so its percentage is
+ * never "Limit".
  */
 function StatusBarCalmWindow(props: {
   readonly window: StatusBarRateLimitWindow;
   readonly display: StatusBarUsageDisplay;
+  readonly now: number;
   readonly motionEnabled: boolean;
 }): ReactNode {
   const { window, display } = props;
+  const countdown = windowResetCountdown(window, display, props.now);
   return (
     <>
       {display.readingStyle === "percent" ? null : (
@@ -349,6 +369,14 @@ function StatusBarCalmWindow(props: {
           display={display}
           motionEnabled={props.motionEnabled}
         />
+      )}
+      {countdown === null ? null : (
+        <span
+          data-testid={`status-bar-window-reset-${window.windowKey}`}
+          className="whitespace-nowrap"
+        >
+          {countdown}
+        </span>
       )}
     </>
   );
@@ -405,10 +433,7 @@ function StatusBarExpandedWindow(props: {
 }): ReactNode {
   const { window, display } = props;
   const limited = window.severity === "limited";
-  const countdown =
-    display.showTimer && window.resetsAt !== null
-      ? formatResetCountdown(window.resetsAt, props.now)
-      : null;
+  const countdown = windowResetCountdown(window, display, props.now);
   const label = windowLabelText({
     label: window.label,
     labelIsDuration: window.labelIsDuration,

@@ -92,7 +92,7 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
       key: "readingStyle",
       label: "Reading style",
       description:
-        "What a calm profile shows. A profile running low or at its limit always shows its name, percent and reset.",
+        "What a calm profile shows. A profile running low or at its limit always shows its name and percent.",
       labelPlacement: "above",
       examples: READING_STYLE_EXAMPLES,
     },
@@ -118,8 +118,7 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
         {
           id: "reset",
           label: "Reset time",
-          description:
-            "Shown when a profile needs attention, or always with Everything.",
+          description: "Shows each profile's time until reset.",
           pinsTransient: false,
           liveWhileHidden: null,
           requires: null,

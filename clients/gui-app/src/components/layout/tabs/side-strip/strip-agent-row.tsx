@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { NestedChatStatusGlyph } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
-import { agentLabelUnder } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
 import {
   STRIP_AGENT_ON_SCREEN_CLASS,
@@ -72,15 +72,13 @@ function Trailing(props: { readonly agent: StripAgent }): ReactNode {
  */
 export function StripAgentRow(props: {
   readonly agent: StripAgent;
-  /** The task's title, which an agent named the same does not repeat. */
-  readonly taskTitle: string | null;
   readonly onScreen: boolean;
   readonly onClick: (() => void) | undefined;
   readonly onHoverChange: ((hovering: boolean) => void) | undefined;
 }): ReactNode {
   const { agent, onScreen, onHoverChange } = props;
-  const name = agentLabelUnder(props.taskTitle, agent.title);
-  const label = `${name.text}, ${labelOf(agent)}`;
+  const name = displayTitle(agent.title ?? "", "agent");
+  const label = `${name}, ${labelOf(agent)}`;
   return (
     <button
       type="button"
@@ -100,15 +98,8 @@ export function StripAgentRow(props: {
       )}
     >
       <NestedChatStatusGlyph kind={agent.kind} />
-      <span
-        className={cn(
-          // Fades at the edge, as the task's title above does.
-          "header-tab-title-text min-w-0 flex-1",
-          name.main && "text-muted-foreground",
-        )}
-      >
-        {name.text}
-      </span>
+      {/* Fades at the edge, as the task's title above does. */}
+      <span className="header-tab-title-text min-w-0 flex-1">{name}</span>
       <Trailing agent={agent} />
     </button>
   );
