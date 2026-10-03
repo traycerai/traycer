@@ -309,6 +309,7 @@ describe("root dnd commits - left panel", () => {
       target,
       point: { x: 20, y: 220 },
       targetRect: null,
+      targetElement: null,
       activeRect: null,
     });
 
@@ -350,6 +351,7 @@ describe("root dnd commits - left panel", () => {
           target,
           point: { x: LEADING_X_MIDDLE_Y.x, y },
           targetRect: RAIL_SLOT_RECT,
+          targetElement: null,
           activeRect: null,
         }),
       ).toEqual({
@@ -363,6 +365,7 @@ describe("root dnd commits - left panel", () => {
       target,
       point: LEADING_X_MIDDLE_Y,
       targetRect: RAIL_SLOT_RECT,
+      targetElement: null,
       activeRect: null,
     });
 
@@ -398,6 +401,7 @@ describe("root dnd commits - left panel", () => {
           target,
           point: { x, y: 4 },
           targetRect: RAIL_SLOT_RECT,
+          targetElement: null,
           activeRect: null,
         }),
       ).toEqual({
@@ -414,6 +418,7 @@ describe("root dnd commits - left panel", () => {
         target,
         point: LEADING_X_MIDDLE_Y,
         targetRect: RAIL_SLOT_RECT,
+        targetElement: null,
         activeRect: null,
       }),
     ).toEqual({
@@ -426,6 +431,7 @@ describe("root dnd commits - left panel", () => {
       target,
       point: { x: 4, y: 34 },
       targetRect: RAIL_SLOT_RECT,
+      targetElement: null,
       activeRect: null,
     });
 
@@ -463,6 +469,7 @@ describe("root dnd commits - left panel", () => {
       target,
       point: { x: 120, y: 700 },
       targetRect: null,
+      targetElement: null,
       activeRect: null,
     });
 
@@ -489,7 +496,7 @@ describe("root dnd commits - left panel", () => {
     ]);
   });
 
-  it("refuses a body drop onto a stack already at the max, drawing the refusal rather than a quiet no-op (L-181, L-182)", () => {
+  it("stacks a fifth panel dropped on the body of a stack of four: a stack has no cap (L-181, L-182)", () => {
     const fourMember = [
       { kind: "panel" as const, id: "railAgents" as const },
       {
@@ -516,6 +523,7 @@ describe("root dnd commits - left panel", () => {
       target,
       point: { x: 120, y: 700 },
       targetRect: null,
+      targetElement: null,
       activeRect: null,
     });
 
@@ -525,8 +533,19 @@ describe("root dnd commits - left panel", () => {
       rawNestedFocus,
     );
 
-    expect(committed).toBe(false);
-    expect(useLayoutStore.getState().arrangement.rail).toEqual(fourMember);
+    expect(committed).toBe(true);
+    expect(currentLayoutArrangement().rail.map((entry) => entry.id)).toEqual([
+      "railAgents",
+      "stack:railAgents+railArtifacts+railTerminals+railBrowsers+railGitDiff",
+      "railArtifacts",
+      "railTerminals",
+      "railBrowsers",
+      "railGitDiff",
+      "railPullRequests",
+      "railFileTree",
+      "railSharing",
+      "railComments",
+    ]);
   });
 
   it("is a no-op for a section-origin drop onto the body of the stack the panel already belongs to", () => {
@@ -537,6 +556,7 @@ describe("root dnd commits - left panel", () => {
       target,
       point: { x: 120, y: 700 },
       targetRect: null,
+      targetElement: null,
       activeRect: null,
     });
 
@@ -574,6 +594,7 @@ describe("root dnd commits - left panel", () => {
       target,
       point: { x: 120, y: 700 },
       targetRect: null,
+      targetElement: null,
       activeRect: null,
     });
 
@@ -592,49 +613,6 @@ describe("root dnd commits - left panel", () => {
       "railComments",
     ]);
   });
-
-  it("refuses a whole-stack body join that would pass the max (L-181, L-182)", () => {
-    // Agents+Artifacts+GitDiff (3) plus Terminals+Browsers (2) would be 5:
-    // refused, and the stored rail is untouched.
-    const rail: ReadonlyArray<RailEntry> = [
-      { kind: "panel", id: "railAgents" },
-      {
-        kind: "stack",
-        id: "stack:railAgents+railArtifacts+railGitDiff",
-      },
-      { kind: "panel", id: "railArtifacts" },
-      { kind: "panel", id: "railGitDiff" },
-      { kind: "panel", id: "railTerminals" },
-      { kind: "stack", id: "stack:railTerminals+railBrowsers" },
-      { kind: "panel", id: "railBrowsers" },
-      { kind: "panel", id: "railPullRequests" },
-      { kind: "panel", id: "railFileTree" },
-      { kind: "panel", id: "railSharing" },
-      { kind: "panel", id: "railComments" },
-    ];
-    useLayoutStore.setState({
-      ...DEFAULT_LAYOUT_SNAPSHOT,
-      arrangement: { ...DEFAULT_ARRANGEMENT, rail },
-    });
-    const source = railSource("terminals", "rail");
-    const target = { kind: "left-panel-body", panelId: "chats" } as const;
-    const preview = resolveCanvasDropPreview({
-      source,
-      target,
-      point: { x: 120, y: 700 },
-      targetRect: null,
-      activeRect: null,
-    });
-
-    expect(isLeftPanelDropNoop(source, preview)).toBe(false);
-    const committed = commitResolvedCanvasDrop(
-      { source, target, preview },
-      rawNestedFocus,
-    );
-
-    expect(committed).toBe(false);
-    expect(useLayoutStore.getState().arrangement.rail).toEqual(rail);
-  });
 });
 
 describe("root dnd commits - full-pane tile split affordances", () => {
@@ -647,6 +625,7 @@ describe("root dnd commits - full-pane tile split affordances", () => {
         target: paneBodyTarget("group-1"),
         point: panePoint,
         targetRect: PANE_RECT,
+        targetElement: null,
         activeRect: null,
       }),
     ).toEqual({
@@ -663,6 +642,7 @@ describe("root dnd commits - full-pane tile split affordances", () => {
         target: paneBodyTarget("group-2"),
         point: panePoint,
         targetRect: PANE_RECT,
+        targetElement: null,
         activeRect: null,
       }),
     ).toEqual({

@@ -364,7 +364,70 @@ export type EpicCanvasDropPreview =
       readonly kind: "left-panel-rail-list";
       readonly viewTabId?: string;
     }
+  | {
+      /**
+       * A stacked section's header dropped inside its own stack's body: it
+       * changes place in the stack, before or after `panelId` (L-181).
+       */
+      readonly kind: "left-panel-section";
+      readonly viewTabId?: string;
+      readonly panelId: LeftPanelId;
+      readonly position: Exclude<LeftPanelRailDropPosition, "combine">;
+    }
   | null;
+
+/** One section of the sidebar body, measured, for a reorder inside it. */
+export interface LeftPanelSectionRect {
+  readonly panelId: LeftPanelId;
+  readonly rect: RectLike;
+}
+
+/**
+ * Where a section dropped inside its own stack's body lands: at the section
+ * boundary nearest the pointer, among the OTHER sections (the dragged one is
+ * left out, so the slot it leaves is not a place to aim at). `null` when there
+ * is no other section to land beside.
+ */
+export function getLeftPanelSectionDropPreview(
+  viewTabId: string | undefined,
+  sections: ReadonlyArray<LeftPanelSectionRect>,
+  point: PointLike,
+): EpicCanvasDropPreview {
+  const last = sections.at(-1);
+  if (last === undefined) return null;
+  const bottom = (rect: RectLike): number => rect.top + rect.height;
+  const boundaries = [
+    // Between two sections the boundary is the middle of whatever separates
+    // them - the dragged section's own slot included.
+    ...sections.map((section, index) => {
+      const above = index === 0 ? null : sections[index - 1];
+      return {
+        panelId: section.panelId,
+        position: "before" as const,
+        y:
+          above === null
+            ? section.rect.top
+            : (bottom(above.rect) + section.rect.top) / 2,
+      };
+    }),
+    {
+      panelId: last.panelId,
+      position: "after" as const,
+      y: bottom(last.rect),
+    },
+  ];
+  const nearest = boundaries.reduce((best, boundary) =>
+    Math.abs(boundary.y - point.y) < Math.abs(best.y - point.y)
+      ? boundary
+      : best,
+  );
+  return {
+    kind: "left-panel-section",
+    viewTabId,
+    panelId: nearest.panelId,
+    position: nearest.position,
+  };
+}
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object";
@@ -1030,10 +1093,9 @@ export function getEpicCanvasDropPreview(
       rect,
       target.orientation === "horizontal" ? "x" : "y",
     );
-    // Whether the middle band can join is the rail's answer, not the
-    // target's: it depends on the source too, so the rail draws the join or
-    // the refusal from `railStackJoin` and the commit obeys the same answer
-    // (L-181). A refused middle band still answers `combine`, never a side.
+    // Whether the middle band joins is the rail's answer, not the target's:
+    // it depends on the source too, so the rail draws the join from
+    // `railStackJoin` and the commit obeys the same answer (L-181).
     return {
       kind: "left-panel-rail",
       viewTabId: target.viewTabId,
@@ -1051,7 +1113,7 @@ export function getEpicCanvasDropPreview(
     // The open body is the stack it draws, so a drop anywhere on it means
     // INTO that stack (L-182): the same middle-band join its rail icon takes,
     // aimed at the stack's top panel, which is the icon that stands for it.
-    // What the join does with what is carried (join, full, already there) is
+    // What the join does with what is carried (join, or already there) is
     // the rail's own `railStackJoin`, read by the rail, the body and the
     // commit alike.
     return {

@@ -22,8 +22,7 @@ import type { AutoRailRegionId, RailRegionId } from "@/lib/layout/region-id";
  * removes it, and the rail draws it as a gap at rest (L-140). It groups
  * nothing, and the shipped rail ships with none.
  *
- * A STACK joins two to {@link MAX_RAIL_STACK_MEMBERS} adjacent panels that
- * share the sidebar body, top to bottom, with a resize handle between each two
+ * A STACK joins two or more adjacent panels that share the sidebar body, top to bottom, with a resize handle between each two
  * (L-166, L-181). It is an entry rather than a flag on a panel so that both
  * lists the user reads - the inspector index and the Position list - get its
  * row for free, and so `moveCanvasOrderMember` keeps placing one member by id
@@ -168,17 +167,6 @@ export function highestDividerSeq(rail: ReadonlyArray<RailEntry>): number {
  */
 const STACK_ID_PREFIX = "stack:";
 const STACK_ID_SEPARATOR = "+";
-
-/**
- * The most panels one stack holds (L-181).
- *
- * The rail is not what limits it - a stack draws one icon per member, which is
- * the room those panels take standing alone. The body is: every member is a
- * section with a 32px header, and at the window's 600px minimum height the
- * sidebar body has about 460px, so four sections still show a header and three
- * rows each, and a fifth would leave some with one row.
- */
-export const MAX_RAIL_STACK_MEMBERS = 4;
 
 export function railStackId(members: ReadonlyArray<RailRegionId>): string {
   return `${STACK_ID_PREFIX}${members.join(STACK_ID_SEPARATOR)}`;
@@ -473,8 +461,13 @@ function normalizedPanelsAndDividers(
  * Every maximal run of a stack's members standing side by side, in any order,
  * is a stack of its own, re-minted for the order the members now stand in: a
  * stack is a view group, and reordering members within it is how the user
- * picks which panel sits on top. A run longer than
- * {@link MAX_RAIL_STACK_MEMBERS} keeps its first members; the rest stand alone.
+ * picks which panel sits on top.
+ *
+ * A stack has no cap (L-181). It had one of four, so each section kept three
+ * rows at the window's 600px minimum height, but the sidebar's groups never
+ * had one and users stack more: the split shrinks each section toward its
+ * header, and a section's own body scrolls. All nine 36px headers fit the
+ * minimum height's ~460px body.
  */
 function withRailStacks(
   entries: ReadonlyArray<RailEntry>,
@@ -485,10 +478,9 @@ function withRailStacks(
   for (const members of joins) {
     let run: RailRegionId[] = [];
     const close = (): void => {
-      const kept = run.slice(0, MAX_RAIL_STACK_MEMBERS);
-      if (kept.length >= 2) {
-        for (const member of kept) claimed.add(member);
-        stackByFirst.set(kept[0], kept);
+      if (run.length >= 2) {
+        for (const member of run) claimed.add(member);
+        stackByFirst.set(run[0], run);
       }
       run = [];
     };

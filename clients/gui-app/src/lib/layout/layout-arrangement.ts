@@ -6,7 +6,6 @@ import {
   DEFAULT_RAIL_DIVIDER_SEQ,
   RAIL_REGION_IDS,
   railDividerId,
-  MAX_RAIL_STACK_MEMBERS,
   areRailsEqual,
   normalizeRail,
   railRegionForLeftPanelId,
@@ -1024,13 +1023,13 @@ function carriedMembers(
 
 /**
  * What a drop onto the middle of a rail icon would do (L-181): `join` adds the
- * carried panels to the target's stack (or makes a stack with it), `full` is
- * refused because the result would pass {@link MAX_RAIL_STACK_MEMBERS}, and
- * `same` does nothing because the carried panels are already stacked with the
- * target. The rail draws the join cue, a refusal cue, or nothing, from this
- * answer, and the writer obeys the same one.
+ * carried panels to the target's stack (or makes a stack with it), and `same`
+ * does nothing because the carried panels are already stacked with the
+ * target. A stack has no cap, so no join is refused for its size. The rail
+ * draws the join cue or nothing from this answer, and the writer obeys the
+ * same one.
  */
-export type RailStackJoin = "join" | "full" | "same";
+export type RailStackJoin = "join" | "same";
 
 export function railStackJoin(
   rail: ReadonlyArray<RailEntry>,
@@ -1045,10 +1044,7 @@ export function railStackJoin(
     carry,
   );
   const target = railStackOf(rail, targetId)?.members ?? [targetId];
-  if (carried.some((member) => target.includes(member))) return "same";
-  return target.length + carried.length > MAX_RAIL_STACK_MEMBERS
-    ? "full"
-    : "join";
+  return carried.some((member) => target.includes(member)) ? "same" : "join";
 }
 
 /**
@@ -1127,9 +1123,8 @@ export function stackRailPanels(
 /**
  * The panel directly below this one's stack (or below this panel, standing
  * alone), when the list's "Stack with the panel below" can join the two
- * (L-168, L-181): this panel is the last of its stack, the next entry is a
- * panel rather than a divider, and the two stacks together stay within
- * {@link MAX_RAIL_STACK_MEMBERS}. `null` otherwise.
+ * (L-168, L-181): this panel is the last of its stack and the next entry is a
+ * panel rather than a divider. `null` otherwise.
  */
 export function railPanelToStackBelow(
   rail: ReadonlyArray<RailEntry>,
@@ -1142,12 +1137,7 @@ export function railPanelToStackBelow(
   const [, blockEnd] = railBlockAt(rail, index);
   if (blockEnd !== index) return null;
   const below = rail.at(index + 1);
-  if (below === undefined || below.kind !== "panel") return null;
-  const count = (id: RailRegionId): number =>
-    railStackOf(rail, id)?.members.length ?? 1;
-  return count(regionId) + count(below.id) <= MAX_RAIL_STACK_MEMBERS
-    ? below.id
-    : null;
+  return below === undefined || below.kind !== "panel" ? null : below.id;
 }
 
 /**

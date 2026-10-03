@@ -107,6 +107,7 @@ import { FileTreePanelSkeleton } from "@/components/epic-canvas/skeletons/file-t
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
 import { CommentSidebarPanel } from "@/components/comments";
 import { Sidebar } from "@/components/ui/sidebar";
+import { DropLine } from "@/components/ui/drop-line";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DEFAULT_LEFT_PANEL_ID,
@@ -822,9 +823,12 @@ function PanelBodyDropRegion(props: { readonly children: ReactNode }) {
  * dropping a rail icon anywhere on the open panel joins the stack exactly as
  * a drop on the middle of its rail icon does. So the droppable names the
  * stack's top panel, the icon that stands for it, and the preview and commit
- * are the rail's own. The frame draws the same answer the icon does - the
- * join, or the refusal for a stack that would pass the cap - and a drop that
- * would do nothing (a member onto its own stack) draws nothing.
+ * are the rail's own. The frame draws the same answer the icon does: the
+ * join, which a stack takes whatever its size (L-181).
+ *
+ * The one exception is a member's own section header: joining its own stack
+ * means nothing, so inside its body it REORDERS the stack instead, landing at
+ * the section boundary nearest the pointer, which that section draws (L-181).
  */
 export function LeftPanelBody(props: {
   readonly epicId: string;
@@ -841,14 +845,21 @@ export function LeftPanelBody(props: {
     }),
     [top, tabId],
   );
+  const bodyDropId = getPaneScopedDndId(
+    tabId,
+    getLeftPanelBodyDropId(epicId, top),
+  );
   const { setNodeRef: bodyDropRef } = useDroppable({
-    id: getPaneScopedDndId(tabId, getLeftPanelBodyDropId(epicId, top)),
+    id: bodyDropId,
     data: bodyDropData,
   });
   const dropCue = useLeftPanelBodyDropCue(tabId, top);
   return (
     <div
       ref={bodyDropRef}
+      // Found by the drag provider, which measures this stack's sections for
+      // a reorder inside it (L-181).
+      data-dnd-droppable-id={bodyDropId}
       className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       {panels.length >= 2 ? (
@@ -869,12 +880,7 @@ export function LeftPanelBody(props: {
         <div
           aria-hidden
           data-body-drop-cue={dropCue}
-          className={cn(
-            "pointer-events-none absolute inset-0 z-20 ring-2 ring-inset",
-            dropCue === "join"
-              ? "bg-primary/5 ring-primary"
-              : "bg-destructive/5 ring-destructive",
-          )}
+          className="pointer-events-none absolute inset-0 z-20 bg-primary/5 ring-2 ring-inset ring-primary"
         />
       )}
     </div>
@@ -884,7 +890,7 @@ export function LeftPanelBody(props: {
 /**
  * What a drop on this body would do right now, from the same answer the rail
  * draws on the stack's icon (L-182): the preview is the stack's middle-band
- * join, so `railStackJoin` decides between the join cue and the refusal.
+ * join, so `railStackJoin` decides between the join cue and nothing.
  * Re-renders only when a rail drag in this tab aims at this stack.
  */
 function useLeftPanelBodyDropCue(
@@ -1117,7 +1123,44 @@ function LeftPanelSectionContent(props: {
           <Body epicId={props.epicId} tabId={props.tabId} />
         </PanelBodyDropRegion>
       )}
+      <PanelSectionDropLine tabId={props.tabId} panelId={props.panel.id} />
     </section>
+  );
+}
+
+/**
+ * Where a stacked section being reordered would land, drawn on the edge of
+ * the section it lands beside (L-181). Re-renders only when that preview
+ * names this section.
+ */
+function PanelSectionDropLine(props: {
+  readonly tabId: string;
+  readonly panelId: LeftPanelId;
+}) {
+  const position = useEpicDndStore((s) =>
+    s.dropPreview?.kind === "left-panel-section" &&
+    s.dropPreview.viewTabId === props.tabId &&
+    s.dropPreview.panelId === props.panelId
+      ? s.dropPreview.position
+      : null,
+  );
+  if (position === null) return null;
+  return (
+    <div
+      aria-hidden
+      data-section-drop-position={position}
+      className={cn(
+        "pointer-events-none absolute inset-x-3 z-20",
+        position === "before" ? "top-0" : "bottom-0",
+      )}
+    >
+      <DropLine
+        orientation="horizontal"
+        glow
+        className="w-full"
+        testId="epic-left-panel-section-drop-preview"
+      />
+    </div>
   );
 }
 

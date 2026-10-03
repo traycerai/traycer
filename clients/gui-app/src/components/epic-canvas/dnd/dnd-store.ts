@@ -112,7 +112,10 @@ function matchingLeftPanelDropPreviewEqual(
   left: NonNullable<EpicCanvasDropPreview>,
   right: NonNullable<EpicCanvasDropPreview>,
 ): boolean {
-  if (left.kind === "left-panel-rail" && right.kind === "left-panel-rail") {
+  if (
+    (left.kind === "left-panel-rail" && right.kind === "left-panel-rail") ||
+    (left.kind === "left-panel-section" && right.kind === "left-panel-section")
+  ) {
     return (
       left.viewTabId === right.viewTabId &&
       left.panelId === right.panelId &&

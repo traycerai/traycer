@@ -76,7 +76,6 @@ import {
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import {
   LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
-  LEFT_PANEL_RAIL_REFUSED_TARGET_CLASS,
   LEFT_PANEL_RAIL_TAB_UNDERLINE_CLASS,
   LEFT_PANEL_RAIL_TILE_CLASS,
   railGroupLabel,
@@ -324,7 +323,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
       : getLeftPanelDefinition(panelSectionDragSource.panelId);
   const dropAtRailEnd = railPanelDropPreview?.kind === "left-panel-rail-list";
   // What this tab's rail drag carries, whatever it was grabbed off, so a
-  // middle-band preview can be read as a join, a refusal or nothing (L-181).
+  // middle-band preview can be read as a join or nothing (L-181).
   const dragSource = useLeftPanelRailDragSource(tabId);
   const dropCueFor = (
     targetPanelId: LeftPanelId,
@@ -609,7 +608,7 @@ interface RailPanelButtonProps {
   readonly active: boolean;
   /**
    * What a drop aimed at this icon's MIDDLE band would do (L-181): join its
-   * stack, or be refused because the stack is full.
+   * stack, or nothing.
    */
   readonly dropCue: Exclude<RailStackJoin, "same"> | null;
   readonly onClick: () => void;
@@ -774,7 +773,6 @@ export function RailButton(props: RailButtonProps) {
             active && activeClass,
             isDragSource && "cursor-grabbing opacity-50",
             dropCue === "join" && LEFT_PANEL_RAIL_COMBINE_TARGET_CLASS,
-            dropCue === "full" && LEFT_PANEL_RAIL_REFUSED_TARGET_CLASS,
           )}
         >
           <span
