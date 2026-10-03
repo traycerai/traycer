@@ -14,25 +14,32 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { profileSyncMutationKeys } from "@/lib/query-keys/profile-sync-keys";
+import { profileCopyDraftMutationAttempt } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
 import type {
   ProfileSyncSelection,
   ProfileSyncPreview,
   ProfileSyncList,
 } from "@traycer/protocol/host/profile-sync-schemas";
 
-/** Keep the source's mutation observers mounted until its RPCs settle. */
+/** Keep source and nested destination observers mounted until their RPCs settle. */
 export function useProfileSyncPending(hostId: string | null): boolean {
   return (
     useIsMutating({
       predicate: (mutation) => {
+        if (hostId === null) return false;
         const key = mutation.options.mutationKey;
         const method = key?.[0];
-        return (
-          hostId !== null &&
+        if (
           key?.[1] === hostId &&
           typeof method === "string" &&
           (method.startsWith("providers.profileCopy.sync.") ||
             method === "providers.profileCopy.retry")
+        ) {
+          return true;
+        }
+        return (
+          profileCopyDraftMutationAttempt(key, mutation.state.variables)
+            ?.sourceHostId === hostId
         );
       },
     }) > 0

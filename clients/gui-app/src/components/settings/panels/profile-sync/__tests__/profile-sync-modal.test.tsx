@@ -145,6 +145,11 @@ let saveRuleGate: Promise<void> | null = null;
 let startGate: Promise<void> | null = null;
 let retryGate: Promise<void> | null = null;
 let resolveGate: Promise<void> | null = null;
+// The destination's draft: what draftStatus reads and how verify answers.
+let draftStatusOutcome: ProfileCopyOutcome | null = null;
+let verifyGate: Promise<void> | null = null;
+let verifyResult: "current" | "stale-revision" | "unavailable" = "current";
+let verifyThrows = false;
 let stopRuleGate: Promise<void> | null = null;
 let stopRuleThrows = false;
 
@@ -257,6 +262,37 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         if (startGate !== null) return startGate.then(() => answered);
         lastStarted = answered;
         return answered;
+      },
+      "providers.profileCopy.draftStatus": (params) => ({
+        result: "current" as const,
+        outcome:
+          draftStatusOutcome ?? profileCopyOutcome({ attempt: params.attempt }),
+      }),
+      "providers.profileCopy.verify": (
+        params,
+      ):
+        | ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.verify">
+        | Promise<
+            ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.verify">
+          > => {
+        const answer = () => {
+          if (verifyThrows) {
+            throw new HostRpcError({
+              code: "RPC_ERROR",
+              message: "verify unreachable",
+              requestId: "req-sync",
+              method: "providers.profileCopy.verify",
+              fatalDetails: null,
+            });
+          }
+          return {
+            result: verifyResult,
+            outcome:
+              draftStatusOutcome ??
+              profileCopyOutcome({ attempt: params.attempt }),
+          };
+        };
+        return verifyGate === null ? answer() : verifyGate.then(answer);
       },
       "providers.profileCopy.retry": ():
         | ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.retry">
@@ -458,6 +494,10 @@ function resetModuleKnobs(): void {
   startGate = null;
   retryGate = null;
   resolveGate = null;
+  draftStatusOutcome = null;
+  verifyGate = null;
+  verifyResult = "current";
+  verifyThrows = false;
   stopRuleGate = null;
   stopRuleThrows = false;
 }
@@ -3603,5 +3643,145 @@ describe("ProfileSyncModal review regressions", () => {
         },
       );
     });
+  });
+
+  describe("round 21: the destination draft's own requests hold the source dialog", () => {
+    const STALE_DRAFT = /This changed on Linux box since you last looked/;
+
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    const verificationPending = (): ProfileCopyOutcome =>
+      recordedOutcome({
+        attempt: profileCopyAttempt({
+          operationId: "00000000-0000-4000-8000-000000000001",
+        }),
+        state: "verification-pending",
+        revision: 6,
+        readiness: {
+          preparation: "complete",
+          verification: "not-checked",
+          verificationRevision: null,
+          acceptedVerificationRevision: null,
+          identity: "not-checked",
+          identityRevision: null,
+          acceptedIdentityRevision: null,
+          writer: "none",
+          writerGeneration: 0,
+          quarantined: false,
+        },
+      });
+
+    async function openDraftReview(): Promise<
+      MockHostMessenger<HostRpcRegistry>
+    > {
+      const outcome = verificationPending();
+      draftStatusOutcome = outcome;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: () => [
+          {
+            ...syncItem(1, DEST_HOST_ID, "needs-action", []),
+            preview: null,
+            outcome,
+          },
+        ],
+      });
+      openSync(null);
+      await pickDestinations([/Linux box/]);
+      await screen.findByText("1 profile transfers selected");
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+      await screen.findByRole("button", { name: "Verify" });
+      return messenger;
+    }
+
+    function attemptExits(): void {
+      fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      fireEvent.keyDown(document.activeElement ?? document.body, {
+        key: "Escape",
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
+    }
+
+    function expectDraftHeld(): void {
+      expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+      expect(screen.getByRole("button", { name: "Hide details" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Verify" })).toBeTruthy();
+    }
+
+    it.each([
+      ["a stale-revision answer", "stale", (): void => undefined],
+      [
+        "an unreachable destination",
+        "error",
+        (): void => {
+          verifyThrows = true;
+        },
+      ],
+    ] as const)(
+      "keeps the draft panel through every exit while Verify is in flight, then unlocks after %s",
+      async (_label, kind, arrange) => {
+        const held = gate();
+        verifyGate = held.promise;
+        verifyResult = "stale-revision";
+        const messenger = await openDraftReview();
+        try {
+          fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+          await waitFor(() =>
+            expect(
+              messenger.calls.filter(
+                (call) => call.method === "providers.profileCopy.verify",
+              ),
+            ).toHaveLength(1),
+          );
+          attemptExits();
+          expectDraftHeld();
+          arrange();
+        } finally {
+          held.release();
+        }
+        if (kind === "stale") {
+          expect(await screen.findByText(STALE_DRAFT)).toBeTruthy();
+        } else {
+          // The per-call failure is kept, not just the unlocked exits.
+          expect(
+            await screen.findByText(/Couldn't reach Linux box right now/),
+          ).toBeTruthy();
+        }
+        // Settled: the panel is still there and every exit is available.
+        await waitFor(() =>
+          expect(
+            screen
+              .getByRole("button", { name: "Done" })
+              .hasAttribute("disabled"),
+          ).toBe(false),
+        );
+        expect(
+          screen.getByRole("button", { name: "Hide details" }),
+        ).toBeTruthy();
+        if (kind === "stale")
+          expect(screen.getByText(STALE_DRAFT)).toBeTruthy();
+        else
+          expect(
+            screen.getByText(/Couldn't reach Linux box right now/),
+          ).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
+        expect(screen.queryByRole("button", { name: "Verify" })).toBeNull();
+      },
+    );
   });
 });

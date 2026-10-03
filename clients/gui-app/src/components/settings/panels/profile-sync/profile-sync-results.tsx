@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProfileSyncResolve } from "@/hooks/providers/use-profile-sync";
 import { useProfileCopyRetryMutation } from "@/hooks/providers/profile-copy/use-profile-copy-operation-mutations";
+import { useProfileCopyDraftPending } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
 import {
   profileCopySourceRecovery,
   profileCopyPreviewRecord,
@@ -76,8 +77,13 @@ function ProfileSyncResultItem(props: {
   const resolve = useProfileSyncResolve(sourceHostId);
   const resolveError = useProfileSyncItemError(item, resolve.error);
   const retry = useProfileSyncItemRetry(sourceHostId, item);
+  const draftPending = useProfileCopyDraftPending(
+    sourceHostId,
+    item.operationId,
+    item.destinationHostId,
+  );
   const sourceName = hosts.nameFor(sourceHostId);
-  const pending = resolve.isPending || retry.pending;
+  const pending = resolve.isPending || retry.pending || draftPending;
   const doResolve = (
     action: "check" | "keep-destination" | "use-source",
   ): void => {
@@ -110,7 +116,9 @@ function ProfileSyncResultItem(props: {
           retry={retry}
           expanded={expanded}
           onCheck={() => doResolve("check")}
-          onToggleDetails={() => setExpanded(!expanded)}
+          onToggleDetails={() => {
+            if (!pending) setExpanded(!expanded);
+          }}
         />
       </div>
       {item.identityChanged ? (
@@ -185,6 +193,7 @@ function ProfileSyncResultActions(props: {
         <Button
           size="xs"
           variant="ghost"
+          disabled={pending}
           aria-expanded={props.expanded}
           onClick={props.onToggleDetails}
         >
