@@ -79,7 +79,8 @@ export interface ProfileLoginIo {
   readonly onInterrupt: (handler: () => void) => () => void;
   /**
    * Feeds each line typed on stdin to `onLine` until the returned function is
-   * called, or null when there is no terminal to type into.
+   * called, or null when there is no terminal to type into. Calls
+   * `onInterrupt` on Ctrl+C, or when input closes before that function runs.
    */
   readonly readLines: (
     onLine: (line: string) => void,
@@ -114,12 +115,21 @@ export const PROCESS_PROFILE_LOGIN_IO: ProfileLoginIo = {
   readLines: (onLine, onInterrupt) => {
     if (process.stdin.isTTY !== true) return null;
     const lines = createInterface({ input: process.stdin });
+    let stopped = false;
     lines.on("line", onLine);
     // Ctrl+C reaches the process handler while this interface has no output
     // stream; were it ever given one, readline would take the key itself and
     // report it here instead.
     lines.on("SIGINT", onInterrupt);
-    return () => lines.close();
+    // Input closing on its own (Ctrl+D) means no code can be pasted any more,
+    // so the sign-in is given up rather than left to the host's deadline.
+    lines.on("close", () => {
+      if (!stopped) onInterrupt();
+    });
+    return () => {
+      stopped = true;
+      lines.close();
+    };
   },
 };
 
@@ -416,6 +426,10 @@ async function runLogin(
         await release();
         return { status: "cancelled" };
       }
+      // The sign-in has ended; what is left is reading the row back and
+      // naming a new profile. A Ctrl+C from here ends the process at once
+      // rather than being taken as cancelling a sign-in that already happened.
+      stopListening();
       return await outcomeOf(providerId, target, heldProfileId, result);
     } finally {
       stopKeepalive();

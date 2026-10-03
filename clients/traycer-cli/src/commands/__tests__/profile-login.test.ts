@@ -608,7 +608,8 @@ describe("profile add (create)", () => {
     expect(result.human).toContain(
       "Added claude (Claude Code) profile prof_new",
     );
-    expect(fake.stopInterrupt).toHaveBeenCalledTimes(1);
+    // Stopped once the sign-in ended and again on the way out.
+    expect(fake.stopInterrupt).toHaveBeenCalled();
   });
 
   it("reads providers.list with no version floor", async () => {
@@ -658,6 +659,29 @@ describe("profile add (create)", () => {
         profile: rowOf(NEW_PROFILE, "jane.doe"),
       }),
     );
+  });
+
+  it("stops listening for Ctrl+C before it renames the new profile", async () => {
+    scenario.awaitLogin = () =>
+      Promise.resolve(
+        awaitResult({
+          state: signedInState([{ ...NEW_PROFILE, label: "Pending" }]),
+        }),
+      );
+    const fake = makeIo(false);
+
+    await runLogin(create(null), fake, makeCtx(false, false));
+
+    const renameIndex = dispatchMock.mock.calls.findIndex(
+      (call) => call[0] === "providers.setEnabled",
+    );
+    expect(renameIndex).toBeGreaterThanOrEqual(0);
+    const renameOrder = dispatchMock.mock.invocationCallOrder[renameIndex];
+    const stopOrder = fake.stopInterrupt.mock.invocationCallOrder[0];
+    if (renameOrder === undefined || stopOrder === undefined) {
+      throw new Error("unreachable: the stop and the rename both ran");
+    }
+    expect(stopOrder).toBeLessThan(renameOrder);
   });
 
   it("does not rename when --label was given", async () => {
