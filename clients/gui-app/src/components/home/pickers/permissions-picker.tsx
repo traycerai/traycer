@@ -1,14 +1,13 @@
+import { LazyDropdownMenu } from "@/components/ui/lazy-menu";
 import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
 import { useRef } from "react";
 import { ChevronDown } from "lucide-react";
 import {
-  DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
@@ -169,33 +168,36 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   // `data-state`, the ref - landed on a generic span instead of the focusable
   // control.
   const trigger = (
-    <DropdownMenuTrigger asChild>
-      <PermissionsTrigger
-        ref={interactive ? hotspotRef : undefined}
-        label={label}
-        aria-label={accessibleLabel}
-        disabled={disabled}
-        compact={compact}
-        experimental={experimental}
-        icon={<Icon className="size-4 shrink-0" />}
-      />
-    </DropdownMenuTrigger>
+    <PermissionsTrigger
+      ref={interactive ? hotspotRef : undefined}
+      label={label}
+      aria-label={accessibleLabel}
+      disabled={disabled}
+      compact={compact}
+      experimental={experimental}
+      icon={<Icon className="size-4 shrink-0" />}
+    />
   );
 
   return (
-    <DropdownMenu>
-      {compact ? (
-        <TooltipWrapper
-          label={accessibleLabel}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          {trigger}
-        </TooltipWrapper>
-      ) : (
-        <NarrowOnlyTooltip label={accessibleLabel}>{trigger}</NarrowOnlyTooltip>
-      )}
+    <LazyDropdownMenu
+      trigger={
+        compact ? (
+          <TooltipWrapper
+            label={accessibleLabel}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            {trigger}
+          </TooltipWrapper>
+        ) : (
+          <NarrowOnlyTooltip label={accessibleLabel}>
+            {trigger}
+          </NarrowOnlyTooltip>
+        )
+      }
+    >
       <DropdownMenuContent
         align="start"
         className="min-w-[min(90vw,20rem)]"
@@ -314,7 +316,7 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
           </>
         ) : null}
       </DropdownMenuContent>
-    </DropdownMenu>
+    </LazyDropdownMenu>
   );
 }
 

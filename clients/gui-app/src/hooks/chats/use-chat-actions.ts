@@ -77,7 +77,7 @@ export interface ChatActions {
     harnessId: GuiHarnessId,
     profileId: string | null,
   ) => string | null;
-  readonly queueCancel: (queueItemId: string) => string | null;
+  readonly queueCancel: ChatSessionState["queueCancel"];
   readonly queueReorder: (
     queueItemId: string,
     beforeQueueItemId: string | null,
@@ -220,8 +220,8 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
         handle.store.getState().updateActivePermissionMode(permissionMode),
       updateActiveProfile: (harnessId, profileId) =>
         handle.store.getState().updateActiveProfile(harnessId, profileId),
-      queueCancel: (queueItemId) =>
-        tracked(handle.store.getState().queueCancel(queueItemId), () => {
+      queueCancel: (input) =>
+        tracked(handle.store.getState().queueCancel(input), () => {
           Analytics.getInstance().track(
             AnalyticsEvent.ChatQueueItemCancelled,
             null,

@@ -17,8 +17,10 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
@@ -48,6 +50,7 @@ import {
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import { resetTileSurfaceGeometryCoordinatorForTesting } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -138,20 +141,37 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
+function fixtureBrowserSessionsState(hostId: string | null): {
+  readonly items: readonly BrowserSessionInfo[];
+} {
+  return {
+    items:
+      hostId === null
+        ? []
+        : (testState.browserSessionsByHost.get(hostId) ?? []),
+  };
+}
+
 vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
   useBrowserSessionsForHost: (args: { readonly hostId: string | null }) => ({
     hostId: args.hostId,
     lifecycle: "live",
     inventoryReady: true,
-    items:
-      args.hostId === null
-        ? []
-        : (testState.browserSessionsByHost.get(args.hostId) ?? []),
+    items: fixtureBrowserSessionsState(args.hostId).items,
     errorMessage: null,
     retry: () => undefined,
     openTab: () => Promise.reject(new Error("not used")),
     closeTab: () => Promise.resolve(),
   }),
+  // `browser-tab-presentation.ts` reads through this selector rather than
+  // the full state above - apply the caller's selector to the same fixture
+  // items so its tab/session lookup sees what the test seeded.
+  useBrowserSessionsSelectorForHost: (
+    args: { readonly hostId: string | null },
+    selector: (state: {
+      readonly items: readonly BrowserSessionInfo[];
+    }) => unknown,
+  ) => selector(fixtureBrowserSessionsState(args.hostId)),
 }));
 
 vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
@@ -330,11 +350,38 @@ function renderTabStripForTab(
     });
   }
   const queryClient = createQueryClient();
-  const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
-    <QueryClientProvider client={queryClient}>
+    tabStripUi({
+      queryClient,
+      tabs: [tab],
+      activeTabId: tab.instanceId,
+      input,
+      browserSessions,
+    }),
+  );
+}
+
+function tabStripUi(props: {
+  readonly queryClient: QueryClient;
+  readonly tabs: readonly EpicCanvasTileRef[];
+  readonly activeTabId: string;
+  readonly input: {
+    readonly onClose: (groupId: string, tabId: string) => void;
+    readonly onMenuClose?: (groupId: string, tabId: string) => void;
+    readonly onPromotePreview: (groupId: string) => void;
+    readonly onOpenBlankTab: (groupId: string) => void;
+    readonly onSplit:
+      | ((groupId: string, direction: SplitDirection) => void)
+      | undefined;
+  };
+  readonly browserSessions: readonly BrowserSessionInfo[];
+}): ReactElement {
+  const { input } = props;
+  const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
+  return (
+    <QueryClientProvider client={props.queryClient}>
       <BrowserSessionsContext.Provider
-        value={browserSessionsState(browserSessions)}
+        value={browserSessionsState(props.browserSessions)}
       >
         <NotificationConsumptionContext.Provider
           value={consumeNotificationEntity}
@@ -344,8 +391,8 @@ function renderTabStripForTab(
               epicId="epic-1"
               tabId={VIEW_TAB_ID}
               groupId="group-1"
-              tabs={[tab]}
-              activeTabId={tab.instanceId}
+              tabs={props.tabs}
+              activeTabId={props.activeTabId}
               onSelectTab={() => undefined}
               onCloseTab={input.onClose}
               onPromotePreview={input.onPromotePreview}
@@ -366,13 +413,14 @@ function renderTabStripForTab(
           </TooltipProvider>
         </NotificationConsumptionContext.Provider>
       </BrowserSessionsContext.Provider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
 describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
+    resetTileSurfaceGeometryCoordinatorForTesting();
     vi.unstubAllGlobals();
     testState.draggableInputs = [];
     testState.droppableInputs = [];
@@ -904,6 +952,140 @@ describe("<TabStrip />", () => {
     fireEvent.wheel(scroller, { deltaY: 80, deltaMode: 0 });
 
     expect(scroller.scrollLeft).toBe(80);
+  });
+
+  it("activating a clipped tab scrolls the strip from cached bounds, never through scrollIntoView", async () => {
+    // Earlier renders leave a real frame pending in the coordinator.
+    resetTileSurfaceGeometryCoordinatorForTesting();
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const input = {
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    };
+    const queryClient = createQueryClient();
+    const tabs = [TAB, ARTIFACT_TAB];
+    const seedPane = (activeTabId: string): void => {
+      seedActivePreviewTab(TAB);
+      useEpicCanvasStore.setState({
+        canvasByTabId: {
+          [VIEW_TAB_ID]: {
+            activePaneId: "group-1",
+            root: {
+              kind: "pane",
+              id: "group-1",
+              tabInstanceIds: tabs.map((tab) => tab.instanceId),
+              activeTabId,
+              previewTabId: null,
+              activationHistory: [activeTabId],
+            },
+            tilesByInstanceId: {
+              [TAB.instanceId]: TAB,
+              [ARTIFACT_TAB.instanceId]: ARTIFACT_TAB,
+            },
+            sizesByGroupId: {},
+          },
+        },
+      });
+    };
+    seedPane(TAB.instanceId);
+    const view = render(
+      tabStripUi({
+        queryClient,
+        tabs,
+        activeTabId: TAB.instanceId,
+        input,
+        browserSessions: [],
+      }),
+    );
+
+    // A 100px viewport over 400px of content: the first tab is content 0..60,
+    // the second 150..250, clipped past the end edge.
+    const scroller = screen.getByTestId("tab-strip-end");
+    let scrollLeft = 0;
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, value: 100 },
+      scrollWidth: { configurable: true, value: 400 },
+      scrollLeft: {
+        configurable: true,
+        get: () => scrollLeft,
+        set: (value: number) => {
+          scrollLeft = value;
+        },
+      },
+    });
+    const domRect = (left: number, right: number): DOMRect => ({
+      left,
+      right,
+      x: left,
+      y: 0,
+      top: 0,
+      bottom: 20,
+      width: right - left,
+      height: 20,
+      toJSON: () => ({}),
+    });
+    let rectReads = 0;
+    scroller.getBoundingClientRect = () => {
+      rectReads += 1;
+      return domRect(0, 100);
+    };
+    const placed = [
+      { tab: TAB, box: { left: 0, right: 60 } },
+      { tab: ARTIFACT_TAB, box: { left: 150, right: 250 } },
+    ];
+    for (const { tab, box } of placed) {
+      const tabElement = screen.getByTestId(`tab-item-${tab.instanceId}`);
+      const frame = tabElement.closest<HTMLElement>("[data-tile-item-id]");
+      if (frame === null) throw new Error("Expected a tile frame");
+      // The coordinator reads a canvas frame's layout width, not its
+      // (possibly scaled) rendered box.
+      Object.defineProperty(frame, "offsetWidth", {
+        configurable: true,
+        value: box.right - box.left,
+      });
+      for (const element of [tabElement, frame]) {
+        element.getBoundingClientRect = () => {
+          rectReads += 1;
+          return domRect(box.left - scrollLeft, box.right - scrollLeft);
+        };
+      }
+    }
+    // Let the strip take its first measurement (a scheduled frame, if the
+    // implementation has one) so the activation below starts from a warm cache.
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+    });
+    expect(scrollLeft).toBe(0);
+    scrollIntoView.mockClear();
+    rectReads = 0;
+
+    act(() => {
+      seedPane(ARTIFACT_TAB.instanceId);
+      view.rerender(
+        tabStripUi({
+          queryClient,
+          tabs,
+          activeTabId: ARTIFACT_TAB.instanceId,
+          input,
+          browserSessions: [],
+        }),
+      );
+    });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    // The clipped tab ends at 250 in a 100px viewport.
+    await waitFor(() => {
+      expect(scrollLeft).toBe(150);
+    });
+    // The reveal came from the cache built before the activation.
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(rectReads).toBe(0);
   });
 
   it("does not open a blank tab when an existing tab is double-clicked", () => {

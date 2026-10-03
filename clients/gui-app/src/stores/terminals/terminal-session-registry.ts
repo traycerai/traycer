@@ -8,10 +8,13 @@ import {
   getRetentionProfile,
 } from "@/stores/replica-memory/retention-profile";
 import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
-import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
+import type {
+  TerminalSessionState,
+  TerminalSessionStoreHandle,
+} from "@/stores/terminals/terminal-session-store";
 
 /**
- * How long a released, still-running plain terminal keeps its handle (and
+ * How long a released, still-running terminal keeps its handle (and
  * therefore its live `terminal.subscribe` stream + warm xterm engine) before
  * the registry evicts it. Navigating away from the surface that mounted the
  * tile (landing page -> epic tab, epic -> epic) releases every lease; without
@@ -26,15 +29,9 @@ import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-ses
 export const PLAIN_TERMINAL_RELEASE_LINGER_MS = 10 * 60 * 1000;
 
 /**
- * Upper bound on lease-free lingering plain terminals held at once. The
- * linger window bounds retention in time; this bounds it in count, so cycling
- * through many terminal-bearing tabs inside one window cannot pin an unbounded
- * set of open streams and warm xterm engines. Oldest-released first. The
- * count-bounded pool is the lingering plain terminals only: lease-free
- * running terminal-agents live under their own indefinite keep-warm rule and
- * neither count toward nor get evicted by this cap (counting them would let N
- * running agents flush every lingering shell immediately). Mirrors
- * `DEFAULT_MAX_WARM_CHAT_SESSIONS`.
+ * Upper bound on lease-free terminal attachments, shells and agents alike.
+ * Oldest-released first; leased views never enter this pool. The host keeps
+ * the PTY and its snapshot buffer alive after renderer attachment eviction.
  */
 export const MAX_LINGERING_PLAIN_TERMINALS =
   DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals;
@@ -102,14 +99,12 @@ const TERMINAL_SESSION_SCOPE = "terminal";
  * host already fans `terminal.subscribe` out to many subscribers and replays
  * scrollback to each, so a second live view costs nothing host-side.
  *
- * Lease-free retention: a running terminal-agent is kept warm indefinitely
- * (its tab may reopen any time while the agent works); a running plain
- * terminal lingers for {@link PLAIN_TERMINAL_RELEASE_LINGER_MS} so a tab
- * switch away and back reattaches instantly, count-bounded by
- * {@link MAX_LINGERING_PLAIN_TERMINALS} (oldest-released evicted first);
- * exited sessions are disposed as soon as the last lease releases. This is
- * the terminal twin of `ChatSessionRegistry`'s warm pool, so hiding a tab
- * treats its chats and terminals identically.
+ * Lease-free running sessions linger for
+ * {@link PLAIN_TERMINAL_RELEASE_LINGER_MS}, count-bounded by
+ * {@link MAX_LINGERING_PLAIN_TERMINALS} (oldest-released first). Exited,
+ * lost and reaped sessions are disposed as soon as the last lease releases.
+ * Unacknowledged writes protect a live or lost handle until replay settles;
+ * they exist only in the renderer, unlike the host's output snapshot.
  */
 export class TerminalSessionRegistry {
   private readonly sessions: SessionRegistry<TerminalRegistrySession>;
@@ -130,25 +125,18 @@ export class TerminalSessionRegistry {
           return getRetentionProfile().maxLingeringPlainTerminals;
         },
         warmCapScope: "demand-free",
-        // "The count-bounded pool is the lingering plain terminals only ...
-        // counting them would let N running agents flush every lingering shell
-        // immediately."
-        busyCountsTowardWarmCap: false,
-        // A running terminal-agent "is kept warm indefinitely (its tab may
-        // reopen any time while the agent works)", so it is not on a clock at
-        // all - the status subscription below is what collects it.
+        busyCountsTowardWarmCap: true,
         maxActiveDeferMs: null,
         // Ordered by release, which is what `releaseSequence` recorded.
         refreshOrderOnRelease: true,
-        retainWhenIdle: ({ handle }) =>
-          shouldKeepLeaseFree(handle) || shouldLingerLeaseFree(handle),
-        // "Busy" here is the indefinite keep-warm class: a running
-        // terminal-agent. A lingering plain terminal is not busy - it is warm
-        // on a clock.
-        hasActiveWork: ({ handle }) => shouldKeepLeaseFree(handle),
-        activeWorkReason: () => "agent-running",
-        // Nothing a terminal handle holds is lost by disposing it: the PTY runs
-        // host-side and a reattach replays scrollback.
+        retainWhenIdle: ({ handle }) => shouldLingerLeaseFree(handle),
+        // Unacked writes retain the handle without a time bound until ack,
+        // exit or explicit teardown; never silently expire input. Follow-ups:
+        // bounded retention with surfaced discard, and recovery handoff.
+        hasActiveWork: ({ handle }) =>
+          hasPendingWrites(handle.store.getState()),
+        activeWorkReason: () => "unacknowledged-input",
+        // The shared cap already checks hasActiveWork; idle expiry does too.
         isEvictable: () => true,
         onBeforeDispose: () => "dispose",
         dispose: (session) => {
@@ -156,7 +144,7 @@ export class TerminalSessionRegistry {
           session.handle.dispose();
         },
         // Attachment intent follows lease state, not session kind: a
-        // lease-free running terminal-agent (indefinite keep-warm) or
+        // lease-free running terminal-agent or
         // lingering plain terminal must not claim attention.
         // A lease change reopens the stream as `cache`, which is how a host
         // of any version hears it. A THROW here is the disappearing-transport
@@ -217,8 +205,7 @@ export class TerminalSessionRegistry {
   /**
    * Live tab-instance ids. The xterm host registry keeps still-live
    * terminal-agent engines warm keyed by `instanceId`; it uses this to drop a
-   * warm engine once its instance leaves the registry (the agent exited and its
-   * lease-free handle was evicted).
+   * warm engine once its lease-free handle exits, expires or exceeds the cap.
    */
   listInstanceIds(): string[] {
     return Array.from(this.sessions.keys());
@@ -263,25 +250,24 @@ export class TerminalSessionRegistry {
     instanceId: string,
     handle: TerminalSessionStoreHandle,
   ): () => void {
-    return handle.store.subscribe((state) => {
+    return handle.store.subscribe((state, previous) => {
       const defunct =
         state.status === "exited" ||
         // `TERMINAL_NOT_FOUND` only proves this handle's PTY is gone. A
         // durable terminal may already have been recreated under the same
         // logical id, so a reaped handle must never shadow a fresh bootstrap.
         state.status === "reaped" ||
-        // "Lost" (the store's mapping of a `closed` stream) is a dead end
-        // for a plain terminal: the stream client never redials after
-        // `closed` (transient drops surface as "reconnecting", not
-        // "closed"), so a lingering lost handle would only ever be revived
-        // as a permanently dead store - and it would shadow the fresh
-        // create-then-acquire bootstrap after the host recreates the
-        // session. Lost terminal-AGENTS stay warm: their reopen path runs
-        // `useTerminalSessionRecovery`, which force-releases the dead
-        // handle and re-bootstraps.
-        (state.status === "lost" && state.kind === "terminal");
-      if (!defunct) return;
-      this.evictDefunctLeaseFreeEntry(instanceId);
+        // A lost handle may still owe input replay to the live host PTY.
+        (state.status === "lost" && !hasPendingWrites(state));
+      if (defunct) {
+        this.evictDefunctLeaseFreeEntry(instanceId);
+      } else if (
+        state.pendingActions !== previous.pendingActions &&
+        hasPendingWrites(previous) &&
+        !hasPendingWrites(state)
+      ) {
+        this.sessions.reevaluate(instanceId);
+      }
     });
   }
 
@@ -366,9 +352,8 @@ export class TerminalSessionRegistry {
   }
 
   /**
-   * Drops a lease-free entry whose session became unreattachable (exited, or
-   * a plain terminal whose stream closed for good). Leased entries are left
-   * alone: the mounted tile observes the same status and owns the response
+   * Drops a lease-free entry whose session exited or stream closed for good.
+   * Leased entries are left alone: the mounted tile observes the same status and owns the response
    * (close the tab, run recovery).
    */
   private evictDefunctLeaseFreeEntry(instanceId: string): void {
@@ -379,28 +364,18 @@ export class TerminalSessionRegistry {
   }
 }
 
-function shouldKeepLeaseFree(handle: TerminalSessionStoreHandle): boolean {
-  const state = handle.store.getState();
-  return (
-    state.kind === "terminal-agent" &&
-    state.status !== "exited" &&
-    state.status !== "reaped"
-  );
-}
-
-/**
- * A released plain terminal lingers for
- * {@link PLAIN_TERMINAL_RELEASE_LINGER_MS} only while its stream can still
- * serve a reattach (creating/running). "Lost" and "reaped" are excluded: the
- * stream client cannot address a PTY from either state, so reviving that handle
- * would shadow the fresh create-then-acquire bootstrap after recovery.
- */
+/** Reopening either session kind replays the host's authoritative snapshot. */
 function shouldLingerLeaseFree(handle: TerminalSessionStoreHandle): boolean {
   const state = handle.store.getState();
   return (
-    state.kind === "terminal" &&
     state.status !== "exited" &&
-    state.status !== "lost" &&
-    state.status !== "reaped"
+    state.status !== "reaped" &&
+    (state.status !== "lost" || hasPendingWrites(state))
+  );
+}
+
+function hasPendingWrites(state: TerminalSessionState): boolean {
+  return Object.values(state.pendingActions).some(
+    (pending) => pending.frame.kind === "write",
   );
 }

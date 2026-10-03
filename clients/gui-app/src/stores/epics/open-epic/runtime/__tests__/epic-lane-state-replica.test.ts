@@ -428,6 +428,53 @@ describe("epic.state.subscribe read model - row rules", () => {
     });
   });
 
+  it("composes two epic-meta-patch changes within ONE transaction, not just across separate ones", () => {
+    // Each patch's fold must see the other's within one batched transaction,
+    // not just across separate ones.
+    const { replica } = newReplica();
+    replica.apply(
+      snapshotEvent({
+        rows: metaRows({ title: "Original", updatedAt: 10, revision: 1 }),
+        position: 1,
+        epoch: EPOCH,
+        trust: "reconciled-with-cloud",
+        cause: "initial",
+      }),
+    );
+
+    replica.apply({
+      kind: "record-transaction",
+      cursor: cursorAt(2, EPOCH),
+      changes: [
+        {
+          kind: "upsert",
+          row: {
+            rowId: EPIC_META_ROW_ID,
+            revision: 2,
+            row: { kind: "epic-meta-patch", meta: { title: "Renamed" } },
+          },
+        },
+        {
+          kind: "upsert",
+          row: {
+            rowId: EPIC_META_ROW_ID,
+            revision: 3,
+            row: { kind: "epic-meta-patch", meta: { updatedAt: 30 } },
+          },
+        },
+      ],
+      barrier: null,
+    });
+
+    // Both patches landed: the title from the first, the recency from the
+    // second, folded onto each other rather than either one alone winning by
+    // replacing the whole row.
+    expect(replica.slices().epicHeader).toEqual({
+      title: "Renamed",
+      updatedAt: 30,
+    });
+  });
+
   it("drops a metadata patch that has nothing to merge onto", () => {
     const { replica } = newReplica();
     // No snapshot has established the entity, so a partial is not an EpicMeta.

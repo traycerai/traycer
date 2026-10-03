@@ -112,7 +112,7 @@ interface MinorLookupEntry {
   readonly contract: { readonly responseSchema: z.ZodType };
 }
 interface MajorLookupEntry {
-  readonly versions: Readonly<Record<string, MinorLookupEntry>>;
+  readonly versions: Readonly<Record<number, MinorLookupEntry>>;
 }
 
 /**
@@ -123,9 +123,10 @@ function servedResponseMismatch(
   served: unknown,
   version: { readonly major: number; readonly minor: number },
 ): string | null {
-  const majors: Readonly<Record<string, MajorLookupEntry>> =
+  // Numeric version keys exclude method metadata such as cancelAfterDispatch.
+  const majors: Readonly<Record<number, MajorLookupEntry>> =
     hostRpcRegistry["host.status"];
-  const entry = majors[String(version.major)]?.versions[String(version.minor)];
+  const entry = majors[version.major]?.versions[version.minor];
   if (entry === undefined) {
     return `host.status@${version.major}.${version.minor} is not installed in this client's registry`;
   }

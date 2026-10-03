@@ -3,8 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import type { DraftHeadReaderRecord } from "@traycer/protocol/persistence/draft/schemas";
 import { DRAFT_HEAD_DIALECT } from "@traycer/protocol/persistence/draft/version";
+import type { ReactNode } from "react";
 import { appLogger } from "@/lib/logger";
 import type { CloudDraftHeadAbandonCause } from "@/lib/drafts/draft-mirror-coordinator";
+import {
+  SurfaceDemandContext,
+  type ActiveSurfaceDemand,
+} from "@/stores/tabs/surface-demand";
 
 const directoryMock = vi.hoisted(() => ({
   chats: [] as ReadonlyArray<CloudChatSummary>,
@@ -293,6 +298,34 @@ afterEach(() => {
 });
 
 describe("useCloudDraftsIngest", () => {
+  it("reads nothing from a surface a held tab cycle is only previewing, and reads once it settles", async () => {
+    readMock.read.mockResolvedValue({ kind: "ok", record: HEAD });
+    ingestMock.ingest.mockResolvedValue(undefined);
+    directoryMock.chats = [summary(DIGEST_ONE, null)];
+    let demand: ActiveSurfaceDemand = "preview";
+    const wrapper = ({ children }: { readonly children: ReactNode }) => (
+      <SurfaceDemandContext value={demand}>{children}</SurfaceDemandContext>
+    );
+
+    const view = renderHook(
+      () => useCloudDraftsIngest(CLIENT as never, HOST_ID),
+      { wrapper },
+    );
+    // A previewed tab may be left again before the cycle ends: no head is
+    // claimed, fenced, read or swept for it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(readMock.read).not.toHaveBeenCalled();
+    expect(sweepFenceMock.reserve).not.toHaveBeenCalled();
+    expect(reserveMock.reserve).not.toHaveBeenCalled();
+
+    demand = "settled";
+    view.rerender();
+    await vi.waitFor(() => {
+      expect(ingestMock.ingest).toHaveBeenCalledTimes(1);
+    });
+    expect(readMock.read).toHaveBeenCalledTimes(1);
+  });
+
   it("re-reads the same draft when its published head changes", async () => {
     readMock.read.mockResolvedValue({ kind: "ok", record: HEAD });
     ingestMock.ingest.mockResolvedValue(undefined);

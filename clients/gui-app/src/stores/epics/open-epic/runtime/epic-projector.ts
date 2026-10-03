@@ -1,3 +1,7 @@
+import {
+  projectIncrementalEpic,
+  type EpicProjectionBaseline,
+} from "./incremental-epic-projection";
 /**
  * Y.Doc → projection-sink projector for the per-Epic replica runtime.
  *
@@ -107,10 +111,9 @@ import { EMPTY_ARRAY, EMPTY_PROJECTED_SLICES } from "../types";
  *
  * A union because the two heads differ in one structural way beyond where the
  * rows come from: the `@1` head has an INCREMENTAL path (a Y `observeDeep`
- * handler that turns a doc transaction into a patch), and the lane head has
- * none - its rows arrive as decoded envelopes the replica has already
- * reconciled, so every lane frame is a full recompute of an already-cheap
- * source. Modelling that as one config with a nullable handler would invite a
+ * handler that turns a doc transaction into a patch), whereas the lane head
+ * receives explicit row publications. Modelling that as one config with a
+ * nullable handler would invite a
  * `handler?.()` somewhere and quietly make the legacy path optional.
  */
 type AttachedConfig =
@@ -256,6 +259,7 @@ export interface EpicProjector {
    * same slices for a caller that wants to fold them into a wider write.
    */
   projectFull: () => EpicProjectedSlices;
+  projectChanges: () => EpicProjectedSlices;
 }
 
 /**
@@ -316,6 +320,7 @@ export function createEpicProjector(
   const { getDocArm, getPendingOverlay, onDeadMutations } = sources;
   let attached: AttachedConfig | null = null;
   let ingesting = false;
+  let baseline: EpicProjectionBaseline | null = null;
 
   function currentInputs(): ProjectionInputs {
     return {
@@ -328,6 +333,7 @@ export function createEpicProjector(
   }
 
   function detachInternal(): void {
+    baseline = null;
     if (attached === null) return;
     if (attached.kind === "doc") {
       const epicMap = getEpicMap(attached.doc);
@@ -356,6 +362,7 @@ export function createEpicProjector(
       if (ingesting) return;
       const patches = collectPatches(events, doc);
       if (patchesEmpty(patches)) return;
+      baseline = null;
       // With a metadata mutation in flight, take the FULL path. The
       // incremental path recomputes rows from the doc alone, so it would
       // publish a projection with the optimistic overlay missing and the row
@@ -411,12 +418,7 @@ export function createEpicProjector(
     // sink deterministically. Skipped mid-ingest so the snapshot path can
     // apply bytes and then call `projectFull` once.
     if (!ingesting) {
-      sink.publish(
-        stabilizeProjectedSlices(
-          sink.read(),
-          projectFullState(doc, getCurrentUserId(), currentInputs()),
-        ),
-      );
+      projectFull();
     }
   }
 
@@ -443,19 +445,41 @@ export function createEpicProjector(
     sink.transact(run);
   }
 
-  function projectFull(): EpicProjectedSlices {
+  function project(incremental: boolean): EpicProjectedSlices {
     if (attached === null) return EMPTY_PROJECTED_SLICES;
-    const currentUserId = getCurrentUserId();
-    const slices = stabilizeProjectedSlices(
-      attached.sink.read(),
-      composeEpicProjection(
-        readAttachedRaw(attached, currentUserId),
-        currentUserId,
-        currentInputs(),
-      ),
-    );
+    const userId = getCurrentUserId();
+    const inputs = currentInputs();
+    const raw =
+      incremental &&
+      attached.kind === "doc" &&
+      baseline !== null &&
+      baseline.userId === userId
+        ? baseline.raw
+        : readAttachedRaw(attached, userId);
+    const next: EpicProjectionBaseline = {
+      raw,
+      inputs: { ...inputs, docArm: { ...inputs.docArm } },
+      userId,
+      hadOverlay: inputs.pendingOverlay.size > 0,
+    };
+    const previous = attached.sink.read();
+    const changed =
+      incremental && baseline !== null
+        ? projectIncrementalEpic(previous, baseline, next)
+        : null;
+    const slices =
+      changed ??
+      stabilizeProjectedSlices(
+        previous,
+        composeEpicProjection(raw, userId, inputs),
+      );
+    baseline = next;
     attached.sink.publish(slices);
     return slices;
+  }
+
+  function projectFull(): EpicProjectedSlices {
+    return project(false);
   }
 
   /**
@@ -472,13 +496,7 @@ export function createEpicProjector(
     detachInternal();
     attached = { kind: "lane", readRaw, sink };
     if (ingesting) return;
-    const currentUserId = getCurrentUserId();
-    sink.publish(
-      stabilizeProjectedSlices(
-        sink.read(),
-        composeEpicProjection(readRaw(), currentUserId, currentInputs()),
-      ),
-    );
+    projectFull();
   }
 
   return {
@@ -488,6 +506,7 @@ export function createEpicProjector(
     isAttached: () => attached !== null,
     ingest,
     projectFull,
+    projectChanges: () => project(true),
   };
 }
 
@@ -1408,7 +1427,7 @@ function spliceNodeById(
  * row and the id order survived, so a full projection that changed nothing in
  * this slice is invisible to its subscribers.
  */
-function spliceIdSlice<T>(
+export function spliceIdSlice<T>(
   next: {
     readonly byId: Readonly<Record<string, T>>;
     readonly allIds: readonly string[];

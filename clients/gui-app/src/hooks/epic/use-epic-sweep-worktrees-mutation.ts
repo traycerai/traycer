@@ -114,7 +114,11 @@ export function useEpicSweepWorktrees(): UseMutationResult<
           variables.worktrees,
           result.removed,
         );
-        invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
+        invalidateWorktreeListingAndBindingCaches(
+          queryClient,
+          result.hostId,
+          variables.worktrees.map((target) => target.worktreePath),
+        );
       }
     },
     onError: (error) => {

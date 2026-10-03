@@ -24,7 +24,7 @@ import {
   useBrowserSidebarTabRows,
   useBrowserTabRowLabels,
 } from "@/components/epic-canvas/sidebar/use-browser-tab-rows";
-import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useBrowserSessionsInventory } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import { BrowserSessionsHostBoundary } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import {
   useEpicBrowsersElsewhere,
@@ -87,7 +87,7 @@ function BrowsersPanelBodyLive(props: {
   readonly epicId: string;
   readonly tabId: string;
 }) {
-  const sessions = useBrowserSessionsContext();
+  const sessions = useBrowserSessionsInventory();
   const hostPin = useSurfaceHostPin(useTabSurfaceKey("browsers", props.tabId));
   // Read whether or not the panel is empty - the empty state is the only
   // consumer today, but the read is a registry scan with no stream of its own,

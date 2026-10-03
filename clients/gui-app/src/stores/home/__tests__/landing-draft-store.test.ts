@@ -15,6 +15,7 @@ import {
 } from "@/stores/home/landing-draft-store";
 import * as landingImageGc from "@/lib/composer/landing-image-gc";
 import * as landingImageMove from "@/lib/composer/landing-image-move";
+import { flushDeferredJsonWrite } from "@/lib/persist/deferred-json-storage";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -1200,6 +1201,9 @@ describe("useLandingDraftStore", () => {
         patches.push(patch);
         return Promise.resolve();
       },
+      schedule: (projection) => {
+        patches.push(projection());
+      },
       flush: () => Promise.resolve(),
       dispose: () => undefined,
     });
@@ -1303,12 +1307,13 @@ describe("useLandingDraftStore", () => {
     ]);
   });
 
-  it("persists drafts to localStorage under the versioned key", async () => {
+  it("persists drafts to localStorage under the versioned key", () => {
     const { createDraft, setDraftContent } = useLandingDraftStore.getState();
     const id = createDraft(null);
     setDraftContent(id, textContent("survives reload"), null);
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // The write is queued, not synchronous - flush it before reading disk.
+    flushDeferredJsonWrite(LANDING_DRAFT_PERSIST_KEY);
 
     const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
     expect(raw).not.toBeNull();
@@ -1408,6 +1413,9 @@ describe("useLandingDraftStore", () => {
           patches.push(patch);
           return Promise.resolve();
         },
+        schedule: (projection) => {
+          patches.push(projection());
+        },
         flush: () => Promise.resolve(),
         dispose: () => undefined,
       });
@@ -1424,13 +1432,15 @@ describe("useLandingDraftStore", () => {
       }
     });
 
-    it("the localStorage partialize strips the pending b64 node (keeping text + hash)", async () => {
+    it("the localStorage write strips the pending b64 node (keeping text + hash)", () => {
       const id = useLandingDraftStore.getState().createDraft(null);
       useLandingDraftStore
         .getState()
         .setDraftContent(id, mixedPendingContent, null);
 
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      // The strip now runs inside the deferred flush (createDeferredPersistStorage's
+      // `project`), not in a store `partialize` - flush before reading disk.
+      flushDeferredJsonWrite(LANDING_DRAFT_PERSIST_KEY);
 
       const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
       expect(raw).not.toBeNull();
@@ -1466,6 +1476,9 @@ describe("useLandingDraftStore", () => {
         update: (patch) => {
           patches.push(patch);
           return Promise.resolve();
+        },
+        schedule: (projection) => {
+          patches.push(projection());
         },
         flush: () => Promise.resolve(),
         dispose: () => undefined,
@@ -1594,6 +1607,9 @@ describe("useLandingDraftStore", () => {
           patches.push(patch);
           return Promise.resolve();
         },
+        schedule: (projection) => {
+          patches.push(projection());
+        },
         flush: () => Promise.resolve(),
         dispose: () => undefined,
       });
@@ -1648,6 +1664,9 @@ describe("useLandingDraftStore", () => {
         update: (patch) => {
           patches.push(patch);
           return Promise.resolve();
+        },
+        schedule: (projection) => {
+          patches.push(projection());
         },
         flush: () => Promise.resolve(),
         dispose: () => undefined,

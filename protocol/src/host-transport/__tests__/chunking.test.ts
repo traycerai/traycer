@@ -851,6 +851,206 @@ describe("body compression round-trip (T5)", () => {
       ).toThrow(MuxFrameDecodeError);
     });
   });
+
+  describe("ChunkReassembler owns a full-length binary buffer for a CHUNKED completion (K1)", () => {
+    // A completed CHUNKED message's binary used to share a buffer with the
+    // body's own header/json section - safe, but not zero-copy transferable
+    // (`takeBytesForTransfer` in clients/shared needs `byteOffset === 0` and
+    // an exactly-sized buffer). Reassembly now copies the binary section into
+    // its own buffer once.
+    function isOwnedFullLengthBuffer(view: Uint8Array): boolean {
+      return (
+        view.byteOffset === 0 && view.buffer.byteLength === view.byteLength
+      );
+    }
+
+    function requireBinary(message: ReassembledMessage): Uint8Array {
+      if (message.binary === null) {
+        throw new Error("expected message.binary to be present");
+      }
+      return message.binary;
+    }
+
+    it("a multi-chunk message's binary is its own owned buffer, copied at most once, and transferable without touching sibling bytes", () => {
+      const json = { kind: "snapshot", note: "K1 owned-buffer" };
+      const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 2 + 777);
+      for (let i = 0; i < binary.length; i += 1) {
+        binary[i] = i % 251;
+      }
+      let seq = 0;
+      const source = new OutboundChunkSource(
+        {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 30,
+          qos: QosClass.BULK,
+          json,
+          binary,
+        },
+        () => seq++,
+        false,
+      );
+      expect(source.chunked).toBe(true);
+
+      const frames: MuxFrame[] = [];
+      while (!source.done) {
+        frames.push(decodeMuxFrame(encodeMuxFrame(source.nextFrame())));
+      }
+      const bodyLength = encodeMuxMessageBody(json, binary).length;
+
+      // Spying only around `accept` (frames are already built above) pins the
+      // copy budget without a production seam: a naive concat-then-slice
+      // would copy the binary section a second time, pushing the total past
+      // one body's worth of bytes.
+      const reassembler = new ChunkReassembler(undefined);
+      const setSpy = vi.spyOn(Uint8Array.prototype, "set");
+      let message: ReassembledMessage | null = null;
+      for (const frame of frames) {
+        const out = reassembler.accept(frame);
+        if (out !== null) {
+          message = out;
+        }
+      }
+      const copiedBytes = setSpy.mock.calls.reduce(
+        (sum, call) => sum + call[0].length,
+        0,
+      );
+      setSpy.mockRestore();
+      if (message === null) {
+        throw new Error("test source never completed");
+      }
+      expect(copiedBytes).toBe(bodyLength);
+
+      expect(message.json).toEqual(json);
+      const messageBinary = requireBinary(message);
+      expect(bytesEqual(messageBinary, binary)).toBe(true);
+      expect(isOwnedFullLengthBuffer(messageBinary)).toBe(true);
+
+      // The real platform primitive `takeBytesForTransfer` relies on.
+      const buffer = messageBinary.buffer;
+      const received = structuredClone(messageBinary, { transfer: [buffer] });
+      expect(bytesEqual(received, binary)).toBe(true);
+      expect(buffer.byteLength).toBe(0);
+    });
+
+    it("a chunk boundary splitting the body's own json section still reassembles byte-identical with an owned buffer", () => {
+      // Sized so the 5-byte body header plus its encoded json bytes overrun
+      // the first chunk - the json section itself straddles the boundary,
+      // not just the binary tail.
+      const json = {
+        kind: "snapshot",
+        blob: "y".repeat(BULK_CHUNK_SIZE_BYTES - 2),
+      };
+      const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES + 321).fill(0x7a);
+      let seq = 0;
+      const source = new OutboundChunkSource(
+        {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 31,
+          qos: QosClass.BULK,
+          json,
+          binary,
+        },
+        () => seq++,
+        false,
+      );
+      expect(source.chunked).toBe(true);
+
+      const { message } = drainThroughWire(source);
+      if (message === null) {
+        throw new Error("test source never completed");
+      }
+      expect(message.json).toEqual(json);
+      const messageBinary = requireBinary(message);
+      expect(bytesEqual(messageBinary, binary)).toBe(true);
+      expect(isOwnedFullLengthBuffer(messageBinary)).toBe(true);
+    });
+
+    it.each([
+      [1, 4],
+      [2, 3],
+      [3, 2],
+      [4, 1],
+    ])(
+      "a body header split %i/%i bytes into the first chunk still reassembles byte-identical with an owned buffer",
+      (firstChunkHeaderBytes) => {
+        // The 5-byte body header ITSELF splits across the first/second chunk,
+        // built from real frame inputs at an arbitrary chunk size (the way
+        // the conformance spec's own `bodyChunks` does) rather than through
+        // `OutboundChunkSource`, which only ever chunks at
+        // `BULK_CHUNK_SIZE_BYTES`.
+        const json = { kind: "small" };
+        const binary = new Uint8Array([9, 8, 7, 6, 5, 4]);
+        const body = encodeMuxMessageBody(json, binary);
+
+        const firstFrame = decodeMuxFrame(
+          encodeMuxFrame({
+            type: MuxFrameType.STREAM_FRAME,
+            streamId: 33,
+            seq: 0,
+            qos: QosClass.BULK,
+            chunked: true,
+            chunkFirst: true,
+            chunkLast: false,
+            compressed: false,
+            json: null,
+            binary: body.subarray(0, firstChunkHeaderBytes),
+          }),
+        );
+        const secondFrame = decodeMuxFrame(
+          encodeMuxFrame({
+            type: MuxFrameType.STREAM_FRAME,
+            streamId: 33,
+            seq: 1,
+            qos: QosClass.BULK,
+            chunked: true,
+            chunkFirst: false,
+            chunkLast: true,
+            compressed: false,
+            json: null,
+            binary: body.subarray(firstChunkHeaderBytes),
+          }),
+        );
+        const reassembler = new ChunkReassembler(undefined);
+        expect(reassembler.accept(firstFrame)).toBeNull();
+        const message = reassembler.accept(secondFrame);
+        if (message === null) {
+          throw new Error("test source never completed");
+        }
+        expect(message.json).toEqual(json);
+        const messageBinary = requireBinary(message);
+        expect(bytesEqual(messageBinary, binary)).toBe(true);
+        expect(isOwnedFullLengthBuffer(messageBinary)).toBe(true);
+      },
+    );
+
+    it("an UNCHUNKED (single-frame) message keeps the existing view contract - the copy is scoped to chunked reassembly", () => {
+      const json = { kind: "small" };
+      const binary = new Uint8Array([1, 2, 3, 4, 5]);
+      let seq = 0;
+      const source = new OutboundChunkSource(
+        {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 32,
+          qos: QosClass.INTERACTIVE,
+          json,
+          binary,
+        },
+        () => seq++,
+        false,
+      );
+      expect(source.chunked).toBe(false);
+
+      const { message } = drainThroughWire(source);
+      if (message === null) {
+        throw new Error("test source never completed");
+      }
+      const messageBinary = requireBinary(message);
+      expect(bytesEqual(messageBinary, binary)).toBe(true);
+      // A view into a larger decrypt buffer, exactly as before - a small
+      // message never earns the copy the chunked path now pays for.
+      expect(isOwnedFullLengthBuffer(messageBinary)).toBe(false);
+    });
+  });
 });
 
 /**

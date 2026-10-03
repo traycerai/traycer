@@ -9,10 +9,10 @@ import type {
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { projectTranscriptRows } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 
 /**
  * # The acceptance bar for the row projection

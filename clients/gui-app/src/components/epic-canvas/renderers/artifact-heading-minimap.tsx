@@ -47,7 +47,7 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
     hitStripWidth,
     maxVisibleItems,
     scrollToIndex,
-  } = useArtifactHeadingMetrics({ editor, refreshRef, scroller, side });
+  } = useArtifactHeadingMetrics({ editor, refreshRef, scroller, side, shown });
   const [open, setOpen] = useState(false);
   const [cursorIndex, setCursorIndex] = useState(0);
   const regionRef = useRef<HTMLDivElement | null>(null);

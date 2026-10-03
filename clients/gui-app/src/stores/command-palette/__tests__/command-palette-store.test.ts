@@ -115,6 +115,11 @@ describe("useCommandPaletteStore", () => {
   });
 
   it("does not persist session-only open state", () => {
+    // A transient-only change (open/query) now writes nothing at all (see the
+    // shallow-gated deferred-persist suite), so establish a real persisted
+    // write first via a field that IS persisted, then prove `open` never
+    // rides along in it.
+    useCommandPaletteStore.getState().recordUse("a");
     useCommandPaletteStore.getState().setOpen(true);
     const raw = window.localStorage.getItem("traycer-gui-app:command-palette");
     if (raw === null) throw new Error("expected persisted palette state");

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -6,6 +6,7 @@ import type {
   ChatSessionStoreHandle,
   SendChatSessionMessageInput,
 } from "@/stores/chats/chat-session-store";
+import { createTestChatSession } from "@/stores/chats/test-support/create-test-chat-session";
 import { useChatActions } from "@/hooks/chats/use-chat-actions";
 
 /**
@@ -28,17 +29,12 @@ const SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 
-/**
- * DERIVED from the store's own parameter, not restated. This fake is why that
- * matters: a hand-typed copy of `sendMessage`'s input drifted from production
- * and, because the only thing `tsc` checks is the object literal the proxy
- * builds, it stayed green through a compile and reached committed history RED.
- */
-interface SendMessageStoreSlice {
-  readonly sendMessage: (
-    input: SendChatSessionMessageInput,
-  ) => { readonly clientActionId: string; readonly messageId: string } | null;
-}
+let session: ChatSessionStoreHandle | null = null;
+
+afterEach(() => {
+  session?.dispose();
+  session = null;
+});
 
 describe("useChatActions deliveryPolicy threading", () => {
   it("forwards deliveryPolicy to the chat session store sendMessage", () => {
@@ -46,8 +42,9 @@ describe("useChatActions deliveryPolicy threading", () => {
       clientActionId: "action-1",
       messageId: "message-1",
     }));
-    const storeSlice: SendMessageStoreSlice = { sendMessage };
-    const handle = createDeliveryPolicyHandle(storeSlice);
+    const handle = createTestChatSession();
+    session = handle;
+    handle.store.setState({ sendMessage });
 
     const { result } = renderHook(() => useChatActions(handle));
     result.current.sendMessage({
@@ -70,26 +67,3 @@ describe("useChatActions deliveryPolicy threading", () => {
     });
   });
 });
-
-function createDeliveryPolicyHandle(
-  storeSlice: SendMessageStoreSlice,
-): ChatSessionStoreHandle {
-  const store = {
-    getState: () => storeSlice,
-  } as ChatSessionStoreHandle["store"];
-  return {
-    epicId: "epic-1",
-    chatId: "chat-1",
-    userId: null,
-    store,
-    deliveredNotices: {
-      notices: new WeakSet(),
-      clientActionIds: new Set(),
-      retainedClientActionIds: new Set(),
-    },
-    deliveredRestoreCompletionKeys: new Set(),
-    setSurfaceVisibility: (_surfaceId: string, _visible: boolean) => undefined,
-    clearSurfaceVisibility: (_surfaceId: string) => undefined,
-    dispose: () => undefined,
-  };
-}

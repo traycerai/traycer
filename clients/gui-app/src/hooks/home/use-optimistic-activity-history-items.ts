@@ -137,7 +137,8 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-function snapshot(): ActivitySnapshot {
+/** The activity store's published snapshot (`useSyncExternalStore`'s read). */
+export function historyActivitySnapshot(): ActivitySnapshot {
   return currentSnapshot;
 }
 
@@ -380,13 +381,21 @@ function compareLegacyProjectedRows(
   return (right.stampAt ?? 0) - (left.stampAt ?? 0);
 }
 
-/** Loaded-row projection shared by the panel, drawer, and tray. */
+/**
+ * Loaded-row projection shared by the panel, drawer, and tray. Render passes
+ * the stamps of its subscribed {@link historyActivitySnapshot}, never the live
+ * Map.
+ */
 export function projectOptimisticHistoryItems(
-  userId: string,
-  pageItems: readonly HistoryItem[],
-  backfilled: readonly HistoryItem[],
-  nowMs: number,
+  activityStamps: ReadonlyMap<string, ActivityStamp>,
+  input: {
+    readonly userId: string;
+    readonly pageItems: readonly HistoryItem[];
+    readonly backfilled: readonly HistoryItem[];
+    readonly nowMs: number;
+  },
 ): readonly HistoryItem[] {
+  const { userId, pageItems, backfilled, nowMs } = input;
   const byEpic = new Map(pageItems.map((item) => [item.epicId, item]));
   for (const item of backfilled) {
     const pageItem = byEpic.get(item.epicId);
@@ -410,7 +419,7 @@ export function projectOptimisticHistoryItems(
     (item) => item.recentAtMs === undefined,
   );
   const projected: ProjectedHistoryRow[] = sourceItems.map((item) => {
-    const stamp = stamps.get(keyFor(userId, item.epicId));
+    const stamp = activityStamps.get(keyFor(userId, item.epicId));
     if (
       stamp === undefined ||
       stamp.expiresAt <= nowMs ||
@@ -583,7 +592,7 @@ export function useOptimisticActivityHistoryItems(
   const workingEpicIds = useOwnTurnEpicIds(input.userId);
   const activitySnapshot = useSyncExternalStore(
     subscribe,
-    snapshot,
+    historyActivitySnapshot,
     () => EMPTY_SNAPSHOT,
   );
   const cloudAuthorized = useAuthStore((state) =>
@@ -733,10 +742,10 @@ export function useOptimisticActivityHistoryItems(
   }, [activitySnapshot, refreshEnabled, input.userId]);
   if (!input.enabled || input.userId === null) return input.items;
   if (input.items.length === 0 && backfilled.length === 0) return EMPTY_ITEMS;
-  return projectOptimisticHistoryItems(
-    input.userId,
-    input.items,
+  return projectOptimisticHistoryItems(activitySnapshot.stamps, {
+    userId: input.userId,
+    pageItems: input.items,
     backfilled,
     nowMs,
-  );
+  });
 }

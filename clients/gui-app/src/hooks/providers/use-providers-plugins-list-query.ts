@@ -5,6 +5,7 @@ import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   mapProvidersListToPlugins,
   type PluginsListData,
@@ -22,6 +23,7 @@ export function useProvidersPluginsList(args: {
   readonly enabled: boolean;
 }): UseQueryResult<PluginsListData, HostRpcError> {
   const client = useHostClient();
+  const readiness = useReactiveHostReadiness(client);
   const listParams = {
     providerId: args.providerId,
     scope: args.scope,
@@ -67,15 +69,15 @@ export function useProvidersPluginsList(args: {
   const { refetch } = query;
   const enabled = args.enabled;
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !readiness.isReady) return;
     return startVisibleInterval({
       tick: () => {
-        void refetch();
+        void refetch({ cancelRefetch: false });
       },
       intervalMs: PLUGINS_LIST_REFRESH_MS,
       fireOnShow: true,
     });
-  }, [enabled, refetch]);
+  }, [enabled, readiness.isReady, refetch]);
 
   return query;
 }

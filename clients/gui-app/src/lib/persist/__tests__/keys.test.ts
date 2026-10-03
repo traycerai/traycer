@@ -8,6 +8,9 @@ import {
   appLocalNotificationCompletionReceiptKey,
   appLocalNotificationCompletionReceiptPrefix,
   appLocalNotificationsKey,
+  composerDraftRowKey,
+  composerDraftRowPrefix,
+  composerDraftStorageKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   deliveryRestoreAckKey,
@@ -291,6 +294,31 @@ describe("persist key builders — output-preserving against current source", ()
 
   it("emits the machine-level last-local-host-id localStorage key", () => {
     expect(lastLocalHostIdKey()).toBe("traycer-gui-app:last-local-host-id");
+  });
+
+  it("keys composer drafts per account namespace, one row per (kind, id), percent-encoding ids", () => {
+    // The anonymous namespace keeps the legacy single-blob key, so an upgrade
+    // finds (and migrates) what the old build wrote.
+    expect(composerDraftStorageKey(null)).toBe(
+      "traycer-gui-app:composer-drafts",
+    );
+    expect(composerDraftStorageKey("user/1")).toBe(
+      "traycer-gui-app:composer-drafts:account:user%2F1",
+    );
+    expect(composerDraftRowPrefix("traycer-gui-app:composer-drafts")).toBe(
+      "traycer-gui-app:composer-drafts:rows:",
+    );
+    expect(
+      composerDraftRowKey("traycer-gui-app:composer-drafts", "draft", "chat:1"),
+    ).toBe("traycer-gui-app:composer-drafts:rows:draft:chat%3A1");
+    // One namespace's rows are never under another's prefix.
+    expect(
+      composerDraftRowKey(
+        composerDraftStorageKey("user/1"),
+        "delete",
+        "d-1",
+      ).startsWith(composerDraftRowPrefix(composerDraftStorageKey(null))),
+    ).toBe(false);
   });
 
   it("has no two catalog entries sharing a leaf", () => {

@@ -15,13 +15,7 @@ export function invalidateNotificationIndicators(
   hostId: string,
   canceller: NotificationIndicatorReadCanceller | null,
 ): void {
-  invalidateMatchingNotificationIndicators(
-    queryClient,
-    {
-      queryKey: notificationsQueryKeys.indicatorScope(hostId),
-    },
-    canceller,
-  );
+  queueIndicatorInvalidation(queryClient, hostId, null, canceller);
 }
 
 export function invalidateNotificationIndicatorsForEntities(
@@ -31,36 +25,90 @@ export function invalidateNotificationIndicatorsForEntities(
   canceller: NotificationIndicatorReadCanceller | null,
 ): void {
   if (entities.length === 0) return;
-  invalidateMatchingNotificationIndicators(
-    queryClient,
-    {
-      queryKey: notificationsQueryKeys.indicatorScope(hostId),
-      predicate: (query) =>
-        entities.some((entity) =>
-          notificationsQueryKeys.isIndicatorQueryForEntity(
-            query.queryKey,
-            entity,
-          ),
-        ),
-    },
-    canceller,
-  );
+  queueIndicatorInvalidation(queryClient, hostId, entities, canceller);
 }
 
-function invalidateMatchingNotificationIndicators(
+interface PendingInvalidation {
+  all: boolean;
+  entities: HostNotificationsEntityRef[];
+  canceller: NotificationIndicatorReadCanceller | null;
+}
+
+const pendingInvalidations = new WeakMap<
+  QueryClient,
+  Map<string, PendingInvalidation>
+>();
+
+function queueIndicatorInvalidation(
+  queryClient: QueryClient,
+  hostId: string,
+  entities: ReadonlyArray<HostNotificationsEntityRef> | null,
+  canceller: NotificationIndicatorReadCanceller | null,
+): void {
+  let hosts = pendingInvalidations.get(queryClient);
+  if (hosts === undefined) {
+    hosts = new Map();
+    pendingInvalidations.set(queryClient, hosts);
+  }
+  const pending = hosts.get(hostId);
+  if (pending !== undefined) {
+    pending.all ||= entities === null;
+    pending.entities.push(...(entities ?? []));
+    pending.canceller = canceller;
+    return;
+  }
+  const entry: PendingInvalidation = {
+    all: entities === null,
+    entities: [...(entities ?? [])],
+    canceller,
+  };
+  hosts.set(hostId, entry);
+  const owner = hosts;
+  queueMicrotask(() => {
+    void (async () => {
+      do {
+        if (pendingInvalidations.get(queryClient) !== owner) return;
+        const all = entry.all;
+        const changed = entry.entities;
+        entry.all = false;
+        entry.entities = [];
+        await invalidateMatchingNotificationIndicators(
+          queryClient,
+          {
+            queryKey: notificationsQueryKeys.indicatorScope(hostId),
+            predicate: (query) =>
+              all ||
+              changed.some((entity) =>
+                notificationsQueryKeys.isIndicatorQueryForEntity(
+                  query.queryKey,
+                  entity,
+                ),
+              ),
+          },
+          entry.canceller,
+        );
+        // Changes arriving during a read need a fresh successor, not a join to its stale answer.
+      } while (owner.get(hostId)?.all || entry.entities.length > 0);
+    })().finally(() => {
+      if (owner.get(hostId) === entry) owner.delete(hostId);
+    });
+  });
+}
+
+async function invalidateMatchingNotificationIndicators(
   queryClient: QueryClient,
   filters: QueryFilters,
   canceller: NotificationIndicatorReadCanceller | null,
-): void {
+): Promise<void> {
   const fetchingQueries = queryClient
     .getQueryCache()
     .findAll(filters)
     .filter((query) => query.state.fetchStatus === "fetching");
   if (fetchingQueries.length === 0) {
-    void queryClient.invalidateQueries(filters);
+    await queryClient.invalidateQueries(filters);
     return;
   }
-  void queryClient
+  await queryClient
     .cancelQueries({
       predicate: (query) =>
         query.state.fetchStatus === "fetching" &&
@@ -85,6 +133,7 @@ function invalidateMatchingNotificationIndicators(
 export function clearNotificationIndicatorCaches(
   queryClient: QueryClient,
 ): void {
+  pendingInvalidations.delete(queryClient);
   queryClient.removeQueries({
     predicate: (query) =>
       notificationsQueryKeys.isIndicatorQuery(query.queryKey),

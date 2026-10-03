@@ -16,6 +16,7 @@ import {
 } from "@/lib/drafts/cloud-draft-reader";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { draftDocumentFromCloudHead } from "@/lib/drafts/cloud-draft-apply";
+import { useSurfaceDemand } from "@/stores/tabs/surface-demand";
 import {
   abandonCloudDraftHeadRead,
   beginCloudDraftHeadRead,
@@ -73,6 +74,9 @@ export function useCloudDraftsIngest(
   client: HostClient<HostRpcRegistry> | null,
   hostId: string | null,
 ): void {
+  // A surface previewed by a held tab cycle (or not yet settled) reads no
+  // heads: its tab may be left again before the cycle ends.
+  const demand = useSurfaceDemand();
   const directory = useCloudDraftsDirectory(client, hostId);
   // Destructured so the effect depends on the (stable) reader, not on the
   // directory object a method call would otherwise bind.
@@ -90,7 +94,13 @@ export function useCloudDraftsIngest(
     nudged.current = { fenceSeq: -1, ids: new Set() };
   }, [directory.scopeId]);
   useEffect(() => {
-    if (!directory.visible || client === null || hostId === null) return;
+    if (
+      demand !== "settled" ||
+      !directory.visible ||
+      client === null ||
+      hostId === null
+    )
+      return;
     // The verdict is re-read by the port before every head and part request,
     // as `use-cloud-chat-queries` does: a session demoted mid-ingest stops the
     // next read rather than the reads already in flight.
@@ -438,6 +448,7 @@ export function useCloudDraftsIngest(
     };
   }, [
     client,
+    demand,
     directory.chats,
     directory.settled,
     directory.visible,

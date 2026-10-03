@@ -20,6 +20,19 @@ interface ChatComposerAttachmentsStripProps {
   readonly onRemoveImage: (id: string) => void;
 }
 
+export function ChatComposerDraftAttachmentsStrip(
+  props: Omit<ChatComposerAttachmentsStripProps, "content" | "taskId"> & {
+    readonly taskId: string;
+    readonly initialContent: JsonContent;
+  },
+) {
+  const { initialContent, ...stripProps } = props;
+  const content = useComposerDraftStore(
+    (state) => state.drafts[props.taskId]?.content ?? initialContent,
+  );
+  return <ChatComposerAttachmentsStrip {...stripProps} content={content} />;
+}
+
 export function ChatComposerAttachmentsStrip(
   props: ChatComposerAttachmentsStripProps,
 ) {

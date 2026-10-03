@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,6 +31,9 @@ export function SteerSettingsConflictDialog(
   props: SteerSettingsConflictDialogProps,
 ) {
   const { changed, onOpenChange, onRestart, open } = props;
+  const [everOpened, setEverOpened] = useState(open);
+  if (open && !everOpened) setEverOpened(true);
+  if (!open && !everOpened) return null;
   const changeList = changed.length > 0 ? changed.join(", ") : "these settings";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

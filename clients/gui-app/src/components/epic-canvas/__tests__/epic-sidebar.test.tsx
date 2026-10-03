@@ -136,6 +136,16 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => browserPanelState.value,
 }));
+// The panel reads the narrowed inventory selector, not the context above.
+vi.mock("@/components/epic-canvas/renderers/use-browser-sessions", () => ({
+  useBrowserSessionsInventory: () => ({
+    items: browserPanelState.value.items,
+    lifecycle: browserPanelState.value.lifecycle,
+    errorMessage: browserPanelState.value.errorMessage,
+    retry: browserPanelState.value.retry,
+    closeTab: browserPanelState.value.closeTab,
+  }),
+}));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
     props.children,

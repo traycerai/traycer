@@ -63,6 +63,7 @@ function renderTimeline(messages: ReadonlyArray<ChatMessageModel>) {
     <div style={{ height: 700, width: 800 }}>
       <ChatTimeline
         rows={transcriptListRows({ window: null, rendered: msgs })}
+        visible
         taskTitle="Quoted-reply send"
         backgroundToolBlockIds={new Set()}
         getMessageActions={() => null}

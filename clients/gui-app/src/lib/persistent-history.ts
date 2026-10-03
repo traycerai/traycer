@@ -5,6 +5,11 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { appLogger, describeLogError } from "@/lib/logger";
+import {
+  deferJsonWrite,
+  flushDeferredJsonWrite,
+  cancelDeferredJsonWrite,
+} from "@/lib/persist/deferred-json-storage";
 
 /**
  * `ParsedHistoryState` is not exported from `@tanstack/react-router`, so we
@@ -125,15 +130,15 @@ export function getHistoryController(
  * visible URL bar and no path carried across launches, so a window's previous
  * route would otherwise be lost when no explicit shell route is provided. This
  * module owns a small per-window history stack, mirrors it into `localStorage`
- * on every push/replace/back/forward, and seeds the stack from `localStorage`
+ * after navigation bursts, and seeds the stack from `localStorage`
  * at module init. The read is synchronous, so the router boots with zero
  * render flash - no async hydration gate required.
  *
  * Pattern mirrors superset's `persistent-hash-history.ts` (we verified the
  * shape against that implementation): use TanStack's `createHistory`
  * primitive, drive entries[] + index explicitly, persist inside each
- * navigation method. Relying on `createMemoryHistory().subscribe()` was
- * unreliable in practice.
+ * navigation method (encoding and writing at flush). Relying on
+ * `createMemoryHistory().subscribe()` was unreliable in practice.
  */
 
 const STORAGE_KEY_PREFIX = "traycer-gui-app:last-route";
@@ -170,6 +175,7 @@ function loadPersistedState(windowId: string | null): PersistedState | null {
   if (typeof window === "undefined") return null;
   if (windowId === null) return null;
   const storageKey = buildStorageKey(windowId);
+  flushDeferredJsonWrite(storageKey);
   try {
     const raw = window.localStorage.getItem(storageKey);
     if (raw === null) return null;
@@ -210,6 +216,7 @@ export function readPersistedCurrentRoute(
 }
 
 function removePersistedState(storageKey: string): void {
+  cancelDeferredJsonWrite(storageKey);
   try {
     window.localStorage.removeItem(storageKey);
   } catch {
@@ -253,29 +260,35 @@ function persistState(
   // "Settings…" while signed out; restoring it would open the next launch on
   // that card, which nobody asked for.
   if (entries[index] === "/when-you-quit") return;
-  try {
-    // The in-memory stack is already bounded to MAX_ENTRIES by `capStackInPlace`
-    // (applied at every push and at seed), so persistence mirrors it verbatim.
-    // Capping HERE instead would re-introduce a cursor/window mismatch: slicing
-    // from the tail while clamping the index independently can drop the current
-    // entry when the cursor sits outside the retained window.
-    window.localStorage.setItem(
-      buildStorageKey(windowId),
-      JSON.stringify({ entries, index }),
-    );
-  } catch (error) {
-    appLogger.warn("[history] persisted route state write failed", {
-      windowId,
-      entryCount: entries.length,
-      error: describeLogError(error),
-    });
-    // localStorage unavailable (private mode, quota, disabled) - fail silent.
-  }
+  // The stack is mutable; retain the last non-landing snapshot even when a
+  // subsequent auth redirect replaces it with `/` before the timer fires.
+  // The in-memory stack is already bounded to MAX_ENTRIES by `capStackInPlace`
+  // (applied at every push and at seed), so persistence mirrors it verbatim.
+  // Capping HERE instead would re-introduce a cursor/window mismatch: slicing
+  // from the tail while clamping the index independently can drop the current
+  // entry when the cursor sits outside the retained window.
+  const snapshot = { entries: [...entries], index };
+  deferJsonWrite(buildStorageKey(windowId), () => {
+    try {
+      window.localStorage.setItem(
+        buildStorageKey(windowId),
+        JSON.stringify(snapshot),
+      );
+    } catch (error) {
+      appLogger.warn("[history] persisted route state write failed", {
+        windowId,
+        entryCount: snapshot.entries.length,
+        error: describeLogError(error),
+      });
+      // localStorage unavailable (private mode, quota, disabled) - fail silent.
+    }
+  });
 }
 
 function clearPersistedState(windowId: string | null): void {
   if (typeof window === "undefined") return;
   if (windowId === null) return;
+  cancelDeferredJsonWrite(buildStorageKey(windowId));
   try {
     window.localStorage.removeItem(buildStorageKey(windowId));
   } catch (error) {
@@ -540,7 +553,26 @@ export function createPersistentMemoryHistory(
 
   persistState(windowId, entries, index);
 
+  const storageKey = windowId === null ? null : buildStorageKey(windowId);
+  const onStorage = (event: StorageEvent): void => {
+    if (
+      storageKey !== null &&
+      event.storageArea === window.localStorage &&
+      (event.key === null || event.key === storageKey)
+    ) {
+      // A peer's wipe or replacement supersedes this renderer's queued write.
+      cancelDeferredJsonWrite(storageKey);
+    }
+  };
+  if (storageKey !== null) window.addEventListener("storage", onStorage);
+
   const history = createHistory({
+    destroy: () => {
+      if (storageKey !== null) {
+        window.removeEventListener("storage", onStorage);
+        flushDeferredJsonWrite(storageKey);
+      }
+    },
     getLocation: () =>
       parseHref(
         entries[index] ?? "/",

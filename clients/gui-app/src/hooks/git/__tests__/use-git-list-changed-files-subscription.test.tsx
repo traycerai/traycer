@@ -1687,6 +1687,53 @@ describe("useGitListChangedFilesSubscription", () => {
       );
     });
 
+    it("publishes poll start, error and watcher facts to every consumer, including one that joins after the frame", async () => {
+      const first = await renderAtMinor(3);
+      first.session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() =>
+        expect(first.result.current.pollStartedAtMs).toBe(1_000),
+      );
+
+      // No further frame arrives for this consumer: it has to be handed the
+      // facts the shared entry already holds.
+      const second = renderHook(
+        () =>
+          useGitListChangedFilesSubscription({
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() =>
+        expect(second.result.current.pollStartedAtMs).toBe(1_000),
+      );
+      expect(second.result.current.watcherStatus).toEqual({
+        state: "degraded-error",
+        detail: "boom",
+      });
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+
+      // An error frame writes no cache slot, so nothing but the entry's own
+      // publication can make either consumer look again.
+      first.session.emitFrame(
+        { type: "error", message: "transient", isFatal: false },
+        null,
+      );
+      for (const consumer of [first.result, second.result]) {
+        await waitFor(() => expect(consumer.current.error).not.toBeNull());
+        expect(consumer.current.pollStartedAtMs).toBeNull();
+        expect(consumer.current.watcherStatus).toEqual({
+          state: "degraded-error",
+          detail: "boom",
+        });
+      }
+    });
+
     it("reports UNKNOWN, not healthy, against a host negotiated below 1.3", async () => {
       // The distinction matters: a released host emits no watcher field at
       // all, and rendering that as "watching" would assert live updates this

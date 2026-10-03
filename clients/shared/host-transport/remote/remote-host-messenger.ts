@@ -49,7 +49,9 @@ export class RemoteHostMessenger<
       method,
       params,
       options.idempotencyKey,
-      options.authority.abortSignal,
+      options.authority.cancelAfterDispatch === true
+        ? { signal: options.authority.abortSignal, cancelAfterDispatch: true }
+        : options.authority.abortSignal,
       null,
       // No caller-specific budget: the session's shared
       // `UNARY_RESPONSE_TIMEOUT_MS` applies, as it always has.
@@ -82,7 +84,9 @@ export class RemoteHostMessenger<
       method,
       params,
       options.idempotencyKey,
-      options.authority.abortSignal,
+      options.authority.cancelAfterDispatch === true
+        ? { signal: options.authority.abortSignal, cancelAfterDispatch: true }
+        : options.authority.abortSignal,
       null,
       responseTimeoutMs,
       options.replayMustBeKeyed,

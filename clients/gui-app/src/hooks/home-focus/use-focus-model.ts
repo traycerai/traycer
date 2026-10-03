@@ -46,14 +46,6 @@ import { useBrowserSessionsPlane } from "@/hooks/home-focus/use-browser-sessions
 import { useWarmChatBackground } from "@/hooks/home-focus/use-warm-chat-background";
 
 /**
- * Per-hook-instance memory of the last model built, so an unchanged section
- * keeps its row objects across a rebuild triggered by a different section.
- * Keyed by a token the hook owns, so two Home surfaces in one window do not
- * share (and reset) each other's baseline, and the entry dies with the token.
- */
-const focusModelCache = new WeakMap<object, FocusModel>();
-
-/**
  * Every host's `byEpic`, unioned.
  *
  * The activity store keys its slices by the host whose stream produced them,
@@ -523,21 +515,11 @@ export function useFocusModel(): FocusModel {
     [browserEpics, taskTitles, projection.agentIdentities],
   );
 
-  // The previous model, so the builders can hand back their own unchanged rows
-  // rather than rebuilding every section whenever one of them moves. `useMemo`
-  // alone cannot do this - it has no access to what it produced last time.
-  //
-  // Held in a module WeakMap keyed by a per-instance token, the same shape
-  // `useStableChatTimelineRows` uses and for the same reason: reading a ref
-  // during render is what `react-hooks/refs` forbids. The entry is published
-  // from render, so a discarded render can advance it - which is harmless here
-  // because the builders are idempotent (rebuilding from identical inputs
-  // against a previous that already equals the result returns that same
-  // result), and nothing downstream reasons about what was last COMMITTED.
-  const [cacheKey] = useState<object>(() => ({}));
+  // React discards this reconciliation baseline with an abandoned render, so
+  // a prompt can retain only an activation that actually reached a commit.
+  const [previous, setPrevious] = useState(EMPTY_FOCUS_MODEL);
   const model = useMemo(() => {
-    const previous = focusModelCache.get(cacheKey) ?? EMPTY_FOCUS_MODEL;
-    const next = buildFocusModel(
+    return buildFocusModel(
       {
         notificationRows,
         tasks: {
@@ -565,10 +547,8 @@ export function useFocusModel(): FocusModel {
       },
       previous,
     );
-    focusModelCache.set(cacheKey, next);
-    return next;
   }, [
-    cacheKey,
+    previous,
     notificationRows,
     byEpic,
     taskTitles,
@@ -589,6 +569,7 @@ export function useFocusModel(): FocusModel {
     connectableHosts.resolved,
     feedMode,
   ]);
+  if (model !== previous) setPrevious(model);
   return model;
 }
 

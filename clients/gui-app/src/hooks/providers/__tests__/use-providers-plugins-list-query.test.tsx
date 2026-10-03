@@ -1,6 +1,10 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProvidersPluginsList } from "@/hooks/providers/use-providers-plugins-list-query";
+import {
+  __resetDocumentVisibilitySubscribersForTests,
+  setDesktopWindowOnScreen,
+} from "@/lib/dom/document-visibility";
 
 /**
  * Captures the options the hook hands the host-query layer. `poll` is the only
@@ -11,6 +15,8 @@ const queryMocks = vi.hoisted(() => ({
   options: [] as Array<{ poll?: boolean; staleTime?: number }>,
   refetch: vi.fn(),
 }));
+
+const readinessMocks = vi.hoisted(() => ({ isReady: true }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQueryWithResponseMap: (args: {
@@ -27,20 +33,35 @@ vi.mock("@/hooks/host/use-host-query", () => ({
   },
 }));
 
+vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
+  useReactiveHostReadiness: () => ({ isReady: readinessMocks.isReady }),
+}));
+
 vi.mock("@/lib/host", async () => {
   const actual =
     await vi.importActual<typeof import("@/lib/host")>("@/lib/host");
   return { ...actual, useHostClient: () => null };
 });
 
+function defineVisibility(state: "visible" | "hidden"): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+}
+
 describe("useProvidersPluginsList", () => {
   beforeEach(() => {
     queryMocks.options = [];
     queryMocks.refetch.mockClear();
+    readinessMocks.isReady = true;
+    defineVisibility("visible");
+    setDesktopWindowOnScreen(true);
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    __resetDocumentVisibilitySubscribersForTests();
   });
 
   /**
@@ -115,5 +136,78 @@ describe("useProvidersPluginsList", () => {
 
     vi.advanceTimersByTime(120_000);
     expect(queryMocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("refreshes with cancelRefetch:false so a slow read is not cancelled by the next tick", () => {
+    vi.useFakeTimers();
+    renderHook(() =>
+      useProvidersPluginsList({
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        enabled: true,
+      }),
+    );
+
+    vi.advanceTimersByTime(30_000);
+    expect(queryMocks.refetch).toHaveBeenCalledWith({ cancelRefetch: false });
+  });
+
+  it("never polls while the host is not reactively ready", () => {
+    vi.useFakeTimers();
+    readinessMocks.isReady = false;
+    renderHook(() =>
+      useProvidersPluginsList({
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        enabled: true,
+      }),
+    );
+
+    vi.advanceTimersByTime(120_000);
+    expect(queryMocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("never polls while the document starts hidden", () => {
+    vi.useFakeTimers();
+    defineVisibility("hidden");
+    renderHook(() =>
+      useProvidersPluginsList({
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        enabled: true,
+      }),
+    );
+
+    vi.advanceTimersByTime(120_000);
+    expect(queryMocks.refetch).not.toHaveBeenCalled();
+  });
+
+  it("stops polling once the desktop window goes off-screen, and resumes on return", async () => {
+    vi.useFakeTimers();
+    renderHook(() =>
+      useProvidersPluginsList({
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        enabled: true,
+      }),
+    );
+
+    vi.advanceTimersByTime(30_000);
+    await Promise.resolve();
+    expect(queryMocks.refetch).toHaveBeenCalledTimes(1);
+
+    setDesktopWindowOnScreen(false);
+    vi.advanceTimersByTime(120_000);
+    expect(queryMocks.refetch).toHaveBeenCalledTimes(1);
+
+    // Returning to the foreground immediately refreshes rather than waiting
+    // out the rest of the 30s cadence.
+    setDesktopWindowOnScreen(true);
+    await Promise.resolve();
+    expect(queryMocks.refetch).toHaveBeenCalledTimes(2);
   });
 });

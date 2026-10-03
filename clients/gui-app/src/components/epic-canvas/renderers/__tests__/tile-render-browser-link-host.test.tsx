@@ -49,24 +49,42 @@ vi.mock(
     const notify = (key: string): void => {
       listeners.get(key)?.forEach((listener) => listener());
     };
+    const stateOf = (key: string | null): BrowserSessionsState | null =>
+      key === null ? null : (states.get(key) ?? null);
+    const subscribe = (key: string | null, listener: () => void) => {
+      if (key === null) return () => undefined;
+      const existing = listeners.get(key) ?? new Set<() => void>();
+      existing.add(listener);
+      listeners.set(key, existing);
+      return () => {
+        existing.delete(listener);
+      };
+    };
     return {
       ...actual,
       hasBrowserSessionsCoordinator: (key: string) => states.has(key),
-      browserSessionsCoordinatorState: (key: string | null) =>
-        key === null ? null : (states.get(key) ?? null),
+      browserSessionsCoordinatorState: stateOf,
       upsertBrowserSessionsCoordinatorConsumer: () => undefined,
-      subscribeToBrowserSessionsCoordinator: (
-        key: string | null,
-        listener: () => void,
-      ) => {
-        if (key === null) return () => undefined;
-        const existing = listeners.get(key) ?? new Set<() => void>();
-        existing.add(listener);
-        listeners.set(key, existing);
-        return () => {
-          existing.delete(listener);
-        };
-      },
+      // The real store closes over the module's own state/listener maps, not
+      // this mock's, so it has to be re-backed by the maps `acquire` fills.
+      browserSessionsCoordinatorStore: (key: string | null) => ({
+        getState: () => stateOf(key),
+        getInitialState: () => null,
+        subscribe: (
+          listener: (
+            state: BrowserSessionsState | null,
+            previous: BrowserSessionsState | null,
+          ) => void,
+        ) => {
+          let previous = stateOf(key);
+          return subscribe(key, () => {
+            const state = stateOf(key);
+            const before = previous;
+            previous = state;
+            listener(state, before);
+          });
+        },
+      }),
       acquireBrowserSessionsCoordinator: (args: {
         readonly key: string;
         readonly owner: { readonly hostId: string };

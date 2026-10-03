@@ -207,8 +207,13 @@ export function useHostQueriesWithResponseMap<
     getConditionPollEpisodeCoordinator(queryClient);
   const readiness = useReactiveHostReadiness(client);
   const baseOptions = options ?? {};
-  const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
-    baseOptions;
+  const {
+    meta,
+    poll,
+    select,
+    subscribed,
+    ...queryOptionsWithoutReservedFields
+  } = baseOptions;
 
   const queries = requests.map((request) => {
     const queryKey: QueryKey = [
@@ -308,7 +313,7 @@ export function useHostQueriesWithResponseMap<
   const useQueriesOptions = hasCombine(args)
     ? { queries, combine: args.combine }
     : { queries };
-  return useQueries(useQueriesOptions);
+  return useQueries({ ...useQueriesOptions, subscribed });
 }
 
 function hasCombine<

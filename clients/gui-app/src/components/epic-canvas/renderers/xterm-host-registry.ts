@@ -326,11 +326,10 @@ let followerInstalled = false;
 /**
  * Evict any kept-alive engine whose tab instance has left the
  * `TerminalSessionRegistry`. Live sessions keep their engine cached across
- * unmount (`releaseXtermHost(..., true)`) - terminal-agents for as long as the
- * agent runs, plain terminals for the registry's release-linger window - so
- * the engine's true owner is the session handle, and this follower is what
- * finally disposes the engine when the registry evicts that handle (agent
- * exit, linger expiry, or a forced release). Only exited sessions release
+ * unmount (`releaseXtermHost(..., true)`) within the registry's bounded warm
+ * pool, for both agents and shells. The engine's true owner is the session
+ * handle; this follower disposes it on exit, loss, linger expiry, warm-pool
+ * overflow or forced release. Only exited sessions release
  * their engine eagerly. The registry keys handles by `instanceId` too, so the
  * membership sets line up.
  */

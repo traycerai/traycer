@@ -92,6 +92,7 @@ import {
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "./legend-list-test-environment";
+import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 
 /**
  * `ChatMessages` takes the open-as-chat state from its owner (the chat tile).
@@ -6754,9 +6755,12 @@ describe("ChatMessages scroll policy", () => {
         anchorIndex,
         offset: savedViewOffset,
       });
+      const reportedOrdinalRanges: Array<OrdinalRange | null> = [];
       const { rerenderWith, rerenderMessages } = renderChatMessages({
         messages,
         scrollStateKey: key,
+        onVisibleOrdinalRangeChange: (range) =>
+          reportedOrdinalRanges.push(range),
       });
       await settleLegendList();
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
@@ -6769,6 +6773,7 @@ describe("ChatMessages scroll policy", () => {
       rerenderWith({ visible: false });
       await settleLegendList();
       expect(getScrollNode().scrollTop).toBe(0);
+      reportedOrdinalRanges.length = 0;
 
       // Growth arrives while the free-reading surface is hidden.
       const grown = appendAssistant(
@@ -6780,6 +6785,11 @@ describe("ChatMessages scroll policy", () => {
         LEGEND_LIST_HEADER_PX + grown.length * 90 + 40,
       );
       rerenderMessages(grown);
+      await settleLegendList();
+
+      // Hidden: no ordinal-range report - a report here would replan
+      // hydration around a viewport nobody sees.
+      expect(reportedOrdinalRanges).toEqual([]);
 
       rerenderWith({ visible: true });
       await settleLegendList();
@@ -7847,6 +7857,194 @@ describe("ChatMessages scroll policy", () => {
         maxScrollTopFor(getScrollNode()),
       );
       second.unmount();
+    });
+  });
+
+  /**
+   * W2-H2: `composerOverlayHeight` is now driven, in production
+   * (`chat-tile.tsx`), by `useMeasuredElementHeight(true)`'s live output
+   * rather than a static prop - this suite composes the REAL hook with a
+   * REAL `ChatMessages` render (not the fresh-ChatTileSessionView harness
+   * `chat-tile-lower-surfaces.test.ts` deliberately keeps out of scope), so
+   * the observer/opt-in-read plumbing is exercised end to end into a real
+   * consumer instead of only through the hook's own isolated test file.
+   *
+   * `endInset`/`contentInsetEndAdjustment`/`bottomOffsetPx` all read the
+   * SAME `composerOverlayHeight`-derived `endInset` local
+   * (chat-messages.tsx: `const endInset = composerOverlayHeight;`, threaded
+   * unchanged into `ChatTimeline`, `ChatTurnMinimap` and `ScrollToEndPill`
+   * in the same render) - pinning it at `ScrollToEndPill`'s rendered inline
+   * style, the only one of the three that is not behind virtualized library
+   * internals, proves the value `ChatTimeline` received too.
+   */
+  describe("W2-H2: composerOverlayHeight fed by the real useMeasuredElementHeight(true) dock hook", () => {
+    class ControllableResizeObserver implements ResizeObserver {
+      readonly callback: ResizeObserverCallback;
+      readonly observed = new Set<Element>();
+
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+        controllableResizeObservers.push(this);
+      }
+
+      observe(target: Element): void {
+        this.observed.add(target);
+      }
+
+      unobserve(target: Element): void {
+        this.observed.delete(target);
+      }
+
+      disconnect(): void {
+        this.observed.clear();
+      }
+
+      emit(blockSize: number): void {
+        const target = this.observed.values().next().value;
+        if (!(target instanceof Element)) return;
+        this.callback(
+          [
+            {
+              target,
+              contentRect: new DOMRectReadOnly(0, 0, 0, 0),
+              borderBoxSize: [{ blockSize, inlineSize: 0 }],
+              contentBoxSize: [],
+              devicePixelContentBoxSize: [],
+            },
+          ],
+          this,
+        );
+      }
+    }
+
+    let controllableResizeObservers: ControllableResizeObserver[] = [];
+
+    function resizeObserverFor(target: Element): ControllableResizeObserver {
+      const observer = controllableResizeObservers.find((candidate) =>
+        candidate.observed.has(target),
+      );
+      if (observer === undefined) {
+        throw new Error("expected a resize observer for target");
+      }
+      return observer;
+    }
+
+    function MeasuredDockChatMessages(props: {
+      readonly messages: ReadonlyArray<ChatMessageModel>;
+      readonly instanceId: string;
+    }): ReactElement {
+      const { setElement, element, height } = useMeasuredElementHeight(true);
+      // The exact chat-tile.tsx formula the sibling `chat-tile-lower-
+      // surfaces.test.ts` source-pin checks for, driving a real ChatMessages
+      // instead of a regex match.
+      const composerOverlayHeight = element === null ? 0 : height;
+      return (
+        <div
+          data-group-id="pane-1"
+          style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
+        >
+          <div
+            data-chat-keyboard-scroll-scope
+            data-active="true"
+            data-group-id="pane-1"
+            style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}
+          >
+            <ChatMessagesWithDrillIn
+              taskTitle="Test chat"
+              taskId="task-1"
+              epicId="epic-1"
+              hostId={null}
+              messages={props.messages}
+              baselineEpoch={0}
+              hydrationSequence={0}
+              backgroundItems={undefined}
+              getMessageActions={() => null}
+              nextStepActions={null}
+              instanceId={props.instanceId}
+              visible
+              systemOverlayActive={false}
+              scrollRequest={null}
+              onScrollRequestSettled={null}
+              composerOverlayHeight={composerOverlayHeight}
+              transcriptWindow={null}
+              onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
+              onFindReadOrdinalChange={noOpOnFindReadOrdinalChange}
+              coldRewrittenMessageIds={new Set()}
+            />
+            <div ref={setElement} data-testid="measured-dock" />
+          </div>
+        </div>
+      );
+    }
+
+    function getPillBottomPx(): number {
+      // The pill stays mounted at every ScrollToEndPillState (only its
+      // visibility classes change), but a hidden state also sets
+      // `aria-hidden`, which `getByRole` excludes by default -
+      // `queryScrollToEndPill()` above deliberately keeps that exclusion,
+      // since its callers care about the accessible/visible pill
+      // specifically. The chevron (`data-testid`) is unconditional, so it
+      // finds the button regardless of visibility state.
+      const button = screen
+        .getByTestId("scroll-to-end-pill-chevron")
+        .closest("button");
+      if (button === null) {
+        throw new Error("scroll-to-end pill button not found");
+      }
+      return Number.parseFloat(button.style.bottom);
+    }
+
+    beforeEach(() => {
+      controllableResizeObservers = [];
+      vi.stubGlobal("ResizeObserver", ControllableResizeObserver);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it("shows the dock's pre-paint measured height in the pill offset before any RO delivery, and follows a live resize afterward", async () => {
+      // `installLegendListViewportMetrics` (the outer suite's own
+      // `beforeEach`) already spies `HTMLElement.prototype.getBoundingClientRect`
+      // to feed LegendList's own row/scroller geometry, and its `heightFor`
+      // reports `VIEWPORT_HEIGHT_PX` (700) for any element that is not one
+      // of its recognized row/spacer shells - our unstyled "measured-dock"
+      // div included. That ambient value is what the hook's opt-in
+      // `measureOnAttach=true` layout-effect read actually sees, so it
+      // doubles as this test's pre-paint fixture without a second,
+      // conflicting `getBoundingClientRect` spy layered on top (a bare
+      // `Element.prototype` spy here would be shadowed by the shared
+      // `HTMLElement.prototype` one and never fire; re-spying that same
+      // property recurses into itself instead of the original).
+      const messages = makeCompletedTranscript(12);
+      const instanceId = `w2h2-measured-dock-${Math.random().toString(36).slice(2)}`;
+      render(
+        <MeasuredDockChatMessages
+          messages={messages}
+          instanceId={instanceId}
+        />,
+      );
+      await settleLegendList();
+
+      // No RO `emit(...)` has happened anywhere above this line - this is
+      // the hook's opt-in read landing before first paint, already flowing
+      // through composerOverlayHeight -> endInset -> bottomOffsetPx into the
+      // real rendered pill. Falsification: if the opt-in read never ran (a
+      // regressed `measureOnAttach` wiring), composerOverlayHeight would
+      // still be its initial 0 here, and this would read 4 instead of 704.
+      expect(getPillBottomPx()).toBe(VIEWPORT_HEIGHT_PX + 4);
+
+      const dock = screen.getByTestId("measured-dock");
+      act(() => {
+        resizeObserverFor(dock).emit(96);
+      });
+      await settleLegendList();
+
+      // Falsification: a regressed composerOverlayHeight wiring (a stale
+      // prop, or one not derived from THIS hook's live `height` at all)
+      // leaves this at 704 instead of following the observer's new delivery.
+      expect(getPillBottomPx()).toBe(96 + 4);
     });
   });
 });

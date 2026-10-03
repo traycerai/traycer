@@ -178,10 +178,8 @@ describe("the bridge vocabulary and its version", () => {
     // the two: editing either union reddens this test, and the comment the
     // reader lands on is the one telling them to bump. That is a prompt, not a
     // proof, and it is named as such rather than dressed up as coverage.
-    // 14 since incremental replica-data settlements and provisional root
-    // updates. The worker now reports retained task-row bytes separately, so
-    // an older worker would leave that managed data invisible to main.
-    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(14);
+    // 15 since projection/resync and the required baseRevision field.
+    expect(RUNTIME_BRIDGE_PROTOCOL_VERSION).toBe(15);
     expect(MAIN_TO_WORKER_EVENT_KINDS).toEqual([
       "bootstrap",
       "current-user",
@@ -191,6 +189,7 @@ describe("the bridge vocabulary and its version", () => {
       "stream/manifest",
       "accounting/demote",
       "runtime/command",
+      "projection/resync",
       "body/awareness-out",
       "shutdown",
     ]);

@@ -13,11 +13,10 @@ import {
 } from "./worktree-busy-holders";
 
 /**
- * Wire-level frame types for the per-request WebSocket RPC protocol.
- *
- * Each accepted WebSocket connection carries exactly one RPC call and the
- * preceding open/manifest dance. Frames are JSON text frames discriminated
- * by `kind`.
+ * Wire-level frames for local unary WebSocket RPC. Without bilateral
+ * unary.persistentSession negotiation each connection carries one call.
+ * Persistent peers correlate concurrent calls by requestId and reject reused
+ * sequence numbers. Frames are JSON text discriminated by `kind`.
  *
  * This module is the authoritative home for the full WS session contract:
  * every frame type and the canonical Zod schema that validates it on the
@@ -84,6 +83,11 @@ export const RPC_REQUEST_TIMEOUT_FATAL_CODE = "RPC_REQUEST_TIMEOUT";
  * new name must be introduced; this string must never be redefined in place.
  */
 export const UNARY_CAPABILITY_IDEMPOTENCY_KEY = "unary.idempotencyKey";
+
+/** Opt-in on both open and openAck; otherwise the socket remains one-shot. */
+export const UNARY_CAPABILITY_PERSISTENT_SESSION = "unary.persistentSession";
+export const PERSISTENT_RPC_IDLE_TIMEOUT_MS = 30_000;
+export const PERSISTENT_RPC_MAX_RUNNING_REQUESTS = 64;
 
 /**
  * The invariant fragment of the sentence the host writes when its idempotency
@@ -246,11 +250,9 @@ export type ClientOpenFrame = {
    * presence is the declaration, absence is a peer that predates the capability
    * and is therefore authorized in fact.
    *
-   * There is deliberately NO control frame on this carrier and no capability tag
-   * for one. A `/rpc` socket carries a single request and closes, so its verdict
-   * cannot go stale mid-connection: the next call opens a new socket and asserts
-   * the verdict again. Only the long-lived carriers (`/stream`, the mux session)
-   * need `cloudVerdictUpdate`.
+   * Persistent unary clients retire the session before issuing another call
+   * whenever this verdict or the bearer changes. Host contexts are registered
+   * as live only while calls run, preserving per-call snapshot semantics.
    */
   readonly cloudAuthorized?: boolean;
 };
@@ -274,6 +276,14 @@ export type ClientRequestFrame = {
    * safety.
    */
   readonly idempotencyKey?: string | null;
+  /** Strictly increasing within a negotiated persistent session; never reused. */
+  readonly sequence?: number;
+};
+
+/** Suppresses a permitted read's response; its computation keeps running. */
+export type ClientCancelFrame = {
+  readonly kind: "cancel";
+  readonly requestId: string;
 };
 
 /**
@@ -292,6 +302,7 @@ export type ClientFatalErrorFrame = {
 export type ClientFrame =
   | ClientOpenFrame
   | ClientRequestFrame
+  | ClientCancelFrame
   | ClientFatalErrorFrame;
 
 /**
@@ -463,6 +474,12 @@ export const clientRequestFrameSchema = z.object({
   schemaVersion: schemaVersionSchema,
   params: z.unknown(),
   idempotencyKey: z.string().min(1).nullable().optional(),
+  sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+});
+
+export const clientCancelFrameSchema = z.object({
+  kind: z.literal("cancel"),
+  requestId: z.string().min(1),
 });
 
 /** Canonical schema for the client `fatalError` frame. */
@@ -479,6 +496,7 @@ export const clientFatalErrorFrameSchema = z.object({
 export const clientFrameSchema = z.discriminatedUnion("kind", [
   clientOpenFrameSchema,
   clientRequestFrameSchema,
+  clientCancelFrameSchema,
   clientFatalErrorFrameSchema,
 ]);
 

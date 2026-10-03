@@ -123,9 +123,10 @@ function TabStripBody() {
     },
     [setScrollElement],
   );
-  // Before `useStripScroller`: the slots it opens are measured and held shut
-  // before the activation reveal runs, and it keeps the selection in view
-  // while they grow, which that one-off reveal cannot.
+  // The slots it opens are measured and held shut in this commit, ahead of
+  // the strip's activation reveal (the geometry coordinator's, next frame),
+  // and it keeps the selection in view while they grow, which that one-off
+  // reveal cannot.
   const revealSelection = useCallback(() => {
     const scroller = scrollerRef.current;
     if (scroller !== null)
@@ -138,8 +139,8 @@ function TabStripBody() {
     itemCount: headerItemIds.length,
     extraRef: setScrollExtras,
   });
-  // After `useStripScroller`, whose reveal has by then scrolled the
-  // destination into view for the travel to measure.
+  // The reveal has not scrolled yet when this plans: the travel judges the
+  // slide against the offset that reveal will settle on.
   useSelectionTravel({ scrollerRef, travellerRef, activeItemId, layoutItems });
   // The rows as drawn, so a group that collapses or expands counts as well as
   // a close: a spacer whose row it hid is not drawn to finish closing.

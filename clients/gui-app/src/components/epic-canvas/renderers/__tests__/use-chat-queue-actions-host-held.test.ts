@@ -7,7 +7,7 @@
  * half: it must clear that claim when the queue-edit is abandoned.
  */
 import { renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatQueuedPromptItem,
@@ -18,14 +18,28 @@ import {
   useChatQueueActions,
   type ChatQueueActionsInput,
 } from "@/components/epic-canvas/renderers/use-chat-queue-actions";
-import type { ChatActions } from "@/hooks/chats/use-chat-actions";
-import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import {
+  useChatActions,
+  type ChatActions,
+} from "@/hooks/chats/use-chat-actions";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+  type ChatStreamClientHandle,
+} from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import { composerDraftStorageKey } from "@/lib/persist/keys";
+import { rawRows } from "@/stores/composer/__tests__/composer-draft-rows";
 import {
   __resetHostHeldImageHashesForTests,
   hostHeldImageHashes,
+  setHostHeldImageHashes,
 } from "@/lib/composer/host-held-image-hashes";
 import { __resetComposerContentImageRootsForTests } from "@/lib/composer/composer-content-image-roots";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
@@ -106,7 +120,13 @@ function fakeChatActions(overrides: Partial<ChatActions>): ChatActions {
     restampQueuedItemSettings: () => undefined,
     updateActivePermissionMode: () => null,
     updateActiveProfile: () => null,
-    queueCancel: () => "action-1",
+    // Admits unconditionally and runs `beforeSend` (the real store only runs
+    // it once its own admission gate passes) - fine for every describe here
+    // except the one exercising that gate, which wires the real store instead.
+    queueCancel: (input) => {
+      if (typeof input !== "string") input.beforeSend();
+      return "action-1";
+    },
     queueReorder: () => null,
     queueSteerNow: () => null,
     queueAbortSteer: () => null,
@@ -223,6 +243,202 @@ describe("editQueuedItem seeds host-held custody", () => {
 
     expect(hostHeldImageHashes(NODE_ID, null).size).toBe(0);
   });
+});
+
+/**
+ * `same_turn` used to mutate the draft/custody before calling `queueCancel`,
+ * so a locally refused cancel still clobbered them for nothing. The fix runs
+ * that mutation as `beforeSend`, invoked only once the store's real admission
+ * gate passes - tested here against a real `ChatSessionStore`, since a mocked
+ * `queueCancel` can't prove the gate ran.
+ */
+describe("editQueuedItem same_turn: queueCancel's admission gate owns the mutation", () => {
+  const PROMPT_TEXT = "same-turn edit text";
+  const ORIGINAL_TEXT = "original untouched draft";
+  const ORIGINAL_HASH = "b".repeat(64);
+  const QUEUED_HASH = "a".repeat(64);
+  const handles: ChatSessionStoreHandle[] = [];
+
+  afterEach(() => {
+    for (const handle of handles.splice(0)) handle.dispose();
+    cancelDeferredJsonWrites();
+  });
+
+  function textContent(text: string): JsonContent {
+    return {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+    };
+  }
+
+  function realReplaceDraftContent(
+    nodeId: string,
+    content: JsonContent,
+    selection: { readonly from: number; readonly to: number } | null,
+  ): void {
+    useComposerDraftStore.getState().replaceDraft(nodeId, content, selection);
+  }
+
+  /** Every persisted composer row (key, revision and value) as one string. */
+  function persistedComposerDraftBlob(): string | null {
+    return rawRows(
+      useComposerDraftStore.persist.getOptions().name ??
+        composerDraftStorageKey(null),
+    );
+  }
+
+  /** A real store, admitted by default (owner, connection open). */
+  function createRealHarness() {
+    const sendAction = vi.fn<ChatStreamClientHandle["sendAction"]>();
+    const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      hostId: "host-a",
+      epicId: "epic-1",
+      chatId: NODE_ID,
+      userId: "user-1",
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport: null,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: () => ({
+        sendAction,
+        sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      }),
+    });
+    handle.store.setState({
+      connectionStatus: "open",
+      access: { role: "owner", ownerUserId: "user-1", canAct: true },
+    });
+    handles.push(handle);
+    return { handle, sendAction };
+  }
+
+  function renderQueueActions(
+    handle: ChatSessionStoreHandle,
+    overrides: Partial<ChatQueueActionsInput>,
+  ) {
+    return renderHook(() => {
+      const chatActions = useChatActions(handle);
+      return useChatQueueActions(
+        baseInput({
+          handle,
+          chatActions,
+          replaceDraftContent: realReplaceDraftContent,
+          ...overrides,
+        }),
+      );
+    });
+  }
+
+  it("on admission, the draft is durably persisted before the frame is sent, and the editor-mode dispatch fires", () => {
+    const { handle, sendAction } = createRealHarness();
+    useComposerDraftStore
+      .getState()
+      .replaceDraft(NODE_ID, textContent(ORIGINAL_TEXT), null);
+    const dispatchUi = vi.fn();
+    const item = queuedPromptItem("same_turn", textContent(PROMPT_TEXT));
+    let persistedBlobAtSend: string | null = null;
+    sendAction.mockImplementation(() => {
+      persistedBlobAtSend = persistedComposerDraftBlob();
+    });
+
+    const { result } = renderQueueActions(handle, { dispatchUi });
+    result.current.editQueuedItem(item);
+
+    expect(sendAction).toHaveBeenCalledTimes(1);
+    expect(persistedBlobAtSend).not.toBeNull();
+    expect(persistedBlobAtSend).toContain(PROMPT_TEXT);
+    expect(Object.keys(handle.store.getState().pendingActions)).toHaveLength(1);
+    expect(dispatchUi).toHaveBeenCalledWith({
+      type: "setEditingQueueItemId",
+      editingQueueItemId: null,
+    });
+  });
+
+  it("a quota failure while replacing the draft prevents both the frame and the pending action - the queued item survives for retry", () => {
+    const { handle, sendAction } = createRealHarness();
+    const item = queuedPromptItem("same_turn", textContent(PROMPT_TEXT));
+    const { result } = renderQueueActions(handle, {});
+
+    // Support native Storage and the setup's own-method fallback.
+    const storageSpyTarget: Storage = Object.hasOwn(
+      window.localStorage,
+      "setItem",
+    )
+      ? window.localStorage
+      : Storage.prototype;
+    const setItemSpy = vi
+      .spyOn(storageSpyTarget, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      });
+    try {
+      // beforeSend throws before sendAction's pending/frame side effects run.
+      expect(() => result.current.editQueuedItem(item)).toThrow();
+    } finally {
+      setItemSpy.mockRestore();
+    }
+
+    expect(sendAction).not.toHaveBeenCalled();
+    expect(handle.store.getState().pendingActions).toEqual({});
+  });
+
+  it.each([
+    [
+      "a closed connection",
+      (handle: ChatSessionStoreHandle): void => {
+        handle.store.setState({ connectionStatus: "closed" });
+      },
+    ],
+    [
+      "no canAct",
+      (handle: ChatSessionStoreHandle): void => {
+        handle.store.setState({ access: null });
+      },
+    ],
+    [
+      "a disposed store",
+      (handle: ChatSessionStoreHandle): void => {
+        handle.dispose();
+      },
+    ],
+  ])(
+    "%s refuses locally: the draft, custody, and dispatch are all left untouched, and no frame is sent",
+    (_label, breakAdmission) => {
+      const { handle, sendAction } = createRealHarness();
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(NODE_ID, textContent(ORIGINAL_TEXT), null);
+      setHostHeldImageHashes(NODE_ID, null, [ORIGINAL_HASH]);
+      const originalBlob = persistedComposerDraftBlob();
+      // The queued item's content is an image hash alone, so a blob check
+      // against PROMPT_TEXT would pass trivially either way - only an exact
+      // before/after comparison of the persisted bytes proves nothing wrote.
+      expect(originalBlob).toContain(ORIGINAL_TEXT);
+      const dispatchUi = vi.fn();
+      const item = queuedPromptItem("same_turn", docWithImageHash(QUEUED_HASH));
+
+      breakAdmission(handle);
+
+      const { result } = renderQueueActions(handle, { dispatchUi });
+      result.current.editQueuedItem(item);
+
+      expect(sendAction).not.toHaveBeenCalled();
+      expect(handle.store.getState().pendingActions).toEqual({});
+      expect(readComposerDraftSnapshot(NODE_ID).content).toEqual(
+        textContent(ORIGINAL_TEXT),
+      );
+      expect(persistedComposerDraftBlob()).toBe(originalBlob);
+      expect(hostHeldImageHashes(NODE_ID, null)).toEqual(
+        new Set([ORIGINAL_HASH]),
+      );
+      expect(dispatchUi).not.toHaveBeenCalled();
+    },
+  );
 });
 
 /**

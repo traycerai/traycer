@@ -107,7 +107,6 @@ const ALT_NOT_HELD: LeaderState = {
   modOwnerScopeId: null,
   altOwnerScopeId: null,
   modShiftOwnerScopeId: null,
-  pathname: "/",
 };
 
 const ALT_HELD_BY_PICKER: LeaderState = {
@@ -117,7 +116,6 @@ const ALT_HELD_BY_PICKER: LeaderState = {
   modOwnerScopeId: null,
   altOwnerScopeId: LEADER_SCOPE_MODEL_PICKER,
   modShiftOwnerScopeId: null,
-  pathname: "/",
 };
 
 interface ControlsProps {

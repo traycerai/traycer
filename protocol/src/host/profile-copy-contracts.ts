@@ -8,7 +8,10 @@ import * as schemas from "./profile-copy-schemas";
  * These names stay off the released floor, with no unsafe fallback.
  */
 export const PROFILE_COPY_RPC_METHODS = {
+  // `cancelAfterDispatch`: reads and waits may be discarded once sent; every
+  // verb that records, reserves or drives an attempt may not.
   "providers.profileCopy.preview": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -27,6 +30,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.start": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -45,6 +49,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.status": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -63,6 +68,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.cancel": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -81,6 +87,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.incoming": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -99,6 +106,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.draftStatus": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -117,6 +125,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.cancelDraft": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -135,6 +144,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.setPreference": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -153,6 +163,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.verify": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -171,6 +182,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.confirmVerification": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -189,6 +201,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.confirmIdentity": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -207,6 +220,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.retry": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -225,6 +239,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.login.start": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -243,6 +258,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.login.await": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -261,6 +277,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.login.touch": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -279,6 +296,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.login.submitCode": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -297,6 +315,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "providers.profileCopy.login.cancel": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -315,6 +334,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "host.profileCopy.preflight": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -333,6 +353,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "host.profileCopy.import": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -351,6 +372,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "host.profileCopy.receipt": {
+    cancelAfterDispatch: true,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -369,6 +391,7 @@ export const PROFILE_COPY_RPC_METHODS = {
     },
   },
   "host.profileCopy.cancel": {
+    cancelAfterDispatch: false,
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,

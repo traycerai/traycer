@@ -3,6 +3,7 @@ import type { ComposerTopBannerKind } from "@/components/chat/composer/chat-comp
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
   isPromptSuggestionAcceptKey,
+  isSuggestionPlaceholderDocument,
   promptSuggestionAllowed,
   suggestionOfferableWhilePending,
 } from "@/components/chat/composer/prompt-suggestion";
@@ -19,14 +20,14 @@ const ALLOWED_INPUT: {
   readonly workspaceBlocked: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
-  readonly draftContent: JsonContent;
+  readonly draftIsSuggestionPlaceholder: boolean;
 } = {
   topBannerKind: "none",
   sendDisabled: false,
   workspaceBlocked: false,
   draftHasText: false,
   draftHasImages: false,
-  draftContent: EMPTY_DOC,
+  draftIsSuggestionPlaceholder: true,
 };
 
 const BLANK_DRAFT_CONTENTS: ReadonlyArray<{
@@ -87,23 +88,29 @@ const OTHER_BANNER_KINDS: ReadonlyArray<ComposerTopBannerKind> = [
   "rate-limit",
 ];
 
+describe("isSuggestionPlaceholderDocument", () => {
+  it("is true for the lone empty paragraph", () => {
+    expect(isSuggestionPlaceholderDocument(EMPTY_DOC)).toBe(true);
+  });
+
+  it.each(BLANK_DRAFT_CONTENTS)("is false for $label", ({ content }) => {
+    expect(isSuggestionPlaceholderDocument(content)).toBe(false);
+  });
+});
+
 describe("promptSuggestionAllowed", () => {
   it("is true when no banner is up, sending is possible and the draft is empty", () => {
     expect(promptSuggestionAllowed(ALLOWED_INPUT)).toBe(true);
   });
 
-  it.each(BLANK_DRAFT_CONTENTS)(
-    "is false for $label even when draftHasText is false",
-    ({ content }) => {
-      expect(
-        promptSuggestionAllowed({
-          ...ALLOWED_INPUT,
-          draftHasText: false,
-          draftContent: content,
-        }),
-      ).toBe(false);
-    },
-  );
+  it("is false when the draft is not one empty paragraph", () => {
+    expect(
+      promptSuggestionAllowed({
+        ...ALLOWED_INPUT,
+        draftIsSuggestionPlaceholder: false,
+      }),
+    ).toBe(false);
+  });
 
   it.each(OTHER_BANNER_KINDS)(
     "is false when the banner kind is %s",

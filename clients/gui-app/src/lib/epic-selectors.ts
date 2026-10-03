@@ -22,6 +22,7 @@
  */
 import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
+import { useSurfaceDemand } from "@/stores/tabs/surface-demand";
 import { useShallow } from "zustand/react/shallow";
 import { createSelector, lruMemoize } from "reselect";
 import { v4 as uuidv4 } from "uuid";
@@ -72,7 +73,10 @@ import {
   agentActivityTiers,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
-import { useEpicAgentActivity } from "@/stores/agent-activity-store";
+import {
+  useAgentActivityTier,
+  useEpicAgentActivity,
+} from "@/stores/agent-activity-store";
 import { useEpicStore, useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
@@ -2113,6 +2117,7 @@ export function useEpicArtifactBodySubscribeAnswered(
  */
 export function useEpicArtifactBodyLease(artifactId: string | null): void {
   const handle = useOpenEpicHandle();
+  const demand = useSurfaceDemand();
   const bodyDocKey = useStore(handle.store, (s) =>
     artifactId === null ? null : s.getArtifactBodyDocKey(artifactId),
   );
@@ -2122,8 +2127,11 @@ export function useEpicArtifactBodyLease(artifactId: string | null): void {
   // resulting store update, before the browser paints.
   useLayoutEffect(() => {
     if (artifactId === null || bodyDocKey === null) return;
+    const warm =
+      handle.store.getState().getArtifactFragment(artifactId) !== null;
+    if (demand !== "settled" && !warm) return;
     return handle.store.getState().acquireArtifactBodyLease(artifactId);
-  }, [handle, artifactId, bodyDocKey]);
+  }, [handle, artifactId, bodyDocKey, demand]);
 }
 
 // ─── Agent activity (per-user notification-room presence) ─────────────────
@@ -2157,6 +2165,20 @@ const registeredLiveAgentIdsCache = new WeakMap<
 export function useEpicActiveAgentIds(): ReadonlySet<string> {
   const epicId = useOpenEpicHandle().epicId;
   return useEpicAgentActivity(epicId).working;
+}
+
+/** One agent's tier, without subscribing its row to every agent in the epic. */
+export function useEpicAgentActivityTier(
+  agentId: string,
+): AgentActivityTier | undefined {
+  return useAgentActivityTier(useOpenEpicHandle().epicId, agentId);
+}
+
+export function useRegisteredEpicAgentActivityTier(
+  epicId: string | null,
+  agentId: string,
+): AgentActivityTier | undefined {
+  return useAgentActivityTier(epicId, agentId);
 }
 
 /**

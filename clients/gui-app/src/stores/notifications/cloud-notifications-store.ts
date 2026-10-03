@@ -1,3 +1,8 @@
+import {
+  EMPTY_INDICATOR_STATE_RESPONSE,
+  projectCloudNotificationIndicators,
+  type SurfaceNotificationIndicators,
+} from "@/stores/notifications/notification-indicator-state";
 import { create } from "zustand";
 import type {
   IStreamSession,
@@ -23,6 +28,7 @@ export type CloudNotificationsConnectionState =
   | "unavailable";
 
 export interface CloudNotificationsState {
+  readonly indicators: SurfaceNotificationIndicators;
   /**
    * Keyed by `entryId` ALONE. An entry is an immutable occurrence, so a key
    * identifies one occurrence for its whole life - a reopen arrives as a
@@ -203,6 +209,7 @@ function isUnreadAttention(row: HostNotificationsCloudFeedRowV11): boolean {
 export const useCloudNotificationsStore = create<CloudNotificationsState>()(
   (set, get) => ({
     rows: {},
+    indicators: EMPTY_INDICATOR_STATE_RESPONSE,
     summary: null,
     version: null,
     connectionState: "unavailable",
@@ -229,6 +236,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         }
         return {
           rows,
+          indicators: projectCloudNotificationIndicators(
+            rows,
+            state.indicators,
+          ),
           summary: input.summary,
           version: input.version,
           connectionState: "connected",
@@ -243,11 +254,16 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         const row = state.rows[key];
         if (row === undefined || row.entry.readAt !== null) return state;
         const attentionDelta = isUnreadAttention(row) ? 1 : 0;
+        const rows = {
+          ...state.rows,
+          [key]: { ...row, entry: { ...row.entry, readAt } },
+        };
         return {
-          rows: {
-            ...state.rows,
-            [key]: { ...row, entry: { ...row.entry, readAt } },
-          },
+          rows,
+          indicators: projectCloudNotificationIndicators(
+            rows,
+            state.indicators,
+          ),
           summary:
             state.summary === null
               ? null
@@ -270,6 +286,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         }
         return {
           rows,
+          indicators: projectCloudNotificationIndicators(
+            rows,
+            state.indicators,
+          ),
           summary:
             state.summary === null
               ? null
@@ -300,6 +320,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
         }
         return {
           rows,
+          indicators: projectCloudNotificationIndicators(
+            rows,
+            state.indicators,
+          ),
           entityReadRetries: retries,
           summary:
             state.summary === null
@@ -349,6 +373,7 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
     reset: () =>
       set((state) => ({
         rows: {},
+        indicators: EMPTY_INDICATOR_STATE_RESPONSE,
         summary: null,
         version: null,
         connectionState: "unavailable",
@@ -361,6 +386,12 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       })),
   }),
 );
+
+export const cloudNotificationsStoreApi = {
+  getState: useCloudNotificationsStore.getState,
+  getInitialState: useCloudNotificationsStore.getInitialState,
+  subscribe: useCloudNotificationsStore.subscribe,
+};
 
 /** Opens the distinct cloud-feed stream. It deliberately owns a fresh-session
  * retry loop: a terminal stream close is otherwise permanent in the shared

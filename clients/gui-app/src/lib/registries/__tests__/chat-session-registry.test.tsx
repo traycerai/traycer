@@ -24,6 +24,8 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { providersNativeQueryKeys } from "@/lib/query-keys/providers-native-query-keys";
 
 // `useChatSessionHandle`'s own module state (the process-wide registry) is
 // exercised for real below - only its collaborators are mocked, so the
@@ -340,7 +342,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     hostEntryRef.value = remoteTarget("pubkey-a");
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-1", REMOTE_HOST_ID, true),
+      () => useChatSessionHandle("chat-1", REMOTE_HOST_ID, true, "surface"),
       { wrapper },
     );
 
@@ -392,7 +394,13 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     hostEntryRef.value = remoteTarget("resume-prewarm-key");
 
     const { result } = renderHook(
-      () => useChatSessionHandle("chat-resume-pending", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle(
+          "chat-resume-pending",
+          REMOTE_HOST_ID,
+          true,
+          "surface",
+        ),
       { wrapper },
     );
 
@@ -417,7 +425,8 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     hostEntryRef.value = remoteTarget("pubkey-a");
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-relay-1", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle("chat-relay-1", REMOTE_HOST_ID, true, "surface"),
       { wrapper },
     );
     await waitFor(() => {
@@ -503,7 +512,8 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("connectable");
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-unknown-1", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle("chat-unknown-1", REMOTE_HOST_ID, true, "surface"),
       { wrapper },
     );
 
@@ -550,7 +560,8 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("connectable");
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-offline-1", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle("chat-offline-1", REMOTE_HOST_ID, true, "surface"),
       { wrapper },
     );
 
@@ -591,7 +602,13 @@ describe("a live chat session survives a degraded liveness read", () => {
     readySessionHosts.value = new Set([REMOTE_HOST_ID]);
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-offline-live-1", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle(
+          "chat-offline-live-1",
+          REMOTE_HOST_ID,
+          true,
+          "surface",
+        ),
       { wrapper },
     );
 
@@ -629,7 +646,8 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("connectable");
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-restart-1", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle("chat-restart-1", REMOTE_HOST_ID, true, "surface"),
       { wrapper },
     );
     await waitFor(() => {
@@ -669,7 +687,8 @@ describe("a live chat session survives a degraded liveness read", () => {
     hostEntryRef.value = mappedEntry("connectable");
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-restart-2", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle("chat-restart-2", REMOTE_HOST_ID, true, "surface"),
       { wrapper },
     );
     await waitFor(() => {
@@ -737,7 +756,8 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
 
       const { result, rerender } = renderHook(
-        () => useChatSessionHandle("chat-local-1", LOCAL_HOST_ID, true),
+        () =>
+          useChatSessionHandle("chat-local-1", LOCAL_HOST_ID, true, "surface"),
         { wrapper },
       );
       await waitFor(() => {
@@ -766,7 +786,7 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
     hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
 
     const { result, rerender } = renderHook(
-      () => useChatSessionHandle("chat-boot-1", LOCAL_HOST_ID, true),
+      () => useChatSessionHandle("chat-boot-1", LOCAL_HOST_ID, true, "surface"),
       { wrapper },
     );
     await waitFor(() => {
@@ -816,7 +836,13 @@ describe("useChatSessionHandle through a local host restart (G1)", () => {
       hostEntryRef.value = localEntry(FIRST_URL, "1.0.0");
 
       const { result, rerender } = renderHook(
-        () => useChatSessionHandle("chat-boot-lost-1", LOCAL_HOST_ID, true),
+        () =>
+          useChatSessionHandle(
+            "chat-boot-lost-1",
+            LOCAL_HOST_ID,
+            true,
+            "surface",
+          ),
         { wrapper },
       );
       await waitFor(() => {
@@ -873,7 +899,8 @@ describe("useChatSessionHandle retryFromUser silence gate", () => {
     signInAndBind(fake);
 
     const { result } = renderHook(
-      () => useChatSessionHandle("chat-silence-1", REMOTE_HOST_ID, true),
+      () =>
+        useChatSessionHandle("chat-silence-1", REMOTE_HOST_ID, true, "surface"),
       { wrapper },
     );
     await waitFor(() => {
@@ -895,5 +922,103 @@ describe("useChatSessionHandle retryFromUser silence gate", () => {
     fake.silentFor = false;
     handle.store.getState().retryFromUser();
     expect(reconnectAll).not.toHaveBeenCalled();
+  });
+});
+
+describe("useChatSessionHandle provider-auth-error invalidation", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+  });
+
+  function signInAndBind(fake: FakeStreamClient): void {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    openTransportRef.fn = () => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+    });
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+  }
+
+  it("invalidates only the exact classic providers.list key on a live auth-error frame, never the icon cache", async () => {
+    const fake = new FakeStreamClient(true);
+    signInAndBind(fake);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const testWrapper = ({ children }: { children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+
+    const { result } = renderHook(
+      () =>
+        useChatSessionHandle("chat-auth-1", REMOTE_HOST_ID, true, "surface"),
+      { wrapper: testWrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    const subscribeIndex = fake.subscribes.findIndex(
+      (entry) => entry.method === "chat.subscribe",
+    );
+    if (subscribeIndex === -1) {
+      throw new Error("expected a chat.subscribe session");
+    }
+    const session = fake.sessions[subscribeIndex];
+
+    const classicKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      REMOTE_HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    const iconKey = providersNativeQueryKeys.pluginIcon(REMOTE_HOST_ID, {
+      providerId: "claude-code",
+      scope: "global",
+      workspaceRoot: null,
+      pluginId: "github@m",
+      theme: "light",
+      version: "1.0.0",
+    });
+    queryClient.setQueryData(classicKey, { providers: [], native: null });
+    queryClient.setQueryData(iconKey, { data: "icon-bytes" });
+
+    act(() => {
+      session.emit(
+        {
+          kind: "blockDelta",
+          hasBinaryPayload: false,
+          epicId: "epic-1",
+          chatId: "chat-auth-1",
+          event: {
+            type: "error",
+            blockId: "auth-live-1",
+            timestamp: 4,
+            message: "Codex is signed out on this machine.",
+            recoverable: true,
+            code: "auth",
+          },
+        },
+        null,
+      );
+    });
+
+    expect(queryClient.getQueryState(classicKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(iconKey)?.isInvalidated).not.toBe(true);
   });
 });

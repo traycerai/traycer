@@ -58,6 +58,7 @@ interface ChatComposerEditorSlotProps {
   readonly onDocumentChange: (
     content: JsonContent,
     selection: { from: number; to: number },
+    changedImages: JsonContent | null,
   ) => void;
   readonly onSelectionChange: (selection: { from: number; to: number }) => void;
   readonly onSubmit: (source: ChatComposerSubmitSource) => void;

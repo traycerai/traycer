@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { del as idbDel, get as idbGet, set as idbSet } from "idb-keyval";
 
 import { attachBrowserAnnotation } from "@/lib/browser-view/annotation/browser-annotation-attach";
+import {
+  cancelDeferredJsonWrites,
+  flushDeferredJsonWrite,
+} from "@/lib/persist/deferred-json-storage";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
@@ -22,8 +26,13 @@ import {
   type DraftState,
 } from "../composer-draft-store";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
-
-const STORAGE_KEY = "traycer-gui-app:composer-drafts";
+import {
+  ANON_NAME,
+  rawRows,
+  readDraftRow,
+  resetComposerDraftPersistence,
+  seedRows,
+} from "./composer-draft-rows";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
@@ -86,37 +95,13 @@ function draftOf(taskId: string): DraftState {
   return draft;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function persistedAnnotationOf(
-  stored: string | null,
-  taskId: string,
-): { readonly annotationId: string; readonly imageHash: string } {
-  if (stored === null) {
-    throw new Error("missing composer-draft persist payload");
-  }
-  const parsed: unknown = JSON.parse(stored);
-  if (!isRecord(parsed) || !isRecord(parsed.state)) {
-    throw new Error("persist payload is not a draft map");
-  }
-  if (!isRecord(parsed.state.drafts)) {
-    throw new Error("persist payload has no drafts");
-  }
-  const draft = parsed.state.drafts[taskId];
-  if (!isRecord(draft) || !Array.isArray(draft.browserAnnotations)) {
-    throw new Error(`persist draft ${taskId} has no browserAnnotations`);
-  }
-  const first: unknown = draft.browserAnnotations[0];
-  if (!isRecord(first)) {
-    throw new Error(`persist draft ${taskId} annotation is not a record`);
-  }
-  if (
-    typeof first.annotationId !== "string" ||
-    typeof first.imageHash !== "string"
-  ) {
-    throw new Error(`persist draft ${taskId} annotation is missing ids`);
+function persistedAnnotationOf(taskId: string): {
+  readonly annotationId: string;
+  readonly imageHash: string;
+} {
+  const first = readDraftRow(taskId, ANON_NAME)?.browserAnnotations[0];
+  if (first === undefined) {
+    throw new Error(`persisted draft row ${taskId} has no annotation`);
   }
   return { annotationId: first.annotationId, imageHash: first.imageHash };
 }
@@ -128,15 +113,15 @@ beforeEach(async () => {
   await drainImages();
   vi.clearAllMocks();
   installIdbWorking(idbData, idbGet, idbSet, idbDel);
-  window.localStorage.clear();
-  useComposerDraftStore.setState({ drafts: {} });
+  await resetComposerDraftPersistence();
   markLandingDraftsReady();
 });
 
 afterEach(async () => {
   await drainImages();
-  window.localStorage.clear();
   useComposerDraftStore.setState({ drafts: {} });
+  cancelDeferredJsonWrites();
+  window.localStorage.clear();
 });
 
 describe("composer draft store browserAnnotations", () => {
@@ -301,22 +286,19 @@ describe("composer draft store browserAnnotations", () => {
       imageHash: hash,
       droppedElementCount: 0,
     };
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {
-            "chat-persist": {
-              content: EMPTY_DOC,
-              selection: null,
-              browserAnnotations: [persistedRecord],
-              resetEpoch: 0,
-              revision: 2,
-            },
+    seedRows(
+      {
+        drafts: {
+          "chat-persist": {
+            content: EMPTY_DOC,
+            selection: null,
+            browserAnnotations: [persistedRecord],
+            resetEpoch: 0,
+            revision: 2,
           },
         },
-      }),
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -336,17 +318,16 @@ describe("composer draft store browserAnnotations", () => {
       sessionId: "session-roundtrip",
       comment: "persisted add",
     });
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    expect(stored).not.toBeNull();
-    const persisted = persistedAnnotationOf(stored, "chat-roundtrip");
+    // The write is queued, not synchronous - flush it before reading disk.
+    flushDeferredJsonWrite(ANON_NAME);
+    const persisted = persistedAnnotationOf("chat-roundtrip");
     expect(persisted).toEqual({
       annotationId: attached.annotationId,
       imageHash: attached.hash,
     });
 
-    // setState persists; write the captured payload back so rehydrate sees it.
+    // Drop the in-memory draft; the explicit rehydrate reads the row back.
     useComposerDraftStore.setState({ drafts: {} });
-    window.localStorage.setItem(STORAGE_KEY, stored ?? "");
     await useComposerDraftStore.persist.rehydrate();
 
     const restored = draftOf("chat-roundtrip").browserAnnotations;
@@ -356,21 +337,18 @@ describe("composer draft store browserAnnotations", () => {
   });
 
   it("Rehydrate: legacy drafts without browserAnnotations become []", async () => {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        state: {
-          drafts: {
-            "chat-legacy": {
-              content: EMPTY_DOC,
-              selection: null,
-              resetEpoch: 0,
-              revision: 4,
-            },
+    seedRows(
+      {
+        drafts: {
+          "chat-legacy": {
+            content: EMPTY_DOC,
+            selection: null,
+            resetEpoch: 0,
+            revision: 4,
           },
         },
-      }),
+      },
+      ANON_NAME,
     );
 
     await useComposerDraftStore.persist.rehydrate();
@@ -466,6 +444,11 @@ describe("composer draft store browserAnnotations", () => {
       .getState()
       .restoreBrowserAnnotations("chat-reject", snapshot);
     expect(draftOf("chat-reject").browserAnnotations).toEqual(snapshot);
+    // Durable the instant the call returns - no flush, no lifecycle event.
+    // The failed-send handoff driver acknowledges right after this restore.
+    const onDisk = rawRows(ANON_NAME);
+    expect(onDisk).not.toBeNull();
+    expect(onDisk).toContain(attached.annotationId);
 
     useComposerDraftStore
       .getState()

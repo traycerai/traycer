@@ -125,7 +125,13 @@ export function syncHeaderStripItem(input: {
  */
 let armed = false;
 
-export function armHeaderStripCommitHandoff(): void {
+export function armHeaderStripCommitHandoff(axis: StripAxis): void {
+  // Called synchronously before the reorder write. Capture the current slots
+  // here so intervening resizes need no bookkeeping on ordinary commits.
+  for (const entry of entries.values()) {
+    entry.lastBaseline =
+      entry.node === null ? null : layoutBaselineOf(entry.node, axis);
+  }
   armed = true;
 }
 
@@ -247,16 +253,15 @@ function firstLayoutOf(
 /**
  * Re-base every item whose baseline moved, then release the arm.
  *
- * Driven from the strip container's layout effect on EVERY strip layout pass:
- * baselines have to be recorded even when nothing is armed, or the first commit
- * after a quiet render would compare against a stale slot. Walking the DOM
- * rather than the registry is deliberate - it is the only way to notice an item
- * that is on screen and NOT registered. Baselines are read along `axis`, the
- * strip's main axis.
+ * Driven from the strip container's layout effect. Only an armed reorder
+ * needs geometry: arming captured its pre-commit slots synchronously. Walking
+ * the DOM on that commit is deliberate - it notices an on-screen item that is
+ * NOT registered, including a split group.
  */
 export function runHeaderStripCommitHandoff(
   axis: StripAxis,
 ): HeaderStripHandoffReport {
+  if (!armed) return { rebased: [], moved: [], uncorrected: [] };
   const byNode = new Map<HTMLElement, HeaderStripItemEntry>();
   for (const entry of entries.values()) {
     if (entry.node !== null) byNode.set(entry.node, entry);
@@ -267,6 +272,11 @@ export function runHeaderStripCommitHandoff(
   const nodes = document.querySelectorAll(
     `[data-testid="${HEADER_STRIP_SCROLL_TEST_ID}"] [data-strip-item-id]`,
   );
+  const measurements: Array<{
+    id: string;
+    entry: HeaderStripItemEntry;
+    nextBaseline: number;
+  }> = [];
   for (const node of nodes) {
     if (!(node instanceof HTMLElement)) continue;
     const id = node.getAttribute("data-strip-item-id");
@@ -275,13 +285,20 @@ export function runHeaderStripCommitHandoff(
     if (entry === undefined) {
       // On screen, not participating. Never skip this quietly - that silence is
       // exactly what hid the split group.
-      if (armed) uncorrected.push(id);
+      uncorrected.push(id);
       continue;
     }
+    measurements.push({
+      id,
+      entry,
+      nextBaseline: layoutBaselineOf(node, axis),
+    });
+  }
+  for (const { id, entry, nextBaseline } of measurements) {
     const previousBaseline = entry.lastBaseline;
-    const nextBaseline = layoutBaselineOf(node, axis);
     entry.lastBaseline = nextBaseline;
     if (previousBaseline === null) {
+      // No pre-commit snapshot: an item joined after arming.
       const first = firstLayoutOf(entry, id, nextBaseline);
       if (first === "rebased") rebased.push(id);
       if (first === "uncorrected") uncorrected.push(id);
@@ -289,7 +306,6 @@ export function runHeaderStripCommitHandoff(
     }
     if (previousBaseline === nextBaseline) continue;
     moved.push(id);
-    if (!armed) continue;
     entry.value.jump(
       handoffTransformFor({
         previousBaseline,
@@ -302,7 +318,7 @@ export function runHeaderStripCommitHandoff(
     animate(entry.value, entry.target, entry.transition);
     rebased.push(id);
   }
-  if (armed && uncorrected.length > 0) {
+  if (uncorrected.length > 0) {
     appLogger.warn(
       "[header-strip] commit reached items that cannot be re-based",
       { uncorrected },

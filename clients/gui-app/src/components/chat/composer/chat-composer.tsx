@@ -66,7 +66,7 @@ import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
-import { ChatComposerAttachmentsStrip } from "./chat-composer-attachments-strip";
+import { ChatComposerDraftAttachmentsStrip } from "./chat-composer-attachments-strip";
 import { ChatComposerEditorSlot } from "./chat-composer-editor-slot";
 import { ChatComposerToolbarSlot } from "./chat-composer-toolbar-slot";
 import { ComposerTileIdProvider } from "@/components/home/composer/composer-tile-context";
@@ -398,9 +398,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const {
     initialContent,
     initialSelection,
-    draftContent,
     draftHasText,
     draftHasImages,
+    draftIsSuggestionPlaceholder,
     handleDocumentChange,
     handleSelectionChange,
   } = useChatComposerDraft({
@@ -618,15 +618,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // (a fresh id, same content) before the keystroke lands; the editor is
   // never held for it.
   const handleDocumentChangeNotingEdit = useCallback(
-    (content: JsonContent, selection: { from: number; to: number }): void => {
+    (
+      content: JsonContent,
+      selection: { from: number; to: number },
+      changedImages: JsonContent | null,
+    ): void => {
       authority.noteEdit();
       handleDocumentChange(content, selection);
-      // The document is the queue, and mount-time re-entry cannot see a node
-      // that did not exist at mount. The browser-preview screenshot the mention
-      // extension appends asynchronously is exactly that node, and it enters
-      // through no paste. Edge-triggered in the hook - a node whose job has
-      // started is never looked at again this mount - so this costs one scan.
-      noteContentImages(content);
+      // Covers asynchronous screenshot insertion as well as paste, without
+      // rescanning every existing image when ordinary text changes.
+      if (changedImages !== null) noteContentImages(changedImages);
     },
     [authority, handleDocumentChange, noteContentImages],
   );
@@ -718,7 +719,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
       workspaceBlocked,
       draftHasText,
       draftHasImages,
-      draftContent,
+      draftIsSuggestionPlaceholder,
     })
       ? suggestedPrompt
       : null;
@@ -856,9 +857,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   utilityRail={null}
                   expansion={composerExpansion}
                   attachmentsStrip={
-                    <ChatComposerAttachmentsStrip
+                    <ChatComposerDraftAttachmentsStrip
                       taskId={taskId}
-                      content={draftContent}
+                      initialContent={initialContent}
                       editingQueueItemId={editingQueueItemId}
                       onCancelQueueEdit={onCancelQueueEdit}
                       onRemoveImage={removeImage}

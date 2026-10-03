@@ -38,6 +38,10 @@ vi.mock("@/lib/epic-selectors", () => ({
     state.tier === null
       ? new Map<string, AgentActivityTier>()
       : new Map<string, AgentActivityTier>([["n1", state.tier]]),
+  // TerminalAgentProgressIcon reads the single-agent-id selector rather than
+  // the whole tier map.
+  useEpicAgentActivityTier: (agentId: string) =>
+    state.tier === null || agentId !== "n1" ? undefined : state.tier,
   // ChatProgressIcon reads the REGISTERED (registry-keyed, non-throwing)
   // selectors rather than the ambient ones, so a whole-module mock has to
   // answer those too - same data, addressed by epic id instead of by context.
@@ -45,6 +49,10 @@ vi.mock("@/lib/epic-selectors", () => ({
     state.tier === null
       ? new Map<string, AgentActivityTier>()
       : new Map<string, AgentActivityTier>([["n1", state.tier]]),
+  useRegisteredEpicAgentActivityTier: (
+    _epicId: string | null,
+    agentId: string,
+  ) => (state.tier === null || agentId !== "n1" ? undefined : state.tier),
   useEpicChatHarnessId: () => state.gui,
   useMaybeEpicTuiAgentHarnessId: () => state.tui,
   useEpicPermissionRole: () => state.role,

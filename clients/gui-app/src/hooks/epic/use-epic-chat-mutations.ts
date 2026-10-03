@@ -22,6 +22,7 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   HostRpcError,
+  type ResponseOfMethod,
   toHostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -619,6 +620,58 @@ export function useEpicArchiveChat(): UseMutationResult<
   return useEpicArchiveChatMutation("individual");
 }
 
+async function refreshArchivedChat(
+  variables: ArchiveChatMutationInput,
+  ctx: ChatRecordMutationContext,
+  queryClient: QueryClient,
+  readOwnerRecords: (
+    variables: ArchiveChatMutationInput,
+  ) => Promise<ResponseOfMethod<HostRpcRegistry, "epic.listChatRecords">>,
+): Promise<void> {
+  try {
+    const answer = await readOwnerRecords(variables);
+    // `unchanged` cannot arrive: the read above sends no stamp, so the
+    // host has nothing to match and every answer is a `snapshot`. The
+    // guard returns rather than assumes - there is no row to reconcile
+    // against in an answer that carries none.
+    if (answer.kind !== "snapshot") return;
+    const records = answer.chats;
+    const currentHandle = getChatMutationViewer(
+      variables.epicId,
+      variables.chatId,
+      ctx,
+    );
+    if (currentHandle === null) return;
+    invalidateEpicChatRecords(queryClient, currentHandle.hostId);
+    const record = records.find(
+      (row) =>
+        row.chatId === variables.chatId &&
+        row.ownerUserId === ctx.viewerUserId &&
+        row.originHostId === ctx.hostId &&
+        row.origin === "own",
+    );
+    if (record === undefined) return;
+    currentHandle.store.getState().applyConfirmedChatMutation({
+      kind: "upsert",
+      record:
+        currentHandle.hostId === ctx.hostId
+          ? record
+          : {
+              ...record,
+              origin: "foreign",
+              archivedAt: null,
+              docResident: false,
+            },
+    });
+  } catch (error) {
+    // The write succeeded; only its immediate display refresh failed.
+    toastFromHostError(
+      toHostRpcError(error, "epic.listChatRecords"),
+      "Agent updated, but couldn't refresh its status.",
+    );
+  }
+}
+
 function useEpicArchiveChatMutation(
   failurePresentation: "individual" | "aggregate",
 ): UseMutationResult<
@@ -686,48 +739,12 @@ function useEpicArchiveChatMutation(
             null
         )
           return;
-        try {
-          const answer = await readOwnerRecords.mutateAsync(variables);
-          // `unchanged` cannot arrive: the read above sends no stamp, so the
-          // host has nothing to match and every answer is a `snapshot`. The
-          // guard returns rather than assumes - there is no row to reconcile
-          // against in an answer that carries none.
-          if (answer.kind !== "snapshot") return;
-          const records = answer.chats;
-          const currentHandle = getChatMutationViewer(
-            variables.epicId,
-            variables.chatId,
-            ctx,
-          );
-          if (currentHandle === null) return;
-          invalidateEpicChatRecords(queryClient, currentHandle.hostId);
-          const record = records.find(
-            (row) =>
-              row.chatId === variables.chatId &&
-              row.ownerUserId === ctx.viewerUserId &&
-              row.originHostId === ctx.hostId &&
-              row.origin === "own",
-          );
-          if (record === undefined) return;
-          currentHandle.store.getState().applyConfirmedChatMutation({
-            kind: "upsert",
-            record:
-              currentHandle.hostId === ctx.hostId
-                ? record
-                : {
-                    ...record,
-                    origin: "foreign",
-                    archivedAt: null,
-                    docResident: false,
-                  },
-          });
-        } catch (error) {
-          // The write succeeded; only its immediate display refresh failed.
-          toastFromHostError(
-            toHostRpcError(error, "epic.listChatRecords"),
-            "Agent updated, but couldn't refresh its status.",
-          );
-        }
+        await refreshArchivedChat(
+          variables,
+          ctx,
+          queryClient,
+          readOwnerRecords.mutateAsync,
+        );
       },
       onError:
         failurePresentation === "individual"

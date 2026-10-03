@@ -9,10 +9,10 @@ import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe"
 import { latestForkableAssistantMessageId as protocolLatestForkableAssistantMessageId } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import { projectTranscriptRows } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import { latestForkableAssistantMessageId as rendererLatestForkableAssistantMessageId } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 
 /**

@@ -195,8 +195,8 @@ function notify(epicId: string): void {
  * "Hidden" here is what `lib/dom/document-visibility.ts` answers: the Page
  * Visibility API in a browser, and on the desktop the shell's own
  * minimised/hidden answer pushed in through `desktop-window-visibility.ts`,
- * because `backgroundThrottling: false` keeps the Page Visibility API at
- * "visible" there. Neither detects occlusion.
+ * because throttling stays disabled for receiver stats (#1613) and transport
+ * keepalives. DOM visibility stays visible; neither detects native occlusion.
  */
 function isEpicVisibleAnywhere(epicId: string): boolean {
   return (

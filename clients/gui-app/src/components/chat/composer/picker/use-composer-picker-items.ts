@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
-import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
+import type { UseSlashCommandsResult } from "@/hooks/composer/use-slash-commands";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SlashCommand } from "@/lib/composer/types";
 
@@ -41,14 +41,15 @@ export function useComposerPickerItems(
     mentionRoots: params.mentionRoots,
     currentEpicId: params.currentEpicId,
   });
-  useSlashItems({
+  const catalog = useSlashItems({
+    isActive: params.isActive,
     pickerStore: params.pickerStore,
     hostClient: params.hostClient,
     harnessId: params.harnessId,
     workingDirectories: params.mentionRoots,
     localCommands: params.localSlashCommands,
   });
-  useKnownSlashCommandNames(params);
+  useKnownSlashCommandNames(params, catalog);
 }
 
 // Eagerly loads the slash-command catalog for the *active* composer (independent
@@ -59,14 +60,11 @@ export function useComposerPickerItems(
 // inactive-but-mounted composers do not fetch `agent.gui.listCommands`; their
 // `knownSlashCommands` stays null (a composer you cannot focus cannot be typed
 // into). Shares the cached query with the popover, so it opens against warm data.
-function useKnownSlashCommandNames(params: UseComposerPickerItemsParams): void {
-  const { data: commands, isLoading } = useSlashCommands("", {
-    hostClient: params.hostClient,
-    harnessId: params.harnessId,
-    workingDirectories: params.mentionRoots,
-    enabled: params.isActive,
-    localCommands: params.localSlashCommands,
-  });
+function useKnownSlashCommandNames(
+  params: UseComposerPickerItemsParams,
+  catalog: UseSlashCommandsResult,
+): void {
+  const { data: commands, isLoading } = catalog;
   const knownCommands = useMemo<ReadonlyMap<string, SlashCommand> | null>(
     () =>
       params.isActive && !isLoading

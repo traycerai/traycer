@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
-import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
+import type {
+  TerminalSubscribeClientFrameV17,
+  TerminalSubscribeViewer,
+} from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalSessionKind } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   createTerminalSessionStore,
   type TerminalSessionStoreHandle,
+  type TerminalWrite,
 } from "@/stores/terminals/terminal-session-store";
 import {
   MAX_LINGERING_PLAIN_TERMINALS,
@@ -24,6 +28,9 @@ interface CreatedHandle {
   readonly closeCount: () => number;
   readonly callbacks: () => TerminalStreamCallbacks;
   readonly viewers: () => readonly TerminalSubscribeViewer[];
+  /** Every client frame ever dispatched, across reconnects (a fresh stream
+   * client is a new `streamClientFactory` call, but this array is shared). */
+  readonly sentFrames: () => readonly TerminalSubscribeClientFrameV17[];
 }
 
 function createHandle(kind: TerminalSessionKind): CreatedHandle {
@@ -38,6 +45,7 @@ function createHandleWithViewer(
   let closeCount = 0;
   let callbacks: TerminalStreamCallbacks | null = null;
   const viewers: TerminalSubscribeViewer[] = [];
+  const sentFrames: TerminalSubscribeClientFrameV17[] = [];
   const handle = createTerminalSessionStore({
     scope: { kind: "epic", epicId: "epic-1" },
     sessionId: "terminal-1",
@@ -50,7 +58,9 @@ function createHandleWithViewer(
       callbacks = streamArgs.callbacks;
       viewers.push(streamArgs.viewer);
       return {
-        sendAction: () => undefined,
+        sendAction: (frame) => {
+          sentFrames.push(frame);
+        },
         close: () => {
           closeCount += 1;
         },
@@ -65,6 +75,7 @@ function createHandleWithViewer(
       return callbacks;
     },
     viewers: () => viewers,
+    sentFrames: () => sentFrames,
   };
 }
 
@@ -245,12 +256,15 @@ describe("TerminalSessionRegistry", () => {
     });
   });
 
-  it("excludes warm terminal-agents from the linger pool count and candidacy", () => {
+  it("folds a released terminal-agent into the shared linger pool - same cap and release order as shells", () => {
     const registry = new TerminalSessionRegistry();
     const agent = createHandle("terminal-agent");
     registry.acquire("agent-1", () => agent.handle, HOST_ID, "presentation");
     registry.release("agent-1", agent.handle, true);
 
+    // The agent released first, so it is the oldest entry in the shared pool.
+    // Filling the rest of the cap with plains must evict the agent, not spare
+    // it - agents no longer have their own uncapped class.
     const owned = Array.from({ length: MAX_LINGERING_PLAIN_TERMINALS }, () =>
       createHandle("terminal"),
     );
@@ -264,46 +278,58 @@ describe("TerminalSessionRegistry", () => {
       registry.release(`terminal-${index}`, entry.handle, true);
     });
 
-    // The warm agent neither counts toward the cap (all plains retained) nor
-    // gets evicted by it. Each release reopens the subscribe as cache.
-    expect(agent.closeCount()).toBe(1);
-    expect(registry.get("agent-1")).toBe(agent.handle);
-    owned.forEach((entry) => {
+    expect(agent.closeCount()).toBe(2);
+    expect(registry.get("agent-1")).toBeNull();
+    owned.forEach((entry, index) => {
       expect(entry.closeCount()).toBe(1);
+      expect(registry.get(`terminal-${index}`)).toBe(entry.handle);
     });
   });
 
-  it("keeps a running terminal-agent outside the cap after the epic-only grace", () => {
+  it("shares the release-linger TTL with plain terminals for a released running agent", () => {
     const registry = new TerminalSessionRegistry();
     const agent = createHandle("terminal-agent");
+
+    registry.acquire("agent-ttl", () => agent.handle, HOST_ID, "presentation");
+    registry.release("agent-ttl", agent.handle, true);
+
+    vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS - 1);
+    expect(agent.closeCount()).toBe(1);
+    expect(registry.get("agent-ttl")).toBe(agent.handle);
+
+    vi.advanceTimersByTime(1);
+    expect(agent.closeCount()).toBe(2);
+    expect(registry.get("agent-ttl")).toBeNull();
+  });
+
+  it("never evicts a leased (presented) terminal-agent through the shared cap, however many lease-free entries cycle through", () => {
+    const registry = new TerminalSessionRegistry();
+    const agent = createHandle("terminal-agent");
+    // Leased for the whole test - never released, so it carries demand and is
+    // outside the demand-free cap walk regardless of pool pressure.
     registry.acquire(
-      "agent-grace",
+      "agent-leased",
       () => agent.handle,
       HOST_ID,
       "presentation",
     );
-    registry.release("agent-grace", agent.handle, true);
-    vi.advanceTimersByTime(
-      DESKTOP_RETENTION_PROFILE.unknownActivityCapGraceMs + 1,
-    );
 
-    const plains = Array.from(
-      { length: MAX_LINGERING_PLAIN_TERMINALS + 1 },
+    const owned = Array.from(
+      { length: MAX_LINGERING_PLAIN_TERMINALS + 5 },
       () => createHandle("terminal"),
     );
-    plains.forEach((entry, index) => {
+    owned.forEach((entry, index) => {
       registry.acquire(
-        `plain-grace-${index}`,
+        `terminal-${index}`,
         () => entry.handle,
         HOST_ID,
         "presentation",
       );
-      registry.release(`plain-grace-${index}`, entry.handle, true);
+      registry.release(`terminal-${index}`, entry.handle, true);
     });
 
-    expect(registry.get("agent-grace")).toBe(agent.handle);
-    expect(agent.closeCount()).toBe(1);
-    expect(plains[0].closeCount()).toBe(2);
+    expect(agent.closeCount()).toBe(0);
+    expect(registry.get("agent-leased")).toBe(agent.handle);
   });
 
   it("forceRelease during the linger window disposes once and cancels the timer", () => {
@@ -343,7 +369,7 @@ describe("TerminalSessionRegistry", () => {
     expect(registry.get("terminal-1")).toBeNull();
   });
 
-  it("keeps a lost lease-free terminal-agent warm because the host PTY may still be running", () => {
+  it("evicts a lease-free terminal-agent immediately once its stream is lost, sharing the plain-terminal defunct predicate", () => {
     const registry = new TerminalSessionRegistry();
     const owned = createHandle("terminal-agent");
 
@@ -374,9 +400,40 @@ describe("TerminalSessionRegistry", () => {
     owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
     registry.release("terminal-1", owned.handle, true);
 
+    // A closed stream never redials for either kind now, so a lease-free
+    // "lost" agent is disposed on release instead of lingering - the same
+    // predicate a lost plain terminal already gets, not the previous
+    // agent-only exemption.
     expect(owned.handle.store.getState().status).toBe("lost");
-    expect(owned.closeCount()).toBe(0);
+    expect(owned.closeCount()).toBe(1);
+    expect(registry.get("terminal-1")).toBeNull();
+
+    vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
+    expect(owned.closeCount()).toBe(1);
+  });
+
+  it("evicts a lingering terminal-agent the instant its stream is lost, so reacquire builds fresh", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal-agent");
+
+    registry.acquire("terminal-1", () => owned.handle, HOST_ID, "presentation");
+    registry.release("terminal-1", owned.handle, true);
     expect(registry.get("terminal-1")).toBe(owned.handle);
+
+    owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
+
+    expect(owned.closeCount()).toBe(2);
+    expect(registry.get("terminal-1")).toBeNull();
+
+    const fresh = createHandle("terminal-agent");
+    const reacquired = registry.acquire(
+      "terminal-1",
+      () => fresh.handle,
+      HOST_ID,
+      "presentation",
+    );
+    expect(reacquired).toBe(fresh.handle);
+    expect(fresh.closeCount()).toBe(0);
   });
 
   it("adopts a closed tab's lease-free warm agent handle under a reopened tab's fresh instance id", () => {
@@ -517,7 +574,7 @@ describe("TerminalSessionRegistry", () => {
     expect(owned.closeCount()).toBe(2);
   });
 
-  it("evicts a lease-free terminal-agent the moment it is confirmed reaped, unlike a merely lost one", () => {
+  it("evicts a lease-free terminal-agent the moment it is confirmed reaped", () => {
     const registry = new TerminalSessionRegistry();
     const owned = createHandle("terminal-agent");
 
@@ -536,9 +593,9 @@ describe("TerminalSessionRegistry", () => {
     });
 
     expect(owned.handle.store.getState().status).toBe("reaped");
-    // Unlike a merely "lost" terminal-agent (kept warm - see the sibling test
-    // above), a confirmed-reaped one is a dead end: keeping it warm would
-    // shadow the fresh create-then-acquire bootstrap once the tile revives.
+    // A confirmed-reaped agent is a dead end just like a lost one: keeping it
+    // warm would shadow the fresh create-then-acquire bootstrap once the tile
+    // revives.
     expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
     // A reopened tab must never adopt the dead entry - there is nothing left
@@ -887,6 +944,289 @@ describe("TerminalSessionRegistry", () => {
     owned.slice(1).forEach((entry, index) => {
       expect(entry.closeCount()).toBe(1);
       expect(registry.get(`terminal-${index + 1}`)).toBe(entry.handle);
+    });
+  });
+
+  it("replays the host snapshot into a fresh handle once the shared cap evicts the prior one", () => {
+    const registry = new TerminalSessionRegistry();
+    const evicted = createHandle("terminal-agent");
+
+    registry.acquire(
+      "terminal-1",
+      () => evicted.handle,
+      HOST_ID,
+      "presentation",
+    );
+    registry.release("terminal-1", evicted.handle, true);
+
+    // Push the evicted agent out through the shared cap - the same eviction
+    // path a shell now takes, since agents no longer have an uncapped class.
+    const fillers = Array.from({ length: MAX_LINGERING_PLAIN_TERMINALS }, () =>
+      createHandle("terminal"),
+    );
+    fillers.forEach((filler, index) => {
+      registry.acquire(
+        `filler-${index}`,
+        () => filler.handle,
+        HOST_ID,
+        "presentation",
+      );
+      registry.release(`filler-${index}`, filler.handle, true);
+    });
+    expect(registry.get("terminal-1")).toBeNull();
+    expect(evicted.closeCount()).toBe(2);
+
+    // Reopening the tab mints a fresh handle - the evicted one is gone for
+    // good; the host-side PTY is untouched and replays its snapshot (the
+    // host's own scrollback, which can truncate at 2MiB - not a promise of
+    // full history).
+    const reopened = createHandle("terminal-agent");
+    const writes: TerminalWrite[] = [];
+    reopened.handle.store.getState().setWriter((write) => writes.push(write));
+    const reacquired = registry.acquire(
+      "terminal-1",
+      () => reopened.handle,
+      HOST_ID,
+      "presentation",
+    );
+    expect(reacquired).toBe(reopened.handle);
+
+    const hostSnapshot = "line\n".repeat(5_000) + "final-line";
+    reopened.callbacks().onSnapshot(
+      {
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        scrollback: hostSnapshot,
+        session: {
+          sessionId: "terminal-1",
+          epicId: "epic-1",
+          sessionKind: "terminal-agent",
+          cwd: "/repo",
+          shellCommand: "zsh",
+          shellArgs: [],
+          status: "running",
+          exitCode: null,
+          cols: 80,
+          rows: 24,
+          createdAt: 1,
+          title: null,
+        },
+      },
+      hostSnapshot,
+    );
+
+    // The host snapshot lands as one write - not a partial or merged
+    // continuation of the evicted engine's stale content.
+    expect(writes).toEqual([
+      expect.objectContaining({ kind: "snapshot", chunk: hostSnapshot }),
+    ]);
+    expect(reopened.handle.store.getState().snapshotLoaded).toBe(true);
+  });
+
+  describe("pending-write protection (W3-L)", () => {
+    it.each([
+      {
+        label: "before release (the retainWhenIdle gate at park time)",
+        dropBeforeRelease: true,
+        expectedCloseCountAfterRelease: 0,
+      },
+      {
+        label:
+          "after release (the watchDefunct subscriber on an already-warm entry)",
+        dropBeforeRelease: false,
+        expectedCloseCountAfterRelease: 1,
+      },
+    ])(
+      "protects a lease-free entry with an unacked write through loss $label, then through the cap walk and TTL expiry",
+      ({ dropBeforeRelease, expectedCloseCountAfterRelease }) => {
+        const registry = new TerminalSessionRegistry();
+        const owned = createHandle("terminal");
+
+        registry.acquire(
+          "terminal-1",
+          () => owned.handle,
+          HOST_ID,
+          "presentation",
+        );
+        owned.callbacks().onConnectionStatus("open", null);
+        const clientActionId = owned.handle.store
+          .getState()
+          .writeInput("echo hi\r");
+        expect(clientActionId).not.toBeNull();
+
+        if (dropBeforeRelease) {
+          // The transport drops before the host ever acks the write, and
+          // before the last lease releases - `retainWhenIdle` is the gate
+          // that has to notice the pending write at park time.
+          owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
+          expect(owned.handle.store.getState().status).toBe("lost");
+        }
+
+        registry.release("terminal-1", owned.handle, true);
+        // Before: the plain "lost" predicate would have disposed this
+        // immediately (see "disposes a lost plain terminal on release
+        // instead of lingering it" above) - the unacked write is what keeps
+        // it parked instead. After: parking while still healthy reopens the
+        // stream as "cache" (one close of the pre-park client), and the
+        // transport has not dropped yet.
+        expect(owned.closeCount()).toBe(expectedCloseCountAfterRelease);
+        expect(registry.get("terminal-1")).toBe(owned.handle);
+
+        if (!dropBeforeRelease) {
+          // The transport drops NOW, on the already-warm "cache" entry.
+          // `retainWhenIdle` already ran once at park time and will not run
+          // again - only the live `watchDefunct` subscriber sees this
+          // transition, and it has to respect the pending write on its own.
+          owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
+          expect(owned.handle.store.getState().status).toBe("lost");
+          expect(registry.get("terminal-1")).toBe(owned.handle);
+          expect(owned.closeCount()).toBe(expectedCloseCountAfterRelease);
+        }
+
+        // Pool pressure: fill the linger cap past its limit with ordinary
+        // released terminals that carry no pending work.
+        const fillers = Array.from(
+          { length: MAX_LINGERING_PLAIN_TERMINALS + 5 },
+          () => createHandle("terminal"),
+        );
+        fillers.forEach((filler, index) => {
+          registry.acquire(
+            `filler-${index}`,
+            () => filler.handle,
+            HOST_ID,
+            "presentation",
+          );
+          registry.release(`filler-${index}`, filler.handle, true);
+        });
+        expect(registry.get("terminal-1")).toBe(owned.handle);
+
+        // TTL pressure: the window elapses too - no expiry timer was ever
+        // armed for it while the write was outstanding.
+        vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS * 3);
+        expect(registry.get("terminal-1")).toBe(owned.handle);
+        expect(owned.closeCount()).toBe(expectedCloseCountAfterRelease);
+      },
+    );
+
+    it("replays an unacked terminal-agent write with the SAME clientActionId exactly once on reconnect, under real pool+TTL pressure, then evicts on ack because the original TTL had already elapsed", () => {
+      const registry = new TerminalSessionRegistry();
+      const owned = createHandle("terminal-agent");
+
+      registry.acquire("agent-1", () => owned.handle, HOST_ID, "presentation");
+      owned.callbacks().onConnectionStatus("open", null);
+      const clientActionId = owned.handle.store
+        .getState()
+        .writeInput("echo hi\r");
+      if (clientActionId === null) throw new Error("expected an action id");
+
+      // A transient blip while still leased - harmless, demand is still
+      // held. Isolates the fix from the "lost" retention branch entirely:
+      // the session never goes lost or exited here, so any protection below
+      // can only come from `hasActiveWork` reading the pending write.
+      owned.callbacks().onConnectionStatus("reconnecting", null);
+
+      registry.release("agent-1", owned.handle, true);
+      // Released while merely reconnecting (not dead): `onParked`'s cache
+      // retag reopens the stream, closing the pre-park client once.
+      expect(owned.closeCount()).toBe(1);
+      expect(registry.get("agent-1")).toBe(owned.handle);
+
+      // Pool pressure: fill the linger cap past its limit with ordinary
+      // released terminals sharing the same cap.
+      const fillers = Array.from(
+        { length: MAX_LINGERING_PLAIN_TERMINALS + 5 },
+        () => createHandle("terminal"),
+      );
+      fillers.forEach((filler, index) => {
+        registry.acquire(
+          `filler-${index}`,
+          () => filler.handle,
+          HOST_ID,
+          "presentation",
+        );
+        registry.release(`filler-${index}`, filler.handle, true);
+      });
+      expect(registry.get("agent-1")).toBe(owned.handle);
+
+      // TTL pressure: the window elapses while still merely "reconnecting"
+      // (never lost/exited) - protection holds with no timer ever armed,
+      // proving `hasActiveWork` alone (not the lost-handle branch) is what
+      // guards the cap and TTL here.
+      vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS * 3);
+      expect(registry.get("agent-1")).toBe(owned.handle);
+
+      // The real reconnect: a natural reconnecting -> open cycle on the
+      // CURRENT (already-reopened "cache") stream replays every
+      // still-unacked write verbatim: the existing stream client redials
+      // itself.
+      const beforeReconnectFrameCount = owned.sentFrames().length;
+      owned.callbacks().onConnectionStatus("open", null);
+
+      const replayedWrites = owned
+        .sentFrames()
+        .slice(beforeReconnectFrameCount)
+        .filter(
+          (frame) =>
+            frame.kind === "write" && frame.clientActionId === clientActionId,
+        );
+      expect(replayedWrites).toEqual([
+        expect.objectContaining({ clientActionId, data: "echo hi\r" }),
+      ]);
+      expect(
+        Object.keys(owned.handle.store.getState().pendingActions),
+      ).toContain(clientActionId);
+      expect(registry.get("agent-1")).toBe(owned.handle);
+
+      // The host finally acks it.
+      owned.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        clientActionId,
+        action: "write",
+        status: "accepted",
+        reason: null,
+        code: null,
+      });
+
+      // The original TTL window had already elapsed while the write
+      // protected the entry - the ack must evict it immediately against
+      // that original deadline, not restart a fresh window from now.
+      expect(registry.get("agent-1")).toBeNull();
+      expect(owned.closeCount()).toBe(2); // the pre-park client, then dispose
+    });
+
+    it("does not let a resize-only pending action protect an entry from ordinary TTL eviction", () => {
+      const registry = new TerminalSessionRegistry();
+      const owned = createHandle("terminal");
+
+      registry.acquire(
+        "terminal-1",
+        () => owned.handle,
+        HOST_ID,
+        "presentation",
+      );
+      owned.callbacks().onConnectionStatus("open", null);
+      // Bypass the dedupe: the store starts at 80x24, so this is a genuine
+      // resize request.
+      const resizeId = owned.handle.store.getState().requestResize(120, 40);
+      expect(resizeId).not.toBeNull();
+      expect(
+        Object.keys(owned.handle.store.getState().pendingActions),
+      ).toContain(resizeId);
+
+      registry.release("terminal-1", owned.handle, true);
+      expect(registry.get("terminal-1")).toBe(owned.handle);
+
+      // A resize-only pending action never counts as active work - the
+      // linger TTL runs on schedule exactly as it would with nothing
+      // pending at all.
+      vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS - 1);
+      expect(owned.closeCount()).toBe(1);
+      vi.advanceTimersByTime(1);
+      expect(owned.closeCount()).toBe(2);
+      expect(registry.get("terminal-1")).toBeNull();
     });
   });
 });

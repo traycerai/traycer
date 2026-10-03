@@ -866,15 +866,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   // `memo` on this component is not a defence and never was - it blocks a
   // re-render pushed down by a parent, not one this component's own
   // subscription triggers. So the reads below subscribe to their ANSWERS.
-  //
-  // `useShallow` is required, not decorative: a deriving selector returns a
-  // fresh object each call, so without it `useSyncExternalStore` sees a change
-  // on every notification and loops. See `epic-sidebar-filter.ts`.
-  const cascadeCounts = useEpicStore(
-    useShallow((state: OpenEpicState) =>
-      computeDescendantCountsFromTree(state.tree, nodeId),
-    ),
-  );
+
   const statusValue = useEpicArtifactStatus(nodeId);
 
   useEffect(() => {
@@ -928,6 +920,14 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // Closed dialogs need no subtree walk on mount or store notifications.
+  const cascadeSummary = useEpicStore((state) =>
+    confirmDeleteOpen
+      ? formatCascadeSummary(
+          computeDescendantCountsFromTree(state.tree, nodeId),
+        )
+      : null,
+  );
   // Mount the delete dialog on FIRST open and keep it mounted thereafter,
   // rather than rendering it for every row unconditionally.
   //
@@ -1177,13 +1177,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
 
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
-
-  // Cascade counts feed only the delete-confirm dialog, computed from the
-  // canonical tree structure rather than the churning record list. Subscribed
-  // at the top of this component rather than derived here, because a hook
-  // cannot live below the two early returns above - see the note at the
-  // subscription for why it stopped reading the whole slice.
-  const cascadeSummary = formatCascadeSummary(cascadeCounts);
 
   const showStatusDot = computeArtifactNodeStatusDot(artifactType, statusValue);
 

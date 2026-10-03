@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Profiler, useState, type ProfilerOnRenderCallback } from "react";
 import {
   act,
   cleanup,
@@ -6,12 +6,14 @@ import {
   renderHook,
   screen,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
+import * as tiptapJsonContent from "@/lib/composer/tiptap-json-content";
+import * as imageAtoms from "@/lib/composer/image-atoms";
 import {
   buildQuoteBlockquote,
   appendQuoteToDraft,
@@ -532,5 +534,274 @@ describe("useChatComposerDraft browser annotation image gating", () => {
         .removeBrowserAnnotation(taskId, "ann-remove");
     });
     expect(result.current.draftHasImages).toBe(false);
+  });
+});
+
+function mentionDoc(attrs: Record<string, unknown>): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "mention", attrs }] }],
+  };
+}
+
+function slashCommandDoc(attrs: Record<string, unknown>): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      { type: "paragraph", content: [{ type: "slashCommand", attrs }] },
+    ],
+  };
+}
+
+function blockquoteDoc(content: JsonContent[]): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "blockquote", content }],
+  };
+}
+
+function sourcedQuoteDoc(content: JsonContent[]): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "sourcedQuote", content }],
+  };
+}
+
+function imageOnlyDoc(): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "imageAttachment",
+        attrs: {
+          id: "img-1",
+          fileName: "img-1.png",
+          mimeType: "image/png",
+          size: 10,
+          byHashEligible: false,
+          hash: "hash-1",
+        },
+      },
+    ],
+  };
+}
+
+describe("draftHasText: early-exit predicate matches the real full plain-text projection", () => {
+  const cases: ReadonlyArray<{
+    readonly name: string;
+    readonly content: JsonContent;
+  }> = [
+    { name: "plain non-whitespace text", content: doc("hello") },
+    { name: "whitespace-only text", content: doc("   \n\t") },
+    { name: "empty doc", content: EMPTY_DOC },
+    {
+      name: "mention chip alone with valid attrs",
+      content: mentionDoc({ contextType: "file", path: "src/foo.ts" }),
+    },
+    {
+      name: "mention chip alone with malformed attrs",
+      content: mentionDoc({ contextType: "not-a-real-type" }),
+    },
+    {
+      name: "slash command chip alone with valid attrs",
+      content: slashCommandDoc({ commandName: "review" }),
+    },
+    {
+      name: "slash command chip alone with malformed attrs",
+      content: slashCommandDoc({}),
+    },
+    { name: "empty blockquote", content: blockquoteDoc([]) },
+    {
+      name: "blockquote wrapping real text",
+      content: blockquoteDoc([
+        { type: "paragraph", content: [{ type: "text", text: "quoted" }] },
+      ]),
+    },
+    { name: "empty sourcedQuote", content: sourcedQuoteDoc([]) },
+    { name: "image attachment alone, no text", content: imageOnlyDoc() },
+  ];
+
+  for (const { name, content } of cases) {
+    it(`matches the full projection for: ${name}`, () => {
+      const taskId = `task-parity-${name}`;
+      act(() => {
+        useComposerDraftStore.getState().setSnapshot(taskId, content, null);
+      });
+      const { handle } = fakeHandle(true);
+      const editorRef = {
+        current: handle as ComposerPromptEditorHandle | null,
+      };
+
+      const { result } = renderBridgeHook({
+        chatId: taskId,
+        editorRef,
+        editorReadyTick: 1,
+      });
+
+      const expected =
+        tiptapJsonContent
+          .extractPlainTextFromComposerJSONContent(content)
+          .trim().length > 0;
+      expect(result.current.draftHasText).toBe(expected);
+    });
+  }
+});
+
+describe("50k-character prompt: no full-text extraction, no extra hook re-render, exact snapshot per edit", () => {
+  it("repeated edits keep hasText stable, store the exact content/selection, and never call the full plain-text extractor", () => {
+    const taskId = "task-50k";
+    const { handle } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    const renders = { count: 0 };
+    const onRenderProbe: ProfilerOnRenderCallback = () => {
+      renders.count += 1;
+    };
+
+    const longText = "a".repeat(50_000);
+    const { result } = renderHook(
+      (props: BridgeHookProps) =>
+        useChatComposerDraft({
+          chatId: props.chatId,
+          epicId: "epic-1",
+          hostId: "host-1",
+          editorRef: props.editorRef,
+          editorReadyTick: props.editorReadyTick,
+          chatTitle: null,
+          epicTitle: null,
+        }),
+      {
+        initialProps: { chatId: taskId, editorRef, editorReadyTick: 1 },
+        wrapper: ({ children }) => (
+          <Profiler id="probe" onRender={onRenderProbe}>
+            {children}
+          </Profiler>
+        ),
+      },
+    );
+
+    // Establish the draft row (mints `draftId`) the way the owner's first
+    // keystroke does - this edit is expected to re-render.
+    act(() => {
+      result.current.handleDocumentChange(doc(longText), { from: 1, to: 1 });
+    });
+    expect(
+      useComposerDraftStore.getState().drafts[taskId]?.draftId,
+    ).not.toBeNull();
+
+    const extractSpy = vi.spyOn(
+      tiptapJsonContent,
+      "extractPlainTextFromComposerJSONContent",
+    );
+    extractSpy.mockClear();
+    renders.count = 0;
+
+    for (let i = 0; i < 20; i += 1) {
+      const content = doc(`${longText}${i}`);
+      const selection = { from: i + 1, to: i + 1 };
+      act(() => {
+        result.current.handleDocumentChange(content, selection);
+      });
+      const stored = useComposerDraftStore.getState().drafts[taskId];
+      expect(stored?.content).toEqual(content);
+      expect(stored?.selection).toEqual(selection);
+    }
+
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(renders.count).toBe(0);
+
+    extractSpy.mockRestore();
+  });
+});
+
+function manyParagraphs(count: number): JsonContent[] {
+  return Array.from({ length: count }, (_, i) => ({
+    type: "paragraph",
+    content: [{ type: "text", text: `line ${i}` }],
+  }));
+}
+
+/**
+ * A `JsonContent` whose `content` array is behind a counted getter, installed
+ * from the TEST side (`Object.defineProperty`) rather than a production seam.
+ * `composerNodeHasText` reads `(...).content?.some(...)` and
+ * `containsImageAtoms` walks the same array - either one re-running over an
+ * UNCHANGED draft counts as a read here.
+ */
+function contentWithCountedGetter(
+  paragraphs: JsonContent[],
+  onRead: () => void,
+): JsonContent {
+  const target = { type: "doc" } as JsonContent;
+  Object.defineProperty(target, "content", {
+    enumerable: true,
+    get() {
+      onRead();
+      return paragraphs;
+    },
+  });
+  return target;
+}
+
+describe("P2 regression: an unrelated store write must not re-traverse an untouched chat's content", () => {
+  it("chatA's edit and chatB's own selection move do not re-run chatB's text/image predicates over chatB's content", () => {
+    const taskA = "task-p2-a";
+    const taskB = "task-p2-b";
+
+    let bContentReads = 0;
+    const bParagraphs = manyParagraphs(500);
+    const bDoc = contentWithCountedGetter(bParagraphs, () => {
+      bContentReads += 1;
+    });
+
+    act(() => {
+      useComposerDraftStore.getState().setSnapshot(taskB, bDoc, null);
+    });
+
+    const imageSpy = vi.spyOn(imageAtoms, "containsImageAtoms");
+
+    const { handle: handleA } = fakeHandle(true);
+    const editorRefA = {
+      current: handleA as ComposerPromptEditorHandle | null,
+    };
+    const { handle: handleB } = fakeHandle(true);
+    const editorRefB = {
+      current: handleB as ComposerPromptEditorHandle | null,
+    };
+
+    const { result: resultA } = renderBridgeHook({
+      chatId: taskA,
+      editorRef: editorRefA,
+      editorReadyTick: 1,
+    });
+    const { result: resultB } = renderBridgeHook({
+      chatId: taskB,
+      editorRef: editorRefB,
+      editorReadyTick: 1,
+    });
+
+    // Both hooks have mounted and settled - count only what the two
+    // isolated, synchronous actions below cause. No `await` anywhere in this
+    // test, so a persist/mirror timer cannot fire and muddy either count.
+    bContentReads = 0;
+    imageSpy.mockClear();
+
+    act(() => {
+      resultA.current.handleDocumentChange(doc("hello from A"), {
+        from: 1,
+        to: 1,
+      });
+    });
+    act(() => {
+      resultB.current.handleSelectionChange({ from: 1, to: 1 });
+    });
+
+    const bImageCalls = imageSpy.mock.calls.filter(
+      ([content]) => content === bDoc,
+    );
+    expect(bContentReads).toBe(0);
+    expect(bImageCalls).toHaveLength(0);
+
+    imageSpy.mockRestore();
   });
 });

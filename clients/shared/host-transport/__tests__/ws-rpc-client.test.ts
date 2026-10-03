@@ -84,6 +84,9 @@ const statusV10 = defineRpcContract({
 
 const testRegistry = defineVersionedRpcRegistry({
   "host.echo": {
+    // A read: safe to discard post-dispatch. `host.status` is left unmarked
+    // on purpose, as the bypass-guard fixture.
+    cancelAfterDispatch: true,
     1: {
       latestMinor: 0,
       versions: {
@@ -744,6 +747,165 @@ describe("WsRpcClient", () => {
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
   });
 
+  it("keeps a dispatched request running when its authority did not opt into post-dispatch cancellation", async () => {
+    // A request already sent to the host must not become discardable on
+    // abort just because the caller's authority never asked for that.
+    const { factory, sockets } = makeFactory();
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-guard",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const lifetime = new AbortController();
+    const pending = client.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: lifetime.signal,
+          cancelAfterDispatch: false,
+        },
+      },
+    );
+    void pending.catch(() => undefined);
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    await flush();
+    stub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
+    await flush();
+    expect(sockets[0].sent).toHaveLength(2);
+
+    lifetime.abort("superseded");
+    await flush();
+    expect(stub.closed).toBeNull();
+
+    stub.fireMessage({
+      kind: "response",
+      requestId: "req-guard",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ echoed: "HI" });
+  });
+
+  it("cancels a dispatched read post-abort when both the registry and the authority permit it", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-permitted",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const lifetime = new AbortController();
+    const pending = client.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: lifetime.signal,
+          cancelAfterDispatch: true,
+        },
+      },
+    );
+    void pending.catch(() => undefined);
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    await flush();
+    stub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
+    await flush();
+    expect(sockets[0].sent).toHaveLength(2);
+
+    lifetime.abort("superseded");
+    await flush();
+
+    expect(stub.closed).not.toBeNull();
+    await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
+  });
+
+  it("keeps a dispatched request running when the registry does not permit cancellation, even when the authority claims it", async () => {
+    // host.status is left unmarked in testRegistry, on purpose.
+    const { factory, sockets } = makeFactory();
+    const client = new WsRpcClient<typeof testRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
+      registry: testRegistry,
+      requestId: () => "req-bypass",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: 0,
+      evidence: NO_TRANSPORT_EVIDENCE,
+    });
+    const lifetime = new AbortController();
+    const pending = client.request(
+      "host.status",
+      {},
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: {
+          endpoint: {
+            hostId: mockLocalHostEntry.hostId,
+            websocketUrl: mockLocalHostEntry.websocketUrl,
+          },
+          bearer: new MutableBearerLease("token-abc", "test-user"),
+          abortSignal: lifetime.signal,
+          cancelAfterDispatch: true,
+        },
+      },
+    );
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    await flush();
+    stub.fireMessage(openAckWithOptionalHostEcho({ major: 1, minor: 0 }));
+    await flush();
+    expect(sockets[0].sent).toHaveLength(2);
+
+    lifetime.abort("superseded");
+    await flush();
+    expect(stub.closed).toBeNull();
+
+    stub.fireMessage({
+      kind: "response",
+      requestId: "req-bypass",
+      method: "host.status",
+      schemaVersion: { major: 1, minor: 0 },
+      result: { ready: true },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ ready: true });
+  });
+
   // G4: a recovery sweep no longer re-issues a read whose attempt is still in
   // flight, which is safe only if an attempt cannot outlive its socket. A host
   // restart closes the socket under a dispatched request; the request has to
@@ -881,7 +1043,7 @@ describe("WsRpcClient", () => {
       const verdict = { value: true };
       const authority = authorityWithVerdict("token-abc", verdict);
 
-      void inner.request(
+      const pending = inner.request(
         "host.status",
         {},
         {
@@ -891,12 +1053,15 @@ describe("WsRpcClient", () => {
           requiredHostMethodVersion: null,
         },
       );
+      void pending.catch(() => undefined);
       await flush();
       sockets[0].socket.fireOpen();
       await flush();
 
       const openFrame = expectOpenFrame(sockets[0].sent[0]);
       expect(openFrame.cloudAuthorized).toBe(true);
+      sockets[0].socket.fireClose(1000, "test-complete", true);
+      await pending.catch(() => undefined);
     });
 
     it("an authority built with no `cloudAuthorized` source omits the key rather than sending a default", async () => {
@@ -913,7 +1078,7 @@ describe("WsRpcClient", () => {
       });
       const authority = authorityForToken("token-abc");
 
-      void inner.request(
+      const pending = inner.request(
         "host.status",
         {},
         {
@@ -923,12 +1088,15 @@ describe("WsRpcClient", () => {
           requiredHostMethodVersion: null,
         },
       );
+      void pending.catch(() => undefined);
       await flush();
       sockets[0].socket.fireOpen();
       await flush();
 
       const openFrame = expectOpenFrame(sockets[0].sent[0]);
       expect(openFrame).not.toHaveProperty("cloudAuthorized");
+      sockets[0].socket.fireClose(1000, "test-complete", true);
+      await pending.catch(() => undefined);
     });
   });
 
@@ -2829,6 +2997,7 @@ describe("WsRpcClient", () => {
             },
             bearer: new MutableBearerLease("token-abc", "test-user"),
             abortSignal: lifetime.signal,
+            cancelAfterDispatch: true,
           },
         },
       );

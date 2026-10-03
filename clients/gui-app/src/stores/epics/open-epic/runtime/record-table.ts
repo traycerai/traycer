@@ -372,6 +372,13 @@ export interface RecordTablePlane<TRow, TSlice> {
     visibleRows: readonly TRow[],
     currentUserId: string | null,
   ) => TSlice;
+  /** Existing visible rows only; null requests the full membership path. */
+  readonly updateSlice?: (
+    previous: TSlice,
+    changedRows: readonly TRow[],
+    currentUserId: string | null,
+    previousRows: readonly TRow[],
+  ) => TSlice | null;
   /** The change gate. */
   readonly slicesEq: (a: TSlice, b: TSlice) => boolean;
   /** The slice a table publishes before it has ingested anything. */
@@ -420,6 +427,11 @@ export interface RecordTable<TRow, TSlice> {
   retainedRowSize(): RetainedValueSize;
   /** The slice as last published. The projector reads this as an input. */
   current(): TSlice;
+  /**
+   * Apply ordered writes and rebuild the published slice once. Inner writes
+   * return null; use retainedRow for same-batch reads, current for publication.
+   */
+  batch(body: () => void): RecordTablePublication<TSlice> | null;
   /**
    * The retained RAW row for a full record identity, or `null`.
    *
@@ -628,7 +640,16 @@ export function createRecordTable<TRow, TSlice>(
    * row enters the map, so the three books that have to move together (the row,
    * its ingest order, and the patch revision this supersedes) cannot drift.
    */
+  const changedRows = new Map<string, TRow | undefined>();
+  let projectedUserId: string | null | undefined;
+  let fullProjection = true;
+
+  function noteChange(key: string): void {
+    if (!changedRows.has(key)) changedRows.set(key, rows.get(key));
+  }
+
   function setRow(key: string, row: TRow): void {
+    noteChange(key);
     accountRow(key, row);
     rows.set(key, row);
     recencyRevision.delete(key);
@@ -638,6 +659,7 @@ export function createRecordTable<TRow, TSlice>(
 
   /** The counterpart: forget a row and everything keyed alongside it. */
   function dropRow(key: string): void {
+    noteChange(key);
     const previous = rowSizes.get(key);
     if (previous !== undefined) {
       rawBytes -= previous.rawBytes;
@@ -658,20 +680,58 @@ export function createRecordTable<TRow, TSlice>(
     return Math.max(recency.revisionOf(held), recencyRevision.get(key) ?? 0);
   }
 
+  let batchDepth = 0;
+  let batchChanged = false;
+  let batchRetractions = false;
+
+  function incrementalSlice(currentUserId: string | null): TSlice | null {
+    if (
+      fullProjection ||
+      projectedUserId !== currentUserId ||
+      plane.updateSlice === undefined
+    )
+      return null;
+    const replacements: TRow[] = [];
+    const previousRows: TRow[] = [];
+    for (const [key, before] of changedRows) {
+      const after = rows.get(key);
+      if (before === undefined || after === undefined) return null;
+      const wasVisible = plane.isVisibleToUser(before, currentUserId);
+      if (wasVisible !== plane.isVisibleToUser(after, currentUserId))
+        return null;
+      if (wasVisible) {
+        replacements.push(after);
+        previousRows.push(before);
+      }
+    }
+    return plane.updateSlice(slice, replacements, currentUserId, previousRows);
+  }
+
   function recompute(
     withRetractions: boolean,
   ): RecordTablePublication<TSlice> | null {
+    if (batchDepth > 0) {
+      batchChanged = true;
+      batchRetractions ||= withRetractions;
+      return null;
+    }
     const currentUserId = hooks.getCurrentUserId();
     // Record provenance for any pending mutation this table now backs, BEFORE
     // the change gate below can early-return.
     hooks.onBeforePublish();
-    const visible: TRow[] = [];
-    for (const row of rows.values()) {
-      if (!plane.isVisibleToUser(row, currentUserId)) continue;
-      visible.push(row);
+    let nextSlice = incrementalSlice(currentUserId);
+    if (nextSlice === null) {
+      const visible: TRow[] = [];
+      for (const row of rows.values()) {
+        if (plane.isVisibleToUser(row, currentUserId)) visible.push(row);
+      }
+      const built = plane.buildSlice(visible, currentUserId);
+      nextSlice = plane.slicesEq(slice, built) ? slice : built;
     }
-    const nextSlice = plane.buildSlice(visible, currentUserId);
-    if (!withRetractions && plane.slicesEq(slice, nextSlice)) return null;
+    projectedUserId = currentUserId;
+    fullProjection = false;
+    changedRows.clear();
+    if (!withRetractions && slice === nextSlice) return null;
     slice = nextSlice;
     return {
       slice: nextSlice,
@@ -695,6 +755,22 @@ export function createRecordTable<TRow, TSlice>(
         (retractions.size === 0 ? 0 : 64),
     }),
     current: () => slice,
+    batch(body) {
+      batchDepth += 1;
+      let publication: RecordTablePublication<TSlice> | null = null;
+      try {
+        body();
+      } finally {
+        batchDepth -= 1;
+        if (batchDepth === 0 && batchChanged) {
+          const withRetractions = batchRetractions;
+          batchChanged = false;
+          batchRetractions = false;
+          publication = recompute(withRetractions);
+        }
+      }
+      return publication;
+    },
     retainedRow: (rowKey: string) => rows.get(rowKey) ?? null,
     ingestSeq: () => ingestSeq,
     snapshotIncompleteSeq: () => snapshotIncompleteSeq,
@@ -708,6 +784,7 @@ export function createRecordTable<TRow, TSlice>(
     },
 
     applySnapshot(served, issuedAtSeq) {
+      fullProjection = true;
       const admitted = new Map<string, TRow>();
       for (const row of served) {
         if (retractions.has(plane.retractionIdOf(row))) continue;
@@ -784,6 +861,7 @@ export function createRecordTable<TRow, TSlice>(
         // recency back to a version the other book has already passed.
         if (patch.revision <= heldRecencyRevision(key, held, recency)) continue;
         const patched = recency.withPatch(held, patch);
+        noteChange(key);
         accountRow(key, patched);
         rows.set(key, patched);
         // NOT `setRow`: this is the one write that leaves the row's content -
@@ -850,6 +928,7 @@ export function createRecordTable<TRow, TSlice>(
         doomed.push(key);
       }
       const changedPlaneState = hooks.onRemoval(retractionId);
+      fullProjection ||= changedPlaneState;
       // Idempotent: a redelivered removal for the same reason is not a state
       // change, and re-publishing on it would re-project the epic for nothing.
       if (
@@ -873,7 +952,10 @@ export function createRecordTable<TRow, TSlice>(
       return recompute(true);
     },
 
-    republish: () => recompute(false),
+    republish: () => {
+      fullProjection = true;
+      return recompute(false);
+    },
 
     servesNodeToViewer(nodeId, currentUserId) {
       for (const row of rows.values()) {

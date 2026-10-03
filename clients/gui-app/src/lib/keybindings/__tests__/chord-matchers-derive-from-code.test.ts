@@ -173,6 +173,7 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "gui-app/src/components/remote-folder-picker-dialog.tsx": 4,
   "gui-app/src/components/resources/resource-monitor-popover.tsx": 9,
   "gui-app/src/components/settings/controls/chord-capture-core.tsx": 2,
+  "gui-app/src/components/ui/lazy-menu.tsx": 2,
   "gui-app/src/components/worktree/worktree-pr-state-icons.tsx": 2,
   "gui-app/src/editor-core/links/artifact-link-popover.tsx": 3,
   "gui-app/src/hooks/use-primary-action-shortcut.ts": 1,

@@ -1,6 +1,8 @@
-import type { ComponentProps } from "react";
+import { useId, useState, type ComponentProps } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Collapsible as CollapsiblePrimitive } from "radix-ui";
+
+import { CollapsibleStateContext } from "@/components/ui/collapsible-context";
 
 import { cn } from "@/lib/utils";
 
@@ -34,15 +36,31 @@ const collapsibleVariants = cva("", {
 function Collapsible({
   className,
   variant,
+  open,
+  defaultOpen,
+  disabled,
   ...props
 }: ComponentProps<typeof CollapsiblePrimitive.Root> &
   VariantProps<typeof collapsibleVariants>) {
+  const [localOpen, setLocalOpen] = useState(defaultOpen ?? false);
+  const contentId = useId();
+  const resolvedOpen = open ?? localOpen;
   return (
-    <CollapsiblePrimitive.Root
-      data-slot="collapsible"
-      className={cn(collapsibleVariants({ variant }), className)}
-      {...props}
-    />
+    <CollapsibleStateContext.Provider
+      value={{ open: resolvedOpen, disabled: disabled ?? false, contentId }}
+    >
+      <CollapsiblePrimitive.Root
+        data-slot="collapsible"
+        className={cn(collapsibleVariants({ variant }), className)}
+        {...props}
+        disabled={disabled}
+        open={resolvedOpen}
+        onOpenChange={(next) => {
+          if (open === undefined) setLocalOpen(next);
+          props.onOpenChange?.(next);
+        }}
+      />
+    </CollapsibleStateContext.Provider>
   );
 }
 

@@ -4,11 +4,7 @@ import {
 } from "@/lib/tab-recovery/history";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import {
-  createJSONStorage,
-  persist,
-  type StateStorage,
-} from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
@@ -41,6 +37,14 @@ import type {
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  cancelDeferredPersistOnRetarget,
+  createDeferredPersistStorage,
+} from "@/lib/persist/persist-options";
+import {
+  cancelDeferredJsonWrite,
+  persistNowOrThrow,
+} from "@/lib/persist/deferred-json-storage";
 import {
   completeLandingDraftDelete,
   isLandingDraftRetirementKey,
@@ -282,27 +286,17 @@ let hasAppliedDesktopProjection = false;
  */
 const imageAdoptionAttemptedDraftIds = new Set<string>();
 
-const landingDraftStorage: StateStorage = {
-  getItem: (name) => window.localStorage.getItem(name),
-  setItem: (name, value) => {
-    if (!localPersistenceEnabled) return;
-    window.localStorage.setItem(name, value);
-  },
-  removeItem: (name) => {
-    window.localStorage.removeItem(name);
-  },
-};
-function setLandingDraftLocalPersistenceEnabled(enabled: boolean): void {
-  localPersistenceEnabled = enabled;
-}
-
 export function setLandingDraftDesktopProjectionBridge(
   bridge: DesktopPerWindowProjectionBridge | null,
 ): void {
   desktopProjectionBridge = bridge;
   hasAppliedDesktopProjection = false;
   imageAdoptionAttemptedDraftIds.clear();
-  setLandingDraftLocalPersistenceEnabled(bridge === null);
+  localPersistenceEnabled = bridge === null;
+  if (!localPersistenceEnabled) {
+    const name = useLandingDraftStore.persist.getOptions().name;
+    if (name !== undefined) cancelDeferredJsonWrite(name);
+  }
 }
 
 export function applyLandingDraftDesktopProjection(
@@ -701,7 +695,14 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 
       installLandingDraft: (input) => {
         if (landingDraftIsRetired(input.id)) return false;
-        if (get().drafts.some((draft) => draft.id === input.id)) return false;
+        const persistName =
+          useLandingDraftStore.persist.getOptions().name ??
+          LANDING_DRAFT_PERSIST_KEY;
+        if (get().drafts.some((draft) => draft.id === input.id)) {
+          // A previous install may have reached memory but failed on disk.
+          persistNowOrThrow(persistName);
+          return false;
+        }
         const next: LandingDraftTab = {
           id: input.id,
           content: input.content,
@@ -720,6 +721,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
         }));
+        // Migration and failed-send recovery may retire the source next.
+        // Desktop callers retain their separate asynchronous projection barrier.
+        persistNowOrThrow(persistName);
         notifyDraftLocalEdit(input.id);
         scheduleLandingImageReconcile();
         return true;
@@ -847,7 +851,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // in-session navigate-away-and-back re-ingests that node (mount-time
         // re-entry in `landing-composer`). The "persisted landing drafts never
         // carry base64" invariant [Mechanism A] is enforced at the two true
-        // serialization seams instead — the persist `partialize` and
+        // serialization seams: the deferred persistence projection and
         // `projectLandingDraftForDesktop` — never here (a store that feeds a
         // remount is not a serialization sink).
         if (
@@ -977,7 +981,6 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     }),
     {
       ...basePersistOptions(LANDING_DRAFT_PERSIST_KEY),
-      storage: createJSONStorage(() => landingDraftStorage),
       // Serialization boundary [Mechanism A]: persisted landing drafts NEVER
       // carry base64. The in-memory `drafts` array is canonical and DOES hold a
       // paste's still-pending b64 node (so an in-session navigate-away-and-back
@@ -992,13 +995,19 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       // persisted mid-ingest would otherwise restore its caret against a
       // document one node shorter than the one those positions were measured
       // in.
-      partialize: (state) => ({
-        drafts: state.drafts.map((draft) => ({
-          ...draft,
-          ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
-        })),
-        activeDraftId: state.activeDraftId,
-      }),
+      storage: createDeferredPersistStorage<LandingDraftStoreState>(
+        (state) => ({
+          drafts: state.drafts.map((draft) => ({
+            ...draft,
+            ...stripBase64ImageNodesWithSelection(
+              draft.content,
+              draft.selection,
+            ),
+          })),
+          activeDraftId: state.activeDraftId,
+        }),
+        () => localPersistenceEnabled,
+      ),
       // Sanitize the localStorage payload on rehydration the same way
       // `readProjectedDrafts` sanitizes the desktop projection, so a legacy tab
       // (pre-`content` retype / pre-`workspace`) can't rehydrate a shape whose
@@ -1021,6 +1030,8 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     },
   ),
 );
+
+cancelDeferredPersistOnRetarget(useLandingDraftStore);
 
 // The registry intentionally has no import back into this persisted source.
 // Wiring it after store construction keeps the renderer-local runtime free of
@@ -1162,8 +1173,8 @@ function projectLandingDraftForDesktop(
   // Desktop serialization seam [Mechanism A]: strip a paste's still-pending b64
   // node first so the projected draft is hash-only — this covers BOTH the store
   // subscription and the [B1] empty-inbound guard re-projection (both route
-  // through here). Same narrowed accepted imperfection as the persist
-  // `partialize`, and the same caret rule: a strip that removes a node shifts
+  // through here). The deferred persistence projection has the same accepted
+  // imperfection and caret rule: a strip that removes a node shifts
   // every position after it, so the selection is taken from the stripped pair
   // rather than from `draft` directly.
   const stripped = stripBase64ImageNodesWithSelection(

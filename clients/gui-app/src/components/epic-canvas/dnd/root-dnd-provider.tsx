@@ -1,3 +1,4 @@
+import { HORIZONTAL_STRIP_AXIS, type StripAxis } from "./strip-axis";
 /**
  * THE single DndContext for the app. Mounted once in `app-shell.tsx`,
  * wrapping the header tab strip and every route surface, so canvas tiles,
@@ -50,6 +51,7 @@ import {
   isLeftPanelDropNoop,
   resolveCanvasDropPreview,
   resolveOverlayTileForSource,
+  type SidebarReparentDropInput,
   type HeaderStripDropResult,
   type ResolvedEpicCanvasDrop,
 } from "@/components/epic-canvas/dnd/root-dnd-commits";
@@ -151,10 +153,7 @@ import {
   readHeaderStripSlots,
   type HeaderStripDeclaration,
 } from "@/components/layout/tabs/header-strip-geometry";
-import {
-  pulledOutOfStrip,
-  type StripAxis,
-} from "@/components/epic-canvas/dnd/strip-axis";
+import { pulledOutOfStrip } from "@/components/epic-canvas/dnd/strip-axis";
 import { pointIsOutsideViewport } from "@/components/epic-canvas/dnd/viewport-release";
 import {
   readTabDetachHandler,
@@ -1012,6 +1011,7 @@ function fillTopLevelSlot(
 }
 
 function commitHeaderTabDrop(input: {
+  readonly axis: StripAxis;
   readonly event: DragEndEvent;
   readonly navigate: UseNavigateResult<string>;
   readonly geometry: StripDragGeometry | null;
@@ -1078,7 +1078,7 @@ function commitHeaderTabDrop(input: {
   // Arm BEFORE the move is written: the strip items re-base their transform
   // against the new baseline in the layout effect of the render this causes, so
   // the flag has to be set by the time that render commits.
-  armHeaderStripCommitHandoff();
+  armHeaderStripCommitHandoff(input.axis);
   // Read before the move: it repairs the layout, which drops a group left with
   // no tab, and an organization's group emptied by this very drop is still the
   // one the task is leaving.
@@ -1242,7 +1242,7 @@ function commitHeaderStripPair(
   // The pair takes its target's place, starting where the target is drawn, and
   // the rows around it settle from where they are, as a reorder's do.
   const session = activeHeaderStripSession;
-  armHeaderStripCommitHandoff();
+  armHeaderStripCommitHandoff(session?.axis ?? HORIZONTAL_STRIP_AXIS);
   if (session !== null) {
     seedHeaderStripItemFrom(splitId, tabItemId(target.targetRef), session.axis);
   }
@@ -1463,6 +1463,7 @@ function commitOrdinaryDrop(input: {
   const headerDragState = dndStore.headerStripDragState;
   if (input.source === null) {
     commitHeaderTabDrop({
+      axis: activeHeaderStripSession?.axis ?? HORIZONTAL_STRIP_AXIS,
       event: input.event,
       navigate: input.navigate,
       geometry: activeHeaderStripSession?.geometry ?? null,
@@ -1504,6 +1505,47 @@ function isAtViewportEdge(point: PointLike | null): boolean {
 
 interface RootDndProviderProps {
   readonly children: ReactNode;
+}
+
+function commitReparentAndEndGesture(
+  input: SidebarReparentDropInput,
+  endGesture: () => void,
+): void {
+  try {
+    // The rejection is caught by `.catch`, NOT by the `catch` below.
+    // The commit is async now, so it has no synchronous throw and the
+    // enclosing `catch` can never see its failure - a `void`ed call
+    // would lose the log entirely and surface as an unhandled rejection.
+    //
+    // `.catch` rather than `await`, and that is the whole point at THIS
+    // site: awaiting would hold the `finally` until the commit settled,
+    // and the `finally` is the gesture cleanup that "has to survive the
+    // failure" per the comment above. Cleanup stays synchronous; only
+    // the logging waits.
+    void commitSidebarReparentDrop(input).catch((error: unknown) => {
+      appLogger.error(
+        "[epic-dnd] sidebar reparent commit rejected; the gesture already ended",
+        {
+          epicId: input.epicId,
+          sourceNodeId: input.sourceNodeId,
+          newParentId: input.newParentId,
+        },
+        error,
+      );
+    });
+  } catch (error: unknown) {
+    appLogger.error(
+      "[epic-dnd] sidebar reparent commit threw; ending the gesture anyway",
+      {
+        epicId: input.epicId,
+        sourceNodeId: input.sourceNodeId,
+        newParentId: input.newParentId,
+      },
+      error,
+    );
+  } finally {
+    endGesture();
+  }
 }
 
 export function RootDndProvider(props: RootDndProviderProps) {
@@ -1828,18 +1870,8 @@ export function RootDndProvider(props: RootDndProviderProps) {
         // Rethrowing would defeat the point, since the cleanup is exactly
         // what has to survive the failure, so the error is logged and
         // swallowed and the commit's own handler owns anything user-facing.
-        try {
-          // The rejection is caught by `.catch`, NOT by the `catch` below.
-          // The commit is async now, so it has no synchronous throw and the
-          // enclosing `catch` can never see its failure - a `void`ed call
-          // would lose the log entirely and surface as an unhandled rejection.
-          //
-          // `.catch` rather than `await`, and that is the whole point at THIS
-          // site: awaiting would hold the `finally` until the commit settled,
-          // and the `finally` is the gesture cleanup that "has to survive the
-          // failure" per the comment above. Cleanup stays synchronous; only
-          // the logging waits.
-          void commitSidebarReparentDrop({
+        commitReparentAndEndGesture(
+          {
             hostBinding,
             epicId: reparent.epicId,
             sourceNodeId: reparent.sourceNodeId,
@@ -1847,30 +1879,9 @@ export function RootDndProvider(props: RootDndProviderProps) {
             panelId: reparent.panelId,
             viewTabId: reparent.viewTabId,
             queryClient,
-          }).catch((error: unknown) => {
-            appLogger.error(
-              "[epic-dnd] sidebar reparent commit rejected; the gesture already ended",
-              {
-                epicId: reparent.epicId,
-                sourceNodeId: reparent.sourceNodeId,
-                newParentId: reparent.newParentId,
-              },
-              error,
-            );
-          });
-        } catch (error: unknown) {
-          appLogger.error(
-            "[epic-dnd] sidebar reparent commit threw; ending the gesture anyway",
-            {
-              epicId: reparent.epicId,
-              sourceNodeId: reparent.sourceNodeId,
-              newParentId: reparent.newParentId,
-            },
-            error,
-          );
-        } finally {
-          endGesture();
-        }
+          },
+          endGesture,
+        );
         return;
       }
       if (composerDrop !== null) {

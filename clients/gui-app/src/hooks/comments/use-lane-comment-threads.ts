@@ -184,7 +184,7 @@ export function useEpicLaneCommentThreadsDroppedAt(): number | null {
       handle !== null &&
       handle.store.getState().recordsTransportStatus === "open";
     if (live) droppedAtRef.current = null;
-    else droppedAtRef.current ??= Date.now();
+    else if (droppedAtRef.current === null) droppedAtRef.current = Date.now();
     return droppedAtRef.current;
   }, [handle]);
   return useSyncExternalStore(subscribe, getSnapshot);

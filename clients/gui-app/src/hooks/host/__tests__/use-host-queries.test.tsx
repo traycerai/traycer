@@ -134,11 +134,61 @@ describe("useHostQueries enabled handling", () => {
 
     expect(result.current).toBe(combined);
   });
+
+  it("forwards `subscribed:false` to the top-level useQueries call, detaching the observer with no extra request", async () => {
+    const fixture = createHostQueriesFixture();
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+
+    const { rerender } = renderHook(
+      ({ subscribed }: { subscribed: boolean }) =>
+        useHostQueries({
+          client,
+          cacheKeyIdentity: undefined,
+          requests: [{ method: "host.status", params: {} }],
+          options: { enabled: true, subscribed },
+        }),
+      { wrapper: fixture.Wrapper, initialProps: { subscribed: true } },
+    );
+
+    await waitFor(() => {
+      expect(fixture.requestCount.value).toBe(1);
+    });
+    const query = fixture.queryClient
+      .getQueryCache()
+      .getAll()
+      .find((entry) => entry.queryKey.includes("host.status"));
+    if (query === undefined) {
+      throw new Error("Expected the host.status query to be cached");
+    }
+    // Attached: this mount's own observer is live.
+    expect(query.getObserversCount()).toBe(1);
+
+    rerender({ subscribed: false });
+    expect(query.getObserversCount()).toBe(0);
+
+    // `refetchType: "active"` (the default) only refetches a query with a
+    // live observer. Zero observers means zero refetch - proving the
+    // detach is real, not merely that this invalidate happened to skip it.
+    // Only the top-level `useQueries({ subscribed })` field can detach an
+    // observer; the per-query field TanStack silently drops has no effect
+    // at all, which is exactly the bug this pins.
+    await fixture.queryClient.invalidateQueries({
+      queryKey: query.queryKey,
+    });
+    expect(fixture.requestCount.value).toBe(1);
+  });
 });
 
 function createHostQueriesFixture(): {
   readonly client: HostClient<HostRpcRegistry>;
   readonly requestCount: { value: number };
+  readonly queryClient: QueryClient;
   readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
   const queryClient = new QueryClient({
@@ -186,5 +236,5 @@ function createHostQueriesFixture(): {
       {props.children}
     </QueryClientProvider>
   );
-  return { client, requestCount, Wrapper };
+  return { client, requestCount, queryClient, Wrapper };
 }

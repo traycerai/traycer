@@ -54,12 +54,13 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import { CHAT_TREE_MESSAGE_HITS_NONE } from "@/components/epic-canvas/sidebar/epic-sidebar-message-hits-state";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
@@ -163,6 +164,28 @@ vi.mock(
     };
   },
 );
+
+/**
+ * Counts real cascade-count walks per root id, delegating to the actual
+ * implementation so the counts a delete dialog shows stay genuine.
+ *
+ * Every row currently subscribes to this walk unconditionally, so mounting the
+ * panel alone walks all forty rows before any delete affordance is ever
+ * touched - the pin below is written against the invariant the confirmDeleteOpen
+ * gate must produce, not against today's behaviour.
+ */
+const cascadeWalks = vi.hoisted(() => new Map<string, number>());
+vi.mock("@/lib/epic-tree-cascade", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/epic-tree-cascade")>();
+  return {
+    ...actual,
+    computeDescendantCountsFromTree: (tree: TreeSlice, rootId: string) => {
+      cascadeWalks.set(rootId, (cascadeWalks.get(rootId) ?? 0) + 1);
+      return actual.computeDescendantCountsFromTree(tree, rootId);
+    },
+  };
+});
 
 const EPIC_ID = "epic-chat-row-node-churn";
 const TAB_ID = "tab-chat-row";
@@ -272,6 +295,7 @@ describe("a chat row's tree-node subscription", () => {
     for (const handle of opened.splice(0)) handle.dispose();
     cleanup();
     rowRenders.clear();
+    cascadeWalks.clear();
   });
 
   function renderPanel(): OpenedSession {
@@ -439,5 +463,56 @@ describe("a chat row's tree-node subscription", () => {
     });
 
     expect(rowRenders.get(target) ?? 0).toBeGreaterThan(before);
+  });
+
+  it("walks cascade counts only while a row's delete dialog is open", async () => {
+    // Pinning the confirmDeleteOpen gate: today every row computes its cascade
+    // counts unconditionally (this is the pre-fix walk-on-mount case below),
+    // which is the same class of defect as the rest of this file - a per-row
+    // subscription that fires on every notification regardless of whether the
+    // row needs the answer right now. Only the confirm dialog needs it, and
+    // only while it is open.
+    const session = renderPanel();
+    const target = ROW_IDS[0];
+
+    // 1. Idle mount: no row's delete dialog is open, so nothing should have
+    // walked the tree for cascade counts yet.
+    expect(cascadeWalks.size).toBe(0);
+
+    // 2. An unrelated store notification that changes the TARGET's real
+    // descendant count (a nested chat is added under it) must still not walk
+    // anything - the dialog is still closed.
+    act(() => {
+      session.handle.doc.transact(() => {
+        const chats = chatsMap(session.handle);
+        const child = new Y.Map<unknown>();
+        child.set("id", "chat-1-child");
+        child.set("title", "Nested chat");
+        child.set("parentId", target);
+        child.set("createdAt", 2);
+        child.set("updatedAt", 2);
+        child.set("hostId", "host-a");
+        child.set("archivedAt", null);
+        child.set("messages", new Y.Array<unknown>());
+        chats.set("chat-1-child", child);
+      });
+    });
+    expect(cascadeWalks.get(target) ?? 0).toBe(0);
+
+    // 3. Opening the row's delete dialog must walk it, and must reflect the
+    // CURRENT tree - the one nested chat added above.
+    fireEvent.pointerDown(screen.getByTestId(`epic-sidebar-more-${target}`), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByTestId(`epic-sidebar-delete-${target}`));
+
+    expect(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("confirm-cascade-meta").textContent).toContain(
+      "1 agent",
+    );
+    expect(cascadeWalks.get(target) ?? 0).toBeGreaterThan(0);
   });
 });

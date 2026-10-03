@@ -11,10 +11,8 @@ import {
   type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import {
-  useRenderedMessages,
-  type RenderedMessagesDisplayContext,
-} from "@/stores/chats/rendered-messages";
+import { type RenderedMessagesDisplayContext } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import diag4Fixture from "./fixtures/windowed-late-peer-reserve-diag4-frames.json";
 import diag5ProdFixture from "./fixtures/windowed-late-peer-reserve-diag5-prod-frames.json";
 import diag5HeldFixture from "./fixtures/windowed-late-peer-reserve-diag5-held-frames.json";

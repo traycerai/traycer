@@ -6,10 +6,9 @@ import {
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
 /**
- * Whether THIS window is on screen (shown and not minimised), as main sees it.
- * Renderer parking cannot read it from the Page Visibility API in this app:
- * every window runs with `backgroundThrottling: false`, which keeps
- * `document.visibilityState` at `"visible"` through minimise and hide.
+ * Main's shown/not-minimised answer. Desktop keeps throttling disabled for
+ * video receiver stats (#1613) and transport keepalives, so DOM visibility
+ * alone cannot report hide/minimise.
  */
 export interface WindowVisibilityBridgeSurface {
   /** The startup read; main's replay fires before any renderer subscription. */

@@ -1,3 +1,7 @@
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
@@ -56,12 +60,12 @@ export function subscribeHostNotificationPresence(
   }
   window.addEventListener("focus", sendPresence);
   window.addEventListener("blur", sendPresence);
-  document.addEventListener("visibilitychange", sendPresence);
+  const unsubscribeVisibility = subscribeDocumentVisibility(sendPresence);
   return () => {
     unsubscribeCanvas();
     window.removeEventListener("focus", sendPresence);
     window.removeEventListener("blur", sendPresence);
-    document.removeEventListener("visibilitychange", sendPresence);
+    unsubscribeVisibility();
   };
 }
 
@@ -90,7 +94,11 @@ export function readFocusedHostNotificationPresence(): FocusedHostNotificationPr
 }
 
 export function isDocumentFocused(): boolean {
-  return typeof document !== "undefined" && document.hasFocus();
+  return (
+    typeof document !== "undefined" &&
+    isDocumentVisible() &&
+    document.hasFocus()
+  );
 }
 
 function readActiveHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {

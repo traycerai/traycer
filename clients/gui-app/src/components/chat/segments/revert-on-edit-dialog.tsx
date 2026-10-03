@@ -42,12 +42,10 @@ interface RevertOnEditDialogProps {
  * no in-dialog pending state.
  */
 export function RevertOnEditDialog(props: RevertOnEditDialogProps) {
-  return (
-    <RevertOnEditDialogContent
-      key={props.open ? "open" : "closed"}
-      {...props}
-    />
-  );
+  const [everOpened, setEverOpened] = useState(props.open);
+  if (props.open && !everOpened) setEverOpened(true);
+  if (!props.open && !everOpened) return null;
+  return <RevertOnEditDialogContent {...props} />;
 }
 
 function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
@@ -60,6 +58,11 @@ function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
     queuedCount,
   } = props;
   const [revertArtifacts, setRevertArtifacts] = useState(true);
+  const [previousOpen, setPreviousOpen] = useState(open);
+  if (open !== previousOpen) {
+    setPreviousOpen(open);
+    if (open) setRevertArtifacts(true);
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent

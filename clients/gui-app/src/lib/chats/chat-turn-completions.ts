@@ -3,12 +3,17 @@ import {
   type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import {
+  getChatSessionRegistry,
+  getChatSessionHandleHostId,
+} from "@/lib/registries/chat-session-registry";
 import { reconcileStoreSubscriptions } from "@/lib/registries/reconcile-store-subscriptions";
 
 const CHAT_REGISTRY = getChatSessionRegistry();
 
 export interface ChatTurnCompletion {
+  readonly hostId: string | null;
+  readonly profileId: string | null;
   readonly epicId: string;
   readonly chatId: string;
   readonly chatTitle: string | null;
@@ -87,23 +92,31 @@ function subscribeHandleCompletions(
   );
   let runningHarnessId: GuiHarnessId | null =
     handle.store.getState().activeTurn?.harnessId ?? null;
+  let runningProfileId = handle.store.getState().activeTurn?.profileId ?? null;
   return handle.store.subscribe((state, prevState) => {
-    if (!turnInputsChanged(prevState, state)) {
+    if (
+      !turnInputsChanged(prevState, state) &&
+      prevState.activeTurn === state.activeTurn
+    ) {
       return;
     }
     if (state.activeTurn !== null) {
       runningHarnessId = state.activeTurn.harnessId;
+      runningProfileId = state.activeTurn.profileId;
     }
     const result = advanceTurnNotify(notifyState, toChatTurnPhase(state));
     notifyState = result.state;
     if (result.completed) {
       onComplete({
+        hostId: getChatSessionHandleHostId(handle),
+        profileId: runningProfileId,
         epicId: state.epicId,
         chatId: state.chatId,
         chatTitle: state.chat?.title ?? null,
         harnessId: runningHarnessId,
       });
       runningHarnessId = null;
+      runningProfileId = null;
     }
   });
 }

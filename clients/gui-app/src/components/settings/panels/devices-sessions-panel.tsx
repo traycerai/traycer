@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
@@ -38,6 +38,7 @@ import {
 } from "@/lib/auth/step-up-prompt";
 import { useHostBinding } from "@/lib/host";
 import { cn } from "@/lib/utils";
+import { useSampledNow } from "@/lib/relative-time";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const SESSION_ABSOLUTE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -81,12 +82,12 @@ function sessionDisplayLine(session: UserSessionListItem): string {
   return parts.length === 0 ? "Session details unavailable" : parts.join(" / ");
 }
 
-function formatRelativeTime(value: string): string {
+function formatRelativeTime(value: string, now: number): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
     return "unknown";
   }
-  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1_000));
+  const seconds = Math.max(0, Math.round((now - timestamp) / 1_000));
   if (seconds < 60) {
     return "just now";
   }
@@ -105,17 +106,20 @@ function formatRelativeTime(value: string): string {
   return SESSION_ABSOLUTE_TIME_FORMATTER.format(new Date(timestamp));
 }
 
-function sessionStatusLine(session: UserSessionListItem): string {
+function sessionStatusLine(session: UserSessionListItem, now: number): string {
   if (session.revoked) {
     return session.revokedAt === null
       ? "Signed out"
-      : `Signed out ${formatRelativeTime(session.revokedAt)}`;
+      : `Signed out ${formatRelativeTime(session.revokedAt, now)}`;
   }
-  return `Last seen ${formatRelativeTime(session.lastSeenAt)}`;
+  return `Last seen ${formatRelativeTime(session.lastSeenAt, now)}`;
 }
 
-function sessionTimelineLine(session: UserSessionListItem): string {
-  return `Created ${formatRelativeTime(session.createdAt)} · ${sessionStatusLine(session)}`;
+function sessionTimelineLine(
+  session: UserSessionListItem,
+  now: number,
+): string {
+  return `Created ${formatRelativeTime(session.createdAt, now)} · ${sessionStatusLine(session, now)}`;
 }
 
 function sortSessions(
@@ -149,6 +153,70 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
       return <Server className={className} />;
     default:
       return <HelpCircle className={className} />;
+  }
+}
+
+async function revokeSession({
+  session,
+  mutation,
+  stepUpCredentialRef,
+  requestCredential,
+  signOut,
+  setActionError,
+  setActiveSessionFamilyId,
+}: {
+  session: UserSessionListItem;
+  mutation: SessionMutation;
+  stepUpCredentialRef: RefObject<StepUpCredential | null>;
+  requestCredential: () => Promise<StepUpCredential>;
+  signOut: (() => Promise<void>) | null;
+  setActionError: (message: string | null) => void;
+  setActiveSessionFamilyId: (id: string | null) => void;
+}): Promise<void> {
+  try {
+    await runStepUpProtectedAction({
+      getCredential: () => stepUpCredentialRef.current,
+      setCredential: (credential) => {
+        stepUpCredentialRef.current = credential;
+      },
+      requestCredential: () => requestCredential(),
+      action: (useStepUpCredential) =>
+        mutation.mutateAsync({
+          familyId: session.familyId,
+          useStepUpCredential,
+        }),
+      nowMs: () => Date.now(),
+    });
+    if (session.current && signOut !== null) {
+      await signOut();
+    }
+  } catch (error) {
+    setActionError(actionErrorFromStepUpError(error));
+  } finally {
+    setActiveSessionFamilyId(null);
+  }
+}
+
+async function revokeEverySession(
+  requestCredential: () => Promise<StepUpCredential>,
+  revokeAll: () => Promise<unknown>,
+  signOut: () => Promise<void>,
+  setActionError: (message: string | null) => void,
+): Promise<void> {
+  try {
+    await requestCredential();
+    try {
+      await revokeAll();
+    } catch (error) {
+      if (!isStepUpRequiredError(error)) {
+        throw error;
+      }
+      await requestCredential();
+      await revokeAll();
+    }
+    await signOut();
+  } catch (error) {
+    setActionError(actionErrorFromStepUpError(error));
   }
 }
 
@@ -216,28 +284,15 @@ export function DevicesSessionsPanel() {
       }
       setActionError(null);
       setActiveSessionFamilyId(session.familyId);
-      try {
-        await runStepUpProtectedAction({
-          getCredential: () => stepUpCredentialRef.current,
-          setCredential: (credential) => {
-            stepUpCredentialRef.current = credential;
-          },
-          requestCredential: () => requestStepUpCredential("session-revoke"),
-          action: (useStepUpCredential) =>
-            mutation.mutateAsync({
-              familyId: session.familyId,
-              useStepUpCredential,
-            }),
-          nowMs: () => Date.now(),
-        });
-        if (session.current && binding !== null) {
-          await binding.auth.signOut();
-        }
-      } catch (error) {
-        setActionError(actionErrorFromStepUpError(error));
-      } finally {
-        setActiveSessionFamilyId(null);
-      }
+      await revokeSession({
+        session,
+        mutation,
+        stepUpCredentialRef,
+        requestCredential: () => requestStepUpCredential("session-revoke"),
+        signOut: binding === null ? null : () => binding.auth.signOut(),
+        setActionError,
+        setActiveSessionFamilyId,
+      });
     },
     [activeSessionFamilyId, binding, requestStepUpCredential],
   );
@@ -247,21 +302,12 @@ export function DevicesSessionsPanel() {
       return;
     }
     setActionError(null);
-    try {
-      await requestStepUpCredential("global-revoke");
-      try {
-        await revokeAllSessions.mutateAsync(undefined);
-      } catch (error) {
-        if (!isStepUpRequiredError(error)) {
-          throw error;
-        }
-        await requestStepUpCredential("global-revoke");
-        await revokeAllSessions.mutateAsync(undefined);
-      }
-      await binding.auth.signOut();
-    } catch (error) {
-      setActionError(actionErrorFromStepUpError(error));
-    }
+    await revokeEverySession(
+      () => requestStepUpCredential("global-revoke"),
+      () => revokeAllSessions.mutateAsync(undefined),
+      () => binding.auth.signOut(),
+      setActionError,
+    );
   }, [binding, requestStepUpCredential, revokeAllSessions]);
 
   return (
@@ -392,6 +438,13 @@ function DevicesSessionsSkeleton() {
   );
 }
 
+function SessionTimelineLabel(props: {
+  readonly session: UserSessionListItem;
+}) {
+  const now = useSampledNow();
+  return sessionTimelineLine(props.session, now);
+}
+
 function SessionRow(props: {
   readonly session: UserSessionListItem;
   readonly actionBusy: boolean;
@@ -430,7 +483,11 @@ function SessionRow(props: {
           </p>
           <p className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
             <Clock className="size-3.5" />
-            {pending ? "Signing out" : sessionTimelineLine(session)}
+            {pending ? (
+              "Signing out"
+            ) : (
+              <SessionTimelineLabel session={session} />
+            )}
           </p>
         </div>
       </div>

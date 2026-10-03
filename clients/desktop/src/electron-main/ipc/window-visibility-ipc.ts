@@ -5,23 +5,10 @@ import {
 import type { IpcManagedWindow, RunnerIpcBridge } from "./runner-ipc-bridge";
 
 /**
- * Whether a window is on screen at all, as MAIN sees it: shown and not
- * minimised. Renderer parking needs this from main because the renderer's own
- * Page Visibility API cannot supply it here. Every GUI window is created with
- * `backgroundThrottling: false` (`windows/window-factory.ts`, for the WebRTC
- * receiver), and Electron documents that setting as keeping
- * `document.visibilityState` at `"visible"` through minimise, hide and
- * occlusion alike. So the signal this app can actually observe is the
- * BrowserWindow's own `minimize` / `restore` / `show` / `hide` transitions,
- * which the window registry already relays as `geometry` and `change`.
- *
- * Occlusion (a window fully covered by another app's) is NOT detected on any
- * platform; a covered window keeps its epics resident, which is the pre-existing
- * cost of the throttling choice and is accepted.
- *
- * `isMinimized` is optional on {@link IpcManagedWindow} so test doubles need
- * not model it; absent, the window counts as not minimised, which fails toward
- * NOT parking.
+ * Main's shown/not-minimised signal supplies visibility while desktop keeps
+ * background throttling disabled for receiver stats (#1613) and transport
+ * keepalives. DOM visibility stays visible; native occlusion is unavailable.
+ * An absent isMinimized on a test double fails toward keeping the window live.
  */
 export function windowOnScreen(window: IpcManagedWindow): boolean {
   if (window.isDestroyed()) return false;

@@ -388,7 +388,8 @@ function useAutosaveStatusPresentation(
   useEffect(() => {
     let timeoutId: number | null = null;
     const revealSaving = (): void => {
-      savingVisibleAtRef.current ??= Date.now();
+      if (savingVisibleAtRef.current === null)
+        savingVisibleAtRef.current = Date.now();
       setShowSaving(true);
     };
 

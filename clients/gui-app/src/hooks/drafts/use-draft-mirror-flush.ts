@@ -1,3 +1,7 @@
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { useEffect } from "react";
 import { flushDraftMirrorSessions } from "@/lib/drafts/draft-mirror-coordinator";
 
@@ -25,17 +29,17 @@ function flushOnce(): void {
 export function useDraftMirrorFlush(): void {
   useEffect(() => {
     const onHide = (): void => {
-      if (document.visibilityState !== "hidden") return;
+      if (isDocumentVisible()) return;
       flushOnce();
     };
     const onBlur = (): void => {
       flushOnce();
     };
-    document.addEventListener("visibilitychange", onHide);
+    const unsubscribeVisibility = subscribeDocumentVisibility(onHide);
     window.addEventListener("blur", onBlur);
     window.addEventListener("pagehide", onBlur);
     return () => {
-      document.removeEventListener("visibilitychange", onHide);
+      unsubscribeVisibility();
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("pagehide", onBlur);
     };

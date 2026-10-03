@@ -108,6 +108,20 @@ export interface ChatSessionRegistryOptions {
  */
 export class ChatSessionRegistry {
   private readonly sessions: SessionRegistry<ChatSessionStoreHandle>;
+  private readonly transientHandles = new WeakSet<ChatSessionStoreHandle>();
+
+  markTransient(handle: ChatSessionStoreHandle): void {
+    this.transientHandles.add(handle);
+  }
+
+  markPresented(handle: ChatSessionStoreHandle): void {
+    this.transientHandles.delete(handle);
+  }
+
+  isTransient(handle: ChatSessionStoreHandle): boolean {
+    return this.transientHandles.has(handle);
+  }
+
   // The shared policy receives a handle, not its key. Keep the acquire-time
   // host beside that handle so the activity verdict cannot use another host's
   // narrow union for a same-id chat. Weak keys do not extend handle lifetime.
@@ -115,6 +129,22 @@ export class ChatSessionRegistry {
     ChatSessionStoreHandle,
     string
   >();
+
+  private hasUnclassifiedTransientTurn(
+    handle: ChatSessionStoreHandle,
+  ): boolean {
+    if (!this.transientHandles.has(handle)) return false;
+    const state = handle.store.getState();
+    // Before the first snapshot, access is unknown rather than viewer-only.
+    // Honor positive activity for this session's host without widening the
+    // known-viewer policy or treating an absent activity verdict as work.
+    if (state.snapshotLoaded || state.access !== null) return false;
+    const hostId = this.hostIdByHandle.get(handle);
+    return (
+      hostId !== undefined &&
+      agentActivityTurnForHost(handle.epicId, handle.chatId, hostId) === true
+    );
+  }
 
   constructor(options: ChatSessionRegistryOptions) {
     this.sessions = createSessionRegistry<ChatSessionStoreHandle>({
@@ -137,13 +167,24 @@ export class ChatSessionRegistry {
         maxActiveDeferMs: MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
         // A release stamps `lastUsedAt`, which is what the overflow sort reads.
         refreshOrderOnRelease: true,
-        // Every chat session is worth keeping warm; this plane has no
-        // unreattachable state.
-        retainWhenIdle: () => true,
-        hasActiveWork: (handle) =>
+        // Only discard abandoned first loads after the LAST holder leaves.
+        // The park guard protects pending actions and last-copy restoration;
+        // the host activity guard covers a turn not yet seen on this stream.
+        retainWhenIdle: (handle) =>
+          !this.transientHandles.has(handle) ||
+          this.hasUnclassifiedTransientTurn(handle) ||
+          hasUnsettledChatWork(handle) ||
           chatCapHasActiveWork(handle, this.hostIdByHandle.get(handle) ?? null),
+        hasActiveWork: (handle) =>
+          chatCapHasActiveWork(
+            handle,
+            this.hostIdByHandle.get(handle) ?? null,
+          ) ||
+          this.hasUnclassifiedTransientTurn(handle) ||
+          (this.transientHandles.has(handle) && hasUnsettledChatWork(handle)),
         activeWorkReason: (handle) =>
-          hasActiveChatWork(handle, this.hostIdByHandle.get(handle) ?? null)
+          hasActiveChatWork(handle, this.hostIdByHandle.get(handle) ?? null) ||
+          this.hasUnclassifiedTransientTurn(handle)
             ? "chat-work"
             : "unrecorded-prompt",
         // NOTHING is gated here, and that is the correction rather than an
@@ -312,11 +353,19 @@ export class ChatSessionRegistry {
     hostId: string,
     handle: ChatSessionStoreHandle,
   ): void {
-    this.sessions.releaseHandle(
-      chatSessionKey(epicId, chatId, hostId),
-      handle,
-      "warm",
-    );
+    const release = (): void => {
+      this.sessions.releaseHandle(
+        chatSessionKey(epicId, chatId, hostId),
+        handle,
+        "warm",
+      );
+    };
+    // StrictMode's effect cleanup/setup pair runs synchronously in one React
+    // commit. Microtasks cannot interleave that JS stack, so the replacement
+    // holder is counted before this decrement; there is no elapsed-time guess.
+    // Actual unmount still releases at the end of the same turn.
+    if (this.transientHandles.has(handle)) queueMicrotask(release);
+    else release();
   }
 
   forceRelease(epicId: string, chatId: string, hostId: string): void {
@@ -330,6 +379,11 @@ export class ChatSessionRegistry {
         !chatCapHasActiveWork(
           entry.session,
           this.hostIdByHandle.get(entry.session) ?? null,
+        ) &&
+        !this.hasUnclassifiedTransientTurn(entry.session) &&
+        !(
+          this.transientHandles.has(entry.session) &&
+          hasUnsettledChatWork(entry.session)
         ),
     );
   }

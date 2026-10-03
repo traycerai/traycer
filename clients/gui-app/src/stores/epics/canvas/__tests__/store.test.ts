@@ -11,6 +11,10 @@ import {
 import { paneTabRefs, setActiveTab } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import {
+  cancelDeferredJsonWrites,
+  flushDeferredJsonWrite,
+} from "@/lib/persist/deferred-json-storage";
+import {
   collectPanes,
   findPaneById,
   replacePane,
@@ -91,6 +95,12 @@ beforeEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.persist.setOptions({ name: epicCanvasKey(null) });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  // The reset above itself queues a debounced local-persist write. Left
+  // pending, a test that seeds `window.localStorage` directly and then reads
+  // it back (`persist.getItem`/`rehydrate`) would have that seed clobbered by
+  // this stale empty-state write, since the storage adapter's `getItem`
+  // flushes any pending write for the key before reading.
+  cancelDeferredJsonWrites();
 });
 
 afterEach(() => {
@@ -135,7 +145,14 @@ function requireNestedFocusTarget(tabId: string): NestedFocusTarget {
   return target;
 }
 
+// Local persistence is debounced ~100ms now; call before reading
+// `window.localStorage` directly, mirroring the app's own lifecycle flush.
+function flushCanvasPersist(): void {
+  flushDeferredJsonWrite(useEpicCanvasStore.persist.getOptions().name ?? "");
+}
+
 function requirePersistedCanvasByTabId(): Readonly<Record<string, unknown>> {
+  flushCanvasPersist();
   const raw = window.localStorage.getItem(epicCanvasKey(null));
   if (raw === null) throw new Error("expected persisted canvas state");
   const parsed: unknown = JSON.parse(raw);
@@ -429,6 +446,7 @@ describe("epic canvas store header tabs", () => {
     store.markEpicTitlePending("epic-title", "Initial title");
     store.markChatTitlePending("chat-title", "Initial title");
 
+    flushCanvasPersist();
     const raw = window.localStorage.getItem(epicCanvasKey(null));
     if (raw === null) throw new Error("expected persisted canvas state");
     const persisted = JSON.parse(raw) as {
@@ -2201,7 +2219,7 @@ describe("closedTilePayloadsByTabId", () => {
     expect(cached[previewTile.instanceId]?.node).toEqual(previewTile);
   });
 
-  it("is session-only: not written into the zustand persist partialize surface", async () => {
+  it("is session-only: not written into the zustand persist partialize surface", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-session-only", "Session Only");
     store.openTileInTab(tabId, SPEC_A);
@@ -2215,8 +2233,10 @@ describe("closedTilePayloadsByTabId", () => {
       ]?.node,
     ).toEqual(SPEC_A);
 
-    // Flush any pending persist write.
-    await useEpicCanvasStore.persist.rehydrate();
+    // `rehydrate()` is a read path (disk is the incoming authority, it now
+    // cancels rather than flushes a pending local write) - flush explicitly
+    // to get the pending write onto disk before inspecting it.
+    flushCanvasPersist();
     const raw = window.localStorage.getItem(epicCanvasKey(null));
     expect(raw).not.toBeNull();
     if (raw === null) return;
@@ -3149,5 +3169,98 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
       anchorIndex: null,
       offset: 0,
     });
+  });
+});
+
+describe("epic canvas local persistence - deferred write account switch", () => {
+  it("flushes the outgoing account's pending write before retargeting to a new account", () => {
+    const keyA = epicCanvasKey("user-a");
+    const keyB = epicCanvasKey("user-b");
+    window.localStorage.removeItem(keyA);
+    window.localStorage.removeItem(keyB);
+
+    useEpicCanvasStore.persist.setOptions({ name: keyA });
+    useEpicCanvasStore.getState().openEpicTab("epic-a", "Epic A");
+
+    // The write is debounced - nothing on disk yet under key A.
+    expect(window.localStorage.getItem(keyA)).toBeNull();
+
+    // Retargeting to account B must commit the outgoing bucket first: the
+    // lifecycle bridge reads localStorage directly to decide whether a
+    // returning account has state, so a write left pending here would make
+    // account A look empty on its next sign-in.
+    useEpicCanvasStore.persist.setOptions({ name: keyB });
+
+    const persistedA: unknown = JSON.parse(
+      window.localStorage.getItem(keyA) ?? "null",
+    );
+    expect(persistedA).not.toBeNull();
+    const stateA = (persistedA as { state: { tabsById: object } }).state;
+    expect(Object.keys(stateA.tabsById)).toHaveLength(1);
+  });
+
+  it("cancels a pending write on clearStorage so a later lifecycle flush cannot resurrect it", () => {
+    const key = epicCanvasKey("user-clear");
+    window.localStorage.removeItem(key);
+    useEpicCanvasStore.persist.setOptions({ name: key });
+    useEpicCanvasStore.getState().openEpicTab("epic-clear", "Epic Clear");
+
+    // Still only debounced, not yet on disk.
+    expect(window.localStorage.getItem(key)).toBeNull();
+
+    useEpicCanvasStore.persist.clearStorage();
+    expect(window.localStorage.getItem(key)).toBeNull();
+
+    // A write cancelled by clearStorage must not come back through the
+    // shared pagehide/beforeunload/hidden lifecycle flush.
+    window.dispatchEvent(new Event("pagehide"));
+
+    expect(window.localStorage.getItem(key)).toBeNull();
+  });
+
+  it("lets a newer external disk write survive rehydrate over a queued local write, and stay put after a lifecycle flush", async () => {
+    const key = epicCanvasKey("user-external");
+    window.localStorage.removeItem(key);
+    useEpicCanvasStore.persist.setOptions({ name: key });
+
+    // A local mutation queues its own write - not yet on disk.
+    const localTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-local", "Local");
+    expect(window.localStorage.getItem(key)).toBeNull();
+
+    // A newer external write lands directly on disk (another window/process
+    // sharing this account's key), bypassing the debounce entirely.
+    const external = JSON.stringify({
+      state: {
+        tabsById: {
+          "tab-external": {
+            tabId: "tab-external",
+            epicId: "epic-external",
+            name: "External",
+          },
+        },
+        openTabOrder: ["tab-external"],
+        activeTabId: "tab-external",
+        mostRecentTabIdByEpicId: { "epic-external": "tab-external" },
+        artifactTreeByEpicId: {},
+      },
+      version: 1,
+    });
+    window.localStorage.setItem(key, external);
+
+    // Rehydration treats disk as the incoming authority: the queued local
+    // write must not overwrite the newer external blob before it's read.
+    await useEpicCanvasStore.persist.rehydrate();
+
+    const state = useEpicCanvasStore.getState();
+    expect(state.openTabOrder).toEqual(["tab-external"]);
+    expect(state.tabsById["tab-external"]).toBeDefined();
+    expect(state.tabsById[localTabId]).toBeUndefined();
+
+    // The cancelled local write must not resurrect and clobber the external
+    // blob through the shared lifecycle flush either.
+    window.dispatchEvent(new Event("pagehide"));
+    expect(window.localStorage.getItem(key)).toBe(external);
   });
 });

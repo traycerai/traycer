@@ -17,9 +17,46 @@ import {
   unbindComposerDraftHost,
 } from "@/lib/drafts/draft-mirror-coordinator";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import {
+  mentionPlainTextFromAttrs,
+  slashCommandPlainTextFromAttrs,
+} from "@/lib/composer/tiptap-json-content";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
+import { isSuggestionPlaceholderDocument } from "./prompt-suggestion";
+
+function memoizeContentPredicate(predicate: (content: JsonContent) => boolean) {
+  let previousContent: JsonContent | null = null;
+  let previousResult = false;
+  return (content: JsonContent): boolean => {
+    if (content !== previousContent) {
+      previousResult = predicate(content);
+      previousContent = content;
+    }
+    return previousResult;
+  };
+}
+
+function composerNodeHasText(node: JsonContent): boolean {
+  switch (node.type) {
+    case "text":
+      return /\S/u.test(node.text ?? "");
+    case "mention":
+      return mentionPlainTextFromAttrs(node.attrs).length > 0;
+    case "slashCommand":
+      return slashCommandPlainTextFromAttrs(node.attrs).length > 0;
+    case "blockquote":
+    case "sourcedQuote":
+      // Even an empty quote projects to the non-whitespace prefix `>`.
+      return true;
+    case "hardBreak":
+    case "imageAttachment":
+    case "attachmentGroup":
+      return false;
+    default:
+      return node.content?.some(composerNodeHasText) ?? false;
+  }
+}
 
 interface UseChatComposerDraftArgs {
   readonly chatId: string;
@@ -53,23 +90,36 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
   const initialContent = initialDraft.content;
   const initialSelection = initialDraft.selection;
 
-  const draftContent = useComposerDraftStore(
-    (state) => state.drafts[args.chatId]?.content ?? initialContent,
-  );
   const draftResetEpoch = useComposerDraftStore(
     (state) => state.drafts[args.chatId]?.resetEpoch ?? 0,
   );
-  const draftHasText = useMemo(
+  // Selectors run on every store write, including another chat's keystrokes.
+  // Draft content is immutable, so unchanged documents need no traversal.
+  const hasText = useMemo(
     () =>
-      extractPlainTextFromComposerJSONContent(draftContent).trim().length > 0,
-    [draftContent],
+      memoizeContentPredicate(
+        (content) => content.content?.some(composerNodeHasText) ?? false,
+      ),
+    [],
   );
-  const draftAnnotationCount = useComposerDraftStore(
-    (state) => state.drafts[args.chatId]?.browserAnnotations.length ?? 0,
+  const hasImages = useMemo(
+    () => memoizeContentPredicate(containsImageAtoms),
+    [],
   );
-  const draftHasImages = useMemo(
-    () => containsImageAtoms(draftContent) || draftAnnotationCount > 0,
-    [draftContent, draftAnnotationCount],
+  const draftHasText = useComposerDraftStore((state) =>
+    hasText(state.drafts[args.chatId]?.content ?? initialContent),
+  );
+  const isPlaceholder = useMemo(
+    () => memoizeContentPredicate(isSuggestionPlaceholderDocument),
+    [],
+  );
+  const draftIsSuggestionPlaceholder = useComposerDraftStore((state) =>
+    isPlaceholder(state.drafts[args.chatId]?.content ?? initialContent),
+  );
+  const draftHasImages = useComposerDraftStore(
+    (state) =>
+      (state.drafts[args.chatId]?.browserAnnotations.length ?? 0) > 0 ||
+      hasImages(state.drafts[args.chatId]?.content ?? initialContent),
   );
 
   const handleDocumentChange = useCallback(
@@ -145,9 +195,9 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
   return {
     initialContent,
     initialSelection,
-    draftContent,
     draftHasText,
     draftHasImages,
+    draftIsSuggestionPlaceholder,
     handleDocumentChange,
     handleSelectionChange,
   };

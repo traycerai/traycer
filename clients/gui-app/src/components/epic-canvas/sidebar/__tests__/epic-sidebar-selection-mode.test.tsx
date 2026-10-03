@@ -1061,6 +1061,19 @@ vi.mock("@/lib/epic-selectors", () => ({
         testState.activityTierById.get(id) ?? "turn",
       ]),
     ),
+  // Per-agent narrowed siblings of the two map-returning selectors above -
+  // same source, one id looked up instead of the whole map handed back.
+  useEpicAgentActivityTier: (agentId: string) =>
+    testState.activeAgentIds.has(agentId)
+      ? (testState.activityTierById.get(agentId) ?? "turn")
+      : undefined,
+  useRegisteredEpicAgentActivityTier: (
+    _epicId: string | null,
+    agentId: string,
+  ) =>
+    testState.activeAgentIds.has(agentId)
+      ? (testState.activityTierById.get(agentId) ?? "turn")
+      : undefined,
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];

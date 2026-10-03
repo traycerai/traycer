@@ -78,7 +78,10 @@ import {
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  type HostRequestAuthority,
+  type HostRequestOptions,
 } from "../../host-messenger";
+import { RemoteHostMessenger } from "../remote-host-messenger";
 import {
   getNegotiatedHostMethodVersion,
   getNegotiatedHostMethods,
@@ -142,6 +145,7 @@ import type {
 } from "../../i-stream-session";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { hostFileTransferOpenV10 } from "@traycer/protocol/host/host-agent-capabilities";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
@@ -384,6 +388,7 @@ class FakeRelayHost {
     idempotencyKey: string | null;
     callerAgentId: string | null;
     streamId: number;
+    requestId: string;
   }[] = [];
   /** Answers the next REQUEST with this result payload. */
   unaryResult: unknown = { ready: true };
@@ -808,6 +813,7 @@ class FakeRelayHost {
         callerAgentId:
           typeof json.callerAgentId === "string" ? json.callerAgentId : null,
         streamId: message.streamId,
+        requestId: typeof json.requestId === "string" ? json.requestId : "",
       });
       const method = typeof json.method === "string" ? json.method : "";
       if (
@@ -6923,6 +6929,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
   const statusRegistry: VersionedRpcRegistry =
     defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
       "host.status": {
+        cancelAfterDispatch: true,
         1: {
           latestMinor: 0,
           versions: {
@@ -6947,6 +6954,25 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           versions: {
             0: {
               contract: usageSummaryContract,
+              upgradeFromPreviousVersion: null,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  // The real production contract, not a stand-in: the resource-acquiring
+  // regression below must pin the actual `handleId`-returning response shape
+  // `agent-file-copy-job-service.ts` depends on.
+  const fileTransferOpenRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry(["host.fileTransfer.open"] as const, {
+      "host.fileTransfer.open": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: hostFileTransferOpenV10,
               upgradeFromPreviousVersion: null,
             },
           },
@@ -7199,6 +7225,466 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         expect(session.isClosed()).toBe(false);
         expect(session.isReady()).toBe(true);
         expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // W3-T: a caller whose result can be safely discarded opts into
+  // post-dispatch cancellation with the `{ signal, cancelAfterDispatch: true }`
+  // wrapper. It reuses `rejectUnary` (the FATAL case just above): cancelling
+  // post-dispatch rejects promptly, CLOSEs the stream, and tombstones the id.
+  // A bare `AbortSignal` no longer does this - see the resource-acquiring
+  // regression below.
+  //
+  // Attaches settle handlers immediately and reads the outcome through a
+  // bounded `vi.waitFor` rather than an unbounded `await`: on the pre-fix
+  // behavior the promise never settles from the abort at all, and an
+  // unbounded await would then hang past this test's own budget into the
+  // real 30s unary timeout - past `session.close()` in the `finally` below,
+  // outliving the test.
+  function captureSettlement(promise: Promise<unknown>): {
+    settled: boolean;
+    value: unknown;
+    error: unknown;
+  } {
+    const outcome: { settled: boolean; value: unknown; error: unknown } = {
+      settled: false,
+      value: null,
+      error: null,
+    };
+    promise.then(
+      (value: unknown) => {
+        outcome.settled = true;
+        outcome.value = value;
+      },
+      (error: unknown) => {
+        outcome.settled = true;
+        outcome.error = error;
+      },
+    );
+    return outcome;
+  }
+
+  it(
+    "aborting the caller's wrapped read-cancellation signal after dispatch rejects sendUnary promptly and CLOSEs the stream, while a sibling request keeps going",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      // Held back so the abort - not a race with the host's own answer -
+      // is what settles it.
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      const controller = new AbortController();
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const cancelled = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          { signal: controller.signal, cancelAfterDispatch: true },
+          null,
+          undefined,
+          false,
+          null,
+        );
+        const cancelledOutcome = captureSettlement(cancelled);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests[0]?.streamId;
+        if (streamId === undefined) {
+          throw new Error("no REQUEST recorded");
+        }
+
+        // From here on the host answers normally - the sibling below must
+        // reach a real RESPONSE, not race the harness's own withheld reply.
+        relay.skipUnaryAutoRespond = false;
+        const sibling = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          null,
+        );
+
+        controller.abort();
+
+        await vi.waitFor(
+          () => expect(cancelledOutcome.settled).toBe(true),
+          WAIT,
+        );
+        expect(cancelledOutcome.error).toBeInstanceOf(HostRequestAbortedError);
+
+        await expect(sibling).resolves.toEqual({ ready: true });
+
+        // The sibling's own exchange sends no CLOSE - a normal RESPONSE ends
+        // it - so this streamId is the only one recorded.
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamId),
+          WAIT,
+        );
+        expect(relay.closesSent).toEqual([streamId]);
+
+        expect(session.isClosed()).toBe(false);
+        expect(session.isReady()).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not cancel a dispatched unary when the registry does not permit it, even when the caller opts in",
+    async () => {
+      // host.usage.summary is unmarked in usageSummaryRegistry, on purpose.
+      const relay = new FakeRelayHost();
+      relay.sendOptionalRpc = true;
+      relay.optionalRpcManifest = {
+        "host.usage.summary": { major: 1, minor: 0 },
+      };
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: usageSummaryRegistry,
+      });
+      const controller = new AbortController();
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const pending = session.sendUnary(
+          "host.usage.summary",
+          {},
+          null,
+          { signal: controller.signal, cancelAfterDispatch: true },
+          null,
+          undefined,
+          false,
+          null,
+        );
+        const outcome = captureSettlement(pending);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+
+        controller.abort();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        expect(outcome.settled).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "drops a frame that lands for an already-cancelled stream before it is ever parsed, even a malformed one - proven by a sibling request answered afterward on the same inbound mutex",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      const controller = new AbortController();
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const victim = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          { signal: controller.signal, cancelAfterDispatch: true },
+          null,
+          undefined,
+          false,
+          null,
+        );
+        const victimOutcome = captureSettlement(victim);
+        const sibling = session.sendUnary(
+          "host.status",
+          {},
+          null,
+          null,
+          null,
+          undefined,
+          false,
+          null,
+        );
+        const siblingOutcome = captureSettlement(sibling);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(2),
+          WAIT,
+        );
+        const [victimRequest, siblingRequest] = relay.unaryRequests;
+        if (victimRequest === undefined || siblingRequest === undefined) {
+          throw new Error("expected two REQUESTs recorded");
+        }
+
+        controller.abort();
+        await vi.waitFor(() => expect(victimOutcome.settled).toBe(true), WAIT);
+        expect(victimOutcome.error).toBeInstanceOf(HostRequestAbortedError);
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(victimRequest.streamId),
+          WAIT,
+        );
+
+        // A frame flagged COMPRESSED whose payload is not valid deflate: the
+        // tombstone drop (checked before the reassembler ever sees it) is
+        // what must save it, not the decoder rejecting it.
+        const corrupt = new Uint8Array(4 + 8);
+        new DataView(corrupt.buffer).setUint32(0, 64);
+        corrupt.set([9, 9, 9, 9, 9, 9, 9, 9], 4);
+        const malformedFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.RESPONSE,
+          streamId: victimRequest.streamId,
+          seq: 0,
+          qos: QosClass.INTERACTIVE,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: true,
+          json: null,
+          binary: corrupt,
+        };
+        const siblingResponseFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.RESPONSE,
+          streamId: siblingRequest.streamId,
+          seq: 0,
+          qos: QosClass.INTERACTIVE,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: false,
+          json: null,
+          binary: encodeMuxMessageBody(
+            {
+              requestId: siblingRequest.requestId,
+              method: siblingRequest.method,
+              result: { ready: true },
+              error: null,
+            },
+            null,
+          ),
+        };
+        // Encrypted first, delivered back-to-back with no await between the
+        // two `deliverToClient` calls: `noise.decrypt`'s receive mutex admits
+        // waiters in call order, so the malformed frame's tombstone-drop
+        // fully runs before the sibling's decrypt is even entered - the
+        // sibling settling below is the ordering proof, not a timer.
+        const sealedMalformed = await relay.encryptFrame(malformedFrame);
+        const sealedSibling = await relay.encryptFrame(siblingResponseFrame);
+        relay.deliverToClient(sealedMalformed);
+        relay.deliverToClient(sealedSibling);
+
+        await vi.waitFor(() => expect(siblingOutcome.settled).toBe(true), WAIT);
+        expect(siblingOutcome.error).toBeNull();
+        expect(siblingOutcome.value).toEqual({ ready: true });
+
+        expect(session.isClosed()).toBe(false);
+        expect(session.isReady()).toBe(true);
+        // Exactly the one CLOSE this test's own abort sent - the malformed
+        // frame produced no second round-trip.
+        expect(relay.closesSent).toEqual([victimRequest.streamId]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // W3-T P2: a resource-acquiring call (`host.fileTransfer.open`) passes a
+  // BARE signal, never the wrapper - it must keep its result so the caller
+  // can close the handle it opened. Aborting post-dispatch here must NOT
+  // reject or CLOSE the stream; the eventual RESPONSE, carrying the real
+  // handle the caller now owns, must still resolve.
+  it(
+    "aborting a bare (non-wrapped) signal after dispatch does not cancel a resource-acquiring open - the caller still receives the handle to close",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.sendOptionalRpc = true;
+      relay.optionalRpcManifest = {
+        "host.fileTransfer.open": { major: 1, minor: 0 },
+      };
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: fileTransferOpenRegistry,
+      });
+      const controller = new AbortController();
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const held = session.sendUnary(
+          "host.fileTransfer.open",
+          { epicId: "epic-1", sourcePath: "/src/file", relativePath: "file" },
+          null,
+          controller.signal,
+          null,
+          undefined,
+          false,
+          null,
+        );
+        const heldOutcome = captureSettlement(held);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const request = relay.unaryRequests[0];
+        if (request === undefined) {
+          throw new Error("no REQUEST recorded");
+        }
+
+        controller.abort();
+
+        const responseFrame: EncodeMuxFrameInput = {
+          type: MuxFrameType.RESPONSE,
+          streamId: request.streamId,
+          seq: 0,
+          qos: QosClass.INTERACTIVE,
+          chunked: false,
+          chunkFirst: false,
+          chunkLast: false,
+          compressed: false,
+          json: null,
+          binary: encodeMuxMessageBody(
+            {
+              requestId: request.requestId,
+              method: request.method,
+              result: { handleId: "handle-9f2", sizeBytes: 128 },
+              error: null,
+            },
+            null,
+          ),
+        };
+        relay.deliverToClient(await relay.encryptFrame(responseFrame));
+
+        await vi.waitFor(() => expect(heldOutcome.settled).toBe(true), WAIT);
+        expect(heldOutcome.error).toBeNull();
+        // The concrete handle, not just an absence of error - this is the id
+        // a caller's cleanup path (`close(handleId)`) would need, and it is
+        // exactly what post-dispatch cancellation would have discarded.
+        expect(heldOutcome.value).toEqual({
+          handleId: "handle-9f2",
+          sizeBytes: 128,
+        });
+        expect(relay.closesSent).toEqual([]);
+        expect(session.isClosed()).toBe(false);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // W3-T: the policy travels through `RemoteHostMessenger`, not just
+  // `session.sendUnary` directly - a caller only ever sets
+  // `HostRequestAuthority.cancelAfterDispatch`, and the messenger is what
+  // must turn that into the wrapper. Both bridge methods build the wrapper
+  // the same way, so both are pinned - proves the real bridge, not a
+  // stand-in, on either entry point.
+  it.each([
+    [
+      "request",
+      (
+        messenger: RemoteHostMessenger<
+          VersionedRpcRegistry,
+          VersionedStreamRpcRegistry
+        >,
+        options: HostRequestOptions,
+      ) => messenger.request("host.status", {}, options),
+    ],
+    [
+      "requestWithResponseTimeout",
+      (
+        messenger: RemoteHostMessenger<
+          VersionedRpcRegistry,
+          VersionedStreamRpcRegistry
+        >,
+        options: HostRequestOptions,
+      ) =>
+        messenger.requestWithResponseTimeout(
+          "host.status",
+          {},
+          10_000,
+          options,
+        ),
+    ],
+  ] as const)(
+    "propagates HostRequestAuthority.cancelAfterDispatch through RemoteHostMessenger's %s into a post-dispatch cancellation",
+    async (_label, call) => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      const messenger = new RemoteHostMessenger(session);
+      const controller = new AbortController();
+      const authority: HostRequestAuthority = {
+        endpoint: { hostId: "host-1", websocketUrl: null },
+        bearer: lease,
+        abortSignal: controller.signal,
+        cancelAfterDispatch: true,
+      };
+      const options: HostRequestOptions = {
+        idempotencyKey: null,
+        authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      };
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        const cancelled = call(messenger, options);
+        const cancelledOutcome = captureSettlement(cancelled);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.unaryRequests[0]?.streamId;
+        if (streamId === undefined) {
+          throw new Error("no REQUEST recorded");
+        }
+
+        controller.abort();
+
+        await vi.waitFor(
+          () => expect(cancelledOutcome.settled).toBe(true),
+          WAIT,
+        );
+        expect(cancelledOutcome.error).toBeInstanceOf(HostRequestAbortedError);
+        await vi.waitFor(
+          () => expect(relay.closesSent).toContain(streamId),
+          WAIT,
+        );
       } finally {
         session.close();
       }

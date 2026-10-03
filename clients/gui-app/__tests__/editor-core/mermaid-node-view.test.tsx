@@ -40,14 +40,15 @@ vi.mock("@/lib/files/save-blob-to-disk", () => ({
 vi.mock("@/editor-core/nodes/mermaid/mermaid-service", () => {
   return {
     ensureMermaidReady: vi.fn().mockResolvedValue(undefined),
-    parseMermaid: vi.fn().mockImplementation((code: string) => {
+    // The node view no longer calls `parseMermaid` separately - render itself
+    // is the validation step, so the syntax-error case is a render rejection.
+    renderMermaidSvg: vi.fn().mockImplementation((code: string) => {
       if (code.includes("!!!")) {
         return Promise.reject(new Error("Parse error: bad token !!!"));
       }
-      return Promise.resolve();
-    }),
-    renderMermaidSvg: vi.fn().mockResolvedValue({
-      svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
+      return Promise.resolve({
+        svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
+      });
     }),
     svgToPngBlob: vi
       .fn()

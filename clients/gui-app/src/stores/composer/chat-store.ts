@@ -6,6 +6,8 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
+  AgentSender,
+  UserMessageSender,
   ApprovalDecision,
   ChatSessionAnchor,
   GuiHarnessId,
@@ -632,6 +634,7 @@ export interface ChatMessageSteerBadge {
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
 export interface AssistantTurnMeta {
+  readonly sender?: AgentSender;
   /** Raw harness id, used to pick the provider's mono icon for the footer. */
   readonly provider: GuiHarnessId;
   readonly providerLabel: string;
@@ -710,6 +713,7 @@ export interface ChatMessageStoppedInfo {
 }
 
 export interface ChatMessage {
+  readonly sender?: UserMessageSender | null;
   id: string;
   role: ChatMessageRole;
   content: string;

@@ -7,6 +7,10 @@ import type { RateLimitFetchEligibility } from "@/lib/rate-limit-providers";
 import { PROVIDER_RATE_LIMITS_STALE_TIME_MS } from "@/lib/rate-limit-providers";
 import type { fetchProviderRateLimits } from "@/lib/rate-limits/provider-rate-limit-fetch";
 import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-limit-timing";
+import {
+  __resetDocumentVisibilitySubscribersForTests,
+  setDesktopWindowOnScreen,
+} from "@/lib/dom/document-visibility";
 
 type ConfiguredFixture = {
   readonly providerId: string;
@@ -150,6 +154,7 @@ describe("<RateLimitPollProvider />", () => {
 
   afterEach(() => {
     cleanup();
+    __resetDocumentVisibilitySubscribersForTests();
     vi.useRealTimers();
   });
 
@@ -243,6 +248,43 @@ describe("<RateLimitPollProvider />", () => {
     act(() => {
       vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
     });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("pauses the interval when the desktop shell reports the window off-screen even though document.visibilityState stays visible, and resumes once it reports back on-screen", () => {
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          profile({ profileId: "p1", kind: "managed", usageUpdatedAt: null }),
+        ],
+      },
+    ];
+    render(tree());
+    fetchSpy.mockClear();
+
+    act(() => {
+      setDesktopWindowOnScreen(false);
+    });
+    expect(document.visibilityState).toBe("visible");
+    act(() => {
+      vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS * 3);
+    });
+    // Minimised on the desktop shell: no fetches while off screen.
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    act(() => {
+      setDesktopWindowOnScreen(true);
+    });
+    // Brought back: `startVisibleInterval`'s `fireOnShow` catches up
+    // immediately on the hide->show edge, rather than leaving rate-limit
+    // data stale until the next full interval elapses.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS);
+    });
+    // Polling resumes on its ordinary cadence after the catch-up tick.
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 

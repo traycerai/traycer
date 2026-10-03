@@ -6,10 +6,10 @@ import type {
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 
 const BINDING = {
   epicId: "epic-1",

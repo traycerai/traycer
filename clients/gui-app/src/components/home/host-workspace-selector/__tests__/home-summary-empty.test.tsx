@@ -17,6 +17,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
+import { installFakeResizeObserver } from "@/__tests__/fake-resize-observer";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
@@ -434,20 +435,14 @@ const NARROW_ROW_WIDTH = 390;
 const WIDE_ROW_WIDTH = 720;
 
 /**
- * Mounts the controls inside the composer's real workspace row and gives that
- * row a measured width, so the narrow read comes from the row's own observer
- * rather than a hand-set provider. jsdom measures every element at 0px, which
- * would otherwise make every row narrow.
+ * Mounts the controls inside the composer's real workspace row and delivers
+ * that row's size through its own ResizeObserver, as the browser does after
+ * `observe()`, so the narrow read comes from the row's observer rather than a
+ * hand-set provider.
  */
 function renderControlInWorkspaceRow(rowWidth: number): QueryClient {
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-    function measure(this: HTMLElement): DOMRect {
-      if (this.parentElement?.dataset.testid === WORKSPACE_ROW_HOST_TEST_ID) {
-        return new DOMRect(0, 0, rowWidth, 28);
-      }
-      return new DOMRect(0, 0, 0, 0);
-    },
-  );
+  const resizeObservers = installFakeResizeObserver();
+  restoreResizeObserver = resizeObservers.restore;
   const rowHost = document.createElement("div");
   rowHost.dataset.testid = WORKSPACE_ROW_HOST_TEST_ID;
   document.body.appendChild(rowHost);
@@ -478,8 +473,17 @@ function renderControlInWorkspaceRow(rowWidth: number): QueryClient {
     </QueryClientProvider>,
     { container: rowHost },
   );
+  act(() => {
+    for (const observer of resizeObservers.live()) {
+      if (observer.target?.parentElement === rowHost) {
+        observer.emit({ inline: rowWidth, block: 28 });
+      }
+    }
+  });
   return queryClient;
 }
+
+let restoreResizeObserver: () => void = () => {};
 
 function seedOneRecentWorkspace(): void {
   mocks.negotiatedVersion.current = { major: 1, minor: 2 };
@@ -718,7 +722,8 @@ describe("landing workspace summary empty state", () => {
 
   describe("inside a narrow composer workspace row", () => {
     afterEach(() => {
-      vi.restoreAllMocks();
+      restoreResizeObserver();
+      restoreResizeObserver = () => {};
     });
 
     it("folds the Add folder word into its icon and keeps the name on hover", async () => {

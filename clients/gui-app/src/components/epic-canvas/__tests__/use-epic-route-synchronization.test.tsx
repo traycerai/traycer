@@ -15,6 +15,10 @@ import {
   useEpicRouteSynchronization,
 } from "@/components/epic-canvas/hooks/use-epic-route-synchronization";
 import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
+import {
+  setTopLevelDemand,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 import type {
   EpicCanvasTileRef,
   EpicCanvasState,
@@ -362,6 +366,7 @@ const THREAD_FOCUS_INTENT: EpicRouteFocusIntent = {
 };
 
 function resetStores(): void {
+  useSurfaceDemandStore.setState(useSurfaceDemandStore.getInitialState(), true);
   resetNestedRouteDomFocusForTests();
   resetNestedFocusNavigationIntentsForTests();
   resetPaneActivationFocusIntentsForTests();
@@ -2179,5 +2184,57 @@ describe("useEpicRouteSynchronization", () => {
       throw new Error("expected navigate state updater");
     }
     expect(isRouteBookkeepingState(state({}))).toBe(true);
+  });
+
+  it("a previewed tab neither reapplies the settled URL focus nor persists its focus, and settling resumes both", async () => {
+    testState.nestedFocusEnabled = true;
+    testState.activeArtifactId = "artifact-b";
+    setSinglePaneCanvas(
+      "pane-current",
+      [
+        specTile("artifact-a", "tile-a", "Artifact A"),
+        specTile("artifact-b", "tile-b", "Artifact B"),
+      ],
+      "tile-b",
+    );
+    // The URL still names the settled tile A while the cursor previews B.
+    act(() => setTopLevelDemand([`epic:${TAB_ID}`], "preview"));
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          focusPaneId: "pane-current",
+          focusTileInstanceId: "tile-a",
+        },
+      },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(testState.canvasStore.applyNestedRouteFocus).not.toHaveBeenCalled();
+    expect(testState.navigate).not.toHaveBeenCalled();
+    expect(
+      testState.openEpicState.setLastFocusedArtifactId,
+    ).not.toHaveBeenCalled();
+
+    // Settling lifts the gate: the same inputs now take the usual path.
+    act(() => setTopLevelDemand([`epic:${TAB_ID}`], "settled"));
+
+    await waitFor(() => {
+      expect(
+        testState.openEpicState.setLastFocusedArtifactId,
+      ).toHaveBeenCalledWith("artifact-b");
+      expect(testState.canvasStore.applyNestedRouteFocus).toHaveBeenCalledWith(
+        TAB_ID,
+        { paneId: "pane-current", tileInstanceId: "tile-a" },
+      );
+    });
   });
 });

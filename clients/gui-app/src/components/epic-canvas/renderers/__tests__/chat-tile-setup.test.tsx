@@ -413,6 +413,68 @@ describe("useChatSetupFailureRestoreDriver", () => {
     );
   });
 
+  it("a quota failure while restoring withholds the take - the pending prompt survives for retry", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), [], []);
+
+    const failedContent = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "queued prompt" }],
+        },
+      ],
+    };
+
+    act(() => {
+      sendTestMessage(harness, failedContent);
+    });
+    const sent = harness.handle.store.getState().pendingUserMessages.at(0);
+    if (sent === undefined) throw new Error("expected pending user message");
+
+    render(<DriverHost handle={harness.handle} />);
+
+    // Support native Storage and the setup's own-method fallback.
+    const storageSpyTarget: Storage = Object.hasOwn(
+      window.localStorage,
+      "setItem",
+    )
+      ? window.localStorage
+      : Storage.prototype;
+    const setItemSpy = vi
+      .spyOn(storageSpyTarget, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      });
+    try {
+      // The persist barrier throws before the take call is reached.
+      expect(() => {
+        act(() => {
+          appendEvent(
+            harness.callbacks(),
+            chatEvent(
+              "evt-failed",
+              "setup.failed",
+              { workspacePath: "/repo", setupExitCode: 1 },
+              { messageId: sent.messageId },
+            ),
+          );
+        });
+      }).toThrow();
+    } finally {
+      setItemSpy.mockRestore();
+    }
+
+    // The source slot survives: the pending entry was never taken.
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([sent]);
+    expect(
+      harness.handle.store
+        .getState()
+        .peekSetupFailedRestoration(sent.messageId),
+    ).toEqual(failedContent);
+  });
+
   it("restores the failed prompt on the windowed line, where no event ever reaches state.events", () => {
     // Consumer 25 of the `state.messages` sweep, and the one with no
     // client-side repair: `selectRestorableSetupInterruption`'s scan reads

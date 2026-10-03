@@ -108,6 +108,10 @@
  * construction stamp in the same module generation, or `requireConstructionHostStamp`
  * throws (F1). This module imports the registry; the registry never imports it.
  */
+import {
+  topLevelDemand,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 import { appLogger } from "@/lib/logger";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -1437,6 +1441,18 @@ function createEpicSessionController(): EpicSessionController {
     entry.suspended = false;
   }
 
+  function hasSettledSurfaceDemand(entry: ControllerEntry): boolean {
+    const attached = surfaces.get(entry.epicId);
+    const tabIds =
+      attached === undefined || attached.size === 0
+        ? entry.tabs.keys()
+        : attached;
+    for (const tabId of tabIds) {
+      if (topLevelDemand(`epic:${tabId}`) === "settled") return true;
+    }
+    return false;
+  }
+
   /**
    * The identity of the run these inputs call for, or `null` for none. A
    * change cancels the run in flight - what the provider's effect deps did.
@@ -1445,6 +1461,7 @@ function createEpicSessionController(): EpicSessionController {
     entry: ControllerEntry,
     inputs: ReconcileInputs,
   ): string | null {
+    if (entry.session === null && !hasSettledSurfaceDemand(entry)) return null;
     if (!inputs.ownershipClaimed || inputs.parked || entry.suspended) {
       return null;
     }
@@ -2193,6 +2210,7 @@ function createEpicSessionController(): EpicSessionController {
 
   registry.subscribe(onRegistryChanged);
   subscribeEpicParking(onParkingChanged);
+  useSurfaceDemandStore.subscribe(requestReconcileAll);
   useSelectionAuthorityStore.subscribe(requestReconcileAll);
   useAuthStore.subscribe((state, previous) => {
     const userId = state.profile?.userId ?? null;

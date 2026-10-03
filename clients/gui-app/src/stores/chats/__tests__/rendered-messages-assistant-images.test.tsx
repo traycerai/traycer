@@ -19,10 +19,10 @@ import {
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
 } from "@/components/chat/chat-stable-rows";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import type { MessageSegment } from "@/stores/composer/chat-store";
 
 const CONTENT: JsonContent = {

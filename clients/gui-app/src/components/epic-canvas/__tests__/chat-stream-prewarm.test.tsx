@@ -25,7 +25,12 @@ const testState = vi.hoisted(() => ({
   parked: false,
   pending: new Set<string>(),
   deleted: new Set<string>(),
-  calls: [] as Array<{ chatId: string; hostId: string; enabled: boolean }>,
+  calls: [] as Array<{
+    chatId: string;
+    hostId: string;
+    enabled: boolean;
+    demand: "surface" | "startup";
+  }>,
   leases: new Map<string, number>(),
   registry: null as ChatSessionRegistry | null,
   createHandle: null as
@@ -60,8 +65,9 @@ vi.mock("@/lib/registries/chat-session-registry", async () => {
       chatId: string,
       hostId: string,
       enabled: boolean,
+      demand: "surface" | "startup",
     ) => {
-      testState.calls.push({ chatId, hostId, enabled });
+      testState.calls.push({ chatId, hostId, enabled, demand });
       const owner = testState.owner;
       const [handle, setHandle] = React.useState<ChatSessionStoreHandle | null>(
         null,
@@ -225,7 +231,12 @@ function ChatTileLease(props: {
   readonly hostId: string;
   readonly instanceId: string;
 }) {
-  const handle = useChatSessionHandle(props.chatId, props.hostId, true);
+  const handle = useChatSessionHandle(
+    props.chatId,
+    props.hostId,
+    true,
+    "surface",
+  );
   useEffect(() => {
     if (handle === null) return;
     testState.tileHandles.set(`${props.hostId}\u0000${props.chatId}`, handle);
@@ -375,7 +386,12 @@ describe("chat stream prewarm", () => {
     const registryKey = "remote-host\u0000chat-1";
 
     expect(testState.calls).toEqual([
-      { chatId: "chat-1", hostId: "remote-host", enabled: true },
+      {
+        chatId: "chat-1",
+        hostId: "remote-host",
+        enabled: true,
+        demand: "startup",
+      },
     ]);
     expect(testState.leases.get(registryKey)).toBe(1);
 
@@ -399,7 +415,7 @@ describe("chat stream prewarm", () => {
 
     // The ordinary tile reports acquisition across the handoff signal.
     function NormalChatTileLease() {
-      useChatSessionHandle("chat-1", "remote-host", true);
+      useChatSessionHandle("chat-1", "remote-host", true, "surface");
       return null;
     }
     const tile = render(<NormalChatTileLease />);
@@ -407,6 +423,7 @@ describe("chat stream prewarm", () => {
       chatId: "chat-1",
       hostId: "remote-host",
       enabled: true,
+      demand: "surface",
     });
     expect(testState.leases.get(registryKey)).toBe(2);
     notifyChatTileSessionAcquired("epic-1", "remote-host", "chat-1", "chat");

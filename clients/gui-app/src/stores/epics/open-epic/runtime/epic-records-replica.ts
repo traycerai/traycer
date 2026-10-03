@@ -555,27 +555,13 @@ export function createEpicRecordsReplica(
     projector.projectFull();
   }
 
-  /**
-   * Publish a record table's recomputed slice, folding in the FULL
-   * re-projection it forces.
-   *
-   * A full re-projection rather than a hand-rolled patch: the union slices feed
-   * the tree and the role-claim slices, and re-deriving those here would be a
-   * second implementation of the projector's own composition, free to drift
-   * from it. Records change rarely (the tables gate on an actual difference), so
-   * the cost is a snapshot-shaped re-project on a real change and nothing at
-   * all otherwise.
-   *
-   * When nothing is attached the records are held and the attach-time projection
-   * folds them in through the same getter; publishing EMPTY slices here would
-   * erase the projection.
-   */
+  /** Publish raw records and their composed rows atomically. */
   function publishRecordSlice(patch: Partial<EpicRecordsProjection>): void {
     if (!projector.isAttached()) {
       publish(patch);
       return;
     }
-    // Two publishes, one delivery. `projectFull` publishes through the same
+    // Two publishes, one delivery. `projectChanges` publishes through the same
     // sink, and the transaction is what keeps a record ingest and the
     // projection it forces at the ONE store write the closure spent on them.
     // The order matters: the slice is buffered first, so the projector's own
@@ -583,7 +569,7 @@ export function createEpicRecordsReplica(
     // on it rather than overwriting it.
     sink.transact(() => {
       publish(patch);
-      projector.projectFull();
+      projector.projectChanges();
     });
   }
 
@@ -1562,7 +1548,7 @@ export function createEpicRecordsReplica(
     applyLaneState(slices): void {
       if (isDisposed()) return;
       laneSlices = slices;
-      projector.projectFull();
+      projector.projectChanges();
     },
 
     applyChatRecords(records, issuedAtSeq): void {

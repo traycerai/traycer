@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,6 +42,9 @@ export function TeardownCommitDialog(props: {
   const deferLabel = deferButtonLabel(props.choice, deferContext);
   const immediateLabel = immediateButtonLabel(props.choice);
   const agentNames = useTeardownAgentNames(props.holders);
+  const [everOpened, setEverOpened] = useState(props.open);
+  if (props.open && !everOpened) setEverOpened(true);
+  if (!props.open && !everOpened) return null;
   return (
     <Dialog
       open={props.open}

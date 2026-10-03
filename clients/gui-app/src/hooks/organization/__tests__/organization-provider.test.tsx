@@ -69,21 +69,26 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
 }));
 
-vi.mock("@/stores/auth/auth-store", () => ({
-  authorizesCloudCapability: () => true,
-  useAuthStore: Object.assign(
-    <T,>(
-      selector: (auth: {
-        readonly status: "signed-in";
-        readonly contextMetadata: { readonly userId: string } | null;
-      }) => T,
-    ): T => selector(authSnapshot()),
-    {
-      getState: authSnapshot,
-      subscribe: () => () => {},
-    },
-  ),
-}));
+// The composer draft store subscribes to the auth store when it loads (it is
+// reached transitively from `organization-provider`), so the mock needs
+// `subscribe` and the real, pure `admitsLocalPlane`.
+vi.mock("@/stores/auth/auth-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/auth/auth-store")>();
+  return {
+    admitsLocalPlane: actual.admitsLocalPlane,
+    authorizesCloudCapability: () => true,
+    useAuthStore: Object.assign(
+      <T,>(
+        selector: (auth: {
+          readonly status: "signed-in";
+          readonly contextMetadata: { readonly userId: string } | null;
+        }) => T,
+      ): T => selector(authSnapshot()),
+      { getState: authSnapshot, subscribe: () => () => undefined },
+    ),
+  };
+});
 
 function authSnapshot(): {
   readonly status: "signed-in";

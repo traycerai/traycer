@@ -147,6 +147,25 @@ export const appLocalNotificationCompletionReceiptKey = (input: {
     encodeURIComponent(input.occurrenceKey),
   );
 
+// The unscoped name is the anonymous/legacy bucket. Signed-in drafts never
+// share it; row keys retain the existing host ownership inside their values.
+export const composerDraftStorageKey = (userId: string | null): string =>
+  userId === null
+    ? persistKey("composer-drafts")
+    : scopedPersistKey(
+        "composer-drafts",
+        "account",
+        encodeURIComponent(userId),
+      );
+
+export const composerDraftRowPrefix = (name: string): string => `${name}:rows:`;
+
+export const composerDraftRowKey = (
+  name: string,
+  kind: "draft" | "delete",
+  id: string,
+): string => `${composerDraftRowPrefix(name)}${kind}:${encodeURIComponent(id)}`;
+
 // Interview answer drafts persist ONE localStorage key per (chatId, blockId)
 // instead of a single full-snapshot Zustand blob. Separate keys prevent a
 // full-map write from one window (or a stale store context) from erasing an

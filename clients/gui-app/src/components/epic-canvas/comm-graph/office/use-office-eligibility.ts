@@ -18,7 +18,7 @@
  * becomes a fifth input here - it is deliberately not threaded through the
  * tile today, so that choice stays one place.
  */
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
@@ -31,27 +31,16 @@ export interface OfficeEligibilityInput {
   readonly intersecting: boolean;
 }
 
-/**
- * Window on-screen bit, live. A minimised desktop window and a background
- * browser tab both arrive here through `document-visibility.ts` - Page
- * Visibility alone stays `"visible"` on desktop.
- */
-function useDocumentVisible(): boolean {
-  const [visible, setVisible] = useState(isDocumentVisible);
-  useEffect(() => {
-    const apply = (): void => setVisible(isDocumentVisible());
-    apply();
-    return subscribeDocumentVisibility(apply);
-  }, []);
-  return visible;
-}
-
 export function useOfficeEligibility(input: OfficeEligibilityInput): {
   readonly eligible: boolean;
 } {
   const paneVisible = usePaneVisible();
   const bodySelected = useTabBodySelected();
-  const documentVisible = useDocumentVisible();
+  const documentVisible = useSyncExternalStore(
+    subscribeDocumentVisibility,
+    isDocumentVisible,
+    isDocumentVisible,
+  );
   return {
     eligible:
       paneVisible && bodySelected && documentVisible && input.intersecting,

@@ -91,7 +91,12 @@ export function SnapshotDiffTileBody(
 ): ReactNode {
   const { node, viewTabId } = props;
   const hostId = useTabHostId();
-  const handle = useChatSessionHandle(node.diff.chatId, hostId, true);
+  const handle = useChatSessionHandle(
+    node.diff.chatId,
+    hostId,
+    true,
+    "surface",
+  );
 
   if (handle === null) {
     return (

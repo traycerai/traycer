@@ -29,6 +29,7 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
+import { resetTileSurfaceGeometryCoordinatorForTesting } from "@/components/epic-canvas/surface-host/tile-surface-geometry-coordinator";
 import {
   useLandingPaneAnchorStore,
   type LandingPanelCoverage,
@@ -643,16 +644,19 @@ function expectTopBlockAndFoot(): void {
 
 interface RevealShim {
   readonly scrolled: () => number;
+  /** How many times the strip read the scroller's own box. */
+  readonly scrollerReads: () => number;
   readonly restore: () => void;
 }
 
 /**
- * jsdom has no layout: the scroller shows 0..300 on y, the member (the
- * scroller's own child holding the selection) takes `memberBox()`, and
- * `scrollTop` keeps what is written. The reveal's decision is not shimmed.
+ * jsdom has no layout: the scroller shows 0..300 on y, every row (and its
+ * member, the scroller's own child holding it) sits at a fixed box by tab
+ * test id - selected or not, as in a real layout - and `scrollTop` keeps what
+ * is written. The reveal's decision is not shimmed.
  */
 function installRevealGeometry(
-  memberBox: () => { readonly top: number; readonly bottom: number },
+  rowBoxes: Readonly<Record<string, { top: number; bottom: number }>>,
 ): RevealShim {
   const realRect = Object.getOwnPropertyDescriptor(
     HTMLElement.prototype,
@@ -664,18 +668,23 @@ function installRevealGeometry(
   );
   const isScroller = (node: Element | null): boolean =>
     node !== null && node.hasAttribute("data-layout-passive-members");
+  let scrollerReads = 0;
   HTMLElement.prototype.getBoundingClientRect = function boxFor(
     this: HTMLElement,
   ): DOMRect {
-    if (isScroller(this)) return new DOMRect(0, 0, 200, 300);
-    const holdsSelection =
-      this.querySelector('[aria-selected="true"]') !== null ||
-      this.getAttribute("aria-selected") === "true";
-    if (!holdsSelection || !isScroller(this.parentElement)) {
-      return new DOMRect(0, 0, 0, 0);
+    if (isScroller(this)) {
+      scrollerReads += 1;
+      return new DOMRect(0, 0, 200, 300);
     }
-    const box = memberBox();
-    return new DOMRect(0, box.top, 200, box.bottom - box.top);
+    for (const [testId, box] of Object.entries(rowBoxes)) {
+      const holdsRow =
+        this.dataset.testid === testId ||
+        this.querySelector(`[data-testid="${testId}"]`) !== null;
+      if (holdsRow) {
+        return new DOMRect(0, box.top, 200, box.bottom - box.top);
+      }
+    }
+    return new DOMRect(0, 0, 0, 0);
   };
   let scrolled = 0;
   Object.defineProperty(Element.prototype, "scrollTop", {
@@ -687,6 +696,7 @@ function installRevealGeometry(
   });
   return {
     scrolled: () => scrolled,
+    scrollerReads: () => scrollerReads,
     restore: () => {
       // jsdom defines the method on `Element`, so without an own descriptor
       // the override is the one own property to remove.
@@ -892,23 +902,71 @@ describe("<SideTabStrip />", () => {
 
   it("scrolls a row that becomes active while clipped into view", async () => {
     const refs = openEpicTabs(["Alpha", "Beta"]);
-    let selected = { top: 0, bottom: 32 };
-    const geometry = installRevealGeometry(() => selected);
+    // Beta's row sits 100px past the scroller's 300px bottom edge.
+    const geometry = installRevealGeometry({
+      "tab-epic-e-alpha": { top: 0, bottom: 32 },
+      "tab-epic-e-beta": { top: 368, bottom: 400 },
+    });
     try {
+      // An earlier render may leave a coordinator frame pending.
+      resetTileSurfaceGeometryCoordinatorForTesting();
       await renderStrip("/elsewhere", LEFT_STRIP);
       await screen.findByTestId("tab-epic-e-beta");
+      // The strip measured while Beta was inactive: its box is in the cache
+      // before it becomes active.
+      await waitFor(() => {
+        expect(geometry.scrollerReads()).toBeGreaterThan(0);
+      });
       expect(geometry.scrolled()).toBe(0);
 
-      // Beta's row sits 100px past the scroller's 300px bottom edge.
-      selected = { top: 368, bottom: 400 };
       const beta = refs.at(1);
       if (beta === undefined) throw new Error("expected two tabs");
       act(() => {
         useTabsStore.setState({ activeItemId: tabItemId(beta) });
       });
 
-      expect(geometry.scrolled()).toBe(100);
+      await waitFor(() => {
+        expect(geometry.scrolled()).toBe(100);
+      });
     } finally {
+      resetTileSurfaceGeometryCoordinatorForTesting();
+      geometry.restore();
+    }
+  });
+
+  it("keeps a row it reveals clear of the scroller's scroll-padding", async () => {
+    // The sectioned list pads its scroller for the sticky section header and
+    // the bottom fade; the coordinator's reveal must land past that padding,
+    // as `revealMemberAlongAxis` does, not flush with the edge beneath it.
+    const refs = openEpicTabs(["Alpha", "Beta"]);
+    const geometry = installRevealGeometry({
+      "tab-epic-e-alpha": { top: 0, bottom: 32 },
+      "tab-epic-e-beta": { top: 368, bottom: 400 },
+    });
+    const padding = document.createElement("style");
+    padding.textContent =
+      '[data-testid="header-tab-strip-scroll"] { scroll-padding-bottom: 20px; }';
+    document.head.append(padding);
+    try {
+      resetTileSurfaceGeometryCoordinatorForTesting();
+      await renderStrip("/elsewhere", LEFT_STRIP);
+      await screen.findByTestId("tab-epic-e-beta");
+      await waitFor(() => {
+        expect(geometry.scrollerReads()).toBeGreaterThan(0);
+      });
+
+      const beta = refs.at(1);
+      if (beta === undefined) throw new Error("expected two tabs");
+      act(() => {
+        useTabsStore.setState({ activeItemId: tabItemId(beta) });
+      });
+
+      await waitFor(() => {
+        expect(geometry.scrolled()).toBe(120);
+      });
+    } finally {
+      padding.remove();
+      resetTileSurfaceGeometryCoordinatorForTesting();
       geometry.restore();
     }
   });

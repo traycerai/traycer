@@ -1,3 +1,5 @@
+import { useSurfaceDemand } from "@/stores/tabs/surface-demand";
+import { SurfacePreviewShell } from "@/components/layout/surface-preview-shell";
 import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -74,6 +76,16 @@ export function ChatTilePreContent(props: {
   readonly testId: string;
   readonly frame: ChatTilePreContentFrame;
   /** `null` while the tile has no session handle: no store, nothing to retry. */
+  readonly session: ChatTilePreContentSession | null;
+}): ReactNode {
+  const demand = useSurfaceDemand();
+  if (demand === "preview") return <SurfacePreviewShell />;
+  return <ChatTileLoadingContent {...props} />;
+}
+
+function ChatTileLoadingContent(props: {
+  readonly testId: string;
+  readonly frame: ChatTilePreContentFrame;
   readonly session: ChatTilePreContentSession | null;
 }): ReactNode {
   const { frame, session } = props;

@@ -1,5 +1,7 @@
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { pruneRecoveryTiles } from "@/lib/tab-recovery/history";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -117,6 +119,42 @@ export function useEpicCreateArtifact() {
  * Caller opens a confirm dialog first; on Delete the button enters
  * pending state; success is silent.
  */
+async function deleteArtifact(
+  handle: OpenEpicStoreHandle,
+  client: HostClient<HostRpcRegistry> | null,
+  queryClient: QueryClient,
+  variables: { readonly epicId: string; readonly artifactId: string },
+): Promise<{ readonly deleted: boolean }> {
+  try {
+    await enqueueAndWait(handle, {
+      kind: "delete-artifact",
+      artifactId: variables.artifactId,
+    });
+    pruneRecoveryTiles(
+      (tile, epicId) =>
+        epicId === variables.epicId && tile.id === variables.artifactId,
+    );
+    Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
+    const hostId = client?.getActiveHostId() ?? null;
+    if (hostId !== null) {
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          hostId,
+          "epic.deletedArtifacts.list",
+        ),
+      });
+    }
+    return { deleted: true };
+  } catch (error: unknown) {
+    const normalized =
+      error instanceof Error ? error : new Error(String(error));
+    toast.error("Couldn't delete artifact.", {
+      description: normalized.message,
+    });
+    throw normalized;
+  }
+}
+
 export function useEpicDeleteArtifact(artifactId: string | null) {
   const handle = useOpenEpicHandle();
   // The delete itself rides the write-command queue, but the tombstone list is
@@ -140,36 +178,8 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
   interface Response {
     readonly deleted: boolean;
   }
-  const mutateAsync = async (variables: Variables): Promise<Response> => {
-    try {
-      await enqueueAndWait(handle, {
-        kind: "delete-artifact",
-        artifactId: variables.artifactId,
-      });
-      pruneRecoveryTiles(
-        (tile, epicId) =>
-          epicId === variables.epicId && tile.id === variables.artifactId,
-      );
-      Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
-      const hostId = client?.getActiveHostId() ?? null;
-      if (hostId !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostId,
-            "epic.deletedArtifacts.list",
-          ),
-        });
-      }
-      return { deleted: true };
-    } catch (error: unknown) {
-      const normalized =
-        error instanceof Error ? error : new Error(String(error));
-      toast.error("Couldn't delete artifact.", {
-        description: normalized.message,
-      });
-      throw normalized;
-    }
-  };
+  const mutateAsync = (variables: Variables): Promise<Response> =>
+    deleteArtifact(handle, client, queryClient, variables);
   function mutate(variables: Variables): void;
   function mutate(
     variables: Variables,

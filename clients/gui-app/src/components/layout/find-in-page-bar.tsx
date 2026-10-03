@@ -33,6 +33,7 @@ const LIVE_SEARCH_DEBOUNCE_MS = 140;
  * any focus-reclamation gymnastics.
  */
 export function FindInPageBar() {
+  const findSkipAttribute = getFindSkipAttribute();
   const isOpen = useFindInPageStore((s) => s.isOpen);
   const matches = useFindInPageStore((s) => s.matches);
   const matchCase = useFindInPageStore((s) => s.matchCase);
@@ -217,7 +218,7 @@ export function FindInPageBar() {
 
   return (
     <search
-      {...{ [getFindSkipAttribute()]: "" }}
+      {...{ [findSkipAttribute]: "" }}
       className={cn(
         "pointer-events-auto absolute right-3 top-3 z-30 flex items-center gap-1 rounded-md border border-border bg-popover px-2 py-1 shadow-md",
       )}

@@ -21,6 +21,7 @@ import { useOfficeEligibility } from "@/components/epic-canvas/comm-graph/office
 import {
   __resetDocumentVisibilitySubscribersForTests,
   __setBrowserDocumentHiddenForTests,
+  setDesktopWindowOnScreen,
 } from "@/lib/dom/document-visibility";
 
 afterEach(() => {
@@ -104,6 +105,22 @@ describe("useOfficeEligibility", () => {
       __setBrowserDocumentHiddenForTests(false);
     });
 
+    expect(eligibleText(result)).toBe("true");
+  });
+
+  it("is ineligible when the desktop shell reports the window off-screen even though document.visibilityState stays visible, and becomes eligible again once it reports back on-screen", () => {
+    const result = renderProbe({ intersecting: true });
+    expect(eligibleText(result)).toBe("true");
+
+    act(() => {
+      setDesktopWindowOnScreen(false);
+    });
+    expect(document.visibilityState).toBe("visible");
+    expect(eligibleText(result)).toBe("false");
+
+    act(() => {
+      setDesktopWindowOnScreen(true);
+    });
     expect(eligibleText(result)).toBe("true");
   });
 

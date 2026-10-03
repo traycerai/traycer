@@ -53,6 +53,7 @@ const pingV10 = defineRpcContract({
 
 const registry = defineVersionedRpcRegistry({
   "host.ping": {
+    cancelAfterDispatch: true,
     1: {
       latestMinor: 0,
       versions: { 0: { contract: pingV10, upgradeFromPreviousVersion: null } },

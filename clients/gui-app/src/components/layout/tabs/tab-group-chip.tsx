@@ -18,7 +18,7 @@ export function TabGroupChip(props: {
   const chipRef = useRef<HTMLButtonElement | null>(null);
   // A group a reopen brings back opens its chip first; its tabs follow.
   useStripEntrance(chipRef, stripGroupMarkKey(groupId), "chip");
-  const actions = useTabsStore.getState();
+  const actions = readTabActions();
   return (
     <GroupEditorAnchor
       groupId={groupId}
@@ -59,4 +59,8 @@ export function TabGroupChip(props: {
       </TooltipWrapper>
     </GroupEditorAnchor>
   );
+}
+
+function readTabActions() {
+  return useTabsStore.getState();
 }

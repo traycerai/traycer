@@ -1,4 +1,5 @@
 import { useContext, useMemo, type ReactNode } from "react";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import type { HostNotificationsIndicatorStateResponse } from "@traycer/protocol/host/notifications/contracts";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import {
@@ -8,12 +9,13 @@ import {
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import type { ChatIndicatorHostScope } from "@/lib/notifications/chat-indicator-scopes";
-import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import { cloudNotificationsStoreApi } from "@/stores/notifications/cloud-notifications-store";
 import {
   EMPTY_INDICATOR_STATE_RESPONSE,
   mergeLocalPartitionIntoCloudIndicators,
   mergeIndicatorStateResponses,
-  selectCloudNotificationIndicatorProjection,
+  selectNotificationIndicatorsForEntities,
+  surfaceNotificationIndicatorsEqual,
   type SurfaceNotificationIndicators,
 } from "@/stores/notifications/notification-indicator-state";
 
@@ -62,7 +64,18 @@ export function ChatIndicatorHostScopes(props: {
     () => props.scopes.flatMap((scope) => [...scope.chatIds]),
     [props.scopes],
   );
-  const cloudRows = useCloudNotificationsStore((state) => state.rows);
+  const cloud = useStoreWithEqualityFn(
+    cloudNotificationsStoreApi,
+    (state): SurfaceNotificationIndicators =>
+      isCloud
+        ? selectNotificationIndicatorsForEntities(
+            state.indicators,
+            NO_EPIC_IDS,
+            allChatIds,
+          )
+        : EMPTY_INDICATOR_STATE_RESPONSE,
+    surfaceNotificationIndicatorsEqual,
+  );
   // The cloud snapshot is the base every host layer folds into, and it is
   // host-INDEPENDENT: a cloud row produced on any machine is already in this
   // client's snapshot, which is the whole reason cloud mode exists. Only the
@@ -80,26 +93,23 @@ export function ChatIndicatorHostScopes(props: {
     // cloud row that only reached the aggregate lit nothing for the tab it
     // was about - and the host layers below fold only the `home: local`
     // partition into those buckets, which by construction excludes it.
-    const cloud = selectCloudNotificationIndicatorProjection(
-      cloudRows,
-      NO_EPIC_IDS,
-      allChatIds,
-    );
     const byOriginHostId: Record<
       string,
       HostNotificationsIndicatorStateResponse
     > = { ...inherited.byOriginHostId };
-    for (const [originHostId, bucket] of Object.entries(cloud.byOriginHostId)) {
+    for (const [originHostId, bucket] of Object.entries(
+      cloud.byOriginHostId ?? {},
+    )) {
       byOriginHostId[originHostId] = mergeIndicatorStateResponses(
         byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE,
         bucket,
       );
     }
     return {
-      ...mergeIndicatorStateResponses(inherited, cloud.aggregate),
+      ...mergeIndicatorStateResponses(inherited, cloud),
       byOriginHostId,
     };
-  }, [isCloud, inherited, cloudRows, allChatIds]);
+  }, [isCloud, inherited, cloud]);
   return (
     <NotificationIndicatorsProvider indicators={base}>
       <ChatIndicatorHostLayers

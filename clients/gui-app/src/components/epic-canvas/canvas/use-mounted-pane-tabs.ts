@@ -61,7 +61,11 @@
  * (A `useLayoutEffect`-committed ref would be the paseo shape, but reading
  * a ref during render violates the React Compiler's `react-hooks/refs`.)
  */
-import { useMemo, useState } from "react";
+import { use, useMemo, useState } from "react";
+import {
+  SurfaceDemandContext,
+  useSurfaceDemandStore,
+} from "@/stores/tabs/surface-demand";
 import type { EpicCanvasTileRef, TilePane } from "@/stores/epics/canvas/types";
 import {
   isRetainablePaneChat,
@@ -143,6 +147,11 @@ export function useMountedPaneTabs(
   input: UseMountedPaneTabsInput,
 ): ReadonlySet<string> {
   const { activeTabId, pane, tabs, paneVisible } = input;
+  const parentDemand = use(SurfaceDemandContext);
+  const preview = useSurfaceDemandStore(
+    (state) => state.panePreviewTargets[pane.id] !== undefined,
+  );
+  const demand = parentDemand === "preview" || preview ? "preview" : "settled";
 
   // Terminals are pinned; chats are retained by their own policy below;
   // everything else competes for LRU slots.
@@ -181,16 +190,17 @@ export function useMountedPaneTabs(
         retainedPaneChatInstanceIds({
           pane,
           cap: RETAINED_PANE_CHAT_CAP,
+          demand,
           tileFor: (instanceId) => tileByInstanceId.get(instanceId),
         }),
       ),
-    [pane, tileByInstanceId],
+    [pane, tileByInstanceId, demand],
   );
 
   const [committedLru, setCommittedLru] =
     useState<ReadonlyArray<string>>(EMPTY_LRU);
   const mountedTabLru = deriveMountedTabLru({
-    activeTabId,
+    activeTabId: demand === "settled" ? activeTabId : null,
     availableTabIds: availableLruIds,
     cap: paneVisible ? MOUNTED_PANE_TAB_LRU_CAP : 1,
     // A hidden pane collapses to the active tab only; dropping the

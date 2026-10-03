@@ -1,3 +1,5 @@
+import { replaceSliceRows } from "./projection-table-changes";
+import { chatProjectionsEq } from "../projection-helpers";
 import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
 import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
@@ -337,6 +339,11 @@ export function createChatRecordTable(
           currentUserId,
         );
         return next.allIds.length === 0 ? EMPTY_CHATS_SLICE : next;
+      },
+      updateSlice: (previous, changedRows, currentUserId) => {
+        if (currentUserId === null || pendingCreations.size > 0) return null;
+        const changed = chatRecordsSlice(changedRows);
+        return replaceSliceRows(previous, changed, chatProjectionsEq);
       },
       slicesEq: chatSlicesEq,
       emptySlice: EMPTY_CHATS_SLICE,

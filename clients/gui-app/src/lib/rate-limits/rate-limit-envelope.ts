@@ -7,7 +7,8 @@ import { isTransientRateLimitUnavailableReason } from "@traycer/protocol/host";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 
-const PROVIDERS_LIST_METHOD_DISCRIMINATOR = "providers.list";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { invalidateProviderFamilyQueries } from "@/lib/query-keys/providers-query-keys";
 
 /** The `available: true` arm of `ProviderRateLimits` - the only shape worth retaining. */
 export type AvailableProviderRateLimits = Extract<
@@ -140,28 +141,55 @@ function isManagedProfileCapableRateLimitsResponse(
   );
 }
 
+// Hosts owed a `providers.list` re-read once their rate-limit reads settle.
+const owedConvergence = new WeakMap<QueryClient, Set<string>>();
+
 /**
- * Converges the composer's rate-limit switch-prompt banner (which reads
- * `providers.list`) with whatever this `host.getRateLimitUsage` fetch just
- * learned: a profile the popover or the background poll just observed
- * crossing into (or out of) near/hard limit should not wait for
- * `providers.list`'s own unrelated refetch cadence to reflect that.
- *
- * Invalidated by a broad key-prefix predicate rather than one exact `hostId`:
- * this fetch's own host (the default host, or whichever host the fetch's scope
- * names) is not necessarily the tab host the banner's
- * `providers.list` query is scoped to, and `providers.list` is a cheap
- * cache-only host read (no subprocess, no account probe), so invalidating it
- * across every currently-cached host scope is safe.
+ * A gauge is host-local; refresh only that host's provider snapshot. The
+ * re-read waits for the host's last in-flight rate-limit read to settle, so a
+ * burst of reads (every provider at reload) converges the list once, after the
+ * final capture, instead of once per response.
+ * ponytail: a slow straggler read holds its host's convergence until it
+ * settles; a host capture timestamp on `host.getRateLimitUsage` would let each
+ * response converge only when it is newer than the cached row.
  */
 function invalidateProvidersListForConvergence(
   queryClient: QueryClient,
+  queryKey: QueryKey,
   response: RateLimitUsageResponse,
 ): void {
   if (!isManagedProfileCapableRateLimitsResponse(response)) return;
-  void queryClient.invalidateQueries({
-    predicate: (query) =>
-      query.queryKey.includes(PROVIDERS_LIST_METHOD_DISCRIMINATOR),
+  const hostId = queryKey[1];
+  if (typeof hostId !== "string") return;
+  let owed = owedConvergence.get(queryClient);
+  if (owed === undefined) {
+    owed = new Set();
+    owedConvergence.set(queryClient, owed);
+    subscribeConvergenceOnSettle(queryClient, owed);
+  }
+  owed.add(hostId);
+}
+
+function subscribeConvergenceOnSettle(
+  queryClient: QueryClient,
+  owed: Set<string>,
+): void {
+  queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== "updated" && event.type !== "removed") return;
+    for (const hostId of owed) {
+      const rateLimitReads = hostQueryKeys.methodScope(
+        hostId,
+        "host.getRateLimitUsage",
+      );
+      if (queryClient.isFetching({ queryKey: rateLimitReads }) > 0) continue;
+      owed.delete(hostId);
+      invalidateProviderFamilyQueries(
+        queryClient,
+        hostId,
+        ["providers.list"],
+        "classic",
+      );
+    }
   });
 }
 
@@ -258,7 +286,11 @@ export function mapResponseToProviderRateLimitEnvelope(args: {
   const previous = args.queryClient.getQueryData<ProviderRateLimitEnvelope>(
     args.queryKey,
   );
-  invalidateProvidersListForConvergence(args.queryClient, args.response);
+  invalidateProvidersListForConvergence(
+    args.queryClient,
+    args.queryKey,
+    args.response,
+  );
   return buildProviderRateLimitEnvelope(previous, args.response, Date.now());
 }
 

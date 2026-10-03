@@ -8,9 +8,20 @@ import {
   getHistoryController,
   type PersistentHistoryController,
 } from "../persistent-history";
+import {
+  cancelDeferredJsonWrites,
+  flushDeferredJsonWrite,
+} from "@/lib/persist/deferred-json-storage";
 
 function storageKey(windowId: string): string {
   return `traycer-gui-app:last-route:${windowId}`;
+}
+
+// Serialization is now debounced ~100ms after each navigation; call this
+// before a disk assertion to materialize whatever is currently pending,
+// mirroring the app's own pagehide/beforeunload/hidden lifecycle flush.
+function flushHistory(windowId: string): void {
+  flushDeferredJsonWrite(storageKey(windowId));
 }
 
 function controllerOf(history: RouterHistory): PersistentHistoryController {
@@ -77,6 +88,12 @@ function readEntryKeyOf(state: unknown): string {
 beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
+  // A test that pushes/replaces without an explicit flush leaves a write
+  // queued in the shared deferred-json-storage module (a singleton keyed by
+  // storage key, not reset by clearing localStorage above). Left alone, the
+  // NEXT test's `createPersistentMemoryHistory` would auto-flush it via
+  // `loadPersistedState` and read back a stale prior test's stack.
+  cancelDeferredJsonWrites();
 });
 
 describe("createPersistentMemoryHistory", () => {
@@ -251,6 +268,7 @@ describe("createPersistentMemoryHistory", () => {
     expect(controller.getEntries()).toEqual(entries);
     expect(controller.getIndex()).toBe(6);
     expect(history.location.pathname).toBe("/draft/552a2b55");
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({ entries, index: 6 });
   });
 
@@ -581,6 +599,7 @@ describe("PersistentHistoryController", () => {
 
     controller.prune((href) => href === "/draft/dead-draft");
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
       index: 1,
@@ -644,14 +663,18 @@ describe("PersistentHistoryController", () => {
       "/epics/epic-b/tab-b",
     ]);
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
       index: 1,
     });
 
-    // Navigating onto the bare landing must not clobber the remembered route.
+    // Navigating onto the bare landing must not clobber the remembered route -
+    // and must not even queue a write, so the earlier pending snapshot (had
+    // it not already flushed above) would survive untouched too.
     history.push("/");
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
       index: 1,
@@ -665,6 +688,7 @@ describe("PersistentHistoryController", () => {
   it("does not persist /when-you-quit, mirroring the bare-`/` rule", () => {
     const history = seedStack("window-a", ["/settings/general"]);
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/settings/general"],
       index: 0,
@@ -672,6 +696,7 @@ describe("PersistentHistoryController", () => {
 
     history.push("/when-you-quit");
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/settings/general"],
       index: 0,
@@ -683,6 +708,7 @@ describe("PersistentHistoryController", () => {
 
     history.push("/settings/host");
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/settings/general", "/settings/host"],
       index: 1,
@@ -860,6 +886,7 @@ describe("PersistentHistoryController", () => {
 
     history.replace("/epics/epic-b/tab-b");
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
       index: 1,
@@ -875,6 +902,7 @@ describe("PersistentHistoryController", () => {
 
     history.replace("/epics/epic-b/tab-b");
 
+    flushHistory("window-a");
     expect(readPersisted("window-a")).toEqual({
       entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
       index: 1,
@@ -920,6 +948,7 @@ describe("PersistentHistoryController", () => {
       history.push(`/epics/epic-${i}/tab-${i}`);
     }
 
+    flushHistory("window-a");
     const persisted = readPersisted("window-a");
     if (persisted === null) throw new Error("expected persisted stack");
     expect(persisted.entries.length).toBe(100);
@@ -948,6 +977,7 @@ describe("PersistentHistoryController", () => {
     const current = controller.getEntries()[0];
     expect(history.location.pathname).toBe(current);
 
+    flushHistory("window-a");
     const persisted = readPersisted("window-a");
     if (persisted === null) throw new Error("expected persisted stack");
     expect(persisted.entries.length).toBe(100);
@@ -1063,6 +1093,7 @@ describe("PersistentHistoryController", () => {
       const controller = controllerOf(history);
       controller.prune((href) => href === "/draft/dead-pane");
 
+      flushHistory("window-a");
       expect(readPersisted("window-a")).toEqual({
         entries: ["/epics/epic-a/tab-a"],
         index: 0,
@@ -1170,6 +1201,7 @@ describe("PersistentHistoryController", () => {
       expect(history.location.pathname).toBe("/epics/epic-b/tab-b");
       expect(history.location.state.__TSR_index).toBe(1);
 
+      flushHistory("window-a");
       expect(readPersisted("window-a")).toEqual({
         entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
         index: 1,
@@ -1224,6 +1256,246 @@ describe("PersistentHistoryController", () => {
         "/epics/epic-b/tab-b",
       ]);
       expect(controller.getIndex()).toBe(1);
+    });
+  });
+});
+
+describe("debounced persistence", () => {
+  it("keeps in-memory navigation and back/forward immediate while the disk write stays pending", () => {
+    const history = createPersistentMemoryHistory(
+      "/epics/epic-a/tab-a",
+      "window-a",
+    );
+    const controller = controllerOf(history);
+    flushHistory("window-a");
+
+    history.push("/epics/epic-b/tab-b");
+
+    // Every in-memory read reflects the new location immediately - no flush
+    // required.
+    expect(controller.getEntries()).toEqual([
+      "/epics/epic-a/tab-a",
+      "/epics/epic-b/tab-b",
+    ]);
+    expect(controller.getIndex()).toBe(1);
+    expect(controller.canGoBack()).toBe(true);
+    expect(history.location.pathname).toBe("/epics/epic-b/tab-b");
+
+    // The disk write is still the PRE-push snapshot - nothing has flushed yet.
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/epics/epic-a/tab-a"],
+      index: 0,
+    });
+
+    history.back();
+
+    expect(controller.getIndex()).toBe(0);
+    expect(controller.canGoBack()).toBe(false);
+    expect(history.location.pathname).toBe("/epics/epic-a/tab-a");
+    // Still the same stale disk snapshot from before either navigation.
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/epics/epic-a/tab-a"],
+      index: 0,
+    });
+  });
+
+  function fireLifecycleFlushTrigger(
+    trigger: "pagehide" | "beforeunload" | "hidden",
+  ): void {
+    if (trigger === "hidden") {
+      const visibilityStateSpy = vi
+        .spyOn(document, "visibilityState", "get")
+        .mockReturnValue("hidden");
+      try {
+        document.dispatchEvent(new Event("visibilitychange"));
+      } finally {
+        visibilityStateSpy.mockRestore();
+      }
+      return;
+    }
+    window.dispatchEvent(new Event(trigger));
+  }
+
+  it.each(["pagehide", "beforeunload", "hidden"] as const)(
+    "flushes the latest pending write on %s, not an intermediate one",
+    (trigger) => {
+      const history = createPersistentMemoryHistory(
+        "/epics/epic-a/tab-a",
+        "window-a",
+      );
+      flushHistory("window-a");
+
+      history.push("/epics/epic-b/tab-b");
+      history.push("/epics/epic-c/tab-c");
+      expect(readPersisted("window-a")).toEqual({
+        entries: ["/epics/epic-a/tab-a"],
+        index: 0,
+      });
+
+      fireLifecycleFlushTrigger(trigger);
+
+      expect(readPersisted("window-a")).toEqual({
+        entries: [
+          "/epics/epic-a/tab-a",
+          "/epics/epic-b/tab-b",
+          "/epics/epic-c/tab-c",
+        ],
+        index: 2,
+      });
+    },
+  );
+
+  it("flushes on its own after the real debounce timer elapses, with no explicit flush or lifecycle event", () => {
+    vi.useFakeTimers();
+    try {
+      const history = createPersistentMemoryHistory(
+        "/epics/epic-a/tab-a",
+        "window-a",
+      );
+      flushHistory("window-a");
+
+      history.push("/epics/epic-b/tab-b");
+      expect(readPersisted("window-a")).toEqual({
+        entries: ["/epics/epic-a/tab-a"],
+        index: 0,
+      });
+
+      vi.advanceTimersByTime(99);
+      expect(readPersisted("window-a")).toEqual({
+        entries: ["/epics/epic-a/tab-a"],
+        index: 0,
+      });
+
+      vi.advanceTimersByTime(1);
+      expect(readPersisted("window-a")).toEqual({
+        entries: ["/epics/epic-a/tab-a", "/epics/epic-b/tab-b"],
+        index: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes only this window's key on history.destroy()", () => {
+    const historyA = createPersistentMemoryHistory(
+      "/epics/epic-a/tab-a",
+      "window-a",
+    );
+    const historyB = createPersistentMemoryHistory(
+      "/epics/epic-b/tab-b",
+      "window-b",
+    );
+    flushHistory("window-a");
+    flushHistory("window-b");
+
+    historyA.push("/draft/draft-a");
+    historyB.push("/draft/draft-b");
+
+    historyA.destroy();
+
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/epics/epic-a/tab-a", "/draft/draft-a"],
+      index: 1,
+    });
+    // The other window's write is untouched by A's destroy.
+    expect(readPersisted("window-b")).toEqual({
+      entries: ["/epics/epic-b/tab-b"],
+      index: 0,
+    });
+
+    flushHistory("window-b");
+  });
+
+  it("reads pending state on a cold reload even before the debounce timer or a lifecycle flush fires", () => {
+    // `loadPersistedState` (called at construction) flushes this window's
+    // key itself, so a second history built for the same window sees the
+    // first one's still-pending write without any explicit flush.
+    const firstBoot = createPersistentMemoryHistory(
+      "/epics/epic-a/tab-a",
+      "window-a",
+    );
+    flushHistory("window-a");
+    firstBoot.push("/draft/draft-a");
+
+    const reload = createPersistentMemoryHistory(
+      "/epics/epic-a/tab-a",
+      "window-a",
+    );
+
+    expect(reload.location.pathname).toBe("/draft/draft-a");
+  });
+
+  // A same-document localStorage write never fires `storage`; only a peer
+  // window does, so the event is built by hand.
+  it.each([
+    {
+      label: "a peer's replacement of this window's key",
+      peer: () => {
+        const snapshot = { entries: ["/epics/epic-a/tab-peer"], index: 0 };
+        window.localStorage.setItem(
+          storageKey("window-a"),
+          JSON.stringify(snapshot),
+        );
+        return { key: storageKey("window-a"), expected: snapshot };
+      },
+    },
+    {
+      label: "a peer's clear-all",
+      peer: () => {
+        window.localStorage.clear();
+        return { key: null, expected: null };
+      },
+    },
+  ])(
+    "a queued write does not survive $label, on debounce flush or destroy()",
+    ({ peer }) => {
+      const history = createPersistentMemoryHistory(
+        "/epics/epic-a/tab-a",
+        "window-a",
+      );
+      flushHistory("window-a");
+      history.push("/draft/draft-a");
+
+      const { key, expected } = peer();
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key,
+          storageArea: window.localStorage,
+        }),
+      );
+
+      flushHistory("window-a");
+      expect(readPersisted("window-a")).toEqual(expected);
+      history.destroy();
+      expect(readPersisted("window-a")).toEqual(expected);
+    },
+  );
+
+  it("keeps a queued write when the event names another key or another storage area", () => {
+    const history = createPersistentMemoryHistory(
+      "/epics/epic-a/tab-a",
+      "window-a",
+    );
+    flushHistory("window-a");
+    history.push("/draft/draft-a");
+
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: storageKey("window-b"),
+        storageArea: window.localStorage,
+      }),
+    );
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: storageKey("window-a"),
+        storageArea: window.sessionStorage,
+      }),
+    );
+
+    history.destroy();
+    expect(readPersisted("window-a")).toEqual({
+      entries: ["/epics/epic-a/tab-a", "/draft/draft-a"],
+      index: 1,
     });
   });
 });

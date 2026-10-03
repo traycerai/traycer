@@ -35,6 +35,7 @@ import {
   __resetTabSyncCoordinatorForTesting,
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
+import { resetComposerDraftPersistence } from "@/stores/composer/__tests__/composer-draft-rows";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -171,16 +172,15 @@ async function publishChatDraft(log: HostLog): Promise<string> {
   return draftId;
 }
 
-afterEach(() => {
+afterEach(async () => {
   resetDraftMirrorCoordinatorForTests();
   resetLandingDraftRetirementsForTests();
-  useComposerDraftStore.setState({
-    drafts: {},
-    pendingSubmittedDraftDeletes: {},
-  });
+  // Also drops the storage adapter's revision baseline: clearing localStorage
+  // alone leaves it naming rows that are gone, and the next test's first
+  // custody write on the same chat would report a conflict.
+  await resetComposerDraftPersistence();
   useNewConversationModalStore.getState().resetForTests();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  window.localStorage.clear();
 });
 
 describe("deleteComposerDraftRow routes the host tombstone itself (critique C1)", () => {

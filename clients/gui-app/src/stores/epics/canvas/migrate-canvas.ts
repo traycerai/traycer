@@ -293,10 +293,19 @@ export function serializeTileNode(node: TileLayoutNode): DesktopJsonValue {
   };
 }
 
+// Canvas snapshots are immutable; share unchanged canvases between local
+// persistence, desktop projection, and echo comparisons.
+const serializedCanvasByReference = new WeakMap<
+  EpicCanvasState,
+  DesktopJsonValue
+>();
+
 export function serializeEpicCanvasState(
   canvas: EpicCanvasState,
 ): DesktopJsonValue {
-  return {
+  const cached = serializedCanvasByReference.get(canvas);
+  if (cached !== undefined) return cached;
+  const serialized: DesktopJsonValue = {
     root: canvas.root === null ? null : serializeTileNode(canvas.root),
     activePaneId: canvas.activePaneId,
     tilesByInstanceId: Object.fromEntries(
@@ -306,6 +315,8 @@ export function serializeEpicCanvasState(
     ),
     sizesByGroupId: serializeSizes(canvas.sizesByGroupId),
   };
+  serializedCanvasByReference.set(canvas, serialized);
+  return serialized;
 }
 
 function serializeSizes(sizes: SizesByGroupId): DesktopJsonValue {
@@ -317,11 +328,11 @@ function serializeSizes(sizes: SizesByGroupId): DesktopJsonValue {
 }
 
 export function serializeCanvasByTabId(
-  value: Readonly<Record<string, EpicCanvasState>>,
+  value: Readonly<Record<string, EpicCanvasState | undefined>>,
 ): Readonly<Record<string, DesktopJsonValue>> {
   const out: Record<string, DesktopJsonValue> = {};
   for (const [tabId, canvas] of Object.entries(value)) {
-    out[tabId] = serializeEpicCanvasState(canvas);
+    if (canvas !== undefined) out[tabId] = serializeEpicCanvasState(canvas);
   }
   return out;
 }

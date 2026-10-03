@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { StreamCloseReason } from "../../host-transport/i-stream-session";
 import {
   createHostReconnectEngine,
@@ -170,13 +178,20 @@ describe("close-reason predicates", () => {
 
 describe("reopen lanes (R10)", () => {
   let engine: HostReconnectEngine;
+  let randomSpy: MockInstance<() => number>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     engine = createHostReconnectEngine();
+    // `scheduleAfterClose` now jitters its delay (`jitteredBackoffFor(...,
+    // Math.random)`); pin it to 1 so every exact-boundary assertion below
+    // keeps asserting the un-jittered schedule it was written against (see
+    // "jitters two lanes..." below for the jitter itself).
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
   });
 
   afterEach(() => {
+    randomSpy.mockRestore();
     vi.useRealTimers();
   });
 
@@ -276,6 +291,31 @@ describe("reopen lanes (R10)", () => {
     vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS - 1);
     expect(reopenB).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
+    expect(reopenB).toHaveBeenCalledTimes(1);
+  });
+
+  it("jitters two lanes at the same backoff stage to different bounded delays", () => {
+    const reopenA = vi.fn();
+    const reopenB = vi.fn();
+    const laneA = engine.openReopenLane(reopenA, isReopenableHostStreamClose);
+    const laneB = engine.openReopenLane(reopenB, isReopenableHostStreamClose);
+
+    // Same backoff stage, but each `scheduleAfterClose` draws its own
+    // `Math.random()` call - a low and a high roll land at opposite ends of
+    // the jittered [0.5, 1) range.
+    randomSpy.mockReturnValueOnce(0).mockReturnValueOnce(1);
+    laneA.scheduleAfterClose(fatalClose("INTERNAL"));
+    laneB.scheduleAfterClose(fatalClose("INTERNAL"));
+
+    const lowDelayMs = Math.round(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS * 0.5);
+    const highDelayMs = HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS;
+    expect(lowDelayMs).toBeLessThan(highDelayMs);
+
+    vi.advanceTimersByTime(lowDelayMs);
+    expect(reopenA).toHaveBeenCalledTimes(1);
+    expect(reopenB).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(highDelayMs - lowDelayMs);
     expect(reopenB).toHaveBeenCalledTimes(1);
   });
 });

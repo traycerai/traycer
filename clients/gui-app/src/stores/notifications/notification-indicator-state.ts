@@ -1,3 +1,5 @@
+import { shallow } from "zustand/shallow";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import {
   HOST_NOTIFICATION_PENDING_PROMPT_KINDS,
   type HostNotificationEntryV22,
@@ -14,6 +16,12 @@ import {
   useAppLocalNotificationsStore,
   type AppLocalNotificationsState,
 } from "@/stores/notifications/app-local-notifications-store";
+
+const appLocalNotificationsStoreApi = {
+  getState: useAppLocalNotificationsStore.getState,
+  getInitialState: useAppLocalNotificationsStore.getInitialState,
+  subscribe: useAppLocalNotificationsStore.subscribe,
+};
 
 export interface NotificationIndicatorState {
   readonly unreadFailure: boolean;
@@ -58,7 +66,20 @@ export function selectNotificationIndicatorState(
   originHostId: string | null,
   indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
-  const hostState = selectHostIndicatorState(indicators, entity, originHostId);
+  return selectIndicatorStateFromHost(
+    state,
+    entity,
+    originHostId,
+    selectHostIndicatorState(indicators, entity, originHostId),
+  );
+}
+
+function selectIndicatorStateFromHost(
+  state: Pick<AppLocalNotificationsState, "byId">,
+  entity: HostNotificationsEntityRef,
+  originHostId: string | null,
+  hostState: HostNotificationsIndicatorState,
+): NotificationIndicatorState {
   const {
     terminal: unreadLocalTerminalFailure,
     nonTerminal: unreadLocalNonTerminalFailure,
@@ -119,19 +140,30 @@ export function useNotificationIndicatorState(
   originHostId: string | null,
   indicators: SurfaceNotificationIndicators,
 ): NotificationIndicatorState {
-  const byId = useAppLocalNotificationsStore((state) => state.byId);
-  return selectNotificationIndicatorState(
-    { byId },
+  return useHostNotificationIndicatorState(
     entity,
     originHostId,
-    indicators,
+    selectHostIndicatorState(indicators, entity, originHostId),
+  );
+}
+
+export function useHostNotificationIndicatorState(
+  entity: HostNotificationsEntityRef,
+  originHostId: string | null,
+  hostState: HostNotificationsIndicatorState,
+): NotificationIndicatorState {
+  return useStoreWithEqualityFn(
+    appLocalNotificationsStoreApi,
+    (state) =>
+      selectIndicatorStateFromHost(state, entity, originHostId, hostState),
+    shallow,
   );
 }
 
 export const EMPTY_INDICATOR_STATE_RESPONSE: HostNotificationsIndicatorStateResponse =
   { epics: {}, chats: {} };
 
-function selectHostIndicatorState(
+export function selectHostIndicatorState(
   indicators: SurfaceNotificationIndicators,
   entity: HostNotificationsEntityRef,
   originHostId: string | null,
@@ -233,6 +265,122 @@ export function selectCloudNotificationIndicatorProjection(
     aggregate: finalizeCloudIndicatorAccumulator(accumulator),
     byOriginHostId,
   };
+}
+
+/** Feed-owned projection. Reconcile flags so unrelated entities retain identity. */
+export function projectCloudNotificationIndicators(
+  rows: Readonly<Partial<Record<string, HostNotificationsCloudFeedRowV11>>>,
+  previous: SurfaceNotificationIndicators,
+): SurfaceNotificationIndicators {
+  const epicIds = new Set<string>();
+  const chatIds = new Set<string>();
+  for (const row of Object.values(rows)) {
+    if (row === undefined) continue;
+    if (row.entry.epicId !== null) epicIds.add(row.entry.epicId);
+    if (row.entry.chatId !== null) chatIds.add(row.entry.chatId);
+  }
+  const projection = selectCloudNotificationIndicatorProjection(
+    rows,
+    [...epicIds],
+    [...chatIds],
+  );
+  const aggregate = reconcileIndicatorResponse(previous, projection.aggregate);
+  const byOriginHostId = Object.fromEntries(
+    Object.entries(projection.byOriginHostId).map(([hostId, response]) => [
+      hostId,
+      reconcileIndicatorResponse(
+        previous.byOriginHostId?.[hostId] ?? EMPTY_INDICATOR_STATE_RESPONSE,
+        response,
+      ),
+    ]),
+  );
+  return aggregate === previous &&
+    shallow(previous.byOriginHostId, byOriginHostId)
+    ? previous
+    : { ...aggregate, byOriginHostId };
+}
+
+function reconcileIndicatorResponse(
+  previous: HostNotificationsIndicatorStateResponse,
+  next: HostNotificationsIndicatorStateResponse,
+): HostNotificationsIndicatorStateResponse {
+  const reconcile = (
+    before: HostNotificationsIndicatorStateResponse["epics"],
+    after: HostNotificationsIndicatorStateResponse["epics"],
+  ) => {
+    const entries = Object.fromEntries(
+      Object.entries(after).map(([id, flags]) => [
+        id,
+        shallow(before[id], flags) ? before[id] : flags,
+      ]),
+    );
+    return shallow(before, entries) ? before : entries;
+  };
+  const epics = reconcile(previous.epics, next.epics);
+  const chats = reconcile(previous.chats, next.chats);
+  return epics === previous.epics && chats === previous.chats
+    ? previous
+    : { epics, chats };
+}
+
+/** Read the already indexed feed; this never scans notification rows. */
+export function selectNotificationIndicatorsForEntities(
+  indicators: SurfaceNotificationIndicators,
+  epicIds: ReadonlyArray<string>,
+  chatIds: ReadonlyArray<string>,
+): SurfaceNotificationIndicators {
+  const select = (response: HostNotificationsIndicatorStateResponse) => ({
+    epics: Object.fromEntries(
+      epicIds
+        .filter((id) => Object.hasOwn(response.epics, id))
+        .map((id) => [id, response.epics[id]]),
+    ),
+    chats: Object.fromEntries(
+      chatIds
+        .filter((id) => Object.hasOwn(response.chats, id))
+        .map((id) => [id, response.chats[id]]),
+    ),
+  });
+  const byOriginHostId: Record<
+    string,
+    HostNotificationsIndicatorStateResponse
+  > = {};
+  for (const [hostId, response] of Object.entries(
+    indicators.byOriginHostId ?? {},
+  )) {
+    const selected = select(response);
+    if (
+      Object.keys(selected.epics).length > 0 ||
+      Object.keys(selected.chats).length > 0
+    ) {
+      byOriginHostId[hostId] = selected;
+    }
+  }
+  return { ...select(indicators), byOriginHostId };
+}
+
+export function surfaceNotificationIndicatorsEqual(
+  a: SurfaceNotificationIndicators,
+  b: SurfaceNotificationIndicators,
+): boolean {
+  if (a === b) return true;
+  const responseEqual = (
+    left: HostNotificationsIndicatorStateResponse,
+    right: HostNotificationsIndicatorStateResponse,
+  ) => shallow(left.epics, right.epics) && shallow(left.chats, right.chats);
+  if (!responseEqual(a, b)) return false;
+  if (a.byOriginHostId === b.byOriginHostId) return true;
+  if (a.byOriginHostId === undefined || b.byOriginHostId === undefined) {
+    return false;
+  }
+  const right = b.byOriginHostId;
+  return (
+    Object.keys(a.byOriginHostId).length === Object.keys(right).length &&
+    Object.entries(a.byOriginHostId).every(
+      ([hostId, response]) =>
+        Object.hasOwn(right, hostId) && responseEqual(response, right[hostId]),
+    )
+  );
 }
 
 function cloudIndicatorEntryIsWanted(

@@ -157,12 +157,33 @@ function joinIsDrawn(): boolean {
   );
 }
 
-function isWhollyInView(scroller: HTMLElement, box: BoxRect): boolean {
+function isWhollyInView(
+  scroller: HTMLElement,
+  scrollLeft: number,
+  box: BoxRect,
+): boolean {
   return (
-    box.left >= scroller.scrollLeft - SETTLED_PX &&
-    box.left + box.width <=
-      scroller.scrollLeft + scroller.clientWidth + SETTLED_PX
+    box.left >= scrollLeft - SETTLED_PX &&
+    box.left + box.width <= scrollLeft + scroller.clientWidth + SETTLED_PX
   );
+}
+
+/**
+ * The scroll offset the strip settles on once it reveals the destination.
+ * The reveal is the tab-strip geometry coordinator's (`revealedOffset`), on
+ * the frame AFTER this commit, so a plan made now reads where the strip will
+ * be rather than where it is. Same rule, applied to the member's outer box
+ * (`boxOf` insets it); a member wider than the strip is not revealed whole.
+ */
+function revealedScrollLeft(scroller: HTMLElement, to: BoxRect): number {
+  const offset = scroller.scrollLeft;
+  const extent = scroller.clientWidth;
+  const start = to.left - BOX_INSET_PX;
+  const end = to.left + to.width + BOX_INSET_PX;
+  if (end - start > extent) return offset;
+  if (end > offset + extent + 1) return Math.max(0, end - extent);
+  if (start < offset - 1) return Math.max(0, start);
+  return offset;
 }
 
 /**
@@ -277,14 +298,15 @@ function planTravel(input: {
   const destinationFrame = frameOf(scroller, activeItemId);
   if (destinationFrame === null) return null;
   const to = boxOf(scroller, destinationFrame);
-  if (!isWhollyInView(scroller, to)) return null;
+  const scrollLeft = revealedScrollLeft(scroller, to);
+  if (!isWhollyInView(scroller, scrollLeft, to)) return null;
   // A turn starts wherever the traveller is now, which a quick run of
   // switches on a scrolled strip can have left out of view.
   const from =
     flight === null
       ? sourceBox(scroller, previous, input.closed)
       : flightBox(flight, to);
-  if (from === null || !isWhollyInView(scroller, from)) return null;
+  if (from === null || !isWhollyInView(scroller, scrollLeft, from)) return null;
   return { itemId: activeItemId, from: flight === null ? from : null, to };
 }
 
@@ -343,9 +365,11 @@ function fly(input: {
 }
 
 /**
- * Must be called after `useStripScroller`: its reveal runs in an earlier
- * layout effect of the same commit, so the destination measured here is
- * already scrolled into view.
+ * Plans in the commit that changes the selection. The strip's reveal lands
+ * on the next frame (the tab-strip geometry coordinator), so the plan judges
+ * the slide against the offset that reveal will settle on
+ * (`revealedScrollLeft`); every box it measures is in content coordinates,
+ * which a scroll does not move.
  */
 export function useSelectionTravel(input: {
   readonly scrollerRef: RefObject<HTMLDivElement | null>;

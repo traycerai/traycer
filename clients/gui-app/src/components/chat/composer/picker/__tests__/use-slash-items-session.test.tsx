@@ -70,6 +70,7 @@ function openSession(
 function renderItems(store: ComposerPickerStore) {
   return renderHook(() =>
     useSlashItems({
+      isActive: true,
       pickerStore: store,
       hostClient: null,
       harnessId: "claude",

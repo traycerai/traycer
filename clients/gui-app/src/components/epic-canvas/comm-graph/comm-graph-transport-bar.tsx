@@ -88,6 +88,7 @@ const MARKER_HOVER_DELAY_MS = 500;
  * the key IS the lifetime: rows the log has dropped take their titles with
  * them.
  */
+// render-cache: immutable event key; title is a pure function of that event.
 const markerTitles = new WeakMap<CommGraphEvent, string>();
 
 export interface CommGraphTransportBarProps {

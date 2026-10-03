@@ -377,6 +377,20 @@ function FallbackSettingsPanelBody(props: {
   );
 }
 
+async function readBackFallbackPolicy(
+  refetchPolicy: () => Promise<FallbackPolicy | null>,
+  setReadBackInFlight: (pending: boolean) => void,
+  onPolicy: (policy: FallbackPolicy | null) => void,
+): Promise<void> {
+  setReadBackInFlight(true);
+  try {
+    const policy = await refetchPolicy();
+    onPolicy(policy);
+  } finally {
+    setReadBackInFlight(false);
+  }
+}
+
 function FallbackPolicyEditor(props: {
   readonly initialPolicy: FallbackPolicy;
   readonly inFlightCount: number;
@@ -594,14 +608,14 @@ function FallbackPolicyEditor(props: {
    */
   const reconcileUnknownSave = useCallback(
     async (requestId: number): Promise<void> => {
-      setReadBackInFlight(true);
-      try {
-        const policy = await refetchPolicy();
-        if (policy === null) return;
-        dispatch({ type: "reconciled", requestId, policy });
-      } finally {
-        setReadBackInFlight(false);
-      }
+      await readBackFallbackPolicy(
+        refetchPolicy,
+        setReadBackInFlight,
+        (policy) => {
+          if (policy === null) return;
+          dispatch({ type: "reconciled", requestId, policy });
+        },
+      );
     },
     [refetchPolicy],
   );
@@ -787,26 +801,26 @@ function FallbackPolicyEditor(props: {
    */
   const refreshAfterReset = useCallback(
     async (requestId: number | null): Promise<void> => {
-      setReadBackInFlight(true);
-      try {
-        const policy = await refetchPolicy();
-        if (policy === null) {
-          // A retry that fails changes nothing, and says so by dispatching
-          // nothing: the notice this would raise is the notice already on
-          // screen, and re-raising it would only re-render the same sentence.
-          if (requestId === null) return;
-          dispatch({
-            type: "reset-unrefreshed",
-            requestId,
-            message:
-              "Your settings were reset, but we couldn't load what's on the host.",
-          });
-          return;
-        }
-        onPolicyReplaced();
-      } finally {
-        setReadBackInFlight(false);
-      }
+      await readBackFallbackPolicy(
+        refetchPolicy,
+        setReadBackInFlight,
+        (policy) => {
+          if (policy === null) {
+            // A retry that fails changes nothing, and says so by dispatching
+            // nothing: the notice this would raise is the notice already on
+            // screen, and re-raising it would only re-render the same sentence.
+            if (requestId === null) return;
+            dispatch({
+              type: "reset-unrefreshed",
+              requestId,
+              message:
+                "Your settings were reset, but we couldn't load what's on the host.",
+            });
+            return;
+          }
+          onPolicyReplaced();
+        },
+      );
     },
     [refetchPolicy, onPolicyReplaced],
   );

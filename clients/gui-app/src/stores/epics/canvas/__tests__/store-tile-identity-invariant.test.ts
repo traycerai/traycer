@@ -35,6 +35,7 @@ import { serializeEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
 import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { makeCommGraphTileRef } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import { epicCanvasKey } from "@/lib/persist";
+import { cancelDeferredJsonWrites } from "@/lib/persist/deferred-json-storage";
 import type {
   BlankTileRef,
   CommGraphTileRef,
@@ -64,6 +65,10 @@ beforeEach(() => {
   window.localStorage.clear();
   useEpicCanvasStore.persist.setOptions({ name: epicCanvasKey(null) });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  // The reset above queues its own debounced local-persist write; drop it so
+  // a later direct `window.localStorage.setItem` seed in a test body isn't
+  // clobbered when `persist.rehydrate()`'s read flushes pending writes first.
+  cancelDeferredJsonWrites();
 });
 
 function requireCanvas(tabId: string): EpicCanvasState {
@@ -841,11 +846,13 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
     const tabId = store.openEpicTab("epic-1", "Epic One");
     store.openTileInTab(tabId, SPEC_A);
 
-    const updates: Array<DesktopPerWindowStatePatch> = [];
+    // Local mutations now go through `schedule()` (materialized lazily at
+    // flush), not the eager `update()` - track calls to it instead.
+    const scheduleCalls: Array<() => DesktopPerWindowStatePatch> = [];
     const bridge: DesktopPerWindowProjectionBridge = {
-      update: (patch) => {
-        updates.push(patch);
-        return Promise.resolve();
+      update: () => Promise.resolve(),
+      schedule: (projection) => {
+        scheduleCalls.push(projection);
       },
       flush: () => Promise.resolve(),
       dispose: () => {},
@@ -872,12 +879,12 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
     expect(() => applyEpicCanvasDesktopProjection(snapshot)).toThrow(
       /identity invariant violated/i,
     );
-    expect(updates).toHaveLength(0);
+    expect(scheduleCalls).toHaveLength(0);
 
     // If `applyingDesktopProjection` stuck `true` after the throw above,
     // this valid local mutation would be silently suppressed too.
     useEpicCanvasStore.getState().openTileInTab(tabId, SPEC_C);
-    expect(updates).toHaveLength(1);
+    expect(scheduleCalls).toHaveLength(1);
   });
 
   it("throws when a desktop projection changes only a tab's epicId while its canvas stays identical (round-2 adversarial probe)", () => {

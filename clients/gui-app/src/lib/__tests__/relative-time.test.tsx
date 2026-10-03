@@ -1,6 +1,14 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
-import { useLayoutEffect } from "react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
+import { useLayoutEffect, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import {
   GRACE_COUNTDOWN_IMMINENT,
   createSharedClock,
@@ -427,6 +435,417 @@ describe("minute-clock hooks re-render with a NEW value after a live tick (compi
     // sampledNowOf())` on `timestamp` alone, so a regressed build still reads
     // `sameDayForm` here instead of the dated cross-midnight form.
     expect(result.current).toBe(`${datePrefix}, ${sameDayForm}`);
+  });
+});
+
+/**
+ * W2-H2: `useRelativeLabel`/`useMessageTime`/`useClockValue` moved the
+ * `useSyncExternalStore` snapshot from a raw, always-advancing `now` (every
+ * hook here used to render off `sampledNowOf()` directly) to the already
+ * COMPUTED label. `useSyncExternalStore` bails a re-render when the new
+ * snapshot is `Object.is`-equal to the last one, so once the label text
+ * cannot move on a given tick (a settled short-date bucket, a same-day
+ * message stamp), that tick must not re-render the leaf at all - the exact
+ * per-row cost the header/pane-tab audit measured piling up under Cmd+].
+ */
+describe("minute-clock label snapshots do not re-render once the text has settled (compiled)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /**
+   * `vi.spyOn(Intl.DateTimeFormat.prototype, "format", "get")` does not
+   * reliably count calls made through a formatter this module already cached
+   * before the spy was installed: instrumenting `formatDateTime` directly
+   * showed `.format()` genuinely being reached on the tick below while the
+   * getter spy stayed at 0 calls - a runtime accessor-caching quirk, not a
+   * property of the source under test. A subclass sidesteps that quirk; it
+   * needs its own module instance (`vi.resetModules()` + a dynamic import)
+   * since `dateTimeFormatters` is a module-level cache and the override must
+   * be in place before any formatter is constructed under it.
+   *
+   * Fake timers installed FIRST, before the `Intl.DateTimeFormat` swap:
+   * vitest's fake-`Date` install replaces global `Intl.DateTimeFormat` with
+   * its own clock-aware wrapper, and that wrapper's constructor explicitly
+   * RETURNS a plain object carrying its own `format` own-property - which
+   * shadows a `class ... extends { format() {...} }` override on the
+   * prototype (an own property always wins the lookup over a prototype
+   * method), so overriding `format` this way is silently dead code if fake
+   * timers install AFTER the subclass. Wrapping the format function as an
+   * own property assigned from the SUBCLASS'S OWN CONSTRUCTOR - which runs
+   * as plain code after `super()` returns, regardless of what `super()`
+   * returned - sidesteps that shadowing (confirmed directly against this
+   * repo's Bun runtime before writing this fix).
+   */
+  async function withFormatCallCounter<T>(
+    run: (
+      relativeTime: typeof import("@/lib/relative-time"),
+      getFormatCallCount: () => number,
+    ) => T | Promise<T>,
+  ): Promise<T> {
+    vi.useFakeTimers();
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    let formatCallCount = 0;
+    class CountingDateTimeFormat extends RealDateTimeFormat {
+      constructor(
+        localeArg: string | readonly string[] | undefined,
+        options: Intl.DateTimeFormatOptions | undefined,
+      ) {
+        super(localeArg, options);
+        const originalFormat = this.format.bind(this);
+        this.format = (date: Date | number | undefined): string => {
+          formatCallCount += 1;
+          return originalFormat(date);
+        };
+      }
+    }
+    Intl.DateTimeFormat = CountingDateTimeFormat as typeof Intl.DateTimeFormat;
+    vi.resetModules();
+    try {
+      const relativeTime = await import("@/lib/relative-time");
+      return await run(relativeTime, () => formatCallCount);
+    } finally {
+      Intl.DateTimeFormat = RealDateTimeFormat;
+      vi.resetModules();
+      vi.useRealTimers();
+    }
+  }
+
+  it("useRelativeTimestamp: a minute tick does not re-render once the label has settled into the cached short-date bucket", async () => {
+    await withFormatCallCounter((relativeTime, getFormatCallCount) => {
+      const now = Date.now();
+      const createdAt = now - 10 * DAY_MS; // well past the cutoff -> short date
+      const renderProbe = vi.fn();
+      const { result } = renderHook(() => {
+        const label = relativeTime.useRelativeTimestamp(createdAt);
+        useLayoutEffect(() => {
+          renderProbe();
+        });
+        return label;
+      });
+      const expectedDate = new Date(createdAt).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+      expect(result.current).toBe(expectedDate);
+      const baseline = renderProbe.mock.calls.length;
+      // Captured AFTER the mount's own format call, so it only counts what
+      // the tick below triggers.
+      const formatCallsAtBaseline = getFormatCallCount();
+      // Sanity: the counter is actually alive (the mount's own render did
+      // format at least once) - without this, a broken counter stuck at 0
+      // would make every "stays the same" assertion below pass vacuously.
+      expect(formatCallsAtBaseline).toBeGreaterThan(0);
+
+      act(() => {
+        vi.advanceTimersByTime(MINUTE_MS);
+      });
+      // Falsification: a snapshot keyed on raw `now` (the pre-fix shape)
+      // re-renders on every tick even though a short-date label can never move
+      // within the same day.
+      expect(renderProbe.mock.calls.length).toBe(baseline);
+      // Distinct from the render-count pin above: this proves the cached
+      // string is returned WITHOUT re-invoking the expensive Intl formatter,
+      // not merely that React happened to bail on an identical result.
+      expect(getFormatCallCount()).toBe(formatCallsAtBaseline);
+      expect(result.current).toBe(expectedDate);
+    });
+  });
+
+  it("useMessageTime: a minute tick does not re-render or re-format while the local day is unchanged", async () => {
+    await withFormatCallCounter((relativeTime, getFormatCallCount) => {
+      const now = new Date(2026, 3, 23, 10, 0, 0).getTime();
+      vi.setSystemTime(now);
+      const timestamp = now - 5 * MINUTE_MS;
+      const renderProbe = vi.fn();
+      const { result } = renderHook(() => {
+        const label = relativeTime.useMessageTime(timestamp);
+        useLayoutEffect(() => {
+          renderProbe();
+        });
+        return label;
+      });
+      const baseline = renderProbe.mock.calls.length;
+      const formatCallsAtBaseline = getFormatCallCount();
+      expect(formatCallsAtBaseline).toBeGreaterThan(0);
+
+      act(() => {
+        vi.advanceTimersByTime(MINUTE_MS);
+      });
+      // Falsification: a snapshot keyed on raw `now` re-renders here even
+      // though `timestamp` is fixed and the day has not rolled over, so the
+      // day-scoped clock stamp cannot have changed.
+      expect(renderProbe.mock.calls.length).toBe(baseline);
+      // Distinct contract from the render-count pin: proves the cached label
+      // is returned without re-running `formatMessageTime`'s Intl call at all.
+      expect(getFormatCallCount()).toBe(formatCallsAtBaseline);
+      expect(result.current).toBe(
+        new Date(timestamp).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+      );
+    });
+  });
+
+  // Control for both cases above: the label DOES still update, and the leaf
+  // DOES still re-render, when the tick genuinely changes it - otherwise the
+  // "no re-render" pins above would also pass for a hook that never updates
+  // at all.
+  it("control: still re-renders with a new label once a tick actually crosses a bucket", () => {
+    vi.useFakeTimers();
+    const createdAt = Date.now();
+    const renderProbe = vi.fn();
+    const { result } = renderHook(() => {
+      const label = useRelativeTimestamp(createdAt);
+      useLayoutEffect(() => {
+        renderProbe();
+      });
+      return label;
+    });
+    expect(result.current).toBe("Just now");
+    const baseline = renderProbe.mock.calls.length;
+
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    expect(result.current).toBe("1m ago");
+    expect(renderProbe.mock.calls.length).toBeGreaterThan(baseline);
+  });
+});
+
+/**
+ * W2-H2: every minute-clock hook now gates its subscription on
+ * `usePaneVisible()` (`useClockValue`'s `visible && enabled ? clock.subscribe
+ * : subscribeIdle`). A hidden pane's leaf must not be woken by a tick it
+ * cannot show, and must catch up to the CURRENT label the instant it is
+ * revealed - not the stale one it went hidden with, and not one more tick
+ * later.
+ */
+describe("minute-clock hooks unsubscribe while hidden and reveal a fresh label", () => {
+  function RelativeTimestampLeaf(props: {
+    readonly createdAt: number;
+  }): ReactNode {
+    const label = useRelativeTimestamp(props.createdAt);
+    return <span data-testid="relative-label">{label}</span>;
+  }
+
+  function RelativeTimestampProbe(props: {
+    readonly createdAt: number;
+    readonly visible: boolean;
+  }): ReactNode {
+    return (
+      <PaneVisibilityContext.Provider value={props.visible}>
+        <RelativeTimestampLeaf createdAt={props.createdAt} />
+      </PaneVisibilityContext.Provider>
+    );
+  }
+
+  function MessageTimeLeaf(props: { readonly timestamp: number }): ReactNode {
+    const label = useMessageTime(props.timestamp);
+    return <span data-testid="message-time-label">{label}</span>;
+  }
+
+  function MessageTimeProbe(props: {
+    readonly timestamp: number;
+    readonly visible: boolean;
+  }): ReactNode {
+    return (
+      <PaneVisibilityContext.Provider value={props.visible}>
+        <MessageTimeLeaf timestamp={props.timestamp} />
+      </PaneVisibilityContext.Provider>
+    );
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  /**
+   * `minuteClock` is a module singleton (see the file-level notes above), and
+   * a HIDDEN mount reads its `sampledNow()` directly without ever
+   * subscribing to correct it - that is the exact behavior under test. So a
+   * hidden mount is the one place in this file where a stale sample left
+   * behind by an earlier test (any prior fake-time jump, since nothing
+   * resamples the clock while every subscriber is gone) would otherwise leak
+   * into this test instead of the module's own "no subscriber" cost. A
+   * throwaway visible subscriber forces the same correction `subscribe`
+   * would give a real caller, then leaves - the fixture's setup, not the
+   * behavior this test pins.
+   */
+  function warmUpSharedClock(): void {
+    const warmup = renderHook(() => useSampledNow());
+    warmup.unmount();
+  }
+
+  it("useRelativeTimestamp: freezes while hidden and catches up to the real elapsed time on reveal", () => {
+    vi.useFakeTimers();
+    warmUpSharedClock();
+    const mountAt = Date.now();
+    const createdAt = mountAt - 30_000; // "Just now"
+    const { rerender } = render(
+      <RelativeTimestampProbe createdAt={createdAt} visible={false} />,
+    );
+    expect(screen.getByTestId("relative-label").textContent).toBe("Just now");
+
+    // Five minutes pass while hidden; nothing here is subscribed to observe
+    // them. (`advanceTimersByTime` itself moves the fake system clock
+    // forward, so this alone reaches `mountAt + 5 * MINUTE_MS`.)
+    act(() => {
+      vi.advanceTimersByTime(5 * MINUTE_MS);
+    });
+    expect(screen.getByTestId("relative-label").textContent).toBe("Just now");
+
+    // Reveal: the label must reflect the real elapsed time immediately -
+    // "5m ago" (30s + 5m rounds down to 5 whole minutes) - not the stale
+    // "Just now" and not a further wait for the next minute tick.
+    act(() => {
+      rerender(<RelativeTimestampProbe createdAt={createdAt} visible />);
+    });
+    expect(screen.getByTestId("relative-label").textContent).toBe("5m ago");
+  });
+
+  it("useMessageTime: withholds the midnight-rollover date prefix while hidden, and reveals it immediately on becoming visible", () => {
+    vi.useFakeTimers();
+    const justBeforeMidnight = new Date(2026, 3, 23, 23, 59, 30).getTime();
+    vi.setSystemTime(justBeforeMidnight);
+    warmUpSharedClock();
+    const timestamp = justBeforeMidnight;
+    const { rerender } = render(
+      <MessageTimeProbe timestamp={timestamp} visible={false} />,
+    );
+    const sameDayForm = new Date(timestamp).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    expect(screen.getByTestId("message-time-label").textContent).toBe(
+      sameDayForm,
+    );
+
+    // Crosses midnight, but hidden - must not flip yet.
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    expect(screen.getByTestId("message-time-label").textContent).toBe(
+      sameDayForm,
+    );
+
+    act(() => {
+      rerender(<MessageTimeProbe timestamp={timestamp} visible />);
+    });
+    const datePrefix = new Date(timestamp).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    expect(screen.getByTestId("message-time-label").textContent).toBe(
+      `${datePrefix}, ${sameDayForm}`,
+    );
+  });
+});
+
+/**
+ * W2-H2: every visibility gate above moved from `usePaneVisible()` alone to
+ * `useTileBodyVisible()` (`usePaneVisible() && useTabBodySelected()`). A
+ * visible pane whose tab is not the FRONT one must still unsubscribe - the
+ * case the tests above cannot see, since they only ever toggle
+ * `PaneVisibilityContext` and leave `TabBodySelectedContext` at its
+ * default-true. Covers the second-clock (`useGraceCountdown`) and the
+ * tick-only (`useSampledNow`) hooks, not just the label hooks above.
+ */
+describe("minute/second-clock hooks unsubscribe when the tab is unselected in a visible pane", () => {
+  function SampledNowLeaf(): ReactNode {
+    const now = useSampledNow();
+    return <span data-testid="sampled-now">{now}</span>;
+  }
+
+  function TabSelectionProbe(props: {
+    readonly visible: boolean;
+    readonly tabSelected: boolean;
+    readonly children: ReactNode;
+  }): ReactNode {
+    return (
+      <PaneVisibilityContext.Provider value={props.visible}>
+        <TabBodySelectedContext.Provider value={props.tabSelected}>
+          {props.children}
+        </TabBodySelectedContext.Provider>
+      </PaneVisibilityContext.Provider>
+    );
+  }
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  /** Same reasoning as `warmUpSharedClock` above: corrects a stale sample a
+   * prior test left on the module-singleton `minuteClock` before this test's
+   * own assertions depend on it staying still. */
+  function warmUpMinuteClock(): void {
+    const warmup = renderHook(() => useSampledNow());
+    warmup.unmount();
+  }
+
+  it("useSampledNow: freezes while the tab is unselected in a visible pane, and catches up immediately on reselect", () => {
+    vi.useFakeTimers();
+    warmUpMinuteClock();
+    const mountAt = Date.now();
+    const { rerender } = render(
+      <TabSelectionProbe visible tabSelected={false}>
+        <SampledNowLeaf />
+      </TabSelectionProbe>,
+    );
+    expect(screen.getByTestId("sampled-now").textContent).toBe(String(mountAt));
+
+    act(() => {
+      vi.advanceTimersByTime(5 * MINUTE_MS);
+    });
+    // Falsification: a hook still gated on usePaneVisible() alone stays
+    // subscribed here, since the pane itself never went hidden - only the
+    // tab is unselected.
+    expect(screen.getByTestId("sampled-now").textContent).toBe(String(mountAt));
+
+    act(() => {
+      rerender(
+        <TabSelectionProbe visible tabSelected>
+          <SampledNowLeaf />
+        </TabSelectionProbe>,
+      );
+    });
+    expect(screen.getByTestId("sampled-now").textContent).toBe(
+      String(mountAt + 5 * MINUTE_MS),
+    );
+  });
+
+  it("useGraceCountdown: keeps counting down while the tab is selected, and freezes as soon as it is not", () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    function GraceLeaf(): ReactNode {
+      const label = useGraceCountdown(now + 5_000);
+      return <span data-testid="grace">{label}</span>;
+    }
+    const { rerender } = render(
+      <TabSelectionProbe visible tabSelected>
+        <GraceLeaf />
+      </TabSelectionProbe>,
+    );
+    expect(screen.getByTestId("grace").textContent).toBe("5s");
+
+    act(() => {
+      rerender(
+        <TabSelectionProbe visible tabSelected={false}>
+          <GraceLeaf />
+        </TabSelectionProbe>,
+      );
+    });
+    act(() => {
+      vi.advanceTimersByTime(2_000);
+    });
+    // Falsification: a hook still gated on usePaneVisible() alone keeps
+    // ticking down here, since the pane itself never went hidden.
+    expect(screen.getByTestId("grace").textContent).toBe("5s");
   });
 });
 
@@ -1333,5 +1752,427 @@ describe("formatFullTimestamp", () => {
     // A day-scoped, same-day render of the same instant never carries a year
     // - this is the "unabridged" form that restores it unconditionally.
     expect(result).not.toBe(formatMessageTime(timestamp, timestamp));
+  });
+});
+
+/**
+ * W3-I1: every locale call site (`formatClockTime`, `formatResetDateTime`,
+ * `formatFullTimestamp`, `formatResetFullDateTime`) moved from a direct
+ * `Date.prototype.toLocale*` call to the module-level `formatDateTime`
+ * helper, which resolves a cached `Intl.DateTimeFormat` from a
+ * `[locale, options]` key and calls `.format()` on it. Output must be
+ * byte-identical to what the old `Date.prototype.toLocale*` calls produced -
+ * the point of the change is where the formatting work happens, not what it
+ * renders.
+ *
+ * The app pins no locale anywhere (every call site passes `undefined`), so
+ * there is no production seam to vary the locale through. `withForcedLocale`
+ * substitutes a real locale for `undefined` at the `Intl.DateTimeFormat`
+ * constructor itself - the only place `formatDateTime` ever resolves one -
+ * and reimports the module fresh per locale, since `dateTimeFormatters` is a
+ * module-level cache keyed on the LITERAL `undefined` every call site passes;
+ * without a fresh module the second locale's formatters would hit the first
+ * locale's cached entries.
+ */
+describe("formatDateTime: locale/date matrix against native Date locale methods", () => {
+  const TIMESTAMPS = [
+    Date.parse("2026-07-11T10:35:00.000Z"),
+    Date.parse("2026-01-01T00:00:00.000Z"), // year boundary
+    Date.parse("2026-12-31T23:59:00.000Z"), // year boundary, other edge
+  ];
+  const LOCALES = ["en-US", "en-GB", "fr-FR", "ar-EG", "ja-JP"];
+
+  const RESET_DATE_OPTIONS: Intl.DateTimeFormatOptions = {
+    weekday: "short",
+  };
+  const RESET_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  };
+  const FULL_TIMESTAMP_OPTIONS: Intl.DateTimeFormatOptions = {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  };
+  const RESET_FULL_DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  };
+
+  async function withForcedLocale<T>(
+    locale: string,
+    run: (relativeTime: typeof import("@/lib/relative-time")) => T,
+  ): Promise<T> {
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    class ForcedLocaleDateTimeFormat extends RealDateTimeFormat {
+      constructor(
+        localeArg: string | readonly string[] | undefined,
+        options: Intl.DateTimeFormatOptions | undefined,
+      ) {
+        super(localeArg ?? locale, options);
+      }
+    }
+    Intl.DateTimeFormat =
+      ForcedLocaleDateTimeFormat as typeof Intl.DateTimeFormat;
+    vi.resetModules();
+    try {
+      const relativeTime = await import("@/lib/relative-time");
+      return run(relativeTime);
+    } finally {
+      Intl.DateTimeFormat = RealDateTimeFormat;
+      vi.resetModules();
+    }
+  }
+
+  it("matches native Date locale methods for every locale and timestamp sampled", async () => {
+    for (const locale of LOCALES) {
+      await withForcedLocale(locale, (relativeTime) => {
+        for (const timestamp of TIMESTAMPS) {
+          const date = new Date(timestamp);
+          expect(relativeTime.formatClockTime(timestamp)).toBe(
+            date.toLocaleTimeString(locale, RESET_TIME_OPTIONS),
+          );
+          expect(relativeTime.formatResetDateTime(timestamp)).toBe(
+            `${date.toLocaleDateString(locale, RESET_DATE_OPTIONS)} ${date.toLocaleTimeString(locale, RESET_TIME_OPTIONS)}`,
+          );
+          expect(relativeTime.formatFullTimestamp(timestamp)).toBe(
+            date.toLocaleString(locale, FULL_TIMESTAMP_OPTIONS),
+          );
+          expect(relativeTime.formatResetFullDateTime(timestamp)).toBe(
+            date.toLocaleString(locale, RESET_FULL_DATE_TIME_OPTIONS),
+          );
+        }
+      });
+    }
+  });
+});
+
+/**
+ * W3-I1's whole point: one `Intl.DateTimeFormat` construction per distinct
+ * `[locale, options]` key, reused across every timestamp AND every call site
+ * that happens to want the same options - not one construction per call.
+ * `formatClockTime` and the time half of `formatResetDateTime` pass the
+ * exact same option shape (`{hour: "numeric", minute: "2-digit",
+ * hour12: true}`), so they must share the one cached instance.
+ */
+describe("formatDateTime: cached Intl.DateTimeFormat construction (module-level, per key)", () => {
+  it("constructs a formatter once per key, reused across many timestamps and across call sites sharing options", async () => {
+    // `vi.spyOn` cannot wrap a native class constructor and still produce a
+    // working instance (a plain `.apply()` call-through does not satisfy
+    // `Intl.DateTimeFormat`'s `[[Construct]]` semantics), so this counts
+    // constructions through a real subclass instead - the same technique
+    // `withForcedLocale` above uses.
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    let constructCount = 0;
+    class CountingDateTimeFormat extends RealDateTimeFormat {
+      constructor(
+        localeArg: string | readonly string[] | undefined,
+        options: Intl.DateTimeFormatOptions | undefined,
+      ) {
+        super(localeArg, options);
+        constructCount += 1;
+      }
+    }
+    Intl.DateTimeFormat = CountingDateTimeFormat as typeof Intl.DateTimeFormat;
+    vi.resetModules();
+    try {
+      const relativeTime = await import("@/lib/relative-time");
+      const timestamps = [
+        Date.parse("2026-01-05T08:00:00.000Z"),
+        Date.parse("2026-03-14T15:30:00.000Z"),
+        Date.parse("2026-11-22T21:45:00.000Z"),
+      ];
+
+      for (const timestamp of timestamps) {
+        relativeTime.formatClockTime(timestamp);
+      }
+      // `formatResetDateTime`'s time-of-day half shares `formatClockTime`'s
+      // exact options - no new construction for it, only for its distinct
+      // weekday-only half.
+      for (const timestamp of timestamps) {
+        relativeTime.formatResetDateTime(timestamp);
+      }
+
+      // Falsification: key the cache on locale alone (drop `options` from
+      // the key), or on the timestamp, and this count rises past 3 - one
+      // construction per `formatClockTime` call, or per distinct call site,
+      // instead of one per distinct option shape.
+      //
+      // W3-I1: 3, not 2 - the first `formatDateTime` call's once-per-second
+      // zone probe (empty-options `new Intl.DateTimeFormat()`) adds a third,
+      // separate from the two option-bearing constructions this test pins.
+      expect(constructCount).toBe(3);
+    } finally {
+      Intl.DateTimeFormat = RealDateTimeFormat;
+      vi.resetModules();
+    }
+  });
+});
+
+/**
+ * W3-I1: an OS timezone change has to reach a cache that was warmed BEFORE
+ * the change, and it has to reach it on the ONE persistent module instance a
+ * real session keeps - not only on a freshly imported one. Every other
+ * `Intl.DateTimeFormat`/timezone test in this file uses `vi.resetModules()`
+ * for isolation; this suite deliberately does not, using the file's own
+ * top-level imports instead, since a fix that only works on a cold module
+ * would still pass every one of those.
+ *
+ * `process.env.TZ` is a real, process-wide switch: reassigning it changes
+ * what `Date.prototype.getTimezoneOffset()` and
+ * `Intl.DateTimeFormat().resolvedOptions().timeZone` report for every
+ * subsequent call - but NOT what an `Intl.DateTimeFormat` instance already
+ * constructed under the OLD zone renders: that instance keeps the old zone
+ * baked in and never updates (confirmed directly against this repo's Bun
+ * runtime before writing this suite). That staleness is exactly what
+ * `dateTimeFormatters.clear()` exists to correct, by forcing the next call to
+ * construct a fresh instance instead of reusing the stale one.
+ */
+describe("W3-I1: an in-process OS timezone change reaches a warmed cache", () => {
+  const ORIGINAL_TZ = process.env.TZ;
+
+  afterEach(() => {
+    cleanup();
+    process.env.TZ = ORIGINAL_TZ;
+    vi.useRealTimers();
+  });
+
+  it("recomputes to fresh native output for timestamps whose own offset moved, and stays correct for one whose offset did not", () => {
+    vi.useFakeTimers();
+    process.env.TZ = "Europe/Berlin";
+
+    // "Now" is January, where Berlin and Lagos share the same offset - so the
+    // viewing instant's own local-midnight key stays IDENTICAL across the
+    // zone flip below, isolating the generation/offset check as the only
+    // thing that can be driving a recompute (not an incidental day change).
+    const now0 = Date.UTC(2026, 0, 15, 12, 0, 0);
+    // Berlin (CEST, UTC+2 in July) vs Lagos (UTC+1 year-round): identical
+    // Jan-1 offset, different Jul-1 offset - the CHEAP current-year check
+    // alone catches this swap, no need to wait on the throttled zone probe.
+    const oldRelativeCreatedAt = Date.UTC(2025, 6, 5, 22, 30, 0); // Jul 6 00:30 Berlin / Jul 5 23:30 Lagos
+    const janMessage = Date.UTC(2026, 0, 10, 9, 0, 0); // 10:00 AM in both zones - offset never moves
+    const julMessage = Date.UTC(2025, 6, 10, 9, 0, 0); // 11:00 AM Berlin / 10:00 AM Lagos - offset moves
+    vi.setSystemTime(now0);
+
+    const oldRelative = renderHook(() =>
+      useRelativeTimestamp(oldRelativeCreatedAt),
+    );
+    const janLabel = renderHook(() => useMessageTime(janMessage));
+    const julLabel = renderHook(() => useMessageTime(julMessage));
+
+    const expectedMessage = (timestamp: number): string =>
+      `${new Date(timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${new Date(timestamp).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+    const expectedShortDate = (timestamp: number): string =>
+      new Date(timestamp).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+
+    // Warm cache: the initial render under Berlin already matches a fresh
+    // native call - this is not a cold, empty-cache case.
+    expect(oldRelative.result.current).toBe(
+      expectedShortDate(oldRelativeCreatedAt),
+    );
+    expect(julLabel.result.current).toBe(expectedMessage(julMessage));
+    expect(janLabel.result.current).toBe(expectedMessage(janMessage));
+
+    process.env.TZ = "Africa/Lagos";
+    // >=1s later, and also the shared clock's own minute tick - what
+    // actually wakes these subscribed leaves to re-check their cache.
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+
+    // The short-date bucket picks up the changed local calendar date.
+    expect(oldRelative.result.current).toBe(
+      expectedShortDate(oldRelativeCreatedAt),
+    );
+    // Falsification: dropping the per-timestamp `offset` check and relying on
+    // `generation` alone would still pass this one (the global generation
+    // moved too) - `julMessage`'s own offset moving is what this pins.
+    expect(julLabel.result.current).toBe(expectedMessage(julMessage));
+    // `janMessage`'s own offset is identical in both zones. Its label must
+    // still read correctly here - not merely "unchanged", which a fully
+    // stale cache would also satisfy by coincidence in this one case.
+    expect(janLabel.result.current).toBe(expectedMessage(janMessage));
+    // A plain (non-hook) call site sharing the same module-level formatter
+    // cache also reflects the new zone.
+    expect(formatClockTime(julMessage)).toBe(
+      new Date(julMessage).toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }),
+    );
+
+    oldRelative.unmount();
+    janLabel.unmount();
+    julLabel.unmount();
+  });
+});
+
+/**
+ * W3-I1: Africa/Abidjan and America/Danmarkshavn render identical Jan-1 and
+ * Jul-1 offsets for the current year (both 0 - neither observes DST), so the
+ * cheap seasonal-offset check cannot distinguish them. Danmarkshavn was
+ * GMT-2 as recently as 1990, a real historical divergence that lives in the
+ * zone's IDENTITY rather than its current offset pair - exactly the case
+ * `getFormattingGeneration`'s once-per-second `resolvedOptions().timeZone`
+ * probe exists to catch, at the accepted cost of up to ~1s of stale
+ * formatting while the throttle holds.
+ */
+describe("W3-I1: a same-offset zone identity change is caught by the throttled zone-name probe", () => {
+  const ORIGINAL_TZ = process.env.TZ;
+
+  afterEach(() => {
+    process.env.TZ = ORIGINAL_TZ;
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it("keeps a stale historical rendering within the probe's throttle window, then corrects once it elapses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 1));
+    process.env.TZ = "Africa/Abidjan";
+    vi.resetModules();
+    const relativeTime = await import("@/lib/relative-time");
+
+    const historicalAt = Date.UTC(1990, 6, 1, 12, 0, 0);
+    const nativeUnderCurrentTz = (): string =>
+      new Date(historicalAt).toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+
+    const abidjanLabel = relativeTime.formatClockTime(historicalAt);
+    expect(abidjanLabel).toBe(nativeUnderCurrentTz());
+
+    process.env.TZ = "America/Danmarkshavn";
+    // Falsification: an unthrottled probe (a fresh `resolvedOptions().
+    // timeZone` read on every `formatDateTime` call) would already read the
+    // new zone here - this pins the ACCEPTED throttle window, not merely
+    // that a fix eventually lands.
+    expect(relativeTime.formatClockTime(historicalAt)).toBe(abidjanLabel);
+
+    vi.advanceTimersByTime(1_000);
+    const correctedLabel = relativeTime.formatClockTime(historicalAt);
+    expect(correctedLabel).toBe(nativeUnderCurrentTz());
+    // Falsification: relying on the cheap Jan/Jul offset check alone (no
+    // zone-name probe at all) leaves this equal to the stale label forever,
+    // since Abidjan and Danmarkshavn share identical current-year offsets.
+    expect(correctedLabel).not.toBe(abidjanLabel);
+  });
+});
+
+/**
+ * W3-I1: the zone-name probe is throttled to at most once per elapsed
+ * second, regardless of how many `formatDateTime` calls land inside that
+ * second - distinct from the option-bearing formatter cache, which never
+ * reconstructs once a key is built.
+ *
+ * `Date.now` stubbed directly (`vi.spyOn`), not `vi.useFakeTimers()`:
+ * vitest's fake-`Date` install also replaces global `Intl.DateTimeFormat`
+ * with its own clock-aware wrapper (mirrors the real constructor's own
+ * `format`/`resolvedOptions` on a plain returned object, not a subclass),
+ * which defeats construction-counting via `extends` the way this file's
+ * other counting suites rely on. Stubbing only `Date.now` - the one call
+ * `getFormattingGeneration` makes to read "now" - crosses the probe's
+ * throttle window instantly, with no real wait and no fake-Date/Intl
+ * interaction: the `Date` constructor and `Intl.DateTimeFormat` stay real.
+ */
+describe("W3-I1: the zone-name probe stays bounded to about once per second, not once per format call", () => {
+  it("keeps option-bearing formatter construction fixed while probe construction advances only across an elapsed second", async () => {
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    let optionConstructCount = 0;
+    let probeConstructCount = 0;
+    class CountingDateTimeFormat extends RealDateTimeFormat {
+      constructor(
+        localeArg: string | readonly string[] | undefined,
+        options: Intl.DateTimeFormatOptions | undefined,
+      ) {
+        super(localeArg, options);
+        if (options === undefined) {
+          probeConstructCount += 1;
+        } else {
+          optionConstructCount += 1;
+        }
+      }
+    }
+    Intl.DateTimeFormat = CountingDateTimeFormat as typeof Intl.DateTimeFormat;
+    const fixedStart = Date.parse("2026-03-14T15:30:00.000Z");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(fixedStart);
+    vi.resetModules();
+    try {
+      const relativeTime = await import("@/lib/relative-time");
+      const timestamp = fixedStart;
+
+      for (let call = 0; call < 5; call += 1) {
+        relativeTime.formatClockTime(timestamp);
+        relativeTime.formatResetDateTime(timestamp);
+      }
+      // Falsification: probing on every `formatDateTime` entry instead of
+      // once per elapsed second makes this grow with the 10 calls above
+      // instead of staying at the one probe this first window allows.
+      expect(probeConstructCount).toBe(1);
+      expect(optionConstructCount).toBe(2);
+
+      nowSpy.mockReturnValue(fixedStart + 1_000);
+
+      for (let call = 0; call < 5; call += 1) {
+        relativeTime.formatClockTime(timestamp);
+        relativeTime.formatResetDateTime(timestamp);
+      }
+      // One more probe for the elapsed second, still bounded regardless of
+      // how many calls landed inside either window.
+      expect(probeConstructCount).toBe(2);
+      // The cached, option-bearing formatters never reconstruct once built -
+      // one for `formatClockTime`'s options, one for `formatResetDateTime`'s
+      // distinct weekday-only half - across either window.
+      expect(optionConstructCount).toBe(2);
+    } finally {
+      Intl.DateTimeFormat = RealDateTimeFormat;
+      vi.resetModules();
+      nowSpy.mockRestore();
+    }
+  });
+});
+
+/**
+ * W3-I1: `formatDateTime` checks `Number.isNaN` and returns the literal
+ * "Invalid Date" before ever calling `Intl.DateTimeFormat.prototype.format`,
+ * which throws a RangeError on an invalid date - unlike the
+ * `Date.prototype.toLocale*` methods it replaced, which returned that same
+ * literal without throwing.
+ */
+describe("formatDateTime: invalid timestamps degrade to the literal 'Invalid Date' instead of throwing", () => {
+  const INVALID = NaN;
+
+  it("every locale-formatting call site returns 'Invalid Date' rather than throwing", () => {
+    expect(() => formatClockTime(INVALID)).not.toThrow();
+    expect(formatClockTime(INVALID)).toBe("Invalid Date");
+
+    expect(formatFullTimestamp(INVALID)).toBe("Invalid Date");
+    expect(formatResetFullDateTime(INVALID)).toBe("Invalid Date");
+
+    // Composes two formatDateTime calls with a space joiner; both halves
+    // degrade independently.
+    expect(formatResetDateTime(INVALID)).toBe("Invalid Date Invalid Date");
+
+    // `isSameLocalDay(NaN, now)` is false (NaN !== any real year), so
+    // formatMessageTime falls into its date-prefixed branch and both halves
+    // - the short date and the time - degrade too.
+    const now = Date.parse("2026-04-23T12:00:00.000Z");
+    expect(formatMessageTime(INVALID, now)).toBe("Invalid Date, Invalid Date");
   });
 });

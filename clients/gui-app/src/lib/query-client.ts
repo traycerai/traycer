@@ -18,6 +18,7 @@ import {
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import { installDiffBodyCacheRetention } from "@/lib/git/diff-body-cache-retention";
 import { worktreeQuerySuccessOrderFor } from "@/lib/worktree/worktree-query-success-order";
 
 const SAFE_QUERY_KEY_MARKERS = new Set([
@@ -101,6 +102,7 @@ export function createAppQueryClient(): QueryClient {
   });
   worktreeQuerySuccessOrderFor(client);
   installConditionPollEpisodeCoordinator(client);
+  installDiffBodyCacheRetention(client);
   return client;
 }
 

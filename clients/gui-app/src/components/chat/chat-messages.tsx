@@ -1,3 +1,4 @@
+import { observedBorderBox } from "@/lib/resize-observer-box";
 import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
 import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
@@ -192,6 +193,11 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
+// The seed hook needs only the imperative API, not the bound Zustand hook.
+// Passing the hook itself makes React Compiler bail out of ChatMessagesInner.
+const toolOpenStore = { getState: useToolOpenStore.getState };
+const subagentOpenStore = { getState: useSubagentOpenStore.getState };
+
 interface ChatMessagesProps {
   taskTitle: string;
   /** Chat tab identity; keys the composer draft the quote affordance appends to.
@@ -204,6 +210,7 @@ interface ChatMessagesProps {
   hostId: string | null;
   /** The full derived, pinned-todo-stripped row history to hand to LegendList. */
   messages: ReadonlyArray<ChatMessageModel>;
+  projectedRows?: ReadonlyArray<TranscriptListRow>;
   /**
    * The transcript index on the windowed line (`chat.subscribe@1.8`), or
    * `null` on the legacy line where `messages` IS the whole transcript. The
@@ -2000,8 +2007,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // there. Computed before the mount-time restore initializers because they
   // resolve saved anchors against LIST indexes, which are row indexes.
   const listRows = useMemo(
-    () => transcriptListRows({ window: transcriptWindow, rendered: messages }),
-    [transcriptWindow, messages],
+    () =>
+      props.projectedRows ??
+      transcriptListRows({ window: transcriptWindow, rendered: messages }),
+    [transcriptWindow, messages, props.projectedRows],
   );
 
   // Restore the persisted reading position once, on mount (ticket 15: tries
@@ -2092,6 +2101,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  const wasSurfaceVisibleRef = useRef(visible);
   // The open-as-chat view's scroll area while a card is open (`null` while the
   // transcript shows): the scroll keys and chat find address it instead of the
   // timeline it covers.
@@ -2100,27 +2110,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // `observeLayoutBasis`. A ResizeObserver on the container rather than React
   // state, for the reason the memory itself is not state: a resize must not
   // re-render a mounted transcript, and the basis is only wanted as a hint for
-  // the placeholders that mount next. A layout effect for the same ordering as
-  // the skeleton pass above - LegendList measures in its own, which runs first,
-  // so the opening commit's heights are already recorded when the baseline is
-  // adopted (and `observeLayoutBasis` deliberately keeps them).
+  // the placeholders that mount next. Use the observer's measured width,
+  // without forcing layout during mount. The opening commit's heights are
+  // recorded before the initial delivery; adopting that first basis keeps them.
   //
   // `uiFontSize` is a DEPENDENCY, not just a read: changing it re-flows every
   // row without necessarily changing the container's width, so the
-  // ResizeObserver may never fire and this effect re-running is the only thing
-  // that reports the new basis.
+  // observer is reattached to request an initial delivery with the new basis.
   useLayoutEffect(() => {
     const container = transcriptContainerRef.current;
     if (container === null) return;
-    const report = (): void => {
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.find((candidate) => candidate.target === container);
+      if (entry === undefined) return;
       rowHeightMemory.observeLayoutBasis({
-        width: container.getBoundingClientRect().width,
+        width: observedBorderBox(entry).inlineSize,
         fontSizePx: uiFontSize,
       });
-    };
-    const observer = new ResizeObserver(report);
+    });
     observer.observe(container);
-    report();
     return () => observer.disconnect();
   }, [rowHeightMemory, uiFontSize]);
   const messagesRef = useRef(messages);
@@ -2843,11 +2851,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // hide transition) with row-zero/clamped garbage. Fall back to that
       // already-known-good mirror instead of a live read whenever the
       // surface cannot be measured right now.
+      // A retained tab's hide already captured its last visible position.
+      // Do not flush layout while evicting that known-hidden surface. Visible
+      // closes still check live geometry: an observer can lag concealment.
       const list = chatTimelineRef.current;
       const scrollableNode =
         list === null ? null : getScrollableNodeOrNull(list);
       const isMeasurable =
-        scrollableNode !== null && scrollableNode.clientHeight !== 0;
+        wasSurfaceVisibleRef.current &&
+        scrollableNode !== null &&
+        scrollableNode.clientHeight !== 0;
       const snapshot = isMeasurable
         ? captureLiveChatTabScrollSnapshot()
         : lastVisibleScrollSnapshotRef.current;
@@ -2948,13 +2961,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Round 3: the durable commit moved to the canvas sweep's promotion
   // choke point - see the hook's own doc comment.
   useChatScopedOpenStoreDualKeySeed(
-    useToolOpenStore,
+    toolOpenStore,
     identity,
     toolOpenDurableCache,
     toolOpenInitializedScopes,
   );
   useChatScopedOpenStoreDualKeySeed(
-    useSubagentOpenStore,
+    subagentOpenStore,
     identity,
     subagentOpenDurableCache,
     subagentOpenInitializedScopes,
@@ -3608,7 +3621,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // mount-time `restoredTabState`) picks up the SAME clamp-to-surviving-
   // neighbor/natural-clamp fallback a destructive mutation while hidden
   // already gets on an ordinary remount.
-  const wasSurfaceVisibleRef = useRef(visible);
   useLayoutEffect(() => {
     const wasVisible = wasSurfaceVisibleRef.current;
     wasSurfaceVisibleRef.current = visible;
@@ -4133,6 +4145,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               <div className="contents" inert={subagentDrillIn.openId !== null}>
                 <ChatTimeline
                   rows={listRows}
+                  visible={visible}
                   onVisibleRowRangeChange={onChatTimelineVisibleRowsChange}
                   taskTitle={taskTitle}
                   backgroundToolBlockIds={backgroundToolBlockIds}

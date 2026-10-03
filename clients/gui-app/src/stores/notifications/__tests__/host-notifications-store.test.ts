@@ -1858,6 +1858,12 @@ describe("host notifications store", () => {
 
   it("escalates the reopen backoff while closes repeat and resets it on a valid snapshot", () => {
     vi.useFakeTimers();
+    // `scheduleAfterClose` jitters its delay (`jitteredBackoffFor(...,
+    // Math.random)`); pin it to 1 so every exact-boundary assertion below
+    // exercises the un-jittered schedule it was written against, matching
+    // `host-connection-reconnect-engine.test.ts`'s own pin for the same
+    // reason. The escalation values asserted below are unchanged.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
     try {
       const client = new MockWsStreamClient();
       const close = openHostNotificationsStream(reconnectEngine, client, null, {
@@ -1918,6 +1924,7 @@ describe("host notifications store", () => {
       vi.advanceTimersByTime(HOST_STREAM_REOPEN_MAX_BACKOFF_MS);
       expect(client.subscribeCount).toBe(5);
     } finally {
+      randomSpy.mockRestore();
       vi.useRealTimers();
     }
   });

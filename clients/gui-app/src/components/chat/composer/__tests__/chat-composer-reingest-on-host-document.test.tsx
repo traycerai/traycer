@@ -27,7 +27,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { useCallback, useState } from "react";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DraftDocument } from "@traycer/protocol/host";
 import type { ImageAttachmentRewrite } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
@@ -35,7 +41,9 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import { useChatComposerDraft } from "../use-chat-composer-draft";
 import { useComposerReingestOnReplacement } from "../use-composer-reingest-on-replacement";
+import { ComposerPromptEditor } from "../composer-prompt-editor";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
+import { createComposerPickerStore } from "../picker/composer-picker-store";
 import { createFakeComposerPromptEditorHandle } from "./composer-prompt-editor-handle-fixtures";
 import {
   applyComposerHostDocument,
@@ -328,18 +336,26 @@ describe("F4: re-ingest re-fires on a host-document replacement, not just editor
  * reachable from it. That is an inference from the gating, not a proof, and it
  * is the one thing that would make this a four-surface claim if it changed.
  */
+// `chat-composer.tsx` and `chat-message-user-body.tsx` receive the editor's
+// third `onDocumentChange` argument (`changedImages`) and call
+// `noteContentImages` only when it is non-null - see `composer-image-changes.ts`.
+// `new-conversation-modal.tsx` is deliberately unchanged and still scans the
+// whole `content` on every change (ticket W2-F left it out of scope).
 const ON_CHANGE_SURFACES = [
   {
     path: "src/components/chat/composer/chat-composer.tsx",
     handler: "handleDocumentChangeNotingEdit",
+    expectedCall: "noteContentImages(changedImages)",
   },
   {
     path: "src/components/epic-canvas/sidebar/new-conversation-modal.tsx",
     handler: "handleDocumentChange",
+    expectedCall: "noteContentImages(content)",
   },
   {
     path: "src/components/chat/chat-message-user-body.tsx",
     handler: "onDocumentChange",
+    expectedCall: "noteContentImages(changedImages)",
   },
 ] as const;
 
@@ -368,9 +384,146 @@ describe("a b64 node appended after mount is re-ingested, because each surface n
     it(`${surface.path} calls noteContentImages from the handler the editor is given`, () => {
       const source = surfaceSource(surface.path);
       expect(changeHandlerBody(source, surface.handler)).toContain(
-        "noteContentImages(content)",
+        surface.expectedCall,
       );
       expect(source).toContain(`onDocumentChange={${surface.handler}}`);
     });
   }
+});
+
+/**
+ * The source check above proves each surface's real wrapper is wired to
+ * `onDocumentChange` and calls `noteContentImages` guarded on `changedImages`.
+ * It cannot prove the VALUE that guard receives is right - that a document
+ * already carrying one image, plus a freshly inserted second one, produces a
+ * `changedImages` containing only the new node, and that handing exactly that
+ * into the real `noteContentImages` still starts the real ingest job for it.
+ * This mounts the real `ComposerPromptEditor` beside the real
+ * `useComposerPendingImageIngest` (as `chat-composer.tsx` does) rather than
+ * restating either side's logic.
+ */
+describe("changedImages end to end: what the editor emits is what the real ingest hook consumes", () => {
+  function b64PngAttrs(id: string) {
+    return {
+      id,
+      fileName: `${id}.png`,
+      b64content: b64Of(`${id}-bytes`),
+      mimeType: "image/png",
+      size: 10,
+    };
+  }
+
+  // `imageAttachment` is an INLINE node - it must sit inside a paragraph, not
+  // as a direct child of `doc`. `docWithInlinePng` above is fed only to the
+  // FAKE handle in the F4 suite, which never validates against the real
+  // schema; this suite mounts a REAL editor, which does.
+  function inlinePngParagraphDoc(id: string, b64content: string): JsonContent {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "imageAttachment",
+              attrs: {
+                id,
+                fileName: `${id}.png`,
+                b64content,
+                mimeType: "image/png",
+                size: b64content.length,
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it("ingests only the newly inserted image, leaving an untouched existing one alone", async () => {
+    const editorRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    let rewriteCallCount = 0;
+    const rewrittenIds: string[] = [];
+    const rewriteImageAttachmentHashById = (
+      id: string,
+      _rewrite: ImageAttachmentRewrite,
+    ): boolean => {
+      rewriteCallCount += 1;
+      rewrittenIds.push(id);
+      return true;
+    };
+
+    function Harness() {
+      const [pickerStore] = useState(() => createComposerPickerStore());
+      const { noteContentImages } = useComposerPendingImageIngest({
+        editorRef,
+        runPendingImageJob: immediateRunPendingImageJob,
+        draftId: null,
+      });
+      return (
+        <ComposerPromptEditor
+          ref={(instance) => {
+            if (instance === null) {
+              editorRef.current = null;
+              return;
+            }
+            editorRef.current = { ...instance, rewriteImageAttachmentHashById };
+          }}
+          initialContent={inlinePngParagraphDoc(
+            "already-ingested",
+            b64Of("already-ingested-bytes"),
+          )}
+          initialSelection={null}
+          pickerStore={pickerStore}
+          placeholder="test"
+          editorClassName={undefined}
+          isActive={false}
+          disabled={false}
+          slashProviderId="claude"
+          hasPastedImageBytes={null}
+          ingestPastedComposerImages={null}
+          stabilizeImageAttachmentCaret={false}
+          onDocumentChange={(_content, _selection, changedImages) => {
+            if (changedImages !== null) noteContentImages(changedImages);
+          }}
+          onSelectionChange={() => undefined}
+          onSubmit={() => undefined}
+          onPaste={() => undefined}
+          onDragOver={() => undefined}
+          onDrop={() => undefined}
+          onKeyDown={undefined}
+          onFocus={() => undefined}
+          onBlur={() => undefined}
+          onEditorReady={null}
+        />
+      );
+    }
+
+    render(<Harness />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // This harness deliberately does not wire the mount-time restart (that
+    // path is the F4 suite above) - only the on-change path is under test,
+    // so nothing has touched the pre-existing "already-ingested" node yet.
+    act(() => {
+      editorRef.current?.focusAtEnd();
+    });
+    act(() => {
+      editorRef.current?.insertImageAttachments([
+        {
+          ...b64PngAttrs("just-inserted"),
+          byHashEligible: false,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(rewriteCallCount).toBe(1);
+    });
+    expect(rewrittenIds).toEqual(["just-inserted"]);
+  });
 });

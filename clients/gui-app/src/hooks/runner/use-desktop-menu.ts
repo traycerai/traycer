@@ -17,6 +17,7 @@ import type {
   DesktopMenuSnapshot,
 } from "@/lib/windows/types";
 
+// render-cache: stable per-key instance identity; menu state read via subscription (Query + onChange).
 const scopes = new WeakMap<object, number>();
 let nextScope = 0;
 

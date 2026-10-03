@@ -257,6 +257,7 @@ function renderTimeline(
     >
       <ChatTimeline
         rows={transcriptListRows({ window: null, rendered: messages })}
+        visible
         taskTitle="follow-latch integration"
         backgroundToolBlockIds={new Set()}
         getMessageActions={() => null}

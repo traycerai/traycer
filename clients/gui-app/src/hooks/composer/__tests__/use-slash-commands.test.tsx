@@ -1,6 +1,9 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ListGuiAgentCommandsResponse } from "@traycer/protocol/host/index";
+import type {
+  GuiAgentCommandOption,
+  ListGuiAgentCommandsResponse,
+} from "@traycer/protocol/host/index";
 import { useSlashCommands } from "../use-slash-commands";
 import type { LocalSlashCommand } from "@/lib/composer/types";
 
@@ -126,6 +129,79 @@ describe("useSlashCommands", () => {
       kind: "skill",
     });
     expect(result.current.data.map((cmd) => cmd.name)).not.toContain("plan");
+  });
+
+  it("skips computing the command list entirely while disabled, then sorts numeric/case-insensitively once enabled", () => {
+    // A getter on `name`, not a plain string: proves the disabled path never
+    // reads it at all (never maps, dedupes, or sorts the catalog), rather
+    // than just filtering a computed list down to nothing afterward.
+    let nameReads = 0;
+    const trackedProviderCommand = (name: string): GuiAgentCommandOption => ({
+      harnessId: "codex",
+      get name() {
+        nameReads++;
+        return name;
+      },
+      description: `desc-${name}`,
+      argumentHint: null,
+      kind: "slash-command",
+      metadata: {},
+    });
+    mockState.data = {
+      harnessId: "codex",
+      commands: [
+        trackedProviderCommand("review10"),
+        trackedProviderCommand("Review2"),
+      ],
+    };
+    const trackedLocalCommand: LocalSlashCommand = {
+      source: "local",
+      harnessId: "codex",
+      get name() {
+        nameReads++;
+        return "alpha";
+      },
+      description: "Local alpha",
+      argumentHint: null,
+      kind: "slash-command",
+      metadata: {},
+      preview: {
+        kind: "text",
+        primary: "Local alpha",
+        secondary: null,
+        mono: false,
+      },
+    };
+
+    const { result, rerender } = renderHook(
+      (props: { enabled: boolean }) =>
+        useSlashCommands("", {
+          hostClient: null,
+          harnessId: "codex",
+          workingDirectories: ["/repo"],
+          enabled: props.enabled,
+          localCommands: [trackedLocalCommand],
+        }),
+      { initialProps: { enabled: false } },
+    );
+
+    expect(result.current.data).toEqual([]);
+    expect(result.current.isLoading).toBe(false);
+    expect(nameReads).toBe(0);
+    expect(mockState.calls.at(-1)).toMatchObject({
+      enabled: false,
+      subscribed: false,
+    });
+
+    rerender({ enabled: true });
+
+    // sensitivity: "base" (case-insensitive) + numeric: true (2 before 10).
+    expect(result.current.data.map((command) => command.name)).toEqual([
+      "alpha",
+      "Review2",
+      "review10",
+    ]);
+    expect(nameReads).toBeGreaterThan(0);
   });
 
   it("lists localCommands and lets a local row shadow a same-named provider row", () => {

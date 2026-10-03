@@ -170,6 +170,8 @@ export function createVideoPlaneSession(options: {
    */
   const armDeadline = (): void => {
     const onVisible = (): void => {
+      if (!isDocumentVisible()) return;
+      cancelDeadline?.();
       cancelDeadline = null;
       armDeadline();
     };
@@ -177,14 +179,7 @@ export function createVideoPlaneSession(options: {
       () => {
         cancelDeadline = null;
         if (!isDocumentVisible()) {
-          const stop = subscribeDocumentVisibility(() => {
-            if (!isDocumentVisible()) return;
-            stop();
-            onVisible();
-          });
-          cancelDeadline = () => {
-            stop();
-          };
+          cancelDeadline = subscribeDocumentVisibility(onVisible);
           return;
         }
         deadlineRound = null;

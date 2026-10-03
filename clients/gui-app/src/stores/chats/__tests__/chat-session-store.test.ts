@@ -71,6 +71,7 @@ import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/sub
 import type { RestorableSetupInterruption } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import { selectRestorableSetupInterruption } from "@/stores/chats/chat-session-selectors";
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
+import { setDesktopWindowOnScreen } from "@/lib/dom/document-visibility";
 import {
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
@@ -12499,12 +12500,19 @@ describe("surface visibility rollup", () => {
       }),
     });
 
+    // Default-visible before any surface has ever reported.
+    expect(handle.isSurfaceVisible()).toBe(true);
+    // Ignore the initial registration report.
+    reported.length = 0;
+
     handle.setSurfaceVisibility("surface-a", false);
     expect(reported).toEqual([false]);
+    expect(handle.isSurfaceVisible()).toBe(false);
 
     // A second visible surface flips the chat visible (visible-if-any).
     handle.setSurfaceVisibility("surface-b", true);
     expect(reported).toEqual([false, true]);
+    expect(handle.isSurfaceVisible()).toBe(true);
 
     // Unchanged report is a no-op.
     handle.setSurfaceVisibility("surface-b", true);
@@ -12513,13 +12521,75 @@ describe("surface visibility rollup", () => {
     handle.clearSurfaceVisibility("surface-b");
     expect(reported).toEqual([false, true, false]);
 
-    // No reporting surfaces left: default back to visible (never starve).
+    // No reporting surfaces left: once a report has ever landed, the latch
+    // never falls back to the default - this reports (and reads) hidden,
+    // not the pre-report default.
     handle.clearSurfaceVisibility("surface-a");
-    expect(reported).toEqual([false, true, false, true]);
+    expect(reported).toEqual([false, true, false, false]);
+    expect(handle.isSurfaceVisible()).toBe(false);
 
     // Clearing an unknown surface is a no-op.
     handle.clearSurfaceVisibility("surface-a");
-    expect(reported).toEqual([false, true, false, true]);
+    expect(reported).toEqual([false, true, false, false]);
+
+    // A fresh registration still flips it visible again.
+    handle.setSurfaceVisibility("surface-c", true);
+    expect(reported).toEqual([false, true, false, false, true]);
+    expect(handle.isSurfaceVisible()).toBe(true);
+  });
+
+  it("also gates the flush lease on document visibility, while isSurfaceVisible() stays surface-only", () => {
+    const reported: boolean[] = [];
+    const coordinator: StreamFlushCoordinator = {
+      register: (input) => ({
+        requestFlush: () => input.flush(),
+        setVisible: (visible) => {
+          reported.push(visible);
+        },
+        unregister: () => {},
+      }),
+    };
+    setDesktopWindowOnScreen(false);
+    const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      userId: OWNER_ID,
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport: null,
+      streamFlushCoordinator: coordinator,
+      streamClientFactory: () => ({
+        sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
+        draftBlobBridgeSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      }),
+    });
+    try {
+      expect(reported).toEqual([false]);
+      expect(handle.isSurfaceVisible()).toBe(true);
+
+      setDesktopWindowOnScreen(true);
+      expect(reported).toEqual([false, true]);
+
+      setDesktopWindowOnScreen(false);
+      expect(reported).toEqual([false, true, false]);
+      expect(handle.isSurfaceVisible()).toBe(true);
+
+      setDesktopWindowOnScreen(true);
+      expect(reported).toEqual([false, true, false, true]);
+
+      handle.dispose();
+      setDesktopWindowOnScreen(false);
+      expect(reported).toEqual([false, true, false, true]);
+    } finally {
+      handle.dispose();
+      setDesktopWindowOnScreen(true);
+    }
   });
 });
 

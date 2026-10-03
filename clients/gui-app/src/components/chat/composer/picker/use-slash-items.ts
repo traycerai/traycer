@@ -4,7 +4,11 @@ import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
-import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
+import {
+  useSlashCommands,
+  type UseSlashCommandsResult,
+} from "@/hooks/composer/use-slash-commands";
+import { rankSlashCommands } from "@/lib/composer/slash-command-ranking";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { SlashCommand } from "@/lib/composer/types";
 
@@ -16,6 +20,7 @@ import type {
 
 export interface UseSlashItemsParams {
   readonly pickerStore: ComposerPickerStore;
+  readonly isActive: boolean;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly harnessId: GuiHarnessId;
   readonly workingDirectories: ReadonlyArray<string>;
@@ -49,7 +54,9 @@ function selectSlashSlice(state: {
   };
 }
 
-export function useSlashItems(params: UseSlashItemsParams): void {
+export function useSlashItems(
+  params: UseSlashItemsParams,
+): UseSlashCommandsResult {
   const {
     pickerStore,
     hostClient,
@@ -61,27 +68,25 @@ export function useSlashItems(params: UseSlashItemsParams): void {
   const slice = useStore(pickerStore, useShallow(selectSlashSlice));
   const { active, sessionId, query, slashScope } = slice;
 
-  const {
-    data: commands,
-    isLoading,
-    isFetching,
-    error,
-    refetch,
-  } = useSlashCommands(query, {
+  const catalog = useSlashCommands("", {
     hostClient,
     harnessId,
     workingDirectories,
-    enabled: active,
+    enabled: params.isActive,
     localCommands,
   });
+  const { data: commands, isLoading, isFetching, error, refetch } = catalog;
 
   const retryLoad = useCallback(() => {
     void refetch();
   }, [refetch]);
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
-    () => slashItemsForScope(commands, slashScope),
-    [commands, slashScope],
+    () =>
+      active
+        ? slashItemsForScope(rankSlashCommands(commands, query), slashScope)
+        : [],
+    [active, commands, query, slashScope],
   );
 
   useEffect(() => {
@@ -119,6 +124,7 @@ export function useSlashItems(params: UseSlashItemsParams): void {
     if (!active) return;
     pickerStore.getState().setFetching(isFetching);
   }, [active, isFetching, pickerStore]);
+  return catalog;
 }
 
 /**

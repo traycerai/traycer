@@ -5,7 +5,11 @@ import {
   resolveMatchingChord,
 } from "@/lib/keybindings/chord";
 import {
-  dispatchAction,
+  dispatchKeydownAction,
+  flushTabCycle,
+  resetTabCycle,
+  validateTabCycle,
+  isKeybindingDialogOpen,
   findActionMatchForChord,
   type DigitActionMatch,
   isExternallyHandled,
@@ -53,7 +57,6 @@ const INITIAL_LEADER: LeaderState = {
   modOwnerScopeId: null,
   altOwnerScopeId: null,
   modShiftOwnerScopeId: null,
-  pathname: "/",
 };
 const LEADER_HINT_DELAY_MS = 300;
 const DIGIT_SEQUENCE_COMMIT_MS = 450;
@@ -164,8 +167,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         prev.modShiftHeld === next.modShiftHeld &&
         prev.modOwnerScopeId === next.modOwnerScopeId &&
         prev.altOwnerScopeId === next.altOwnerScopeId &&
-        prev.modShiftOwnerScopeId === next.modShiftOwnerScopeId &&
-        prev.pathname === next.pathname
+        prev.modShiftOwnerScopeId === next.modShiftOwnerScopeId
       ) {
         return;
       }
@@ -183,7 +185,6 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     // reasoning, ⌘⇧ profile) therefore lights only the matching tier.
     const resolveVisibleLeaderState = (
       heldModifier: LeaderModifier,
-      pathname: string,
     ): LeaderState => {
       const modOwner = resolveLeaderOwner("mod");
       const altOwner = resolveLeaderOwner("alt");
@@ -196,7 +197,6 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
           modOwnerScopeId: null,
           altOwnerScopeId: null,
           modShiftOwnerScopeId: modShiftOwner,
-          pathname,
         };
       }
       const showMod =
@@ -216,7 +216,6 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         modOwnerScopeId: showMod ? modOwner : null,
         altOwnerScopeId: showAlt ? altOwner : null,
         modShiftOwnerScopeId: null,
-        pathname,
       };
     };
 
@@ -232,14 +231,11 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       );
     };
 
-    const showLeaderHints = (
-      heldModifier: LeaderModifier,
-      pathname: string,
-    ) => {
-      applyLeaderState(resolveVisibleLeaderState(heldModifier, pathname));
+    const showLeaderHints = (heldModifier: LeaderModifier) => {
+      applyLeaderState(resolveVisibleLeaderState(heldModifier));
     };
 
-    const hideLeaderHints = (pathname: string) => {
+    const hideLeaderHints = () => {
       applyLeaderState({
         modHeld: false,
         altHeld: false,
@@ -247,21 +243,20 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         modOwnerScopeId: null,
         altOwnerScopeId: null,
         modShiftOwnerScopeId: null,
-        pathname,
       });
     };
 
-    const resetHintSession = (pathname: string) => {
+    const resetHintSession = () => {
       clearHintTimer();
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
       hintSessionRef.current = { status: "idle" };
-      hideLeaderHints(pathname);
+      hideLeaderHints();
     };
 
-    const spendHintSession = (pathname: string) => {
+    const spendHintSession = () => {
       clearHintTimer();
       hintSessionRef.current = { status: "spent" };
-      hideLeaderHints(pathname);
+      hideLeaderHints();
     };
 
     const revealPendingSession = (modifier: LeaderModifier) => {
@@ -269,14 +264,13 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       if (session.status !== "pending" || session.modifier !== modifier) {
         return;
       }
-      const pathname = adapter.getPathname();
       if (!hasLeaderOwner(modifier)) {
-        spendHintSession(pathname);
+        spendHintSession();
         return;
       }
       hintTimerRef.current = null;
       hintSessionRef.current = { status: "visible", modifier };
-      showLeaderHints(modifier, pathname);
+      showLeaderHints(modifier);
     };
 
     // Moves the hint session onto `modifier` - called both when a fresh bare
@@ -288,25 +282,22 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     // continuous hold, so re-imposing it on every combo change would make
     // hints flicker off and back on for no reason. A PENDING (or idle/spent)
     // session (re)starts the delay for the new modifier, same as a fresh hold.
-    const transitionLeaderSession = (
-      modifier: LeaderModifier,
-      pathname: string,
-    ) => {
+    const transitionLeaderSession = (modifier: LeaderModifier) => {
       const session = hintSessionRef.current;
       if (session.status === "spent") return;
       if (session.status === "visible") {
         clearHintTimer();
         hintSessionRef.current = { status: "visible", modifier };
-        showLeaderHints(modifier, pathname);
+        showLeaderHints(modifier);
         return;
       }
       if (session.status === "pending" && session.modifier === modifier) {
-        hideLeaderHints(pathname);
+        hideLeaderHints();
         return;
       }
       clearHintTimer();
       hintSessionRef.current = { status: "pending", modifier };
-      hideLeaderHints(pathname);
+      hideLeaderHints();
       hintTimerRef.current = window.setTimeout(() => {
         revealPendingSession(modifier);
       }, LEADER_HINT_DELAY_MS);
@@ -334,30 +325,27 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     };
 
     const handleRouteChange = () => {
-      const pathname = adapter.getPathname();
+      validateTabCycle(adapter);
       const session = hintSessionRef.current;
       if (session.status === "pending" || session.status === "visible") {
         if (!hasLeaderOwner(session.modifier)) {
-          spendHintSession(pathname);
+          spendHintSession();
           return;
         }
         if (session.status === "visible") {
-          showLeaderHints(session.modifier, pathname);
+          showLeaderHints(session.modifier);
           return;
         }
       }
-      hideLeaderHints(pathname);
+      hideLeaderHints();
     };
 
     // Reserved v1 list is empty - OS-level chords live in the Electron menu
     // and never reach this listener. No action-id list.
-    const skipAppActions = (
-      event: KeyboardEvent,
-      pathname: string,
-    ): boolean => {
-      if (isAnyDialogOpen()) {
-        if (hasLeaderModifier(event)) spendHintSession(pathname);
-        else resetHintSession(pathname);
+    const skipAppActions = (event: KeyboardEvent): boolean => {
+      if (isKeybindingDialogOpen(event.target)) {
+        if (hasLeaderModifier(event)) spendHintSession();
+        else resetHintSession();
         return true;
       }
       // The start page has no guest, and returning to it can leave an armed
@@ -368,7 +356,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         !isTextHistoryShortcut(event, isMac()) &&
         focusBrowserAddressForShortcut(event)
       ) {
-        spendHintSession(pathname);
+        spendHintSession();
         resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
         event.preventDefault();
         event.stopPropagation();
@@ -408,32 +396,41 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         useScreencastArmedStore.getState().releasePageKeys?.();
         return false;
       }
-      if (hasLeaderModifier(event)) spendHintSession(pathname);
-      else resetHintSession(pathname);
+      if (hasLeaderModifier(event)) spendHintSession();
+      else resetHintSession();
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
       return true;
     };
 
+    const spendModifiedHintSession = (event: KeyboardEvent): void => {
+      if (hasLeaderModifier(event)) spendHintSession();
+    };
+
     const handleKeyDown = (event: KeyboardEvent) => {
-      const pathname = adapter.getPathname();
       if (allLeaderModifiersReleased(event)) {
-        resetHintSession(pathname);
+        resetHintSession();
       }
 
-      if (skipAppActions(event, pathname)) return;
+      if (skipAppActions(event)) {
+        resetTabCycle(adapter);
+        return;
+      }
 
       const cleanModifier = cleanLeaderModifierFromEvent(event);
       if (isBareModifierEvent(event)) {
         if (cleanModifier === null) {
-          if (hasLeaderModifier(event)) spendHintSession(pathname);
+          spendModifiedHintSession(event);
           return;
         }
-        transitionLeaderSession(cleanModifier, pathname);
+        transitionLeaderSession(cleanModifier);
         return;
       }
 
-      if (hasLeaderModifier(event)) spendHintSession(pathname);
-      if (event.defaultPrevented) return;
+      spendModifiedHintSession(event);
+      if (event.defaultPrevented) {
+        resetTabCycle(adapter);
+        return;
+      }
       // AltGr is Ctrl+Alt to the event on Windows and Linux, and it types a
       // character (AltGr+N is ń on a Polish layout, AltGr+2 is @ on a German
       // one). The key is the text's, so no chord or digit action sees it,
@@ -453,6 +450,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // digit-by-number flow. `matchDigitAction` only succeeds when a digit
       // is the primary key + at least one modifier is held.
       const digitMatch = matchDigitAction(event);
+      if (digitMatch !== null) resetTabCycle(adapter);
       if (
         handleDigitKeyDown(
           event,
@@ -466,7 +464,10 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
 
       const actionId = resolveReservedAction(event);
-      if (actionId === null) return;
+      if (actionId === null) {
+        resetTabCycle(adapter);
+        return;
+      }
       if (
         shouldPassCtrlChordToFocusedTerminal(event, actionId.terminalPolicy)
       ) {
@@ -488,7 +489,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // (Cmd+Alt+Left/Right = history back/forward on Chrome+Safari).
       event.preventDefault();
       event.stopPropagation();
-      dispatchAction(actionId.actionId, adapter);
+      dispatchKeydownAction(actionId.actionId, adapter, event.repeat);
     };
 
     // Mouse back/forward (buttons 3/4). Desktop-only, on the shared chrome
@@ -511,15 +512,16 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     };
 
     const handleKeyUp = (event: KeyboardEvent) => {
-      const pathname = adapter.getPathname();
+      flushTabCycle(adapter);
+      resetTabCycle(adapter);
       if (allLeaderModifiersReleased(event)) {
         commitDigitSequence(digitSequenceRef, digitSequenceTimerRef);
-        resetHintSession(pathname);
+        resetHintSession();
         return;
       }
       const cleanModifier = cleanLeaderModifierFromEvent(event);
       if (cleanModifier === null) {
-        if (hasLeaderModifier(event)) spendHintSession(pathname);
+        if (hasLeaderModifier(event)) spendHintSession();
         return;
       }
       // A modifier was released (e.g. Shift, while Cmd/Ctrl stays down) but
@@ -533,12 +535,16 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
         (session.status === "pending" || session.status === "visible") &&
         session.modifier !== cleanModifier
       ) {
-        transitionLeaderSession(cleanModifier, pathname);
+        transitionLeaderSession(cleanModifier);
       }
     };
 
+    const handlePointerDown = () => resetTabCycle(adapter);
+    const handleFocusChange = () => validateTabCycle(adapter);
+
     const handleBlur = () => {
-      resetHintSession(adapter.getPathname());
+      resetTabCycle(adapter);
+      resetHintSession();
     };
 
     // A scope registering/unregistering (e.g. the model picker opening or
@@ -546,15 +552,15 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     // or visible session immediately; if its owner disappears, spend the
     // session so a transient owner loss cannot be repaired by a stale timer.
     const handleScopeChange = () => {
+      resetTabCycle(adapter);
       const session = hintSessionRef.current;
       if (session.status !== "pending" && session.status !== "visible") return;
-      const pathname = adapter.getPathname();
       if (!hasLeaderOwner(session.modifier)) {
-        spendHintSession(pathname);
+        spendHintSession();
         return;
       }
       if (session.status !== "visible") return;
-      showLeaderHints(session.modifier, pathname);
+      showLeaderHints(session.modifier);
     };
 
     const unregisterBaseScope = registerBaseLeaderScope(adapter);
@@ -562,11 +568,16 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     window.addEventListener("keyup", handleKeyUp, { capture: true });
     window.addEventListener("blur", handleBlur);
+    window.addEventListener("pointerdown", handlePointerDown, {
+      capture: true,
+    });
+    window.addEventListener("focusin", handleFocusChange, { capture: true });
     // Capture-phase to match keydown/keyup: app history nav should win before a
     // descendant (editor, xterm) can swallow mouse buttons 3/4.
     window.addEventListener("auxclick", handleMouseNav, { capture: true });
     const unsubscribeHistory = router.history.subscribe(handleRouteChange);
     return () => {
+      resetTabCycle(adapter);
       clearHintTimer();
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
       unsubscribeArmed();
@@ -576,6 +587,12 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
       window.removeEventListener("keyup", handleKeyUp, { capture: true });
       window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("pointerdown", handlePointerDown, {
+        capture: true,
+      });
+      window.removeEventListener("focusin", handleFocusChange, {
+        capture: true,
+      });
       window.removeEventListener("auxclick", handleMouseNav, { capture: true });
     };
   }, [router]);
@@ -755,21 +772,4 @@ function handleDigitKeyDown(
   event.stopPropagation();
   handleDigitMatch(match, sequenceRef, timerRef);
   return true;
-}
-
-function isAnyDialogOpen(): boolean {
-  if (typeof document === "undefined") return false;
-  const dialogs = document.querySelectorAll(
-    '[role="dialog"][data-state="open"]',
-  );
-  // A dialog that hosts a leader scope (the system-tab modal, the model picker
-  // popover, …) opts out of the block via `data-leader-scope`: it's the
-  // intended target of the leader shortcuts, so treat it as transparent to
-  // chord dispatch. Any other open dialog still blocks, so chords don't fire
-  // behind an unrelated modal.
-  for (const node of dialogs) {
-    if (!(node instanceof HTMLElement)) return true;
-    if (node.dataset.leaderScope === undefined) return true;
-  }
-  return false;
 }

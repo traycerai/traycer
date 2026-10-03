@@ -1,3 +1,4 @@
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -11,6 +12,7 @@ import { notificationsMutationKeys } from "@/lib/query-keys";
 
 interface HostNotificationEntityReadContext {
   readonly hostId: string | null;
+  readonly userId: string | null;
 }
 
 export function useNotificationMarkEntityRead(
@@ -33,9 +35,17 @@ export function useNotificationMarkEntityRead(
     mapVariables: (entity) => ({ kind: "entity", entity }),
     options: {
       mutationKey: notificationsMutationKeys.markEntityRead(),
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onMutate: () => ({
+        hostId: client?.getActiveHostId() ?? null,
+        userId: useAuthStore.getState().contextMetadata?.userId ?? null,
+      }),
       onSuccess: (_data, entity, context) => {
         if (context.hostId === null || client === null) return;
+        if (
+          context.userId !==
+          (useAuthStore.getState().contextMetadata?.userId ?? null)
+        )
+          return;
         if ((client.getActiveHostId() ?? null) !== context.hostId) return;
         invalidateNotificationIndicatorsForEntities(
           queryClient,

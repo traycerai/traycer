@@ -10,6 +10,7 @@ import {
   processReconnectEngine,
   WAKE_RETRY_EPISODE_MS,
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { isDocumentVisible } from "@/lib/dom/document-visibility";
 import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
@@ -129,12 +130,51 @@ export function subscribeChatSessionWakeRetry(
     }
   };
 
+  const queuedRetries = new Map<ChatSessionStoreHandle, WakeSignalReason>();
+  let retryTimer: number | null = null;
+  const drainRetries = (): void => {
+    retryTimer = null;
+    for (const [handle, reason] of queuedRetries) {
+      if (!isDocumentVisible() || !handle.isSurfaceVisible()) continue;
+      queuedRetries.delete(handle);
+      recordAttempts(retryClosedChatSessions([handle], reason), Date.now());
+    }
+    const next = queuedRetries.entries().next().value;
+    if (next !== undefined) {
+      const [handle, reason] = next;
+      queuedRetries.delete(handle);
+      recordAttempts(retryClosedChatSessions([handle], reason), Date.now());
+    }
+    scheduleRetries();
+  };
+  const scheduleRetries = (): void => {
+    if (retryTimer !== null || queuedRetries.size === 0) return;
+    // One background rebuild per tick, with jitter across renderer windows.
+    retryTimer = window.setTimeout(drainRetries, 100 + Math.random() * 100);
+  };
+  const admitRetries = (
+    handles: readonly ChatSessionStoreHandle[],
+    reason: WakeSignalReason,
+  ): void => {
+    for (const handle of handles) {
+      pendingLateCloseReason.delete(handle);
+      if (isDocumentVisible() && handle.isSurfaceVisible()) {
+        queuedRetries.delete(handle);
+        recordAttempts(retryClosedChatSessions([handle], reason), Date.now());
+      } else {
+        queuedRetries.set(handle, reason);
+      }
+    }
+    scheduleRetries();
+  };
+
   const syncHandleSubscriptions = (): void => {
     const liveHandles = new Set(registry.listHandles());
     for (const [handle, dispose] of handleDisposers) {
       if (liveHandles.has(handle)) continue;
       dispose();
       handleDisposers.delete(handle);
+      queuedRetries.delete(handle);
       pendingLateCloseReason.delete(handle);
       wakeEpisodes.delete(handle);
     }
@@ -165,7 +205,7 @@ export function subscribeChatSessionWakeRetry(
         // connecting, and a permanently fatal replacement may close again. One
         // late close gets one rebuild for this wake, never a retry loop.
         pendingLateCloseReason.delete(handle);
-        recordAttempts(retryClosedChatSessions([handle], reason), Date.now());
+        admitRetries([handle], reason);
       });
       handleDisposers.set(handle, dispose);
     }
@@ -179,7 +219,10 @@ export function subscribeChatSessionWakeRetry(
   const onWake = (reason: WakeSignalReason): void => {
     const now = Date.now();
     const due = registry.listHandles().filter((handle) => {
-      if (reconnect.isWithinWakeEpisode(handle, now)) {
+      if (
+        queuedRetries.has(handle) ||
+        reconnect.isWithinWakeEpisode(handle, now)
+      ) {
         return false;
       }
       const episode = wakeEpisodes.get(handle);
@@ -205,7 +248,7 @@ export function subscribeChatSessionWakeRetry(
         }
       }
     }
-    recordAttempts(retryClosedChatSessions(closed, reason), now);
+    admitRetries(closed, reason);
   };
   let disposeWakeSubscription: () => void;
   if (runnerHost !== null) {
@@ -225,6 +268,8 @@ export function subscribeChatSessionWakeRetry(
     });
   }
   return () => {
+    if (retryTimer !== null) window.clearTimeout(retryTimer);
+    queuedRetries.clear();
     disposeWakeSubscription();
     disposeRegistrySubscription();
     for (const dispose of handleDisposers.values()) dispose();

@@ -233,4 +233,31 @@ describe("startEpicRuntimeWorkerHost", () => {
     host.shutdown();
     main.dispose();
   });
+
+  it("answers a projection/resync from the registered snapshot reader, and bases the next delta off it", () => {
+    const { pair, main, host } = createFixture();
+    main.emit(bootstrap(RUNTIME_BRIDGE_PROTOCOL_VERSION), []);
+
+    host.setProjectionSnapshotReader(() => ({ title: "full-state" }));
+    host.publishProjection({ title: "first-delta" });
+
+    main.emit({ kind: "projection/resync" }, []);
+
+    const projections = workerEvents(pair).filter(
+      (event) => event.kind === "projection",
+    );
+    expect(projections).toHaveLength(2);
+    expect(projections[1].baseRevision).toBeNull();
+    expect(projections[1].value).toEqual({ title: "full-state" });
+    expect(projections[1].revision).toBe(projections[0].revision + 1);
+
+    host.publishProjection({ title: "next-delta" });
+    const afterSnapshot = workerEvents(pair).filter(
+      (event) => event.kind === "projection",
+    );
+    expect(afterSnapshot[2].baseRevision).toBe(projections[1].revision);
+
+    host.shutdown();
+    main.dispose();
+  });
 });

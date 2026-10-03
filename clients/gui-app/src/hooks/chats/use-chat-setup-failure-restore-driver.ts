@@ -12,19 +12,16 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
  * chat-session handle. When a new failure/cancellation event arrives that
  * names a `messageId`, the driver:
  *
- *  1. Pulls the locally-cached pending content out of `pendingUserMessages`
- *     via the chat-session store's `takeSetupFailedRestoration` action.
- *     That action removes the matching pending entry so the queued message
- *     no longer appears as in-flight; later queued messages stay in the
- *     queue (the host decides queue state, not the renderer).
- *  2. Pushes the recovered structured content back into the composer draft
- *     for `nodeId` via `replaceDraft`, which bumps the editor reset epoch
- *     so the Tiptap editor re-seeds with the restored prompt.
+ *  1. Reads the locally-cached prompt via `peekSetupFailedRestoration` and
+ *     durably restores it with `replaceDraft`, which bumps the editor reset
+ *     epoch so the editor re-seeds with the restored prompt.
+ *  2. Consumes the matching restoration slots via `takeSetupFailedRestoration`
+ *     only after the draft write succeeds. Later queued messages stay queued.
  *  3. For a path-less failure (the generic `SETUP_AWAIT_FAILED` catch-all,
  *     which the in-transcript setup card cannot anchor without a
  *     `workspacePath`), toasts the failure so it isn't silent - the parity
  *     the old failure banner provided. This fires strictly after a successful
- *     restoration (step 1 returned content), so a historical failure replayed
+ *     restoration, so a historical failure replayed
  *     on a cold snapshot open never re-announces itself.
  *
  * The hook reads `selectRestorableSetupInterruption` rather than the latest
@@ -103,12 +100,16 @@ export function useChatSetupFailureRestoreDriver(
     if (interruption === null) return;
     const eventId = interruption.eventId;
     if (dedupe.ids.has(eventId)) return;
-    dedupe.ids.add(eventId);
     const restored = handle.store
       .getState()
-      .takeSetupFailedRestoration(interruption.messageId);
-    if (restored === null) return;
+      .peekSetupFailedRestoration(interruption.messageId);
+    if (restored === null) {
+      dedupe.ids.add(eventId);
+      return;
+    }
     replaceDraft(nodeId, restored, null);
+    handle.store.getState().takeSetupFailedRestoration(interruption.messageId);
+    dedupe.ids.add(eventId);
     // A path-less setup failure (the generic `SETUP_AWAIT_FAILED` catch-all,
     // which carries no `workspacePath`) produces NO setup card - the deriver
     // can't anchor a card without a workspace - so this toast is the only

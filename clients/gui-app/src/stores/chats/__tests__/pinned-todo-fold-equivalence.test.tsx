@@ -9,10 +9,10 @@ import type {
 import { projectTranscriptRows } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 import {
-  useRenderedMessages,
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 // The shared half of the fold, from protocol. It used to be a cross-repo
 // relative path into `traycer-host/`, which resolves only in the internal
 // monorepo - so this corpus was silently unrunnable in a standalone OSS clone,

@@ -16,7 +16,7 @@ export function HistoryGroupHeader(props: {
   const { targetRef } = props;
   const messages = props.kind === "messages";
   const Heading = messages ? "h3" : "h2";
-  const { setElement, element, height } = useMeasuredElementHeight();
+  const { setElement, element, height } = useMeasuredElementHeight(false);
   const heightProperty = `--history-${props.kind}-header-height`;
   useLayoutEffect(() => {
     if (element === null || height === 0) return;

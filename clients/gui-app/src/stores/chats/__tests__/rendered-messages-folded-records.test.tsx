@@ -2,10 +2,8 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
-import {
-  useRenderedMessages,
-  type RenderedMessagesDisplayContext,
-} from "@/stores/chats/rendered-messages";
+import { type RenderedMessagesDisplayContext } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 
 /**

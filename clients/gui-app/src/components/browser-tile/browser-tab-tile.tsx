@@ -1,3 +1,4 @@
+import { useSurfaceDemand } from "@/stores/tabs/surface-demand";
 import type { PendingBrowserTabRequest } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { logBrowserOpenSpan } from "@/lib/browser-view/sessions/browser-open-perf";
 import {
@@ -722,6 +723,19 @@ function useRuntimeDemotionNote(
  * puts every tile's subtree behind a `BrowserSessionsHostBoundary` for
  * `node.hostId`, so there is no per-tile boundary here.
  */
+function browserTabAlreadyLive(
+  binding: ElectronTabBinding | null,
+  tab: BrowserSessionInfo["tabs"][number] | undefined,
+  session: BrowserSessionInfo | undefined,
+): boolean {
+  return (
+    binding !== null ||
+    (tab !== undefined &&
+      tab.status !== "dormant" &&
+      session?.runtime.kind === "headless")
+  );
+}
+
 export function BrowserTabTile(props: BrowserTabTileProps) {
   const sessions = useBrowserSessionsContext();
   const attachTab = sessions.attachTab;
@@ -896,6 +910,9 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   // remounts, and reachable as soon as the Start Page panel renders this body
   // with a store that re-keys refs in place.
   const attachRequestedTabIdRef = useRef<string | null>(null);
+  const demand = useSurfaceDemand();
+  const attachAdmitted =
+    browserTabAlreadyLive(binding, tab, session) || demand === "settled";
   const shouldRequestAttach = shouldRequestTabAttach({
     canMaterializeElectron: sessions.canMaterializeElectron,
     inventoryReady: sessions.inventoryReady,
@@ -926,14 +943,14 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   // streams (`browser.sessions` and `browser.screencast`), so this buys ISSUE
   // order, not host-side arrival order; the host is what closes the remainder.
   useLayoutEffect(() => {
-    if (!shouldRequestAttach) {
+    if (!shouldRequestAttach || !attachAdmitted) {
       attachRequestedTabIdRef.current = null;
       return;
     }
     if (attachRequestedTabIdRef.current === props.node.tabId) return;
     attachRequestedTabIdRef.current = props.node.tabId;
     sendAttachTab();
-  }, [props.node.tabId, sendAttachTab, shouldRequestAttach]);
+  }, [props.node.tabId, sendAttachTab, shouldRequestAttach, attachAdmitted]);
   const wakeActive =
     binding === null && wakeRequestedAt !== null && !wakeWindowExpired;
   const wakeExpired =
@@ -988,7 +1005,7 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
           session={session}
           tab={tab}
           binding={binding}
-          inventoryReady={sessions.inventoryReady}
+          inventoryReady={sessions.inventoryReady ? attachAdmitted : false}
           canMaterializeElectron={sessions.canMaterializeElectron}
           desktopWindowId={desktopWindowId}
           wakeRequested={wakeActive}

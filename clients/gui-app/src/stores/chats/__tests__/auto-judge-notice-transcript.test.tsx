@@ -32,10 +32,8 @@ import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import {
-  useRenderedMessages,
-  type RenderedMessagesDisplayContext,
-} from "@/stores/chats/rendered-messages";
+import { type RenderedMessagesDisplayContext } from "@/stores/chats/rendered-messages";
+import { useRenderedMessages } from "@/stores/chats/__tests__/rendered-messages-test-utils";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import {

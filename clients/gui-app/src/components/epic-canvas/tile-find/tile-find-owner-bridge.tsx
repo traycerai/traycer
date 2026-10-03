@@ -87,23 +87,57 @@ export function TileFindOwnerBridge(): ReactNode {
 function useBlockingDomDialogActive(): boolean {
   return useSyncExternalStore(
     subscribeBlockingDomDialog,
-    hasBlockingDomDialog,
+    () => blockingDomDialogActive,
     () => false,
   );
 }
 
+let blockingDomDialogActive = false;
+
 function subscribeBlockingDomDialog(listener: () => void): () => void {
   if (typeof MutationObserver === "undefined") return () => undefined;
-  const observer = new MutationObserver(listener);
+  const refresh = (): void => {
+    const next = hasBlockingDomDialog();
+    if (next === blockingDomDialogActive) return;
+    blockingDomDialogActive = next;
+    listener();
+  };
+  // Pane-local portals can live under #root. Keep compatibility with those,
+  // but streaming content must not trigger a document-wide dialog query.
+  const observer = new MutationObserver((records) => {
+    if (records.some(changesDialogPresence)) refresh();
+  });
   observer.observe(document.body, {
     subtree: true,
     childList: true,
     attributes: true,
+    attributeOldValue: true,
     attributeFilter: ["data-state", "role"],
   });
+  refresh();
   return () => {
     observer.disconnect();
   };
+}
+
+function changesDialogPresence(record: MutationRecord): boolean {
+  if (record.type === "attributes") {
+    return (
+      record.target instanceof Element &&
+      (record.target.getAttribute("role") === "dialog" ||
+        (record.attributeName === "role" && record.oldValue === "dialog"))
+    );
+  }
+  for (const node of [...record.addedNodes, ...record.removedNodes]) {
+    if (
+      node instanceof Element &&
+      (node.matches('[role="dialog"]') ||
+        node.querySelector('[role="dialog"]') !== null)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function hasBlockingDomDialog(): boolean {

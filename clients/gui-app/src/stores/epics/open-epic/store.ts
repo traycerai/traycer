@@ -1,3 +1,8 @@
+import type {
+  EpicProjectionPatch,
+  SliceDelta,
+  TableDelta,
+} from "./runtime/projection-wire";
 import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The zustand adapter over the epic replica runtime.
@@ -30,7 +35,11 @@ import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runt
 import type { EpicAdapterArm } from "./runtime/epic-adapter-selection";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { replaceEqualDeep } from "@tanstack/react-query";
-import { persist, createJSONStorage } from "zustand/middleware";
+import {
+  persist,
+  createJSONStorage,
+  type PersistStorage,
+} from "zustand/middleware";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
@@ -1190,6 +1199,57 @@ export function isProjectionPatch(
   return typeof value === "object" && value !== null;
 }
 
+function applyProjectionTableDelta(before: unknown, delta: TableDelta): object {
+  if (typeof before !== "object" || before === null || Array.isArray(before)) {
+    throw new Error("Projection delta for missing table");
+  }
+  const rows = { ...before };
+  let changed = false;
+  for (const id of delta.removed) {
+    changed ||= Object.hasOwn(rows, id);
+    Reflect.deleteProperty(rows, id);
+  }
+  for (const [id, value] of Object.entries(delta.upserts)) {
+    const prior: unknown = Reflect.get(before, id);
+    const stabilized: unknown = replaceEqualDeep(prior, value);
+    changed ||= stabilized !== prior || !Object.hasOwn(before, id);
+    Reflect.set(rows, id, stabilized);
+  }
+  return changed ? rows : before;
+}
+
+/** Copy table shells only; unchanged rows never cross the wire or a deep walk. */
+function applyProjectionDeltas(
+  current: Partial<EpicRuntimeProjection>,
+  deltas: readonly SliceDelta[],
+): Partial<EpicRuntimeProjection> {
+  const patch: Partial<EpicRuntimeProjection> = {};
+  for (const delta of deltas) {
+    const held = current[delta.key];
+    if (held === undefined) {
+      throw new Error("Projection delta before initial slice");
+    }
+    const next = { ...held };
+    let changed = false;
+    for (const [field, value] of Object.entries(delta.fields)) {
+      const before: unknown = Reflect.get(held, field);
+      const stabilized: unknown = replaceEqualDeep(before, value);
+      changed ||= stabilized !== before;
+      Reflect.set(next, field, stabilized);
+    }
+    for (const [field, table] of Object.entries(delta.tables)) {
+      const before: unknown = Reflect.get(held, field);
+      const rows = applyProjectionTableDelta(before, table);
+      if (rows !== before) {
+        changed = true;
+        Reflect.set(next, field, rows);
+      }
+    }
+    Reflect.set(patch, delta.key, changed ? next : held);
+  }
+  return patch;
+}
+
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
@@ -1644,7 +1704,7 @@ export function createOpenEpicStore(
 
   const isDisposed = (): boolean => disposed;
 
-  function applyProjection(patch: Partial<EpicRuntimeProjection>): void {
+  function applyProjection(patch: EpicProjectionPatch): void {
     if (disposed) return;
     const api = storeApi;
     if (api === null) {
@@ -1668,7 +1728,8 @@ export function createOpenEpicStore(
         "[open-epic] projection applied before the store attached",
       );
     }
-    const { bindingEpoch, ...workerProjected } = patch;
+    const { bindingEpoch, sliceDeltas, sliceAliases, ...workerProjected } =
+      patch;
     let projected = workerProjected;
     if (projected.isDirty !== undefined) {
       workerReplicaIsDirty = projected.isDirty;
@@ -1679,20 +1740,9 @@ export function createOpenEpicStore(
         projected = { ...projected, isDirty: true };
       }
     }
-    // ── Re-stabilise nested identity, at the grain the projector owns it ──
-    //
-    // The worker's projector re-allocates ONLY what changed - a rename mints a
-    // fresh slot and every sibling keeps its reference - and selectors skip
-    // work on exactly that discipline. `structuredClone` erases it one level
-    // below the wire's key-grain diff: a slice whose reference moved arrives
-    // with EVERY nested slot re-minted, changed or not. `replaceEqualDeep`
-    // (TanStack's default structural sharing, already the precedent in
-    // `worktrees-enrichment-batcher.ts`) restores it: a deep-equal subtree
-    // keeps the object already in state, a changed one stays fresh - so
-    // `===` again means "unchanged", clone or no clone.
-    //
-    // Per delivered key only - the wire diff already omits keys whose
-    // reference never moved, so this walks what actually crossed.
+    // Initial/ordinary values cross as whole slices. Keyed slice deltas carry
+    // only changed rows; their unchanged siblings already have main's identity
+    // and must never enter replaceEqualDeep or structured clone.
     const current = api.getState();
     // Read BEFORE the per-key pass, because that pass is what destroys them.
     const aliasGroups = aliasGroupsOf(projected);
@@ -1701,7 +1751,8 @@ export function createOpenEpicStore(
     >) {
       stabilizeProjectionKey(current, projected, key);
     }
-    restoreAliasGroups(projected, aliasGroups);
+    Object.assign(projected, applyProjectionDeltas(current, sliceDeltas ?? []));
+    restoreAliasGroups(projected, sliceAliases ?? aliasGroups);
     api.setState(
       bindingEpoch === undefined
         ? projected
@@ -1962,6 +2013,33 @@ export function createOpenEpicStore(
       });
     },
   });
+
+  const focusJsonStorage = createJSONStorage<PersistedSlice>(
+    () => localStorage,
+  );
+  let lastPersistedFocus: PersistedSlice | null = null;
+  const focusStorage: PersistStorage<PersistedSlice> = {
+    getItem: (name) => {
+      lastPersistedFocus = null;
+      return focusJsonStorage?.getItem(name) ?? null;
+    },
+    setItem: (name, value) => {
+      if (
+        lastPersistedFocus?.lastFocusedArtifactId ===
+          value.state.lastFocusedArtifactId &&
+        lastPersistedFocus.lastFocusedThreadId ===
+          value.state.lastFocusedThreadId
+      ) {
+        return;
+      }
+      focusJsonStorage?.setItem(name, value);
+      lastPersistedFocus = value.state;
+    },
+    removeItem: (name) => {
+      lastPersistedFocus = null;
+      focusJsonStorage?.removeItem(name);
+    },
+  };
 
   const store = create<OpenEpicState>()(
     persist(
@@ -2504,7 +2582,7 @@ export function createOpenEpicStore(
       },
       {
         ...basePersistOptions(openEpicKey(userId, epicId)),
-        storage: createJSONStorage(() => localStorage),
+        storage: focusStorage,
         partialize: (state): PersistedSlice => ({
           lastFocusedArtifactId: state.lastFocusedArtifactId,
           lastFocusedThreadId: state.lastFocusedThreadId,

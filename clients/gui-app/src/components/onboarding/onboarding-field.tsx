@@ -233,7 +233,7 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
 
     // Every pixel belongs to exactly one cell, so nothing overlaps and the
     // canvas never blends against itself - only against the page underneath.
-    gl.useProgram(program);
+    activateProgram(gl, program);
     const corners = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, corners);
     gl.bufferData(
@@ -399,4 +399,11 @@ export function OnboardingField(props: { readonly welcoming: boolean }) {
       className="onboarding-field pointer-events-none absolute inset-0 size-full"
     />
   );
+}
+
+function activateProgram(
+  gl: WebGLRenderingContext,
+  program: WebGLProgram,
+): void {
+  gl.useProgram(program);
 }

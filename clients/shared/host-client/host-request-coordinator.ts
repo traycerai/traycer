@@ -79,6 +79,7 @@ interface HostRequestWaiter<Response> {
 
 interface HostRequestJob {
   readonly mode: RpcSchedulingMode;
+  readonly cancelAfterDispatch: boolean;
   readonly authority: HostRequestAuthority;
   readonly authorityDomain: HostRequestAuthorityDomain;
   readonly controller: AbortController;
@@ -193,7 +194,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
       if (!matches(key)) {
         continue;
       }
-      if (queue.active !== null && queue.active.mode !== "fifo") {
+      if (queue.active !== null && queue.active.cancelAfterDispatch) {
         jobs.push({ key, queue, job: queue.active });
       }
       for (const job of queue.queued) {
@@ -207,7 +208,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   }
 
   /**
-   * Settles only the transition snapshot: FIFO commands are never captured,
+   * Settles only the transition snapshot: dispatched mutations are never captured,
    * and reads submitted after the transition began cannot be aborted here.
    */
   abortHostTransition(snapshot: HostTransitionAbortSnapshot): void {
@@ -218,6 +219,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     this.transitionSnapshots.delete(snapshot.token);
     for (const { key, queue, job } of jobs) {
       if (queue.active === job) {
+        if (!job.cancelAfterDispatch) continue;
         this.settleJobControlFlow(job, "authority-superseded");
         job.controller.abort("host-authority-replaced");
       } else if (queue.queued.includes(job)) {
@@ -246,7 +248,11 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   ): void {
     const key = this.keyFor(method, params, hostId, userId);
     const active = this.queues.get(key)?.active;
-    if (active === null || active === undefined || active.mode === "fifo") {
+    if (
+      active === null ||
+      active === undefined ||
+      !active.cancelAfterDispatch
+    ) {
       return;
     }
     this.settleJobControlFlow(active, "waiter-cancelled");
@@ -341,6 +347,8 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   ): HostRequestJob {
     return {
       mode,
+      cancelAfterDispatch:
+        this.registry[submission.method].cancelAfterDispatch === true,
       authority: submission.authority,
       authorityDomain: submission.authorityDomain,
       controller: new AbortController(),
@@ -373,7 +381,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
         this.removeQueueWhenDrained(key, queue);
         return;
       }
-      if (job.started && job.waiters.size === 0 && job.mode !== "fifo") {
+      if (job.started && job.waiters.size === 0 && job.cancelAfterDispatch) {
         job.controller.abort("last-cancelable-waiter-detached");
       }
     };
@@ -407,6 +415,7 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     const authority: HostRequestAuthority = {
       ...job.authority,
       abortSignal: combined.signal,
+      cancelAfterDispatch: job.cancelAfterDispatch,
     };
     void job
       .execute(authority)

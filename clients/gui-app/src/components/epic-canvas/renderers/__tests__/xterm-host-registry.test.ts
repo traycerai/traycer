@@ -22,7 +22,11 @@ import {
   createTerminalSessionStore,
   type TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
-import { PLAIN_TERMINAL_RELEASE_LINGER_MS } from "@/stores/terminals/terminal-session-registry";
+import type { TerminalSessionKind } from "@traycer/protocol/host/terminal/unary-schemas";
+import {
+  MAX_LINGERING_PLAIN_TERMINALS,
+  PLAIN_TERMINAL_RELEASE_LINGER_MS,
+} from "@/stores/terminals/terminal-session-registry";
 
 function makeEntry(sessionId: string, hostId: string | null): XtermHostEntry {
   const term = new Terminal();
@@ -60,7 +64,10 @@ function makeEntryForTests(): XtermHostEntry {
   return makeEntry("session-1", "host-1");
 }
 
-function createOwnedHandle(sessionId: string): {
+function createOwnedHandle(
+  sessionId: string,
+  kind: TerminalSessionKind,
+): {
   readonly handle: TerminalSessionStoreHandle;
   readonly closeCount: () => number;
 } {
@@ -71,7 +78,7 @@ function createOwnedHandle(sessionId: string): {
     cols: 80,
     rows: 24,
     reattachMode: "fresh",
-    kind: "terminal",
+    kind,
     viewer: "presentation",
     streamClientFactory: () => ({
       sendAction: () => undefined,
@@ -132,7 +139,7 @@ describe("xterm host fleet identity", () => {
 
   it("does not let host B adopt, rekey, or release host A's warm engine or stream", () => {
     const registry = __getTerminalSessionRegistryForTests();
-    const ownedA = createOwnedHandle(SHARED_ID);
+    const ownedA = createOwnedHandle(SHARED_ID, "terminal");
     registry.acquire("inst-a", () => ownedA.handle, HOST_A, "presentation");
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
@@ -156,7 +163,7 @@ describe("xterm host fleet identity", () => {
 
   it("keeps host A's retained stream and engine after host B opens the same id", () => {
     const registry = __getTerminalSessionRegistryForTests();
-    const ownedA = createOwnedHandle(SHARED_ID);
+    const ownedA = createOwnedHandle(SHARED_ID, "terminal");
     registry.acquire("inst-a", () => ownedA.handle, HOST_A, "presentation");
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
@@ -164,7 +171,7 @@ describe("xterm host fleet identity", () => {
     releaseXtermHost("inst-a", true, false);
     registry.release("inst-a", ownedA.handle, true);
 
-    const ownedB = createOwnedHandle(SHARED_ID);
+    const ownedB = createOwnedHandle(SHARED_ID, "terminal");
     registry.acquire("inst-b", () => ownedB.handle, HOST_B, "presentation");
     const engineB = acquireXtermHost("inst-b", () =>
       makeEntry(SHARED_ID, HOST_B),
@@ -227,7 +234,7 @@ describe("xterm host fleet identity", () => {
   it("still adopts a same-host warm engine and keeps the linger clock", () => {
     vi.useFakeTimers();
     const registry = __getTerminalSessionRegistryForTests();
-    const ownedA = createOwnedHandle(SHARED_ID);
+    const ownedA = createOwnedHandle(SHARED_ID, "terminal");
     registry.acquire("inst-a", () => ownedA.handle, HOST_A, "presentation");
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
@@ -257,5 +264,69 @@ describe("xterm host fleet identity", () => {
     registry.release("inst-reopen", ownedA.handle, true);
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
     expect(ownedA.closeCount()).toBe(4);
+  });
+});
+
+describe("xterm host disposal follows the shared terminal registry", () => {
+  it("disposes a released terminal-agent's engine once the shared cap evicts it, not only on exit", () => {
+    const registry = __getTerminalSessionRegistryForTests();
+    const owned = createOwnedHandle("agent-session", "terminal-agent");
+    registry.acquire(
+      "agent-inst",
+      () => owned.handle,
+      "host-1",
+      "presentation",
+    );
+    const engine = acquireXtermHost("agent-inst", () =>
+      makeEntry("agent-session", "host-1"),
+    );
+    releaseXtermHost("agent-inst", true, false);
+    registry.release("agent-inst", owned.handle, true);
+    expect(__getXtermHostEntryForTests("agent-inst")).toBe(engine);
+
+    // Fill the rest of the shared cap so the agent - released first - falls
+    // out as the oldest lease-free entry. Agents no longer have their own
+    // uncapped keep-warm class, so this must evict it exactly like a shell.
+    const fillers = Array.from(
+      { length: MAX_LINGERING_PLAIN_TERMINALS },
+      (_unused, index) => createOwnedHandle(`filler-${index}`, "terminal"),
+    );
+    fillers.forEach((filler, index) => {
+      registry.acquire(
+        `filler-inst-${index}`,
+        () => filler.handle,
+        "host-1",
+        "presentation",
+      );
+      registry.release(`filler-inst-${index}`, filler.handle, true);
+    });
+
+    expect(registry.get("agent-inst")).toBeNull();
+    expect(engine.disposeEngine).toHaveBeenCalledTimes(1);
+    expect(__getXtermHostEntryForTests("agent-inst")).toBeNull();
+  });
+
+  it("disposes a lingering terminal-agent's engine at TTL expiry, mirroring a plain terminal", () => {
+    vi.useFakeTimers();
+    const registry = __getTerminalSessionRegistryForTests();
+    const owned = createOwnedHandle("agent-ttl-session", "terminal-agent");
+    registry.acquire(
+      "agent-ttl-inst",
+      () => owned.handle,
+      "host-1",
+      "presentation",
+    );
+    const engine = acquireXtermHost("agent-ttl-inst", () =>
+      makeEntry("agent-ttl-session", "host-1"),
+    );
+    releaseXtermHost("agent-ttl-inst", true, false);
+    registry.release("agent-ttl-inst", owned.handle, true);
+
+    vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS - 1);
+    expect(engine.disposeEngine).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(engine.disposeEngine).toHaveBeenCalledTimes(1);
+    expect(__getXtermHostEntryForTests("agent-ttl-inst")).toBeNull();
   });
 });

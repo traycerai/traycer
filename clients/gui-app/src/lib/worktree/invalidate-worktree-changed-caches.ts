@@ -1,5 +1,6 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { affectedWorktreeQueryKeys } from "@/hooks/worktree/invalidations";
 import {
   enrichmentQueryPaths,
   isPerPathEnrichmentQueryKey,
@@ -42,18 +43,22 @@ import { worktreePathMatcher } from "@/lib/worktree/worktree-path-match";
  * matched by `worktreePathMatcher`, so such a key still refreshes on its own
  * row's frame.
  *
- * The workspace-path queries and the epic-scoped binding listing always go
- * too: a worktree path does not map back to the workspace folders or epics
- * that list it. Called once per BURST rather than per event: the host's sweep
- * emits one event per re-derived row, and refetching the full base list per
- * row is pure amplification - one trailing refetch renews demand and freshness
- * the same.
+ * Path pushes refresh keys with matching managed paths, plus imported/local
+ * bindings whose path identity is uncertain. Root pushes refresh every active
+ * listing: external membership changes and late cold-workspace discovery
+ * publish at root scope.
  */
 export function invalidateWorktreeChangedCaches(
   queryClient: QueryClient,
   hostId: string,
   scopes: WorktreeChangedAccumulatedScopes,
 ): void {
+  // Capture membership before any refetch replaces the cached rows.
+  const affected = scopes.root
+    ? null
+    : affectedWorktreeQueryKeys(queryClient, hostId, [...scopes.worktreePaths]);
+  const isAffected = (key: QueryKey): boolean =>
+    affected === null || affected.has(key);
   const listAllScope = hostQueryKeys.methodScope(
     hostId,
     "worktree.listAllForHost",
@@ -97,15 +102,14 @@ export function invalidateWorktreeChangedCaches(
       "worktree.listByWorkspacePaths",
     ),
     refetchType: "active",
+    predicate: (query) => isAffected(query.queryKey),
   });
-  // The chat's folder warning reads the owner's binding, not Sweep's host-wide
-  // inventory. Re-read its disk-derived missing paths on the same burst so a
-  // deleted or restored folder is reflected before the next send/focus. Path
-  // events carry run directories, not owner ids, so refresh active bindings on
-  // this host at either scope; inactive bindings only need marking stale.
+  // Re-read the affected owner's disk-derived missing paths; inactive owners
+  // remain stale until observed.
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(hostId, "worktree.getBinding"),
     refetchType: "active",
+    predicate: (query) => isAffected(query.queryKey),
   });
   // The branch LIST is a separate host-side read, so a summary refresh alone
   // leaves a branch deleted outside Traycer sitting in the new-worktree source
@@ -118,21 +122,10 @@ export function invalidateWorktreeChangedCaches(
   void queryClient.invalidateQueries({
     queryKey: hostQueryKeys.methodScope(hostId, "worktree.listBranches"),
     refetchType: "active",
+    predicate: (query) => isAffected(query.queryKey),
   });
-  // The epic-scoped binding listing feeds the git-diff / file-tree workspace
-  // pickers. Without this scope, a host-push correction (a worktree finishing
-  // setup, a cold row re-deriving as a git repo) never reaches those pickers
-  // until a remount refetch. Invalidated at EVERY scope on purpose:
-  // worktreePath events carry selector-visible changes too (a branch switch
-  // re-derives the row), so gating on root scope would regress live branch
-  // labels. `refetchType: "active"` refetches the open epic's mounted
-  // pickers now and only MARKS other epics' cached queries invalidated -
-  // they refetch on their next mount regardless of staleTime.
-  //
-  // Mid-create epics are the exception: their landing-flow optimistic seed
-  // is still authoritative and a refetch could return pre-binding
-  // `{ rows: [] }` and clobber it, so they are marked without an active
-  // refetch and converge once the create settles.
+  // Binding membership can change even when no cached row names the path.
+  // Pending-create seeds stay mark-only until their existing hold is released.
   const bindingsScope = hostQueryKeys.methodScope(
     hostId,
     "worktree.listBindingsForEpic",

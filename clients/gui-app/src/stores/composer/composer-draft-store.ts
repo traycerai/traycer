@@ -5,6 +5,8 @@ import type { PendingHostDelete } from "@/lib/drafts/draft-mirror-session";
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import { cancelDeferredPersistOnRetarget } from "@/lib/persist/persist-options";
+import { persistNowOrThrow } from "@/lib/persist/deferred-json-storage";
 import {
   legacyComposerDraftId,
   migratedLegacyComposerDraftId,
@@ -21,7 +23,10 @@ import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
-import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
+import { createComposerDraftStorage } from "./composer-draft-storage";
+import { composerDraftStorageKey } from "@/lib/persist/keys";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { appLogger } from "@/lib/logger";
 
 export interface DraftSelection {
   readonly from: number;
@@ -303,6 +308,8 @@ function isDraftSelection(value: unknown): value is DraftSelection {
   );
 }
 
+const composerDraftStorage = createComposerDraftStorage();
+
 export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
     (set, get) => ({
@@ -351,6 +358,11 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           bumpRevision: true,
           bumpResetEpoch: true,
         });
+        // Restorers acknowledge the source after this returns.
+        persistNowOrThrow(
+          useComposerDraftStore.persist.getOptions().name ??
+            persistKey(STORE_KEYS.composerDraft),
+        );
         notifyDraftLocalEdit(draftId);
       },
       addBrowserAnnotation: (chatId, record) => {
@@ -411,6 +423,11 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
             },
           };
         });
+        // Failed-send handoffs restore their sidecars before the same ACK.
+        persistNowOrThrow(
+          useComposerDraftStore.persist.getOptions().name ??
+            persistKey(STORE_KEYS.composerDraft),
+        );
       },
       clearDraft: (chatId) => {
         // Sidecar first, document second: `replaceDraft` is the broadcast
@@ -567,41 +584,7 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.composerDraft)),
-      // Serialization boundary: a persisted chat draft NEVER carries base64.
-      // The in-memory `drafts` map is canonical and DOES hold a paste's
-      // still-pending b64 node - that node is the work token its background
-      // prepare+hash+store job is keyed on, and the composer re-enters ingest
-      // for it on every document change - so the strip lives only here, at the
-      // localStorage seam. A hash-only node, whose bytes are durable in the
-      // composer image store, always survives, and `blobHashes` on the draft
-      // mirror's write is derived from those same hashes, which is what shrank
-      // the debounced `drafts.upsert` bodies from megabytes to a few KB.
-      //
-      // `selection` travels WITH the strip, and is dropped when the strip
-      // actually removes a node. The previous note here reasoned that the image
-      // node "is still there in memory", which is true and answers the wrong
-      // question: what the caret is applied to on the next launch is the
-      // REHYDRATED document, and that is the stripped copy - one node shorter,
-      // with every position after the removed image shifted. See
-      // `stripBase64ImageNodesWithSelection` for why it is dropped rather than
-      // rebased.
-      partialize: (state) => ({
-        pendingSubmittedDraftDeletes: state.pendingSubmittedDraftDeletes,
-        drafts: Object.fromEntries(
-          Object.entries(state.drafts).map(([chatId, draft]) => [
-            chatId,
-            draft === undefined
-              ? draft
-              : {
-                  ...draft,
-                  ...stripBase64ImageNodesWithSelection(
-                    draft.content,
-                    draft.selection,
-                  ),
-                },
-          ]),
-        ),
-      }),
+      storage: composerDraftStorage,
       // Synchronous localStorage hydration can finish during `create(...)`,
       // before an `onFinishHydration` subscriber can be registered. Normalize
       // at the merge boundary so legacy revisions are safe on initial import.
@@ -677,6 +660,161 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
     },
   ),
 );
+
+cancelDeferredPersistOnRetarget(useComposerDraftStore);
+
+composerDraftStorage.rememberSnapshot(useComposerDraftStore.getState());
+useComposerDraftStore.persist.onFinishHydration((state) => {
+  composerDraftStorage.rememberSnapshot(state);
+});
+
+composerDraftStorage.listen(
+  () =>
+    useComposerDraftStore.persist.getOptions().name ??
+    composerDraftStorageKey(null),
+  (kind, id, value) => {
+    const current = useComposerDraftStore.getState();
+    const merge = useComposerDraftStore.persist.getOptions().merge;
+    if (merge === undefined) return;
+    const hydrated = merge(
+      {
+        drafts: kind === "draft" && value !== null ? { [id]: value } : {},
+        pendingSubmittedDraftDeletes:
+          kind === "delete" && value !== null ? { [id]: value } : {},
+      },
+      current,
+    );
+    if (kind === "draft") {
+      applyExternalComposerDraft(id, hydrated.drafts[id], value);
+    } else {
+      const pendingSubmittedDraftDeletes = {
+        ...current.pendingSubmittedDraftDeletes,
+      };
+      const pending = hydrated.pendingSubmittedDraftDeletes[id];
+      if (pending === undefined) delete pendingSubmittedDraftDeletes[id];
+      else pendingSubmittedDraftDeletes[id] = pending;
+      useComposerDraftStore.setState({ pendingSubmittedDraftDeletes });
+    }
+  },
+);
+
+function externalComposerContentChanged(
+  before: DraftState,
+  draft: DraftState,
+): boolean {
+  return (
+    draft.draftId !== before.draftId ||
+    JSON.stringify(draft.content) !== JSON.stringify(before.content) ||
+    draft.selection?.from !== before.selection?.from ||
+    draft.selection?.to !== before.selection?.to ||
+    JSON.stringify(draft.browserAnnotations) !==
+      JSON.stringify(before.browserAnnotations)
+  );
+}
+
+function applyExternalComposerDraft(
+  id: string,
+  draft: DraftState | undefined,
+  value: unknown,
+): void {
+  const current = useComposerDraftStore.getState();
+  const before = current.drafts[id] ?? EMPTY_COMPOSER_DRAFT;
+  if (draft === undefined) {
+    useComposerDraftStore.setState({
+      drafts: {
+        ...current.drafts,
+        [id]: {
+          ...EMPTY_COMPOSER_DRAFT,
+          selection: EMPTY_COMPOSER_SELECTION,
+          generation: before.generation + 1,
+          syncedGeneration: before.generation + 1,
+          revision: before.revision + 1,
+          resetEpoch: before.resetEpoch + 1,
+        },
+      },
+    });
+    return;
+  }
+  // Counters belong to this window. Metadata-only echoes must not start
+  // another upsert, while an old ACK cannot clear newly adopted content.
+  const changed = externalComposerContentChanged(before, draft);
+  const dirty =
+    (isRecord(value) &&
+      normalizedNonNegative(value.generation) >
+        normalizedNonNegative(value.syncedGeneration)) ||
+    (changed && before.generation > before.syncedGeneration);
+  const generation = before.generation + (changed ? 1 : 0);
+  useComposerDraftStore.setState({
+    drafts: {
+      ...current.drafts,
+      [id]: {
+        ...draft,
+        generation,
+        syncedGeneration: dirty ? before.syncedGeneration : generation,
+        revision: before.revision + (changed ? 1 : 0),
+        resetEpoch: before.resetEpoch + (changed ? 1 : 0),
+      },
+    },
+  });
+  if (changed && dirty && draft.draftId !== null)
+    notifyDraftLocalEdit(draft.draftId);
+}
+
+export function clearComposerDraftPersistence(): void {
+  useComposerDraftStore.persist.clearStorage();
+  composerDraftStorage.withoutPersistence(() => {
+    for (const chatId of Object.keys(useComposerDraftStore.getState().drafts)) {
+      applyExternalComposerDraft(chatId, undefined, null);
+    }
+    useComposerDraftStore.setState({ pendingSubmittedDraftDeletes: {} });
+  });
+}
+
+// Retarget synchronously with identity, before another account can edit a row.
+// Interactive auth attempts keep the old identity, like the lifecycle bridges.
+let draftAccountId: string | null = null;
+function retargetComposerDraftAccount(): void {
+  const auth = useAuthStore.getState();
+  if (
+    auth.status === "signing-in" ||
+    (auth.status === "signed-out" && auth.signedOutCause === "attempt-failed")
+  )
+    return;
+  const accountId = admitsLocalPlane(auth.status)
+    ? (auth.contextMetadata?.userId ?? null)
+    : null;
+  if (accountId === draftAccountId) return;
+  const name = composerDraftStorageKey(accountId);
+  const previousAccountId = draftAccountId;
+  draftAccountId = accountId;
+  try {
+    if (accountId === null) useComposerDraftStore.persist.clearStorage();
+  } catch {
+    appLogger.warn("[persist] composer draft scope clear failed", {});
+  }
+  useComposerDraftStore.persist.setOptions({ name });
+  // Hydration/migration can fail (quota, denied storage, malformed rows).
+  // Nothing from the outgoing account may survive that failure in memory.
+  composerDraftStorage.withoutPersistence(() => {
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
+  });
+  try {
+    if (accountId !== null && previousAccountId === null) {
+      composerDraftStorage.adoptNamespace(composerDraftStorageKey(null), name);
+    }
+  } catch {
+    appLogger.warn(
+      "[persist] composer draft adoption incomplete; source retained",
+      {},
+    );
+  }
+  void useComposerDraftStore.persist.rehydrate();
+}
+useAuthStore.subscribe(retargetComposerDraftAccount);
+retargetComposerDraftAccount();
 
 function normalizedLegacyResetEpoch(rawDraft: Record<string, unknown>): number {
   const resetEpoch = rawDraft.resetEpoch;

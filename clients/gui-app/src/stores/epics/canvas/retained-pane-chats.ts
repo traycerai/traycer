@@ -59,9 +59,9 @@
  * The cap is deliberately PER PANE rather than canvas-global: per-pane
  * recency is the only recency the store actually has, and inventing a
  * cross-pane order would mean new persisted state whose sole purpose is a
- * memory bound. The retained total is therefore
- * `Σ over retained top-level surfaces of (panes × cap)`, where the top-level
- * `MAX_RETAINED_TOP_LEVEL_SURFACES` cap still dominates.
+ * memory bound. This cap keeps two settled chat bodies per pane. The retention profile's top-level DOM cap limits hidden task
+ * surfaces, each of which contains these panes. Neither count cap grants a stream lease: hidden neighbours are
+ * warm sessions, evictable by the single managed-data byte budget.
  */
 import type { EpicCanvasTileRef, TilePane } from "@/stores/epics/canvas/types";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
@@ -102,6 +102,7 @@ export interface RetainedPaneChatInstancesInput {
    */
   readonly tileFor: (instanceId: string) => EpicCanvasTileRef | undefined;
   readonly cap: number;
+  readonly demand: "preview" | "settled";
 }
 
 /**
@@ -131,7 +132,8 @@ export function retainedPaneChatInstanceIds(
     retained.push(instanceId);
   };
 
-  consider(resolveActivePaneTab(pane.activeTabId, pane.tabInstanceIds));
+  const activeId = resolveActivePaneTab(pane.activeTabId, pane.tabInstanceIds);
+  if (input.demand === "settled") consider(activeId);
   for (const instanceId of pane.activationHistory) consider(instanceId);
 
   return retained;

@@ -16,6 +16,7 @@
  */
 import type { EpicDocRecordArms } from "../../projection-helpers";
 import { createBatchingDelivery } from "../projection-delivery";
+import { createProjectionEncoder } from "../projection-wire";
 import {
   readWriteCommandIntent,
   RelayedWriteCommandFailureError,
@@ -221,13 +222,15 @@ export function installEpicRuntimeCore(
   let composed: EpicReplicaRuntime | null = null;
   host.onBootstrap((facts) => {
     const factories = buildFactories(host);
+    const projection = createProjectionEncoder();
+    host.setProjectionSnapshotReader(() => projection.snapshot());
 
     const runtime = createEpicRuntimeComposition({
       epicId: facts.epicId,
       environment: host.environment,
       factories,
       delivery: createBatchingDelivery((patch) => {
-        host.publishProjection(patch);
+        host.publishProjection(projection.encode(patch));
       }),
       getCurrentUserId: () => host.currentUserId(),
       getDocArm: () => readDocArm(host.streams.manifest()?.docArm),

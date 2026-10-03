@@ -86,6 +86,13 @@ export function reconcileAgentActivityByEpic(
   return changed ? next : previous;
 }
 
+// Bucket identities survive unrelated host/epic writes. Weak keys let retired
+// snapshots and their unions go away without retaining a per-epic history.
+const mergedActivityCache = new WeakMap<
+  EpicAgentActivity,
+  WeakMap<EpicAgentActivity, EpicAgentActivity>
+>();
+
 /**
  * Unions two hosts' views of the SAME epic.
  *
@@ -103,11 +110,19 @@ export function mergeEpicAgentActivity(
   left: EpicAgentActivity,
   right: EpicAgentActivity,
 ): EpicAgentActivity {
+  let byRight = mergedActivityCache.get(left);
+  const cached = byRight?.get(right);
+  if (cached !== undefined) return cached;
   const working = unionIdSets(left.working, right.working);
   const turn = unionIdSets(left.turn, right.turn);
-  return working === left.working && turn === left.turn
-    ? left
-    : { working, turn };
+  const merged =
+    working === left.working && turn === left.turn ? left : { working, turn };
+  if (byRight === undefined) {
+    byRight = new WeakMap<EpicAgentActivity, EpicAgentActivity>();
+    mergedActivityCache.set(left, byRight);
+  }
+  byRight.set(right, merged);
+  return merged;
 }
 
 function unionIdSets(
