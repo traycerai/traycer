@@ -741,9 +741,11 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
 
   const EXPECTED_OVERRIDES = {
     homeTab: { shown: "shown" },
-    // `showBar` and `showModeWord` are in the stored record and carry nowhere.
-    usageLimits: { reset: false, amount: "remaining" },
-    resourceMonitor: { shown: "hidden", processes: false, ramShare: true },
+    // The bar is off, so the reading is the percent alone.
+    usageLimits: { reset: false, amount: "remaining", readingStyle: "percent" },
+    // Header placement: the sidebar chips (cpu) were the only metrics this
+    // user saw and picked, so they win over the strip's never-drawn list.
+    resourceMonitor: { shown: "hidden", processes: false },
     contextUsage: {
       style: "ring",
       pinBreakdown: true,
@@ -841,6 +843,102 @@ describe("migrating a version-1 launch (the shipped desktop-v1.4.0-rc.1 record)"
 
     expect(state().overrides.usageLimits).toEqual({ shown: "hidden" });
     expect(state().overrides.resourceMonitor).toEqual({ shown: "hidden" });
+  });
+
+  describe("the usage reading style from showBar and showModeWord", () => {
+    async function readingStyleFor(
+      showBar: unknown,
+      showModeWord: unknown,
+    ): Promise<unknown> {
+      writeLayoutRecordAtVersion(
+        {
+          statusBar: {
+            placement: "status-bar",
+            rateLimits: { showBar, showModeWord },
+          },
+          composer: {},
+        },
+        1,
+      );
+      const { state } = await relaunchStore();
+      return state().overrides.usageLimits?.readingStyle;
+    }
+
+    it("reads a bar turned off as the percent alone, whether or not the mode word was on", async () => {
+      expect(await readingStyleFor(false, false)).toBe("percent");
+      expect(await readingStyleFor(false, true)).toBe("percent");
+    });
+
+    it("reads the bar with the mode word off as both", async () => {
+      expect(await readingStyleFor(true, false)).toBe("both");
+    });
+
+    it("carries nothing for the bar with the mode word on, the shipped reading", async () => {
+      expect(await readingStyleFor(true, true)).toBeUndefined();
+    });
+
+    it("carries nothing when showBar is not a boolean", async () => {
+      expect(await readingStyleFor("yes", false)).toBeUndefined();
+      expect(await readingStyleFor(undefined, false)).toBeUndefined();
+    });
+
+    it("carries the style under the header placement too", async () => {
+      writeLayoutRecordAtVersion(
+        {
+          statusBar: {
+            placement: "header",
+            rateLimits: { showBar: false, showModeWord: true },
+          },
+          composer: {},
+        },
+        1,
+      );
+
+      const { state } = await relaunchStore();
+
+      expect(state().overrides.usageLimits).toEqual({
+        readingStyle: "percent",
+      });
+    });
+  });
+
+  describe("the monitor's metrics from the strip list and the sidebar chips", () => {
+    async function monitorFor(placement: string): Promise<unknown> {
+      writeLayoutRecordAtVersion(
+        {
+          statusBar: {
+            placement,
+            resources: { enabled: true, metrics: ["cpu", "ramShare"] },
+          },
+          composer: {},
+        },
+        1,
+      );
+      writeSettingsRecord({ navigatorResourceMetrics: ["memory"] });
+      const { state } = await relaunchStore();
+      return state().overrides.resourceMonitor;
+    }
+
+    // Only a value that differs from the shipped Default is kept (cpu and
+    // agentRows are on there, memory and ramShare off), which is why each
+    // expectation names just the metrics that moved.
+    it("takes the sidebar chips under the header, where the strip list was never on screen", async () => {
+      // Chips are memory alone: memory on, the shipped cpu and processes off,
+      // and the strip's ramShare is not carried.
+      expect(await monitorFor("header")).toEqual({
+        cpu: false,
+        memory: true,
+        processes: false,
+      });
+    });
+
+    it("keeps the strip list under the status bar", async () => {
+      // The strip list is cpu and ramShare, so the chips' memory is ignored.
+      expect(await monitorFor("status-bar")).toEqual({
+        processes: false,
+        ramShare: true,
+      });
+    });
   });
 
   it("produces no overrides for a v1 record already sitting on its own shipped defaults", async () => {
