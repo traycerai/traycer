@@ -18,6 +18,7 @@ import type { ProfileCopyAttempt } from "@traycer/protocol/host/profile-copy-sch
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
+  profileSyncBatchSchema,
   profileSyncListSchema,
   profileSyncRuleSchema,
 } from "@traycer/protocol/host/profile-sync-schemas";
@@ -58,6 +59,7 @@ import {
   useProfileSyncSaveRule,
   useProfileSyncStart,
   useProfileSyncStopRule,
+  type ProfileSyncResolveVariables,
 } from "@/hooks/providers/use-profile-sync";
 
 const SOURCE = "source-host";
@@ -86,10 +88,12 @@ const RULE: ProfileSyncRule = {
   status: "waiting",
 };
 
+const RESOLVED_PROFILE = "88888888-8888-4888-8888-888888888888";
+
 function resolvedItem(operationId: string): ProfileSyncItem {
   return {
     providerId: "claude",
-    sourceProfileId: "88888888-8888-4888-8888-888888888888",
+    sourceProfileId: RESOLVED_PROFILE,
     name: "Work",
     destinationHostId: DEST,
     operationId,
@@ -108,6 +112,15 @@ let retryAnswer:
   | ((
       request: RequestOfMethod<HostRpcRegistry, "providers.profileCopy.retry">,
     ) => ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.retry">)
+  | null = null;
+
+let resolveAnswer:
+  | ((
+      request: RequestOfMethod<
+        HostRpcRegistry,
+        "providers.profileCopy.sync.resolve"
+      >,
+    ) => ProfileSyncBatch)
   | null = null;
 
 // Overrides for the rule answers; reset by the describe that uses them.
@@ -155,11 +168,12 @@ function setup(): {
       "providers.profileCopy.sync.stopRule": (params) =>
         stopAnswer?.(params) ?? { batches: [], rules: [] },
       // The authoritative answer names the operation that was asked about.
-      "providers.profileCopy.sync.resolve": (params) => ({
-        ...BATCH,
-        batchId: params.batchId,
-        items: [resolvedItem(params.operationId)],
-      }),
+      "providers.profileCopy.sync.resolve": (params) =>
+        resolveAnswer?.(params) ?? {
+          ...BATCH,
+          batchId: params.batchId,
+          items: [resolvedItem(params.operationId)],
+        },
     },
   });
   const spine = new HostClient<HostRpcRegistry>({
@@ -273,18 +287,29 @@ describe("profile sync mutation hooks dispatch", () => {
     const { result } = renderHook(() => useProfileSyncResolve(SOURCE), {
       wrapper,
     });
-    const request = {
+    const request: ProfileSyncResolveVariables = {
       sourceHostId: SOURCE,
       batchId: BATCH_ID,
       operationId: OPERATION_ID,
-      action: "check" as const,
+      action: "check",
       expectedDestination: null,
+      // The transfer the caller means; local only, never sent.
+      providerId: "claude",
+      sourceProfileId: RESOLVED_PROFILE,
+      destinationHostId: DEST,
     };
     act(() => result.current.mutate(request));
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const calls = callsOf(messenger, "providers.profileCopy.sync.resolve");
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.params).toEqual(request);
+    // Only the wire fields reach the host.
+    expect(calls[0]?.params).toEqual({
+      sourceHostId: SOURCE,
+      batchId: BATCH_ID,
+      operationId: OPERATION_ID,
+      action: "check",
+      expectedDestination: null,
+    });
     expect(calls[0]?.authority.endpoint.hostId).toBe(SOURCE);
   });
 });
@@ -693,6 +718,72 @@ describe("retry answers are correlated with their request", () => {
         { onSuccess },
       ),
     );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolve answers are correlated with the intended transfer", () => {
+  const request: ProfileSyncResolveVariables = {
+    sourceHostId: SOURCE,
+    batchId: BATCH_ID,
+    operationId: OPERATION_ID,
+    action: "check",
+    expectedDestination: null,
+    providerId: "claude",
+    sourceProfileId: RESOLVED_PROFILE,
+    destinationHostId: DEST,
+  };
+  const answerWith = (
+    overrides: Partial<ProfileSyncItem>,
+  ): ProfileSyncBatch => ({
+    ...BATCH,
+    items: [{ ...resolvedItem(OPERATION_ID), ...overrides }],
+  });
+
+  beforeEach(() => {
+    harness.spine = null;
+    resolveAnswer = null;
+  });
+  afterEach(() => {
+    cleanup();
+    harness.spine = null;
+    resolveAnswer = null;
+  });
+
+  it.each([
+    ["another provider", { providerId: "codex" as const }],
+    [
+      "another source profile",
+      { sourceProfileId: "99999999-9999-4999-8999-999999999990" },
+    ],
+    ["another destination", { destinationHostId: "dest-host-2" }],
+  ])(
+    "rejects an answer for the same operation under %s",
+    async (_label, overrides) => {
+      const answer = answerWith(overrides);
+      // Wire-valid: only the correlation can refuse it.
+      expect(profileSyncBatchSchema.safeParse(answer).success).toBe(true);
+      resolveAnswer = () => answer;
+      const { wrapper } = setup();
+      const { result } = renderHook(() => useProfileSyncResolve(SOURCE), {
+        wrapper,
+      });
+      const onSuccess = vi.fn();
+      act(() => result.current.mutate(request, { onSuccess }));
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(onSuccess).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts the exact transfer", async () => {
+    resolveAnswer = () => answerWith({});
+    const { wrapper } = setup();
+    const { result } = renderHook(() => useProfileSyncResolve(SOURCE), {
+      wrapper,
+    });
+    const onSuccess = vi.fn();
+    act(() => result.current.mutate(request, { onSuccess }));
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(onSuccess).toHaveBeenCalledTimes(1);
   });

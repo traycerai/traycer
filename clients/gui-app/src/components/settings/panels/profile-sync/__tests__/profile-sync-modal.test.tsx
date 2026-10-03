@@ -34,6 +34,7 @@ import {
 import type {
   ProfileSyncBatch,
   ProfileSyncItem,
+  ProfileSyncList,
   ProfileSyncRule,
   ProfileSyncSaveRule,
   ProfileSyncSelection,
@@ -154,6 +155,8 @@ let saveRuleThrows = false;
 let saveRuleGate: Promise<void> | null = null;
 // Likewise for the start and stop answers.
 let startGate: Promise<void> | null = null;
+// One-shot: the next sync.list read dispatches, then waits for it.
+let listGate: Promise<void> | null = null;
 let retryGate: Promise<void> | null = null;
 let resolveGate: Promise<void> | null = null;
 // Overrides what sync.resolve answers; otherwise it echoes the captured batch.
@@ -231,7 +234,9 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         providers: [...options.providers],
         native: null,
       }),
-      "providers.profileCopy.sync.list": () => {
+      "providers.profileCopy.sync.list": ():
+        | ProfileSyncList
+        | Promise<ProfileSyncList> => {
         if (listFails) {
           throw new HostRpcError({
             code: "RPC_ERROR",
@@ -241,7 +246,8 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
             fatalDetails: null,
           });
         }
-        return {
+        // The snapshot as it stands at dispatch, as a host would answer.
+        const snapshot = {
           batches: [
             ...listBatches,
             ...(lastStarted !== null && updateStarted !== null
@@ -250,6 +256,9 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
           ],
           rules: [...(listRules ?? options.rules)],
         };
+        const held = listGate;
+        listGate = null;
+        return held === null ? snapshot : held.then(() => snapshot);
       },
       "providers.profileCopy.sync.preview": (params) => ({
         selection: previewSelection ?? params,
@@ -536,6 +545,7 @@ function resetModuleKnobs(): void {
   saveRuleThrows = false;
   saveRuleGate = null;
   startGate = null;
+  listGate = null;
   retryGate = null;
   resolveGate = null;
   resolveAnswer = null;
@@ -5354,6 +5364,252 @@ describe("ProfileSyncModal review regressions", () => {
       );
       // The older answer does not overwrite the newer attempt's receipt.
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+  });
+
+  describe("round 29: late reads and non-final receipts", () => {
+    const OP = "00000000-0000-4000-8000-000000000001";
+    const RUN = "00000000-0000-4000-8000-0000000000fa";
+
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    const retryableReceipt = (): ProfileCopyOutcome =>
+      profileCopyOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "blocked",
+        reason: "unreachable",
+      });
+    const retryableItem = (): ProfileSyncItem => ({
+      ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+      preview: null,
+      outcome: retryableReceipt(),
+    });
+    const runWith = (items: ProfileSyncItem[]): ProfileSyncBatch => ({
+      batchId: RUN,
+      sourceHostId: SOURCE_HOST_ID,
+      createdAt: 1_700_000_000_000,
+      automatic: false,
+      items,
+    });
+
+    it("keeps a fresh start answer over an older list read that lands late, and still lets a newer poll supersede", async () => {
+      const heldStart = gate();
+      const heldList = gate();
+      startGate = heldStart.promise;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: () => [
+          { ...syncItem(1, DEST_HOST_ID, "synced", []), preview: null },
+        ],
+      });
+      try {
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(1));
+        const submitted = profileSyncStartSchema.parse(
+          startCalls(messenger)[0].params,
+        ).batchId;
+        // A poll dispatches now, capturing the OLD snapshot, and is held.
+        listBatches = [
+          {
+            batchId: submitted,
+            sourceHostId: SOURCE_HOST_ID,
+            createdAt: 1,
+            automatic: false,
+            items: [retryableItem()],
+          },
+        ];
+        listGate = heldList.promise;
+        const listCalls = (): number =>
+          messenger.calls.filter(
+            (call) => call.method === "providers.profileCopy.sync.list",
+          ).length;
+        const before = listCalls();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+        // The held read was dispatched before the write. From here on any
+        // fresh read fails, so only the OLD captured answer can arrive later.
+        listFails = true;
+        // The newer start answer settles while that read is still held.
+        heldStart.release();
+        expect(await screen.findByText("Synced")).toBeTruthy();
+        // The old read lands afterwards and must not undo it.
+        heldList.release();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        expect(screen.getByText("Synced")).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Check status" }),
+        ).toBeNull();
+        // A genuinely newer poll still supersedes it.
+        listFails = false;
+        listBatches = [
+          {
+            batchId: submitted,
+            sourceHostId: SOURCE_HOST_ID,
+            createdAt: 1,
+            automatic: false,
+            items: [
+              {
+                ...syncItem(1, DEST_HOST_ID, "source-removed", []),
+                preview: null,
+              },
+            ],
+          },
+        ];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        expect(await screen.findByText("Profile removed")).toBeTruthy();
+      } finally {
+        heldStart.release();
+        heldList.release();
+      }
+    });
+
+    it("keeps an accepted Pause over an older rule list read that lands late", async () => {
+      const heldList = gate();
+      const messenger = mount([SAVED_RULE]);
+      try {
+        openSync(null);
+        fireEvent.mouseDown(
+          await screen.findByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        await screen.findByRole("heading", { name: "Linux box" });
+        // A poll dispatches with the rule still active, and is held.
+        listGate = heldList.promise;
+        const listCalls = (): number =>
+          messenger.calls.filter(
+            (call) => call.method === "providers.profileCopy.sync.list",
+          ).length;
+        const before = listCalls();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+        // The held read was dispatched before the write; fresh reads now fail.
+        listFails = true;
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        expect(
+          await screen.findByRole("button", { name: "Resume" }),
+        ).toBeTruthy();
+        heldList.release();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+      } finally {
+        heldList.release();
+      }
+    });
+
+    it("keeps an already-present Retry answer queued, not final, when the list refetch fails", async () => {
+      retryOutcome = recordedOutcome({
+        attempt: profileCopyAttempt({
+          operationId: OP,
+          attemptId: ATTEMPT_TWO_ID,
+        }),
+        revision: 4,
+        state: "already-present",
+      });
+      listBatches = [runWith([retryableItem()])];
+      mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      openSync(null);
+      fireEvent.click(
+        await screen.findByRole("button", { name: /profile transfers/ }),
+      );
+      await screen.findByRole("button", { name: "Retry" });
+      listFails = true;
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(await screen.findByText("Queued")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Check status" })).toBeTruthy();
+      expect(screen.queryByText(/Already present/)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    });
+
+    it("withdraws the old action and shows Queued after a draft Verify answers signed-in, with the list failing", async () => {
+      const pending = recordedOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "verification-pending",
+        revision: 6,
+        readiness: {
+          preparation: "complete",
+          verification: "not-checked",
+          verificationRevision: null,
+          acceptedVerificationRevision: null,
+          identity: "not-checked",
+          identityRevision: null,
+          acceptedIdentityRevision: null,
+          writer: "none",
+          writerGeneration: 0,
+          quarantined: false,
+        },
+      });
+      const signedIn = recordedOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "signed-in",
+        revision: 7,
+      });
+      draftStatusOutcome = pending;
+      listBatches = [
+        runWith([
+          {
+            ...syncItem(1, DEST_HOST_ID, "needs-action", []),
+            preview: null,
+            outcome: pending,
+          },
+        ]),
+      ];
+      mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      openSync(null);
+      fireEvent.click(
+        await screen.findByRole("button", { name: /profile transfers/ }),
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+      await screen.findByRole("button", { name: "Verify" });
+      expect(screen.getByText("Needs attention")).toBeTruthy();
+      // The destination now answers signed-in; the list refetch fails.
+      draftStatusOutcome = signedIn;
+      listFails = true;
+      fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+      await waitFor(() =>
+        expect(screen.queryByText("Needs attention")).toBeNull(),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
+      expect(await screen.findByText("Queued")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Check status" })).toBeTruthy();
+      // The source outcome is not final until the driver confirms settings.
+      expect(screen.queryByText("Synced")).toBeNull();
     });
   });
 });

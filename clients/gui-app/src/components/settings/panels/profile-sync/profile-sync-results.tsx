@@ -1,8 +1,9 @@
+import { useProfileCopyDraftStatusQuery } from "@/hooks/providers/profile-copy/use-profile-copy-queries";
 import {
   SYNC_STATE_LABELS,
   type ProfileSyncRetryReceipt,
 } from "./profile-sync-state";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProfileSyncBatch,
@@ -19,6 +20,8 @@ import {
   profileCopyPreviewRecord,
   knownRouteFromRecord,
   isRecordedOutcome,
+  profileCopyTransferKey,
+  type ProfileCopyOutcome,
 } from "@/lib/profile-copy/profile-copy-model";
 import { presentProfileCopyOutcome } from "@/lib/profile-copy/profile-copy-presentation";
 import { ProfileCopyDraftPanel } from "../profile-copy/profile-copy-draft-panel";
@@ -111,6 +114,9 @@ function ProfileSyncResultItem(props: {
         operationId: item.operationId,
         action,
         expectedDestination: item.destinationSettings,
+        providerId: item.providerId,
+        sourceProfileId: item.sourceProfileId,
+        destinationHostId: item.destinationHostId,
       },
       {
         onSuccess: (response, request) =>
@@ -121,6 +127,13 @@ function ProfileSyncResultItem(props: {
   const error = resolveError.error ?? retry.error;
   return (
     <div className="flex flex-col gap-2 py-3">
+      {item.outcome !== null && isRecordedOutcome(item.outcome) ? (
+        <ProfileSyncDraftObservation
+          outcome={item.outcome}
+          batchId={batch.batchId}
+          onObserved={props.onRetried}
+        />
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-ui-sm">
@@ -188,9 +201,13 @@ function ProfileSyncResultActions(props: {
   const { item, pending, retry } = props;
   return (
     <div className="flex gap-1">
-      {["unconfirmed", "unavailable", "copying", "update-required"].includes(
-        item.state,
-      ) ? (
+      {[
+        "unconfirmed",
+        "unavailable",
+        "queued",
+        "copying",
+        "update-required",
+      ].includes(item.state) ? (
         <Button
           size="xs"
           variant="outline"
@@ -456,4 +473,31 @@ function ProfileSyncOutcomeDetails(props: {
       ) : null}
     </div>
   );
+}
+
+/** Observe the shared draft cache even after its details are collapsed. No RPC. */
+function ProfileSyncDraftObservation(props: {
+  readonly outcome: ProfileCopyOutcome;
+  readonly batchId: string;
+  readonly onObserved: (receipt: ProfileSyncRetryReceipt) => void;
+}): null {
+  const { outcome, batchId, onObserved } = props;
+  const draft = useProfileCopyDraftStatusQuery(outcome.attempt, false);
+  const response = draft.data;
+  useEffect(() => {
+    if (
+      response?.result !== "current" ||
+      response.outcome.revision <= outcome.revision ||
+      response.outcome.attempt.attemptId !== outcome.attempt.attemptId ||
+      profileCopyTransferKey(response.outcome.attempt) !==
+        profileCopyTransferKey(outcome.attempt)
+    )
+      return;
+    onObserved({
+      batchId,
+      requested: outcome.attempt,
+      outcome: response.outcome,
+    });
+  }, [response, outcome, batchId, onObserved]);
+  return null;
 }

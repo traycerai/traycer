@@ -25,7 +25,7 @@ const RETRY_PRESERVED_STATES: ReadonlySet<ProfileSyncItem["state"]> = new Set([
 function retrySyncState(outcome: ProfileCopyOutcome): ProfileSyncItem["state"] {
   switch (outcome.state) {
     case "already-present":
-      return "already-present";
+      return "queued";
     case "outcome-unknown":
       return "unconfirmed";
     case "signed-in":
@@ -90,3 +90,36 @@ export const SYNC_STATE_LABELS: Record<ProfileSyncItem["state"], string> = {
   unconfirmed: "Waiting for confirmation",
   "source-removed": "Profile removed",
 };
+
+/** A destination draft can advance before the source driver has polled it. */
+export function reconcileSyncListBatch(
+  observed: ProfileSyncBatch,
+  retained: ProfileSyncBatch,
+): ProfileSyncBatch {
+  const items = observed.items.map((item) => {
+    const prior = retained.items.find(
+      (candidate) => candidate.operationId === item.operationId,
+    );
+    if (
+      prior?.outcome === null ||
+      prior?.outcome === undefined ||
+      item.outcome === null ||
+      prior.outcome.attempt.attemptId !== item.outcome.attempt.attemptId ||
+      prior.outcome.revision <= item.outcome.revision
+    )
+      return item;
+    return (
+      reconcileSyncRetryBatch(
+        { ...observed, items: [item] },
+        {
+          batchId: observed.batchId,
+          requested: item.outcome.attempt,
+          outcome: prior.outcome,
+        },
+      ).items[0] ?? item
+    );
+  });
+  return items.some((item, index) => item !== observed.items[index])
+    ? { ...observed, items }
+    : observed;
+}

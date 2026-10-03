@@ -27,7 +27,7 @@ import type {
 } from "@/lib/profile-copy/profile-copy-model";
 
 describe("writeProfileCopyDraftOutcome", () => {
-  it("does not overwrite a newer cached revision", () => {
+  it("does not overwrite a newer cached revision", async () => {
     const queryClient = createAppQueryClient();
     const newer = recordedOutcome({
       state: "signed-in",
@@ -43,7 +43,7 @@ describe("writeProfileCopyDraftOutcome", () => {
       outcome: newer,
     });
 
-    writeProfileCopyDraftOutcome(queryClient, older);
+    await writeProfileCopyDraftOutcome(queryClient, older);
 
     expect(
       queryClient.getQueryData<ProfileCopyDraftResponse>(key)?.outcome.revision,
@@ -53,7 +53,34 @@ describe("writeProfileCopyDraftOutcome", () => {
     ).toBe("signed-in");
   });
 
-  it("invalidates incoming on D and status on S from the attempt, never a scoped host", () => {
+  it("keeps a newer written outcome over an older read that lands late", async () => {
+    const queryClient = createAppQueryClient();
+    const older = recordedOutcome({
+      state: "verification-pending",
+      revision: 3,
+    });
+    const newer = recordedOutcome({ state: "signed-in", revision: 5 });
+    const key = profileCopyDraftStatusKey(older);
+    let release: () => void = () => undefined;
+    const held = new Promise<ProfileCopyDraftResponse>((resolve) => {
+      release = () => resolve({ result: "current", outcome: older });
+    });
+    // An in-flight read dispatched before the write.
+    const read = queryClient
+      .fetchQuery({ queryKey: key, queryFn: () => held })
+      .catch(() => undefined);
+    await writeProfileCopyDraftOutcome(queryClient, newer);
+    release();
+    await read;
+    expect(
+      queryClient.getQueryData<ProfileCopyDraftResponse>(key)?.outcome.revision,
+    ).toBe(5);
+    expect(
+      queryClient.getQueryData<ProfileCopyDraftResponse>(key)?.outcome.state,
+    ).toBe("signed-in");
+  });
+
+  it("invalidates incoming on D and status on S from the attempt, never a scoped host", async () => {
     const queryClient = createAppQueryClient();
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     const outcome = recordedOutcome({
@@ -65,7 +92,7 @@ describe("writeProfileCopyDraftOutcome", () => {
       }),
     });
 
-    writeProfileCopyDraftOutcome(queryClient, outcome);
+    await writeProfileCopyDraftOutcome(queryClient, outcome);
 
     const incomingKey = hostQueryKeys.methodScope(
       DEST_HOST_ID,

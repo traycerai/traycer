@@ -16,7 +16,7 @@ import {
   useHostQueryWithResponseMap,
   useHostMutation,
 } from "@/hooks/host/use-host-query";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { refreshProfileSyncAfterWrite } from "@/hooks/providers/profile-sync-cache";
 import { profileSyncMutationKeys } from "@/lib/query-keys/profile-sync-keys";
 import { profileCopyDraftMutationAttempt } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
@@ -25,6 +25,8 @@ import type {
   ProfileSyncPreview,
   ProfileSyncList,
   ProfileSyncScope,
+  ProfileSyncResolve,
+  ProfileSyncItem,
 } from "@traycer/protocol/host/profile-sync-schemas";
 
 function sameSyncScope(
@@ -125,20 +127,7 @@ export function useProfileSyncStart(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: profileSyncMutationKeys.start(hostId),
-      onSuccess: () => {
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostId,
-            "providers.profileCopy.sync.list",
-          ),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostId,
-            "providers.profileCopy.sync.preview",
-          ),
-        });
-      },
+      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
     },
   });
 }
@@ -173,20 +162,7 @@ export function useProfileSyncSaveRule(
     },
     options: {
       mutationKey: profileSyncMutationKeys.saveRule(hostId),
-      onSuccess: () => {
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostId,
-            "providers.profileCopy.sync.list",
-          ),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostId,
-            "providers.profileCopy.sync.preview",
-          ),
-        });
-      },
+      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
     },
   });
 }
@@ -218,22 +194,15 @@ export function useProfileSyncStopRule(
     },
     options: {
       mutationKey: profileSyncMutationKeys.stopRule(hostId),
-      onSuccess: () => {
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostId,
-            "providers.profileCopy.sync.list",
-          ),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostId,
-            "providers.profileCopy.sync.preview",
-          ),
-        });
-      },
+      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
     },
   });
+}
+
+export interface ProfileSyncResolveVariables extends ProfileSyncResolve {
+  readonly providerId: ProfileSyncItem["providerId"];
+  readonly sourceProfileId: ProfileSyncItem["sourceProfileId"];
+  readonly destinationHostId: string;
 }
 
 export function useProfileSyncResolve(
@@ -241,43 +210,43 @@ export function useProfileSyncResolve(
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.sync.resolve">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.resolve">
+  ProfileSyncResolveVariables
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "providers.profileCopy.sync.resolve">(
-    {
-      client: useHostClientForHostId(hostId),
-      method: "providers.profileCopy.sync.resolve",
-      mapVariables: (variables) => variables,
-      onResponse: (response, request) => {
-        if (
-          request.sourceHostId !== hostId ||
-          response.sourceHostId !== request.sourceHostId ||
-          response.batchId !== request.batchId ||
-          !response.items.some(
-            (item) => item.operationId === request.operationId,
-          )
-        ) {
-          throw new Error("The device returned another sync resolution.");
-        }
-      },
-      options: {
-        mutationKey: profileSyncMutationKeys.resolve(hostId),
-        onSuccess: () => {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(
-              hostId,
-              "providers.profileCopy.sync.list",
-            ),
-          });
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(
-              hostId,
-              "providers.profileCopy.sync.preview",
-            ),
-          });
-        },
-      },
+  return useHostMutation<
+    HostRpcRegistry,
+    "providers.profileCopy.sync.resolve",
+    unknown,
+    ProfileSyncResolveVariables
+  >({
+    client: useHostClientForHostId(hostId),
+    method: "providers.profileCopy.sync.resolve",
+    mapVariables: (variables) => ({
+      sourceHostId: variables.sourceHostId,
+      batchId: variables.batchId,
+      operationId: variables.operationId,
+      action: variables.action,
+      expectedDestination: variables.expectedDestination,
+    }),
+    onResponse: (response, request) => {
+      if (
+        request.sourceHostId !== hostId ||
+        response.sourceHostId !== request.sourceHostId ||
+        response.batchId !== request.batchId ||
+        !response.items.some(
+          (item) =>
+            item.operationId === request.operationId &&
+            item.providerId === request.providerId &&
+            item.sourceProfileId === request.sourceProfileId &&
+            item.destinationHostId === request.destinationHostId,
+        )
+      ) {
+        throw new Error("The device returned another sync resolution.");
+      }
     },
-  );
+    options: {
+      mutationKey: profileSyncMutationKeys.resolve(hostId),
+      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
+    },
+  });
 }

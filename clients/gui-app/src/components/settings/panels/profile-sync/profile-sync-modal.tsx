@@ -68,6 +68,7 @@ import { ProfileSyncResults } from "./profile-sync-results";
 import {
   SYNC_STATE_LABELS,
   reconcileSyncRetryBatch,
+  reconcileSyncListBatch,
   type ProfileSyncRetryReceipt,
 } from "./profile-sync-state";
 
@@ -739,14 +740,15 @@ function useProfileSyncViewedBatch(
   );
   const listObservation = currentSyncListObservation(queryClient, sourceHostId);
   // A successful response is fresher than the list already cached when its
-  // response arrived. Only a subsequent list success may replace it; a failed
+  // response arrived; write hooks cancel older in-flight reads first. Only a
+  // subsequent list success may replace it; a failed
   // refetch has no new success. Query identity also fences cache recreation.
   const newerListBatch =
     viewedBatch !== null &&
     observedBatch !== undefined &&
     !list.isFetching &&
     newerSyncListObservation(listObservation, viewedBatch.listObservation)
-      ? observedBatch
+      ? reconcileSyncListBatch(observedBatch, viewedBatch.batch)
       : null;
   if (newerListBatch !== null && newerListBatch !== viewedBatch?.batch)
     setViewedBatch({ batch: newerListBatch, listObservation });

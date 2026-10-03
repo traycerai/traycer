@@ -1,3 +1,4 @@
+import { cancelProfileSyncList } from "@/hooks/providers/profile-sync-cache";
 import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type {
   HostRpcError,
@@ -184,7 +185,13 @@ export function useProfileCopyRetryMutation(
     },
     options: {
       mutationKey: profileCopyMutationKeys.retry(sourceHostId, operationId),
-      onSuccess: (response, request) => {
+      onSuccess: async (response, request) => {
+        await Promise.all([
+          cancelProfileSyncList(queryClient, sourceHostId),
+          queryClient.cancelQueries({
+            queryKey: profileCopyStatusKey(sourceHostId, operationId),
+          }),
+        ]);
         if (response.result === "current")
           writeProfileCopyRetryOutcome(
             queryClient,
