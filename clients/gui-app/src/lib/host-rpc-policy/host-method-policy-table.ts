@@ -1228,6 +1228,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Creating a chat persists a new collaboration record.
   "epic.createChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.continueSubagent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Renaming a chat persists its title.
   "epic.renameChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Updating chat run settings changes persisted execution configuration.

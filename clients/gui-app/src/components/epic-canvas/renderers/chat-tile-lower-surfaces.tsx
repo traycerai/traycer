@@ -18,6 +18,7 @@ import {
   type ChatComposerSubmitInput,
 } from "@/components/chat/composer/chat-composer";
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { SubagentContinueAsChatButton } from "@/components/chat/segments/subagent-continue-as-chat-button";
 import type { SubagentDockView } from "@/components/chat/segments/subagent-open-as-chat";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1025,6 +1026,7 @@ function SubagentViewNotice(props: { readonly view: SubagentDockView }) {
           {view.runningCount} running
         </Badge>
       ) : null}
+      <SubagentContinueAsChatButton testId="subagent-view-notice-continue" />
       <Button type="button" variant="outline" size="xs" onClick={view.close}>
         Back to chat
       </Button>
