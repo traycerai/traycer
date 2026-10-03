@@ -202,6 +202,68 @@ describe("profile sync item consistency", () => {
   });
 });
 
+describe("profile sync needs-action receipt rule", () => {
+  function receiptFree(
+    state: ProfileSyncItem["state"],
+    identityChanged: boolean,
+  ): ProfileSyncItem {
+    return { ...item(), state, outcome: null, identityChanged };
+  }
+
+  it("accepts needs-action carrying a matching outcome", () => {
+    expect(
+      profileSyncItemSchema.safeParse({
+        ...item(),
+        state: "needs-action",
+        identityChanged: false,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects generic needs-action without an outcome, for a rule-specific reason", () => {
+    const result = profileSyncItemSchema.safeParse(
+      receiptFree("needs-action", false),
+    );
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.code)).toEqual(["custom"]);
+    // The same item is valid once it carries an outcome, so the outcome
+    // is the only thing the rejection can be about.
+    expect(
+      profileSyncItemSchema.safeParse({
+        ...receiptFree("needs-action", false),
+        outcome: item().outcome,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts needs-action without an outcome when the source identity changed", () => {
+    expect(
+      profileSyncItemSchema.safeParse(receiptFree("needs-action", true))
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts needs-action with an outcome and a changed identity", () => {
+    expect(
+      profileSyncItemSchema.safeParse({
+        ...item(),
+        state: "needs-action",
+        identityChanged: true,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(["queued", "unconfirmed", "unavailable"] as const)(
+    "keeps receipt-free %s items valid",
+    (state) => {
+      expect(
+        profileSyncItemSchema.safeParse(receiptFree(state, false)).success,
+      ).toBe(true);
+    },
+  );
+});
+
 describe("profile sync source consistency", () => {
   it("accepts a batch whose items belong to its source host", () => {
     expect(

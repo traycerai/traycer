@@ -109,6 +109,16 @@ export const profileSyncItemSchema = lazySchema(() =>
     .refine(
       (item) => item.state !== "conflict" || item.destinationSettings !== null,
       { message: "Conflict items must include destination settings" },
+    )
+    .refine(
+      (item) =>
+        item.state !== "needs-action" ||
+        item.outcome !== null ||
+        item.identityChanged,
+      {
+        message:
+          "Needs-action items must include a copy outcome or source identity change",
+      },
     ),
 );
 export type ProfileSyncItem = z.infer<typeof profileSyncItemSchema>;
