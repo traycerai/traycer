@@ -1,6 +1,6 @@
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ProfileSyncEntryButton as ProfileSyncEntryButtonType } from "@/components/settings/panels/profile-sync/profile-sync-entry-button";
@@ -161,5 +161,8 @@ describe("<ProviderProfileScopedSection /> sync entry boundary", () => {
     const last = entry.props.at(-1);
     expect(last).toBeDefined();
     expect(last?.profile).toBeNull();
+    // The empty copy is true whatever the host negotiated.
+    expect(screen.getByText("No profiles on this device.")).toBeTruthy();
+    expect(screen.queryByText(/automatic sync rules/)).toBeNull();
   });
 });

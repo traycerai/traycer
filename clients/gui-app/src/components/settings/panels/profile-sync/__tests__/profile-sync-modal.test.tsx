@@ -653,6 +653,60 @@ describe("ProfileSyncModal review regressions", () => {
     expect(within(firstDetails).queryByText(/already has this/)).toBeNull();
   });
 
+  it("counts only real attention as needing review: queued and in-progress rows are in flight, and Sync now stays available", async () => {
+    // Rows already in flight carry no preview of their own, so each shows its
+    // state label rather than a copy-preview sentence.
+    const inFlight = (
+      index: number,
+      destinationHostId: string,
+      state: "queued" | "copying",
+      sourceProfileId: string,
+    ): ProfileSyncItem => ({
+      ...withSourceProfile(
+        syncItem(index, destinationHostId, state, [
+          previewDestination(destinationHostId, "automatic"),
+        ]),
+        sourceProfileId,
+      ),
+      preview: null,
+    });
+    const PROFILE_B = "33333333-3333-4333-8333-333333333334";
+    const PROFILE_C = "33333333-3333-4333-8333-333333333335";
+    mountWith({
+      rules: [],
+      providers: defaultProviders(),
+      previewItems: () => [
+        inFlight(1, DEST_HOST_ID, "queued", SOURCE_PROFILE_ID),
+        inFlight(2, DEST_HOST_ID, "copying", PROFILE_B),
+        // The one row that genuinely needs the user.
+        {
+          ...inFlight(3, DEST_HOST_ID, "queued", PROFILE_C),
+          state: "needs-action",
+          identityChanged: true,
+        },
+        inFlight(4, DEST_HOST_TWO_ID, "queued", SOURCE_PROFILE_ID),
+        inFlight(5, DEST_HOST_TWO_ID, "copying", PROFILE_B),
+      ],
+      startItems: noItems,
+    });
+    openSync(null);
+    await pickDestinations([/Linux box/, /Old Mac/]);
+    const summaries = await screen.findAllByText(/\d+ profiles ·/);
+    expect(summaries).toHaveLength(2);
+    // Linux box: only the needs-action row is counted.
+    expect(summaries[0]?.textContent).toMatch(/3 profiles · 1 need review/);
+    // Old Mac: queued and in progress alone need no review.
+    expect(summaries[1]?.textContent).toMatch(/2 profiles · Ready/);
+    expect(summaries[1]?.textContent).not.toMatch(/need review/);
+    const oldMac = summaries[1].closest("details");
+    if (oldMac === null) throw new Error("expected the Old Mac details");
+    expect(within(oldMac).getByText("Queued")).toBeTruthy();
+    expect(within(oldMac).getByText("In progress")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sync now" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
   it("an empty start answer keeps the selection, says nothing was started and refetches the preview", async () => {
     const messenger = mountWith({
       rules: [],

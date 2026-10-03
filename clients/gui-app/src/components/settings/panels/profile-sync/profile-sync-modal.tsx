@@ -289,7 +289,10 @@ function ProfileSyncPreviewDetails(props: {
     (i) => i.destinationHostId === props.destinationId,
   );
   const attention = items.filter(
-    (i) => !["ready", "synced", "already-present"].includes(i.state),
+    (i) =>
+      !["ready", "synced", "already-present", "queued", "copying"].includes(
+        i.state,
+      ),
   ).length;
   return (
     <details className="mt-2 text-ui-xs">

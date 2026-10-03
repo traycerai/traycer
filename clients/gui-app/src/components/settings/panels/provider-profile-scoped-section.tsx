@@ -502,7 +502,7 @@ function EmptyProviderProfiles(props: {
         />
       </div>
       <p className="text-ui-xs text-muted-foreground">
-        No profiles on this device. You can still manage automatic sync rules.
+        No profiles on this device.
       </p>
     </section>
   );
