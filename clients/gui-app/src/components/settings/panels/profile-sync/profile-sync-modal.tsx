@@ -861,7 +861,8 @@ function syncSelection(
     return null;
   return {
     sourceHostId,
-    scope: { kind: "selected", providers },
-    destinationHostIds,
+    // Click order must not change preview, notice or retry identity.
+    scope: { kind: "selected", providers: [...providers].sort() },
+    destinationHostIds: [...destinationHostIds].sort(),
   };
 }

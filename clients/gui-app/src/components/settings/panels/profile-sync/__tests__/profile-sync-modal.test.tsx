@@ -500,6 +500,24 @@ function previewDestination(
   };
 }
 
+/** The item for another source profile, with its nested preview source to match. */
+function withSourceProfile(
+  item: ProfileSyncItem,
+  sourceProfileId: string,
+): ProfileSyncItem {
+  return {
+    ...item,
+    sourceProfileId,
+    preview:
+      item.preview === null
+        ? null
+        : {
+            ...item.preview,
+            source: { ...item.preview.source, sourceProfileId },
+          },
+  };
+}
+
 function syncItem(
   index: number,
   destinationHostId: string,
@@ -608,9 +626,13 @@ describe("ProfileSyncModal review regressions", () => {
         syncItem(2, DEST_HOST_TWO_ID, "already-present", [
           previewDestination(DEST_HOST_TWO_ID, "already-present"),
         ]),
-        syncItem(3, DEST_HOST_TWO_ID, "ready", [
-          previewDestination(DEST_HOST_TWO_ID, "automatic"),
-        ]),
+        // A second profile on the same device: its own logical transfer.
+        withSourceProfile(
+          syncItem(3, DEST_HOST_TWO_ID, "ready", [
+            previewDestination(DEST_HOST_TWO_ID, "automatic"),
+          ]),
+          "33333333-3333-4333-8333-333333333334",
+        ),
       ],
       startItems: noItems,
     });
@@ -2138,6 +2160,60 @@ describe("ProfileSyncModal review regressions", () => {
       );
       expect(screen.getByText("1 profile transfers selected")).toBeTruthy();
       expect(previewCalls(messenger).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("round 11: reordered choices are the same selection", () => {
+    it("keeps the batch id of an uncertain start when the same providers and devices are re-picked in another order", async () => {
+      startFailures = 1;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: noItems,
+      });
+      openSync(null);
+      await pickDestinations([/Linux box/, /Old Mac/]);
+      await screen.findByText("1 profile transfers selected");
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      expect(await screen.findByText(/could not be confirmed/)).toBeTruthy();
+      // Reorder the devices: take Linux box out and put it back after Old Mac.
+      fireEvent.click(screen.getByRole("checkbox", { name: /Linux box/ }));
+      fireEvent.click(screen.getByRole("checkbox", { name: /Linux box/ }));
+      // Reorder the providers the same way.
+      fireEvent.click(screen.getByRole("button", { name: "Choose providers" }));
+      fireEvent.click(await screen.findByRole("option", { name: /Claude/ }));
+      fireEvent.click(await screen.findByRole("option", { name: /Claude/ }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(await screen.findByText(/could not be confirmed/)).toBeTruthy();
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Sync now" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      await waitFor(() => expect(startCalls(messenger)).toHaveLength(2));
+      const [firstCall, secondCall] = startCalls(messenger);
+      const first = profileSyncStartSchema.parse(firstCall.params);
+      const second = profileSyncStartSchema.parse(secondCall.params);
+      expect(second.selection).toEqual(first.selection);
+      expect(second.batchId).toBe(first.batchId);
+      // The wire form is canonical, whatever order the user picked in.
+      expect(first.selection.destinationHostIds).toEqual(
+        [...first.selection.destinationHostIds].sort(),
+      );
+      if (first.selection.scope.kind === "selected")
+        expect(first.selection.scope.providers).toEqual(
+          [...first.selection.scope.providers].sort(),
+        );
     });
   });
 });

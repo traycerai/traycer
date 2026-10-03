@@ -97,6 +97,50 @@ function item(): ProfileSyncItem {
   };
 }
 
+interface ItemIdentity {
+  readonly providerId?: ProfileSyncItem["providerId"];
+  readonly sourceProfileId?: string;
+  readonly destinationHostId?: string;
+  readonly operationId?: string;
+}
+
+/** The base item with the given identity applied consistently everywhere. */
+function itemWith(identity: ItemIdentity): ProfileSyncItem {
+  const base = item();
+  if (base.preview === null || base.outcome === null)
+    throw new Error("fixture has a preview and an outcome");
+  const providerId = identity.providerId ?? base.providerId;
+  const sourceProfileId = identity.sourceProfileId ?? base.sourceProfileId;
+  const destinationHostId =
+    identity.destinationHostId ?? base.destinationHostId;
+  const operationId = identity.operationId ?? base.operationId;
+  return {
+    ...base,
+    providerId,
+    sourceProfileId,
+    destinationHostId,
+    operationId,
+    preview: {
+      ...base.preview,
+      source: { ...base.preview.source, providerId, sourceProfileId },
+      destinations: base.preview.destinations.map((entry) => ({
+        ...entry,
+        destinationHostId,
+      })),
+    },
+    outcome: {
+      ...base.outcome,
+      attempt: {
+        ...base.outcome.attempt,
+        providerId,
+        sourceProfileId,
+        destinationHostId,
+        operationId,
+      },
+    },
+  };
+}
+
 function withAttempt(
   overrides: Partial<NonNullable<ProfileSyncItem["outcome"]>["attempt"]>,
 ): ProfileSyncItem {
@@ -236,9 +280,12 @@ describe("profile sync list bounds", () => {
 describe("profile sync operation uniqueness and self-targeted rules", () => {
   const ALT_OPERATION = "00000000-0000-4000-8000-0000000000cc";
 
+  // A different PROFILE: legitimate second work for the same device.
   function distinctItem(): ProfileSyncItem {
-    const base = withAttempt({ operationId: ALT_OPERATION });
-    return { ...base, operationId: ALT_OPERATION };
+    return itemWith({
+      operationId: ALT_OPERATION,
+      sourceProfileId: "00000000-0000-4000-8000-0000000000dd",
+    });
   }
 
   it("accepts a batch and a preview whose items carry distinct operation ids", () => {
@@ -260,10 +307,17 @@ describe("profile sync operation uniqueness and self-targeted rules", () => {
     ).toBe(true);
   });
 
-  it("rejects duplicate operation ids inside a batch and inside a preview", () => {
+  it("rejects duplicate operation ids inside a batch and inside a preview, for different logical transfers", () => {
+    // A different profile keeps the logical tuple distinct, so only the shared
+    // operation id can be what refuses these.
+    const sameOperation = itemWith({
+      sourceProfileId: "00000000-0000-4000-8000-0000000000df",
+    });
+    expect(sameOperation.operationId).toBe(item().operationId);
     expect(
-      profileSyncBatchSchema.safeParse(batch(SOURCE_HOST, [item(), item()]))
-        .success,
+      profileSyncBatchSchema.safeParse(
+        batch(SOURCE_HOST, [item(), sameOperation]),
+      ).success,
     ).toBe(false);
     expect(
       profileSyncPreviewSchema.safeParse({
@@ -273,9 +327,51 @@ describe("profile sync operation uniqueness and self-targeted rules", () => {
           destinationHostIds: [DEST_HOST],
         },
         revision: REVISION,
-        items: [item(), item()],
+        items: [item(), sameOperation],
       }).success,
     ).toBe(false);
+  });
+
+  const previewOf = (items: ProfileSyncItem[]) => ({
+    selection: {
+      sourceHostId: SOURCE_HOST,
+      scope: { kind: "all" as const },
+      destinationHostIds: [DEST_HOST, "dest-2"],
+    },
+    revision: REVISION,
+    items,
+  });
+
+  it("rejects the same provider, profile and destination twice even with distinct operation ids", () => {
+    const twin = itemWith({ operationId: ALT_OPERATION });
+    expect(
+      profileSyncBatchSchema.safeParse(batch(SOURCE_HOST, [item(), twin]))
+        .success,
+    ).toBe(false);
+    expect(
+      profileSyncPreviewSchema.safeParse(previewOf([item(), twin])).success,
+    ).toBe(false);
+  });
+
+  it("keeps legitimate work: another provider, profile or destination is accepted", () => {
+    const variants = [
+      itemWith({ operationId: ALT_OPERATION, providerId: "codex" }),
+      itemWith({
+        operationId: ALT_OPERATION,
+        sourceProfileId: "00000000-0000-4000-8000-0000000000de",
+      }),
+      itemWith({ operationId: ALT_OPERATION, destinationHostId: "dest-2" }),
+    ];
+    for (const variant of variants) {
+      expect(
+        profileSyncBatchSchema.safeParse(batch(SOURCE_HOST, [item(), variant]))
+          .success,
+      ).toBe(true);
+      expect(
+        profileSyncPreviewSchema.safeParse(previewOf([item(), variant]))
+          .success,
+      ).toBe(true);
+    }
   });
 
   it("rejects a rule that targets its own source, alone and inside a list", () => {

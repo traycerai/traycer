@@ -115,6 +115,19 @@ export type ProfileSyncItem = z.infer<typeof profileSyncItemSchema>;
 function uniqueOperations(items: readonly ProfileSyncItem[]): boolean {
   return new Set(items.map((item) => item.operationId)).size === items.length;
 }
+function uniqueTransfers(items: readonly ProfileSyncItem[]): boolean {
+  return (
+    new Set(
+      items.map((item) =>
+        JSON.stringify([
+          item.providerId,
+          item.sourceProfileId,
+          item.destinationHostId,
+        ]),
+      ),
+    ).size === items.length
+  );
+}
 export const profileSyncPreviewSchema = lazySchema(() =>
   z
     .strictObject({
@@ -137,6 +150,9 @@ export const profileSyncPreviewSchema = lazySchema(() =>
     )
     .refine((preview) => uniqueOperations(preview.items), {
       message: "Sync operation IDs must be unique within a preview",
+    })
+    .refine((preview) => uniqueTransfers(preview.items), {
+      message: "Sync transfers must be unique within a preview",
     }),
 );
 export type ProfileSyncPreview = z.infer<typeof profileSyncPreviewSchema>;
@@ -167,6 +183,9 @@ export const profileSyncBatchSchema = lazySchema(() =>
     )
     .refine((batch) => uniqueOperations(batch.items), {
       message: "Sync operation IDs must be unique within a batch",
+    })
+    .refine((batch) => uniqueTransfers(batch.items), {
+      message: "Sync transfers must be unique within a batch",
     }),
 );
 export type ProfileSyncBatch = z.infer<typeof profileSyncBatchSchema>;
