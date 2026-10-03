@@ -4,6 +4,7 @@ import {
   MAX_ACTIVITY_GROUP_OPEN_IDS,
   type ActivityGroupOpenChoices,
   type ActivityGroupOpenState,
+  type ActivityGroupTextCollapseState,
 } from "./activity-group-open-store-context";
 import { createChatDurableCache } from "@/stores/chats/chat-durable-cache";
 import {
@@ -11,9 +12,21 @@ import {
   type ChatTabPersistenceIdentity,
 } from "@/stores/chats/chat-tab-persistence-key";
 
+interface ActivityGroupOpenDurableState extends ActivityGroupOpenChoices {
+  readonly textCollapseStates: ReadonlyMap<
+    string,
+    ActivityGroupTextCollapseState
+  >;
+}
+
 export function createActivityGroupOpenStore(
-  initialChoices: ActivityGroupOpenChoices | null,
+  initial: ActivityGroupOpenDurableState | ActivityGroupOpenChoices | null,
 ): StoreApi<ActivityGroupOpenState> {
+  const initialTextCollapseStates =
+    initial !== null && "textCollapseStates" in initial
+      ? initial.textCollapseStates
+      : null;
+  const initialChoices: ActivityGroupOpenChoices | null = initial;
   return createStore<ActivityGroupOpenState>((set) => ({
     openIds: initialChoices?.openIds ?? new Set<string>(),
     closedIds: initialChoices?.closedIds ?? new Set<string>(),
@@ -21,14 +34,62 @@ export function createActivityGroupOpenStore(
       set((state) => {
         const chosen = open ? state.openIds : state.closedIds;
         const other = open ? state.closedIds : state.openIds;
-        if (chosen.has(groupId) && !other.has(groupId)) return state;
-        const nextChosen = new Set(chosen);
-        addWithFifoEviction(nextChosen, groupId, MAX_ACTIVITY_GROUP_OPEN_IDS);
-        const nextOther = new Set(other);
-        nextOther.delete(groupId);
-        return open
-          ? { openIds: nextChosen, closedIds: nextOther }
-          : { openIds: nextOther, closedIds: nextChosen };
+        const currentTextState = state.textCollapseStates.get(groupId);
+        let nextTextState = currentTextState;
+        if (open && currentTextState === "text-collapsed") {
+          nextTextState = "user-open-after-text";
+        } else if (!open && currentTextState === "user-open-after-text") {
+          nextTextState = "text-collapsed";
+        }
+        const handChanged = !(chosen.has(groupId) && !other.has(groupId));
+        const textChanged = nextTextState !== currentTextState;
+        if (!handChanged && !textChanged) return state;
+        let nextOpenIds = state.openIds;
+        let nextClosedIds = state.closedIds;
+        if (handChanged) {
+          const nextChosen = new Set(chosen);
+          addWithFifoEviction(nextChosen, groupId, MAX_ACTIVITY_GROUP_OPEN_IDS);
+          const nextOther = new Set(other);
+          nextOther.delete(groupId);
+          if (open) {
+            nextOpenIds = nextChosen;
+            nextClosedIds = nextOther;
+          } else {
+            nextOpenIds = nextOther;
+            nextClosedIds = nextChosen;
+          }
+        }
+        if (!textChanged) {
+          return handChanged
+            ? { openIds: nextOpenIds, closedIds: nextClosedIds }
+            : state;
+        }
+        const nextTextCollapseStates = new Map(state.textCollapseStates);
+        if (nextTextState === undefined) {
+          nextTextCollapseStates.delete(groupId);
+        } else {
+          nextTextCollapseStates.set(groupId, nextTextState);
+        }
+        return {
+          openIds: nextOpenIds,
+          closedIds: nextClosedIds,
+          textCollapseStates: nextTextCollapseStates,
+        };
+      }),
+    textCollapseStates: new Map<string, ActivityGroupTextCollapseState>(
+      initialTextCollapseStates ?? [],
+    ),
+    collapseForText: (groupId) =>
+      set((state) => {
+        if (state.textCollapseStates.has(groupId)) return state;
+        const nextTextCollapseStates = new Map(state.textCollapseStates);
+        nextTextCollapseStates.set(groupId, "text-collapsed");
+        const nextOpenIds = new Set(state.openIds);
+        nextOpenIds.delete(groupId);
+        return {
+          openIds: nextOpenIds,
+          textCollapseStates: nextTextCollapseStates,
+        };
       }),
     // Deliberately NOT seeded from the durable mirror, and entries are never
     // deleted or evicted once added.
@@ -84,7 +145,7 @@ const activityGroupOpenStoreRegistry = new Map<
 // a2a-open-store-context.ts for why (covers active AND inactive/
 // never-mounted views alike).
 const durableActivityGroupOpenCache =
-  createChatDurableCache<ActivityGroupOpenChoices>(200);
+  createChatDurableCache<ActivityGroupOpenDurableState>(200);
 
 export function getOrCreateActivityGroupOpenStore(
   identity: ChatTabPersistenceIdentity,
@@ -92,9 +153,8 @@ export function getOrCreateActivityGroupOpenStore(
   const tabKey = chatTabPersistenceTabKey(identity);
   const existing = activityGroupOpenStoreRegistry.get(tabKey);
   if (existing !== undefined) return existing;
-  const store = createActivityGroupOpenStore(
-    durableActivityGroupOpenCache.get(identity) ?? null,
-  );
+  const durable = durableActivityGroupOpenCache.get(identity);
+  const store = createActivityGroupOpenStore(durable ?? null);
   activityGroupOpenStoreRegistry.set(tabKey, store);
   return store;
 }
@@ -116,8 +176,12 @@ export function promoteActivityGroupOpenStoreToDurable(
     chatTabPersistenceTabKey(identity),
   );
   if (store === undefined) return;
-  const { openIds, closedIds } = store.getState();
-  durableActivityGroupOpenCache.set(identity, { openIds, closedIds });
+  const state = store.getState();
+  durableActivityGroupOpenCache.set(identity, {
+    openIds: state.openIds,
+    closedIds: state.closedIds,
+    textCollapseStates: state.textCollapseStates,
+  });
 }
 
 /** Drops the durable chat-key entry - called when the CHAT itself is

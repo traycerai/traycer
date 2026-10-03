@@ -63,6 +63,7 @@ import { getOrCreateActivityGroupOpenStore } from "@/stores/chats/activity-group
 import type {
   ActivityGroupOpenChoices,
   ActivityGroupOpenState,
+  ActivityGroupTextCollapseState,
 } from "@/stores/chats/activity-group-open-store-context";
 import { getOrCreateA2AOpenStore } from "@/stores/chats/a2a-open-store-context";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
@@ -296,11 +297,16 @@ vi.mock(
     return {
       ...actual,
       createActivityGroupOpenStore: (
-        initialChoices: ActivityGroupOpenChoices | null,
+        initial:
+          | (ActivityGroupOpenChoices & {
+              readonly textCollapseStates?: ReadonlyMap<
+                string,
+                ActivityGroupTextCollapseState
+              >;
+            })
+          | null,
       ) =>
-        wrapWithSetOpenTracking(
-          actual.createActivityGroupOpenStore(initialChoices),
-        ),
+        wrapWithSetOpenTracking(actual.createActivityGroupOpenStore(initial)),
       getOrCreateActivityGroupOpenStore: (
         identity: ChatTabPersistenceIdentity,
       ) =>

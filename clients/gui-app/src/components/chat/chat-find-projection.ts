@@ -3,12 +3,15 @@ import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-noti
 import {
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
+  isCollapsedIntermediateTimelineItem,
+  lastAssistantTextSegmentId,
   reasoningBlockLabel,
 } from "@/components/chat/chat-activity-groups";
 import {
   deriveA2AReceivedCollapsibleKey,
   deriveA2ASendCollapsibleKey,
   deriveActivityGroupCollapsibleKey,
+  deriveEarlierActivityCollapsibleKey,
   deriveInterviewCollapsibleKey,
   derivePromotedSubagentRenderId,
   deriveSubagentCollapsibleKey,
@@ -244,7 +247,8 @@ function chatFindUnitsForMessage(
   visibility: ChatFindVisibility,
 ): ReadonlyArray<ChatFindUnit> {
   if (message.role === "assistant") {
-    const turnState = message.runState === null ? "complete" : "active";
+    const turnComplete = message.turnComplete ?? message.runState === null;
+    const turnState = turnComplete ? "complete" : "active";
     const settled = settledCardSegmentIds(message);
     // The renderer's own list: the hidden notices go before grouping, exactly
     // as `AssistantMessageBody` drops them.
@@ -252,14 +256,32 @@ function chatFindUnitsForMessage(
       message.segments,
       visibility.queuePauseReasonProtocolSupported,
     );
-    return buildChatActivityTimeline(shown, {
+    const timeline = buildChatActivityTimeline(shown, {
       turnState,
       promotedToolBlockIds,
       hideReasoning: visibility.hideReasoning,
-    }).flatMap((item) =>
+    });
+    const finalTextId = lastAssistantTextSegmentId(shown);
+    const finalTextIndex = timeline.findIndex(
+      (item) => item.kind === "segment" && item.id === finalTextId,
+    );
+    const hasLaterAssistantText = message.hasLaterAssistantText ?? false;
+    const earlierActivityKey = deriveEarlierActivityCollapsibleKey(
+      tileInstanceId,
+      message.id,
+    );
+    return timeline.flatMap((item, index) =>
       settled !== null && item.kind === "segment"
         ? settledCardSearchUnits(item.segment, settled, tileInstanceId)
-        : timelineItemSearchUnits(item, tileInstanceId),
+        : timelineItemSearchUnits({
+            item,
+            index,
+            tileInstanceId,
+            finalTextIndex,
+            hasLaterAssistantText,
+            isComplete: turnComplete,
+            earlierActivityKey,
+          }),
     );
   }
 
@@ -306,6 +328,16 @@ function chatFindUnitsForMessage(
   ]);
 }
 
+interface TimelineItemSearchUnitsArgs {
+  readonly item: ChatActivityTimelineItem;
+  readonly index: number;
+  readonly tileInstanceId: string;
+  readonly finalTextIndex: number;
+  readonly hasLaterAssistantText: boolean;
+  readonly isComplete: boolean;
+  readonly earlierActivityKey: ChatCollapsibleKey;
+}
+
 /**
  * The two segments a settled routing card paints as one, or `null` when the
  * row has no such card (`ChatMessage.routingSettledNoticeId`, set only beside
@@ -348,23 +380,45 @@ function settledCardSearchUnits(
 }
 
 function timelineItemSearchUnits(
-  item: ChatActivityTimelineItem,
-  tileInstanceId: string,
+  args: TimelineItemSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
+  const {
+    earlierActivityKey,
+    finalTextIndex,
+    hasLaterAssistantText,
+    index,
+    isComplete,
+    item,
+    tileInstanceId,
+  } = args;
+  const isEarlierActivityOwned =
+    isComplete &&
+    isCollapsedIntermediateTimelineItem(
+      item,
+      index,
+      finalTextIndex,
+      hasLaterAssistantText,
+    );
+  const parentChain = isEarlierActivityOwned ? [earlierActivityKey] : [];
   if (item.kind === "segment") {
-    return segmentSearchUnits(item.segment, tileInstanceId, []);
+    return segmentSearchUnits(item.segment, tileInstanceId, parentChain);
   }
   if (item.kind === "promoted_subagent") {
     const renderId = derivePromotedSubagentRenderId(item.segment.id);
     return subagentSegmentSearchUnits({
       segment: item.segment,
       renderId,
-      parentChain: [],
+      parentChain,
       ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
       tileInstanceId,
     });
   }
-  return activityGroupSearchUnits(item.group, tileInstanceId, []);
+  return activityGroupSearchUnits(
+    item.group,
+    tileInstanceId,
+    hasLaterAssistantText || item.group.followedByText,
+    parentChain,
+  );
 }
 
 /**
@@ -375,6 +429,7 @@ function timelineItemSearchUnits(
 function activityGroupSearchUnits(
   group: ActivityGroupModel,
   tileInstanceId: string,
+  summaryOwnedByGroup: boolean,
   parentChain: ReadonlyArray<ChatCollapsibleKey>,
 ): ReadonlyArray<ChatFindUnit> {
   const groupKey = deriveActivityGroupCollapsibleKey(tileInstanceId, group.id);
@@ -385,7 +440,9 @@ function activityGroupSearchUnits(
     chatFindUnit({
       unitId: chatFindActivityGroupSummaryUnitId(group.id),
       text: group.label,
-      owningChain: parentChain,
+      owningChain: summaryOwnedByGroup
+        ? [...parentChain, groupKey]
+        : parentChain,
     }),
     // A reveal force-opens the group, and every child that renders a header
     // renders it in both the live window and the expanded body, so each of
@@ -476,7 +533,7 @@ function compactUnits(
 function segmentSearchUnits(
   segment: MessageSegment,
   tileInstanceId: string,
-  parentChain: ReadonlyArray<ChatCollapsibleKey>,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
 ): ReadonlyArray<ChatFindUnit> {
   if (segment.kind === "interview") {
     return interviewSearchUnits(segment, tileInstanceId);
@@ -486,7 +543,7 @@ function segmentSearchUnits(
     return subagentSegmentSearchUnits({
       segment,
       renderId,
-      parentChain,
+      parentChain: owningChain,
       ownKey: deriveSubagentCollapsibleKey(tileInstanceId, renderId),
       tileInstanceId,
     });
@@ -497,7 +554,7 @@ function segmentSearchUnits(
         unitId: chatFindA2ASendBodyUnitId(segment.id),
         text: markdownToChatSearchText(segment.agentMessageSend.message),
         owningChain: [
-          ...parentChain,
+          ...owningChain,
           deriveA2ASendCollapsibleKey(tileInstanceId, segment.id),
         ],
       }),
@@ -508,7 +565,7 @@ function segmentSearchUnits(
     chatFindUnit({
       unitId: chatFindSegmentUnitId(segment.id),
       text: segmentSearchText(segment).join("\n"),
-      owningChain: parentChain,
+      owningChain,
     }),
   ]);
 }
@@ -873,7 +930,12 @@ function subagentConversationSearchUnits(
     hideReasoning: !isThinkingShown(),
   }).flatMap((item) => {
     if (item.kind === "activity_group") {
-      return activityGroupSearchUnits(item.group, tileInstanceId, bodyChain);
+      return activityGroupSearchUnits(
+        item.group,
+        tileInstanceId,
+        item.group.followedByText,
+        bodyChain,
+      );
     }
     if (item.kind === "promoted_subagent") {
       return subagentSegmentSearchUnits({

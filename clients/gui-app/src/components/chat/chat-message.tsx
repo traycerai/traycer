@@ -178,11 +178,27 @@ function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
   return null;
 }
 
+/**
+ * The two flags the row's earlier-activity collapse reads, resolved for a
+ * message that may predate them: a legacy row carrying no `turnComplete` is
+ * complete exactly when its run is no longer live, and has no later text.
+ */
+function assistantCollapseFlags(message: ChatMessageModel): {
+  readonly hasLaterAssistantText: boolean;
+  readonly turnComplete: boolean;
+} {
+  return {
+    hasLaterAssistantText: message.hasLaterAssistantText ?? false,
+    turnComplete: message.turnComplete ?? message.runState === null,
+  };
+}
+
 // Assistant rows no longer carry a provider/model label above the bubble -
 // that moved into the elapsed footer's info tooltip (see AssistantMessageBody).
 function renderAssistantMessage(props: ChatMessageProps): ReactElement {
   const { actions, backgroundToolBlockIds, message, nextStepActions } = props;
   const assistantActions = actions?.type === "assistant" ? actions : null;
+  const collapseFlags = assistantCollapseFlags(message);
   return (
     <div
       className={cn(
@@ -192,8 +208,10 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
     >
       <AssistantMessageBody
         segments={message.segments}
+        hasLaterAssistantText={collapseFlags.hasLaterAssistantText}
         backgroundToolBlockIds={backgroundToolBlockIds}
         runState={message.runState}
+        turnComplete={collapseFlags.turnComplete}
         messageId={message.id}
         elapsedStartedAt={message.elapsedStartedAt ?? message.createdAt}
         turnHasOnlyAutonomousResumeSegments={

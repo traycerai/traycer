@@ -118,6 +118,7 @@ const SOLE_REASONING_GROUP: ActivityGroupModel = {
   segments: [REASONING_SEGMENT],
   isActive: true,
   isStreaming: true,
+  followedByText: false,
   label: "Thinking",
   summary: "Thinking",
   activeStartedAt: null,

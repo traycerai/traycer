@@ -1,9 +1,15 @@
-import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
+import {
+  buildChatActivityTimeline,
+  isCollapsedIntermediateTimelineItem,
+  lastAssistantTextSegmentId,
+  type ChatActivityTimelineItem,
+} from "@/components/chat/chat-activity-groups";
 import { useRegionShown } from "@/lib/layout-overrides";
 import { useRegionGhost } from "@/components/layout-editor/use-layout-region";
 import { BrowserSessionRow } from "./segments/browser-session-row";
 import { chatFindSegmentUnitId } from "@/components/chat/chat-find";
 import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-highlight";
+import { deriveEarlierActivityCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { useTranscriptQueuePauseReasonSupport } from "@/components/chat/use-transcript-queue-pause-reason-support";
 import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
@@ -22,8 +28,22 @@ import type {
   ChatMessageStoppedInfo,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import { Check, Copy, Sparkles, Split, Square } from "lucide-react";
-import { use, useCallback, useMemo } from "react";
+import {
+  Check,
+  ChevronRight,
+  Copy,
+  Sparkles,
+  Split,
+  Square,
+} from "lucide-react";
+import {
+  use,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
@@ -55,6 +75,15 @@ import { TextSegment } from "./segments/text-segment";
 import { TodoSegment } from "./segments/todo-segment";
 import { ToolSegment } from "./segments/tool-segment";
 import { distinctRenderKeys } from "./segment-render-keys";
+import {
+  useActivityGroupOpen,
+  useSetActivityGroupOpen,
+} from "@/stores/chats/activity-group-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const COPIED_RESET_MS = 1600;
@@ -70,6 +99,7 @@ const handleCopyError = (): void => {
 
 interface AssistantBodyProps {
   segments: ReadonlyArray<MessageSegment>;
+  hasLaterAssistantText: boolean;
   backgroundToolBlockIds: ReadonlySet<string>;
   /**
    * Host-owned run state of this turn. Non-null only for the active turn;
@@ -77,6 +107,7 @@ interface AssistantBodyProps {
    * message and every multi-turn send) and flips to "Stopping…" on stop.
    */
   runState: ChatMessageRunState | null;
+  turnComplete: boolean;
   /**
    * Stable per-turn id (e.g. `assistant:<turnKey>`). Seeds the elapsed
    * footer's verb so each turn gets its own verb even when sibling turns
@@ -226,8 +257,10 @@ function recoveryRoleOf(
 
 export function AssistantMessageBody({
   segments,
+  hasLaterAssistantText,
   backgroundToolBlockIds,
   runState,
+  turnComplete,
   messageId,
   elapsedStartedAt,
   turnHasOnlyAutonomousResumeSegments,
@@ -244,7 +277,30 @@ export function AssistantMessageBody({
   forkAction,
   interviewDeliveryRetry,
 }: AssistantBodyProps) {
-  const activityTimelineTurnState = runState === null ? "complete" : "active";
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const earlierActivityKey = useMemo(
+    () => deriveEarlierActivityCollapsibleKey(tileInstanceId, messageId),
+    [messageId, tileInstanceId],
+  );
+  const userShowEarlierActivity = useActivityGroupOpen(
+    earlierActivityKey.id,
+    false,
+  );
+  const findForcedOpen = useChatFindForcedOpen(earlierActivityKey);
+  const setActivityGroupOpen = useSetActivityGroupOpen();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const showIntermediateContent = isEarlierActivityOpen(
+    userShowEarlierActivity,
+    findForcedOpen,
+  );
+  const setShowIntermediateContent = useCallback(
+    (open: boolean) => {
+      setActivityGroupOpen(earlierActivityKey.id, open);
+      setFindForcedOpen(earlierActivityKey, false);
+    },
+    [earlierActivityKey, setActivityGroupOpen, setFindForcedOpen],
+  );
+  const activityTimelineTurnState = turnComplete ? "complete" : "active";
   // A ghost while the editor points at hidden Thinking (L-14).
   const thinkingShown = useRegionShown("thinking");
   const thinkingGhost = useRegionGhost("thinking");
@@ -274,6 +330,29 @@ export function AssistantMessageBody({
       thinkingGhost,
       thinkingShown,
     ],
+  );
+  const finalTextId = useMemo(
+    () => lastAssistantTextSegmentId(shownSegments),
+    [shownSegments],
+  );
+  const finalTextIndex = useMemo(
+    () =>
+      timeline.findIndex((item) =>
+        isFinalAssistantTextTimelineItem(item, finalTextId),
+      ),
+    [finalTextId, timeline],
+  );
+  const hasIntermediateContent = useMemo(
+    () =>
+      timeline.some((item, index) =>
+        isCollapsedIntermediateTimelineItem(
+          item,
+          index,
+          finalTextIndex,
+          hasLaterAssistantText,
+        ),
+      ),
+    [finalTextIndex, hasLaterAssistantText, timeline],
   );
   const timelineKeys = useMemo(
     () =>
@@ -312,10 +391,7 @@ export function AssistantMessageBody({
     shouldShowElapsedFooter(
       runState,
       completedAt,
-      lastSegmentDrawnOnItsOwn(
-        shownSegments,
-        settled === null ? null : settled.id,
-      ),
+      lastSegmentDrawnOnItsOwn(shownSegments, settledNoticeId(settled)),
       stopped,
     );
   // No content yet. While the turn is live (`runState` non-null) show the
@@ -352,81 +428,50 @@ export function AssistantMessageBody({
       className="flex w-full max-w-none flex-col gap-2 py-1 @container"
       data-assistant-turn
     >
+      {turnComplete && hasIntermediateContent ? (
+        <IntermediateContentDisclosure
+          open={showIntermediateContent}
+          onOpenChange={setShowIntermediateContent}
+        />
+      ) : null}
       {timeline.map((item, index) => {
         const key = timelineKeys[index];
-        if (item.kind === "activity_group") {
-          return <ActivityGroupSegment key={key} group={item.group} />;
-        }
-        if (item.kind === "promoted_subagent") {
-          return (
-            <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
-              <SubagentSegment
-                id={item.id}
-                cardId={item.segment.id}
-                name={item.segment.name}
-                agentType={item.segment.agentType}
-                task={item.segment.task}
-                progressUpdates={item.segment.progressUpdates}
-                result={item.segment.result}
-                isStreaming={item.segment.isStreaming}
-                endState={item.segment.endState}
-                stopped={item.segment.stopped}
-                startedAt={item.segment.startedAt}
-                durationMs={item.segment.durationMs}
-                workflowMeta={item.segment.workflowMeta}
-                nested={item.segment.children}
-                variant="promoted"
-              />
-            </ChatBlockNavigationAnchor>
-          );
-        }
-        const recovery = recoveryRoleOf(item.id, {
+        const isIntermediate = isCollapsedIntermediateTimelineItem(
+          item,
+          index,
+          finalTextIndex,
+          hasLaterAssistantText,
+        );
+        const isHidden = isIntermediateTimelineItemHidden(
+          turnComplete,
+          isIntermediate,
+          showIntermediateContent,
+        );
+        const rendered = renderAssistantTimelineItem({
+          item,
+          isIntermediate,
+          isHidden,
+          hasLaterAssistantText,
+          backgroundToolBlockIds,
+          nextStepActions,
+          forkAction,
+          interviewDeliveryRetry,
+          meta,
           manualRungAnchorId,
-          turnId,
           settled,
+          turnId,
         });
-        // The settled notice is painted inside the anchor's settled card.
-        if (recovery === "absorbed") return null;
+        // A settled notice is painted inside its anchor's settled card, so it
+        // renders no row of its own.
+        if (rendered === null) return null;
         return (
-          <ChatBlockNavigationAnchor key={key} blockId={item.id}>
-            <AssistantSegment
-              id={item.id}
-              segment={item.segment}
-              backgroundToolBlockIds={backgroundToolBlockIds}
-              nextStepActions={nextStepActions}
-              forkAction={forkAction}
-              interviewDeliveryRetry={interviewDeliveryRetry}
-              // The turn's OWN harness, for an error row that offers to open that
-              // provider's settings. Taken from the row rather than from ambient
-              // app state so the link points at the provider that actually failed,
-              // even when the transcript is scrolled back to a turn from a harness
-              // the chat has since switched away from. `null` on legacy turns with
-              // no metadata; the affordance then falls back to the section root.
-              harnessId={meta?.provider ?? null}
-              // ONE segment, not every error row on the turn, and not one per
-              // row of a split turn. A failed turn routinely carries several
-              // error blocks that all share this `turnId` - the queue-pause
-              // notice the host appends beside the failure, a non-terminal
-              // extension error before the real terminal - and handing the id to
-              // each of them rendered a full recovery group under each,
-              // including under "Resume the queue to send them", where Retry
-              // retried the failed prompt instead.
-              //
-              // The anchor names the segment that describes the failed ATTEMPT.
-              // It is resolved over the WHOLE turn, but not before the split -
-              // `planAssistantTurnRows` splits first and the rows are built, then
-              // `withManualRungAnchor` runs LAST and rebuilds the ordered
-              // whole-turn segment list from those finished rows
-              // (`assistantTurnSegments`). Whole-turn is a claim about the INPUT
-              // to the walk, not about its position in the pipeline. Either way a
-              // turn rendered as several rows still names exactly one. On every
-              // other row `manualRungAnchorId` is null and nothing here matches
-              // - the same answer a row with no turn identity already gets.
-              turnId={recovery.turnId}
-              settledNotice={recovery.settledNotice}
-              settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
-            />
-          </ChatBlockNavigationAnchor>
+          <IntermediateTimelineItem
+            key={key}
+            isHidden={isHidden}
+            isIntermediate={isIntermediate}
+          >
+            {rendered}
+          </IntermediateTimelineItem>
         );
       })}
       {/* Trailing indicator keeps the in-progress cue visible for the whole
@@ -483,6 +528,17 @@ function shouldShowElapsedFooter(
 }
 
 /**
+ * The id of the notice this row's settled card absorbs, or `null` when the row
+ * absorbs none - the id `lastSegmentDrawnOnItsOwn` skips.
+ */
+function settledNoticeId(
+  settled: { readonly id: string } | null,
+): string | null {
+  if (settled === null) return null;
+  return settled.id;
+}
+
+/**
  * The last segment the row DRAWS on its own - the one the footer asks about.
  *
  * `segments` is the list the row renders (the notices this client hides
@@ -514,6 +570,158 @@ function StopBadge() {
     >
       <Square className="size-1.5 rounded-xs fill-destructive text-destructive" />
     </span>
+  );
+}
+
+function isEarlierActivityOpen(
+  userOpen: boolean,
+  findForcedOpen: boolean,
+): boolean {
+  return userOpen || findForcedOpen;
+}
+
+function isFinalAssistantTextTimelineItem(
+  item: ChatActivityTimelineItem,
+  finalTextId: string | null,
+): boolean {
+  return item.kind === "segment" && item.id === finalTextId;
+}
+
+function isIntermediateTimelineItemHidden(
+  turnComplete: boolean,
+  isIntermediate: boolean,
+  showIntermediateContent: boolean,
+): boolean {
+  return turnComplete && isIntermediate && !showIntermediateContent;
+}
+
+interface AssistantTimelineItemRenderArgs {
+  readonly item: ChatActivityTimelineItem;
+  readonly isIntermediate: boolean;
+  readonly isHidden: boolean;
+  readonly hasLaterAssistantText: boolean;
+  readonly backgroundToolBlockIds: ReadonlySet<string>;
+  readonly nextStepActions: NextStepActionHandler | null;
+  readonly forkAction: ChatMessageForkAction | null;
+  readonly interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
+  readonly meta: AssistantTurnMeta | null;
+  readonly manualRungAnchorId: string | null;
+  readonly settled: {
+    readonly id: string;
+    readonly notice: RoutingSettledNotice;
+  } | null;
+  readonly turnId: string | null;
+}
+
+function renderAssistantTimelineItem(
+  args: AssistantTimelineItemRenderArgs,
+): ReactNode {
+  const {
+    backgroundToolBlockIds,
+    forkAction,
+    hasLaterAssistantText,
+    interviewDeliveryRetry,
+    isHidden,
+    isIntermediate,
+    item,
+    manualRungAnchorId,
+    meta,
+    nextStepActions,
+    settled,
+    turnId,
+  } = args;
+  if (item.kind === "activity_group") {
+    return (
+      <ActivityGroupSegment
+        group={item.group}
+        collapseOnText={hasLaterAssistantText}
+        hideWhenCollapsed={isHidden}
+      />
+    );
+  }
+  if (item.kind === "promoted_subagent") {
+    return (
+      <ChatBlockNavigationAnchor
+        blockId={item.segment.id}
+        className={isIntermediate ? "empty:hidden" : undefined}
+        collapsed={isHidden}
+      >
+        {isHidden ? null : (
+          <SubagentSegment
+            id={item.id}
+            cardId={item.segment.id}
+            name={item.segment.name}
+            agentType={item.segment.agentType}
+            task={item.segment.task}
+            progressUpdates={item.segment.progressUpdates}
+            result={item.segment.result}
+            isStreaming={item.segment.isStreaming}
+            endState={item.segment.endState}
+            stopped={item.segment.stopped}
+            startedAt={item.segment.startedAt}
+            durationMs={item.segment.durationMs}
+            workflowMeta={item.segment.workflowMeta}
+            nested={item.segment.children}
+            variant="promoted"
+          />
+        )}
+      </ChatBlockNavigationAnchor>
+    );
+  }
+  const recovery = recoveryRoleOf(item.id, {
+    manualRungAnchorId,
+    turnId,
+    settled,
+  });
+  // The settled notice is painted inside the anchor's settled card.
+  if (recovery === "absorbed") return null;
+  const assistantSegment = (
+    <AssistantSegment
+      id={item.id}
+      segment={item.segment}
+      backgroundToolBlockIds={backgroundToolBlockIds}
+      nextStepActions={nextStepActions}
+      forkAction={forkAction}
+      interviewDeliveryRetry={interviewDeliveryRetry}
+      // The turn's OWN harness, for an error row that offers to open that
+      // provider's settings. Taken from the row rather than from ambient
+      // app state so the link points at the provider that actually failed,
+      // even when the transcript is scrolled back to a turn from a harness
+      // the chat has since switched away from. `null` on legacy turns with
+      // no metadata; the affordance then falls back to the section root.
+      harnessId={meta?.provider ?? null}
+      // ONE segment, not every error row on the turn, and not one per
+      // row of a split turn. A failed turn routinely carries several
+      // error blocks that all share this `turnId` - the queue-pause
+      // notice the host appends beside the failure, a non-terminal
+      // extension error before the real terminal - and handing the id to
+      // each of them rendered a full recovery group under each,
+      // including under "Resume the queue to send them", where Retry
+      // retried the failed prompt instead.
+      //
+      // The anchor names the segment that describes the failed ATTEMPT.
+      // It is resolved over the WHOLE turn, but not before the split -
+      // `planAssistantTurnRows` splits first and the rows are built, then
+      // `withManualRungAnchor` runs LAST and rebuilds the ordered
+      // whole-turn segment list from those finished rows
+      // (`assistantTurnSegments`). Whole-turn is a claim about the INPUT
+      // to the walk, not about its position in the pipeline. Either way a
+      // turn rendered as several rows still names exactly one. On every
+      // other row `manualRungAnchorId` is null and nothing here matches
+      // - the same answer a row with no turn identity already gets.
+      turnId={recovery.turnId}
+      settledNotice={recovery.settledNotice}
+      settledNoticeFindUnitId={recovery.settledNoticeFindUnitId}
+    />
+  );
+  return (
+    <ChatBlockNavigationAnchor
+      blockId={item.id}
+      className={isIntermediate ? "empty:hidden" : undefined}
+      collapsed={isHidden}
+    >
+      {isHidden ? null : assistantSegment}
+    </ChatBlockNavigationAnchor>
   );
 }
 
@@ -1103,6 +1311,90 @@ function RunElapsedTimer({
     <span className="tabular-nums">
       ({formatClockDuration(elapsedSeconds)})
     </span>
+  );
+}
+
+function IntermediateTimelineItem(props: {
+  readonly isHidden: boolean;
+  readonly isIntermediate: boolean;
+  readonly children: ReactNode;
+}) {
+  const focusedContentRef = useRef(false);
+  const focusedTurnRef = useRef<HTMLElement | null>(null);
+  const wasHiddenRef = useRef(props.isHidden);
+
+  useLayoutEffect(() => {
+    if (
+      props.isHidden &&
+      props.isIntermediate &&
+      !wasHiddenRef.current &&
+      focusedContentRef.current
+    ) {
+      focusedTurnRef.current
+        ?.querySelector<HTMLButtonElement>("[data-chat-intermediate-trigger]")
+        ?.focus({ preventScroll: true });
+      focusedContentRef.current = false;
+      focusedTurnRef.current = null;
+    }
+    wasHiddenRef.current = props.isHidden;
+  }, [props.isHidden, props.isIntermediate]);
+
+  return (
+    <div
+      data-chat-intermediate-item={props.isIntermediate ? "true" : undefined}
+      onFocusCapture={(event) => {
+        focusedContentRef.current = true;
+        focusedTurnRef.current = event.currentTarget.closest<HTMLElement>(
+          "[data-assistant-turn]",
+        );
+      }}
+      onBlurCapture={(event) => {
+        if (event.relatedTarget instanceof Node) {
+          if (!event.currentTarget.contains(event.relatedTarget)) {
+            focusedContentRef.current = false;
+            focusedTurnRef.current = null;
+          }
+          return;
+        }
+        const blurred = event.target;
+        const container = event.currentTarget;
+        queueMicrotask(() => {
+          if (!blurred.isConnected) return;
+          if (!container.contains(document.activeElement)) {
+            focusedContentRef.current = false;
+            focusedTurnRef.current = null;
+          }
+        });
+      }}
+      className="contents"
+    >
+      {props.children}
+    </div>
+  );
+}
+
+function IntermediateContentDisclosure(props: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-state={props.open ? "open" : "closed"}
+      data-chat-intermediate-trigger="true"
+      aria-expanded={props.open}
+      aria-label={
+        props.open ? "Hide earlier activity" : "Show earlier activity"
+      }
+      onClick={() => props.onOpenChange(!props.open)}
+      className="group/intermediate-content flex max-w-full items-center gap-2 rounded-sm px-1 py-1 text-left text-ui-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <span className="min-w-0 truncate">Earlier activity</span>
+      <ChevronRight
+        className="size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color] group-hover/intermediate-content:translate-x-0 group-hover/intermediate-content:text-foreground group-focus-visible/intermediate-content:translate-x-0 group-focus-visible/intermediate-content:text-foreground group-focus-visible/intermediate-content:opacity-100 group-data-[state=open]/intermediate-content:translate-x-0 group-data-[state=open]/intermediate-content:rotate-90 group-data-[state=open]/intermediate-content:text-foreground group-data-[state=open]/intermediate-content:opacity-100"
+        aria-hidden
+      />
+    </button>
   );
 }
 

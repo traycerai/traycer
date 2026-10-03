@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
+import { ChatExpansionTestProviders } from "./chat-expansion-test-providers";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage } from "./chat-message-fixtures";
 import {
@@ -60,23 +61,25 @@ function makeAlternatingMessages(count: number): ChatMessageModel[] {
 function renderTimeline(messages: ReadonlyArray<ChatMessageModel>) {
   const listRef = createRef<LegendListRef | null>();
   const jsx = (msgs: ReadonlyArray<ChatMessageModel>) => (
-    <div style={{ height: 700, width: 800 }}>
-      <ChatTimeline
-        rows={transcriptListRows({ window: null, rendered: msgs })}
-        taskTitle="Quoted-reply send"
-        backgroundToolBlockIds={new Set()}
-        getMessageActions={() => null}
-        nextStepActions={null}
-        listRef={listRef}
-        className="h-full"
-        initialScrollAtEnd={false}
-        initialScrollIndex={{
-          index: PARK_INDEX,
-          viewOffset: 0,
-          viewPosition: 0,
-        }}
-      />
-    </div>
+    <ChatExpansionTestProviders tileInstanceId="quote-send-scroll-test">
+      <div style={{ height: 700, width: 800 }}>
+        <ChatTimeline
+          rows={transcriptListRows({ window: null, rendered: msgs })}
+          taskTitle="Quoted-reply send"
+          backgroundToolBlockIds={new Set()}
+          getMessageActions={() => null}
+          nextStepActions={null}
+          listRef={listRef}
+          className="h-full"
+          initialScrollAtEnd={false}
+          initialScrollIndex={{
+            index: PARK_INDEX,
+            viewOffset: 0,
+            viewPosition: 0,
+          }}
+        />
+      </div>
+    </ChatExpansionTestProviders>
   );
   const result = render(jsx(messages));
   return {

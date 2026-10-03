@@ -3,8 +3,11 @@ import { Box, ChevronRight } from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
+  type FocusEvent,
   type ReactNode,
 } from "react";
 import {
@@ -34,6 +37,8 @@ import { ChatBlockNavigationAnchor } from "@/components/chat/chat-navigation-hig
 import {
   useActivityGroupEverHeaded,
   useActivityGroupOpen,
+  useActivityGroupTextCollapseState,
+  useCollapseActivityGroupForText,
   useMarkActivityGroupHeaded,
   useSetActivityGroupOpen,
 } from "@/stores/chats/activity-group-open-store-context";
@@ -60,34 +65,130 @@ function soleSegmentIsStreaming(group: ActivityGroupModel): boolean {
   return sole.kind === "reasoning" && sole.isStreaming;
 }
 
+/**
+ * Which Chat setting this row belongs to: a run of reasoning alone is
+ * Thinking's, anything with a tool call in it is Tool activity's. The setting
+ * is how an untouched row opens; the reader's own click wins.
+ */
+function activityGroupLayoutRegion(
+  group: ActivityGroupModel,
+): "thinking" | "toolActivity" {
+  return isReasoningOnlyRun(group.segments) ? "thinking" : "toolActivity";
+}
+
+/**
+ * When the lone reasoning block drops its header, THIS label is its streaming
+ * "Thinking" label verbatim, so the thinking-token estimate is drawn here
+ * instead of on the (visually hidden) block header.
+ */
+function showsThinkingTokensEstimate(
+  group: ActivityGroupModel,
+  headerlessReasoning: boolean,
+): boolean {
+  return headerlessReasoning && group.isActive && soleSegmentIsStreaming(group);
+}
+
 interface ActivityGroupSegmentProps {
   readonly group: ActivityGroupModel;
+  readonly collapseOnText?: boolean;
+  readonly hideWhenCollapsed?: boolean;
+}
+
+function shouldHideActivityGroup(
+  hideWhenCollapsed: boolean,
+  shouldCollapseForText: boolean,
+): boolean {
+  return hideWhenCollapsed && shouldCollapseForText;
 }
 
 export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
-  const { group } = props;
+  const { collapseOnText = false, group, hideWhenCollapsed = false } = props;
   const tileInstanceId = useChatCollapsibleTileInstanceId();
   const collapsibleKey = useMemo(
     () => deriveActivityGroupCollapsibleKey(tileInstanceId, group.id),
     [group.id, tileInstanceId],
   );
-  // Which Chat setting this row belongs to: a run of reasoning alone is
-  // Thinking's, anything with a tool call in it is Tool activity's. The
-  // setting is how an untouched row opens; the reader's own click wins.
-  const layoutRegion = isReasoningOnlyRun(group.segments)
-    ? "thinking"
-    : "toolActivity";
+  // Which Chat setting this row belongs to, and therefore how an untouched row
+  // opens - see `activityGroupLayoutRegion`.
+  const layoutRegion = activityGroupLayoutRegion(group);
   const defaultOpen = useRegionValue(layoutRegion, "size") === "full";
   const { ref: regionRef } = useLayoutRegion({
     regionId: layoutRegion,
     instanceId: group.id,
   });
   const userOpen = useActivityGroupOpen(group.id, defaultOpen);
+  const textCollapseState = useActivityGroupTextCollapseState(group.id);
   const summaryFindUnitId = chatFindActivityGroupSummaryUnitId(group.id);
   const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
-  const open = userOpen || findForcedOpen;
+  const open =
+    (textCollapseState !== "text-collapsed" && userOpen) || findForcedOpen;
   const setOpen = useSetActivityGroupOpen();
+  const collapseForText = useCollapseActivityGroupForText();
   const setFindForcedOpen = useSetChatFindForcedOpen();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const liveWindowRef = useRef<HTMLDivElement | null>(null);
+  const focusedTurnRef = useRef<HTMLElement | null>(null);
+  const shouldCollapseForText = collapseOnText || group.followedByText;
+  const groupHidden = shouldHideActivityGroup(
+    hideWhenCollapsed,
+    shouldCollapseForText,
+  );
+  const wasGroupHiddenRef = useRef(groupHidden);
+  const rememberFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    focusedTurnRef.current = event.currentTarget.closest<HTMLElement>(
+      "[data-assistant-turn]",
+    );
+  }, []);
+  const forgetFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    if (event.relatedTarget instanceof Node) {
+      if (!event.currentTarget.contains(event.relatedTarget)) {
+        focusedTurnRef.current = null;
+      }
+      return;
+    }
+    const blurred = event.target;
+    const container = event.currentTarget;
+    queueMicrotask(() => {
+      if (!blurred.isConnected) return;
+      if (!container.contains(document.activeElement)) {
+        focusedTurnRef.current = null;
+      }
+    });
+  }, []);
+  useLayoutEffect(() => {
+    if (groupHidden && !wasGroupHiddenRef.current && focusedTurnRef.current) {
+      focusedTurnRef.current
+        .querySelector<HTMLButtonElement>("[data-chat-intermediate-trigger]")
+        ?.focus({ preventScroll: true });
+      focusedTurnRef.current = null;
+    }
+    wasGroupHiddenRef.current = groupHidden;
+  }, [groupHidden]);
+  useEffect(() => {
+    if (!shouldCollapseForText) {
+      return;
+    }
+    if (!findForcedOpen && !groupHidden && textCollapseState === undefined) {
+      const activeElement = document.activeElement;
+      if (
+        activeElement instanceof HTMLElement &&
+        (contentRef.current?.contains(activeElement) ||
+          liveWindowRef.current?.contains(activeElement))
+      ) {
+        triggerRef.current?.focus({ preventScroll: true });
+      }
+    }
+    collapseForText(group.id);
+  }, [
+    collapseForText,
+    findForcedOpen,
+    group.id,
+    groupHidden,
+    group.segments,
+    shouldCollapseForText,
+    textCollapseState,
+  ]);
   // The child a live-window click asked to see. Set at the moment of the click
   // and read once, by the copy of that child which mounts inside the expanded
   // body: it scrolls itself into view and, for reasoning, opens.
@@ -112,7 +213,7 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   // Computed here rather than inline in the JSX: `jsx-no-leaked-render`
   // rewrites an inline `&&` into `? … : null`, which is right for children and
   // wrong for a boolean prop.
-  const liveWindowShown = group.isActive && !open;
+  const liveWindowShown = group.isActive && !open && !shouldCollapseForText;
   // One reasoning block means the group header's thinking clause already IS
   // that block's label, so the block drops its own header rather than repeat
   // it a line lower. Shared with the find projection, which is why it stays a
@@ -143,8 +244,10 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
   // When the lone reasoning block drops its header, THIS label is its
   // streaming "Thinking" label verbatim, so the thinking-token estimate is
   // drawn here instead of on the (visually hidden) block header.
-  const showsThinkingTokens =
-    soleReasoningHeaderless && group.isActive && soleSegmentIsStreaming(group);
+  const showsThinkingTokens = showsThinkingTokensEstimate(
+    group,
+    soleReasoningHeaderless,
+  );
   // The children only EXIST in two containers: the bounded live window, and
   // `CollapsibleContent`, which unmounts its subtree when closed. A settled,
   // collapsed group renders neither - so a shrink that happens before anyone
@@ -232,10 +335,16 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
     <Collapsible
       open={open}
       onOpenChange={updateOpen}
+      hidden={shouldHideActivityGroup(hideWhenCollapsed, shouldCollapseForText)}
       className="text-ui-sm text-muted-foreground"
     >
       <CollapsibleTrigger
-        ref={regionRef}
+        ref={(node) => {
+          triggerRef.current = node;
+          regionRef(node);
+        }}
+        onFocusCapture={rememberFocus}
+        onBlurCapture={forgetFocus}
         data-find-include="true"
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}
@@ -298,13 +407,23 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
           It also cannot expand in place: four line-heights clips a body to
           about one line and pushes the run out of view, so rows in here PROMOTE
           instead - the click opens this group with that row already unfolded. */}
-      <LiveActivityWindow shown={liveWindowShown}>
+      <LiveActivityWindow
+        shown={liveWindowShown}
+        containerRef={liveWindowRef}
+        onFocusCapture={rememberFocus}
+        onBlurCapture={forgetFocus}
+      >
         {open ? null : renderChildren(true)}
       </LiveActivityWindow>
       {/* No height cap and no tail pin here, so a streaming reasoning child
           keeps its own bounded `ReasoningTail`. */}
       <CollapsibleContent>
-        <div className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3">
+        <div
+          ref={contentRef}
+          onFocusCapture={rememberFocus}
+          onBlurCapture={forgetFocus}
+          className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3"
+        >
           {renderChildren(false)}
         </div>
       </CollapsibleContent>

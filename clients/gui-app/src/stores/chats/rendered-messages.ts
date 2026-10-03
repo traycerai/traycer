@@ -3106,6 +3106,27 @@ function renderAssistantTurnRows(
     blocks,
     input.turnKey,
   );
+  const hasLaterTextFrom: boolean[] = [];
+  let sawText = false;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    hasLaterTextFrom[index] = sawText;
+    const block = blocks[index];
+    if (
+      block.type === "text" &&
+      block.browserSession === undefined &&
+      block.text.trim().length > 0 &&
+      block.providerNotice === null &&
+      // A parented text block is a SUBAGENT's own prose: `nestSubagentChildren`
+      // folds it into its card, so it never becomes a top-level segment and the
+      // timeline-level rule (`isNormalAssistantTextSegment`) cannot see it.
+      // Counting it here made the row-level rule disagree with the timeline-level
+      // one - a slice whose only later text belonged to a subagent folded into
+      // "Earlier activity" with no final response left to show.
+      (block.parentBlockId ?? null) === null
+    ) {
+      sawText = true;
+    }
+  }
 
   const hiddenSliceIds = new Set<string>();
   const rows = plan.entries.map((entry): ChatMessageModel => {
@@ -3160,6 +3181,9 @@ function renderAssistantTurnRows(
         assistantSliceRowId(input.turnKey, entry.chunkIndex, plan.split),
       );
     }
+    const lastBlockIndex = entry.blockIndices.at(-1);
+    const hasLaterAssistantText =
+      lastBlockIndex !== undefined && hasLaterTextFrom[lastBlockIndex];
     return renderAssistantTurnSlice({
       acc: input.acc,
       turnKey: input.turnKey,
@@ -3174,6 +3198,7 @@ function renderAssistantTurnRows(
       epicId: input.epicId,
       chatId: input.chatId,
       blocks: sliceBlocks,
+      hasLaterAssistantText,
       chunkIndex: entry.chunkIndex,
       split: plan.split,
       rowAnchorAt: input.rowAnchorAt,
@@ -3493,6 +3518,7 @@ interface AssistantTurnSliceRenderInput {
   readonly pause: TurnPauseAccounting;
   readonly ctx: RenderedMessagesDisplayContext;
   readonly blocks: ReadonlyArray<ContentBlock>;
+  readonly hasLaterAssistantText: boolean;
   readonly chunkIndex: number;
   readonly split: boolean;
   readonly rowAnchorAt: number | null;
@@ -3562,10 +3588,12 @@ function renderAssistantTurnSlice(
     // Stamped onto the turn's last slice by `withTurnCompletion`; null on
     // every other slice and while the turn is still live.
     completedAt: null,
+    turnComplete: input.turnComplete,
     stopped: null,
     pausedDurationMs: input.pause.pausedDurationMs,
     pausedSinceMs: input.pause.pausedSinceMs,
     persistentMessageId: input.acc.messageId,
+    hasLaterAssistantText: input.hasLaterAssistantText,
     ...(input.acc.turnMessageIds === null
       ? {}
       : { turnMessageIds: input.acc.turnMessageIds }),
@@ -3666,6 +3694,7 @@ function attachRunStateToTrailingAssistantSlice(
       epicId: input.epicId,
       chatId: input.chatId,
       blocks: [],
+      hasLaterAssistantText: false,
       chunkIndex: plan.nextChunkIndex,
       split: true,
       rowAnchorAt: createdAt,

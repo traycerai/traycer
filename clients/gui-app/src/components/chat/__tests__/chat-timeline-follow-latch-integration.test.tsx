@@ -26,6 +26,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
 import type { ChatTimelineFollowLatch } from "@/components/chat/chat-timeline-follow-latch";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
+import { ChatExpansionTestProviders } from "./chat-expansion-test-providers";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -249,28 +250,30 @@ function renderTimeline(
     contentInsetEndAdjustment: number,
     initialScrollAtEnd: boolean,
   ): ReactNode => (
-    <div
-      style={{
-        height: VIEWPORT_HEIGHT_PX,
-        width: VIEWPORT_WIDTH_PX,
-      }}
-    >
-      <ChatTimeline
-        rows={transcriptListRows({ window: null, rendered: messages })}
-        taskTitle="follow-latch integration"
-        backgroundToolBlockIds={new Set()}
-        getMessageActions={() => null}
-        nextStepActions={null}
-        listRef={listRef}
-        className="h-full"
-        initialScrollAtEnd={initialScrollAtEnd}
-        contentInsetEndAdjustment={contentInsetEndAdjustment}
-        onItemSizeChanged={options.onItemSizeChanged}
-        onListMetricsChange={options.onListMetricsChange}
-        onFollowIntentChange={options.onFollowIntentChange}
-        followLatchRef={options.followLatchRef}
-      />
-    </div>
+    <ChatExpansionTestProviders tileInstanceId="follow-latch-timeline-test">
+      <div
+        style={{
+          height: VIEWPORT_HEIGHT_PX,
+          width: VIEWPORT_WIDTH_PX,
+        }}
+      >
+        <ChatTimeline
+          rows={transcriptListRows({ window: null, rendered: messages })}
+          taskTitle="follow-latch integration"
+          backgroundToolBlockIds={new Set()}
+          getMessageActions={() => null}
+          nextStepActions={null}
+          listRef={listRef}
+          className="h-full"
+          initialScrollAtEnd={initialScrollAtEnd}
+          contentInsetEndAdjustment={contentInsetEndAdjustment}
+          onItemSizeChanged={options.onItemSizeChanged}
+          onListMetricsChange={options.onListMetricsChange}
+          onFollowIntentChange={options.onFollowIntentChange}
+          followLatchRef={options.followLatchRef}
+        />
+      </div>
+    </ChatExpansionTestProviders>
   );
 
   let currentInset = options.contentInsetEndAdjustment ?? 0;

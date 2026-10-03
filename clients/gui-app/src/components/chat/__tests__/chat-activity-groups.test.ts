@@ -3,6 +3,8 @@ import {
   activityGroupSummary,
   buildChatActivityTimeline,
   hidesSoleReasoningHeader,
+  isCollapsedIntermediateTimelineItem,
+  lastAssistantTextSegmentId,
   latestActivityLabel,
   reasoningSummaryLabel,
 } from "@/components/chat/chat-activity-groups";
@@ -39,6 +41,19 @@ function toolInputFields(toolName: string, input: unknown) {
 }
 
 describe("chat activity grouping", () => {
+  it("identifies the last non-empty assistant text segment", () => {
+    expect(
+      lastAssistantTextSegmentId([
+        textSegment("text-1", "First"),
+        textSegment("text-2", "  "),
+        textSegment("text-3", "Final"),
+      ]),
+    ).toBe("text-3");
+    expect(lastAssistantTextSegmentId([textSegment("text-1", "Only")])).toBe(
+      "text-1",
+    );
+  });
+
   it("summarizes the Traycer browser REPL as browser activity", () => {
     const timeline = buildCompleteTimeline([
       toolSegment("browser-1", "traycer-browser/repl", {
@@ -192,6 +207,50 @@ describe("chat activity grouping", () => {
       throw new Error("Expected the trailing text segment");
     }
     expect(timeline[1].segment.kind).toBe("text");
+  });
+
+  it("marks an activity run followed by assistant text", () => {
+    const withText = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+      textSegment("text-1", "Done"),
+    ]);
+    const withoutText = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+    ]);
+
+    expect(soleGroup(withText, 0).followedByText).toBe(true);
+    expect(soleGroup(withoutText, 0).followedByText).toBe(false);
+  });
+
+  it("does not treat browser or whitespace text as a result boundary", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+      {
+        id: "browser-text",
+        kind: "text",
+        markdown: "Browser session",
+        browserSession: {
+          hostId: "host-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+          profile: "primary",
+        },
+        isStreaming: false,
+      },
+      textSegment("whitespace-text", "  "),
+    ]);
+
+    expect(soleGroup(timeline, 0).followedByText).toBe(false);
+  });
+
+  it("marks a thought run followed by a notice and later text", () => {
+    const timeline = buildCompleteTimeline([
+      reasoningSegment("reasoning-1", false, 1000),
+      providerNoticeSegment("notice-1"),
+      textSegment("text-1", "Done"),
+    ]);
+
+    expect(soleGroup(timeline, 0).followedByText).toBe(true);
   });
 
   // The invariant the whole design rests on: a reasoning block occupies the
@@ -1091,6 +1150,46 @@ describe("chat activity grouping", () => {
     ]);
     expect(timeline[0]?.id).toBe("promoted:subagent-1");
     expect(timeline[2]?.id).toBe("promoted:subagent-2");
+  });
+
+  it("collapses promoted items before final text and keeps those after it visible", () => {
+    const segments: ReadonlyArray<MessageSegment> = [
+      subagentSegment("subagent-before-final", false),
+      a2aToolSegment("a2a-before-final", "traycer_a2a/traycer_send_message", {
+        receiverAgentId: "agent-before",
+        message: "Before final",
+        responseId: null,
+        expectReply: false,
+      }),
+      textSegment("final-text", "Final answer"),
+      subagentSegment("subagent-after-final", false),
+      a2aToolSegment("a2a-after-final", "traycer_a2a/traycer_send_message", {
+        receiverAgentId: "agent-after",
+        message: "After final",
+        responseId: null,
+        expectReply: false,
+      }),
+    ];
+    const timeline = buildCompleteTimeline(segments);
+    const finalTextIndex = timeline.findIndex(
+      (item) => item.kind === "segment" && item.id === "final-text",
+    );
+    const collapsed = (id: string) => {
+      const index = timeline.findIndex((item) => item.id === id);
+      if (index < 0) throw new Error(`Missing timeline item ${id}`);
+      const item = timeline[index];
+      return isCollapsedIntermediateTimelineItem(
+        item,
+        index,
+        finalTextIndex,
+        false,
+      );
+    };
+
+    expect(collapsed("promoted:subagent-before-final")).toBe(true);
+    expect(collapsed("a2a-before-final")).toBe(true);
+    expect(collapsed("promoted:subagent-after-final")).toBe(false);
+    expect(collapsed("a2a-after-final")).toBe(false);
   });
 
   it("promotes A2A send-message tools out of generic activity groups", () => {

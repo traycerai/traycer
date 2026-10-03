@@ -46,6 +46,7 @@ export interface ActivityGroupModel {
   readonly segments: ReadonlyArray<ActivityGroupDetailSegment>;
   readonly isActive: boolean;
   readonly isStreaming: boolean;
+  readonly followedByText: boolean;
   readonly label: string;
   readonly summary: string;
   /**
@@ -241,6 +242,53 @@ function createEmptyCounts(): ActivitySummaryCounts {
   };
 }
 
+function isNormalAssistantTextSegment(segment: MessageSegment): boolean {
+  return (
+    segment.kind === "text" &&
+    segment.browserSession === undefined &&
+    segment.markdown.trim().length > 0
+  );
+}
+
+export function lastAssistantTextSegmentId(
+  segments: ReadonlyArray<MessageSegment>,
+): string | null {
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (isNormalAssistantTextSegment(segment)) {
+      return segment.id;
+    }
+  }
+  return null;
+}
+
+export function isCollapsedIntermediateTimelineItem(
+  item: ChatActivityTimelineItem,
+  index: number,
+  finalTextIndex: number,
+  hasLaterAssistantText: boolean,
+): boolean {
+  if (item.kind === "activity_group") {
+    return hasLaterAssistantText || item.group.followedByText;
+  }
+  if (item.kind === "promoted_subagent") {
+    return (
+      hasLaterAssistantText || (finalTextIndex >= 0 && index < finalTextIndex)
+    );
+  }
+  if (item.segment.kind === "tool" && item.segment.agentMessageSend !== null) {
+    return (
+      hasLaterAssistantText || (finalTextIndex >= 0 && index < finalTextIndex)
+    );
+  }
+  if (item.segment.kind !== "text") return false;
+  return (
+    item.segment.browserSession === undefined &&
+    item.segment.markdown.trim().length > 0 &&
+    (hasLaterAssistantText || (finalTextIndex >= 0 && index < finalTextIndex))
+  );
+}
+
 export function buildChatActivityTimeline(
   segments: ReadonlyArray<MessageSegment>,
   options: ActivityTimelineOptions,
@@ -290,6 +338,15 @@ function buildChatActivityTimelineImpl(
   );
   const out: ChatActivityTimelineItem[] = [];
   let run: ActivityGroupDetailSegment[] = [];
+  const hasLaterTextFrom: boolean[] = [];
+  let sawText = false;
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    hasLaterTextFrom[index] = sawText;
+    const segment = segments[index];
+    if (isNormalAssistantTextSegment(segment)) {
+      sawText = true;
+    }
+  }
 
   // Every run becomes a group, including a run that is one lone reasoning
   // block. #597 special-cased that to a standalone segment to avoid rendering
@@ -309,7 +366,7 @@ function buildChatActivityTimelineImpl(
   // mid-turn, here and upstream in `buildAssistantSegments` - so that rule can
   // flip back. This builder does not try to track it; the component that stays
   // mounted across the shrink does. See `everHeaded` in `ActivityGroupSegment`.
-  const flushRun = (): void => {
+  const flushRun = (followedByText: boolean): void => {
     if (run.length === 0) return;
     // Reasoning never splits a run, so leaving it out here rather than before
     // grouping draws the same runs, under the id the whole run's first member
@@ -321,15 +378,19 @@ function buildChatActivityTimelineImpl(
       const group = activityGroupFromRun(
         deriveActivityGroupRenderId(run[0].id),
         members,
+        followedByText,
       );
       out.push({ kind: "activity_group", id: group.id, group });
     }
     run = [];
   };
 
-  for (const segment of segments) {
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const precedesText =
+      isNormalAssistantTextSegment(segment) || hasLaterTextFrom[index];
     if (shouldSuppressInlineSegment(segment)) {
-      flushRun();
+      flushRun(precedesText);
       continue;
     }
     if (
@@ -342,12 +403,12 @@ function buildChatActivityTimelineImpl(
       continue;
     }
     if (segment.kind === "interview") {
-      flushRun();
+      flushRun(precedesText);
       out.push({ kind: "segment", id: segment.id, segment });
       continue;
     }
     if (segment.kind === "subagent") {
-      flushRun();
+      flushRun(precedesText);
       out.push({
         kind: "promoted_subagent",
         id: derivePromotedSubagentRenderId(segment.id),
@@ -363,7 +424,7 @@ function buildChatActivityTimelineImpl(
       segment.kind === "tool" &&
       shouldPromoteToolSegment(segment, promotedToolBlockIds)
     ) {
-      flushRun();
+      flushRun(precedesText);
       out.push({ kind: "segment", id: segment.id, segment });
       continue;
     }
@@ -371,7 +432,7 @@ function buildChatActivityTimelineImpl(
       segment.kind === "command" &&
       shouldPromoteCommandSegment(segment, promotedToolBlockIds)
     ) {
-      flushRun();
+      flushRun(precedesText);
       out.push({ kind: "segment", id: segment.id, segment });
       continue;
     }
@@ -382,11 +443,11 @@ function buildChatActivityTimelineImpl(
     // Everything else - text, errors, plans, etc. - stands on its own in
     // chronological position rather than folding into the activity group.
     // Reasoning is NOT in this bucket at any point in its life.
-    flushRun();
+    flushRun(precedesText);
     out.push({ kind: "segment", id: segment.id, segment });
   }
 
-  flushRun();
+  flushRun(false);
   return out;
 }
 
@@ -642,6 +703,7 @@ function toolActivityLabel(segment: ToolSegment): string {
 function activityGroupFromRun(
   id: string,
   segments: ReadonlyArray<ActivityGroupDetailSegment>,
+  followedByText: boolean,
 ): ActivityGroupModel {
   const summary = activityGroupSummary(segments);
   const isStreaming = segments.some(isStreamingActivitySegment);
@@ -650,6 +712,7 @@ function activityGroupFromRun(
     segments,
     isActive: isStreaming,
     isStreaming,
+    followedByText,
     label: summary,
     summary,
     activeStartedAt: activeChildStartedAt(segments),

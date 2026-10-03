@@ -144,6 +144,8 @@ function renderBody(
                 segments={segments}
                 backgroundToolBlockIds={new Set()}
                 runState={null}
+                hasLaterAssistantText={false}
+                turnComplete
                 messageId="assistant:published-queue-notice"
                 turnId="turn-published-queue-notice"
                 manualRungAnchorId={null}

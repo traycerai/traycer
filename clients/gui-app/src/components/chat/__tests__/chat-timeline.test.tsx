@@ -19,6 +19,7 @@ import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timel
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import { beginPanelResizeInteraction } from "@/lib/layout/panel-resizing-class";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
+import { ChatExpansionTestProviders } from "./chat-expansion-test-providers";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
@@ -165,26 +166,28 @@ function renderTimeline(options: RenderTimelineOptions) {
     navigationHighlightedMessageId: string | null | undefined,
     navigationHighlightedBlockId: string | null | undefined,
   ): ReactNode => (
-    <div
-      style={{
-        height: VIEWPORT_HEIGHT_PX,
-        width: VIEWPORT_WIDTH_PX,
-      }}
-    >
-      <ChatTimeline
-        rows={transcriptListRows({ window: null, rendered: messages })}
-        taskTitle={options.taskTitle ?? "Test transcript"}
-        backgroundToolBlockIds={backgroundToolBlockIds}
-        getMessageActions={getMessageActions}
-        nextStepActions={nextStepActions}
-        listRef={listRef}
-        className={options.className ?? "h-full"}
-        data-testid={options["data-testid"]}
-        onItemSizeChanged={options.onItemSizeChanged}
-        navigationHighlightedMessageId={navigationHighlightedMessageId}
-        navigationHighlightedBlockId={navigationHighlightedBlockId}
-      />
-    </div>
+    <ChatExpansionTestProviders tileInstanceId="chat-timeline-test">
+      <div
+        style={{
+          height: VIEWPORT_HEIGHT_PX,
+          width: VIEWPORT_WIDTH_PX,
+        }}
+      >
+        <ChatTimeline
+          rows={transcriptListRows({ window: null, rendered: messages })}
+          taskTitle={options.taskTitle ?? "Test transcript"}
+          backgroundToolBlockIds={backgroundToolBlockIds}
+          getMessageActions={getMessageActions}
+          nextStepActions={nextStepActions}
+          listRef={listRef}
+          className={options.className ?? "h-full"}
+          data-testid={options["data-testid"]}
+          onItemSizeChanged={options.onItemSizeChanged}
+          navigationHighlightedMessageId={navigationHighlightedMessageId}
+          navigationHighlightedBlockId={navigationHighlightedBlockId}
+        />
+      </div>
+    </ChatExpansionTestProviders>
   );
 
   const result = render(
@@ -629,18 +632,20 @@ describe("ChatTimeline", () => {
     }, [onExposeSetters]);
 
     return (
-      <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
-        <ChatTimeline
-          rows={transcriptListRows({ window: null, rendered: messages })}
-          taskTitle="Test transcript"
-          backgroundToolBlockIds={new Set<string>()}
-          getMessageActions={() => null}
-          nextStepActions={null}
-          listRef={listRef}
-          className="h-full"
-          navigationHighlightedMessageId={highlight}
-        />
-      </div>
+      <ChatExpansionTestProviders tileInstanceId="chat-timeline-test">
+        <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
+          <ChatTimeline
+            rows={transcriptListRows({ window: null, rendered: messages })}
+            taskTitle="Test transcript"
+            backgroundToolBlockIds={new Set<string>()}
+            getMessageActions={() => null}
+            nextStepActions={null}
+            listRef={listRef}
+            className="h-full"
+            navigationHighlightedMessageId={highlight}
+          />
+        </div>
+      </ChatExpansionTestProviders>
     );
   }
 

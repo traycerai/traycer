@@ -245,6 +245,8 @@ function Body({
       segments={segments}
       backgroundToolBlockIds={new Set()}
       runState={null}
+      hasLaterAssistantText={false}
+      turnComplete
       messageId="assistant:turn-hidden-notices"
       turnId="turn-hidden-notices"
       manualRungAnchorId={null}
@@ -275,6 +277,8 @@ function CompletedBody({
       segments={segments}
       backgroundToolBlockIds={new Set()}
       runState={null}
+      hasLaterAssistantText={false}
+      turnComplete
       messageId="assistant:turn-hidden-notices-footer"
       turnId="turn-hidden-notices-footer"
       manualRungAnchorId="queue-paused:u1"
@@ -481,6 +485,8 @@ describe("elapsed footer", () => {
                 segments={[ERROR_SEGMENT, SETTLED_WITH_RECEIPT]}
                 backgroundToolBlockIds={new Set()}
                 runState={null}
+                hasLaterAssistantText={false}
+                turnComplete
                 messageId="assistant:turn-hidden-notices-footer"
                 turnId="turn-hidden-notices-footer"
                 manualRungAnchorId="queue-paused:u1"
