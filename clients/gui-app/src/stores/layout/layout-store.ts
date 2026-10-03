@@ -547,10 +547,8 @@ function carriedRailVisibility(value: unknown): Record<string, unknown> {
  * ONE: the shipped sidebar put every lone panel in a group of its own and a
  * divider between every pair, and neither of those was a thing anybody placed.
  *
- * A group becomes one stack of every member this build still has (L-181), up
- * to four (`MAX_RAIL_STACK_MEMBERS`): the shipped groups had no cap, and
- * `normalizeRail` keeps a longer group's first four as the stack while the
- * rest keep their ORDER and stand alone.
+ * A group becomes one stack of every member this build still has (L-181):
+ * the shipped groups had no cap, and neither has a stack.
  */
 function carriedRail(value: unknown): ReadonlyArray<RailEntry> {
   if (!Array.isArray(value)) return DEFAULT_ARRANGEMENT.rail;

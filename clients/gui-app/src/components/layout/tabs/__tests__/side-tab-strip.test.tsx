@@ -1136,6 +1136,24 @@ describe("<SideTabStrip />", () => {
       ]);
     });
 
+    it("names an agent titled like its task by its own title, in normal text", async () => {
+      openEpicTabs(["Alpha"]);
+      // The task's title was taken from its first agent's.
+      warmEpic("e-alpha", [chatProjection("c-run", { title: "Alpha" })]);
+      titleWarmEpic("e-alpha", "Alpha");
+      __setAgentActivityStateForTests(
+        { "e-alpha": { working: ["c-run"], turn: ["c-run"] } },
+        "local",
+        "connected",
+      );
+      await renderStrip("/elsewhere", LEFT_STRIP);
+
+      // The name is the row's second child, after the glyph.
+      const name = screen.getByTestId("strip-agent-c-run").children[1];
+      expect(name.textContent).toBe("Alpha");
+      expect(name.className).not.toContain("text-muted-foreground");
+    });
+
     it("draws a running, a waiting and a failed agent with the glyph the Agents panel draws for the same state", async () => {
       openEpicTabs(["Alpha"]);
       warmEpic("e-alpha", [
@@ -1195,11 +1213,6 @@ describe("<SideTabStrip />", () => {
       expect(beta.getAttribute("aria-expanded")).toBe("true");
       expect(beta.getAttribute("aria-selected")).toBe("false");
       expect(screen.getByTestId("strip-agent-group").hidden).toBe(false);
-      // The agent named like its task does not repeat the row above it.
-      // The name is the row's second child, after the glyph.
-      const name = screen.getByTestId("strip-agent-b-run").children[1];
-      expect(name.textContent).toBe("Main agent");
-      expect(name.className).toContain("text-muted-foreground");
       // The rows show each agent's state, so the task row shows none: not the
       // meter, and not the running glyph in its place.
       expect(within(beta).queryByTestId("side-tab-meter")).toBeNull();

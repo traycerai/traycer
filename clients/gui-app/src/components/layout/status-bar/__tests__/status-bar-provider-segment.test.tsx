@@ -114,8 +114,10 @@ describe("<StatusBarProviderSegment /> severity forms", () => {
     resetsAt = resetsAtIn(5, 1);
   });
 
-  it("draws a healthy profile calm: a 16px bar and no text at all", () => {
+  it("draws a healthy profile calm: a 16px bar and its reset time, nothing else", () => {
     renderSegment(singleWindowSegment("healthy", 41, resetsAt), DISPLAY);
+
+    expect(text("status-bar-provider-reading")).toBe("5d");
 
     expect(
       screen.getByTestId("status-bar-provider-mini-bar").className,
@@ -250,6 +252,73 @@ describe("<StatusBarProviderSegment /> reading style", () => {
     ).toContain("w-4");
     expect(text("status-bar-window-percent-codex:primary")).toBe("41%");
     expect(screen.queryByTestId("status-bar-provider-name")).toBeNull();
+  });
+
+  it("prints a calm profile's reset time after its glyph or value under every calm style", () => {
+    const expected = { bar: "5d", percent: "41%5d", both: "41%5d" } as const;
+    for (const readingStyle of ["bar", "percent", "both"] as const) {
+      renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+        ...DISPLAY,
+        readingStyle,
+      });
+
+      expect(text("status-bar-provider-reading")).toBe(expected[readingStyle]);
+      cleanup();
+    }
+  });
+
+  it("prints no reset time on a calm profile when Reset time is off, and keeps it in the tooltip", async () => {
+    const expected = { bar: "", percent: "41%", both: "41%" } as const;
+    for (const readingStyle of ["bar", "percent", "both"] as const) {
+      renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+        ...DISPLAY,
+        showTimer: false,
+        readingStyle,
+      });
+
+      expect(text("status-bar-provider-reading")).toBe(expected[readingStyle]);
+      cleanup();
+    }
+
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      showTimer: false,
+    });
+    fireEvent.focus(screen.getByTestId("status-bar-provider-tooltip-target"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "41% used · resets in 5d",
+    );
+  });
+
+  it("prints no reset time on a calm window that has no reset instant", () => {
+    renderSegment(singleWindowSegment("healthy", 41, null), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(text("status-bar-provider-reading")).toBe("41%");
+  });
+
+  it("hides the reset time under Everything and on a running low or limited profile when Reset time is off", () => {
+    const off = { ...DISPLAY, showTimer: false };
+    // The window's name takes the countdown's place; see "gives the reset
+    // time's place" below.
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...off,
+      readingStyle: "full",
+    });
+    expect(text("status-bar-window-codex:primary")).toBe("41%used5h");
+    cleanup();
+
+    renderSegment(singleWindowSegment("running_low", 86, resetsAt), off);
+    expect(text("status-bar-window-codex:primary")).toBe("86%5h");
+    cleanup();
+
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), {
+      ...off,
+      readingStyle: "percent",
+    });
+    expect(text("status-bar-window-codex:primary")).toBe("Limit5h");
   });
 
   it("expands a healthy profile under Everything, with the word after the percentage", () => {

@@ -1925,7 +1925,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       The user reads it as a "Divider", adds it, drags it and removes it, and
       the sidebar draws it as a gap at rest (L-140).
       The shipped rail carries none.
-    - A STACK joins two to four ADJACENT panels (L-166, L-181): they share
+    - A STACK joins two or more ADJACENT panels (L-166, L-181): they share
       the sidebar body, top to bottom, with a resize handle between each two
       and a per-section collapse. The entry sits right after its first member
       and its id names every member in order (`stack:A+B+C`), so a stored pair
@@ -1942,13 +1942,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       stand side by side, in any order and re-minted for that order: members
       trading places keeps the stack, a member taken away leaves it (a pair
       dissolves), a divider or another panel moved between members splits it
-      there, a run over four keeps its first four, and a panel belongs to one
-      stack. Membership is explicit in the writers, so a member carried out of
+      there, and a panel belongs to one stack. Membership is explicit in the writers, so a member carried out of
       its stack leaves it even when it lands right beside it.
       A rail drag says what it CARRIES (`RailDragCarry`): the rail's icon
       carries its whole stack, a SECTION header carries one panel.
-      Four is the cap because of the BODY, not the rail: at the window's 600px
-      minimum height, four sections still show a header and three rows each.
+      A stack has no cap. It had one of four (each section keeping three rows
+      at the 600px minimum height), but the sidebar's groups never had one, so
+      a stack refusing a fifth panel was a regression. A deep stack shrinks
+      each section toward its header, and a section's body scrolls.
       A HIDDEN panel drops out of its stack for display only - the rest stand
       as a smaller stack, or alone, on the rail and in the body, and showing the
       panel again puts it back.
@@ -1975,10 +1976,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       On the rail a drop has three bands (L-168): the outer 30% at each end
       reorders, and the middle 40% appends what is carried to the target's
       stack (after its last member), or stacks them with a lone target.
-      `railStackJoin` answers what the middle band would do - `join`, `full`
-      (the result would pass four) or `same` (already stacked together) - and
-      the rail draws the join ring or a red refusal ring on the target icon
-      from that answer; a refused drop commits nothing.
+      `railStackJoin` answers what the middle band would do - `join` or `same`
+      (already stacked together) - and the rail draws the join ring on the
+      target icon from that answer; a `same` drop commits nothing.
       A member leaves its stack by dragging its section header out of the
       body onto the rail, from the stack icon's menu ("Unstack 'Name'" per
       member), or from the Sidebar area's stack row, which lists every member
@@ -1988,10 +1988,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       A drop on the open sidebar BODY means INTO the stack it draws (L-182):
       the body is one droppable naming the stack's top panel, it resolves to
       the same middle-band join as that panel's rail icon, and it draws the
-      same answer on its frame - the join ring, the red refusal for a stack
-      that would pass four, and nothing for a member dropped on its own
-      stack. The editor canvas has no join gesture (L-169), so the body there
-      takes no drop.
+      same answer on its frame, the join ring.
+      A member's own section HEADER is the one exception: joining its own
+      stack means nothing, so inside its body it reorders the stack, landing
+      at the section boundary nearest the pointer (a `left-panel-section`
+      preview, drawn as a line on that boundary), as the sidebar's groups
+      always did. The editor canvas has no join gesture
+      (L-169), so the body there takes no drop.
       The split and the per-section collapse live in the PANEL store
       (`panelSectionWeightsByPanelId`, `panelSectionCollapsedByPanelId`), not in
       the arrangement: they are how a stack is drawn rather than whether it

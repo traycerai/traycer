@@ -26,6 +26,7 @@ import {
   WORKSPACE_FILE_DND_TYPE,
   getArtifactTabDropIndexFromPoint,
   getEpicCanvasDropPreview,
+  getLeftPanelSectionDropPreview,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasDropTargetData,
@@ -53,6 +54,7 @@ import {
   expandJoinedPanelSections,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
+import { isLeftPanelId } from "@/lib/left-panel-ids";
 import {
   areRailsEqual,
   normalizeRail,
@@ -61,7 +63,6 @@ import {
 import {
   moveRailPanelBeside,
   moveRailPanelToEnd,
-  railStackJoin,
   stackRailPanels,
   type LayoutArrangement,
 } from "@/lib/layout/layout-arrangement";
@@ -224,6 +225,12 @@ export interface ResolveCanvasDropPreviewInput {
   readonly target: EpicCanvasDropTargetData;
   readonly point: PointLike;
   readonly targetRect: RectLike | null;
+  /**
+   * The droppable's DOM element - read only for a `left-panel-body` target,
+   * whose sections a reorder inside the stack measures; every other target
+   * resolves from `targetRect` alone.
+   */
+  readonly targetElement: Element | null;
   /** Translated rect of the dragged chip (tab-over-tab center math). */
   readonly activeRect: RectLike | null;
 }
@@ -231,7 +238,37 @@ export interface ResolveCanvasDropPreviewInput {
 export function resolveCanvasDropPreview(
   input: ResolveCanvasDropPreviewInput,
 ): EpicCanvasDropPreview {
-  const { source, target, point, targetRect, activeRect } = input;
+  const { source, target, point, targetRect, targetElement, activeRect } =
+    input;
+  if (
+    target.kind === "left-panel-body" &&
+    source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE &&
+    source.origin === "panel-section" &&
+    targetElement !== null
+  ) {
+    // A section header dragged inside the body of its OWN stack reorders it
+    // (L-181): joining is meaningless there, since the panel is already a
+    // member. Anything else on the body joins its stack (L-182), below.
+    const sections = [
+      ...targetElement.querySelectorAll("[data-left-panel-section-id]"),
+    ];
+    const isMember = sections.some(
+      (section) =>
+        section.getAttribute("data-left-panel-section-id") === source.panelId,
+    );
+    if (isMember) {
+      return getLeftPanelSectionDropPreview(
+        target.viewTabId,
+        sections.flatMap((section) => {
+          const panelId = section.getAttribute("data-left-panel-section-id");
+          if (!isLeftPanelId(panelId) || panelId === source.panelId) return [];
+          const { left, top, width, height } = section.getBoundingClientRect();
+          return [{ panelId, rect: { left, top, width, height } }];
+        }),
+        point,
+      );
+    }
+  }
   if (
     target.kind === "artifact-tab" &&
     source.kind === ARTIFACT_TAB_DND_TYPE &&
@@ -301,15 +338,18 @@ export function resolveRailForDrop(
   const carry = railDragCarry(source);
   if (preview.kind === "left-panel-rail" && preview.position === "combine") {
     // The middle band adds the carried panels to the target's stack (L-168,
-    // L-181). `stackRailPanels` returns the arrangement it was given for
-    // anything `railStackJoin` refuses - a full stack, or the two already
-    // stacked together - so a refused drop reaches the "did anything change"
-    // guard below and spends no undo step.
+    // L-181). `stackRailPanels` returns the arrangement it was given when
+    // `railStackJoin` answers `same` - the two already stacked together - so
+    // that drop reaches the "did anything change" guard and spends no undo
+    // step.
     return normalizedRail(
       stackRailPanels(arrangement, source.panelId, preview.panelId, carry),
     );
   }
-  if (preview.kind === "left-panel-rail") {
+  if (
+    preview.kind === "left-panel-rail" ||
+    preview.kind === "left-panel-section"
+  ) {
     return normalizedRail(
       moveRailPanelBeside(arrangement, {
         sourcePanelId: source.panelId,
@@ -349,19 +389,6 @@ export function isLeftPanelDropNoop(
   if (source.kind !== LEFT_PANEL_RAIL_ITEM_DND_TYPE) return false;
   if (preview === null) return false;
   const arrangement = currentLayoutArrangement();
-  // A join the rail refuses is not a quiet no-op: its preview stays, so the
-  // rail draws the refusal cue over the full stack (L-181).
-  if (
-    preview.kind === "left-panel-rail" &&
-    preview.position === "combine" &&
-    railStackJoin(
-      arrangement.rail,
-      source.panelId,
-      preview.panelId,
-      railDragCarry(source),
-    ) === "full"
-  )
-    return false;
   const nextRail = resolveRailForDrop(source, preview, arrangement);
   return nextRail !== null && areRailsEqual(arrangement.rail, nextRail);
 }
@@ -447,7 +474,8 @@ function placeResolvedCanvasTile(
   const { epicId, tile, target, preview } = resolved;
   if (
     preview.kind === "left-panel-rail" ||
-    preview.kind === "left-panel-rail-list"
+    preview.kind === "left-panel-rail-list" ||
+    preview.kind === "left-panel-section"
   ) {
     return false;
   }
@@ -554,8 +582,6 @@ export function commitResolvedCanvasDrop(
   if (drop.source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
     const arrangement = currentLayoutArrangement();
     const nextRail = resolveRailForDrop(drop.source, drop.preview, arrangement);
-    // A refused join (a full stack) keeps its preview so the rail can draw
-    // the refusal, and lands here changing nothing (L-181).
     if (nextRail !== null && !areRailsEqual(arrangement.rail, nextRail)) {
       applyRail(nextRail);
       // A joining member opens with its section showing (L-170). Said at the
