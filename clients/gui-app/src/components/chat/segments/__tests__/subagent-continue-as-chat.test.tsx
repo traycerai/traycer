@@ -4,7 +4,10 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { ContinueSubagentResponse } from "@traycer/protocol/host/epic/unary-schemas";
 
 const mutate = vi.hoisted(() => vi.fn());
-const openTile = vi.hoisted(() => vi.fn());
+/** Opens and cancels in the order they happened, by chat id. */
+const openLog = vi.hoisted((): string[] => []);
+const cancels = vi.hoisted(() => ({ byChatId: new Map<string, () => void>() }));
+const openCreatedChatWhenProjected = vi.hoisted(() => vi.fn());
 const useHostSupportsMethod = vi.hoisted(() => vi.fn());
 const mutationState = vi.hoisted(() => ({ isPending: false }));
 
@@ -14,8 +17,8 @@ vi.mock("@/hooks/epic/use-epic-continue-subagent-mutation", () => ({
     isPending: mutationState.isPending,
   }),
 }));
-vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTile }),
+vi.mock("@/lib/commands/actions/new-chat", () => ({
+  openCreatedChatWhenProjected,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod,
@@ -142,7 +145,19 @@ function deferAnswer(): { deliver: AnswerCallback } {
 describe("useSubagentContinueAsChat", () => {
   beforeEach(() => {
     mutate.mockReset();
-    openTile.mockReset();
+    openCreatedChatWhenProjected.mockReset();
+    openLog.length = 0;
+    cancels.byChatId.clear();
+    openCreatedChatWhenProjected.mockImplementation(
+      (intent: { chatId: string }) => {
+        openLog.push(`open:${intent.chatId}`);
+        const cancel = vi.fn(() => {
+          openLog.push(`cancel:${intent.chatId}`);
+        });
+        cancels.byChatId.set(intent.chatId, cancel);
+        return cancel;
+      },
+    );
     close.mockReset();
     useHostSupportsMethod.mockReset();
     useHostSupportsMethod.mockReturnValue(true);
@@ -310,30 +325,72 @@ describe("useSubagentContinueAsChat", () => {
     });
 
     it.each(["created", "existing"] as const)(
-      "opens the returned chat and closes the view on %s",
+      "opens the returned chat once projected and closes the view on %s",
       (kind) => {
-        answerWith({ kind, epicId: "epic-1", chatId: "chat-new" });
+        answerWith({ kind, epicId: "epic-answer", chatId: "chat-new" });
         const { result } = render({});
         result.current?.run();
-        expect(openTile).toHaveBeenCalledTimes(1);
-        expect(openTile).toHaveBeenCalledWith({
-          node: {
-            id: "chat-new",
-            type: "chat",
-            name: "card-1-agent",
-            hostId: "host-1",
-            instanceId: expect.any(String) as string,
-          },
-          target: { tabId: "tab-1" },
-          gesture: "explicit",
-          modifiers: null,
+        expect(openCreatedChatWhenProjected).toHaveBeenCalledTimes(1);
+        // The RESPONSE's epic and chat, not the hook's own (`epic-1`, `chat-1`).
+        expect(openCreatedChatWhenProjected).toHaveBeenCalledWith({
+          epicId: "epic-answer",
+          tabId: "tab-1",
+          chatId: "chat-new",
+          hostId: "host-1",
           placement: null,
-          dedupe: true,
           source: "direct_ui",
         });
         expect(close).toHaveBeenCalledTimes(1);
       },
     );
+
+    describe("the pending open", () => {
+      const created = (chatId: string): ContinueSubagentResponse => ({
+        kind: "created",
+        epicId: "epic-1",
+        chatId,
+      });
+
+      it("is cancelled once when the hook unmounts after an answer", () => {
+        answerWith(created("chat-a"));
+        const { result, unmount } = render({});
+        result.current?.run();
+        expect(cancels.byChatId.get("chat-a")).not.toHaveBeenCalled();
+        unmount();
+        expect(cancels.byChatId.get("chat-a")).toHaveBeenCalledTimes(1);
+      });
+
+      it("has nothing to cancel when the hook unmounts before an answer", () => {
+        deferAnswer();
+        const { result, unmount } = render({});
+        result.current?.run();
+        unmount();
+        expect(openCreatedChatWhenProjected).not.toHaveBeenCalled();
+        expect(openLog).toEqual([]);
+      });
+
+      it("cancels the first wait before the second answer's open starts", () => {
+        const { result, unmount } = render({});
+        answerWith(created("chat-a"));
+        result.current?.run();
+        answerWith(created("chat-b"));
+        result.current?.run();
+        expect(openLog).toEqual([
+          "open:chat-a",
+          "cancel:chat-a",
+          "open:chat-b",
+        ]);
+        expect(cancels.byChatId.get("chat-b")).not.toHaveBeenCalled();
+        unmount();
+        expect(openLog).toEqual([
+          "open:chat-a",
+          "cancel:chat-a",
+          "open:chat-b",
+          "cancel:chat-b",
+        ]);
+        expect(cancels.byChatId.get("chat-a")).toHaveBeenCalledTimes(1);
+      });
+    });
 
     describe("when the answer arrives after the reader moved", () => {
       const twoCards = (): ReadonlyArray<ChatMessageModel> =>
@@ -342,29 +399,27 @@ describe("useSubagentContinueAsChat", () => {
           children: [],
         }).concat(messagesOf(card("card-2", null)));
 
-      it("opens the chat but keeps another card's view open", () => {
+      it("still requests the open but keeps another card's view open", () => {
         const answer = deferAnswer();
         const messages = twoCards();
         const { result, rerender } = render({ openId: "card-1", messages });
         result.current?.run();
         rerender({ openId: "card-2", messages });
         answer.deliver({ kind: "created", epicId: "epic-1", chatId: "chat-a" });
-        expect(openTile).toHaveBeenCalledTimes(1);
-        expect(openTile).toHaveBeenCalledWith(
-          expect.objectContaining({
-            node: expect.objectContaining({ id: "chat-a" }) as object,
-          }),
+        expect(openCreatedChatWhenProjected).toHaveBeenCalledTimes(1);
+        expect(openCreatedChatWhenProjected).toHaveBeenCalledWith(
+          expect.objectContaining({ chatId: "chat-a" }),
         );
         expect(close).not.toHaveBeenCalled();
       });
 
-      it("opens the chat but does not close once the reader is back on the chat", () => {
+      it("still requests the open but does not close once the reader is back on the chat", () => {
         const answer = deferAnswer();
         const { result, rerender } = render({ openId: "card-1" });
         result.current?.run();
         rerender({ openId: null });
         answer.deliver({ kind: "created", epicId: "epic-1", chatId: "chat-a" });
-        expect(openTile).toHaveBeenCalledTimes(1);
+        expect(openCreatedChatWhenProjected).toHaveBeenCalledTimes(1);
         expect(close).not.toHaveBeenCalled();
       });
 
@@ -381,7 +436,7 @@ describe("useSubagentContinueAsChat", () => {
           epicId: "epic-1",
           chatId: "chat-a",
         });
-        expect(openTile).toHaveBeenCalledTimes(1);
+        expect(openCreatedChatWhenProjected).toHaveBeenCalledTimes(1);
         expect(close).toHaveBeenCalledTimes(1);
       });
     });
@@ -395,7 +450,7 @@ describe("useSubagentContinueAsChat", () => {
       const { result } = render({});
       result.current?.run();
       expect(mutate).toHaveBeenCalledTimes(1);
-      expect(openTile).not.toHaveBeenCalled();
+      expect(openCreatedChatWhenProjected).not.toHaveBeenCalled();
       expect(close).not.toHaveBeenCalled();
     });
   });

@@ -2,22 +2,21 @@ import {
   createContext,
   use,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
 } from "react";
-import { v4 as uuidv4 } from "uuid";
 import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/schemas";
-import {
-  subagentCardName,
-  subagentCardPath,
-} from "@/components/chat/segments/subagent-display";
+import { subagentCardPath } from "@/components/chat/segments/subagent-display";
 import type { SubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { useEpicContinueSubagent } from "@/hooks/epic/use-epic-continue-subagent-mutation";
-import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
-import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import {
+  openCreatedChatWhenProjected,
+  type CancelFn,
+} from "@/lib/commands/actions/new-chat";
 import type {
   ChatMessage as ChatMessageModel,
   SubagentSegment,
@@ -95,7 +94,6 @@ export function useSubagentContinueAsChat(
   const { close, openId } = drillIn;
   const hostSupported = useHostSupportsMethod(hostId, "epic.continueSubagent");
   const { isPending: requestPending, mutate } = useEpicContinueSubagent();
-  const { openTile } = useEpicTileNavigation();
   const owner = useMemo(
     () => openSubagentCard(args.messages, openId),
     [args.messages, openId],
@@ -107,8 +105,7 @@ export function useSubagentContinueAsChat(
   // and offer it on a card the host then refuses. The settings answer only
   // for a turn that recorded no provider.
   const harnessId = owner?.provider ?? args.settings?.harnessId ?? null;
-  // Values, not the card: it is a new object on every streamed token.
-  const cardName = card === null ? null : subagentCardName(card);
+  // A value, not the card: it is a new object on every streamed token.
   const isStreaming = card?.isStreaming === true;
   // A workflow run rides a subagent card and is a fleet, not a conversation.
   const offered =
@@ -126,6 +123,16 @@ export function useSubagentContinueAsChat(
   useLayoutEffect(() => {
     openIdRef.current = openId;
   }, [openId]);
+  // The wait for the new chat's record, so a tile that unmounts mid-wait
+  // leaves no subscription behind.
+  const cancelPendingOpenRef = useRef<CancelFn | null>(null);
+  useEffect(
+    () => () => {
+      cancelPendingOpenRef.current?.();
+      cancelPendingOpenRef.current = null;
+    },
+    [],
+  );
   const run = useCallback((): void => {
     if (openId === null) return;
     mutate(
@@ -134,20 +141,19 @@ export function useSubagentContinueAsChat(
         onSuccess: (response) => {
           // The hook words a refusal; the view stays open on one.
           if (response.kind === "refused") return;
-          openTile(
-            tileIntent(
-              {
-                id: response.chatId,
-                instanceId: uuidv4(),
-                type: "chat",
-                name: cardName ?? "Subagent",
-                hostId,
-              },
-              { tabId: viewTabId },
-              "explicit",
-              "direct_ui",
-            ),
-          );
+          // The chat exists on the host and is not in this renderer's
+          // projection yet: its record arrives with the re-read the mutation
+          // just asked for. Opening a tile for it now would open nothing, so
+          // the open waits for the record, as every create-then-open does.
+          cancelPendingOpenRef.current?.();
+          cancelPendingOpenRef.current = openCreatedChatWhenProjected({
+            epicId: response.epicId,
+            tabId: viewTabId,
+            chatId: response.chatId,
+            hostId,
+            placement: null,
+            source: "direct_ui",
+          });
           // The chat opens whatever the reader is looking at now - they
           // asked for it. The view closes only if it still shows the card
           // the chat was made from: another card opened since is theirs.
@@ -155,17 +161,7 @@ export function useSubagentContinueAsChat(
         },
       },
     );
-  }, [
-    cardName,
-    chatId,
-    close,
-    epicId,
-    hostId,
-    mutate,
-    openId,
-    openTile,
-    viewTabId,
-  ]);
+  }, [chatId, close, epicId, hostId, mutate, openId, viewTabId]);
   const isPending = requestPending || isStreaming;
   return useMemo(
     () => (offered ? { run, isPending } : null),
