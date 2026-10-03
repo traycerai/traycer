@@ -89,9 +89,9 @@ export function ProfileSyncModal(props: {
     selectionTooLarge,
     nothingStarted,
     startRefusal,
+    pending,
     run,
   } = useProfileSyncModalState(props);
-  const pending = useProfileSyncPending(sourceHostId);
   return (
     <>
       <DialogHeader>
@@ -239,7 +239,7 @@ function ProfileSyncFooter({
           <Button variant="outline" disabled={pending} onClick={close}>
             Cancel
           </Button>
-          <Button disabled={!canStart} onClick={run}>
+          <Button disabled={pending || !canStart} onClick={run}>
             {start.isPending ? <MutedAgentSpinner /> : null}Sync now
           </Button>
         </>
@@ -587,8 +587,7 @@ interface SyncModalModel {
   readonly setSelected: Dispatch<SetStateAction<ProfileCopyWireProvider[]>>;
   readonly destinations: string[];
   readonly setDestinations: Dispatch<SetStateAction<string[]>>;
-  readonly batchId: string | null;
-  readonly setBatchId: Dispatch<SetStateAction<string | null>>;
+  readonly setBatchId: (batchId: string | null) => void;
   readonly close: () => void;
   readonly catalog: UseQueryResult<
     ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -614,6 +613,7 @@ interface SyncModalModel {
   readonly nothingStarted: boolean;
   readonly startRefusal: string | null;
   readonly run: () => void;
+  readonly pending: boolean;
 }
 function useProfileSyncModalState(props: {
   readonly sourceHostId: string;
@@ -621,6 +621,7 @@ function useProfileSyncModalState(props: {
   readonly initialProvider: ProfileCopyWireProvider | null;
 }): SyncModalModel {
   const { sourceHostId, hosts } = props;
+  const pending = useProfileSyncPending(sourceHostId);
   const [tab, setTab] = useState("now");
   const [chosenProviders, setSelected] = useState<ProfileCopyWireProvider[]>(
     props.initialProvider === null
@@ -631,7 +632,9 @@ function useProfileSyncModalState(props: {
     sourceHostId,
     hosts,
   );
-  const [batchId, setBatchId] = useState<string | null>(null);
+  // Capture the run the user opened. A bounded history poll can omit it;
+  // that must not unmount its pending action observers or receipts.
+  const [viewedBatch, setViewedBatch] = useState<ProfileSyncBatch | null>(null);
   const [refusedStart, setRefusedStart] = useState<ScopedStartRefusal | null>(
     null,
   );
@@ -658,9 +661,21 @@ function useProfileSyncModalState(props: {
   const selectionKey = JSON.stringify(selection);
   const settledKey = useDebouncedValue(selectionKey, 400);
   const start = useProfileSyncStart(sourceHostId);
-  const batch =
-    list.data?.batches.find((b) => b.batchId === batchId) ??
-    (start.data?.batchId === batchId ? start.data : null);
+  const observedBatch = list.data?.batches.find(
+    (b) => b.batchId === viewedBatch?.batchId,
+  );
+  // Retain the latest observed receipt, not only the run's opening snapshot,
+  // when a later bounded poll no longer includes the selected run.
+  if (observedBatch !== undefined && observedBatch !== viewedBatch)
+    setViewedBatch(observedBatch);
+  const batch = observedBatch ?? viewedBatch;
+  const setBatchId = (batchId: string | null): void => {
+    setViewedBatch(
+      batchId === null
+        ? null
+        : (list.data?.batches.find((b) => b.batchId === batchId) ?? null),
+    );
+  };
   const preview = useProfileSyncPreview(
     sourceHostId,
     selectionKey === settledKey && tab === "now" && batch === null
@@ -685,9 +700,9 @@ function useProfileSyncModalState(props: {
       ["ready", "synced", "queued", "copying"].includes(i.state),
     ) &&
     !preview.isFetching &&
-    !start.isPending;
+    !pending;
   const run = (): void => {
-    if (currentPreview === null || selection === null) return;
+    if (!canStart || selection === null) return;
     setEmptyStart(null);
     setRefusedStart(null);
     const requestKey = JSON.stringify([selection, currentPreview.revision]);
@@ -719,7 +734,7 @@ function useProfileSyncModalState(props: {
             void preview.refetch();
             return;
           }
-          setBatchId(result.batchId);
+          setViewedBatch(result);
         },
       },
     );
@@ -733,7 +748,6 @@ function useProfileSyncModalState(props: {
     setSelected,
     destinations,
     setDestinations,
-    batchId,
     setBatchId,
     close,
     catalog,
@@ -760,6 +774,7 @@ function useProfileSyncModalState(props: {
       selectionKey,
       currentPreview,
     ),
+    pending,
     run,
   };
 }
@@ -820,6 +835,7 @@ function startResponseRefusal(
 
 function syncItemIdentity(item: ProfileSyncBatch["items"][number]): string {
   return JSON.stringify([
+    item.operationId,
     item.providerId,
     item.sourceProfileId,
     item.destinationHostId,

@@ -13,6 +13,8 @@ import {
 
 /** The source checks the current profile count before preparing a selection. */
 export const PROFILE_SYNC_MAX_ITEMS = 512;
+/** A list carries at most eight full runs; older durable history stays local. */
+export const PROFILE_SYNC_MAX_LIST_ITEMS = PROFILE_SYNC_MAX_ITEMS * 8;
 /** Match the source's durable history and rule capacities. */
 export const PROFILE_SYNC_MAX_BATCHES = 100;
 export const PROFILE_SYNC_MAX_RULES = 64;
@@ -250,6 +252,12 @@ export const profileSyncListSchema = lazySchema(() =>
       batches: z.array(profileSyncBatchSchema).max(PROFILE_SYNC_MAX_BATCHES),
       rules: z.array(profileSyncRuleSchema).max(PROFILE_SYNC_MAX_RULES),
     })
+    .refine(
+      (list) =>
+        list.batches.reduce((total, batch) => total + batch.items.length, 0) <=
+        PROFILE_SYNC_MAX_LIST_ITEMS,
+      { message: "Sync history exceeds the list item limit" },
+    )
     .refine(
       (list) =>
         new Set(list.batches.map((batch) => batch.batchId)).size ===

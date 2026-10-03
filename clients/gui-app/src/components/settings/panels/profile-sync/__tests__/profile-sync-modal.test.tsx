@@ -410,36 +410,94 @@ function previewCalls(messenger: MockHostMessenger<HostRpcRegistry>) {
   );
 }
 
-describe("ProfileSyncModal", () => {
-  beforeEach(() => {
-    resetStores();
-    harness.spine = null;
-    harness.hosts = [
-      hostOption(SOURCE_HOST_ID, "Studio Mac", true),
-      hostOption(DEST_HOST_ID, "Linux box", false),
-      hostOption(DEST_HOST_TWO_ID, "Old Mac", false),
-    ];
-    // cmdk, behind the provider picker, needs these in jsdom.
-    Element.prototype.scrollIntoView = vi.fn();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe(): void {}
-        unobserve(): void {}
-        disconnect(): void {}
-      },
-    );
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-  });
-  afterEach(() => {
-    cleanup();
-    resetStores();
-    harness.spine = null;
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
+// jsdom lacks these Element methods; cmdk needs scrollIntoView and Radix
+// Select reads pointer capture. Install them for every test and put back
+// exactly what was there (a descriptor, or nothing) afterwards.
+const ELEMENT_SHIMS = [
+  "scrollIntoView",
+  "hasPointerCapture",
+  "setPointerCapture",
+  "releasePointerCapture",
+] as const;
 
+function installElementShims(): () => void {
+  const originals = ELEMENT_SHIMS.map((name) =>
+    Object.getOwnPropertyDescriptor(Element.prototype, name),
+  );
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => undefined;
+  Element.prototype.releasePointerCapture = () => undefined;
+  return () => {
+    ELEMENT_SHIMS.forEach((name, index) => {
+      const original = originals[index];
+      if (original === undefined)
+        Reflect.deleteProperty(Element.prototype, name);
+      else Object.defineProperty(Element.prototype, name, original);
+    });
+  };
+}
+
+function resetModuleKnobs(): void {
+  startFailures = 0;
+  previewRevision = PREVIEW_REVISION;
+  startBatchSource = null;
+  listFails = false;
+  listBatches = [];
+  previewSelection = null;
+  startBatchMutator = null;
+  listRules = null;
+  lastStarted = null;
+  updateStarted = null;
+  retryResult = "current";
+  retryOutcome = null;
+  retryThrows = false;
+  resolveThrows = false;
+  saveRuleThrows = false;
+  saveRuleGate = null;
+  startGate = null;
+  retryGate = null;
+  resolveGate = null;
+  stopRuleGate = null;
+  stopRuleThrows = false;
+}
+
+let restoreElementShims: (() => void) | null = null;
+
+// File scope, so every describe starts from the same world.
+beforeEach(() => {
+  resetModuleKnobs();
+  resetStores();
+  harness.spine = null;
+  harness.hosts = [
+    hostOption(SOURCE_HOST_ID, "Studio Mac", true),
+    hostOption(DEST_HOST_ID, "Linux box", false),
+    hostOption(DEST_HOST_TWO_ID, "Old Mac", false),
+  ];
+  restoreElementShims = installElementShims();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+});
+afterEach(() => {
+  cleanup();
+  resetStores();
+  resetModuleKnobs();
+  harness.spine = null;
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  restoreElementShims?.();
+  restoreElementShims = null;
+});
+
+describe("ProfileSyncModal", () => {
   it("selects no destination by default and asks for none before one is chosen", async () => {
     const messenger = mount([]);
     openSync(null);
@@ -629,55 +687,6 @@ async function pickDestinations(names: readonly RegExp[]): Promise<void> {
 }
 
 describe("ProfileSyncModal review regressions", () => {
-  beforeEach(() => {
-    startFailures = 0;
-    previewRevision = PREVIEW_REVISION;
-    startBatchSource = null;
-    listFails = false;
-    listBatches = [];
-    previewSelection = null;
-    startBatchMutator = null;
-    listRules = null;
-    lastStarted = null;
-    updateStarted = null;
-    retryResult = "current";
-    retryOutcome = null;
-    retryThrows = false;
-    resolveThrows = false;
-    saveRuleThrows = false;
-    saveRuleGate = null;
-    startGate = null;
-    retryGate = null;
-    resolveGate = null;
-    stopRuleGate = null;
-    stopRuleThrows = false;
-    resetStores();
-    harness.spine = null;
-    harness.hosts = [
-      hostOption(SOURCE_HOST_ID, "Studio Mac", true),
-      hostOption(DEST_HOST_ID, "Linux box", false),
-      hostOption(DEST_HOST_TWO_ID, "Old Mac", false),
-    ];
-    Element.prototype.scrollIntoView = vi.fn();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe(): void {}
-        unobserve(): void {}
-        disconnect(): void {}
-      },
-    );
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-  });
-  afterEach(() => {
-    cleanup();
-    resetStores();
-    harness.spine = null;
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
-
   it("describes each destination from its own preview row and leaves already-present out of the review count", async () => {
     mountWith({
       rules: [],
@@ -1580,13 +1589,6 @@ describe("ProfileSyncModal review regressions", () => {
       "The device returned a run outside this selection. Check sync history again.";
     const AUTO_BATCH = "00000000-0000-4000-8000-0000000000c1";
 
-    beforeEach(() => {
-      // Radix Select reads pointer capture, which jsdom does not implement.
-      Element.prototype.hasPointerCapture = () => false;
-      Element.prototype.setPointerCapture = () => undefined;
-      Element.prototype.releasePointerCapture = () => undefined;
-    });
-
     const queuedItem = (): ProfileSyncItem => ({
       ...syncItem(1, DEST_HOST_ID, "queued", [
         previewDestination(DEST_HOST_ID, "automatic"),
@@ -2379,7 +2381,7 @@ describe("ProfileSyncModal review regressions", () => {
       expect(saveCalls(messenger)).toHaveLength(0);
     });
 
-    it("returns to the selection body and footer when the opened run leaves the history, and previews again", async () => {
+    it("keeps the opened run when it leaves the bounded history, until the user goes Back to the preserved selection", async () => {
       listBatches = [
         {
           batchId: "00000000-0000-4000-8000-0000000000a9",
@@ -2409,14 +2411,18 @@ describe("ProfileSyncModal review regressions", () => {
         await screen.findByRole("button", { name: "← Back" }),
       ).toBeTruthy();
       expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+      const previewsBefore = previewCalls(messenger).length;
+      // Leaving the bounded list is omission, not deletion.
       listBatches = [];
       await act(async () => {
         await vi.advanceTimersByTimeAsync(6_000);
       });
-      await waitFor(() =>
-        expect(screen.queryByRole("button", { name: "Done" })).toBeNull(),
-      );
-      expect(screen.queryByRole("button", { name: "← Back" })).toBeNull();
+      expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+      // The selection is not previewed behind the viewed result.
+      expect(previewCalls(messenger).length).toBe(previewsBefore);
+      fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+      expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
       expect(
         screen
           .getByRole("checkbox", { name: /Linux box/ })
@@ -2436,7 +2442,6 @@ describe("ProfileSyncModal review regressions", () => {
         ).toBe(false),
       );
       expect(screen.getByText("1 profile transfers selected")).toBeTruthy();
-      expect(previewCalls(messenger).length).toBeGreaterThan(0);
     });
   });
 
@@ -2976,6 +2981,57 @@ describe("ProfileSyncModal review regressions", () => {
       });
     });
 
+    it("shows the pending spinner only on the target rule's Pause, and holds every control on the other rule", async () => {
+      const held = gate();
+      saveRuleGate = held.promise;
+      const OTHER_RULE: ProfileSyncRule = {
+        ...SAVED_RULE,
+        ruleId: "99999999-9999-4999-8999-99999999999a",
+        destinationHostId: DEST_HOST_TWO_ID,
+      };
+      const messenger = mount([SAVED_RULE, OTHER_RULE]);
+      try {
+        openSync(null);
+        fireEvent.mouseDown(
+          await screen.findByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        const articleFor = (name: string): HTMLElement => {
+          const article = screen
+            .getByRole("heading", { name })
+            .closest("article");
+          if (article === null) throw new Error(`no rule card for ${name}`);
+          return article;
+        };
+        await screen.findByRole("heading", { name: "Old Mac" });
+        const target = articleFor("Linux box");
+        const other = articleFor("Old Mac");
+        fireEvent.click(within(target).getByRole("button", { name: "Pause" }));
+        await waitFor(() =>
+          expect(
+            callsOf(messenger, "providers.profileCopy.sync.saveRule"),
+          ).toHaveLength(1),
+        );
+        const spinnersIn = (root: HTMLElement): number =>
+          Array.from(root.querySelectorAll('[aria-hidden="true"]')).filter(
+            (node) => node.classList.contains("font-mono"),
+          ).length;
+        await waitFor(() => expect(spinnersIn(target)).toBe(1));
+        expect(
+          spinnersIn(within(target).getByRole("button", { name: "Pause" })),
+        ).toBe(1);
+        expect(spinnersIn(other)).toBe(0);
+        for (const name of ["Edit", "Pause", "Stop…"])
+          expect(
+            within(other)
+              .getByRole("button", { name })
+              .hasAttribute("disabled"),
+          ).toBe(true);
+      } finally {
+        held.release();
+      }
+    });
+
     describe("result actions on a retryable receipt", () => {
       const retryableItem = (): ProfileSyncItem => ({
         ...syncItem(1, DEST_HOST_ID, "unavailable", []),
@@ -3183,6 +3239,369 @@ describe("ProfileSyncModal review regressions", () => {
           expect(draftStatusCalls(messenger).length).toBeGreaterThan(0),
         );
       });
+    });
+  });
+
+  describe("round 20: vanished rules and runs, foreign operations and recovery gating", () => {
+    const REACH_ERROR = /Couldn't reach Studio Mac right now/;
+    const STALE_TEXT = "This changed since you last looked. Review it again.";
+
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    function callsOf(
+      messenger: MockHostMessenger<HostRpcRegistry>,
+      method: string,
+    ) {
+      return messenger.calls.filter((call) => call.method === method);
+    }
+
+    const retryableReceipt = (): ProfileCopyOutcome =>
+      profileCopyOutcome({
+        attempt: profileCopyAttempt({
+          operationId: "00000000-0000-4000-8000-000000000001",
+        }),
+        state: "blocked",
+        reason: "unreachable",
+      });
+
+    function receiptItem(state: ProfileSyncItem["state"]): ProfileSyncItem {
+      return {
+        ...syncItem(1, DEST_HOST_ID, state, []),
+        preview: null,
+        outcome: retryableReceipt(),
+        destinationSettings:
+          state === "conflict"
+            ? { name: "Edited", color: "#10b981", enabled: true }
+            : null,
+      };
+    }
+
+    async function startShowing(
+      items: () => readonly ProfileSyncItem[],
+    ): Promise<MockHostMessenger<HostRpcRegistry>> {
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: items,
+      });
+      openSync(null);
+      await pickDestinations([/Linux box/]);
+      await screen.findByText("1 profile transfers selected");
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      return messenger;
+    }
+
+    it("keeps an existing rule's editor, draft and error when the rule vanishes during a held save", async () => {
+      const held = gate();
+      saveRuleGate = held.promise;
+      const messenger = mount([SAVED_RULE]);
+      try {
+        openSync(null);
+        fireEvent.mouseDown(
+          await screen.findByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        await screen.findByRole("heading", { name: "Linux box" });
+        fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+        fireEvent.click(
+          await screen.findByRole("checkbox", {
+            name: /All supported providers/,
+          }),
+        );
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Save changes" }),
+        );
+        await waitFor(() =>
+          expect(
+            callsOf(messenger, "providers.profileCopy.sync.saveRule"),
+          ).toHaveLength(1),
+        );
+        // The rule leaves the list while the save is still in flight.
+        listRules = [];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        const back = screen.getByRole("button", { name: "← Automatic sync" });
+        expect(back.hasAttribute("disabled")).toBe(true);
+        expect(
+          screen
+            .getByRole("checkbox", { name: /All supported providers/ })
+            .getAttribute("aria-checked"),
+        ).toBe("true");
+        saveRuleThrows = true;
+      } finally {
+        held.release();
+      }
+      expect(await screen.findByText(REACH_ERROR)).toBeTruthy();
+      expect(
+        screen
+          .getByRole("checkbox", { name: /All supported providers/ })
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "← Automatic sync" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+    });
+
+    describe.each([
+      ["Check status", "resolve"],
+      ["Retry", "retry"],
+    ] as const)(
+      "%s on a viewed run that leaves the history",
+      (button, which) => {
+        it("blocks a new start while it is held and keeps the viewed run mounted after release", async () => {
+          const held = gate();
+          if (which === "resolve") resolveGate = held.promise;
+          else {
+            retryGate = held.promise;
+            retryResult = "stale-revision";
+            retryOutcome = retryableReceipt();
+          }
+          const RUN = "00000000-0000-4000-8000-0000000000e1";
+          listBatches = [
+            {
+              batchId: RUN,
+              sourceHostId: SOURCE_HOST_ID,
+              createdAt: 1_700_000_000_000,
+              automatic: false,
+              items: [receiptItem("unavailable")],
+            },
+          ];
+          const messenger = mountWith({
+            rules: [],
+            providers: defaultProviders(),
+            previewItems: () => [
+              syncItem(1, DEST_HOST_ID, "ready", [
+                previewDestination(DEST_HOST_ID, "automatic"),
+              ]),
+            ],
+            startItems: noItems,
+          });
+          try {
+            openSync(null);
+            fireEvent.click(
+              await screen.findByRole("button", { name: /profile transfers/ }),
+            );
+            fireEvent.click(
+              await screen.findByRole("button", { name: button }),
+            );
+            await waitFor(() =>
+              expect(
+                callsOf(
+                  messenger,
+                  which === "resolve"
+                    ? "providers.profileCopy.sync.resolve"
+                    : "providers.profileCopy.retry",
+                ),
+              ).toHaveLength(1),
+            );
+            // The run leaves the history while the action is in flight.
+            listBatches = [];
+            await act(async () => {
+              await vi.advanceTimersByTimeAsync(6_000);
+            });
+            const sync = screen.queryByRole("button", { name: "Sync now" });
+            expect(sync === null || sync.hasAttribute("disabled")).toBe(true);
+            if (sync !== null) fireEvent.click(sync);
+            expect(startCalls(messenger)).toHaveLength(0);
+            expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+          } finally {
+            held.release();
+          }
+          // Settled: the viewed run is still there until the user goes Back.
+          await waitFor(() =>
+            expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy(),
+          );
+          if (which === "retry")
+            expect(await screen.findByText(STALE_TEXT)).toBeTruthy();
+          expect(startCalls(messenger)).toHaveLength(0);
+        });
+      },
+    );
+
+    it.each(["history", "started"] as const)(
+      "keeps the newer polled receipt, not the opening snapshot, when a %s run later leaves the history mid-retry",
+      async (origin) => {
+        const held = gate();
+        retryGate = held.promise;
+        retryResult = "stale-revision";
+        const receiptAt = (attemptId: string): ProfileCopyOutcome =>
+          profileCopyOutcome({
+            attempt: profileCopyAttempt({
+              operationId: "00000000-0000-4000-8000-000000000001",
+              attemptId,
+            }),
+            revision: 3,
+            state: "blocked",
+            reason: "unreachable",
+          });
+        const itemAt = (attemptId: string): ProfileSyncItem => ({
+          ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+          preview: null,
+          outcome: receiptAt(attemptId),
+        });
+        const batchAt = (attemptId: string): ProfileSyncBatch => ({
+          batchId: "00000000-0000-4000-8000-0000000000e2",
+          sourceHostId: SOURCE_HOST_ID,
+          createdAt: 1_700_000_000_000,
+          automatic: false,
+          items: [itemAt(attemptId)],
+        });
+        retryOutcome = receiptAt(ATTEMPT_TWO_ID);
+        if (origin === "history") listBatches = [batchAt(ATTEMPT_ID)];
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: () => [
+            syncItem(1, DEST_HOST_ID, "ready", [
+              previewDestination(DEST_HOST_ID, "automatic"),
+            ]),
+          ],
+          startItems:
+            origin === "started" ? () => [itemAt(ATTEMPT_ID)] : noItems,
+        });
+        // Where the receipt advances and where the run is later omitted from.
+        const advance = (): void => {
+          if (origin === "history") listBatches = [batchAt(ATTEMPT_TWO_ID)];
+          else
+            updateStarted = (batch) => ({
+              ...batch,
+              items: batch.items.map((entry) => ({
+                ...entry,
+                outcome: receiptAt(ATTEMPT_TWO_ID),
+              })),
+            });
+        };
+        const omit = (): void => {
+          // The harness relists a started run through updateStarted, so
+          // clearing it is what omits that run from the history.
+          if (origin === "history") listBatches = [];
+          else updateStarted = null;
+        };
+        try {
+          openSync(null);
+          if (origin === "history") {
+            fireEvent.click(
+              await screen.findByRole("button", { name: /profile transfers/ }),
+            );
+          } else {
+            await pickDestinations([/Linux box/]);
+            await screen.findByText("1 profile transfers selected");
+            fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+          }
+          await screen.findByRole("button", { name: "Retry" });
+          // The receipt advances to a newer attempt by polling.
+          advance();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(6_000);
+          });
+          fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+          await waitFor(() =>
+            expect(
+              callsOf(messenger, "providers.profileCopy.retry"),
+            ).toHaveLength(1),
+          );
+          // Then the run leaves the bounded history while the retry is held.
+          omit();
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(6_000);
+          });
+        } finally {
+          held.release();
+        }
+        expect(await screen.findByText(STALE_TEXT)).toBeTruthy();
+        const sent = profileCopyRetryRequestSchema.parse(
+          callsOf(messenger, "providers.profileCopy.retry")[0].params,
+        );
+        expect(sent.attempt.attemptId).toBe(ATTEMPT_TWO_ID);
+        expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+        await waitFor(() =>
+          expect(
+            screen
+              .getByRole("button", { name: "Done" })
+              .hasAttribute("disabled"),
+          ).toBe(false),
+        );
+      },
+    );
+
+    it("refuses a returned item with another operation id, even when its receipt agrees, and offers no actions", async () => {
+      const FOREIGN_OPERATION = "00000000-0000-4000-8000-0000000000f7";
+      startBatchMutator = (started) => ({
+        ...started,
+        items: started.items.map((entry) => ({
+          ...entry,
+          operationId: FOREIGN_OPERATION,
+          outcome:
+            entry.outcome === null
+              ? null
+              : {
+                  ...entry.outcome,
+                  attempt: {
+                    ...entry.outcome.attempt,
+                    operationId: FOREIGN_OPERATION,
+                  },
+                },
+        })),
+      });
+      await startShowing(() => [receiptItem("unavailable")]);
+      expect(
+        await screen.findByText(
+          "The device returned a run outside this selection. Check sync history again.",
+        ),
+      ).toBeTruthy();
+      for (const name of [/Check status/, /Retry/, /Review/])
+        expect(screen.queryByRole("button", { name })).toBeNull();
+    });
+
+    describe("Retry follows the state, not just the receipt", () => {
+      it.each([
+        "synced",
+        "already-present",
+        "paused",
+        "source-removed",
+        "ready",
+        "queued",
+        "copying",
+        "conflict",
+      ] as const)(
+        "offers no Retry for %s with a retryable receipt",
+        async (state) => {
+          await startShowing(() => [receiptItem(state)]);
+          await screen.findByRole("heading", { name: "Linux box" });
+          expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        },
+      );
+
+      it.each([
+        "needs-action",
+        "unavailable",
+        "update-required",
+        "unconfirmed",
+      ] as const)(
+        "offers Retry for %s with a retryable receipt",
+        async (state) => {
+          await startShowing(() => [receiptItem(state)]);
+          expect(
+            await screen.findByRole("button", { name: "Retry" }),
+          ).toBeTruthy();
+        },
+      );
     });
   });
 });

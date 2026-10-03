@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   PROFILE_SYNC_MAX_BATCHES,
+  PROFILE_SYNC_MAX_ITEMS,
+  PROFILE_SYNC_MAX_LIST_ITEMS,
   PROFILE_SYNC_MAX_RULES,
   profileSyncApplyResultSchema,
   profileSyncBatchSchema,
@@ -882,5 +884,59 @@ describe("profile sync opaque host ids", () => {
       profileSyncBatchSchema.safeParse(batch(OPAQUE_SOURCE, [mismatched]))
         .success,
     ).toBe(false);
+  });
+});
+
+describe("profile sync list item budget", () => {
+  it("is eight full batches of items", () => {
+    expect(PROFILE_SYNC_MAX_LIST_ITEMS).toBe(PROFILE_SYNC_MAX_ITEMS * 8);
+  });
+
+  // One full batch's worth of distinct work; reused as the same receipts in
+  // other batches, which is how history repeats a relationship.
+  const fullBatchItems = (): ProfileSyncItem[] =>
+    Array.from({ length: PROFILE_SYNC_MAX_ITEMS }, (_unused, index) =>
+      itemWith({
+        operationId: uuid(10_000 + index),
+        sourceProfileId: uuid(20_000 + index),
+      }),
+    );
+
+  const batchesOf = (
+    items: readonly ProfileSyncItem[],
+    sizes: readonly number[],
+  ): ProfileSyncBatch[] =>
+    sizes.map((size, index) => ({
+      ...batch(SOURCE_HOST, items.slice(0, size)),
+      batchId: uuid(index + 1),
+    }));
+
+  it("accepts exactly the budget spread over several batches", () => {
+    const items = fullBatchItems();
+    const sizes = Array.from({ length: 8 }, () => PROFILE_SYNC_MAX_ITEMS);
+    expect(sizes.reduce((n, size) => n + size, 0)).toBe(
+      PROFILE_SYNC_MAX_LIST_ITEMS,
+    );
+    expect(
+      profileSyncListSchema.safeParse({
+        batches: batchesOf(items, sizes),
+        rules: [],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects one item over the budget, for the aggregate reason alone", () => {
+    const items = fullBatchItems();
+    const sizes = [
+      ...Array.from({ length: 8 }, () => PROFILE_SYNC_MAX_ITEMS),
+      1,
+    ];
+    const result = profileSyncListSchema.safeParse({
+      batches: batchesOf(items, sizes),
+      rules: [],
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.code)).toEqual(["custom"]);
   });
 });

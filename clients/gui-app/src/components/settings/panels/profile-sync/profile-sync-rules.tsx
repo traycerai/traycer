@@ -153,7 +153,9 @@ export function ProfileSyncRules(props: {
                   })
                 }
               >
-                {save.isPending ? <MutedAgentSpinner /> : null}
+                {save.isPending && save.variables.ruleId === rule.ruleId ? (
+                  <MutedAgentSpinner />
+                ) : null}
                 {rulePaused(rule) ? "Resume" : "Pause"}
               </Button>
               {canViewRuleRun(rule, props.batches, props.hostId) ? (
@@ -268,7 +270,111 @@ function ProfileSyncRuleEditView(props: {
   readonly close: () => void;
 }): ReactNode {
   const rule = props.rules.find((rule) => rule.ruleId === props.editor) ?? null;
-  if (props.editor !== "new" && rule === null)
+  return (
+    <ProfileSyncRuleEditor
+      hostId={props.hostId}
+      existingRuleId={props.editor === "new" ? null : props.editor}
+      rule={rule}
+      hosts={props.hosts}
+      candidates={props.candidates}
+      atCapacity={props.atCapacity}
+      providers={props.providers}
+      close={props.close}
+    />
+  );
+}
+
+interface RuleEditorProps {
+  readonly hostId: string;
+  readonly existingRuleId: string | null;
+  readonly rule: ProfileSyncRule | null;
+  readonly hosts: ProfileCopyHosts;
+  readonly candidates: readonly string[];
+  readonly atCapacity: boolean;
+  readonly providers: readonly ProviderCliState[];
+  readonly close: () => void;
+}
+
+function useProfileSyncRuleDraft(props: RuleEditorProps) {
+  const id = useId();
+  // Polling can remove a rule while its save is still running. Keep the
+  // draft and mutation observer mounted, with the original CAS identity.
+  const [originalRule] = useState(props.rule);
+  const [ruleId] = useState(() => props.existingRuleId ?? crypto.randomUUID());
+  const [expectedRevision] = useState(() => ruleRevision(originalRule));
+  const stopped = props.existingRuleId !== null && props.rule === null;
+  const changed = ruleRevision(props.rule) !== expectedRevision;
+  const [destination, setDestination] = useState(
+    originalRule?.destinationHostId ?? "",
+  );
+  const [all, setAll] = useState(originalRule?.scope.kind === "all");
+  const [chosenProviders, setSelected] = useState<ProfileCopyWireProvider[]>(
+    originalRule?.scope.kind === "selected"
+      ? [...originalRule.scope.providers]
+      : [...PROFILE_COPY_PROVIDERS],
+  );
+  const selected = ruleProviders(
+    originalRule,
+    chosenProviders,
+    props.providers,
+  );
+  const save = useProfileSyncSaveRule(props.hostId);
+  const scope: ProfileSyncScope = all
+    ? { kind: "all" }
+    : { kind: "selected", providers: selected };
+  const request: ProfileSyncSaveRule = {
+    sourceHostId: props.hostId,
+    ruleId,
+    destinationHostId: destination,
+    scope,
+    paused: rulePaused(originalRule),
+    expectedRevision,
+  };
+  const saveError = ruleSaveError(save.variables, request, save.error);
+  const canSave = canSaveRule({
+    rule: originalRule,
+    changed: changed || stopped,
+    destination,
+    candidates: props.candidates,
+    scope,
+    pending: save.isPending,
+  });
+  return {
+    id,
+    originalRule,
+    stopped,
+    changed,
+    destination,
+    setDestination,
+    all,
+    setAll,
+    selected,
+    setSelected,
+    save,
+    request,
+    saveError,
+    canSave,
+  };
+}
+
+function ProfileSyncRuleEditor(props: RuleEditorProps): ReactNode {
+  const {
+    id,
+    originalRule,
+    stopped,
+    changed,
+    destination,
+    setDestination,
+    all,
+    setAll,
+    selected,
+    setSelected,
+    save,
+    request,
+    saveError,
+    canSave,
+  } = useProfileSyncRuleDraft(props);
+  if (stopped && !save.isPending && saveError === null)
     return (
       <div className="flex flex-col gap-4">
         <Button
@@ -285,63 +391,6 @@ function ProfileSyncRuleEditView(props: {
       </div>
     );
   return (
-    <ProfileSyncRuleEditor
-      hostId={props.hostId}
-      rule={rule}
-      hosts={props.hosts}
-      candidates={props.candidates}
-      atCapacity={props.atCapacity}
-      providers={props.providers}
-      close={props.close}
-    />
-  );
-}
-
-function ProfileSyncRuleEditor(props: {
-  readonly hostId: string;
-  readonly rule: ProfileSyncRule | null;
-  readonly hosts: ProfileCopyHosts;
-  readonly candidates: readonly string[];
-  readonly atCapacity: boolean;
-  readonly providers: readonly ProviderCliState[];
-  readonly close: () => void;
-}): ReactNode {
-  const id = useId();
-  const [ruleId] = useState(() => props.rule?.ruleId ?? crypto.randomUUID());
-  const [expectedRevision] = useState(() => ruleRevision(props.rule));
-  const changed = ruleRevision(props.rule) !== expectedRevision;
-  const [destination, setDestination] = useState(
-    props.rule?.destinationHostId ?? "",
-  );
-  const [all, setAll] = useState(props.rule?.scope.kind === "all");
-  const [chosenProviders, setSelected] = useState<ProfileCopyWireProvider[]>(
-    props.rule?.scope.kind === "selected"
-      ? [...props.rule.scope.providers]
-      : [...PROFILE_COPY_PROVIDERS],
-  );
-  const selected = ruleProviders(props.rule, chosenProviders, props.providers);
-  const save = useProfileSyncSaveRule(props.hostId);
-  const scope: ProfileSyncScope = all
-    ? { kind: "all" }
-    : { kind: "selected", providers: selected };
-  const request: ProfileSyncSaveRule = {
-    sourceHostId: props.hostId,
-    ruleId,
-    destinationHostId: destination,
-    scope,
-    paused: rulePaused(props.rule),
-    expectedRevision,
-  };
-  const saveError = ruleSaveError(save.variables, request, save.error);
-  const canSave = canSaveRule({
-    rule: props.rule,
-    changed,
-    destination,
-    candidates: props.candidates,
-    scope,
-    pending: save.isPending,
-  });
-  return (
     <div className="flex flex-col gap-4">
       <div>
         <Button
@@ -353,18 +402,15 @@ function ProfileSyncRuleEditor(props: {
           ← Automatic sync
         </Button>
         <h3 className="mt-2 text-ui-sm font-medium">
-          {props.rule === null ? "Add automatic sync" : "Edit automatic sync"}
+          {props.existingRuleId === null
+            ? "Add automatic sync"
+            : "Edit automatic sync"}
         </h3>
       </div>
       <ProfileSyncRuleCapacity
-        reached={props.rule === null && props.atCapacity}
+        reached={props.existingRuleId === null && props.atCapacity}
       />
-      {changed ? (
-        <p role="alert" className="text-ui-xs text-destructive">
-          This rule changed while you were editing. Go back and reopen it to
-          review the latest settings.
-        </p>
-      ) : null}
+      <ProfileSyncRuleChangeNotice stopped={stopped} changed={changed} />
       <div className="flex flex-col gap-2">
         <span className="text-ui-xs text-muted-foreground">
           Destination device
@@ -372,14 +418,14 @@ function ProfileSyncRuleEditor(props: {
         <Select
           value={destination}
           onValueChange={setDestination}
-          disabled={props.rule !== null || save.isPending}
+          disabled={props.existingRuleId !== null || save.isPending}
         >
           <SelectTrigger className="w-full" aria-label="Destination device">
             <SelectValue placeholder="Choose a device" />
           </SelectTrigger>
           <SelectContent>
-            {(props.rule !== null
-              ? [props.rule.destinationHostId]
+            {(originalRule !== null
+              ? [originalRule.destinationHostId]
               : props.candidates
             ).map((id) => (
               <SelectItem key={id} value={id}>
@@ -439,10 +485,26 @@ function ProfileSyncRuleEditor(props: {
           onClick={() => save.mutate(request, { onSuccess: props.close })}
         >
           {save.isPending ? <MutedAgentSpinner /> : null}
-          {props.rule === null ? "Enable automatic sync" : "Save changes"}
+          {props.existingRuleId === null
+            ? "Enable automatic sync"
+            : "Save changes"}
         </Button>
       </div>
     </div>
+  );
+}
+
+function ProfileSyncRuleChangeNotice(props: {
+  readonly stopped: boolean;
+  readonly changed: boolean;
+}): ReactNode {
+  if (!props.stopped && !props.changed) return null;
+  return (
+    <p role="alert" className="text-ui-xs text-destructive">
+      {props.stopped
+        ? "This rule was stopped while you were editing."
+        : "This rule changed while you were editing. Go back and reopen it to review the latest settings."}
+    </p>
   );
 }
 

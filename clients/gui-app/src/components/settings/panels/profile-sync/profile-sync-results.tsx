@@ -198,6 +198,9 @@ function ProfileSyncResultActions(props: {
 function canRetrySyncItem(item: ProfileSyncItem): boolean {
   return (
     !item.identityChanged &&
+    ["needs-action", "unavailable", "update-required", "unconfirmed"].includes(
+      item.state,
+    ) &&
     item.outcome !== null &&
     profileCopySourceRecovery(item.outcome, false) === "retry"
   );
@@ -249,7 +252,7 @@ function useProfileSyncItemRetry(
   const [notice, setNotice] = useState<SyncRetryNotice | null>(null);
   const outcome = item.outcome;
   const run = (): void => {
-    if (outcome === null) return;
+    if (outcome === null || retry.isPending || !canRetrySyncItem(item)) return;
     const key = `${outcome.attempt.attemptId}:${outcome.revision}`;
     let id = retryIds.current.get(key);
     if (id === undefined) {
