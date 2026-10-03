@@ -240,6 +240,8 @@ describe("useProfileCopyFlowStore retry request ids", () => {
       idFor({ operationId: "00000000-0000-4000-8000-0000000000aa" }, 3),
       idFor({ destinationHostId: DEST_HOST_TWO_ID }, 3),
       idFor({ sourceHostId: "another-source-host" }, 3),
+      idFor({ providerId: "codex" }, 3),
+      idFor({ sourceProfileId: "00000000-0000-4000-8000-0000000000bb" }, 3),
     ];
     for (const id of ids) expect(id).not.toBe(base);
     expect(new Set([base, ...ids]).size).toBe(ids.length + 1);
