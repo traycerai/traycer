@@ -584,7 +584,7 @@ function ScopedResourceMonitorPopover(props: {
     scope,
     props.hasExplicitPick,
     props.trigger,
-    views.find((view) => view.metric === "cpu")?.value ?? null,
+    views.find((view) => view.metric === "cpu") ?? null,
   );
   const tooltip =
     chord === null
@@ -5203,21 +5203,27 @@ function countLabel(count: number, singular: string, plural: string): string {
   return `${formatProcessCount(count)} ${count === 1 ? singular : plural}`;
 }
 
-/** The strip's icon draws no number, so its hover carries the CPU reading. */
+/**
+ * The strip's icon draws no number, so its hover carries the CPU reading - or
+ * why there is none, which the bare icon would otherwise hide.
+ */
 function resourceTooltipLabel(
   scope: HostScope,
   hasExplicitPick: boolean,
   trigger: ResourceMonitorPopoverTrigger,
-  cpuValue: string | null,
+  cpuView: StatusBarResourceMetricView | null,
 ): string {
   const label = watchesNamedHost(scope, hasExplicitPick)
     ? `Resources · ${scope.hostLabel}`
     : "Resources";
-  return trigger.trigger === "header-button" &&
-    trigger.form === "strip" &&
-    cpuValue !== null
-    ? `${label} · CPU ${cpuValue}`
-    : label;
+  if (trigger.trigger !== "header-button" || trigger.form !== "strip") {
+    return label;
+  }
+  if (cpuView === null) return label;
+  if (cpuView.value !== null) return `${label} · CPU ${cpuView.value}`;
+  return cpuView.unavailableReason === null
+    ? label
+    : `${label} · ${cpuView.unavailableReason}`;
 }
 
 /** The Compact forms: one CPU reading, whatever Metrics says. */

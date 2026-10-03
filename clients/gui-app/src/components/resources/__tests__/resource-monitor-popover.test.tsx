@@ -5399,6 +5399,15 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       ).toBe("cpu 16%");
     });
 
+    it("says why there is no CPU reading in the strip icon's tooltip, before the first sample", async () => {
+      renderPopoverForm("strip");
+
+      const button = screen.getByTestId("resource-monitor-header-button");
+      fireEvent.focus(button);
+      const tooltip = (await screen.findByRole("tooltip")).textContent;
+      expect(tooltip).toBe("Resources · Waiting for resource data.");
+    });
+
     // The threshold itself is held once, at the status bar segment.
     it("turns the top strip's CPU icon the warning color once CPU crosses the threshold, and prints no number", () => {
       const stub = renderPopoverForm("strip");
