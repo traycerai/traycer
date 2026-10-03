@@ -146,6 +146,16 @@ The `host service` commands manage the OS registration that keeps the host runni
 | `traycer host service status` | Show the registration and whether the host is running. It only reads. |
 | `traycer host service uninstall` | Deregister the service, which also asks the host to stop. The host files stay installed; `traycer host uninstall` removes them. |
 
+### Host Lifecycle
+
+`traycer host lifecycle get` shows the current mode, whether Desktop is open, how the host was started, and whether its supervisor supports the chosen mode.
+
+`traycer host lifecycle set <mode>` accepts `background`, `linked`, `ask`, `stop-if-idle`, or `none`. See [When you quit Traycer](/settings/general#when-you-quit-traycer) for the corresponding behavior.
+
+Setting a mode does **not** start or stop the host. Startup changes apply to the next automatic start. Quit behavior can update while Desktop is open, but a quit already in progress keeps its earlier choice. A running host with an older supervisor may need a restart; the command reports this.
+
+In particular, `set none` leaves a running host alone and switches Desktop to remote hosts on its next launch. This differs from choosing **Don't run a host** in Settings, which can ask you to confirm stopping the local host. Manually started foreground hosts remain unaffected when Desktop quits.
+
 ## CLI Commands
 
 | Command | Purpose |
