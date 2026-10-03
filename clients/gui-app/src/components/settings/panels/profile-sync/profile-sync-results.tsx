@@ -13,8 +13,11 @@ import {
   profileCopySourceRecovery,
   profileCopyPreviewRecord,
   knownRouteFromRecord,
+  isRecordedOutcome,
 } from "@/lib/profile-copy/profile-copy-model";
+import { presentProfileCopyOutcome } from "@/lib/profile-copy/profile-copy-presentation";
 import { ProfileCopyDraftPanel } from "../profile-copy/profile-copy-draft-panel";
+import { ProfileCopyBadge } from "../profile-copy/profile-copy-badge";
 import {
   profileCopyProviderLabel,
   profileCopyRequestErrorText,
@@ -74,12 +77,11 @@ function ProfileSyncResultItem(props: {
   const resolveError = useProfileSyncItemError(item, resolve.error);
   const retry = useProfileSyncItemRetry(sourceHostId, item);
   const sourceName = hosts.nameFor(sourceHostId);
-  const outcome = item.outcome;
-  const canRetry =
-    outcome !== null && profileCopySourceRecovery(outcome, false) === "retry";
+  const pending = resolve.isPending || retry.pending;
   const doResolve = (
     action: "check" | "keep-destination" | "use-source",
   ): void => {
+    if (pending || (action === "use-source" && item.identityChanged)) return;
     resolveError.capture();
     resolve.mutate({
       sourceHostId,
@@ -101,43 +103,15 @@ function ProfileSyncResultItem(props: {
             {SYNC_STATE_LABELS[item.state]}
           </p>
         </div>
-        <div className="flex gap-1">
-          {[
-            "unconfirmed",
-            "unavailable",
-            "copying",
-            "update-required",
-          ].includes(item.state) ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={resolve.isPending}
-              onClick={() => doResolve("check")}
-            >
-              {resolve.isPending ? <MutedAgentSpinner /> : null}Check status
-            </Button>
-          ) : null}
-          {canRetry ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={retry.pending}
-              onClick={retry.run}
-            >
-              {retry.pending ? <MutedAgentSpinner /> : null}Retry
-            </Button>
-          ) : null}
-          {outcome !== null || item.state === "conflict" ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              aria-expanded={expanded}
-              onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? "Hide details" : "Review…"}
-            </Button>
-          ) : null}
-        </div>
+        <ProfileSyncResultActions
+          item={item}
+          pending={pending}
+          checkPending={resolve.isPending}
+          retry={retry}
+          expanded={expanded}
+          onCheck={() => doResolve("check")}
+          onToggleDetails={() => setExpanded(!expanded)}
+        />
       </div>
       {item.identityChanged ? (
         <p className="text-ui-xs text-warning-foreground">
@@ -156,7 +130,7 @@ function ProfileSyncResultItem(props: {
           item={item}
           hosts={hosts}
           sourceName={sourceName}
-          pending={resolve.isPending}
+          pending={pending}
           doResolve={doResolve}
         />
       ) : null}
@@ -170,6 +144,62 @@ function ProfileSyncResultItem(props: {
         </p>
       ) : null}
     </div>
+  );
+}
+
+function ProfileSyncResultActions(props: {
+  readonly item: ProfileSyncItem;
+  readonly pending: boolean;
+  readonly checkPending: boolean;
+  readonly retry: SyncItemRetry;
+  readonly expanded: boolean;
+  readonly onCheck: () => void;
+  readonly onToggleDetails: () => void;
+}): ReactNode {
+  const { item, pending, retry } = props;
+  return (
+    <div className="flex gap-1">
+      {["unconfirmed", "unavailable", "copying", "update-required"].includes(
+        item.state,
+      ) ? (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={pending}
+          onClick={props.onCheck}
+        >
+          {props.checkPending ? <MutedAgentSpinner /> : null}Check status
+        </Button>
+      ) : null}
+      {canRetrySyncItem(item) ? (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={pending}
+          onClick={retry.run}
+        >
+          {retry.pending ? <MutedAgentSpinner /> : null}Retry
+        </Button>
+      ) : null}
+      {item.outcome !== null || item.state === "conflict" ? (
+        <Button
+          size="xs"
+          variant="ghost"
+          aria-expanded={props.expanded}
+          onClick={props.onToggleDetails}
+        >
+          {props.expanded ? "Hide details" : "Review…"}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function canRetrySyncItem(item: ProfileSyncItem): boolean {
+  return (
+    !item.identityChanged &&
+    item.outcome !== null &&
+    profileCopySourceRecovery(item.outcome, false) === "retry"
   );
 }
 
@@ -289,10 +319,6 @@ function ProfileSyncResultDetails({
     action: "check" | "keep-destination" | "use-source",
   ) => void;
 }): ReactNode {
-  const outcome = item.outcome;
-  const preview = item.preview?.destinations.find(
-    (d) => d.destinationHostId === item.destinationHostId,
-  );
   return (
     <>
       {item.state === "conflict" ? (
@@ -326,7 +352,7 @@ function ProfileSyncResultDetails({
             </Button>
             <Button
               size="xs"
-              disabled={pending}
+              disabled={pending || item.identityChanged}
               onClick={() => doResolve("use-source")}
             >
               Use source settings
@@ -334,25 +360,62 @@ function ProfileSyncResultDetails({
           </div>
         </div>
       ) : null}
-      {item.state !== "conflict" && outcome !== null ? (
-        <ProfileCopyDraftPanel
-          outcome={outcome}
-          names={{
-            source: sourceName,
-            destination: hosts.nameFor(item.destinationHostId),
-            provider: profileCopyProviderLabel(item.providerId),
-            profile: item.name,
-          }}
-          route={knownRouteFromRecord(
-            preview === undefined
-              ? undefined
-              : profileCopyPreviewRecord(preview),
-          )}
-          cancelRequested={false}
-          destinationIsLocal={hosts.isLocalMachine(item.destinationHostId)}
-          extraActions={null}
+      {item.state !== "conflict" ? (
+        <ProfileSyncOutcomeDetails
+          item={item}
+          hosts={hosts}
+          sourceName={sourceName}
         />
       ) : null}
     </>
+  );
+}
+
+function ProfileSyncOutcomeDetails(props: {
+  readonly item: ProfileSyncItem;
+  readonly hosts: ProfileCopyHosts;
+  readonly sourceName: string;
+}): ReactNode {
+  const { item, hosts, sourceName } = props;
+  const outcome = item.outcome;
+  if (outcome === null) return null;
+  const preview = item.preview?.destinations.find(
+    (d) => d.destinationHostId === item.destinationHostId,
+  );
+  const names = {
+    source: sourceName,
+    destination: hosts.nameFor(item.destinationHostId),
+    provider: profileCopyProviderLabel(item.providerId),
+    profile: item.name,
+  };
+  const route = knownRouteFromRecord(
+    preview === undefined ? undefined : profileCopyPreviewRecord(preview),
+  );
+  if (isRecordedOutcome(outcome))
+    return (
+      <ProfileCopyDraftPanel
+        outcome={outcome}
+        names={names}
+        route={route}
+        cancelRequested={false}
+        destinationIsLocal={hosts.isLocalMachine(item.destinationHostId)}
+        extraActions={null}
+      />
+    );
+  const presentation = presentProfileCopyOutcome(outcome, {
+    names,
+    route,
+    cancelRequested: false,
+  });
+  return (
+    <div className="flex flex-col gap-2">
+      <ProfileCopyBadge tone={presentation.tone} label={presentation.badge} />
+      <p className="text-ui-xs leading-relaxed text-muted-foreground">
+        {presentation.body}
+      </p>
+      {presentation.note !== null ? (
+        <p className="text-ui-xs text-muted-foreground">{presentation.note}</p>
+      ) : null}
+    </div>
   );
 }

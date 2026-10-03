@@ -48,6 +48,7 @@ export function ProfileSyncRules(props: {
   const [stop, setStop] = useState<ProfileSyncRule | null>(null);
   const save = useProfileSyncSaveRule(props.hostId),
     remove = useProfileSyncStopRule(props.hostId);
+  const pending = save.isPending || remove.isPending;
   const saveError = ruleActionError(props.rules, save.variables, save.error);
   const removeError = ruleActionError(
     props.rules,
@@ -92,7 +93,7 @@ export function ProfileSyncRules(props: {
         <Button
           size="sm"
           variant="outline"
-          disabled={destinations.length === 0 || atCapacity}
+          disabled={pending || destinations.length === 0 || atCapacity}
           onClick={() => setEditor("new")}
         >
           Add device
@@ -132,6 +133,7 @@ export function ProfileSyncRules(props: {
               <Button
                 size="xs"
                 variant="outline"
+                disabled={pending}
                 onClick={() => setEditor(rule.ruleId)}
               >
                 Edit
@@ -139,7 +141,7 @@ export function ProfileSyncRules(props: {
               <Button
                 size="xs"
                 variant="outline"
-                disabled={save.isPending}
+                disabled={pending}
                 onClick={() =>
                   save.mutate({
                     ruleId: rule.ruleId,
@@ -158,7 +160,7 @@ export function ProfileSyncRules(props: {
                 <Button
                   size="xs"
                   variant="ghost"
-                  disabled={save.isPending || remove.isPending}
+                  disabled={pending}
                   onClick={() => {
                     if (rule.batchId !== null) props.onViewRun(rule.batchId);
                   }}
@@ -166,7 +168,12 @@ export function ProfileSyncRules(props: {
                   View results
                 </Button>
               ) : null}
-              <Button size="xs" variant="ghost" onClick={() => setStop(rule)}>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={pending}
+                onClick={() => setStop(rule)}
+              >
                 Stop…
               </Button>
             </div>
@@ -180,14 +187,14 @@ export function ProfileSyncRules(props: {
                   <Button
                     size="xs"
                     variant="outline"
-                    disabled={remove.isPending}
+                    disabled={pending}
                     onClick={() => setStop(null)}
                   >
                     Keep rule
                   </Button>
                   <Button
                     size="xs"
-                    disabled={remove.isPending}
+                    disabled={pending}
                     onClick={() =>
                       remove.mutate(
                         {

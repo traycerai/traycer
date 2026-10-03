@@ -144,6 +144,7 @@ let saveRuleGate: Promise<void> | null = null;
 // Likewise for the start and stop answers.
 let startGate: Promise<void> | null = null;
 let retryGate: Promise<void> | null = null;
+let resolveGate: Promise<void> | null = null;
 let stopRuleGate: Promise<void> | null = null;
 let stopRuleThrows = false;
 
@@ -336,7 +337,18 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
         }
         return { batches: [], rules: [] };
       },
-      "providers.profileCopy.sync.resolve": (params): ProfileSyncBatch => {
+      "providers.profileCopy.sync.resolve": (
+        params,
+      ): ProfileSyncBatch | Promise<ProfileSyncBatch> => {
+        if (resolveGate !== null) {
+          return resolveGate.then((): ProfileSyncBatch => ({
+            batchId: params.batchId,
+            sourceHostId: params.sourceHostId,
+            createdAt: 1,
+            automatic: false,
+            items: [],
+          }));
+        }
         if (resolveThrows) {
           throw new HostRpcError({
             code: "RPC_ERROR",
@@ -636,6 +648,7 @@ describe("ProfileSyncModal review regressions", () => {
     saveRuleGate = null;
     startGate = null;
     retryGate = null;
+    resolveGate = null;
     stopRuleGate = null;
     stopRuleThrows = false;
     resetStores();
@@ -2830,6 +2843,346 @@ describe("ProfileSyncModal review regressions", () => {
       } finally {
         held.release();
       }
+    });
+  });
+
+  describe("round 19: pending guards across rule controls, result actions and receipts", () => {
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    function callsOf(
+      messenger: MockHostMessenger<HostRpcRegistry>,
+      method: string,
+    ) {
+      return messenger.calls.filter((call) => call.method === method);
+    }
+
+    const isDisabled = (name: string | RegExp): boolean =>
+      screen.getByRole("button", { name }).hasAttribute("disabled");
+
+    describe("rule list while a save or stop is pending", () => {
+      const RUN = "00000000-0000-4000-8000-0000000000d2";
+
+      async function openRuleList(): Promise<
+        MockHostMessenger<HostRpcRegistry>
+      > {
+        listBatches = [
+          {
+            batchId: RUN,
+            sourceHostId: SOURCE_HOST_ID,
+            createdAt: 1_700_000_000_000,
+            automatic: true,
+            items: [listedItem(DEST_HOST_ID)],
+          },
+        ];
+        const messenger = mount([{ ...SAVED_RULE, batchId: RUN }]);
+        openSync(null);
+        fireEvent.mouseDown(
+          await screen.findByRole("tab", { name: /Automatic sync/ }),
+          { button: 0 },
+        );
+        await screen.findByRole("heading", { name: "Linux box" });
+        return messenger;
+      }
+
+      function expectNoNewCommand(
+        messenger: MockHostMessenger<HostRpcRegistry>,
+        saveCount: number,
+        stopCount: number,
+      ): void {
+        expect(
+          callsOf(messenger, "providers.profileCopy.sync.saveRule"),
+        ).toHaveLength(saveCount);
+        expect(
+          callsOf(messenger, "providers.profileCopy.sync.stopRule"),
+        ).toHaveLength(stopCount);
+        // No editor was opened by a click on a held control.
+        expect(
+          screen.queryByRole("button", { name: "Save changes" }),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Enable automatic sync" }),
+        ).toBeNull();
+      }
+
+      it("holds every control while a Pause is pending, and a click on any of them starts nothing", async () => {
+        const held = gate();
+        saveRuleGate = held.promise;
+        const messenger = await openRuleList();
+        try {
+          fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+          await waitFor(() =>
+            expect(
+              callsOf(messenger, "providers.profileCopy.sync.saveRule"),
+            ).toHaveLength(1),
+          );
+          for (const name of [
+            "Edit",
+            "Pause",
+            "Stop…",
+            "Add device",
+            "View results",
+          ])
+            await waitFor(() => expect(isDisabled(name)).toBe(true));
+          for (const name of ["Edit", "Pause", "Stop…", "Add device"])
+            fireEvent.click(screen.getByRole("button", { name }));
+          expectNoNewCommand(messenger, 1, 0);
+        } finally {
+          held.release();
+        }
+      });
+
+      it("holds every control while a Stop is pending, including Keep rule and the confirmation", async () => {
+        const held = gate();
+        stopRuleGate = held.promise;
+        const messenger = await openRuleList();
+        try {
+          fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+          fireEvent.click(
+            await screen.findByRole("button", { name: "Stop automatic sync" }),
+          );
+          await waitFor(() =>
+            expect(
+              callsOf(messenger, "providers.profileCopy.sync.stopRule"),
+            ).toHaveLength(1),
+          );
+          for (const name of [
+            "Edit",
+            "Pause",
+            "Stop…",
+            "Add device",
+            "View results",
+            "Keep rule",
+            "Stop automatic sync",
+          ])
+            await waitFor(() => expect(isDisabled(name)).toBe(true));
+          for (const name of [
+            "Edit",
+            "Pause",
+            "Add device",
+            "Stop automatic sync",
+          ])
+            fireEvent.click(screen.getByRole("button", { name }));
+          expectNoNewCommand(messenger, 0, 1);
+          expect(screen.getByText(/Stop future updates\?/)).toBeTruthy();
+        } finally {
+          held.release();
+        }
+      });
+    });
+
+    describe("result actions on a retryable receipt", () => {
+      const retryableItem = (): ProfileSyncItem => ({
+        ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+        preview: null,
+        outcome: profileCopyOutcome({
+          attempt: profileCopyAttempt({
+            operationId: "00000000-0000-4000-8000-000000000001",
+          }),
+          state: "blocked",
+          reason: "unreachable",
+        }),
+      });
+
+      async function startWith(
+        item: ProfileSyncItem,
+      ): Promise<MockHostMessenger<HostRpcRegistry>> {
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: () => [
+            syncItem(1, DEST_HOST_ID, "ready", [
+              previewDestination(DEST_HOST_ID, "automatic"),
+            ]),
+          ],
+          startItems: () => [item],
+        });
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await screen.findByRole("button", { name: "Check status" });
+        return messenger;
+      }
+
+      it("offers Check status and Retry together, and a pending Check status holds both", async () => {
+        const held = gate();
+        resolveGate = held.promise;
+        const messenger = await startWith(retryableItem());
+        expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+        try {
+          fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+          await waitFor(() =>
+            expect(
+              callsOf(messenger, "providers.profileCopy.sync.resolve"),
+            ).toHaveLength(1),
+          );
+          await waitFor(() => expect(isDisabled("Retry")).toBe(true));
+          expect(isDisabled("Check status")).toBe(true);
+          fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+          expect(
+            callsOf(messenger, "providers.profileCopy.retry"),
+          ).toHaveLength(0);
+        } finally {
+          held.release();
+        }
+      });
+
+      it("holds Check status while a Retry is pending", async () => {
+        const held = gate();
+        retryGate = held.promise;
+        const messenger = await startWith(retryableItem());
+        try {
+          fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+          await waitFor(() =>
+            expect(
+              callsOf(messenger, "providers.profileCopy.retry"),
+            ).toHaveLength(1),
+          );
+          await waitFor(() => expect(isDisabled("Check status")).toBe(true));
+          expect(isDisabled("Retry")).toBe(true);
+          fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+          expect(
+            callsOf(messenger, "providers.profileCopy.sync.resolve"),
+          ).toHaveLength(0);
+        } finally {
+          held.release();
+        }
+      });
+
+      it("does not offer an actionable retry once the source account changed", async () => {
+        await startWith({ ...retryableItem(), identityChanged: true });
+        const retry = screen.queryByRole("button", { name: "Retry" });
+        expect(retry === null || retry.hasAttribute("disabled")).toBe(true);
+      });
+    });
+
+    describe("conflict on a changed source account", () => {
+      const conflictItem = (): ProfileSyncItem => ({
+        ...syncItem(1, DEST_HOST_ID, "conflict", []),
+        preview: null,
+        identityChanged: true,
+        destinationSettings: {
+          name: "Edited on destination",
+          color: "#10b981",
+          enabled: true,
+        },
+      });
+
+      it("offers no actionable Use source settings, while Keep destination & pause stays safe", async () => {
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: () => [
+            syncItem(1, DEST_HOST_ID, "ready", [
+              previewDestination(DEST_HOST_ID, "automatic"),
+            ]),
+          ],
+          startItems: () => [conflictItem()],
+        });
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        const useSource = screen.queryByRole("button", {
+          name: "Use source settings",
+        });
+        expect(useSource === null || useSource.hasAttribute("disabled")).toBe(
+          true,
+        );
+        if (useSource !== null) fireEvent.click(useSource);
+        expect(
+          callsOf(messenger, "providers.profileCopy.sync.resolve"),
+        ).toHaveLength(0);
+        const keep = screen.getByRole("button", {
+          name: "Keep destination & pause",
+        });
+        expect(keep.hasAttribute("disabled")).toBe(false);
+        fireEvent.click(keep);
+        await waitFor(() =>
+          expect(
+            callsOf(messenger, "providers.profileCopy.sync.resolve"),
+          ).toHaveLength(1),
+        );
+      });
+    });
+
+    describe("receipt review", () => {
+      async function reviewReceipt(
+        outcome: ProfileCopyOutcome,
+        state: ProfileSyncItem["state"],
+      ): Promise<MockHostMessenger<HostRpcRegistry>> {
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: () => [
+            syncItem(1, DEST_HOST_ID, "ready", [
+              previewDestination(DEST_HOST_ID, "automatic"),
+            ]),
+          ],
+          startItems: () => [
+            {
+              ...syncItem(1, DEST_HOST_ID, state, []),
+              preview: null,
+              outcome,
+            },
+          ],
+        });
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        return messenger;
+      }
+
+      const draftStatusCalls = (
+        messenger: MockHostMessenger<HostRpcRegistry>,
+      ) => callsOf(messenger, "providers.profileCopy.draftStatus");
+
+      it("shows a source-local needs-action receipt without asking the destination for a draft", async () => {
+        const messenger = await reviewReceipt(
+          profileCopyOutcome({
+            attempt: profileCopyAttempt({
+              operationId: "00000000-0000-4000-8000-000000000001",
+            }),
+            state: "blocked",
+            reason: "unreachable",
+            targetProfileId: null,
+          }),
+          "needs-action",
+        );
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+        expect(
+          screen.getByRole("button", { name: "Hide details" }),
+        ).toBeTruthy();
+        expect(screen.getByText("Not sent")).toBeTruthy();
+        expect(screen.getByText(/^Nothing was sent\./)).toBeTruthy();
+        expect(draftStatusCalls(messenger)).toHaveLength(0);
+      });
+
+      it("still mounts the draft for a receipt the destination recorded", async () => {
+        const messenger = await reviewReceipt(
+          recordedOutcome({
+            attempt: profileCopyAttempt({
+              operationId: "00000000-0000-4000-8000-000000000001",
+            }),
+            state: "sign-in-required",
+          }),
+          "needs-action",
+        );
+        await waitFor(() =>
+          expect(draftStatusCalls(messenger).length).toBeGreaterThan(0),
+        );
+      });
     });
   });
 });
