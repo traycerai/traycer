@@ -140,6 +140,35 @@ describe("<StatusBarResourceSegment />", () => {
       expect(screen.queryByTestId("status-bar-resource-metric-cpu")).toBeNull();
     });
 
+    it("carries the compact CPU value in the icon's tooltip", async () => {
+      registry.projection = liveProjection("host-b");
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "CPU 12%",
+      );
+    });
+
+    it("carries the compact unavailable reason in the icon's tooltip", async () => {
+      registry.projection = liveProjection("host-a");
+      registry.unsupported = true;
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Office Linux is running an older Traycer host",
+      );
+    });
+
     it.each([
       { cpuPercent: 84, warns: false },
       { cpuPercent: 85, warns: true },
