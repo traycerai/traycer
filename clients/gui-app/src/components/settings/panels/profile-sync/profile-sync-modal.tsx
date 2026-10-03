@@ -557,8 +557,11 @@ function ProfileSyncDestinations({
   );
 }
 
-interface ScopedStartRefusal {
+interface ScopedStartNotice {
   readonly selectionKey: string;
+  readonly revision: string;
+}
+interface ScopedStartRefusal extends ScopedStartNotice {
   readonly message: string;
 }
 interface SyncModalModel {
@@ -618,9 +621,7 @@ function useProfileSyncModalState(props: {
   const [refusedStart, setRefusedStart] = useState<ScopedStartRefusal | null>(
     null,
   );
-  const [emptyStartSelection, setEmptyStartSelection] = useState<string | null>(
-    null,
-  );
+  const [emptyStart, setEmptyStart] = useState<ScopedStartNotice | null>(null);
   const requests = useRef(new Map<string, string>());
   const close = useProfileCopyFlowStore((s) => s.close);
   const catalog = useProvidersListForClient(
@@ -673,7 +674,7 @@ function useProfileSyncModalState(props: {
     !start.isPending;
   const run = (): void => {
     if (currentPreview === null || selection === null) return;
-    setEmptyStartSelection(null);
+    setEmptyStart(null);
     setRefusedStart(null);
     const requestKey = JSON.stringify([selection, currentPreview.revision]);
     let id = requests.current.get(requestKey);
@@ -691,12 +692,16 @@ function useProfileSyncModalState(props: {
         onSuccess: (result, request) => {
           const refusal = startResponseRefusal(result, request, currentPreview);
           if (refusal !== null) {
-            setRefusedStart({ selectionKey, message: refusal });
+            setRefusedStart({
+              selectionKey,
+              revision: request.revision,
+              message: refusal,
+            });
             return;
           }
           if (result.items.length === 0) {
             requests.current.delete(requestKey);
-            setEmptyStartSelection(selectionKey);
+            setEmptyStart({ selectionKey, revision: request.revision });
             void preview.refetch();
             return;
           }
@@ -731,8 +736,16 @@ function useProfileSyncModalState(props: {
     sourceName,
     canStart,
     selectionTooLarge,
-    nothingStarted: emptyStartSelection === selectionKey,
-    startRefusal: matchingStartRefusal(refusedStart, selectionKey),
+    nothingStarted: matchingStartNotice(
+      emptyStart,
+      selectionKey,
+      currentPreview,
+    ),
+    startRefusal: matchingStartRefusal(
+      refusedStart,
+      selectionKey,
+      currentPreview,
+    ),
     run,
   };
 }
@@ -752,11 +765,24 @@ function matchingStartError(
     : null;
 }
 
+function matchingStartNotice(
+  notice: ScopedStartNotice | null,
+  selectionKey: string,
+  preview: ProfileSyncPreview | null,
+): boolean {
+  return (
+    notice !== null &&
+    notice.selectionKey === selectionKey &&
+    notice.revision === preview?.revision
+  );
+}
+
 function matchingStartRefusal(
   refusal: ScopedStartRefusal | null,
   selectionKey: string,
+  preview: ProfileSyncPreview | null,
 ): string | null {
-  return refusal !== null && refusal.selectionKey === selectionKey
+  return refusal !== null && matchingStartNotice(refusal, selectionKey, preview)
     ? refusal.message
     : null;
 }

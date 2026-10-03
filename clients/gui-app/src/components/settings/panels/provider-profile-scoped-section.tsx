@@ -291,6 +291,7 @@ export function ProviderProfileScopedSection(
             <ProfileSyncEntryButton
               hostId={hostId}
               providerId={state.providerId}
+              profile={selectedProfile}
             />
             <TooltipWrapper
               label={addProfileDisabledReason}
@@ -497,6 +498,7 @@ function EmptyProviderProfiles(props: {
         <ProfileSyncEntryButton
           hostId={props.hostId}
           providerId={props.state.providerId}
+          profile={null}
         />
       </div>
       <p className="text-ui-xs text-muted-foreground">

@@ -622,13 +622,17 @@ describe("profile sync attempt id uniqueness", () => {
 });
 
 describe("profile sync epoch-millisecond timestamps", () => {
-  const valid = [0, 1_700_000_000_000, Number.MAX_SAFE_INTEGER];
+  // The largest instant a JavaScript Date can represent.
+  const DATE_MAX = 8_640_000_000_000_000;
+  const valid = [0, 1_700_000_000_000, DATE_MAX];
   const invalid = [
     ["negative", -1],
     ["fractional", 1_700_000_000_000.5],
     ["NaN", Number.NaN],
     ["positive infinity", Number.POSITIVE_INFINITY],
     ["negative infinity", Number.NEGATIVE_INFINITY],
+    ["one past the Date maximum", DATE_MAX + 1],
+    ["the maximum safe integer", Number.MAX_SAFE_INTEGER],
     ["above the safe integer range", Number.MAX_SAFE_INTEGER + 1],
   ] as const;
 
@@ -641,6 +645,10 @@ describe("profile sync epoch-millisecond timestamps", () => {
     ).toBe(true);
   });
 
+  it.each(valid)("%s converts to a finite Date", (value) => {
+    expect(Number.isFinite(new Date(value).getTime())).toBe(true);
+  });
+
   it.each(invalid)("rejects a %s batch createdAt", (_label, createdAt) => {
     const result = profileSyncBatchSchema.safeParse({
       ...batch(SOURCE_HOST, []),
@@ -648,9 +656,13 @@ describe("profile sync epoch-millisecond timestamps", () => {
     });
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error.issues.map((issue) => issue.path)).toEqual([
-      ["createdAt"],
-    ]);
+    // One or two constraints may fail, but only on this field.
+    expect(result.error.issues.length).toBeGreaterThan(0);
+    expect(
+      result.error.issues.every(
+        (issue) => issue.path.length === 1 && issue.path[0] === "createdAt",
+      ),
+    ).toBe(true);
   });
 
   it.each([null, ...valid])("accepts %s as a rule lastCheckedAt", (value) => {
@@ -667,9 +679,13 @@ describe("profile sync epoch-millisecond timestamps", () => {
     });
     expect(result.success).toBe(false);
     if (result.success) return;
-    expect(result.error.issues.map((issue) => issue.path)).toEqual([
-      ["lastCheckedAt"],
-    ]);
+    // One or two constraints may fail, but only on this field.
+    expect(result.error.issues.length).toBeGreaterThan(0);
+    expect(
+      result.error.issues.every(
+        (issue) => issue.path.length === 1 && issue.path[0] === "lastCheckedAt",
+      ),
+    ).toBe(true);
   });
 });
 

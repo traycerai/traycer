@@ -1385,6 +1385,77 @@ describe("ProfileSyncModal review regressions", () => {
         previewRevision = PREVIEW_REVISION;
       }
     });
+    describe.each([
+      [
+        "a rejected response",
+        "The device returned a run for another source. Check sync history again.",
+        () => {
+          startBatchSource = DEST_HOST_ID;
+        },
+      ],
+      [
+        "an empty answer",
+        "Nothing was started. Check the selection and try again.",
+        () => undefined,
+      ],
+    ])(
+      "the notice for %s follows its submitted revision",
+      (_label, notice, arrange) => {
+        async function startAndCheck(
+          nextRevision: string,
+        ): Promise<MockHostMessenger<HostRpcRegistry>> {
+          arrange();
+          const messenger = mountWith({
+            rules: [],
+            providers: defaultProviders(),
+            previewItems: READY,
+            startItems: noItems,
+          });
+          try {
+            openSync(null);
+            await pickDestinations([/Linux box/]);
+            await screen.findByText("1 profile transfers selected");
+            fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+            expect(await screen.findByText(notice)).toBeTruthy();
+            await waitFor(() =>
+              expect(
+                screen
+                  .getByRole("button", { name: "Check again" })
+                  .hasAttribute("disabled"),
+              ).toBe(false),
+            );
+            const before = previewCalls(messenger).length;
+            previewRevision = nextRevision;
+            fireEvent.click(
+              screen.getByRole("button", { name: "Check again" }),
+            );
+            await waitFor(() =>
+              expect(previewCalls(messenger).length).toBeGreaterThan(before),
+            );
+            await waitFor(() =>
+              expect(
+                screen
+                  .getByRole("button", { name: "Sync now" })
+                  .hasAttribute("disabled"),
+              ).toBe(false),
+            );
+          } finally {
+            previewRevision = PREVIEW_REVISION;
+          }
+          return messenger;
+        }
+
+        it("stays when Check again returns the same revision", async () => {
+          await startAndCheck(PREVIEW_REVISION);
+          expect(screen.getByText(notice)).toBeTruthy();
+        });
+
+        it("disappears when Check again returns a new revision for the same selection", async () => {
+          await startAndCheck("b".repeat(64));
+          expect(screen.queryByText(notice)).toBeNull();
+        });
+      },
+    );
   });
 
   describe("round 6: run ownership, automatic results link and rule capacity", () => {

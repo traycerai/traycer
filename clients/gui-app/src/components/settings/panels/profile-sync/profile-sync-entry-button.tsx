@@ -1,6 +1,9 @@
 import type { ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
-import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderId,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -9,22 +12,39 @@ import {
   profileCopyWireProvider,
   type ProfileCopyWireProvider,
 } from "@/lib/profile-copy/profile-copy-model";
+import { ProfileCopyEntryButton } from "../profile-copy/profile-copy-entry-button";
 
 export function ProfileSyncEntryButton(props: {
   readonly hostId: string | null;
   readonly providerId: ProviderId;
+  readonly profile: ProviderProfile | null;
 }): ReactNode {
   const providerId = profileCopyWireProvider(props.providerId);
   return props.hostId === null || providerId === null ? null : (
-    <ProfileSyncAvailableEntry hostId={props.hostId} providerId={providerId} />
+    <ProfileSyncAvailableEntry
+      hostId={props.hostId}
+      providerId={providerId}
+      sourceProviderId={props.providerId}
+      profile={props.profile}
+    />
   );
 }
 function ProfileSyncAvailableEntry(props: {
   readonly hostId: string;
   readonly providerId: ProfileCopyWireProvider;
+  readonly sourceProviderId: ProviderId;
+  readonly profile: ProviderProfile | null;
 }): ReactNode {
   const supported = useSourceSyncSupport(props.hostId);
   const open = useProfileCopyFlowStore((s) => s.open);
+  if (supported === false && props.profile !== null)
+    return (
+      <ProfileCopyEntryButton
+        hostId={props.hostId}
+        providerId={props.sourceProviderId}
+        profile={props.profile}
+      />
+    );
   let label = "Update Traycer on this device to sync profiles.";
   if (supported === true)
     label = "Sync profiles from this device to your other devices.";

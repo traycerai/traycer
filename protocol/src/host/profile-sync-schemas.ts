@@ -16,6 +16,7 @@ export const PROFILE_SYNC_MAX_ITEMS = 512;
 /** Match the source's durable history and rule capacities. */
 export const PROFILE_SYNC_MAX_BATCHES = 100;
 export const PROFILE_SYNC_MAX_RULES = 64;
+const MAX_DATE_TIMESTAMP = 8_640_000_000_000_000;
 
 export const profileSyncSettingsSchema = lazySchema(() =>
   z.strictObject({
@@ -196,7 +197,7 @@ export const profileSyncBatchSchema = lazySchema(() =>
     .strictObject({
       batchId: profileCopyIdSchema,
       sourceHostId: profileCopyHostIdSchema,
-      createdAt: z.number().int().nonnegative(),
+      createdAt: z.number().int().nonnegative().max(MAX_DATE_TIMESTAMP),
       automatic: z.boolean(),
       items: z.array(profileSyncItemSchema).max(PROFILE_SYNC_MAX_ITEMS),
     })
@@ -229,7 +230,12 @@ export const profileSyncRuleSchema = lazySchema(() =>
       scope: profileSyncScopeSchema,
       paused: z.boolean(),
       revision: z.number().int().nonnegative(),
-      lastCheckedAt: z.number().int().nonnegative().nullable(),
+      lastCheckedAt: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(MAX_DATE_TIMESTAMP)
+        .nullable(),
       batchId: profileCopyIdSchema.nullable(),
       status: z.enum(["waiting", "active", "needs-action", "paused"]),
     })
