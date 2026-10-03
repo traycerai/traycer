@@ -1,6 +1,7 @@
 import { useProfileCopyDraftStatusQuery } from "@/hooks/providers/profile-copy/use-profile-copy-queries";
 import {
   SYNC_STATE_LABELS,
+  profileSyncItemObservationKey,
   type ProfileSyncRetryReceipt,
 } from "./profile-sync-state";
 import { useEffect, useState, type ReactNode } from "react";
@@ -36,7 +37,10 @@ export function ProfileSyncResults(props: {
   readonly sourceHostId: string;
   readonly batch: ProfileSyncBatch;
   readonly hosts: ProfileCopyHosts;
-  readonly onResolved: (batch: ProfileSyncBatch, operationId: string) => void;
+  readonly onResolved: (
+    batch: ProfileSyncBatch,
+    requested: ProfileSyncItem,
+  ) => void;
   readonly onRetried: (receipt: ProfileSyncRetryReceipt) => void;
 }): ReactNode {
   if (props.batch.sourceHostId !== props.sourceHostId)
@@ -82,7 +86,10 @@ function ProfileSyncResultItem(props: {
   readonly batch: ProfileSyncBatch;
   readonly item: ProfileSyncItem;
   readonly hosts: ProfileCopyHosts;
-  readonly onResolved: (batch: ProfileSyncBatch, operationId: string) => void;
+  readonly onResolved: (
+    batch: ProfileSyncBatch,
+    requested: ProfileSyncItem,
+  ) => void;
   readonly onRetried: (receipt: ProfileSyncRetryReceipt) => void;
 }): ReactNode {
   const { item, batch, hosts, sourceHostId } = props;
@@ -119,8 +126,7 @@ function ProfileSyncResultItem(props: {
         destinationHostId: item.destinationHostId,
       },
       {
-        onSuccess: (response, request) =>
-          props.onResolved(response, request.operationId),
+        onSuccess: (response) => props.onResolved(response, item),
       },
     );
   };
@@ -261,16 +267,7 @@ function useProfileSyncItemError(
   item: ProfileSyncItem,
   error: HostRpcError | null,
 ): ScopedSyncItemError {
-  const current = JSON.stringify([
-    item.state,
-    item.outcome?.attempt.attemptId,
-    item.outcome?.revision,
-    item.sourceIdentityStamp,
-    item.identityChanged,
-    item.sourceSettings,
-    item.destinationSettings,
-    item.baseline,
-  ]);
+  const current = profileSyncItemObservationKey(item);
   const [submitted, setSubmitted] = useState<string | null>(null);
   return {
     capture: () => setSubmitted(current),

@@ -14,6 +14,23 @@ export interface ProfileSyncRetryReceipt {
   readonly outcome: ProfileCopyOutcome;
 }
 
+/** Bind a row action and its error to the source/receipt state it reviewed. */
+export function profileSyncItemObservationKey(item: ProfileSyncItem): string {
+  return JSON.stringify([
+    item.providerId,
+    item.sourceProfileId,
+    item.destinationHostId,
+    item.state,
+    item.outcome?.attempt.attemptId,
+    item.outcome?.revision,
+    item.sourceIdentityStamp,
+    item.identityChanged,
+    item.sourceSettings,
+    item.destinationSettings,
+    item.baseline,
+  ]);
+}
+
 const RETRY_PRESERVED_STATES: ReadonlySet<ProfileSyncItem["state"]> = new Set([
   "synced",
   "already-present",

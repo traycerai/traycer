@@ -2,6 +2,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type {
   ProfileSyncList,
   ProfileSyncRule,
+  ProfileSyncItem,
 } from "@traycer/protocol/host/profile-sync-schemas";
 import { PROFILE_SYNC_MAX_ITEMS } from "@traycer/protocol/host/profile-sync-schemas";
 import type { Dispatch, SetStateAction } from "react";
@@ -69,6 +70,7 @@ import {
   SYNC_STATE_LABELS,
   reconcileSyncRetryBatch,
   reconcileSyncListBatch,
+  profileSyncItemObservationKey,
   type ProfileSyncRetryReceipt,
 } from "./profile-sync-state";
 
@@ -654,6 +656,20 @@ function newerSyncListObservation(
   );
 }
 
+function latestViewedSyncBatch(
+  current: ViewedSyncBatch,
+  listed: ProfileSyncBatch | undefined,
+  observed: SyncListObservation,
+): ViewedSyncBatch {
+  return listed !== undefined &&
+    newerSyncListObservation(observed, current.listObservation)
+    ? {
+        batch: reconcileSyncListBatch(listed, current.batch),
+        listObservation: observed,
+      }
+    : current;
+}
+
 interface AcceptedSyncRules {
   readonly rules: readonly ProfileSyncRule[];
   readonly listObservation: SyncListObservation;
@@ -727,7 +743,7 @@ function useProfileSyncViewedBatch(
   readonly acceptStarted: (batch: ProfileSyncBatch) => void;
   readonly acceptResolved: (
     batch: ProfileSyncBatch,
-    operationId: string,
+    requested: ProfileSyncItem,
   ) => void;
   readonly acceptRetried: (receipt: ProfileSyncRetryReceipt) => void;
 } {
@@ -743,17 +759,13 @@ function useProfileSyncViewedBatch(
   // response arrived; write hooks cancel older in-flight reads first. Only a
   // subsequent list success may replace it; a failed
   // refetch has no new success. Query identity also fences cache recreation.
-  const newerListBatch =
-    viewedBatch !== null &&
-    observedBatch !== undefined &&
-    !list.isFetching &&
-    newerSyncListObservation(listObservation, viewedBatch.listObservation)
-      ? reconcileSyncListBatch(observedBatch, viewedBatch.batch)
-      : null;
-  if (newerListBatch !== null && newerListBatch !== viewedBatch?.batch)
-    setViewedBatch({ batch: newerListBatch, listObservation });
+  const latest =
+    viewedBatch !== null && !list.isFetching
+      ? latestViewedSyncBatch(viewedBatch, observedBatch, listObservation)
+      : viewedBatch;
+  if (latest !== viewedBatch) setViewedBatch(latest);
   return {
-    batch: newerListBatch ?? viewedBatch?.batch ?? null,
+    batch: latest?.batch ?? null,
     setBatchId: (batchId) => {
       const selectedBatch = list.data?.batches.find(
         (b) => b.batchId === batchId,
@@ -775,24 +787,39 @@ function useProfileSyncViewedBatch(
         listObservation: currentSyncListObservation(queryClient, sourceHostId),
       });
     },
-    acceptResolved: (batch, operationId) => {
+    acceptResolved: (batch, requested) => {
       const listObservation = currentSyncListObservation(
         queryClient,
         sourceHostId,
       );
       const resolved = batch.items.find(
-        (item) => item.operationId === operationId,
+        (item) => item.operationId === requested.operationId,
       );
+      const listed = queryClient
+        .getQueryData<ProfileSyncList>(syncListQueryKey(sourceHostId))
+        ?.batches.find((candidate) => candidate.batchId === batch.batchId);
       setViewedBatch((current) => {
         if (current?.batch.batchId !== batch.batchId || resolved === undefined)
           return current;
+        const latest = latestViewedSyncBatch(current, listed, listObservation);
+        const prior = latest.batch.items.find(
+          (item) => item.operationId === requested.operationId,
+        );
+        // A newer poll or destination draft can change this same row while
+        // Resolve is in flight. Its old answer must not undo that observation.
+        if (
+          prior === undefined ||
+          profileSyncItemObservationKey(prior) !==
+            profileSyncItemObservationKey(requested)
+        )
+          return latest;
         // Resolve changes one operation. Its sibling snapshot can predate a
         // concurrent Retry or resolution already accepted in this dialog.
         return {
           batch: {
-            ...current.batch,
-            items: current.batch.items.map((item) =>
-              item.operationId === operationId ? resolved : item,
+            ...latest.batch,
+            items: latest.batch.items.map((item) =>
+              item.operationId === requested.operationId ? resolved : item,
             ),
           },
           listObservation,
@@ -804,10 +831,14 @@ function useProfileSyncViewedBatch(
         queryClient,
         sourceHostId,
       );
+      const listed = queryClient
+        .getQueryData<ProfileSyncList>(syncListQueryKey(sourceHostId))
+        ?.batches.find((candidate) => candidate.batchId === receipt.batchId);
       setViewedBatch((current) => {
-        if (current === null) return current;
-        const batch = reconcileSyncRetryBatch(current.batch, receipt);
-        return batch === current.batch ? current : { batch, listObservation };
+        if (current?.batch.batchId !== receipt.batchId) return current;
+        const latest = latestViewedSyncBatch(current, listed, listObservation);
+        const batch = reconcileSyncRetryBatch(latest.batch, receipt);
+        return batch === latest.batch ? latest : { batch, listObservation };
       });
     },
   };
@@ -846,7 +877,7 @@ interface SyncModalModel {
   readonly batch: ProfileSyncBatch | null;
   readonly acceptResolved: (
     batch: ProfileSyncBatch,
-    operationId: string,
+    requested: ProfileSyncItem,
   ) => void;
   readonly acceptRetried: (receipt: ProfileSyncRetryReceipt) => void;
   readonly startError: HostRpcError | null;

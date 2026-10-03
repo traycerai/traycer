@@ -5523,6 +5523,163 @@ describe("ProfileSyncModal review regressions", () => {
       }
     });
 
+    it("keeps a newer Verify receipt over an older Check status snapshot of the same row, with lists failing", async () => {
+      const held = gate();
+      resolveGate = held.promise;
+      const readiness = {
+        preparation: "complete" as const,
+        verification: "not-checked" as const,
+        verificationRevision: null,
+        acceptedVerificationRevision: null,
+        identity: "not-checked" as const,
+        identityRevision: null,
+        acceptedIdentityRevision: null,
+        writer: "none" as const,
+        writerGeneration: 0,
+        quarantined: false,
+      };
+      const pending = recordedOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "verification-pending",
+        revision: 6,
+        readiness,
+      });
+      const signedIn = recordedOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "signed-in",
+        revision: 7,
+      });
+      draftStatusOutcome = pending;
+      listBatches = [
+        runWith([
+          {
+            ...syncItem(1, DEST_HOST_ID, "copying", []),
+            preview: null,
+            outcome: pending,
+          },
+        ]),
+      ];
+      mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      try {
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        await screen.findByRole("button", { name: "Verify" });
+        // Hold Check status: it captured the OLD receipt and state.
+        fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+        await waitFor(() =>
+          expect(
+            screen
+              .getByRole("button", { name: "Check status" })
+              .hasAttribute("disabled"),
+          ).toBe(true),
+        );
+        // Meanwhile Verify lands a newer signed-in receipt; lists fail.
+        listFails = true;
+        draftStatusOutcome = signedIn;
+        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+        await waitFor(() =>
+          expect(screen.queryByRole("button", { name: "Verify" })).toBeNull(),
+        );
+        expect(await screen.findByText("Queued")).toBeTruthy();
+      } finally {
+        held.release();
+      }
+      // The older Check status snapshot lands and must not undo it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(screen.getByText("Queued")).toBeTruthy();
+      expect(screen.queryByText("In progress")).toBeNull();
+      expect(screen.queryByText("Needs attention")).toBeNull();
+      expect(screen.queryByText("Synced")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Verify" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Hide details" }));
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Check status" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+    });
+
+    it("keeps a source-account change polled in during Check status when the older snapshot lands", async () => {
+      const held = gate();
+      resolveGate = held.promise;
+      const old = retryableItem();
+      // The older captured answer: the row as it was, now claimed synced.
+      resolveAnswer = (request) => ({
+        batchId: request.batchId,
+        sourceHostId: request.sourceHostId,
+        createdAt: 1,
+        automatic: false,
+        items: [{ ...old, state: "synced" }],
+      });
+      listBatches = [runWith([old])];
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      try {
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Check status" }),
+        );
+        await waitFor(() =>
+          expect(
+            messenger.calls.filter(
+              (call) => call.method === "providers.profileCopy.sync.resolve",
+            ),
+          ).toHaveLength(1),
+        );
+        // The same row is polled to a changed source account while held.
+        listBatches = [
+          runWith([
+            {
+              ...old,
+              state: "needs-action",
+              identityChanged: true,
+              sourceIdentityStamp: "d".repeat(64),
+              sourceSettings: {
+                name: "Renamed on source",
+                color: "#10b981",
+                enabled: false,
+              },
+            },
+          ]),
+        ];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        expect(
+          await screen.findByText(/The source account changed\./),
+        ).toBeTruthy();
+        listFails = true;
+      } finally {
+        held.release();
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      // The older snapshot did not erase the warning or the newer state.
+      expect(screen.getByText(/The source account changed\./)).toBeTruthy();
+      expect(screen.getByText("Needs attention")).toBeTruthy();
+      expect(screen.queryByText("Synced")).toBeNull();
+    });
+
     it("keeps an already-present Retry answer queued, not final, when the list refetch fails", async () => {
       retryOutcome = recordedOutcome({
         attempt: profileCopyAttempt({
