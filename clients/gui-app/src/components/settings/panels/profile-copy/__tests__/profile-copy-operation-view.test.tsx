@@ -80,6 +80,8 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 }));
 
 function resetStores(): void {
+  // reset() also forgets the account-scoped retry request ids.
+  useProfileCopyFlowStore.getState().reset();
   useProfileCopyFlowStore.setState({
     view: null,
     session: 0,

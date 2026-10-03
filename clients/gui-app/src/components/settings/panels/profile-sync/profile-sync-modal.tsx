@@ -2,7 +2,12 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { ProfileSyncList } from "@traycer/protocol/host/profile-sync-schemas";
 import { PROFILE_SYNC_MAX_ITEMS } from "@traycer/protocol/host/profile-sync-schemas";
 import type { Dispatch, SetStateAction } from "react";
-import type { UseQueryResult, UseMutationResult } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type QueryClient,
+  type UseQueryResult,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import type {
   HostRpcError,
   RequestOfMethod,
@@ -35,6 +40,7 @@ import {
   useProfileSyncPending,
 } from "@/hooks/providers/use-profile-sync";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import {
   PROFILE_COPY_PROVIDERS,
@@ -592,6 +598,85 @@ interface ScopedStartNotice {
 interface ScopedStartRefusal extends ScopedStartNotice {
   readonly message: string;
 }
+interface SyncListObservation {
+  readonly query: object | undefined;
+  readonly successes: number;
+}
+interface ViewedSyncBatch {
+  readonly batch: ProfileSyncBatch;
+  readonly listObservation: SyncListObservation;
+}
+
+function currentSyncListObservation(
+  queryClient: QueryClient,
+  sourceHostId: string,
+): SyncListObservation {
+  const query = queryClient.getQueryCache().find({
+    queryKey: hostQueryKeys.method<
+      HostRpcRegistry,
+      "providers.profileCopy.sync.list"
+    >(sourceHostId, "providers.profileCopy.sync.list", { sourceHostId }),
+    exact: true,
+  });
+  return { query, successes: query?.state.dataUpdateCount ?? 0 };
+}
+
+function useProfileSyncViewedBatch(
+  sourceHostId: string,
+  list: UseQueryResult<ProfileSyncList, HostRpcError>,
+): {
+  readonly batch: ProfileSyncBatch | null;
+  readonly setBatchId: (batchId: string | null) => void;
+  readonly acceptStarted: (batch: ProfileSyncBatch) => void;
+} {
+  const queryClient = useQueryClient();
+  // A bounded history poll can omit the opened run; its pending action
+  // observers and last accepted receipt must remain mounted.
+  const [viewedBatch, setViewedBatch] = useState<ViewedSyncBatch | null>(null);
+  const observedBatch = list.data?.batches.find(
+    (b) => b.batchId === viewedBatch?.batch.batchId,
+  );
+  const listObservation = currentSyncListObservation(queryClient, sourceHostId);
+  // A successful start is fresher than the list already cached when its
+  // response arrived. Only a subsequent list success may replace it; a failed
+  // refetch has no new success. Query identity also fences cache recreation.
+  const newerListBatch =
+    viewedBatch !== null &&
+    observedBatch !== undefined &&
+    !list.isFetching &&
+    listObservation.successes > 0 &&
+    (listObservation.query !== viewedBatch.listObservation.query ||
+      listObservation.successes > viewedBatch.listObservation.successes)
+      ? observedBatch
+      : null;
+  if (newerListBatch !== null && newerListBatch !== viewedBatch?.batch)
+    setViewedBatch({ batch: newerListBatch, listObservation });
+  return {
+    batch: newerListBatch ?? viewedBatch?.batch ?? null,
+    setBatchId: (batchId) => {
+      const selectedBatch = list.data?.batches.find(
+        (b) => b.batchId === batchId,
+      );
+      setViewedBatch(
+        selectedBatch === undefined
+          ? null
+          : {
+              batch: selectedBatch,
+              listObservation,
+            },
+      );
+    },
+    acceptStarted: (batch) => {
+      setViewedBatch({
+        batch,
+        // Read the LIVE cache at settlement, rather than the list captured
+        // when the request was sent: it may have polled while start was held.
+        listObservation: currentSyncListObservation(queryClient, sourceHostId),
+      });
+    },
+  };
+}
+
 interface SyncModalModel {
   readonly sourceHostId: string;
   readonly hosts: ProfileCopyHosts;
@@ -646,9 +731,6 @@ function useProfileSyncModalState(props: {
     sourceHostId,
     hosts,
   );
-  // Capture the run the user opened. A bounded history poll can omit it;
-  // that must not unmount its pending action observers or receipts.
-  const [viewedBatch, setViewedBatch] = useState<ProfileSyncBatch | null>(null);
   const [refusedStart, setRefusedStart] = useState<ScopedStartRefusal | null>(
     null,
   );
@@ -665,6 +747,10 @@ function useProfileSyncModalState(props: {
     { enabled: true, subscribed: true },
   );
   const list = useProfileSyncList(sourceHostId);
+  const { batch, setBatchId, acceptStarted } = useProfileSyncViewedBatch(
+    sourceHostId,
+    list,
+  );
   const { selected, profileCount } = selectedCatalogProfiles(
     catalog.data?.providers,
     chosenProviders,
@@ -680,21 +766,6 @@ function useProfileSyncModalState(props: {
   const selectionKey = JSON.stringify(selection);
   const settledKey = useDebouncedValue(selectionKey, 400);
   const start = useProfileSyncStart(sourceHostId);
-  const observedBatch = list.data?.batches.find(
-    (b) => b.batchId === viewedBatch?.batchId,
-  );
-  // Retain the latest observed receipt, not only the run's opening snapshot,
-  // when a later bounded poll no longer includes the selected run.
-  if (observedBatch !== undefined && observedBatch !== viewedBatch)
-    setViewedBatch(observedBatch);
-  const batch = observedBatch ?? viewedBatch;
-  const setBatchId = (batchId: string | null): void => {
-    setViewedBatch(
-      batchId === null
-        ? null
-        : (list.data?.batches.find((b) => b.batchId === batchId) ?? null),
-    );
-  };
   const preview = useProfileSyncPreview(
     sourceHostId,
     selectionKey === settledKey && tab === "now" && batch === null
@@ -752,7 +823,7 @@ function useProfileSyncModalState(props: {
             void preview.refetch();
             return;
           }
-          setViewedBatch(result);
+          acceptStarted(result);
         },
       },
     );

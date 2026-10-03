@@ -77,6 +77,12 @@ interface ProfileCopyFlowState {
     revision: string,
     batchId: string,
   ) => void;
+  /** Uncertain retries retain their identity across result/dialog remounts. */
+  readonly profileCopyRetryRequestIds: ReadonlyMap<string, string>;
+  readonly getProfileCopyRetryRequestId: (
+    attempt: ProfileCopyAttempt,
+    revision: number,
+  ) => string;
   /**
    * attemptId → the last direct answer that refused Sign in or Verify, keyed
    * by the verb and the draft revision it answered at (Q4 ruling). The host
@@ -147,6 +153,26 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
       next.delete(key);
       set({ syncStartBatchIds: next });
     },
+    profileCopyRetryRequestIds: new Map(),
+    getProfileCopyRetryRequestId: (attempt, revision) => {
+      const key = JSON.stringify([
+        attempt.sourceHostId,
+        attempt.operationId,
+        attempt.destinationHostId,
+        attempt.providerId,
+        attempt.sourceProfileId,
+        attempt.attemptId,
+        revision,
+      ]);
+      const previous = get().profileCopyRetryRequestIds;
+      const existing = previous.get(key);
+      if (existing !== undefined) return existing;
+      const requestId = crypto.randomUUID();
+      set({
+        profileCopyRetryRequestIds: new Map(previous).set(key, requestId),
+      });
+      return requestId;
+    },
     directBlocks: {},
     open: (view) => set({ view, session: get().session + 1 }),
     close: () => set({ view: null }),
@@ -184,6 +210,7 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
         activeLogin: null,
         directBlocks: {},
         syncStartBatchIds: new Map(),
+        profileCopyRetryRequestIds: new Map(),
       }),
   }),
 );

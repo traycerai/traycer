@@ -4421,4 +4421,204 @@ describe("ProfileSyncModal review regressions", () => {
       },
     );
   });
+
+  describe("round 25: retry ids across remounts and a fresh start over an older snapshot", () => {
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    const OP = "00000000-0000-4000-8000-000000000001";
+    const receiptA = (): ProfileCopyOutcome =>
+      profileCopyOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "blocked",
+        reason: "unreachable",
+      });
+    const retryableItem = (): ProfileSyncItem => ({
+      ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+      preview: null,
+      outcome: receiptA(),
+    });
+    const RUN = "00000000-0000-4000-8000-0000000000e9";
+
+    describe("an unconfirmed retry across Back and close/reopen", () => {
+      const history = (): ProfileSyncBatch => ({
+        batchId: RUN,
+        sourceHostId: SOURCE_HOST_ID,
+        createdAt: 1_700_000_000_000,
+        automatic: false,
+        items: [retryableItem()],
+      });
+
+      async function openRun(): Promise<void> {
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        await screen.findByRole("button", { name: "Retry" });
+      }
+
+      const retryRequests = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+        messenger.calls
+          .filter((call) => call.method === "providers.profileCopy.retry")
+          .map((call) => profileCopyRetryRequestSchema.parse(call.params));
+
+      async function failedRetry(): Promise<
+        MockHostMessenger<HostRpcRegistry>
+      > {
+        retryThrows = true;
+        listBatches = [history()];
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: noItems,
+          startItems: noItems,
+        });
+        await openRun();
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        expect(
+          await screen.findByText(/Couldn't reach Studio Mac right now/),
+        ).toBeTruthy();
+        return messenger;
+      }
+
+      it("reuses the retry request id after Back and opening the same run again", async () => {
+        const messenger = await failedRetry();
+        fireEvent.click(screen.getByRole("button", { name: "← Back" }));
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(retryRequests(messenger)).toHaveLength(2));
+        const [first, second] = retryRequests(messenger);
+        expect(second.attempt).toEqual(first.attempt);
+        expect(second.expectedRevision).toBe(first.expectedRevision);
+        expect(second.retryRequestId).toBe(first.retryRequestId);
+      });
+
+      it("reuses the retry request id after closing and reopening the dialog", async () => {
+        const messenger = await failedRetry();
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        await waitFor(() =>
+          expect(useProfileCopyFlowStore.getState().view).toBeNull(),
+        );
+        await openRun();
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(retryRequests(messenger)).toHaveLength(2));
+        const [first, second] = retryRequests(messenger);
+        expect(second.retryRequestId).toBe(first.retryRequestId);
+      });
+
+      it("mints a new retry request id after an account reset", async () => {
+        const messenger = await failedRetry();
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        await waitFor(() =>
+          expect(useProfileCopyFlowStore.getState().view).toBeNull(),
+        );
+        act(() => {
+          useProfileCopyFlowStore.getState().reset();
+        });
+        await openRun();
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+        await waitFor(() => expect(retryRequests(messenger)).toHaveLength(2));
+        const [first, second] = retryRequests(messenger);
+        expect(second.retryRequestId).not.toBe(first.retryRequestId);
+      });
+    });
+
+    it("keeps a fresh start answer over an older same-batch snapshot polled during the hold, through a failed refetch, until a newer poll supersedes it", async () => {
+      const held = gate();
+      startGate = held.promise;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        // The newer answer: the same reviewed tuple, now synced.
+        startItems: () => [
+          { ...syncItem(1, DEST_HOST_ID, "synced", []), preview: null },
+        ],
+      });
+      try {
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(1));
+        const submitted = profileSyncStartSchema.parse(
+          startCalls(messenger)[0].params,
+        ).batchId;
+        // While held, a poll lists the SAME batch with an older snapshot.
+        listBatches = [
+          {
+            batchId: submitted,
+            sourceHostId: SOURCE_HOST_ID,
+            createdAt: 1,
+            automatic: false,
+            items: [retryableItem()],
+          },
+        ];
+        const listCalls = (): number =>
+          messenger.calls.filter(
+            (call) => call.method === "providers.profileCopy.sync.list",
+          ).length;
+        const listsBefore = listCalls();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        // The poll really reached the host and (with listFails still off)
+        // was answered successfully with the older same-batch snapshot.
+        await waitFor(() => expect(listCalls()).toBeGreaterThan(listsBefore));
+        // Then the next refetch fails, and the start answer lands.
+        listFails = true;
+      } finally {
+        held.release();
+      }
+      expect(await screen.findByText("Synced")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Check status" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      // A failed post-success refetch does not bring the older snapshot back.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByText("Synced")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      // A later, newer poll does supersede it, and survives omission.
+      listFails = false;
+      const submittedId = profileSyncStartSchema.parse(
+        startCalls(messenger)[0].params,
+      ).batchId;
+      listBatches = [
+        {
+          batchId: submittedId,
+          sourceHostId: SOURCE_HOST_ID,
+          createdAt: 1,
+          automatic: false,
+          items: [
+            {
+              ...syncItem(1, DEST_HOST_ID, "source-removed", []),
+              preview: null,
+            },
+          ],
+        },
+      ];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(await screen.findByText("Profile removed")).toBeTruthy();
+      listBatches = [];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(screen.getByText("Profile removed")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+    });
+  });
 });

@@ -1,5 +1,5 @@
 import { SYNC_STATE_LABELS } from "./profile-sync-state";
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProfileSyncBatch,
@@ -10,6 +10,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useProfileSyncResolve } from "@/hooks/providers/use-profile-sync";
 import { useProfileCopyRetryMutation } from "@/hooks/providers/profile-copy/use-profile-copy-operation-mutations";
 import { useProfileCopyDraftPending } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
+import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import {
   profileCopySourceRecovery,
   profileCopyPreviewRecord,
@@ -257,17 +258,14 @@ function useProfileSyncItemRetry(
 ): SyncItemRetry {
   const retry = useProfileCopyRetryMutation(sourceHostId, item.operationId);
   const error = useProfileSyncItemError(item, retry.error);
-  const retryIds = useRef(new Map<string, string>());
+  const getRetryRequestId = useProfileCopyFlowStore(
+    (state) => state.getProfileCopyRetryRequestId,
+  );
   const [notice, setNotice] = useState<SyncRetryNotice | null>(null);
   const outcome = item.outcome;
   const run = (): void => {
     if (outcome === null || retry.isPending || !canRetrySyncItem(item)) return;
-    const key = `${outcome.attempt.attemptId}:${outcome.revision}`;
-    let id = retryIds.current.get(key);
-    if (id === undefined) {
-      id = crypto.randomUUID();
-      retryIds.current.set(key, id);
-    }
+    const id = getRetryRequestId(outcome.attempt, outcome.revision);
     setNotice(null);
     error.capture();
     retry.mutate(

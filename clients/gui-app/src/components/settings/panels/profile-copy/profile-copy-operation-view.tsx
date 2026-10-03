@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -22,7 +22,6 @@ import {
   isOutcomeSettled,
   isRecordedOutcome,
   knownRouteFromRecord,
-  profileCopyAttemptKey,
   profileCopyOperationRows,
   profileCopySourceRecovery,
   type ProfileCopyKnownRoute,
@@ -506,18 +505,14 @@ function useProfileCopyAttemptRetry(
     handle.sourceHostId,
     handle.operationId,
   );
-  // One request id per (attempt, revision): a resend after a lost answer is
-  // the SAME retry, which the source rejoins instead of refusing.
-  const retryRequestIds = useRef(new Map<string, string>());
+  // A lost answer can be retried after reopening this view, with the same ID.
+  const getRetryRequestId = useProfileCopyFlowStore(
+    (state) => state.getProfileCopyRetryRequestId,
+  );
   const [notice, setNotice] = useState<RetryNotice | null>(null);
 
   const run = (): void => {
-    const key = `${profileCopyAttemptKey(outcome.attempt)}@${outcome.revision}`;
-    let retryRequestId = retryRequestIds.current.get(key);
-    if (retryRequestId === undefined) {
-      retryRequestId = crypto.randomUUID();
-      retryRequestIds.current.set(key, retryRequestId);
-    }
+    const retryRequestId = getRetryRequestId(outcome.attempt, outcome.revision);
     setNotice(null);
     retry.mutate(
       {

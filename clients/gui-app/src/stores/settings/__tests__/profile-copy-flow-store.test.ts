@@ -214,3 +214,42 @@ describe("useProfileCopyFlowStore uncertain sync start ids", () => {
     expect(idFor(SOURCE_HOST_ID, REVISION)).not.toBe(base);
   });
 });
+
+describe("useProfileCopyFlowStore retry request ids", () => {
+  afterEach(resetFlowStore);
+
+  const idFor = (
+    overrides: Parameters<typeof profileCopyAttempt>[0],
+    revision: number,
+  ): string =>
+    useProfileCopyFlowStore
+      .getState()
+      .getProfileCopyRetryRequestId(profileCopyAttempt(overrides), revision);
+
+  it("returns the same id for the same attempt and revision", () => {
+    const first = idFor({}, 3);
+    expect(first).toBeTruthy();
+    expect(idFor({}, 3)).toBe(first);
+  });
+
+  it("separates every part of the captured identity and the revision", () => {
+    const base = idFor({}, 3);
+    const ids = [
+      idFor({}, 4),
+      idFor({ attemptId: ATTEMPT_TWO_ID }, 3),
+      idFor({ operationId: "00000000-0000-4000-8000-0000000000aa" }, 3),
+      idFor({ destinationHostId: DEST_HOST_TWO_ID }, 3),
+      idFor({ sourceHostId: "another-source-host" }, 3),
+    ];
+    for (const id of ids) expect(id).not.toBe(base);
+    expect(new Set([base, ...ids]).size).toBe(ids.length + 1);
+  });
+
+  it("survives closing the dialog but not an account reset", () => {
+    const base = idFor({}, 3);
+    useProfileCopyFlowStore.getState().close();
+    expect(idFor({}, 3)).toBe(base);
+    useProfileCopyFlowStore.getState().reset();
+    expect(idFor({}, 3)).not.toBe(base);
+  });
+});
