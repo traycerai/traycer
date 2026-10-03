@@ -3,11 +3,10 @@ import {
   agentActivityTiers,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
-import { agentLabelUnder } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import {
   useRegisteredEpicLiveAgentIds,
   useRegisteredEpicLiveAgents,
-  useRegisteredEpicTitle,
 } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
@@ -161,7 +160,6 @@ function WarmAgentList(props: { readonly epicId: string }): ReactNode {
     [working, props.epicId],
   );
   const agents = useRegisteredEpicLiveAgents(refs);
-  const taskTitle = useRegisteredEpicTitle(props.epicId);
   if (liveAgentIds === null) return null;
   const named = working.flatMap((entry, index) => {
     const agent = agents[index] ?? null;
@@ -175,36 +173,28 @@ function WarmAgentList(props: { readonly epicId: string }): ReactNode {
       data-testid="side-tab-hover-card-agents"
       className="flex flex-col gap-1"
     >
-      {shown.map((agent) => {
-        const name = agentLabelUnder(taskTitle, agent.title);
-        return (
-          <li
-            key={agent.agentId}
-            data-tier={agent.tier}
-            className="flex min-w-0 items-center gap-1.5"
-          >
-            <StatusGlyph
-              status={agent.tier === "turn" ? "running" : "background"}
-              className="size-3.5 text-muted-foreground"
-              testId={undefined}
-              label={
-                agent.tier === "turn"
-                  ? "Agent in progress"
-                  : BACKGROUND_ACTIVITY_TITLE
-              }
-            />
-            <span
-              className={cn(
-                // Fades at the edge, as the strip's titles do.
-                "header-tab-title-text min-w-0 flex-1",
-                name.main ? "text-muted-foreground" : "text-foreground",
-              )}
-            >
-              {name.text}
-            </span>
-          </li>
-        );
-      })}
+      {shown.map((agent) => (
+        <li
+          key={agent.agentId}
+          data-tier={agent.tier}
+          className="flex min-w-0 items-center gap-1.5"
+        >
+          <StatusGlyph
+            status={agent.tier === "turn" ? "running" : "background"}
+            className="size-3.5 text-muted-foreground"
+            testId={undefined}
+            label={
+              agent.tier === "turn"
+                ? "Agent in progress"
+                : BACKGROUND_ACTIVITY_TITLE
+            }
+          />
+          {/* Fades at the edge, as the strip's titles do. */}
+          <span className="header-tab-title-text min-w-0 flex-1 text-foreground">
+            {displayTitle(agent.title ?? "", "agent")}
+          </span>
+        </li>
+      ))}
       {more > 0 ? (
         <li className="text-muted-foreground">+{more} more</li>
       ) : null}

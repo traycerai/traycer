@@ -140,7 +140,7 @@ describe("SideTabHoverCardBody", () => {
     expect(screen.queryByTestId("side-tab-hover-card-agents")).toBeNull();
   });
 
-  it("lists working agents by name for a warm epic, the one named like its task as the main agent", () => {
+  it("lists working agents by their own names for a warm epic, the one named like its task included", () => {
     const registry = __getOpenEpicRegistryForTests();
     const handle = openEpic("epic-warm");
     handle.store.setState({
@@ -181,7 +181,7 @@ describe("SideTabHoverCardBody", () => {
     // that element specifically so this does not depend on whatever fallback
     // text the (possibly nested) running spinner paints.
     expect(items.map((item) => item.children[1]?.textContent)).toEqual([
-      "Main agent",
+      "Fix login",
       "Agent Two",
     ]);
     expect(items.map((item) => (item as HTMLElement).dataset.tier)).toEqual([
