@@ -119,6 +119,8 @@ function resetStores(): void {
 
 // Per-test knobs for the start and resolve answers; reset in beforeEach.
 let startFailures = 0;
+// The revision the preview answers with; a test moves it to model a re-check.
+let previewRevision: string = PREVIEW_REVISION;
 let startBatchSource: string | null = null;
 let listFails = false;
 let listBatches: readonly ProfileSyncBatch[] = [];
@@ -216,7 +218,7 @@ function mountWith(options: MountOptions): MockHostMessenger<HostRpcRegistry> {
       },
       "providers.profileCopy.sync.preview": (params) => ({
         selection: previewSelection ?? params,
-        revision: PREVIEW_REVISION,
+        revision: previewRevision,
         items: [...options.previewItems(params)],
       }),
       "providers.profileCopy.sync.start": (params): ProfileSyncBatch => {
@@ -571,6 +573,7 @@ async function pickDestinations(names: readonly RegExp[]): Promise<void> {
 describe("ProfileSyncModal review regressions", () => {
   beforeEach(() => {
     startFailures = 0;
+    previewRevision = PREVIEW_REVISION;
     startBatchSource = null;
     listFails = false;
     listBatches = [];
@@ -1337,6 +1340,50 @@ describe("ProfileSyncModal review regressions", () => {
       const second = profileSyncStartSchema.parse(secondCall.params);
       expect(second.selection).toEqual(first.selection);
       expect(second.batchId).toBe(first.batchId);
+    });
+
+    it("an uncertain start's failure text is dropped once Check again returns a new revision, and the next start gets a new batch id", async () => {
+      startFailures = 1;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: READY,
+        startItems: noItems,
+      });
+      try {
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        expect(await screen.findByText(/could not be confirmed/)).toBeTruthy();
+        const before = previewCalls(messenger).length;
+        previewRevision = "b".repeat(64);
+        fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+        await waitFor(() =>
+          expect(previewCalls(messenger).length).toBeGreaterThan(before),
+        );
+        await waitFor(() =>
+          expect(screen.queryByText(/could not be confirmed/)).toBeNull(),
+        );
+        await waitFor(() =>
+          expect(
+            screen
+              .getByRole("button", { name: "Sync now" })
+              .hasAttribute("disabled"),
+          ).toBe(false),
+        );
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(2));
+        const [firstCall, secondCall] = startCalls(messenger);
+        const first = profileSyncStartSchema.parse(firstCall.params);
+        const second = profileSyncStartSchema.parse(secondCall.params);
+        expect(second.selection).toEqual(first.selection);
+        expect(first.revision).toBe(PREVIEW_REVISION);
+        expect(second.revision).toBe("b".repeat(64));
+        expect(second.batchId).not.toBe(first.batchId);
+      } finally {
+        previewRevision = PREVIEW_REVISION;
+      }
     });
   });
 

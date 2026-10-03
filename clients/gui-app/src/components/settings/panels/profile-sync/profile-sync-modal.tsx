@@ -657,11 +657,12 @@ function useProfileSyncModalState(props: {
     selection,
     selectionKey === settledKey,
   );
-  const startError =
-    start.variables !== undefined &&
-    JSON.stringify(start.variables.selection) === selectionKey
-      ? start.error
-      : null;
+  const startError = matchingStartError(
+    start.variables,
+    start.error,
+    selectionKey,
+    currentPreview,
+  );
   const sourceName = hosts.nameFor(sourceHostId);
   const canStart =
     currentPreview !== null &&
@@ -734,6 +735,21 @@ function useProfileSyncModalState(props: {
     startRefusal: matchingStartRefusal(refusedStart, selectionKey),
     run,
   };
+}
+
+function matchingStartError(
+  request:
+    | RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">
+    | undefined,
+  error: HostRpcError | null,
+  selectionKey: string,
+  preview: ProfileSyncPreview | null,
+): HostRpcError | null {
+  return request !== undefined &&
+    JSON.stringify(request.selection) === selectionKey &&
+    request.revision === preview?.revision
+    ? error
+    : null;
 }
 
 function matchingStartRefusal(
