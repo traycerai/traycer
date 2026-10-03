@@ -15,10 +15,14 @@ import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messen
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { ProfileCopyOutcome } from "@traycer/protocol/host/profile-copy-schemas";
-import { profileCopyRetryRequestSchema } from "@traycer/protocol/host/profile-copy-schemas";
+import {
+  profileCopyDraftRequestSchema,
+  profileCopyRetryRequestSchema,
+} from "@traycer/protocol/host/profile-copy-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
   profileSyncSaveRuleSchema,
+  profileSyncStopRuleSchema,
   profileSyncSelectionSchema,
   profileSyncStartSchema,
 } from "@traycer/protocol/host/profile-sync-schemas";
@@ -3723,6 +3727,74 @@ describe("ProfileSyncModal review regressions", () => {
       expect(screen.getByRole("button", { name: "Verify" })).toBeTruthy();
     }
 
+    it("keeps the draft pending when polling replaces the receipt with a newer attempt of the same operation", async () => {
+      const held = gate();
+      verifyGate = held.promise;
+      const messenger = await openDraftReview();
+      const draftReads = () =>
+        messenger.calls
+          .filter((call) => call.method === "providers.profileCopy.draftStatus")
+          .map((call) => profileCopyDraftRequestSchema.parse(call.params));
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+        await waitFor(() =>
+          expect(
+            messenger.calls.filter(
+              (call) => call.method === "providers.profileCopy.verify",
+            ),
+          ).toHaveLength(1),
+        );
+        // Polling now reports the same operation under a newer attempt.
+        const newer: ProfileCopyOutcome = {
+          ...verificationPending(),
+          attempt: profileCopyAttempt({
+            operationId: "00000000-0000-4000-8000-000000000001",
+            attemptId: ATTEMPT_TWO_ID,
+          }),
+        };
+        draftStatusOutcome = newer;
+        updateStarted = (batch) => ({
+          ...batch,
+          items: batch.items.map((entry) => ({ ...entry, outcome: newer })),
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        // The newer receipt was actually observed by the panel.
+        await waitFor(() =>
+          expect(
+            draftReads().some(
+              (read) => read.attempt.attemptId === ATTEMPT_TWO_ID,
+            ),
+          ).toBe(true),
+        );
+        // The Verify for the old attempt is still in flight: every exit is
+        // still held and the details stay mounted.
+        for (const name of ["Hide details", "← Back", "Done"])
+          expect(
+            screen.getByRole("button", { name }).hasAttribute("disabled"),
+          ).toBe(true);
+        attemptExits();
+        expect(useProfileCopyFlowStore.getState().view).not.toBeNull();
+        expect(
+          screen.getByRole("button", { name: "Hide details" }),
+        ).toBeTruthy();
+        expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
+      } finally {
+        held.release();
+      }
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "Done" }).hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      expect(
+        screen
+          .getByRole("button", { name: "Hide details" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
     it.each([
       ["a stale-revision answer", "stale", (): void => undefined],
       [
@@ -3783,5 +3855,202 @@ describe("ProfileSyncModal review regressions", () => {
         expect(screen.queryByRole("button", { name: "Verify" })).toBeNull();
       },
     );
+  });
+
+  describe("round 22: frozen selection, stop revision and retained rules", () => {
+    const REACH_ERROR = /Couldn't reach Studio Mac right now/;
+
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    function callsOf(
+      messenger: MockHostMessenger<HostRpcRegistry>,
+      method: string,
+    ) {
+      return messenger.calls.filter((call) => call.method === method);
+    }
+
+    const isDisabled = (element: HTMLElement): boolean =>
+      element.hasAttribute("disabled") ||
+      element.getAttribute("aria-disabled") === "true" ||
+      element.hasAttribute("data-disabled");
+
+    it("freezes the selection while a start is in flight, even with the provider picker already open, and sends the original selection", async () => {
+      const held = gate();
+      startGate = held.promise;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: noItems,
+      });
+      try {
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        // Open the picker BEFORE the start, so it is already open when held.
+        fireEvent.click(
+          screen.getByRole("button", { name: "Choose providers" }),
+        );
+        await screen.findByRole("option", { name: /Claude/ });
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(1));
+        const frozen: HTMLElement[] = [
+          screen.getByRole("checkbox", { name: /Linux box/ }),
+          screen.getByRole("checkbox", { name: /Old Mac/ }),
+          screen.getByRole("button", { name: "Choose providers" }),
+          screen.getByRole("button", { name: "Check again" }),
+          screen.getByRole("option", { name: /Claude/ }),
+          screen.getByRole("button", { name: /^(Select all|Clear)$/ }),
+        ];
+        for (const element of frozen) expect(isDisabled(element)).toBe(true);
+        // Acting on them changes nothing.
+        for (const element of frozen) fireEvent.click(element);
+        expect(
+          screen
+            .getByRole("checkbox", { name: /Linux box/ })
+            .getAttribute("aria-checked"),
+        ).toBe("true");
+        expect(
+          screen
+            .getByRole("checkbox", { name: /Old Mac/ })
+            .getAttribute("aria-checked"),
+        ).toBe("false");
+        expect(screen.getByText("1 profile transfers selected")).toBeTruthy();
+        expect(startCalls(messenger)).toHaveLength(1);
+      } finally {
+        held.release();
+      }
+      const sent = profileSyncStartSchema.parse(
+        startCalls(messenger)[0].params,
+      );
+      expect(sent.selection.destinationHostIds).toEqual([DEST_HOST_ID]);
+    });
+
+    it("confirms a Stop at the revision it was opened at, not the latest polled one", async () => {
+      const messenger = mount([SAVED_RULE]);
+      openSync(null);
+      fireEvent.mouseDown(
+        await screen.findByRole("tab", { name: /Automatic sync/ }),
+        { button: 0 },
+      );
+      await screen.findByRole("heading", { name: "Linux box" });
+      fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+      const confirm = await screen.findByRole("button", {
+        name: "Stop automatic sync",
+      });
+      // The same rule moves on while the confirmation is up.
+      listRules = [
+        { ...SAVED_RULE, paused: true, status: "paused", revision: 2 },
+      ];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      await screen.findByText("Paused");
+      fireEvent.click(
+        screen.getByRole("button", { name: "Stop automatic sync" }),
+      );
+      expect(confirm).toBeTruthy();
+      await waitFor(() =>
+        expect(
+          callsOf(messenger, "providers.profileCopy.sync.stopRule"),
+        ).toHaveLength(1),
+      );
+      const sent = profileSyncStopRuleSchema.parse(
+        callsOf(messenger, "providers.profileCopy.sync.stopRule")[0].params,
+      );
+      expect(sent.expectedRevision).toBe(SAVED_RULE.revision);
+    });
+
+    describe.each([
+      ["a new rule", "new"],
+      ["an existing rule", "edit"],
+    ] as const)("%s's editor", (_label, kind) => {
+      it("stays mounted with its draft when a background list poll fails, and a rejected save then shows its inline error beside it", async () => {
+        const held = gate();
+        saveRuleGate = held.promise;
+        const messenger = mount(kind === "edit" ? [SAVED_RULE] : []);
+        try {
+          openSync(null);
+          fireEvent.mouseDown(
+            await screen.findByRole("tab", { name: /Automatic sync/ }),
+            { button: 0 },
+          );
+          if (kind === "edit") {
+            await screen.findByRole("heading", { name: "Linux box" });
+            fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+            fireEvent.click(
+              await screen.findByRole("checkbox", {
+                name: /All supported providers/,
+              }),
+            );
+          } else {
+            fireEvent.click(
+              await screen.findByRole("button", { name: "Add device" }),
+            );
+            fireEvent.keyDown(
+              await screen.findByRole("combobox", {
+                name: "Destination device",
+              }),
+              { key: "ArrowDown" },
+            );
+            fireEvent.click(
+              await screen.findByRole("option", { name: /Linux box/ }),
+            );
+          }
+          fireEvent.click(
+            await screen.findByRole("button", {
+              name: kind === "edit" ? "Save changes" : "Enable automatic sync",
+            }),
+          );
+          await waitFor(() =>
+            expect(
+              callsOf(messenger, "providers.profileCopy.sync.saveRule"),
+            ).toHaveLength(1),
+          );
+          // A background poll fails while the save is still in flight.
+          listFails = true;
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(6_000);
+          });
+          await screen.findByRole("button", { name: "Try again" });
+          // The editor and its draft are still there, beside the list error.
+          expect(
+            screen.getByRole("combobox", { name: "Destination device" }),
+          ).toBeTruthy();
+          expect(
+            screen.getByRole("button", {
+              name: kind === "edit" ? "Save changes" : "Enable automatic sync",
+            }),
+          ).toBeTruthy();
+          if (kind === "edit")
+            expect(
+              screen
+                .getByRole("checkbox", { name: /All supported providers/ })
+                .getAttribute("aria-checked"),
+            ).toBe("true");
+          expect(screen.getAllByText(REACH_ERROR)).toHaveLength(1);
+          saveRuleThrows = true;
+        } finally {
+          held.release();
+        }
+        // The rejected save's own error joins the list error, in the editor.
+        await waitFor(() =>
+          expect(screen.getAllByText(REACH_ERROR)).toHaveLength(2),
+        );
+        expect(
+          screen.getByRole("combobox", { name: "Destination device" }),
+        ).toBeTruthy();
+      });
+    });
   });
 });

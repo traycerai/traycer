@@ -7853,8 +7853,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 // `_NoOverlappingHostRpcMethods` assertion below is what keeps a method from
 // silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
-  ...PROFILE_COPY_RPC_METHODS,
-  ...PROFILE_SYNC_RPC_METHODS,
   // Optional (non-floor) capability: narrow profile-only update of a chat's
   // persisted run settings - the host patches its own authoritative tuple, so
   // clients never rebuild (and stale-patch) the full tuple to move a chat's
@@ -11490,7 +11488,8 @@ type HostRpcNotificationMethodMap = {
   };
 };
 
-// The six literals must not declare the same method. Nothing about the merge
+// The six local literals and two profile families must not declare the same
+// method. Nothing about the merge
 // below would tell you if they did: the spread silently keeps the LAST
 // occurrence, while the intersection claims a method that has two
 // contradictory version lines - so a duplicate would compile, type-check, and
@@ -11502,7 +11501,25 @@ type HostRpcNotificationMethodMap = {
 // cannot be dropped as unused (`tsc -b` reports TS6196 for one).
 type AssertNever<T extends never> = T;
 
+// Keep the already named profile families out of the large tail literal so
+// their versioned schemas do not push its declaration emission over TS7056.
+type HostRpcProfileMethods = typeof PROFILE_COPY_RPC_METHODS &
+  typeof PROFILE_SYNC_RPC_METHODS;
+
 type DuplicateHostRpcMethodNames =
+  | Extract<
+      keyof typeof PROFILE_COPY_RPC_METHODS,
+      keyof typeof PROFILE_SYNC_RPC_METHODS
+    >
+  | Extract<
+      keyof HostRpcProfileMethods,
+      | keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION
+      | keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
+      | keyof typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_EDITING_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION
+      | keyof typeof HOST_RPC_NOTIFICATION_METHODS
+    >
   | Extract<
       keyof typeof HOST_RPC_REGISTRY_BASE_DEFINITION,
       keyof typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION
@@ -11567,7 +11584,8 @@ type DuplicateHostRpcMethodNames =
 /**
  * The definition every consumer sees.
  *
- * Five of the six literals contribute their own precise `typeof`. The
+ * Five of the six local literals and both profile families contribute their
+ * own precise `typeof`. The
  * notification literal contributes `HostRpcNotificationMethodMap` instead:
  * its post-v1 minors carry the large protocol Zod unions that tip declaration
  * emit over TS7056's serialization ceiling, so those slots are manually named
@@ -11583,6 +11601,7 @@ type DuplicateHostRpcMethodNames =
  */
 type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
   typeof HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION &
+  HostRpcProfileMethods &
   typeof HOST_RPC_PROVIDERS_REGISTRY_DEFINITION &
   typeof HOST_RPC_EDITING_REGISTRY_DEFINITION &
   typeof HOST_RPC_DRAFTS_REGISTRY_DEFINITION &
@@ -11591,6 +11610,8 @@ type HostRpcRegistryDefinition = typeof HOST_RPC_REGISTRY_BASE_DEFINITION &
 
 const HOST_RPC_REGISTRY_DEFINITION: HostRpcRegistryDefinition = {
   ...HOST_RPC_REGISTRY_BASE_DEFINITION,
+  ...PROFILE_COPY_RPC_METHODS,
+  ...PROFILE_SYNC_RPC_METHODS,
   ...HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION,
   ...HOST_RPC_PROVIDERS_REGISTRY_DEFINITION,
   ...HOST_RPC_EDITING_REGISTRY_DEFINITION,

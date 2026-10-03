@@ -144,7 +144,7 @@ export function ProfileSyncModal(props: {
               />
             </>
           ) : null}
-          {batch === null && tab === "automatic" && list.isSuccess ? (
+          {batch === null && tab === "automatic" && list.data !== undefined ? (
             <ProfileSyncRules
               hostId={sourceHostId}
               hosts={hosts}
@@ -158,6 +158,7 @@ export function ProfileSyncModal(props: {
             <ProfileSyncSelectionContent
               sourceHostId={sourceHostId}
               hosts={hosts}
+              disabled={pending}
               providers={catalog.data?.providers ?? []}
               selected={selected}
               setSelected={setSelected}
@@ -359,6 +360,7 @@ function selectionStatus(
 interface SelectionContentProps {
   readonly sourceHostId: string;
   readonly hosts: ProfileCopyHosts;
+  readonly disabled: boolean;
   readonly providers: readonly ProviderCliState[];
   readonly selected: ProfileCopyWireProvider[];
   readonly setSelected: (value: ProfileCopyWireProvider[]) => void;
@@ -378,6 +380,7 @@ interface SelectionContentProps {
 function ProfileSyncSelectionContent({
   sourceHostId,
   hosts,
+  disabled,
   providers,
   selected,
   setSelected,
@@ -395,7 +398,7 @@ function ProfileSyncSelectionContent({
   onViewRun,
 }: SelectionContentProps): ReactNode {
   const sourceName = hosts.nameFor(sourceHostId);
-  const canCheck = selectionReady && !preview.isFetching;
+  const canCheck = !disabled && selectionReady && !preview.isFetching;
   const recentRuns = batches
     .filter(
       (batch) => batch.sourceHostId === sourceHostId && batch.items.length > 0,
@@ -417,19 +420,22 @@ function ProfileSyncSelectionContent({
       <ProfileSyncProviderPicker
         providers={providers}
         selected={selected}
-        onChange={setSelected}
-        disabled={false}
+        onChange={(value) => {
+          if (!disabled) setSelected(value);
+        }}
+        disabled={disabled}
       />
       <ProfileSyncDestinations
         sourceHostId={sourceHostId}
         hosts={hosts}
+        disabled={disabled}
         destinations={destinations}
         setDestinations={setDestinations}
         preview={currentPreview}
         checking={checking}
         canCheck={canCheck}
         check={() => {
-          if (selectionReady) void preview.refetch();
+          if (!disabled && selectionReady) void preview.refetch();
         }}
       />
 
@@ -466,7 +472,10 @@ function ProfileSyncSelectionContent({
               size="sm"
               variant="ghost"
               className="justify-between"
-              onClick={() => onViewRun(b.batchId)}
+              disabled={disabled}
+              onClick={() => {
+                if (!disabled) onViewRun(b.batchId);
+              }}
             >
               <span>{new Date(b.createdAt).toLocaleString()}</span>
               <span>{b.items.length} profile transfers</span>
@@ -480,6 +489,7 @@ function ProfileSyncSelectionContent({
 function ProfileSyncDestinations({
   sourceHostId,
   hosts,
+  disabled,
   destinations,
   setDestinations,
   preview,
@@ -489,6 +499,7 @@ function ProfileSyncDestinations({
 }: {
   readonly sourceHostId: string;
   readonly hosts: ProfileCopyHosts;
+  readonly disabled: boolean;
   readonly destinations: string[];
   readonly setDestinations: Dispatch<SetStateAction<string[]>>;
   readonly preview: ProfileSyncPreview | null;
@@ -498,6 +509,7 @@ function ProfileSyncDestinations({
 }): ReactNode {
   const id = useId();
   const candidates = hosts.options.filter((h) => h.hostId !== sourceHostId);
+  const selectedDestinations = new Set(destinations);
   return (
     <section className="flex flex-col gap-2">
       <h3 className="text-ui-sm font-medium">Destination devices</h3>
@@ -515,18 +527,20 @@ function ProfileSyncDestinations({
               >
                 <Checkbox
                   id={`${id}-${host.hostId}`}
-                  checked={destinations.includes(host.hostId)}
+                  checked={selectedDestinations.has(host.hostId)}
                   disabled={
-                    !destinations.includes(host.hostId) &&
-                    destinations.length >= 16
+                    disabled ||
+                    (!selectedDestinations.has(host.hostId) &&
+                      destinations.length >= 16)
                   }
-                  onCheckedChange={(checked) =>
+                  onCheckedChange={(checked) => {
+                    if (disabled) return;
                     setDestinations((current) =>
                       checked === true
                         ? [...current, host.hostId]
                         : current.filter((id) => id !== host.hostId),
-                    )
-                  }
+                    );
+                  }}
                 />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-ui-sm font-medium">

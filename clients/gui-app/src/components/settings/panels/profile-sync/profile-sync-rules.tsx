@@ -201,8 +201,8 @@ export function ProfileSyncRules(props: {
                       remove.mutate(
                         {
                           sourceHostId: props.hostId,
-                          ruleId: rule.ruleId,
-                          expectedRevision: rule.revision,
+                          ruleId: stop.ruleId,
+                          expectedRevision: stop.revision,
                         },
                         { onSuccess: () => setStop(null) },
                       )

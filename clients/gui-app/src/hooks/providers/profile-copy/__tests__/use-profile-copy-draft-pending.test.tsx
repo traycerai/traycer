@@ -200,7 +200,7 @@ describe("useProfileCopyDraftPending", () => {
   afterEach(cleanup);
 
   it.each(DRAFT_KEYS)(
-    "follows the operation tuple while %s is in flight, even when polling replaces the receipt",
+    "holds the matching operation tuple while %s is in flight, and no other",
     async (_name, keyFor) => {
       const attempt = profileCopyAttempt({});
       const queryClient = new QueryClient();
@@ -230,13 +230,6 @@ describe("useProfileCopyDraftPending", () => {
         attempt.operationId,
         attempt.destinationHostId,
       );
-      // A later receipt for the same operation is a different attempt id; the
-      // tuple, not the receipt, is what keeps the draft mounted.
-      const afterPolling = tuple(
-        attempt.sourceHostId,
-        attempt.operationId,
-        attempt.destinationHostId,
-      );
       const otherOperation = tuple(
         attempt.sourceHostId,
         "00000000-0000-4000-8000-0000000000ff",
@@ -258,7 +251,6 @@ describe("useProfileCopyDraftPending", () => {
           await Promise.resolve();
         });
         await waitFor(() => expect(own.result.current).toBe(true));
-        expect(afterPolling.result.current).toBe(true);
         expect(otherOperation.result.current).toBe(false);
         expect(otherSource.result.current).toBe(false);
         expect(otherDestination.result.current).toBe(false);
