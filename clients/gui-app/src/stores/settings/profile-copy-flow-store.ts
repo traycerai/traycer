@@ -23,6 +23,11 @@ import type {
  */
 export type ProfileCopyFlowView =
   | {
+      readonly kind: "sync";
+      readonly sourceHostId: string;
+      readonly providerId: ProfileCopyWireProvider | null;
+    }
+  | {
       /** Pick devices, preview, start - from a profile on `sourceHostId`. */
       readonly kind: "new";
       readonly sourceHostId: string;

@@ -12,7 +12,7 @@ import {
   writeProfileCopyOperation,
 } from "@/hooks/providers/profile-copy/profile-copy-cache";
 import { reportProfileCopyStarted } from "@/hooks/providers/profile-copy/profile-copy-observations";
-import { profileCopyMutationKeys } from "@/lib/query-keys";
+import { hostQueryKeys, profileCopyMutationKeys } from "@/lib/query-keys";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
 
@@ -175,6 +175,12 @@ export function useProfileCopyRetryMutation(
       onSuccess: () => {
         void queryClient.invalidateQueries({
           queryKey: profileCopyStatusKey(sourceHostId, operationId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            sourceHostId,
+            "providers.profileCopy.sync.list",
+          ),
         });
       },
     },

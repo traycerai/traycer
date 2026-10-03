@@ -1,3 +1,4 @@
+import { PROFILE_SYNC_RPC_METHODS } from "./profile-sync-contracts";
 import { PROFILE_COPY_RPC_METHODS } from "./profile-copy-contracts";
 import {
   organizationReadV10,
@@ -7853,6 +7854,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
 // silently existing in more than one of them.
 const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   ...PROFILE_COPY_RPC_METHODS,
+  ...PROFILE_SYNC_RPC_METHODS,
   // Optional (non-floor) capability: narrow profile-only update of a chat's
   // persisted run settings - the host patches its own authoritative tuple, so
   // clients never rebuild (and stale-patch) the full tuple to move a chat's

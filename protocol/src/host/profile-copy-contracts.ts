@@ -388,13 +388,16 @@ export const PROFILE_COPY_RPC_METHODS = {
   },
 } as const;
 
-export type ProfileCopyMethod = keyof typeof PROFILE_COPY_RPC_METHODS;
+export type ProfileCopyMethod =
+  | keyof typeof PROFILE_COPY_RPC_METHODS
+  | "host.profileCopy.applySync";
 
 export const PROFILE_COPY_INTERNAL_METHODS = [
   "host.profileCopy.preflight",
   "host.profileCopy.import",
   "host.profileCopy.receipt",
   "host.profileCopy.cancel",
+  "host.profileCopy.applySync",
 ] as const;
 
 /** A wire-only gate. Consult live route/adapter admission separately and recheck

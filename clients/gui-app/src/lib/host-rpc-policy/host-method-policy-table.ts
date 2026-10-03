@@ -1848,6 +1848,36 @@ export const HOST_METHOD_POLL_TABLE = {
   // settled; `incoming` never does, because a copy started on another device
   // arrives with no push and no focus refetch, so the slow lane is the only
   // thing that lists it on a Providers screen already open here.
+  "providers.profileCopy.sync.preview": { ...LATEST_SCHEDULING, poll: null },
+  "providers.profileCopy.sync.list": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
+  },
+  "providers.profileCopy.sync.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.profileCopy.sync.saveRule": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.profileCopy.sync.stopRule": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.profileCopy.sync.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.profileCopy.applySync": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "providers.profileCopy.preview": { ...LATEST_SCHEDULING, poll: null },
   "providers.profileCopy.status": {
     ...LATEST_SCHEDULING,
