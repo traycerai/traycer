@@ -511,7 +511,7 @@ describe("SideStripNewTask (F7)", () => {
   );
 });
 
-describe("SideStripNewTask in the Activity view", () => {
+describe("SideStripNewTask in the Activity view (always primary)", () => {
   beforeEach(() => {
     resetSharedState();
     signIn();
@@ -524,29 +524,19 @@ describe("SideStripNewTask in the Activity view", () => {
     resetSharedState();
   });
 
-  it("is a quiet nav row: no primary fill, the same label and its shortcut", async () => {
+  it("expanded: New Task stays the solid primary button with its label and shortcut", async () => {
     renderStrip("left");
     await screen.findByTestId("side-tab-strip");
 
     const newTask = screen.getByTestId("side-strip-new-task");
-    expect(restingFillClasses(newTask)).not.toContain("bg-primary");
-    expect(newTask.classList.contains("text-primary-foreground")).toBe(false);
+    expect(restingFillClasses(newTask)).toEqual(["bg-primary"]);
+    expect(newTask.classList.contains("text-primary-foreground")).toBe(true);
     expect(screen.getByTestId("side-strip-new-task-label").textContent).toBe(
       "New Task",
     );
     const chord = useKeybindingStore.getState().bindings["epic.new"];
     if (chord === null) throw new Error("expected a default binding");
     expect(newTask.textContent).toContain(formatChordForDisplay(chord));
-  });
-
-  it("collapsed: the rail keeps the primary tile", async () => {
-    useSideTabStripStore.setState({ collapsed: true });
-    renderStrip("left");
-    await screen.findByTestId("side-tab-strip");
-
-    expect(
-      restingFillClasses(screen.getByTestId("side-strip-new-task")),
-    ).toEqual(["bg-primary"]);
   });
 });
 
