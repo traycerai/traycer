@@ -621,6 +621,58 @@ describe("profile sync attempt id uniqueness", () => {
   });
 });
 
+describe("profile sync epoch-millisecond timestamps", () => {
+  const valid = [0, 1_700_000_000_000, Number.MAX_SAFE_INTEGER];
+  const invalid = [
+    ["negative", -1],
+    ["fractional", 1_700_000_000_000.5],
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY],
+    ["above the safe integer range", Number.MAX_SAFE_INTEGER + 1],
+  ] as const;
+
+  it.each(valid)("accepts %s as a batch createdAt", (createdAt) => {
+    expect(
+      profileSyncBatchSchema.safeParse({
+        ...batch(SOURCE_HOST, []),
+        createdAt,
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(invalid)("rejects a %s batch createdAt", (_label, createdAt) => {
+    const result = profileSyncBatchSchema.safeParse({
+      ...batch(SOURCE_HOST, []),
+      createdAt,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.path)).toEqual([
+      ["createdAt"],
+    ]);
+  });
+
+  it.each([null, ...valid])("accepts %s as a rule lastCheckedAt", (value) => {
+    expect(
+      profileSyncRuleSchema.safeParse({ ...rule(1), lastCheckedAt: value })
+        .success,
+    ).toBe(true);
+  });
+
+  it.each(invalid)("rejects a %s rule lastCheckedAt", (_label, value) => {
+    const result = profileSyncRuleSchema.safeParse({
+      ...rule(1),
+      lastCheckedAt: value,
+    });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error.issues.map((issue) => issue.path)).toEqual([
+      ["lastCheckedAt"],
+    ]);
+  });
+});
+
 describe("profile sync list identity and conflict contract", () => {
   const twin = (): ProfileSyncBatch => batch(SOURCE_HOST, []);
 

@@ -196,7 +196,7 @@ export const profileSyncBatchSchema = lazySchema(() =>
     .strictObject({
       batchId: profileCopyIdSchema,
       sourceHostId: profileCopyHostIdSchema,
-      createdAt: z.number(),
+      createdAt: z.number().int().nonnegative(),
       automatic: z.boolean(),
       items: z.array(profileSyncItemSchema).max(PROFILE_SYNC_MAX_ITEMS),
     })
@@ -229,7 +229,7 @@ export const profileSyncRuleSchema = lazySchema(() =>
       scope: profileSyncScopeSchema,
       paused: z.boolean(),
       revision: z.number().int().nonnegative(),
-      lastCheckedAt: z.number().nullable(),
+      lastCheckedAt: z.number().int().nonnegative().nullable(),
       batchId: profileCopyIdSchema.nullable(),
       status: z.enum(["waiting", "active", "needs-action", "paused"]),
     })
