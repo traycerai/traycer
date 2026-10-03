@@ -21,6 +21,7 @@ import {
 } from "@traycer/protocol/host/profile-copy-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
+  profileSyncListSchema,
   profileSyncSaveRuleSchema,
   profileSyncStopRuleSchema,
   profileSyncSelectionSchema,
@@ -1798,7 +1799,6 @@ describe("ProfileSyncModal review regressions", () => {
           }),
         ],
       ],
-      ["another source", [autoBatch({ sourceHostId: "foreign-source-host" })]],
       ["empty items", [autoBatch({ items: [] })]],
     ])("hides View results for a %s link", async (_label, batches) => {
       listBatches = batches;
@@ -1806,6 +1806,30 @@ describe("ProfileSyncModal review regressions", () => {
       await openAutomatic();
       await screen.findByRole("heading", { name: "Linux box" });
       expect(screen.queryByRole("button", { name: "View results" })).toBeNull();
+    });
+
+    it("errors on a list holding another source's batch and shows no rules, results or foreign actions", async () => {
+      const foreign = [autoBatch({ sourceHostId: "foreign-source-host" })];
+      const rules = [{ ...SAVED_RULE, batchId: AUTO_BATCH }];
+      // Wire-valid: only the captured-source check can refuse this list.
+      expect(
+        profileSyncListSchema.safeParse({ batches: foreign, rules }).success,
+      ).toBe(true);
+      listBatches = foreign;
+      mount(rules);
+      await openAutomatic();
+      expect(
+        await screen.findByText(/Couldn't reach Studio Mac right now/),
+      ).toBeTruthy();
+      for (const name of [
+        "Edit",
+        "Pause",
+        "Stop…",
+        "Add device",
+        "View results",
+      ])
+        expect(screen.queryByRole("button", { name })).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Linux box" })).toBeNull();
     });
 
     function ruleSet(count: number): ProfileSyncRule[] {
@@ -1883,7 +1907,7 @@ describe("ProfileSyncModal review regressions", () => {
     });
 
     it("refuses the whole rules view when any rule names another source", async () => {
-      mount([
+      const rules = [
         SAVED_RULE,
         {
           ...SAVED_RULE,
@@ -1891,28 +1915,46 @@ describe("ProfileSyncModal review regressions", () => {
           sourceHostId: DEST_HOST_ID,
           destinationHostId: DEST_HOST_TWO_ID,
         },
-      ]);
+      ];
+      expect(
+        profileSyncListSchema.safeParse({ batches: [], rules }).success,
+      ).toBe(true);
+      const messenger = mount(rules);
       await openAutomatic();
       expect(
-        await screen.findByText(
-          "The device returned rules for another source. Check sync history again.",
-        ),
+        await screen.findByText(/Couldn't reach Studio Mac right now/),
       ).toBeTruthy();
       for (const name of ["Edit", "Pause", "Stop…", "Add device"])
         expect(screen.queryByRole("button", { name })).toBeNull();
       expect(screen.queryByRole("heading", { name: "Linux box" })).toBeNull();
+      // Nothing was written on the strength of a refused list.
+      expect(
+        messenger.calls.filter(
+          (call) =>
+            call.method === "providers.profileCopy.sync.saveRule" ||
+            call.method === "providers.profileCopy.sync.stopRule",
+        ),
+      ).toHaveLength(0);
     });
 
-    it("lists only the captured source's runs under Recent runs", async () => {
-      listBatches = [1, 2].map((minute): ProfileSyncBatch => ({
+    it("lists only the captured source's runs under Recent runs, and keeps them when a later list names another source", async () => {
+      const local = [1, 2].map((minute): ProfileSyncBatch => ({
         batchId: `00000000-0000-4000-8000-00000000010${String(minute)}`,
         sourceHostId: SOURCE_HOST_ID,
         createdAt: minute * 60_000,
         automatic: false,
         items: [listedItem(DEST_HOST_ID)],
       }));
+      listBatches = local;
+      mount([]);
+      openSync(null);
+      await screen.findByText("Recent runs");
+      expect(
+        screen.getAllByRole("button", { name: /profile transfers/ }),
+      ).toHaveLength(2);
+      // A later list also carries a run of another source (wire-valid).
       listBatches = [
-        ...listBatches,
+        ...local,
         {
           batchId: "00000000-0000-4000-8000-000000000199",
           sourceHostId: DEST_HOST_ID,
@@ -1922,9 +1964,17 @@ describe("ProfileSyncModal review regressions", () => {
           items: [listedItem(DEST_HOST_TWO_ID)],
         },
       ];
-      mount([]);
-      openSync(null);
-      await screen.findByText("Recent runs");
+      expect(
+        profileSyncListSchema.safeParse({ batches: listBatches, rules: [] })
+          .success,
+      ).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(
+        await screen.findByText(/Couldn't reach Studio Mac right now/),
+      ).toBeTruthy();
+      // The last valid local history is still what Recent runs shows.
       expect(
         screen.getAllByRole("button", { name: /profile transfers/ }),
       ).toHaveLength(2);
