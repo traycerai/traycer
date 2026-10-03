@@ -8,8 +8,9 @@
  * "this user has a lot open" from "this session is accumulating".
  *
  * Two channels, deliberately different frequencies:
- *   - PostHog (here): one sample every 15 min, plus a pressure event when the
- *     JS heap crosses a tier. Low volume, aggregate-queryable across users.
+ *   - PostHog (here): one sample an hour per window, plus a pressure event
+ *     when the JS heap crosses a tier. Low volume, aggregate-queryable across
+ *     users.
  *   - `lib/perf/perf-telemetry.ts`: high-frequency, opt-in, local ndjson for
  *     when a single machine needs to be dissected.
  *
@@ -29,11 +30,28 @@ import {
 const BYTES_PER_MB = 1024 * 1024;
 const MS_PER_HOUR = 3_600_000;
 
+/** Cadence of the local heap READING, which feeds the slope window and the
+ * pressure check. Not every reading is published - see below. */
 export const RESOURCE_SAMPLE_INTERVAL_MS = 15 * 60_000;
-/** First sample is deferred past boot so it measures a settled renderer
+/** First reading is deferred past boot so it measures a settled renderer
  * rather than the hydration transient. */
 export const RESOURCE_FIRST_SAMPLE_DELAY_MS = 60_000;
-/** 8 samples at the 15-minute cadence = a 2-hour slope window: long enough to
+/**
+ * Only one reading in four is published as `app_resource_sample`, so the
+ * event goes out hourly while the slope keeps its 15-minute resolution and the
+ * pressure check keeps its reaction time. Published every 15 minutes it was
+ * the app's largest analytics event, and the three readings in between added
+ * nothing an aggregate query uses: the slope already summarises them.
+ */
+export const RESOURCE_READINGS_PER_SAMPLE = 4;
+/**
+ * The first published reading is the third (index 2), 30 minutes in: settled,
+ * still inside `under_1h` so that bucket keeps a baseline, and with enough
+ * points behind it to carry a slope. The 60-second reading stays local - a
+ * window closed within half an hour cannot show accumulation anyway.
+ */
+export const RESOURCE_FIRST_PUBLISHED_READING = 2;
+/** 8 readings at the 15-minute cadence = a 2-hour slope window: long enough to
  * ignore per-turn churn, short enough to still move within one sitting. */
 const SLOPE_WINDOW_SAMPLES = 8;
 const MIN_SLOPE_SAMPLES = 3;
@@ -108,8 +126,9 @@ export interface ResourceTelemetryDeps {
 }
 
 export interface ResourceTelemetrySampler {
-  /** Take and emit exactly one sample. Exposed for tests and for the pressure
-   * path; production drives it from `start`. */
+  /** Take exactly one reading: always checked for pressure, published as a
+   * sample only on the hourly beat. Exposed for tests; production drives it
+   * from `start`. */
   readonly sampleOnce: () => void;
   readonly start: () => () => void;
 }
@@ -146,6 +165,17 @@ export function heapSlopeMbPerHour(
   );
   if (variance === 0) return null;
   return roundToTenth(covariance / variance);
+}
+
+/** Whether the reading at `readingIndex` (0-based, counting only readings
+ * that produced a heap) is published as a sample. */
+export function isPublishedReading(readingIndex: number): boolean {
+  return (
+    readingIndex >= RESOURCE_FIRST_PUBLISHED_READING &&
+    (readingIndex - RESOURCE_FIRST_PUBLISHED_READING) %
+      RESOURCE_READINGS_PER_SAMPLE ===
+      0
+  );
 }
 
 export function pressureTierFor(
@@ -207,6 +237,9 @@ export function createResourceTelemetrySampler(
   deps: ResourceTelemetryDeps,
 ): ResourceTelemetrySampler {
   const heapHistory: HeapSample[] = [];
+  // Counted rather than timed: an interval tick lands a few ms either side of
+  // the hour, so "an hour since the last publish" would skip beats at random.
+  let readingCount = 0;
   let lastPressureAtMs: number | null = null;
   let lastPressureTier: AnalyticsResourcePressureTier | null = null;
 
@@ -225,6 +258,8 @@ export function createResourceTelemetrySampler(
     const at = deps.now();
     heapHistory.push({ atMs: at, jsHeapMb: heap.usedMb });
     if (heapHistory.length > SLOPE_WINDOW_SAMPLES) heapHistory.shift();
+    const readingIndex = readingCount;
+    readingCount += 1;
 
     const context = deps.collectContext();
     const measurement = {
@@ -234,7 +269,7 @@ export function createResourceTelemetrySampler(
       session_age_bucket: sessionAgeBucket(at - deps.startedAtMs),
       open_tabs: context.openTabs,
     };
-    deps.emit.sample(measurement);
+    if (isPublishedReading(readingIndex)) deps.emit.sample(measurement);
 
     const tier = pressureTierFor(heap.usedMb, heap.limitMb);
     if (tier === null) {
@@ -261,8 +296,8 @@ export function createResourceTelemetrySampler(
       sampleOnce();
     }, RESOURCE_FIRST_SAMPLE_DELAY_MS);
     // Plain interval: this sampler exists to catch heap growth over long
-    // sessions, including ones that sit minimised. A 15-minute tick is
-    // cheap, and `fireOnShow` would cluster samples on restore and skew
+    // sessions, including ones that sit minimised. A 15-minute local reading
+    // is cheap, and `fireOnShow` would cluster samples on restore and skew
     // `heapSlopeMbPerHour`.
     const repeatTimer = window.setInterval(() => {
       sampleOnce();
