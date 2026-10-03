@@ -64,16 +64,14 @@ export function SideStripNavRows(props: {
  * New Task (F7): the button that closes the nav list - after Home
  * expanded, after All tasks on the rail - and does what the header's `+` does.
  * Expanded, a row lined up with the nav rows, its shortcut trailing as All
- * tasks' does; collapsed, a primary 32px tile. In the Activity view the
- * expanded row is a quiet nav row instead of the solid primary, so nothing in
- * the top block outshouts Needs you.
+ * tasks' does; collapsed, a primary 32px tile. Solid primary in every view:
+ * the strip always keeps one primary action.
  */
 export function SideStripNewTask(props: {
   readonly variant: SideTabRowVariant;
   readonly onNewTab: () => void;
 }): ReactNode {
   const collapsed = props.variant === "collapsed";
-  const quiet = useLiveAgentsInStrip();
   const placement = useColumnOverlayPlacement("top");
   const chord = useBindingForAction("epic.new");
   const shortcut = chord === null ? null : formatChordForDisplay(chord);
@@ -100,9 +98,7 @@ export function SideStripNewTask(props: {
             <span
               className={cn(
                 "shrink-0 text-ui-xs",
-                quiet
-                  ? "text-muted-foreground"
-                  : "font-normal text-primary-foreground/70",
+                "font-normal text-primary-foreground/70",
               )}
             >
               {shortcut}
@@ -119,32 +115,21 @@ export function SideStripNewTask(props: {
       sideOffset={6}
       align={placement?.align}
     >
-      {quiet ? (
-        <NavRowButton
-          variant={props.variant}
-          active={false}
-          data-testid="side-strip-new-task"
-          onClick={props.onNewTab}
-        >
-          {content}
-        </NavRowButton>
-      ) : (
-        <Button
-          type="button"
-          size={collapsed ? "nav-tile" : "nav-row"}
-          // Non-editable chrome, dimmed while a layout session is live (4.2).
-          data-layout-passive
-          data-testid="side-strip-new-task"
-          aria-label={collapsed ? NEW_TASK_LABEL : undefined}
-          onClick={props.onNewTab}
-          className={cn(
-            collapsed ? "self-center" : "w-full",
-            "[-webkit-app-region:no-drag]",
-          )}
-        >
-          {content}
-        </Button>
-      )}
+      <Button
+        type="button"
+        size={collapsed ? "nav-tile" : "nav-row"}
+        // Non-editable chrome, dimmed while a layout session is live (4.2).
+        data-layout-passive
+        data-testid="side-strip-new-task"
+        aria-label={collapsed ? NEW_TASK_LABEL : undefined}
+        onClick={props.onNewTab}
+        className={cn(
+          collapsed ? "self-center" : "w-full",
+          "[-webkit-app-region:no-drag]",
+        )}
+      >
+        {content}
+      </Button>
     </TooltipWrapper>
   );
 }
