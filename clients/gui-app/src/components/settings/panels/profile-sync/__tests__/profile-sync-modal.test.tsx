@@ -6359,9 +6359,35 @@ describe("ProfileSyncModal review regressions", () => {
         expect(second.expectedRevision).toBe(0);
       });
 
-      it("keeps the remembered id when the Stop is rejected", async () => {
+      it("uses a new rule id when an accepted Create's rule is later removed remotely", async () => {
         const messenger = await createWithFailedLists();
         const [first] = saveParams(messenger);
+        // The remote Stop is only seen as a later successful, empty list.
+        listFails = false;
+        listRules = [];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        await waitFor(() =>
+          expect(
+            screen.queryByRole("heading", { name: "Linux box" }),
+          ).toBeNull(),
+        );
+        await addRuleFor(/Linux box/);
+        await waitFor(() => expect(saveParams(messenger)).toHaveLength(2));
+        const second = saveParams(messenger)[1];
+        // The accepted Save consumed its id; the same destination starts anew.
+        expect(second.ruleId).not.toBe(first.ruleId);
+        expect(second.expectedRevision).toBe(0);
+      });
+
+      it("keeps the reserved id when the Stop is rejected", async () => {
+        const messenger = await createWithFailedLists();
+        const [first] = saveParams(messenger);
+        // The accepted Save consumed the first id; what is remembered now is
+        // a fresh reservation for the next create of this destination.
+        const reserved = remembered();
+        expect(reserved).not.toBe(first.ruleId);
         stopRuleThrows = true;
         fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
         fireEvent.click(
@@ -6373,7 +6399,8 @@ describe("ProfileSyncModal review regressions", () => {
             screen.getAllByText(/Couldn't reach Studio Mac right now/),
           ).toHaveLength(2),
         );
-        expect(remembered()).toBe(first.ruleId);
+        expect(screen.getByRole("heading", { name: "Linux box" })).toBeTruthy();
+        expect(remembered()).toBe(reserved);
       });
     });
   });

@@ -189,6 +189,9 @@ export function useProfileSyncSaveRule(
       onSuccess: (rule, _request, submitted) =>
         refreshProfileSyncAfterWrite(queryClient, hostId, () => {
           writeProfileSyncSavedRule(queryClient, rule, submitted);
+          useProfileCopyFlowStore
+            .getState()
+            .forgetSyncRuleId(hostId, rule.destinationHostId, rule.ruleId);
         }),
     },
   });

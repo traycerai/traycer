@@ -83,7 +83,7 @@ interface ProfileCopyFlowState {
     attempt: ProfileCopyAttempt,
     revision: number,
   ) => string;
-  /** A new rule keeps its identity until a valid list confirms its creation. */
+  /** Uncertain creates retain their identity until Save or a list confirms it. */
   readonly syncRuleIds: ReadonlyMap<string, string>;
   readonly getSyncRuleId: (
     sourceHostId: string,
