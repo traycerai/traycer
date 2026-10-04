@@ -77,8 +77,10 @@ A team pull request into `main` (a branch in this repository) runs **no CI**:
 every job is skipped, so every required check reports as passed, and the merge
 button is available as soon as review passes. Nothing tests such a PR before
 it merges, so **the local commit hook is the only automatic check before
-merge**. A commit that only moves the submodule pin skips the hook, so nothing
-looks at it until the merge.
+merge**. One job is the exception: `guarded-files-tripwire` in
+`protocol-compat.yml` runs on every PR, because an unlabelled edit to a compat
+governance file can only be caught before it lands. It is not a required
+check.
 
 A pull request from a fork, a pull request from a bot (Dependabot), and a pull
 request into any other branch (a release or integration branch, which has no
@@ -91,12 +93,24 @@ flakes); if the rerun fails too it is posted to Slack with the commit, its
 author and the run. So when `main` goes red, the failure is a break to fix or
 revert, not a flake.
 
+A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`, the
+`changes` job of `browser-regressions.yml`) compares against the last push its
+own workflow passed on, found by `scripts/ci-last-green-sha.sh`, not against
+the push before it. So a red merge is not forgotten: the next merge's range
+still holds the break, its run stays red, and `main` stays red until a run
+covering everything since the last green push passes.
+
 To test a branch before merging it, run the workflow on the branch: the
 Actions tab, or `gh workflow run test.yml --ref <branch>` (likewise
-`pre-commit.yml`, and `browser-regressions.yml`). Do this for a risky change
-the hook does not cover: packaging, the protocol, a pin bump.
+`pre-commit.yml`, `protocol-compat.yml`, `browser-regressions.yml` and
+`real-supervisor.yml`). Do this for a risky change the hook does not cover:
+packaging, the protocol, the CLI's launchd path.
 
-The rule is one expression, copied into the `if:` of every job in the eight
+A red `main` also holds up releases: the internal repository's nightly staging
+train and its promotion to production both refuse a pinned commit of this
+repository whose push checks are not all green.
+
+The rule is one expression, copied into the `if:` of every job (but one) in the eight
 workflows that trigger on `pull_request` (`test`, `pre-commit`,
 `protocol-compat`, `browser-regressions`, `real-supervisor`, `codeql`,
 `secret-scan`, `dco`), and pinned by `scripts/__tests__/ci-pull-request-gate.test.mjs`:
@@ -104,11 +118,15 @@ workflows that trigger on `pull_request` (`test`, `pre-commit`,
 ```
 github.event_name != 'pull_request'
   || github.base_ref != 'main'
-  || github.event.pull_request.head.repo.fork
+  || github.event.pull_request.head.repo.full_name != github.repository
   || github.event.pull_request.user.type == 'Bot'
 ```
 
-A new workflow with a `pull_request` trigger carries it on every job; an
+The gate asks "is the head repository this repository", not "is it a fork": a
+deleted fork reports no head repository, and that answer must fail toward
+running CI. `guarded-files-tripwire` is the one job without it, and the test
+exempts it by name. A new workflow with a `pull_request` trigger carries the
+gate on every job; an
 aggregator that uses `always()` is `always() && (<expression>)`, so it is
 skipped, not failed, on a team PR. The `main` ruleset requires `tests` (the
 single check for `test.yml`'s matrix), not the individual matrix names: a

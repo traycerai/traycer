@@ -30,20 +30,25 @@ jobs:
     if: >-
       github.event_name != 'pull_request'
       || github.base_ref != 'main'
-      || github.event.pull_request.head.repo.fork
+      || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         lane: [static, compile, build]
+    # `actions: read` lets the push step below list this workflow's earlier runs.
+    permissions:
+      contents: read
+      actions: read
     env:
-      # Drive `nx affected` in the workspace-checks hook off the PR base, or on a
-      # push to `main` off the commit before the push: without it the hook falls
-      # back to `origin/main`, which IS the pushed commit, so nothing would be
-      # affected and the merge run would check nothing. A manual run has neither
-      # (both are empty) and takes the fallback: the branch against `origin/main`.
-      NX_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      # Drive `nx affected` in the workspace-checks hook off the PR base. On a
+      # push to `main` the base is set by the "Find the last green push" step
+      # below, not here: without a base the hook falls back to `origin/main`,
+      # which IS the pushed commit, so nothing would be affected and the merge
+      # run would check nothing. A manual run has no base (the hook needs both),
+      # so it takes the fallback: the branch against `origin/main`.
+      NX_BASE: ${{ github.event.pull_request.base.sha }}
       NX_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       # gui-app's type-aware lint has outgrown Node's ~4GB default heap (OOM
       # SIGABRT on two consecutive CI heads, then locally). The headroom lives
@@ -54,6 +59,23 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0 # nx affected needs history to diff against the base
+      # A push run is compared with the last push this workflow PASSED on, not
+      # with the push before it. A team PR runs no check before it merges, so a
+      # red merge would otherwise be forgotten by the next one: A breaks the
+      # compile, B changes a doc, B's range is only the doc, and the green run
+      # on B makes the tip look shippable. From the last green push, B's range
+      # still holds A's change and stays red. `$GITHUB_ENV` is the only way to
+      # hand a step's answer to the job's own `NX_BASE`.
+      - name: Find the last green push to compare against
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          base="$(scripts/ci-last-green-sha.sh pre-commit.yml "$BRANCH" "$BEFORE")"
+          echo "NX_BASE=${base}" >> "$GITHUB_ENV"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         if: matrix.lane == 'static'
         with:
@@ -109,7 +131,7 @@ jobs:
       always() && (
         github.event_name != 'pull_request'
         || github.base_ref != 'main'
-        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
     runs-on: ubuntu-latest

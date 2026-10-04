@@ -42,10 +42,14 @@ jobs:
     if: >-
       github.event_name != 'pull_request'
       || github.base_ref != 'main'
-      || github.event.pull_request.head.repo.fork
+      || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `actions: read` lets the push step below list this workflow's earlier runs.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
@@ -53,6 +57,23 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # A push run is compared with the last push this workflow PASSED on, not
+      # with the push before it. A team PR runs no check before it merges, so a
+      # red merge would otherwise be forgotten by the next one: A breaks the
+      # suite, B changes a doc, B's range is only the doc, and the skipped run
+      # on B is green. From the last green push, B's range still holds A's
+      # change and the suite runs again.
+      - name: Find the last green push to compare against
+        id: base
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          base="$(scripts/ci-last-green-sha.sh browser-regressions.yml "$BRANCH" "$BEFORE")"
+          echo "sha=${base}" >> "$GITHUB_OUTPUT"
       # What the suite depends on: the GUI app (its code, fixtures, specs and
       # configs), the two workspace packages it imports throughout
       # (`@traycer-clients/shared`, `@traycer/protocol`), the dependency set
@@ -67,18 +88,18 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_BASE: ${{ steps.base.outputs.sha }}
         run: |
           set -euo pipefail
           case "$EVENT" in
             pull_request) range="$PR_BASE...HEAD" ;;
             push)
-              if [ -z "$PUSH_BEFORE" ] || ! git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+              if [ -z "$PUSH_BASE" ] || ! git cat-file -e "$PUSH_BASE^{commit}" 2>/dev/null; then
                 echo "run=true" >> "$GITHUB_OUTPUT"
                 echo "No earlier commit to diff against: running the suite."
                 exit 0
               fi
-              range="$PUSH_BEFORE..HEAD" ;;
+              range="$PUSH_BASE..HEAD" ;;
             *)
               echo "run=true" >> "$GITHUB_OUTPUT"
               echo "A $EVENT run always runs the suite."
@@ -109,7 +130,7 @@ jobs:
       (
         github.event_name != 'pull_request'
         || github.base_ref != 'main'
-        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
       && needs.changes.outputs.run == 'true'
@@ -171,7 +192,7 @@ jobs:
       (
         github.event_name != 'pull_request'
         || github.base_ref != 'main'
-        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
       && needs.changes.outputs.run == 'true'
@@ -202,7 +223,7 @@ jobs:
       always() && (
         github.event_name != 'pull_request'
         || github.base_ref != 'main'
-        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
     runs-on: ubuntu-latest

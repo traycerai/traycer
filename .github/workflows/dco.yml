@@ -14,12 +14,14 @@ permissions:
 jobs:
   dco:
     name: Signed-off-by
-    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
-    # PR, a bot PR and a PR into any other branch run it in full.
+    # A team PR into `main` runs no CI, and this workflow has no merge-time run
+    # (it reads a pull request's own commits), so a team commit's sign-off rests
+    # on the local commit hook. A fork PR, a bot PR and a PR into any other
+    # branch are checked here in full.
     if: >-
       github.event_name != 'pull_request'
       || github.base_ref != 'main'
-      || github.event.pull_request.head.repo.fork
+      || github.event.pull_request.head.repo.full_name != github.repository
       || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     steps:

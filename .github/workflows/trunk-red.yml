@@ -45,6 +45,7 @@ on:
       - Real supervisor (macOS launchd integration)
       - CodeQL
       - Secret scan
+      - Scorecard supply-chain security
     types: [completed]
     branches: [main]
 
@@ -118,8 +119,13 @@ jobs:
             sleep 15
           done
           if [ "${rerun_started}" != "true" ]; then
-            post "failed and could not be retried"
-            exit 0
+            # Refused because a person already re-ran it: theirs is the retry,
+            # so wait for that one instead of calling the run unretryable.
+            attempt_now="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '.run_attempt')" || attempt_now=1
+            if [ "${attempt_now:-1}" -lt 2 ]; then
+              post "failed and could not be retried"
+              exit 0
+            fi
           fi
 
           # Poll the retry to its end. The run's status goes back to queued once
@@ -142,6 +148,10 @@ jobs:
 
           if [ "${conclusion}" = "success" ]; then
             echo "${WORKFLOW_NAME} on ${short} passed on its retry: a flake, nothing posted." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "${conclusion}" = "cancelled" ]; then
+            echo "The retry of ${WORKFLOW_NAME} on ${short} was cancelled by a person; nothing posted." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           post "failed twice (${conclusion})"

@@ -19,9 +19,8 @@ name: Protocol Compatibility
 #    new releases ship.
 #  - `guarded-files-tripwire` fails any PR that edits (not adds) the compat
 #    governance files without the `protocol-compat-override` label, making
-#    baseline regeneration a deliberate, reviewable act. It runs wherever CI
-#    runs on a PR (a fork PR, a bot PR, a PR into a branch other than `main`);
-#    a team PR into `main` runs no CI, so review is its only guard there. This
+#    baseline regeneration a deliberate, reviewable act. It runs on EVERY
+#    PR, a team PR into `main` included (see the job). This
 #    closes the failure mode that shipped `terminal.defaultCwd` (#227): the
 #    frozen-fixture test went red and was silenced by editing the fixture in
 #    the same PR. `host-v1.1.5-mutation-v20.ts` is guarded here for a second
@@ -30,13 +29,16 @@ name: Protocol Compatibility
 #    tripwire is the only thing standing between a hand-edit of that frozen
 #    fixture and a green run.
 #
-# Both jobs must be required status checks on `main`.
+# `protocol-compat` is a required status check on `main`; the tripwire is not.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
+  # Check a branch against the released baselines before merging it:
+  # `gh workflow run protocol-compat.yml --ref <branch>`.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -61,7 +63,7 @@ jobs:
       (
         github.event_name != 'pull_request'
         || github.base_ref != 'main'
-        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.head.repo.full_name != github.repository
         || github.event.pull_request.user.type == 'Bot'
       )
       && (github.event_name != 'pull_request' || github.event.action != 'labeled')
@@ -179,16 +181,14 @@ jobs:
 
   guarded-files-tripwire:
     runs-on: ubuntu-latest
-    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
-    # PR, a bot PR and a PR into any other branch run it in full.
-    if: >-
-      (
-        github.event_name != 'pull_request'
-        || github.base_ref != 'main'
-        || github.event.pull_request.head.repo.fork
-        || github.event.pull_request.user.type == 'Bot'
-      )
-      && github.event_name == 'pull_request'
+    # THE ONE JOB THAT STILL RUNS ON A TEAM PR INTO `main`. Every other job is
+    # skipped there and runs on the merge instead, but this one has no merge-time
+    # form: it asks whether a PR that edits a governance file carries the
+    # override label, and on `main` the edit has already landed and the push run
+    # reads the edited file and passes. That is the #227 failure, and the people
+    # who can make it are the team. It is a few seconds on a free runner and is
+    # not a required check, so it holds up no merge it does not fail.
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

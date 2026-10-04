@@ -2,7 +2,10 @@
 // CI job (the merge to `main` runs everything once), and a fork PR, a bot PR
 // or a PR into any other branch runs every check. The workflows are PARSED,
 // never pattern-matched, so a reformat of the YAML cannot hide a job that
-// lost its gate.
+// lost its gate. It also pins what keeps a merge run honest: no push run can
+// be cancelled by a later one, every push run narrows against the last GREEN
+// push (scripts/ci-last-green-sha.sh), and trunk-red watches every push
+// workflow.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,12 +19,33 @@ const WORKFLOWS_DIR = join(REPO_ROOT, ".github", "workflows");
 // The single source of truth. Every job in a workflow that triggers on
 // `pull_request` carries this text in its `if`, verbatim.
 const GATE =
-  "github.event_name != 'pull_request' || github.base_ref != 'main' || github.event.pull_request.head.repo.fork || github.event.pull_request.user.type == 'Bot'";
+  "github.event_name != 'pull_request' || github.base_ref != 'main' || github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.type == 'Bot'";
 
 // What a concurrency group may contain: the pull-request branch of the
-// expression, and nothing else that names a ref.
+// expression, and nothing else that names a ref. On a push the expression is
+// `github.run_id`.
 const PR_KEYED =
   "github.event_name == 'pull_request' && github.ref || github.run_id";
+
+// The one job that runs on every PR, a team PR into `main` included, so it
+// carries no gate: an unlabelled edit to a compat governance file can only be
+// caught before it lands (see the job's own comment).
+const UNGATED = {
+  file: "protocol-compat.yml",
+  jobId: "guarded-files-tripwire",
+};
+const UNGATED_IF = "github.event_name == 'pull_request'";
+
+// The workflows AGENTS.md says can be run on a branch.
+const DISPATCHABLE = [
+  "browser-regressions.yml",
+  "pre-commit.yml",
+  "protocol-compat.yml",
+  "real-supervisor.yml",
+  "test.yml",
+];
+
+const LAST_GREEN = "scripts/ci-last-green-sha.sh";
 
 const normalize = (expression) =>
   String(expression)
@@ -45,29 +69,135 @@ const workflows = readdirSync(WORKFLOWS_DIR)
     workflow: parse(readFileSync(join(WORKFLOWS_DIR, file), "utf8")),
   }));
 
-const pullRequestWorkflows = workflows.filter(
-  ({ workflow }) => "pull_request" in triggers(workflow),
+// `pull_request_target` runs with a write token against the base: it is a
+// pull-request trigger for every purpose here.
+const PULL_REQUEST_TRIGGERS = ["pull_request", "pull_request_target"];
+
+const pullRequestWorkflows = workflows.filter(({ workflow }) =>
+  PULL_REQUEST_TRIGGERS.some((name) => name in triggers(workflow)),
 );
 
+// A workflow runs on a push to `main` when its `push` trigger names `main`, or
+// names no branch filter and no tag filter (a tag-only push is not a push to a
+// branch).
 const pushesToMain = ({ workflow }) => {
   const push = triggers(workflow).push;
   if (push === undefined) return false;
   const branches = push?.branches;
-  return branches === undefined || branches.includes("main");
+  const ignored = push?.["branches-ignore"];
+  if (Array.isArray(ignored)) return !ignored.includes("main");
+  if (branches === undefined) return push?.tags === undefined;
+  return branches.includes("main");
+};
+
+const pushWorkflows = workflows.filter(pushesToMain);
+
+// True when `expression` has an `||` outside every parenthesis and string.
+const hasTopLevelOr = (expression) => {
+  let depth = 0;
+  let inString = false;
+  for (let index = 0; index < expression.length; index += 1) {
+    const char = expression[index];
+    if (char === "'") inString = !inString;
+    if (inString) continue;
+    if (char === "(") depth += 1;
+    if (char === ")") depth -= 1;
+    if (depth === 0 && char === "|" && expression[index + 1] === "|") {
+      return true;
+    }
+  }
+  return false;
+};
+
+// The three shapes under which the gate really gates: it is the whole `if`; it
+// is the only thing an `always()` aggregator adds; or it is the first conjunct
+// of an `if` with no `||` outside a parenthesis. `(gate) || x` and
+// `always() && (gate) || x` run on a team PR whenever `x` holds.
+const gates = (condition) => {
+  if (condition === GATE) return true;
+  if (condition === `always() && (${GATE})`) return true;
+  if (condition.startsWith(`(${GATE}) && `)) {
+    const rest = condition.slice(`(${GATE}) && `.length);
+    return rest.length > 0 && !hasTopLevelOr(rest);
+  }
+  return false;
+};
+
+// Every concurrency block of a workflow: its own, and each job's. A bare
+// string is a group with no `cancel-in-progress`.
+const concurrencyBlocks = (workflow) => {
+  const blocks = [];
+  const add = (where, value) => {
+    if (value === undefined) return;
+    blocks.push({
+      where,
+      group: String(typeof value === "string" ? value : value.group),
+      cancel:
+        typeof value === "string" ? undefined : value["cancel-in-progress"],
+    });
+  };
+  add("workflow", workflow.concurrency);
+  for (const [jobId, job] of Object.entries(workflow.jobs)) {
+    add(`job ${jobId}`, job.concurrency);
+  }
+  return blocks;
+};
+
+// The gate evaluated on the contexts GitHub gives it, so the expression is
+// pinned by what it decides, not by the words in it. It is a flat `||` of
+// `<context> == 'x'` / `<context> != <context | 'x'>` terms.
+const gateRuns = (context) => {
+  const lookup = {
+    "github.event_name": context.event_name,
+    "github.base_ref": context.base_ref,
+    "github.event.pull_request.head.repo.full_name": context.head_repo,
+    "github.repository": "traycerai/traycer",
+    "github.event.pull_request.user.type": context.user_type,
+  };
+  const operand = (text) =>
+    text.startsWith("'") ? text.slice(1, -1) : lookup[text];
+  return GATE.split(" || ").some((term) => {
+    const [left, operator, right] = term.split(" ");
+    if (operator === "==") return operand(left) === operand(right);
+    if (operator === "!=") return operand(left) !== operand(right);
+    throw new Error(`unsupported term in the gate: ${term}`);
+  });
 };
 
 describe("the gate expression", () => {
-  it("skips a team PR only when its base is main", () => {
-    expect(GATE).toContain("github.base_ref != 'main'");
+  const team = {
+    event_name: "pull_request",
+    base_ref: "main",
+    head_repo: "traycerai/traycer",
+    user_type: "User",
+  };
+
+  it("skips a team PR into main", () => {
+    expect(gateRuns(team)).toBe(false);
   });
 
-  it("lets fork PRs and bot PRs through", () => {
-    expect(GATE).toContain("github.event.pull_request.head.repo.fork");
-    expect(GATE).toContain("github.event.pull_request.user.type == 'Bot'");
+  it("runs a PR into any other branch", () => {
+    expect(gateRuns({ ...team, base_ref: "release/1.4" })).toBe(true);
+  });
+
+  it("runs a fork PR, and a PR whose head repository no longer exists", () => {
+    expect(gateRuns({ ...team, head_repo: "someone/traycer" })).toBe(true);
+    // A deleted fork reports a null head repository: the comparison is false
+    // for "is it this repository", so CI runs. The gate fails toward running.
+    expect(gateRuns({ ...team, head_repo: undefined })).toBe(true);
+  });
+
+  it("runs a bot PR", () => {
+    expect(gateRuns({ ...team, user_type: "Bot" })).toBe(true);
+  });
+
+  it("runs a push and a manual run", () => {
+    expect(gateRuns({ ...team, event_name: "push" })).toBe(true);
+    expect(gateRuns({ ...team, event_name: "workflow_dispatch" })).toBe(true);
   });
 });
 
-describe("every job of a workflow that runs on pull_request", () => {
+describe("every job of a workflow that runs on a pull request", () => {
   it("covers the eight workflows the design names", () => {
     expect(pullRequestWorkflows.map(({ file }) => file).sort()).toEqual([
       "browser-regressions.yml",
@@ -83,46 +213,161 @@ describe("every job of a workflow that runs on pull_request", () => {
 
   for (const { file, workflow } of pullRequestWorkflows) {
     for (const [jobId, job] of Object.entries(workflow.jobs)) {
+      const ungated = file === UNGATED.file && jobId === UNGATED.jobId;
       describe(`${file} / ${jobId}`, () => {
         const condition = normalize(job.if ?? "");
 
-        it("carries the gate in its if", () => {
-          expect(condition).toContain(GATE);
-        });
+        if (ungated) {
+          it("is the one deliberate exemption: it runs on every PR, with no gate", () => {
+            expect(condition).toBe(UNGATED_IF);
+          });
+          return;
+        }
 
-        it("parenthesises the gate when it shares the if with anything else", () => {
-          expect(condition === GATE || condition.includes(`(${GATE})`)).toBe(
-            true,
-          );
-        });
-
-        it("is skipped, not run, when it is an always() aggregator", () => {
-          if (condition.includes("always()")) {
-            expect(condition.startsWith(`always() && (${GATE})`)).toBe(true);
-          }
+        it("is gated: the gate is the whole if, an always() aggregator's only addition, or its first conjunct", () => {
+          expect(gates(condition)).toBe(true);
         });
       });
     }
   }
+
+  it("has exactly one exempt job, and it exists", () => {
+    const { workflow } = workflows.find(({ file }) => file === UNGATED.file);
+    expect(Object.keys(workflow.jobs)).toContain(UNGATED.jobId);
+  });
 });
 
 describe("concurrency", () => {
-  for (const entry of workflows.filter(
-    ({ workflow }) => workflow.concurrency !== undefined,
+  for (const { file, workflow } of pushWorkflows) {
+    for (const { where, group } of concurrencyBlocks(workflow)) {
+      it(`${file} (${where}) cannot cancel a push run`, () => {
+        // On a push the PR-keyed expression is the run id; whatever else the
+        // group names must name no ref, or two merges would share a group and
+        // the later one would cancel (or replace) the earlier one's run.
+        const onPush = group.replace(PR_KEYED, "github.run_id");
+        expect(onPush).toContain("github.run_id");
+        expect(onPush).not.toMatch(
+          /github\.(ref|ref_name|head_ref|base_ref|sha)\b/,
+        );
+      });
+    }
+  }
+
+  for (const { file, workflow } of pullRequestWorkflows.filter(
+    ({ workflow: w }) => w.concurrency !== undefined,
   )) {
-    const { file, workflow } = entry;
-    if (!pullRequestWorkflows.includes(entry)) continue;
-    it(`${file} cannot cancel a push run`, () => {
-      const group = String(workflow.concurrency.group);
-      expect(group).toContain(`\${{ ${PR_KEYED} }}`);
-      // Whatever remains once the PR-keyed segment is removed must name no
-      // ref: a bare `github.ref` would key a push by branch and cancel the
-      // previous merge's run.
-      const rest = group.replace(PR_KEYED, "");
-      expect(rest).not.toMatch(/github\.(ref|head_ref|base_ref|sha)\b/);
+    it(`${file} lets a newer PR push supersede the older one`, () => {
+      expect(String(workflow.concurrency.group)).toContain(
+        `\${{ ${PR_KEYED} }}`,
+      );
       expect(workflow.concurrency["cancel-in-progress"]).toBe(true);
     });
   }
+});
+
+describe("workflows that can be run on a branch", () => {
+  for (const file of DISPATCHABLE) {
+    it(`${file} has workflow_dispatch`, () => {
+      const { workflow } = workflows.find((entry) => entry.file === file);
+      expect(triggers(workflow)).toHaveProperty("workflow_dispatch");
+    });
+  }
+});
+
+// A push run tests only what its range changed. The range starts at the last
+// push this workflow PASSED on, so a red merge is not forgotten by the next
+// one. A job that narrows a push run reads `github.event.before` or sets
+// `NX_BASE`; each must get its base from the script, on a push, and nowhere
+// else.
+describe("a job that narrows a push run compares against the last green push", () => {
+  const narrowing = [];
+  for (const { file, workflow } of workflows) {
+    for (const [jobId, job] of Object.entries(workflow.jobs)) {
+      const text = JSON.stringify(job);
+      if (text.includes("github.event.before") || text.includes("NX_BASE")) {
+        narrowing.push({ file, jobId, job });
+      }
+    }
+  }
+
+  it("finds the two jobs that narrow today", () => {
+    expect(
+      narrowing.map(({ file, jobId }) => `${file}/${jobId}`).sort(),
+    ).toEqual([
+      "browser-regressions.yml/changes",
+      "pre-commit.yml/workspace-checks",
+    ]);
+  });
+
+  for (const { file, jobId, job } of narrowing) {
+    describe(`${file} / ${jobId}`, () => {
+      const steps = job.steps;
+      const finder = steps.find((step) =>
+        String(step.run ?? "").includes(LAST_GREEN),
+      );
+
+      it("runs the script in a step that only runs on a push", () => {
+        expect(finder).toBeDefined();
+        expect(normalize(finder.if)).toBe("github.event_name == 'push'");
+      });
+
+      it("hands it this workflow, the branch and the previous push, and nothing is interpolated into the run body", () => {
+        expect(String(finder.run)).not.toContain("${{");
+        expect(String(finder.run)).toContain(
+          `${LAST_GREEN} ${file} "$BRANCH" "$BEFORE"`,
+        );
+        expect(finder.env.BEFORE).toBe("${{ github.event.before }}");
+        expect(finder.env.BRANCH).toBe("${{ github.ref_name }}");
+        expect(finder.env.GH_TOKEN).toBe("${{ github.token }}");
+      });
+
+      it("reads github.event.before in that step's env and nowhere else", () => {
+        const others = JSON.stringify({
+          ...job,
+          steps: steps.filter((step) => step !== finder),
+        });
+        expect(others).not.toContain("github.event.before");
+        expect(JSON.stringify(job.env ?? {})).not.toContain(
+          "github.event.before",
+        );
+      });
+
+      it("may list the workflow's runs, and checks out the history it tests ancestry against", () => {
+        expect(job.permissions).toEqual({ contents: "read", actions: "read" });
+        const checkout = steps.find((step) =>
+          String(step.uses ?? "").startsWith("actions/checkout@"),
+        );
+        expect(checkout.with["fetch-depth"]).toBe(0);
+        expect(steps.indexOf(finder)).toBeGreaterThan(steps.indexOf(checkout));
+      });
+    });
+  }
+
+  it("pre-commit.yml: the answer becomes NX_BASE through $GITHUB_ENV, and the job env names only the PR base", () => {
+    const { workflow } = workflows.find(
+      ({ file }) => file === "pre-commit.yml",
+    );
+    const job = workflow.jobs["workspace-checks"];
+    expect(job.env.NX_BASE).toBe("${{ github.event.pull_request.base.sha }}");
+    const finder = job.steps.find((step) =>
+      String(step.run ?? "").includes(LAST_GREEN),
+    );
+    expect(finder.run).toContain('echo "NX_BASE=${base}" >> "$GITHUB_ENV"');
+  });
+
+  it("browser-regressions.yml: the filter reads the answer from the step's output", () => {
+    const { workflow } = workflows.find(
+      ({ file }) => file === "browser-regressions.yml",
+    );
+    const job = workflow.jobs.changes;
+    const finder = job.steps.find((step) =>
+      String(step.run ?? "").includes(LAST_GREEN),
+    );
+    expect(finder.id).toBe("base");
+    expect(finder.run).toContain('echo "sha=${base}" >> "$GITHUB_OUTPUT"');
+    const filter = job.steps.find((step) => step.id === "filter");
+    expect(filter.env.PUSH_BASE).toBe("${{ steps.base.outputs.sha }}");
+  });
 });
 
 describe("test.yml `tests`", () => {
@@ -147,11 +392,12 @@ describe("trunk-red.yml", () => {
   const trunkRed = workflows.find(({ file }) => file === "trunk-red.yml");
   const { workflow } = trunkRed;
 
-  it("watches every workflow that runs on a push to main", () => {
-    const expected = pullRequestWorkflows
-      .filter(pushesToMain)
+  it("watches every workflow that runs on a push to main, whether or not it also runs on pull_request", () => {
+    const expected = pushWorkflows
+      .filter(({ file }) => file !== "trunk-red.yml")
       .map(({ workflow: w }) => w.name)
       .sort();
+    expect(expected).toContain("Scorecard supply-chain security");
     expect([...workflow.on.workflow_run.workflows].sort()).toEqual(expected);
     expect(workflow.on.workflow_run.branches).toEqual(["main"]);
     expect(workflow.on.workflow_run.types).toEqual(["completed"]);
