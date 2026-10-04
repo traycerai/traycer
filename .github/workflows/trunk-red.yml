@@ -1,0 +1,129 @@
+name: Trunk red
+
+# A team PR into `main` runs no CI (see the `if:` on every job in the workflows
+# below); the full suite runs once, on the merged commit. That moves the first
+# sight of a break from the pull request to `main`, so a red merge run has to
+# be noticed by something other than whoever happens to look.
+#
+# When a push run on `main` fails:
+#
+#  - attempt 1: rerun only the failed jobs, once. The test suites have known
+#    flakes, and one retry separates a flake from a break without a person.
+#  - attempt 2 (the rerun also failed, so this is a break): post one Slack
+#    message naming the workflow, the commit, its author and the run.
+#
+# This workflow fires for the rerun's completion too, which is what makes the
+# second branch reachable. A green rerun fires nothing here (the `if:` below
+# needs a failure), and a cancelled run is ignored: a person cancelled it.
+#
+# Only push runs count. A pull-request run is its author's to read, a schedule
+# run (CodeQL's weekly scan) has no commit to blame, and a manual run is
+# somebody's experiment.
+#
+# `workflows:` must list the `name:` of every workflow that runs on a push to
+# `main`; a workflow missing here can go red on `main` unseen. `DCO` is absent
+# on purpose: it has no push trigger, because it checks a pull request's own
+# commits. `scripts/__tests__/ci-pull-request-gate.test.mjs` fails when this
+# list and the workflows' push triggers disagree.
+#
+# Needs the repository secret TRUNK_RED_SLACK_WEBHOOK (a Slack incoming
+# webhook). With it missing the second branch FAILS rather than skipping, so a
+# red run of this workflow is the signal that the alert has nowhere to go.
+#
+# No checkout and no third-party action: `gh` and `jq` are on the runner, and
+# nothing here runs repository code with a write token.
+
+on:
+  workflow_run:
+    workflows:
+      - Tests
+      - pre-commit
+      - Protocol Compatibility
+      - Browser regressions
+      - Real supervisor (macOS launchd integration)
+      - CodeQL
+      - Secret scan
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  retry-or-report:
+    name: Retry once, then report
+    if: >-
+      github.event.workflow_run.event == 'push'
+      && (
+        github.event.workflow_run.conclusion == 'failure'
+        || github.event.workflow_run.conclusion == 'timed_out'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # `gh run rerun` is a write on the Actions API; nothing else is needed.
+      actions: write
+    steps:
+      - name: Rerun the failed jobs once
+        if: github.event.workflow_run.run_attempt == 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          # The API can refuse a rerun for a few seconds after a run completes,
+          # so try a few times before calling it a failure.
+          for attempt in 1 2 3; do
+            if gh run rerun "$RUN_ID" --failed; then
+              echo "Reran the failed jobs of '$WORKFLOW' (run $RUN_ID) once."
+              exit 0
+            fi
+            echo "Rerun attempt $attempt failed; waiting before the next."
+            sleep 15
+          done
+          echo "::error::Could not rerun the failed jobs of run $RUN_ID."
+          exit 1
+
+      - name: Post the red merge to Slack
+        if: github.event.workflow_run.run_attempt != 1
+        env:
+          SLACK_WEBHOOK: ${{ secrets.TRUNK_RED_SLACK_WEBHOOK }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+          AUTHOR: ${{ github.event.workflow_run.head_commit.author.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo "::error::TRUNK_RED_SLACK_WEBHOOK is not set, so a red merge to main cannot be reported. Add the secret."
+            exit 1
+          fi
+          short_sha="${HEAD_SHA:0:7}"
+          # The first line of the commit message: the PR title on a squash merge.
+          title="${COMMIT_MESSAGE%%$'\n'*}"
+
+          # The title and the author are text somebody else wrote. They reach
+          # the payload only as jq arguments (never spliced into JSON or into
+          # this script), and Slack's own markup is neutralised: `<` opens a
+          # link or an @-mention, so it and `&` and `>` are escaped as Slack
+          # documents.
+          payload=$(jq -n \
+            --arg workflow "$WORKFLOW" \
+            --arg sha "$short_sha" \
+            --arg title "$title" \
+            --arg author "$AUTHOR" \
+            --arg url "$RUN_URL" \
+            'def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+             {text: ":red_circle: main is red: *\($workflow | esc)* failed twice on \($sha) \"\($title | esc)\" by \($author | esc) <\($url)|run>"}')
+
+          # The same fact for whoever opens this run, in plain text. Written
+          # first, so it exists even when Slack does not answer.
+          printf 'main is red: %s failed twice on %s "%s" by %s: %s\n' \
+            "$WORKFLOW" "$short_sha" "$title" "$AUTHOR" "$RUN_URL" >> "$GITHUB_STEP_SUMMARY"
+
+          curl -fsS --retry 3 --max-time 30 \
+            -X POST -H 'Content-Type: application/json' \
+            --data-binary "$payload" "$SLACK_WEBHOOK"
+          echo

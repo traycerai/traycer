@@ -14,6 +14,13 @@ permissions:
 jobs:
   dco:
     name: Signed-off-by
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

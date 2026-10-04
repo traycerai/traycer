@@ -42,12 +42,22 @@ permissions:
   contents: read
 
 concurrency:
-  group: real-supervisor-${{ github.workflow }}-${{ github.ref }}
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run.
+  group: real-supervisor-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   macos:
     name: CLI real-launchd rows (macOS)
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: macos-latest
     # These rows drive real launchd and wait on readiness. Without a bound, a
     # wedged `launchctl` sits until the 6-hour default on a 10x-billed macOS

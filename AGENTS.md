@@ -47,9 +47,8 @@ project's whole `lint` (`bun run --cwd clients/gui-app lint`), and
 needs about 9 GB and its type-check about 5 GB, and two agents running them at
 once have stalled a 24 GB Mac. The checks still run, just not by hand: the
 pre-commit hook lints, formats and compiles what each commit affects (below),
-and CI lints, compiles and builds every project the PR affects and runs every
-project's tests. After pushing, watch the checks (`gh pr checks --watch`) and
-fix what they report.
+and CI lints, compiles and builds every project a change affects and runs every
+project's tests. When CI runs is in "When CI runs" below.
 
 To check work while you write it, narrow the check to what you touched:
 
@@ -71,6 +70,53 @@ concurrent commits from other worktrees queue rather than stacking multi-GB
 type-checks. CI lints each affected project whole and runs the affected
 `build` targets. Tests run in CI (`test.yml`), not in the hook. Commits need
 DCO (`git commit -s`).
+
+## When CI runs
+
+A team pull request into `main` (a branch in this repository) runs **no CI**:
+every job is skipped, so every required check reports as passed, and the merge
+button is available as soon as review passes. Nothing tests such a PR before
+it merges, so **the local commit hook is the only automatic check before
+merge**. A commit that only moves the submodule pin skips the hook, so nothing
+looks at it until the merge.
+
+A pull request from a fork, a pull request from a bot (Dependabot), and a pull
+request into any other branch (a release or integration branch, which has no
+run on push) run every check, as before.
+
+The full suite runs once on the merged commit, on every push to `main`, and a
+later merge never cancels an earlier merge's run. A failed merge run is rerun
+once (`trunk-red.yml`, failed jobs only, because the test suites have known
+flakes); if the rerun fails too it is posted to Slack with the commit, its
+author and the run. So when `main` goes red, the failure is a break to fix or
+revert, not a flake.
+
+To test a branch before merging it, run the workflow on the branch: the
+Actions tab, or `gh workflow run test.yml --ref <branch>` (likewise
+`pre-commit.yml`, and `browser-regressions.yml`). Do this for a risky change
+the hook does not cover: packaging, the protocol, a pin bump.
+
+The rule is one expression, copied into the `if:` of every job in the eight
+workflows that trigger on `pull_request` (`test`, `pre-commit`,
+`protocol-compat`, `browser-regressions`, `real-supervisor`, `codeql`,
+`secret-scan`, `dco`), and pinned by `scripts/__tests__/ci-pull-request-gate.test.mjs`:
+
+```
+github.event_name != 'pull_request'
+  || github.base_ref != 'main'
+  || github.event.pull_request.head.repo.fork
+  || github.event.pull_request.user.type == 'Bot'
+```
+
+A new workflow with a `pull_request` trigger carries it on every job; an
+aggregator that uses `always()` is `always() && (<expression>)`, so it is
+skipped, not failed, on a team PR. The `main` ruleset requires `tests` (the
+single check for `test.yml`'s matrix), not the individual matrix names: a
+matrix job skipped by a job-level `if` is never expanded, so its names never
+report.
+
+After pushing a fork or bot PR, or a PR into another branch, watch the checks
+(`gh pr checks --watch`) and fix what they report.
 
 **nx runs without its daemon** (`useDaemonProcess: false` in `nx.json`). A
 daemon exits only after three hours without an nx command, so every worktree

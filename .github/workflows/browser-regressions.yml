@@ -28,13 +28,22 @@ permissions:
   contents: read
 
 concurrency:
-  # The event is in the key so a push to main cannot cancel a manual run.
-  group: browser-regressions-${{ github.event_name }}-${{ github.ref }}
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run, and a manual run is never cancelled either.
+  group: browser-regressions-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   changes:
     name: browser regressions (changes)
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -94,7 +103,16 @@ jobs:
   browser:
     name: browser (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.user.type == 'Bot'
+      )
+      && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     # A shard runs a few minutes. Playwright bounds each test on its own
     # (`timeout` in playwright.config.ts); this bounds the job, so a hung
@@ -147,7 +165,16 @@ jobs:
   cdp-client:
     name: browser (cdp client)
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.user.type == 'Bot'
+      )
+      && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -161,14 +188,23 @@ jobs:
         working-directory: clients/gui-app
         run: bun scripts/cdp-client-browser.mjs
 
-  # The required check. `always()` makes it report even when the suite was
-  # skipped or a job before it failed. It passes when the suite ran and every
-  # job passed, or when `changes` found nothing to run; anything else - a
-  # failed or cancelled shard, a failed `changes` - fails it.
+  # The required check. A team PR into `main` skips it with every other job, and
+  # a skipped job satisfies a required check. `always()` makes it report even
+  # when the suite was skipped or a job before it failed. It passes when the
+  # suite ran and every job passed, or when `changes` found nothing to run;
+  # anything else - a failed or cancelled shard, a failed `changes` - fails it.
   result:
     name: browser regressions
     needs: [changes, browser, cdp-client]
-    if: always()
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      always() && (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.user.type == 'Bot'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

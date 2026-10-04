@@ -8,26 +8,43 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Check a branch before merging it: the Actions tab, or
+  # `gh workflow run pre-commit.yml --ref <branch>`.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pre-commit-${{ github.workflow }}-${{ github.ref }}
+  # Only a pull request's runs supersede each other. A push to `main` gets its own
+  # group (the run id): every merge is tested once, so a later merge must never
+  # cancel an earlier merge's run.
+  group: pre-commit-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   workspace-checks:
     name: ${{ matrix.lane }}
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      github.event_name != 'pull_request'
+      || github.base_ref != 'main'
+      || github.event.pull_request.head.repo.fork
+      || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         lane: [static, compile, build]
     env:
-      # Drive `nx affected` in the workspace-checks hook off the PR base.
-      NX_BASE: ${{ github.event.pull_request.base.sha }}
-      NX_HEAD: ${{ github.event.pull_request.head.sha }}
+      # Drive `nx affected` in the workspace-checks hook off the PR base, or on a
+      # push to `main` off the commit before the push: without it the hook falls
+      # back to `origin/main`, which IS the pushed commit, so nothing would be
+      # affected and the merge run would check nothing. A manual run has neither
+      # (both are empty) and takes the fallback: the branch against `origin/main`.
+      NX_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      NX_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       # gui-app's type-aware lint has outgrown Node's ~4GB default heap (OOM
       # SIGABRT on two consecutive CI heads, then locally). The headroom lives
       # in that package's own `lint` script - the one place every invocation
@@ -85,8 +102,16 @@ jobs:
 
   pre-commit:
     name: pre-commit
-    if: always()
     needs: workspace-checks
+    # A team PR into `main` runs no CI: the merge to `main` runs it once. A fork
+    # PR, a bot PR and a PR into any other branch run it in full.
+    if: >-
+      always() && (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.fork
+        || github.event.pull_request.user.type == 'Bot'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Require every workspace lane
