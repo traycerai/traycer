@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import {
   depictDockRows,
-  depictRegion,
+  regionDepiction,
 } from "@/components/layout-editor/region-depiction";
 import { PanelTaskHeaderBody } from "@/components/epic-canvas/sidebar/panel-task-header-body";
 import { SampleLiveAgentItems } from "@/components/sample-workspace/sample-strip-live-agents";
@@ -697,7 +697,7 @@ function AppFrameDock({ values, arrangement }: AppFrame): ReactNode {
             <span key={regionId}>
               {/* Framed as a chip because its VALUES say so, which is what
                 `hostContextFor` reads; this list is the chip-sized members. */}
-              {depictRegion(regionId, values[regionId], arrangement)}
+              {regionDepiction(regionId, values, arrangement)}
             </span>
           ))}
         </div>
@@ -890,7 +890,7 @@ function depictRailRegion(
   values: LayoutValues,
   arrangement: LayoutArrangement,
 ): ReactNode {
-  return depictRegion(regionId, values[regionId], arrangement);
+  return regionDepiction(regionId, values, arrangement);
 }
 
 /**
@@ -924,5 +924,5 @@ export function AppFrameRegion<
   )
     return null;
   if (regionValuesHidden(regionValues)) return null;
-  return depictRegion(regionId, regionValues, arrangement);
+  return regionDepiction(regionId, values, arrangement);
 }

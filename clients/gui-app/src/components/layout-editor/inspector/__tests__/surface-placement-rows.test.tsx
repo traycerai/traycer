@@ -884,6 +884,36 @@ describe("the Composer area's Toolbar style row", () => {
     expect(controlGroupOf("Toolbar style").disabled).toBe(false);
   });
 
+  /**
+   * Each sample is the real toolbar chip under ITS option, not under the
+   * stored one: the chip reads `model.toolbarStyle` through the override
+   * seam, and a depiction that never laid its values over it drew the user's
+   * own setting twice.
+   */
+  it("draws each sample at its own option's chrome, whichever is stored", () => {
+    function sampleChipBordered(label: string): boolean {
+      const card = within(
+        screen.getByRole("radiogroup", { name: "Toolbar style" }),
+      ).getByRole("radio", { name: label }).parentElement;
+      const chip = card?.querySelector("[data-layout-depiction] button");
+      if (!(chip instanceof HTMLButtonElement)) {
+        throw new Error(`the ${label} sample draws no toolbar chip`);
+      }
+      return chip.className.split(/\s+/).includes("border-border");
+    }
+
+    for (const stored of ["flat", "bordered"] as const) {
+      useLayoutStore.getState().setRegionValues("model", {
+        toolbarStyle: stored,
+      });
+      render(<AreaRows surface="composer" place="leading" />);
+
+      expect(sampleChipBordered("Flat"), `stored ${stored}`).toBe(false);
+      expect(sampleChipBordered("Bordered"), `stored ${stored}`).toBe(true);
+      cleanup();
+    }
+  });
+
   it("is drawn nowhere else", () => {
     render(<AreaRows surface="composer" place="trailing" />);
 
