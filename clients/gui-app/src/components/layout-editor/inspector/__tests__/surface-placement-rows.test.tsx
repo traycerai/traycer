@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RevertButton } from "@/components/layout-editor/inspector/inspector-row";
 import { LayoutFormHostContext } from "@/components/layout-editor/inspector/layout-form-host";
@@ -14,10 +15,16 @@ import {
   ResourceReadingsRow,
   SidebarSideRow,
   SideStripViewRow,
+  SurfaceAreaRows,
   TabOverflowRow,
   TabStripPositionRow,
-  WideReadingWidthRow,
 } from "@/components/layout-editor/inspector/rows/surface-placement-rows";
+import { useLayoutFormContext } from "@/components/layout-editor/inspector/use-layout-form-context";
+import type { SurfaceGroupId } from "@/components/layout-editor/regions/region-grammar";
+import {
+  LIVE,
+  type ShownRowAvailability,
+} from "@/components/layout-editor/regions/row-availability";
 import { setMobileApp } from "@/lib/mobile-app";
 import { readPendingLayoutLanding } from "@/lib/settings-navigation";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -35,7 +42,50 @@ import {
  * while the value differs from the shipped one. Resource readings writes a
  * region value instead of the arrangement, through the same
  * `region-control-io` seam every other region control uses.
+ *
+ * Every row takes what the registry says about it (`availability`, `depth`),
+ * which is `SurfaceAreaRows`' to place (`regions/area-rows.ts`, P1). A test
+ * about a control's own write hands the row a plain live answer; a test about
+ * WHEN a row is disabled or absent goes through `AreaRows`, which draws the
+ * area's rows by the one form context exactly as the form does.
  */
+
+/** A row the registry leaves plain: what a write test needs and nothing more. */
+const LIVE_ROW: {
+  readonly availability: ShownRowAvailability;
+  readonly depth: 0 | 1;
+} = { availability: LIVE, depth: 0 };
+
+/** One area's own rows on one side of its lists, drawn as the form draws them. */
+function AreaRows(props: {
+  readonly surface: SurfaceGroupId;
+  readonly place: "leading" | "trailing";
+}): ReactNode {
+  const context = useLayoutFormContext();
+  return (
+    <SurfaceAreaRows
+      surface={props.surface}
+      place={props.place}
+      context={context}
+    />
+  );
+}
+
+/** The Readings row over the live form context its switch is read from. */
+function ResourceReadings(): ReactNode {
+  const context = useLayoutFormContext();
+  return <ResourceReadingsRow {...LIVE_ROW} context={context} />;
+}
+
+/** The row's control group - the fieldset the registry's answer disables. */
+function controlGroupOf(label: string): HTMLFieldSetElement {
+  const row = screen.getByText(label).closest("[data-layout-form-row]");
+  const group = row?.querySelector("fieldset");
+  if (!(group instanceof HTMLFieldSetElement)) {
+    throw new Error(`${label} has no control group`);
+  }
+  return group;
+}
 
 function historyDepth(): number {
   return useLayoutEditorStore.getState().history.past.length;
@@ -92,7 +142,7 @@ afterEach(() => {
 
 describe("<TabStripPositionRow />", () => {
   it("draws Top / Left / Right over the stored placement", () => {
-    render(<TabStripPositionRow />);
+    render(<TabStripPositionRow {...LIVE_ROW} />);
 
     const options = Array.from(
       screen
@@ -113,7 +163,7 @@ describe("<TabStripPositionRow />", () => {
   });
 
   it("writes the store at rest, with no history", () => {
-    render(<TabStripPositionRow />);
+    render(<TabStripPositionRow {...LIVE_ROW} />);
 
     pick("Tab placement", "Left");
 
@@ -125,7 +175,7 @@ describe("<TabStripPositionRow />", () => {
 
   it("is one undo step in a session, and Discard puts it back", () => {
     beginSession();
-    render(<TabStripPositionRow />);
+    render(<TabStripPositionRow {...LIVE_ROW} />);
 
     pick("Tab placement", "Right");
     expect(useLayoutStore.getState().arrangement.tabStripPlacement).toBe(
@@ -146,7 +196,7 @@ describe("<TabStripPositionRow />", () => {
   });
 
   it("offers a revert only while the placement differs from the shipped one", () => {
-    render(<TabStripPositionRow />);
+    render(<TabStripPositionRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
         name: "Reset tab placement to default: Top",
@@ -181,7 +231,7 @@ describe("<SideStripViewRow /> (D8)", () => {
   }
 
   it("draws Tabs only / Tabs and agents over the stored view", () => {
-    render(<SideStripViewRow />);
+    render(<SideStripViewRow {...LIVE_ROW} />);
 
     const options = Array.from(
       screen
@@ -202,7 +252,7 @@ describe("<SideStripViewRow /> (D8)", () => {
   });
 
   it("draws the sample agent rows in the Tabs and agents picture, and none in Tabs only", () => {
-    render(<SideStripViewRow />);
+    render(<SideStripViewRow {...LIVE_ROW} />);
 
     const tabsOnly = screen.getByRole("radio", { name: "Tabs only" });
     const tabsAndAgents = screen.getByRole("radio", {
@@ -223,7 +273,7 @@ describe("<SideStripViewRow /> (D8)", () => {
   });
 
   it("is not selected-highlighted at rest, and highlighted once its setting is selected", () => {
-    render(<SideStripViewRow />);
+    render(<SideStripViewRow {...LIVE_ROW} />);
     const rowElement = (): HTMLElement => {
       const node = screen
         .getByText("Side tab view")
@@ -240,33 +290,61 @@ describe("<SideStripViewRow /> (D8)", () => {
   });
 
   it("is disabled with a reason while the tabs are at the top, which is the shipped default", () => {
-    render(<SideStripViewRow />);
+    render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
       .getByRole("radiogroup", { name: "Side tab view" })
       .querySelectorAll<HTMLButtonElement>("[role='radio']");
     expect([...options].every((option) => option.disabled)).toBe(true);
-    expect(
-      screen.getByText("Available when tabs are on the left or right."),
-    ).toBeTruthy();
+    const reason = screen.getByText(
+      "Set Placement to Left or Right to use this.",
+    );
+    expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+    // The group is disabled and described by the reason, so it is heard on
+    // the control it explains.
+    const group = controlGroupOf("Side tab view");
+    expect(group.disabled).toBe(true);
+    expect(group.getAttribute("aria-describedby")).toBe(reason.id);
   });
 
   it("is enabled with no status once the tabs move to a vertical strip", () => {
     withVerticalStrip();
-    render(<SideStripViewRow />);
+    render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
       .getByRole("radiogroup", { name: "Side tab view" })
       .querySelectorAll<HTMLButtonElement>("[role='radio']");
     expect([...options].every((option) => option.disabled)).toBe(false);
     expect(
-      screen.queryByText("Available when tabs are on the left or right."),
+      screen.queryByText("Set Placement to Left or Right to use this."),
     ).toBeNull();
+    expect(controlGroupOf("Side tab view").disabled).toBe(false);
+  });
+
+  it("draws Tab overflow, then Side tab view, one level under Placement - the live one first at the shipped default", () => {
+    render(<AreaRows surface="topBar" place="leading" />);
+
+    const rows = ["Placement", "Tab overflow", "Side tab view"].map((label) => {
+      const row = screen.getByText(label).closest("[data-layout-form-row]");
+      if (row === null) throw new Error(`${label} is not a form row`);
+      return row;
+    });
+    expect(rows.map((row) => row.getAttribute("data-row-depth"))).toEqual([
+      "0",
+      "1",
+      "1",
+    ]);
+    // Nothing else is drawn, and in this order.
+    const drawn = [...document.querySelectorAll("[data-layout-form-row]")];
+    expect(drawn).toHaveLength(rows.length);
+    rows.forEach((row, index) => {
+      expect(drawn[index]).toBe(row);
+    });
   });
 
   it("writes the store at rest, with no history", () => {
     withVerticalStrip();
-    render(<SideStripViewRow />);
+    render(<SideStripViewRow {...LIVE_ROW} />);
 
     pickPictured("Side tab view", "Tabs and agents");
 
@@ -279,7 +357,7 @@ describe("<SideStripViewRow /> (D8)", () => {
   it("is one undo step in a session, and Discard puts it back", () => {
     withVerticalStrip();
     beginSession();
-    render(<SideStripViewRow />);
+    render(<SideStripViewRow {...LIVE_ROW} />);
 
     pickPictured("Side tab view", "Tabs and agents");
     expect(useLayoutStore.getState().arrangement.sideStripView).toBe(
@@ -301,7 +379,7 @@ describe("<SideStripViewRow /> (D8)", () => {
 
   it("offers a revert only while the view differs from the shipped one", () => {
     withVerticalStrip();
-    render(<SideStripViewRow />);
+    render(<SideStripViewRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
         name: "Reset side tab view to default: Tabs only",
@@ -326,7 +404,7 @@ describe("<SideStripViewRow /> (D8)", () => {
 
 describe("<SidebarSideRow />", () => {
   it("draws Left / Right over the stored side", () => {
-    render(<SidebarSideRow />);
+    render(<SidebarSideRow {...LIVE_ROW} />);
 
     const options = Array.from(
       screen
@@ -342,7 +420,7 @@ describe("<SidebarSideRow />", () => {
   });
 
   it("writes the store at rest", () => {
-    render(<SidebarSideRow />);
+    render(<SidebarSideRow {...LIVE_ROW} />);
 
     pick("Sidebar side", "Right");
 
@@ -352,7 +430,7 @@ describe("<SidebarSideRow />", () => {
 
   it("is one undo step in a session, and Discard puts it back", () => {
     beginSession();
-    render(<SidebarSideRow />);
+    render(<SidebarSideRow {...LIVE_ROW} />);
 
     pick("Sidebar side", "Right");
     expect(historyDepth()).toBe(1);
@@ -368,7 +446,7 @@ describe("<SidebarSideRow />", () => {
   });
 
   it("offers a revert only while the side differs from the shipped one", () => {
-    render(<SidebarSideRow />);
+    render(<SidebarSideRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
         name: "Reset sidebar side to default",
@@ -389,7 +467,7 @@ describe("<SidebarSideRow />", () => {
   });
 
   it("keeps focus in the row when its ↺ unmounts, moving it to a sibling control", () => {
-    render(<SidebarSideRow />);
+    render(<SidebarSideRow {...LIVE_ROW} />);
     pick("Sidebar side", "Right");
 
     const revertButton = screen.getByRole("button", {
@@ -414,7 +492,7 @@ describe("<SidebarSideRow />", () => {
 
 describe("<ReadingWidthRow />", () => {
   it("draws Comfortable / Wide over the stored width", () => {
-    render(<ReadingWidthRow />);
+    render(<ReadingWidthRow {...LIVE_ROW} />);
 
     const options = Array.from(
       screen
@@ -432,7 +510,7 @@ describe("<ReadingWidthRow />", () => {
   });
 
   it("writes arrangement.readingWidth", () => {
-    render(<ReadingWidthRow />);
+    render(<ReadingWidthRow {...LIVE_ROW} />);
 
     pick("Reading width", "Wide");
 
@@ -441,7 +519,7 @@ describe("<ReadingWidthRow />", () => {
   });
 
   it("offers a revert only while wide, and it restores comfortable", () => {
-    render(<ReadingWidthRow />);
+    render(<ReadingWidthRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
         name: "Reset reading width to default: Comfortable",
@@ -467,19 +545,14 @@ describe("<ReadingWidthRow />", () => {
 });
 
 /**
- * The slider row beneath Reading width - visible only while "Wide" is
- * picked (the same conditional-row-visibility precedent the fine-tune
- * "Display" row uses in `surface-section.tsx`), floored at 1024 (today's
- * fixed wide column) and reverting to it.
+ * The slider row beneath Reading width - always drawn, one level in, and
+ * disabled with its reason while Comfortable is picked (C5: the slider does
+ * not come and go with the choice above it), floored at 1024 (today's fixed
+ * wide column) and reverting to it. Drawn through the registry, as the form
+ * draws it, since which of those it is IS the registry's answer.
  */
-describe("<WideReadingWidthRow />", () => {
-  it("renders nothing while reading width is comfortable", () => {
-    const { container } = render(<WideReadingWidthRow />);
-
-    expect(container.firstChild).toBeNull();
-  });
-
-  it("draws the slider at the stored width, with no revert at the default", () => {
+describe("the Wide column width row", () => {
+  function withWideReading(): void {
     useLayoutStore.setState({
       ...DEFAULT_LAYOUT_SNAPSHOT,
       arrangement: {
@@ -487,8 +560,58 @@ describe("<WideReadingWidthRow />", () => {
         readingWidth: "wide",
       },
     });
+  }
 
-    render(<WideReadingWidthRow />);
+  it("stays drawn, disabled and saying why, while reading width is comfortable", () => {
+    render(<AreaRows surface="chat" place="leading" />);
+
+    const row = screen
+      .getByText("Wide column width")
+      .closest("[data-layout-form-row]");
+    expect(row?.getAttribute("data-row-depth")).toBe("1");
+    expect(row?.getAttribute("data-row-availability")).toBe("disabled");
+    // What the width would be, still said while it does nothing.
+    expect(
+      screen.getByText("1024px. Never wider than the pane it is in."),
+    ).toBeTruthy();
+    const reason = screen.getByText("Set Reading width to Wide to use this.");
+    expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+    const group = controlGroupOf("Wide column width");
+    expect(group.disabled).toBe(true);
+    expect(group.getAttribute("aria-describedby")).toBe(reason.id);
+    // A thumb is not a form control: the row tells the slider itself.
+    expect(
+      screen
+        .getByRole("slider", { name: "Wide column width" })
+        .hasAttribute("data-disabled"),
+    ).toBe(true);
+  });
+
+  it("becomes operable, with no status, once reading width is wide", () => {
+    withWideReading();
+    render(<AreaRows surface="chat" place="leading" />);
+
+    expect(
+      screen
+        .getByText("Wide column width")
+        .closest("[data-layout-form-row]")
+        ?.getAttribute("data-row-availability"),
+    ).toBe("live");
+    expect(
+      screen.queryByText("Set Reading width to Wide to use this."),
+    ).toBeNull();
+    expect(controlGroupOf("Wide column width").disabled).toBe(false);
+    expect(
+      screen
+        .getByRole("slider", { name: "Wide column width" })
+        .hasAttribute("data-disabled"),
+    ).toBe(false);
+  });
+
+  it("draws the slider at the stored width, with no revert at the default", () => {
+    withWideReading();
+
+    render(<AreaRows surface="chat" place="leading" />);
 
     const slider = screen.getByRole("slider", { name: "Wide column width" });
     expect(slider.getAttribute("aria-valuenow")).toBe("1024");
@@ -509,7 +632,7 @@ describe("<WideReadingWidthRow />", () => {
       },
     });
 
-    render(<WideReadingWidthRow />);
+    render(<AreaRows surface="chat" place="leading" />);
 
     const slider = screen.getByRole("slider", { name: "Wide column width" });
     expect(slider.getAttribute("aria-valuenow")).toBe("1600");
@@ -536,7 +659,7 @@ describe("<TabOverflowRow />", () => {
   }
 
   it("draws Scroll / Shrink to fit over the stored layout", () => {
-    render(<TabOverflowRow />);
+    render(<TabOverflowRow {...LIVE_ROW} />);
 
     const options = Array.from(
       screen
@@ -555,32 +678,40 @@ describe("<TabOverflowRow />", () => {
   });
 
   it("is enabled with no status while the tabs sit at the top, the shipped default", () => {
-    render(<TabOverflowRow />);
+    render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
       .getByRole("radiogroup", { name: "Tab overflow" })
       .querySelectorAll<HTMLButtonElement>("[role='radio']");
-    expect([...options].every((option) => option.disabled)).toBe(false);
-    expect(
-      screen.queryByText("Available when tabs are at the top."),
-    ).toBeNull();
+    // Off by the row's fieldset, which `:disabled` reads and the button's own
+    // `disabled` attribute does not.
+    expect(options.length).toBeGreaterThan(0);
+    expect([...options].some((option) => option.matches(":disabled"))).toBe(
+      false,
+    );
+    expect(screen.queryByText("Set Placement to Top to use this.")).toBeNull();
+    expect(controlGroupOf("Tab overflow").disabled).toBe(false);
   });
 
   it("is disabled with a reason once the tabs move to a side, which never scrolls or shrinks its own", () => {
     withVerticalStrip();
-    render(<TabOverflowRow />);
+    render(<AreaRows surface="topBar" place="leading" />);
 
     const options = screen
       .getByRole("radiogroup", { name: "Tab overflow" })
       .querySelectorAll<HTMLButtonElement>("[role='radio']");
-    expect([...options].every((option) => option.disabled)).toBe(true);
-    expect(
-      screen.getByText("Available when tabs are at the top."),
-    ).toBeTruthy();
+    expect([...options].every((option) => option.matches(":disabled"))).toBe(
+      true,
+    );
+    const reason = screen.getByText("Set Placement to Top to use this.");
+    expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+    const group = controlGroupOf("Tab overflow");
+    expect(group.disabled).toBe(true);
+    expect(group.getAttribute("aria-describedby")).toBe(reason.id);
   });
 
   it("writes the store at rest, with no history", () => {
-    render(<TabOverflowRow />);
+    render(<TabOverflowRow {...LIVE_ROW} />);
 
     pick("Tab overflow", "Shrink to fit");
 
@@ -590,7 +721,7 @@ describe("<TabOverflowRow />", () => {
 
   it("is one undo step in a session, and Discard puts it back", () => {
     beginSession();
-    render(<TabOverflowRow />);
+    render(<TabOverflowRow {...LIVE_ROW} />);
 
     pick("Tab overflow", "Shrink to fit");
     expect(useLayoutStore.getState().arrangement.taskTabLayout).toBe("shrink");
@@ -607,7 +738,7 @@ describe("<TabOverflowRow />", () => {
   });
 
   it("offers a revert only while the value differs from the shipped default", () => {
-    render(<TabOverflowRow />);
+    render(<TabOverflowRow {...LIVE_ROW} />);
     expect(
       screen.queryByRole("button", {
         name: "Reset tab overflow to default: Scroll",
@@ -632,7 +763,7 @@ describe("<TabOverflowRow />", () => {
 
 describe("<ResourceReadingsRow /> (G7)", () => {
   it("draws the shipped default: on", () => {
-    render(<ResourceReadingsRow />);
+    render(<ResourceReadings />);
 
     expect(
       screen
@@ -645,7 +776,7 @@ describe("<ResourceReadingsRow /> (G7)", () => {
     useLayoutStore.getState().setRegionValues("resourceMonitor", {
       shown: "hidden",
     });
-    render(<ResourceReadingsRow />);
+    render(<ResourceReadings />);
 
     const toggle = screen.getByRole("switch", {
       name: "Readings on agent rows",
@@ -664,7 +795,7 @@ describe("<ResourceReadingsRow /> (G7)", () => {
   });
 
   it("offers a revert only while it differs from the shipped default", () => {
-    render(<ResourceReadingsRow />);
+    render(<ResourceReadings />);
     expect(
       screen.queryByRole("button", { name: "Reset readings on agent rows" }),
     ).toBeNull();
@@ -687,7 +818,7 @@ describe("<ResourceReadingsRow /> (G7)", () => {
 
 describe("<ResourceReadingsRow /> Choose metrics link (L-174)", () => {
   it("in the inspector host, opens the Resource monitor's row expanded", () => {
-    render(<ResourceReadingsRow />);
+    render(<ResourceReadings />);
 
     fireEvent.click(screen.getByRole("button", { name: "Choose metrics" }));
 
@@ -709,7 +840,7 @@ describe("<ResourceReadingsRow /> Choose metrics link (L-174)", () => {
     });
     render(
       <LayoutFormHostContext value="page">
-        <ResourceReadingsRow />
+        <ResourceReadings />
       </LayoutFormHostContext>,
     );
 
@@ -721,6 +852,101 @@ describe("<ResourceReadingsRow /> Choose metrics link (L-174)", () => {
     });
     // The docked editor's own selection is untouched by the page host.
     expect(useLayoutEditorStore.getState().selected).toBeNull();
+  });
+});
+
+/**
+ * Toolbar style is the Composer area's own row (C3): it styles every button on
+ * the toolbar, so it is not Model's row even though it is stored in Model's
+ * values, and no layout or setting makes it do nothing.
+ */
+describe("the Composer area's Toolbar style row", () => {
+  function toolbarStyle(): string {
+    const state = useLayoutStore.getState();
+    return state.overrides.model?.toolbarStyle ?? "flat";
+  }
+
+  it("draws Flat / Bordered over the stored style, ahead of the area's lists", () => {
+    render(<AreaRows surface="composer" place="leading" />);
+
+    const options = within(
+      screen.getByRole("radiogroup", { name: "Toolbar style" }),
+    ).getAllByRole("radio");
+    // Pictured options: each one's name is its aria-label.
+    expect(options.map((node) => node.getAttribute("aria-label"))).toEqual([
+      "Flat",
+      "Bordered",
+    ]);
+    expect(options.map((node) => node.getAttribute("aria-checked"))).toEqual([
+      "true",
+      "false",
+    ]);
+    expect(controlGroupOf("Toolbar style").disabled).toBe(false);
+  });
+
+  /**
+   * Each sample is the real toolbar chip under ITS option, not under the
+   * stored one: the chip reads `model.toolbarStyle` through the override
+   * seam, and a depiction that never laid its values over it drew the user's
+   * own setting twice.
+   */
+  it("draws each sample at its own option's chrome, whichever is stored", () => {
+    function sampleChipBordered(label: string): boolean {
+      const card = within(
+        screen.getByRole("radiogroup", { name: "Toolbar style" }),
+      ).getByRole("radio", { name: label }).parentElement;
+      const chip = card?.querySelector("[data-layout-depiction] button");
+      if (!(chip instanceof HTMLButtonElement)) {
+        throw new Error(`the ${label} sample draws no toolbar chip`);
+      }
+      return chip.className.split(/\s+/).includes("border-border");
+    }
+
+    for (const stored of ["flat", "bordered"] as const) {
+      useLayoutStore.getState().setRegionValues("model", {
+        toolbarStyle: stored,
+      });
+      render(<AreaRows surface="composer" place="leading" />);
+
+      expect(sampleChipBordered("Flat"), `stored ${stored}`).toBe(false);
+      expect(sampleChipBordered("Bordered"), `stored ${stored}`).toBe(true);
+      cleanup();
+    }
+  });
+
+  it("is drawn nowhere else", () => {
+    render(<AreaRows surface="composer" place="trailing" />);
+
+    expect(
+      screen.queryByRole("radiogroup", { name: "Toolbar style" }),
+    ).toBeNull();
+  });
+
+  it("writes Model's toolbarStyle, and offers a revert only while it differs from the shipped one", () => {
+    render(<AreaRows surface="composer" place="leading" />);
+    expect(
+      screen.queryByRole("button", { name: "Revert Toolbar style" }),
+    ).toBeNull();
+
+    pickPictured("Toolbar style", "Bordered");
+
+    expect(toolbarStyle()).toBe("bordered");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Revert Toolbar style" }),
+    );
+    expect(toolbarStyle()).toBe("flat");
+    expect(
+      screen.queryByRole("button", { name: "Revert Toolbar style" }),
+    ).toBeNull();
+  });
+
+  it("stays drawn and live in the installed mobile app, which styles the same buttons", () => {
+    setMobileApp(true);
+    render(<AreaRows surface="composer" place="leading" />);
+
+    expect(controlGroupOf("Toolbar style").disabled).toBe(false);
+    // No note or reason line under it.
+    expect(document.querySelector("p[data-row-availability]")).toBeNull();
   });
 });
 
@@ -736,16 +962,56 @@ describe("<RevertButton /> (inspector-row.tsx)", () => {
 });
 
 describe("in the installed mobile app", () => {
-  it("draws none of the three rows (S-39)", () => {
-    setMobileApp(true);
-    render(
+  /** Every area row only the desktop layout draws, where the registry puts it. */
+  function DesktopLayoutRows(): ReactNode {
+    return (
       <>
-        <TabStripPositionRow />
-        <SideStripViewRow />
-        <SidebarSideRow />
-      </>,
+        <AreaRows surface="topBar" place="leading" />
+        <AreaRows surface="sidebar" place="leading" />
+        <AreaRows surface="sidebar" place="trailing" />
+        <AreaRows surface="chat" place="leading" />
+      </>
     );
+  }
+
+  it("draws none of the desktop-layout rows (S-39): the registry answers absent for each", () => {
+    setMobileApp(true);
+    render(<DesktopLayoutRows />);
 
     expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("slider")).toBeNull();
+    expect(document.querySelector("[data-layout-form-row]")).toBeNull();
+  });
+
+  describe("and a narrow browser tab, the same layout the window can widen out of", () => {
+    let originalInnerWidth: number;
+
+    beforeEach(() => {
+      originalInnerWidth = window.innerWidth;
+      window.innerWidth = 500;
+    });
+
+    afterEach(() => {
+      window.innerWidth = originalInnerWidth;
+    });
+
+    it("keeps each of those rows, live, with a note that it applies on wider windows", () => {
+      render(<DesktopLayoutRows />);
+
+      for (const label of [
+        "Placement",
+        "Tab overflow",
+        "Side",
+        "Readings on agent rows",
+        "Reading width",
+      ]) {
+        const row = screen.getByText(label).closest("[data-layout-form-row]");
+        expect(row, label).not.toBeNull();
+        const note = row?.querySelector("[data-row-availability]");
+        expect(note?.getAttribute("data-row-availability"), label).toBe("live");
+        expect(note?.textContent, label).toContain("Applies on wider windows.");
+      }
+    });
   });
 });

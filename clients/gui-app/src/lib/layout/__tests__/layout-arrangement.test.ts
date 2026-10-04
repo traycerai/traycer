@@ -7,7 +7,6 @@ import {
   canvasOrderGroupOf,
   DEFAULT_ARRANGEMENT,
   statusBarHostsAnyRegion,
-  statusBarShown,
   toggleStatusBarSurface,
   withBarHost,
   withBarSide,
@@ -42,7 +41,10 @@ import {
 import {
   areRailsEqual,
   DEFAULT_RAIL,
+  isLastShownRailPanel,
+  isRailStackDrawn,
   railDisplayEntries,
+  railPanelShownByValue,
   railStackMembers,
   railStackMembersFor,
   railStackOf,
@@ -57,6 +59,7 @@ import {
   type RailEntry,
 } from "@/lib/layout/rail";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
+import type { RailRegionId } from "@/lib/layout/region-id";
 
 function panel(id: RailEntry["id"]): RailEntry {
   const entry = DEFAULT_RAIL.find(
@@ -1040,13 +1043,6 @@ describe("the two bar readings (L-156)", () => {
     expect(statusBarHostsAnyRegion(DEFAULT_ARRANGEMENT)).toBe(true);
     expect(statusBarHostsAnyRegion(usageUp)).toBe(true);
     expect(statusBarHostsAnyRegion(bothUp)).toBe(false);
-
-    expect(statusBarShown(usageUp, false)).toBe(true);
-    expect(statusBarShown(bothUp, false)).toBe(false);
-    // A mobile viewport answers with its own switch and ignores both hosts
-    // (L-51), which L-156 does not touch.
-    expect(statusBarShown(DEFAULT_ARRANGEMENT, true)).toBe(false);
-    expect(statusBarShown({ ...bothUp, mobileFooter: true }, true)).toBe(true);
   });
 
   it("names the two readings and nothing else", () => {
@@ -1759,7 +1755,7 @@ describe("stacking and unstacking (L-168)", () => {
 
 describe("what a rail SURFACE draws (L-166, L-167)", () => {
   it("draws a stack as one capsule holding every member, and everything else as itself (L-181)", () => {
-    expect(railDisplayEntries(DEFAULT_RAIL, () => true)).toEqual([
+    expect(railDisplayEntries(DEFAULT_RAIL, () => true, "spacing")).toEqual([
       {
         kind: "stack",
         id: "stack:railAgents+railArtifacts",
@@ -1781,7 +1777,7 @@ describe("what a rail SURFACE draws (L-166, L-167)", () => {
       ...FLAT_RAIL.slice(4),
     ];
 
-    expect(railDisplayEntries(fourMember, () => true)[0]).toEqual({
+    expect(railDisplayEntries(fourMember, () => true, "spacing")[0]).toEqual({
       kind: "stack",
       id: "stack:railAgents+railArtifacts+railTerminals+railBrowsers",
       members: ["railAgents", "railArtifacts", "railTerminals", "railBrowsers"],
@@ -1792,6 +1788,7 @@ describe("what a rail SURFACE draws (L-166, L-167)", () => {
     const drawn = railDisplayEntries(
       DEFAULT_RAIL,
       (regionId) => regionId !== "railArtifacts",
+      "spacing",
     );
 
     expect(drawn[0]).toEqual({ kind: "panel", id: "railAgents" });
@@ -1812,6 +1809,122 @@ describe("what a rail SURFACE draws (L-166, L-167)", () => {
         (regionId) => regionId !== "railArtifacts",
       ),
     ).toEqual(["railAgents"]);
+  });
+});
+
+describe("the last shown rail panel (T3)", () => {
+  const ONLY_AGENTS_SHOWN = effectiveLayoutValues("default", {
+    railArtifacts: { shown: "hidden" },
+    railTerminals: { shown: "hidden" },
+    railBrowsers: { shown: "hidden" },
+    railGitDiff: { shown: "hidden" },
+    railFileTree: { shown: "hidden" },
+    railSharing: { shown: "hidden" },
+    // `auto` panels draw only when the task holds something, so the saved
+    // layout cannot lean on them.
+    railPullRequests: { shown: "auto" },
+    railComments: { shown: "auto" },
+  });
+  const byValue = (regionId: RailRegionId): boolean =>
+    railPanelShownByValue(ONLY_AGENTS_SHOWN, regionId);
+
+  it("counts only a panel the saved values say Shown: an auto panel is not one", () => {
+    expect(byValue("railAgents")).toBe(true);
+    expect(byValue("railPullRequests")).toBe(false);
+    expect(byValue("railComments")).toBe(false);
+    expect(byValue("railArtifacts")).toBe(false);
+  });
+
+  it("locks the one panel left Shown even while an auto panel is present", () => {
+    expect(isLastShownRailPanel("railAgents", byValue)).toBe(true);
+    // A panel that is not shown is never the last shown one.
+    expect(isLastShownRailPanel("railPullRequests", byValue)).toBe(false);
+  });
+
+  it("locks nothing while two panels are Shown", () => {
+    const twoShown = (regionId: RailRegionId): boolean =>
+      byValue(regionId) || regionId === "railFileTree";
+
+    expect(isLastShownRailPanel("railAgents", twoShown)).toBe(false);
+    expect(isLastShownRailPanel("railFileTree", twoShown)).toBe(false);
+  });
+});
+
+describe("rail dividers at rest and while customizing (T3)", () => {
+  const shownExcept =
+    (...hidden: ReadonlyArray<RailRegionId>) =>
+    (regionId: RailRegionId): boolean =>
+      !hidden.includes(regionId);
+
+  function kinds(
+    rail: ReadonlyArray<RailEntry>,
+    isVisible: (regionId: RailRegionId) => boolean,
+    dividers: "spacing" | "handles",
+  ): ReadonlyArray<string> {
+    return railDisplayEntries(rail, isVisible, dividers).map((entry) =>
+      entry.kind === "divider" ? "|" : entry.id,
+    );
+  }
+
+  const PADDED: ReadonlyArray<RailEntry> = [
+    divider("divider:1"),
+    panel("railAgents"),
+    divider("divider:2"),
+    panel("railArtifacts"),
+    divider("divider:3"),
+    divider("divider:4"),
+    panel("railTerminals"),
+    divider("divider:5"),
+  ];
+
+  it("draws no divider at either edge and none right after another at rest", () => {
+    expect(kinds(PADDED, () => true, "spacing")).toEqual([
+      "railAgents",
+      "|",
+      "railArtifacts",
+      "|",
+      "railTerminals",
+    ]);
+  });
+
+  it("drops a divider whose neighbours are hidden, rather than padding an edge or widening a gap", () => {
+    expect(
+      kinds(PADDED, shownExcept("railArtifacts", "railTerminals"), "spacing"),
+    ).toEqual(["railAgents"]);
+    expect(kinds(PADDED, shownExcept("railArtifacts"), "spacing")).toEqual([
+      "railAgents",
+      "|",
+      "railTerminals",
+    ]);
+  });
+
+  it("keeps every divider as a handle while customizing", () => {
+    expect(kinds(PADDED, () => true, "handles")).toEqual([
+      "|",
+      "railAgents",
+      "|",
+      "railArtifacts",
+      "|",
+      "|",
+      "railTerminals",
+      "|",
+    ]);
+  });
+
+  it("says a stack is drawn only while two of its members are shown", () => {
+    const id = "stack:railAgents+railArtifacts+railTerminals";
+
+    expect(isRailStackDrawn(id, () => true)).toBe(true);
+    expect(isRailStackDrawn(id, shownExcept("railTerminals"))).toBe(true);
+    expect(
+      isRailStackDrawn(id, shownExcept("railArtifacts", "railTerminals")),
+    ).toBe(false);
+    expect(
+      isRailStackDrawn(
+        id,
+        shownExcept("railAgents", "railArtifacts", "railTerminals"),
+      ),
+    ).toBe(false);
   });
 });
 

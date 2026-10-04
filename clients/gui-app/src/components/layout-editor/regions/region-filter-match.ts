@@ -8,6 +8,7 @@ import {
   SURFACE_GROUPS,
   type SurfaceGroupId,
 } from "@/components/layout-editor/regions/region-grammar";
+import type { LayoutFacts } from "@/components/layout-editor/regions/row-availability";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import type { HighlightRange } from "@/lib/git/path-highlight";
 import { effectiveLayoutValues } from "@/lib/layout/layout-presets";
@@ -66,6 +67,7 @@ export interface LayoutFindResult {
 export function layoutFindResults(
   query: string,
   snapshot: LayoutSnapshot,
+  facts: LayoutFacts,
 ): ReadonlyArray<LayoutFindResult> {
   if (query.trim().length === 0) return [];
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
@@ -112,7 +114,12 @@ export function layoutFindResults(
   }
 
   for (const region of LAYOUT_REGION_LIST) {
-    const state = regionStateWord(region.id, values, snapshot.arrangement);
+    const state = regionStateWord(
+      region.id,
+      values,
+      snapshot.arrangement,
+      facts,
+    );
     const option = firstMatch(regionDetailLabels(region.id), query);
     const stateMatch = wordStartMatch(state, query);
     const keyword = firstMatch(region.keywords, query);

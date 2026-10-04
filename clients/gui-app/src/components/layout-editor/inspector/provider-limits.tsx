@@ -14,9 +14,15 @@ import {
   type StatusBarProviderLimitSelection,
 } from "@/lib/layout/layout-arrangement";
 import { USAGE_PROVIDER_LEVEL } from "@/components/layout-editor/regions/usage-provider-level";
+import {
+  disabledBy,
+  LIVE,
+  type RowJump,
+  type ShownRowAvailability,
+} from "@/components/layout-editor/regions/row-availability";
+import { useRegionShown } from "@/lib/layout-overrides";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
-import { cn } from "@/lib/utils";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 
@@ -54,7 +60,12 @@ function ProviderLimitsPick(props: {
   const emptyReasonId = useId();
   const { windows, drawnKeys } = limits;
   const arrangement = useLayoutStore((state) => state.arrangement);
-  const shown = !arrangement.hiddenProviders.includes(providerId);
+  const usageShown = useRegionShown("usageLimits");
+  const availability = providerLimitsAvailability(
+    providerId,
+    usageShown,
+    arrangement.hiddenProviders.includes(providerId),
+  );
   const selection =
     arrangement.providerLimits[providerId] ?? AUTOMATIC_LIMIT_SELECTION;
   // The two modes are exclusive by construction: `Automatic` is an empty pick
@@ -70,122 +81,136 @@ function ProviderLimitsPick(props: {
 
   return (
     // GREYED IN PLACE, which is what L-08 asks for and what `inert` was not
-    // (R3-16): `inert` takes the subtree out of the accessibility tree
-    // altogether, so a screen-reader user who turned a provider off could no
-    // longer read what its greyed limits say.
-    //
-    // A disabled `fieldset` is the one element that turns every control inside
-    // it off without hiding any of them: the mode pick's buttons and the window
+    // (R3-16): the row shell's disabled `fieldset` turns every control off
+    // without hiding any of them - the mode pick's buttons and the window
     // checkboxes stop being operable by pointer OR keyboard, and each is still
-    // announced, with its state. The four utilities undo the UA's own fieldset
-    // box, which Tailwind's preflight does not reset.
-    <fieldset
-      disabled={!shown}
-      aria-disabled={!shown}
-      className={cn(
-        "m-0 min-w-0 border-0 p-0",
-        !shown && "pointer-events-none opacity-40",
-      )}
-    >
-      <LayoutFormRow
-        anchor={null}
-        icon={null}
-        onRevert={null}
-        revertLabel=""
-        // The two options read "Automatic (recommended)" and "Choose...",
-        // about 200px of a 292px content box: inline, the label column was
-        // handed what was left and broke at every space (I-05). A control
-        // too wide for its row goes on its own line, which is the
-        // prototype's own answer for the same shape (`.srow.stacked`).
-        stacked
-        selected={false}
-        label={USAGE_PROVIDER_LEVEL.limitsLabel}
-        description={USAGE_PROVIDER_LEVEL.limitsDescription}
-        control={
-          <div className="flex flex-col gap-2.5">
-            <SegmentedControl
-              ariaLabel={USAGE_PROVIDER_LEVEL.limitsLabel}
-              options={USAGE_PROVIDER_LEVEL.limitsOptions.map((option) => ({
-                ...option,
-                disabled: option.value === "choose" && windows.length === 0,
-                describedBy:
-                  option.value === "choose" && windows.length === 0
-                    ? emptyReasonId
-                    : undefined,
-              }))}
-              value={choosing ? "choose" : "automatic"}
-              onChange={(next) => {
-                if (next !== "choose") {
-                  writeSelection(
-                    providerId,
-                    arrangement,
-                    AUTOMATIC_LIMIT_SELECTION,
-                  );
-                  return;
-                }
-                // Nothing reported yet: there is no list to open and an
-                // empty pick would be a selection that draws nothing, so
-                // the level stays on Automatic and says why (L-96).
-                if (windows.length === 0) return;
+    // announced, with its state and the reason, which names the Layout switch
+    // that greys it and links there (U5).
+    <LayoutFormRow
+      anchor={null}
+      icon={null}
+      onRevert={null}
+      revertLabel=""
+      // The two options read "Automatic (recommended)" and "Choose...",
+      // about 200px of a 292px content box: inline, the label column was
+      // handed what was left and broke at every space (I-05). A control
+      // too wide for its row goes on its own line, which is the
+      // prototype's own answer for the same shape (`.srow.stacked`).
+      stacked
+      selected={false}
+      availability={availability}
+      depth={0}
+      label={USAGE_PROVIDER_LEVEL.limitsLabel}
+      description={USAGE_PROVIDER_LEVEL.limitsDescription}
+      control={
+        <div className="flex flex-col gap-2.5">
+          <SegmentedControl
+            ariaLabel={USAGE_PROVIDER_LEVEL.limitsLabel}
+            options={USAGE_PROVIDER_LEVEL.limitsOptions.map((option) => ({
+              ...option,
+              disabled: option.value === "choose" && windows.length === 0,
+              describedBy:
+                option.value === "choose" && windows.length === 0
+                  ? emptyReasonId
+                  : undefined,
+            }))}
+            value={choosing ? "choose" : "automatic"}
+            onChange={(next) => {
+              if (next !== "choose") {
                 writeSelection(
                   providerId,
                   arrangement,
-                  chosenSelection(drawnKeys, windows),
+                  AUTOMATIC_LIMIT_SELECTION,
                 );
-              }}
-            />
-            {windows.length === 0 ? (
-              <p
-                id={emptyReasonId}
-                className="text-ui-xs text-muted-foreground"
-              >
-                {USAGE_PROVIDER_LEVEL.limitsEmpty}
-              </p>
-            ) : null}
-            {pickingLimits ? (
-              <div
-                role="group"
-                aria-label={USAGE_PROVIDER_LEVEL.limitsPickLabel}
-                className="flex flex-col gap-1.5"
-              >
-                {windows.map((window) => {
-                  const checked = picked.has(window.windowKey);
-                  // The last one on screen cannot be unticked: a selection
-                  // that draws nothing is what the Shown switch above is
-                  // for, and the store refuses it anyway (L-96).
-                  const last = checked && picked.size <= 1;
-                  return (
-                    <label
-                      key={window.windowKey}
-                      className="flex items-center gap-2 text-ui-sm"
-                    >
-                      <Checkbox
-                        checked={checked}
-                        disabled={last}
-                        onCheckedChange={(next) => {
-                          writeSelection(
-                            providerId,
-                            arrangement,
-                            togglePick(
-                              selection,
-                              windows.map((entry) => entry.windowKey),
-                              window.windowKey,
-                              next === true,
-                            ),
-                          );
-                        }}
-                      />
-                      {window.label}
-                    </label>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-        }
-      />
-    </fieldset>
+                return;
+              }
+              // Nothing reported yet: there is no list to open and an
+              // empty pick would be a selection that draws nothing, so
+              // the level stays on Automatic and says why (L-96).
+              if (windows.length === 0) return;
+              writeSelection(
+                providerId,
+                arrangement,
+                chosenSelection(drawnKeys, windows),
+              );
+            }}
+          />
+          {windows.length === 0 ? (
+            <p id={emptyReasonId} className="text-ui-xs text-muted-foreground">
+              {USAGE_PROVIDER_LEVEL.limitsEmpty}
+            </p>
+          ) : null}
+          {pickingLimits ? (
+            <div
+              role="group"
+              aria-label={USAGE_PROVIDER_LEVEL.limitsPickLabel}
+              className="flex flex-col gap-1.5"
+            >
+              {windows.map((window) => {
+                const checked = picked.has(window.windowKey);
+                // The last one on screen cannot be unticked: a selection
+                // that draws nothing is what the Shown switch above is
+                // for, and the store refuses it anyway (L-96).
+                const last = checked && picked.size <= 1;
+                return (
+                  <label
+                    key={window.windowKey}
+                    className="flex items-center gap-2 text-ui-sm"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      disabled={last}
+                      onCheckedChange={(next) => {
+                        writeSelection(
+                          providerId,
+                          arrangement,
+                          togglePick(
+                            selection,
+                            windows.map((entry) => entry.windowKey),
+                            window.windowKey,
+                            next === true,
+                          ),
+                        );
+                      }}
+                    />
+                    {window.label}
+                  </label>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      }
+    />
   );
+}
+
+/**
+ * Why a provider's limits do nothing right now, naming the Layout switch that
+ * decides it and landing on it: the usage readings' Show switch, then this
+ * provider's own row in their Profiles list.
+ */
+function providerLimitsAvailability(
+  providerId: RateLimitProviderId,
+  usageShown: boolean,
+  providerHidden: boolean,
+): ShownRowAvailability {
+  const jump = (row: string | null): RowJump => ({
+    kind: "layout-region",
+    regionId: "usageLimits",
+    row,
+    label: "Open Layout",
+  });
+  if (!usageShown) {
+    return disabledBy("Usage limits are hidden in Layout.", jump(null));
+  }
+  if (providerHidden) {
+    return disabledBy(
+      "Hidden in Layout > Usage limits > Profiles.",
+      jump(providerId),
+    );
+  }
+  return LIVE;
 }
 
 /**

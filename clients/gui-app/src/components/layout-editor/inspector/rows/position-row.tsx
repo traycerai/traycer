@@ -14,6 +14,7 @@ import {
 } from "@/lib/layout/layout-arrangement";
 import type { LayoutSnapshot } from "@/lib/layout/layout-snapshot";
 import type { RegionId } from "@/lib/layout/region-id";
+import type { ShownRowAvailability } from "@/components/layout-editor/regions/row-availability";
 
 /**
  * Where a region sits, in the two shapes a row's disclosure draws: where a bar
@@ -33,6 +34,8 @@ export function PositionHostRow(props: {
   readonly regionId: RegionId;
   readonly arrangement: LayoutArrangement;
   readonly snapshot: LayoutSnapshot;
+  readonly availability: ShownRowAvailability;
+  readonly depth: 0 | 1;
 }): ReactNode {
   const { regionId, arrangement, snapshot } = props;
   const barRegion = asBarRegionId(regionId);
@@ -45,6 +48,8 @@ export function PositionHostRow(props: {
       revertLabel="Revert Location"
       stacked={false}
       selected={false}
+      availability={props.availability}
+      depth={props.depth}
       description={locationDescription(barRegion, arrangement)}
       onRevert={
         positionAxisChanged(snapshot, regionId, "position-host")
@@ -68,6 +73,8 @@ export function PositionSideRow(props: {
   readonly arrangement: LayoutArrangement;
   readonly snapshot: LayoutSnapshot;
   readonly description: string;
+  readonly availability: ShownRowAvailability;
+  readonly depth: 0 | 1;
 }): ReactNode {
   const { regionId, arrangement, snapshot, description } = props;
   return (
@@ -78,6 +85,8 @@ export function PositionSideRow(props: {
       revertLabel="Revert Side"
       stacked={false}
       selected={false}
+      availability={props.availability}
+      depth={props.depth}
       description={description}
       onRevert={
         positionAxisChanged(snapshot, regionId, "position-side")

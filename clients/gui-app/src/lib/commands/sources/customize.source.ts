@@ -1,7 +1,7 @@
 import { useMemo } from "react";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { LAYOUT_EDITOR_HELD_ELSEWHERE_REASON } from "@/lib/layout/editor-lease";
 import { openLayoutEditor } from "@/lib/layout/editor-session";
-import { isLayoutEditorAvailable } from "@/lib/settings/settings-availability";
+import { useLayoutEditorDoor } from "@/lib/layout/use-layout-editor-door";
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 
@@ -18,11 +18,7 @@ export const customizeSource: ReactCommandSource = {
   id: "customize",
   useItems: () => {
     const editing = useLayoutEditorStore((state) => state.session !== null);
-    const locked = useLayoutEditorStore(
-      (state) => state.lockedBy === "other-window",
-    );
-    const availability = useSettingsAvailabilityContext();
-    const editorAvailable = isLayoutEditorAvailable(availability);
+    const door = useLayoutEditorDoor();
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       // Nothing to offer from inside a session: the editor is already open and
       // its own chrome is how it is left.
@@ -41,7 +37,7 @@ export const customizeSource: ReactCommandSource = {
       };
       // Where the editor can never open (the installed app), its door would
       // only redirect to the settings row beside it.
-      if (!editorAvailable) return [settingsItem];
+      if (door === "absent") return [settingsItem];
       const item = {
         id: "customize:layout",
         label: "Customize layout",
@@ -55,11 +51,11 @@ export const customizeSource: ReactCommandSource = {
       // Said rather than silently refused: the door declines while another
       // window holds the lease (L-32), and a row that does nothing when
       // pressed is worse than a row that explains itself.
-      if (locked) {
+      if (door === "held-elsewhere") {
         return [
           {
             ...item,
-            description: "Open in another window. Your layout is saved there.",
+            description: LAYOUT_EDITOR_HELD_ELSEWHERE_REASON,
             disabled: true,
             run: () => undefined,
           },
@@ -83,6 +79,6 @@ export const customizeSource: ReactCommandSource = {
         },
         settingsItem,
       ];
-    }, [editing, locked, editorAvailable]);
+    }, [editing, door]);
   },
 };

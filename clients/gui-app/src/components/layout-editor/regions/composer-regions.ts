@@ -17,10 +17,28 @@ import {
 } from "@/components/layout-editor/regions/region-grammar";
 import {
   accessStateWord,
+  micStateWord,
   modelStateWord,
   shownStateWord,
   sizedStateWord,
 } from "@/components/layout-editor/regions/region-state-words";
+import {
+  alwaysLive,
+  disabledBy,
+  LIVE,
+  liveWithNote,
+  strictest,
+  wideLayoutRow,
+  type RegionRule,
+} from "@/components/layout-editor/regions/row-availability";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
+import {
+  alwaysAvailable,
+  isVoiceInputRowAvailable,
+} from "@/lib/settings/settings-availability";
+
+/** Where General > Voice input is, which the microphone's reason links to. */
+const VOICE_INPUT_ANCHOR = GENERAL.definitions.voiceInput.anchor;
 
 /**
  * The composer's eight regions: the four dock rows above the message box, and
@@ -59,8 +77,11 @@ const REASONING_CONTROL_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
   { id: "list", label: "List", patch: { reasoningControl: "list" } },
 ];
 
-/** Flat first: it is the shipped default (L-88 overturned). */
-const TOOLBAR_STYLE_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
+/**
+ * Flat first: it is the shipped default (L-88 overturned). Drawn by the
+ * Composer area's Toolbar style row.
+ */
+export const TOOLBAR_STYLE_EXAMPLES: ReadonlyArray<StyleExample<"model">> = [
   { id: "flat", label: "Flat", patch: { toolbarStyle: "flat" } },
   { id: "bordered", label: "Bordered", patch: { toolbarStyle: "bordered" } },
 ];
@@ -75,6 +96,8 @@ export const RUNNING_AGENTS_REGION: LayoutRegion<"runningAgents"> = {
   hint: null,
   keywords: ["agents", "running", "active", "work"],
   rows: [DOCK_ORDER_ROW],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SIZED_VERBS,
   stateWord: sizedStateWord,
 };
@@ -89,6 +112,8 @@ export const CHANGED_FILES_REGION: LayoutRegion<"changedFiles"> = {
   hint: null,
   keywords: ["changed", "files", "diff", "edits", "added", "removed"],
   rows: [DOCK_ORDER_ROW],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SIZED_VERBS,
   stateWord: sizedStateWord,
 };
@@ -103,6 +128,8 @@ export const BACKGROUND_REGION: LayoutRegion<"background"> = {
   hint: null,
   keywords: ["background", "shell", "tasks", "running"],
   rows: [DOCK_ORDER_ROW],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SIZED_VERBS,
   stateWord: sizedStateWord,
 };
@@ -118,6 +145,8 @@ export const TODO_REGION: LayoutRegion<"todo"> = {
   hint: null,
   keywords: ["todo", "todos", "tasks", "checklist", "plan", "progress"],
   rows: [DOCK_ORDER_ROW],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SIZED_VERBS,
   stateWord: sizedStateWord,
 };
@@ -132,6 +161,8 @@ export const ATTACH_IMAGE_REGION: LayoutRegion<"attachImage"> = {
   hint: null,
   keywords: ["attach", "image", "screenshot", "paste", "upload"],
   rows: [TOOLBAR_LEFT_ORDER_ROW],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SHOW_HIDE_VERBS,
   stateWord: shownStateWord,
 };
@@ -146,6 +177,8 @@ export const ACCESS_REGION: LayoutRegion<"access"> = {
   hint: null,
   keywords: ["access", "supervised", "permissions", "approval"],
   rows: [TOOLBAR_LEFT_ORDER_ROW],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   // No Hide: the pill is a floor, never hidden (G6).
   quickVerbs: SIZE_ONLY_VERBS,
   stateWord: accessStateWord,
@@ -160,6 +193,14 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
   whereByHost: null,
   hint: null,
   keywords: ["model", "chip", "effort", "medium", "bars", "reasoning"],
+  // Toolbar style is not here: it styles the whole toolbar row, so it is a
+  // Composer area row (`area-rows.ts`, C3) even though its value is stored on
+  // Model, the one toolbar region that never hides (G6).
+  //
+  // Whether a model has effort levels is the picked model's fact, not the
+  // form's, so both rows say it rather than disable (P1). The phone layout's
+  // chip has no label, so Style is a desktop-layout row; Reasoning control is
+  // the same picker's on every layout.
   rows: [
     {
       kind: "style",
@@ -168,6 +209,16 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
       description: null,
       labelPlacement: "end",
       examples: MODEL_EXAMPLES,
+      depends: {
+        under: null,
+        availability: (context) =>
+          strictest([
+            wideLayoutRow(context.shell),
+            liveWithNote(
+              "Bars show only for models with several effort levels.",
+            ),
+          ]),
+      },
     },
     {
       kind: "style",
@@ -176,24 +227,35 @@ export const MODEL_REGION: LayoutRegion<"model"> = {
       description: null,
       labelPlacement: "end",
       examples: REASONING_CONTROL_EXAMPLES,
-    },
-    // The whole toolbar row's chrome (attach, access, model, mic), not just
-    // the model chip - it sits on Model because Model is the one toolbar
-    // region that never hides (G6), so this row is always reachable.
-    {
-      kind: "style",
-      key: "toolbarStyle",
-      label: "Toolbar style",
-      description: null,
-      labelPlacement: "end",
-      examples: TOOLBAR_STYLE_EXAMPLES,
+      depends: {
+        under: null,
+        availability: () =>
+          liveWithNote("For models with several effort levels."),
+      },
     },
     TOOLBAR_RIGHT_ORDER_ROW,
   ],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   // No Hide: the picker always draws (G6), so there is no verb to offer.
   quickVerbs: [],
   stateWord: modelStateWord,
 };
+
+/**
+ * The microphone follows General > Voice input as well as its own Shown, so
+ * while that is off the row says where to turn it on (C4). The installed app
+ * refuses dictation outright, so there it is no row at all (its shell gate).
+ */
+const micRule: RegionRule = (context) =>
+  context.facts.voiceInputEnabled
+    ? LIVE
+    : disabledBy("Turn on Voice input in General settings to use this.", {
+        kind: "settings",
+        section: "general",
+        anchor: VOICE_INPUT_ANCHOR,
+        label: "Open General settings",
+      });
 
 export const MIC_REGION: LayoutRegion<"mic"> = {
   id: "mic",
@@ -205,6 +267,8 @@ export const MIC_REGION: LayoutRegion<"mic"> = {
   hint: null,
   keywords: ["microphone", "mic", "voice", "dictation", "speech"],
   rows: [TOOLBAR_RIGHT_ORDER_ROW],
+  shellGate: isVoiceInputRowAvailable,
+  availability: micRule,
   quickVerbs: SHOW_HIDE_VERBS,
-  stateWord: shownStateWord,
+  stateWord: micStateWord,
 };

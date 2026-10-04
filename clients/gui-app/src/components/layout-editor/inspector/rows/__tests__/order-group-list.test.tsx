@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LayoutFormContext } from "@/components/layout-editor/regions/row-availability";
+import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import {
   DEFAULT_ARRANGEMENT,
@@ -66,6 +68,27 @@ function values() {
   );
 }
 
+/**
+ * The one form context a row's rules read (P1), built by hand so the list is
+ * given the arrangement the test names rather than the stored one. A desktop
+ * browser tab, with Voice input on, unless the case says otherwise.
+ */
+function formContext(
+  arrangementValue: LayoutArrangement,
+  shell: Pick<SettingsAvailabilityContext, "mobileApp" | "phoneLayout">,
+): LayoutFormContext {
+  return {
+    values: values(),
+    arrangement: arrangementValue,
+    shell: { runnerHost: null, featureSettings: null, ...shell },
+    facts: { voiceInputEnabled: true },
+  };
+}
+
+const DESKTOP_SHELL = { mobileApp: false, phoneLayout: false };
+const NARROW_BROWSER_SHELL = { mobileApp: false, phoneLayout: true };
+const INSTALLED_APP_SHELL = { mobileApp: true, phoneLayout: true };
+
 function renderList(arrangementValue: LayoutArrangement): ReactNode {
   return (
     <OrderGroupList
@@ -74,6 +97,7 @@ function renderList(arrangementValue: LayoutArrangement): ReactNode {
       values={values()}
       arrangement={arrangementValue}
       decorate={null}
+      context={formContext(arrangementValue, DESKTOP_SHELL)}
     />
   );
 }
@@ -81,6 +105,7 @@ function renderList(arrangementValue: LayoutArrangement): ReactNode {
 function renderToolbar(
   group: "toolbarLeft" | "toolbarRight",
   arrangementValue: LayoutArrangement,
+  shell: Pick<SettingsAvailabilityContext, "mobileApp" | "phoneLayout">,
 ): ReactNode {
   return (
     <OrderGroupList
@@ -89,6 +114,7 @@ function renderToolbar(
       values={values()}
       arrangement={arrangementValue}
       decorate={null}
+      context={formContext(arrangementValue, shell)}
     />
   );
 }
@@ -225,13 +251,20 @@ describe("narrow (mobile-viewport-width) toolbar clusters draw fixed, non-reorde
   });
 
   it("draws only Attach image on the left, in place of the desktop's Attach image/Access pair", () => {
-    render(renderToolbar("toolbarLeft", arrangement({})));
+    render(renderToolbar("toolbarLeft", arrangement({}), NARROW_BROWSER_SHELL));
     expect(rowOrder()).toEqual(["attachImage"]);
   });
 
-  it("draws only Microphone on the right, in place of the desktop's Model/Microphone pair", () => {
-    render(renderToolbar("toolbarRight", arrangement({})));
-    expect(rowOrder()).toEqual(["mic"]);
+  it("draws Model then Microphone on the right: the phone's chip is the same picker, without its label", () => {
+    render(
+      renderToolbar("toolbarRight", arrangement({}), NARROW_BROWSER_SHELL),
+    );
+    expect(rowOrder()).toEqual(["model", "mic"]);
+  });
+
+  it("leaves Microphone out of the installed app, which refuses dictation", () => {
+    render(renderToolbar("toolbarRight", arrangement({}), INSTALLED_APP_SHELL));
+    expect(rowOrder()).toEqual(["model"]);
   });
 
   it("has no reorder gesture at all, not merely nothing left to reorder into", () => {
@@ -244,7 +277,7 @@ describe("narrow (mobile-viewport-width) toolbar clusters draw fixed, non-reorde
     // instructions for an unordered list (`ordered = onMove !== null`,
     // sortable-list.tsx), so their absence is what a narrow list without a
     // reorder gesture actually looks like.
-    render(renderToolbar("toolbarLeft", arrangement({})));
+    render(renderToolbar("toolbarLeft", arrangement({}), NARROW_BROWSER_SHELL));
     expect(
       screen.queryByText(
         "Press space to pick up, arrow keys to move, space to drop, escape to cancel.",
@@ -257,7 +290,7 @@ describe("narrow (mobile-viewport-width) toolbar clusters draw fixed, non-reorde
     // signal the test above relies on: widen past the narrow gate this
     // describe block sets in `beforeEach`, and it comes back.
     window.innerWidth = 1024;
-    render(renderToolbar("toolbarLeft", arrangement({})));
+    render(renderToolbar("toolbarLeft", arrangement({}), DESKTOP_SHELL));
     expect(
       screen.queryByText(
         "Press space to pick up, arrow keys to move, space to drop, escape to cancel.",

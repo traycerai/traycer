@@ -4,6 +4,8 @@ import {
   type LayoutRegion,
 } from "@/components/layout-editor/regions/region-grammar";
 import { shownStateWord } from "@/components/layout-editor/regions/region-state-words";
+import { alwaysLive } from "@/components/layout-editor/regions/row-availability";
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
 
 /**
  * The Home tab's row on a phone, where there is no tab strip: what Shown still
@@ -24,6 +26,8 @@ export const HOME_TAB_REGION: LayoutRegion<"homeTab"> = {
   hint: null,
   keywords: ["home", "start", "page", "tab"],
   rows: [],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: SHOW_HIDE_VERBS,
   stateWord: shownStateWord,
 };

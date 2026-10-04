@@ -70,7 +70,7 @@ afterEach(() => {
   useLayoutEditorStore.getState().endSession();
 });
 
-describe("a hidden region's detail rows follow their own liveWhileHidden (G1-06 overturned by L-174)", () => {
+describe("a hidden region's detail rows stay live only where their rule outlives the gate (G1-06 overturned by L-174)", () => {
   function firstRadio(name: string): HTMLButtonElement {
     return within(row("resourceMonitor"))
       .getByRole("radiogroup", { name })
@@ -138,7 +138,7 @@ describe("a hidden region's detail rows follow their own liveWhileHidden (G1-06 
     expect(screen.queryByText(/Show Resource monitor to change/)).toBeNull();
   });
 
-  it("still disables everything for a region with no liveWhileHidden row (Usage limits)", () => {
+  it("still disables everything for a region with no row that outlives the gate (Usage limits)", () => {
     useLayoutStore.getState().setRegionValues("usageLimits", {
       shown: "hidden",
     });
@@ -335,3 +335,74 @@ function MinimapSurface(): ReactNode {
     />
   );
 }
+
+/**
+ * Pin breakdown decides which of the two rows below it applies (C1): the
+ * pinned strip never reads the chip's style, and the chip never draws the
+ * breakdown rows. Nothing is removed either way - the one that does nothing
+ * is greyed with the switch it waits on named.
+ */
+describe("Context usage's Chip style follows Pin breakdown (C1)", () => {
+  const REASON = "Turn off Pin breakdown to use this.";
+
+  function renderContextUsage(): void {
+    render(
+      <LayoutFormHostContext value="page">
+        <SurfaceSection
+          surface="chat"
+          snapshot={useLayoutStore.getState()}
+          openRows={["contextUsage"]}
+          onToggleRow={() => {}}
+          onSelectRow={null}
+          selectedRow="contextUsage"
+        />
+      </LayoutFormHostContext>,
+    );
+  }
+
+  function chipStyleOptions(): ReadonlyArray<HTMLElement> {
+    return within(
+      screen.getByRole("radiogroup", { name: "Chip style" }),
+    ).getAllByRole("radio");
+  }
+
+  it("draws Pin breakdown before Chip style, so the switch that decides it is read first", () => {
+    renderContextUsage();
+
+    const pin = screen.getByRole("switch", { name: "Pin breakdown" });
+    const style = screen.getByRole("radiogroup", { name: "Chip style" });
+
+    expect(
+      pin.compareDocumentPosition(style) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps Chip style live, with no reason, while the breakdown is unpinned", () => {
+    renderContextUsage();
+
+    expect(
+      chipStyleOptions().some((option) => option.matches(":disabled")),
+    ).toBe(false);
+    expect(screen.queryByText(REASON)).toBeNull();
+  });
+
+  it("greys Chip style in place once pinned, with the reason linked to its group", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: true });
+    renderContextUsage();
+
+    expect(
+      chipStyleOptions().every((option) => option.matches(":disabled")),
+    ).toBe(true);
+    const reason = screen.getByText(REASON);
+    expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+    expect(
+      screen
+        .getByRole("radiogroup", { name: "Chip style" })
+        .closest("fieldset")
+        ?.getAttribute("aria-describedby")
+        ?.split(" "),
+    ).toContain(reason.id);
+  });
+});

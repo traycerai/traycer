@@ -13,8 +13,14 @@ import {
   type LayoutArrangement,
   type OrderGroupId,
 } from "@/lib/layout/layout-arrangement";
+import { PRESET_VALUES } from "@/lib/layout/layout-presets";
 import type { LayoutValues } from "@/lib/layout/layout-values";
 import type { RegionId } from "@/lib/layout/region-id";
+import type {
+  LayoutFacts,
+  RegionRule,
+  ShellGate,
+} from "@/components/layout-editor/regions/row-availability";
 
 /**
  * The registry as a caller walking EVERY region can read it.
@@ -71,6 +77,8 @@ export interface RegionFacts {
   readonly hint: string | null;
   readonly keywords: ReadonlyArray<string>;
   readonly rows: ReadonlyArray<RegionRowFacts>;
+  readonly shellGate: ShellGate;
+  readonly availability: RegionRule;
   readonly quickVerbs: ReadonlyArray<QuickVerbId>;
 }
 
@@ -111,6 +119,20 @@ export function regionWhere(
 }
 
 /**
+ * Whether a region's row has a display control at all: something to show,
+ * hide or size. Model has none - the picker always draws (G6) - and Access has
+ * none in the phone layout, whose composer draws it one way.
+ */
+export function regionHasDisplayControl(
+  region: RegionId,
+  phoneLayout: boolean,
+): boolean {
+  if (region === "access" && phoneLayout) return false;
+  const shape = PRESET_VALUES.default[region];
+  return "shown" in shape || "size" in shape;
+}
+
+/**
  * Every region grouped by surface, which is the index's own order (L-06).
  *
  * Within a surface the declaration order stands, except on the sidebar, where
@@ -137,28 +159,12 @@ export function regionStateWord<K extends RegionId>(
   region: K,
   values: LayoutValues,
   arrangement: LayoutArrangement,
+  facts: LayoutFacts,
 ): string {
   const stateWord: (
     regionValues: LayoutValues[K],
     regionArrangement: LayoutArrangement,
+    regionFacts: LayoutFacts,
   ) => string = LAYOUT_REGIONS[region].stateWord;
-  return stateWord(values[region], arrangement);
-}
-
-/** Device-local settings that the compact toolbar/footer actually honors. */
-export function regionRowAvailable(
-  regionId: RegionId,
-  row: RegionRowFacts,
-  narrow: boolean,
-): boolean {
-  if (!narrow) return true;
-  if (row.kind === "position-host") return false;
-  if (
-    row.kind === "position-order" &&
-    (row.group === "toolbarLeft" || row.group === "toolbarRight")
-  )
-    return false;
-  // The compact toolbar draws the model chip one way; its picker footer is
-  // the same picker's, so Reasoning control still applies there.
-  return regionId !== "model" || row.kind !== "style" || row.key !== "style";
+  return stateWord(values[region], arrangement, facts);
 }

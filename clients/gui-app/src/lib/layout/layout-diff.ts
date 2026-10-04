@@ -37,7 +37,7 @@ import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
  * differs from it. Where things live has no preset, so the arrangement is
  * measured against the shipped one. The two together are the change list
  * (`layoutChanges`), grouped Styles and Arrangement, and `<Preset> · Modified`
- * reads whether that list has anything in it.
+ * reads whether its Styles half has anything in it (`layoutModified`).
  */
 
 /** Which keys of one region differ from the last-applied preset, in the patch's order. */
@@ -53,12 +53,18 @@ function changedKeys<K extends RegionId>(
   );
 }
 
-/** Whether a region has anything to revert, which is what its dot draws. */
-export function regionChanged(
+/**
+ * Which keys of one region's bag differ from the last-applied preset.
+ *
+ * Every key in the bag: which row OWNS a key - a region row or an area row
+ * that happens to store its value there - is a fact about the form, so the
+ * form's dots scope it (`regions/surface-diff.ts`, T4).
+ */
+export function regionChangedKeys(
   snapshot: LayoutSnapshot,
   region: RegionId,
-): boolean {
-  return changedKeys(snapshot, region).length > 0;
+): ReadonlyArray<string> {
+  return changedKeys(snapshot, region);
 }
 
 /**
@@ -247,7 +253,12 @@ export type ArrangementChange =
       readonly baseline: LayoutArrangement[ArrangementField];
     }
   | { readonly kind: "order"; readonly group: OrderGroupId }
-  | { readonly kind: "provider"; readonly providerId: RateLimitProviderId };
+  | { readonly kind: "provider"; readonly providerId: RateLimitProviderId }
+  /**
+   * The pinned context breakdown's field order (C2): an order like a group's,
+   * but of fields rather than regions, written by Breakdown rows.
+   */
+  | { readonly kind: "pinnedFieldOrder" };
 
 export type LayoutChange = StyleChange | ArrangementChange;
 
@@ -260,10 +271,10 @@ export interface LayoutChanges {
  * Everything that differs: values against the last-applied preset, the
  * arrangement against the shipped one.
  *
- * Which profiles the usage popover shows, the pinned breakdown's field order
- * and the status bar's parked set are left out: each is picked where it is
- * drawn rather than in the layout form, so no row could show it. `resetLayout`
- * still puts them back.
+ * Which profiles the usage popover shows and the status bar's parked set are
+ * left out: each is picked where it is drawn rather than in the layout form,
+ * so no row could show it. `resetLayout` still puts them back. The pinned
+ * breakdown's field order is IN since Breakdown rows writes it (C2).
  */
 export function layoutChanges(snapshot: LayoutSnapshot): LayoutChanges {
   const values = effectiveLayoutValues(snapshot.basePreset, snapshot.overrides);
@@ -291,14 +302,36 @@ export function layoutChanges(snapshot: LayoutSnapshot): LayoutChanges {
         kind: "provider",
         providerId,
       })),
+      ...(pinnedFieldOrderChanged(arrangement, DEFAULT_ARRANGEMENT)
+        ? [PINNED_FIELD_ORDER_CHANGE]
+        : []),
     ],
   };
 }
 
-/** Whether the status reads `<Preset> · Modified` rather than the name alone. */
+const PINNED_FIELD_ORDER_CHANGE: ArrangementChange = {
+  kind: "pinnedFieldOrder",
+};
+
+/** Whether the pinned breakdown's field order differs between two arrangements. */
+export function pinnedFieldOrderChanged(
+  a: LayoutArrangement,
+  b: LayoutArrangement,
+): boolean {
+  return !sameFieldList(a.pinnedContextFieldOrder, b.pinnedContextFieldOrder);
+}
+
+/**
+ * Whether the status reads `<Preset> · Modified` rather than the name alone,
+ * which is also what the Presets area's dot draws.
+ *
+ * VALUES only (T5): applying a preset never touches the arrangement, so a
+ * placement or order change counted here offered the applied card as the way
+ * back, and pressing it changed nothing. Those changes stay on View changes
+ * and on their own area's dot.
+ */
 export function layoutModified(snapshot: LayoutSnapshot): boolean {
-  const changes = layoutChanges(snapshot);
-  return changes.styles.length > 0 || changes.arrangement.length > 0;
+  return layoutChanges(snapshot).styles.length > 0;
 }
 
 /** What an editor session has changed so far. */
@@ -318,8 +351,8 @@ export interface SessionLayoutChanges {
  * reads as the values it visibly moved, and the arrangement field by field.
  *
  * The same scope as {@link layoutChanges}: the choices made where they are
- * drawn (shown accounts, the pinned breakdown's order, the parked set) are
- * left out, and so is `dividerSeq`, which is bookkeeping.
+ * drawn (shown accounts, the parked set) are left out, and so is
+ * `dividerSeq`, which is bookkeeping.
  */
 export function sessionLayoutChanges(
   entry: LayoutSnapshot,
@@ -375,6 +408,9 @@ export function sessionLayoutChanges(
         kind: "provider",
         providerId,
       })),
+      ...(pinnedFieldOrderChanged(after, before)
+        ? [PINNED_FIELD_ORDER_CHANGE]
+        : []),
     ],
   };
 }
@@ -504,6 +540,14 @@ function revertSessionChange(
         },
       };
     }
+    case "pinnedFieldOrder":
+      return {
+        ...current,
+        arrangement: {
+          ...arrangement,
+          pinnedContextFieldOrder: before.pinnedContextFieldOrder,
+        },
+      };
   }
 }
 
@@ -570,6 +614,14 @@ export function revertLayoutChange(
         ...snapshot,
         arrangement: revertProvider(arrangement, change.providerId),
       };
+    case "pinnedFieldOrder":
+      return {
+        ...snapshot,
+        arrangement: {
+          ...arrangement,
+          pinnedContextFieldOrder: DEFAULT_ARRANGEMENT.pinnedContextFieldOrder,
+        },
+      };
   }
 }
 
@@ -634,7 +686,7 @@ export function resetLayout(snapshot: LayoutSnapshot): LayoutSnapshot {
 
 /**
  * Whether `resetLayout` would change anything at all - including the stored
- * choices the change list leaves out (selected accounts, pinned field order).
+ * choices the change list leaves out (selected accounts, the parked set).
  * `dividerSeq` is bookkeeping and never counts.
  */
 export function resetWouldChange(snapshot: LayoutSnapshot): boolean {

@@ -33,7 +33,10 @@ import {
   hostRpcRegistry,
   useHostBinding,
 } from "@/lib/host";
-import { useArrangementValue } from "@/lib/layout-overrides";
+import {
+  useArrangementValue,
+  useStatusBarVisible,
+} from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { sideTabStripEdge } from "@/lib/layout/layout-arrangement";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
@@ -43,7 +46,6 @@ import {
   useSidebarWidthPx,
 } from "@/stores/epics/left-panel-store";
 import type { OpenedStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
-import { useStatusBarShown } from "@/stores/layout/layout-store";
 import {
   EPIC_SURFACE_ID,
   EPIC_SURFACE_CHAT,
@@ -105,7 +107,7 @@ function EpicWindowSurface(props: {
   const mainCollapsed = useMainPanelCollapsed(EPIC_SURFACE_ID);
   const stripEdge = sideTabStripEdge(useArrangementValue("tabStripPlacement"));
   const canvasSeam = stripEdge === sidebarSide ? null : stripEdge;
-  const statusBarShown = useStatusBarShown();
+  const statusBarShown = useStatusBarVisible();
   const handle = (
     <SidebarWidthResizeHandle side={sidebarSide} hidden={mainCollapsed} />
   );

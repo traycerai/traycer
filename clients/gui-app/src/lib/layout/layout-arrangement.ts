@@ -607,30 +607,6 @@ export function statusBarHostsAnyRegion(
   );
 }
 
-/**
- * Whether the status bar strip is on screen: the ONE answer to that question,
- * read by the shell that mounts it and by every control that only makes sense
- * while it is mounted.
- *
- * A mobile VIEWPORT, not a mobile build: a narrow desktop window behaves the
- * same way. Mobile ignores both hosts entirely and answers with `mobileFooter`
- * (L-51), which is off by default - and it ignores them for the CONTENTS too
- * (L-162): a footer switched on draws both readings whichever bar each of
- * them names, because the phone has one bar and a footer that honoured a
- * header pick would silently drop a readout. Its ends are fixed as well -
- * usage left, resources right - since an end picked for a desktop bar says
- * nothing about the phone's. The picks are kept, not overridden, so the
- * desktop window they were made in still honours them.
- */
-export function statusBarShown(
-  arrangement: LayoutArrangement,
-  isMobileViewport: boolean,
-): boolean {
-  return isMobileViewport
-    ? arrangement.mobileFooter
-    : statusBarHostsAnyRegion(arrangement);
-}
-
 // ── The tab strip's placement (S-01, S-02, S-05, S-25) ──────────────────────
 
 /**

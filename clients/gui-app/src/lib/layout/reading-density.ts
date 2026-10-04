@@ -61,21 +61,5 @@ export function resolvedReadingDensity(
   return resolveReadingDensity(density, readingPlacement(arrangement, region));
 }
 
-/**
- * Whether Usage limits' Reading style is drawn at all: only the status bar's
- * Detailed form has calm profiles to style. The top strip's Detailed form and
- * the side strip's rows already show the percent.
- */
-export function readingStyleApplies(
-  density: ReadingDensity,
-  arrangement: LayoutArrangement,
-): boolean {
-  const placement = readingPlacement(arrangement, "usageLimits");
-  return (
-    placement === "status-bar" &&
-    resolveReadingDensity(density, placement) === "detailed"
-  );
-}
-
 /** CPU percent at or above which every CPU reading uses the warning color. */
 export const CPU_WARNING_PERCENT = 85;

@@ -22,7 +22,7 @@ import { LayoutSettingsPanel } from "@/components/settings/panels/layout-setting
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { PermissionsSettingsPanel } from "@/components/settings/panels/permissions-settings-panel";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { setMobileApp } from "@/lib/mobile-app";
+import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
@@ -146,6 +146,7 @@ afterEach(() => {
   cleanup();
   hostScopeState.current = null;
   setMobileApp(false);
+  setPhoneLayoutOnly(false);
   setFeatureSettingsBridge(null);
   useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
   useSettingsSearchStore.setState({
@@ -198,7 +199,8 @@ describe("settings search fixtures", () => {
 
 /**
  * Mounts `panel` in exactly the shell `context` describes: its runner host (or
- * none), the window-level feature-settings bridge, and the mobile-app flag.
+ * none), the window-level feature-settings bridge, the mobile-app flag and
+ * whether the phone layout is drawn (the installed app draws it at every width).
  */
 function mountInShell(
   context: SettingsAvailabilityContext,
@@ -206,6 +208,7 @@ function mountInShell(
   onContext: (context: SettingsAvailabilityContext) => void,
 ): HTMLElement {
   setMobileApp(context.mobileApp);
+  setPhoneLayoutOnly(context.phoneLayout);
   setFeatureSettingsBridge(context.featureSettings);
   const queryClient = new QueryClient({
     defaultOptions: {
