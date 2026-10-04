@@ -104,6 +104,22 @@ To pick a profile for the next turn, use the profile dropdown in the composer's 
 
 <FeatureVideo src="https://assets.traycer.ai/docs/videos/provider-profile-add.mp4" label="Add a managed provider profile" />
 
+### Sync Profiles Across Devices
+
+Use **Sync profiles…** on **Profiles & Limits** to send profiles from the host selected in Settings to other devices on your account. The dialog keeps that source host fixed while it is open.
+
+1. On **Sync now**, choose the providers and destination devices.
+2. Review the profile preview for each destination. Availability depends on the provider and destination; a profile may need sign-in or other attention.
+3. Click **Sync now**, then review the results for each profile. Follow any sign-in or confirmation steps shown there.
+
+Closing the dialog does not cancel the run. Reopen **Sync profiles…** and select a **Recent runs** entry to check it. If a result is waiting for confirmation, use **Check status** before starting another transfer.
+
+**Automatic sync** keeps profiles in sync in one direction, from this source host to a destination. Click **Add device**, choose the destination and providers, then **Enable automatic sync**. The rule includes future profiles for the selected providers; **All supported providers, including future providers** also includes providers added later. Offline devices wait until both devices are connected.
+
+Use **Edit**, **Pause**, **Resume**, or **Stop…** to manage a rule. Pausing or stopping keeps profiles already on the destination. Removing a profile from the source also leaves its destination copy intact.
+
+If a destination profile's settings were edited, its result shows **Destination edited**. Review the source and destination values, then choose **Keep destination & pause** or **Use source settings**. Other profiles can continue syncing while that conflict waits for your decision.
+
 ## Signing In Again
 
 When a provider is signed out, the composer shows a banner above the input.
