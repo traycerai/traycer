@@ -175,7 +175,7 @@ Question cards have their own fork actions, **Cross Question** and **A/B Fork**.
 
 When a coding agent delegates work to a native subagent, its activity appears in a subagent card inside the conversation. Hover the card's **Open as chat** icon to identify it, then click it to read the subagent's conversation. This view is read-only. **Back to chat** returns to the parent conversation.
 
-For a **Claude Code** or **Codex** subagent in your own chat, click **Continue as chat** in the subagent view to carry on its work yourself. The button is disabled while the subagent is still running. The chat's host must support this action and still be able to read the provider's record of the subagent.
+For a **Claude Code** or **Codex** subagent in your own chat, click **Continue as chat** in the subagent view to carry on its work yourself. The button is disabled while the subagent is still running. The chat's host must support this action. To create the independent chat for the first time, it must still be able to read the provider's record of the subagent.
 
 Traycer opens an independent chat with the subagent's conversation, nested beneath the parent in the same Task. It runs on the same host and shares the parent's workspace, including any worktree; it does not create a separate worktree. Messages you send there do not go to the original subagent or its parent. Choosing **Continue as chat** again opens the chat already created for that subagent.
 
