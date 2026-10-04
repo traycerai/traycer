@@ -6056,4 +6056,308 @@ describe("ProfileSyncModal review regressions", () => {
       expect(screen.queryByText("Synced")).toBeNull();
     });
   });
+
+  describe("round 31: accepted answers survive Done and reopen while lists fail", () => {
+    const OP = "00000000-0000-4000-8000-000000000001";
+    const RUN = "00000000-0000-4000-8000-0000000000fb";
+
+    async function openAutomatic(wait: "heading" | "add"): Promise<void> {
+      openSync(null);
+      fireEvent.mouseDown(
+        await screen.findByRole("tab", { name: /Automatic sync/ }),
+        { button: 0 },
+      );
+      if (wait === "heading")
+        await screen.findByRole("heading", { name: "Linux box" });
+      else await screen.findByRole("button", { name: "Add device" });
+    }
+
+    async function closeDialog(): Promise<void> {
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      await waitFor(() =>
+        expect(useProfileCopyFlowStore.getState().view).toBeNull(),
+      );
+    }
+
+    async function reopenAutomatic(): Promise<void> {
+      openSync(null);
+      fireEvent.mouseDown(
+        await screen.findByRole("tab", { name: /Automatic sync/ }),
+        { button: 0 },
+      );
+    }
+
+    const saveParams = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+      messenger.calls
+        .filter((call) => call.method === "providers.profileCopy.sync.saveRule")
+        .map((call) => profileSyncSaveRuleSchema.parse(call.params));
+
+    async function addRuleFor(name: RegExp): Promise<void> {
+      fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+      fireEvent.keyDown(
+        await screen.findByRole("combobox", { name: "Destination device" }),
+        { key: "ArrowDown" },
+      );
+      fireEvent.click(await screen.findByRole("option", { name }));
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Enable automatic sync" }),
+      );
+    }
+
+    describe("rules", () => {
+      it("keeps an accepted Pause through Done and reopen, and Resume sends the acknowledged revision", async () => {
+        const messenger = mount([SAVED_RULE]);
+        await openAutomatic("heading");
+        listFails = true;
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        expect(
+          await screen.findByRole("button", { name: "Resume" }),
+        ).toBeTruthy();
+        await closeDialog();
+        await reopenAutomatic();
+        expect(
+          await screen.findByRole("button", { name: "Resume" }),
+        ).toBeTruthy();
+        expect(screen.getByText("Paused")).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+        await waitFor(() => expect(saveParams(messenger)).toHaveLength(2));
+        expect(saveParams(messenger)[1].expectedRevision).toBe(
+          SAVED_RULE.revision + 1,
+        );
+      });
+
+      it("keeps an accepted Stop through Done and reopen: the rule stays gone", async () => {
+        mount([SAVED_RULE]);
+        await openAutomatic("heading");
+        listFails = true;
+        fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Stop automatic sync" }),
+        );
+        await waitFor(() =>
+          expect(
+            screen.queryByRole("heading", { name: "Linux box" }),
+          ).toBeNull(),
+        );
+        await closeDialog();
+        await reopenAutomatic();
+        await screen.findByRole("button", { name: "Add device" });
+        expect(screen.queryByRole("heading", { name: "Linux box" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Stop…" })).toBeNull();
+      });
+
+      it("keeps an accepted Create through Done and reopen, and does not offer its destination again", async () => {
+        mount([]);
+        await openAutomatic("add");
+        listFails = true;
+        await addRuleFor(/Linux box/);
+        expect(
+          await screen.findByRole("heading", { name: "Linux box" }),
+        ).toBeTruthy();
+        await closeDialog();
+        await reopenAutomatic();
+        expect(
+          await screen.findByRole("heading", { name: "Linux box" }),
+        ).toBeTruthy();
+        fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+        fireEvent.keyDown(
+          await screen.findByRole("combobox", { name: "Destination device" }),
+          { key: "ArrowDown" },
+        );
+        await screen.findByRole("option", { name: /Old Mac/ });
+        expect(screen.queryByRole("option", { name: /Linux box/ })).toBeNull();
+      });
+    });
+
+    describe("runs", () => {
+      const retryableItem = (): ProfileSyncItem => ({
+        ...syncItem(1, DEST_HOST_ID, "unavailable", []),
+        preview: null,
+        outcome: profileCopyOutcome({
+          attempt: profileCopyAttempt({ operationId: OP }),
+          state: "blocked",
+          reason: "unreachable",
+        }),
+      });
+      const runWith = (items: ProfileSyncItem[]): ProfileSyncBatch => ({
+        batchId: RUN,
+        sourceHostId: SOURCE_HOST_ID,
+        createdAt: 1_700_000_000_000,
+        automatic: false,
+        items,
+      });
+
+      it("keeps an accepted non-empty Start in Recent runs after Done and reopen", async () => {
+        mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: () => [
+            syncItem(1, DEST_HOST_ID, "ready", [
+              previewDestination(DEST_HOST_ID, "automatic"),
+            ]),
+          ],
+          startItems: () => [
+            { ...syncItem(1, DEST_HOST_ID, "synced", []), preview: null },
+          ],
+        });
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        listFails = true;
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await screen.findByRole("button", { name: "← Back" });
+        await closeDialog();
+        openSync(null);
+        expect(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        ).toBeTruthy();
+      });
+
+      it("keeps an accepted Check status answer (Synced) after Done, reopen and reopening the run", async () => {
+        resolveAnswer = (request) => ({
+          batchId: request.batchId,
+          sourceHostId: request.sourceHostId,
+          createdAt: 1,
+          automatic: false,
+          items: [
+            { ...syncItem(1, DEST_HOST_ID, "synced", []), preview: null },
+          ],
+        });
+        listBatches = [runWith([retryableItem()])];
+        mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: noItems,
+          startItems: noItems,
+        });
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        listFails = true;
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Check status" }),
+        );
+        expect(await screen.findByText("Synced")).toBeTruthy();
+        await closeDialog();
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        expect(await screen.findByText("Synced")).toBeTruthy();
+        expect(
+          screen.queryByRole("button", { name: "Check status" }),
+        ).toBeNull();
+      });
+
+      it("keeps an accepted Retry replacement after Done and reopen, and Review reads the replacement attempt", async () => {
+        const replacement = recordedOutcome({
+          attempt: profileCopyAttempt({
+            operationId: OP,
+            attemptId: ATTEMPT_TWO_ID,
+          }),
+          revision: 4,
+          state: "sign-in-required",
+        });
+        retryOutcome = replacement;
+        draftStatusOutcome = replacement;
+        listBatches = [runWith([retryableItem()])];
+        const messenger = mountWith({
+          rules: [],
+          providers: defaultProviders(),
+          previewItems: noItems,
+          startItems: noItems,
+        });
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        listFails = true;
+        fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+        await waitFor(() =>
+          expect(screen.queryByRole("button", { name: "Retry" })).toBeNull(),
+        );
+        await closeDialog();
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        await waitFor(() =>
+          expect(
+            messenger.calls
+              .filter(
+                (call) => call.method === "providers.profileCopy.draftStatus",
+              )
+              .map((call) => profileCopyDraftRequestSchema.parse(call.params))
+              .some((read) => read.attempt.attemptId === ATTEMPT_TWO_ID),
+          ).toBe(true),
+        );
+        expect(
+          messenger.calls
+            .filter(
+              (call) => call.method === "providers.profileCopy.draftStatus",
+            )
+            .map((call) => profileCopyDraftRequestSchema.parse(call.params))
+            .every((read) => read.attempt.attemptId === ATTEMPT_TWO_ID),
+        ).toBe(true);
+      });
+    });
+
+    describe("a stopped rule's remembered id", () => {
+      const remembered = (): string =>
+        useProfileCopyFlowStore
+          .getState()
+          .getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID);
+
+      async function createWithFailedLists(): Promise<
+        MockHostMessenger<HostRpcRegistry>
+      > {
+        const messenger = mount([]);
+        await openAutomatic("add");
+        listFails = true;
+        await addRuleFor(/Linux box/);
+        await screen.findByRole("heading", { name: "Linux box" });
+        return messenger;
+      }
+
+      it("uses a new rule id at revision 0 when the destination is created again after a confirmed Stop", async () => {
+        const messenger = await createWithFailedLists();
+        const [first] = saveParams(messenger);
+        expect(first.expectedRevision).toBe(0);
+        fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Stop automatic sync" }),
+        );
+        await waitFor(() =>
+          expect(
+            screen.queryByRole("heading", { name: "Linux box" }),
+          ).toBeNull(),
+        );
+        await addRuleFor(/Linux box/);
+        await waitFor(() => expect(saveParams(messenger)).toHaveLength(2));
+        const second = saveParams(messenger)[1];
+        expect(second.ruleId).not.toBe(first.ruleId);
+        expect(second.expectedRevision).toBe(0);
+      });
+
+      it("keeps the remembered id when the Stop is rejected", async () => {
+        const messenger = await createWithFailedLists();
+        const [first] = saveParams(messenger);
+        stopRuleThrows = true;
+        fireEvent.click(screen.getByRole("button", { name: "Stop…" }));
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Stop automatic sync" }),
+        );
+        // The list error is already up; the rejected Stop adds its own.
+        await waitFor(() =>
+          expect(
+            screen.getAllByText(/Couldn't reach Studio Mac right now/),
+          ).toHaveLength(2),
+        );
+        expect(remembered()).toBe(first.ruleId);
+      });
+    });
+  });
 });

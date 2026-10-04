@@ -71,7 +71,7 @@ interface ProfileCopyFlowState {
     selection: ProfileSyncSelection,
     revision: string,
   ) => string;
-  /** Only a confirmed empty start releases its ID for a fresh attempt. */
+  /** A confirmed start releases its ID for a fresh attempt. */
   readonly forgetSyncStartBatchId: (
     selection: ProfileSyncSelection,
     revision: string,
@@ -92,6 +92,11 @@ interface ProfileCopyFlowState {
   readonly forgetSyncRuleId: (
     sourceHostId: string,
     destinationHostId: string,
+    ruleId: string,
+  ) => void;
+  /** A confirmed Stop retires only that rule's remembered create identity. */
+  readonly forgetStoppedSyncRuleId: (
+    sourceHostId: string,
     ruleId: string,
   ) => void;
   /**
@@ -201,6 +206,16 @@ export const useProfileCopyFlowStore = create<ProfileCopyFlowState>(
       const next = new Map(previous);
       next.delete(key);
       set({ syncRuleIds: next });
+    },
+    forgetStoppedSyncRuleId: (sourceHostId, ruleId) => {
+      const previous = get().syncRuleIds;
+      const next = new Map(previous);
+      for (const [key, remembered] of previous) {
+        if (remembered !== ruleId) continue;
+        const pair: unknown = JSON.parse(key);
+        if (Array.isArray(pair) && pair[0] === sourceHostId) next.delete(key);
+      }
+      if (next.size !== previous.size) set({ syncRuleIds: next });
     },
     directBlocks: {},
     open: (view) => set({ view, session: get().session + 1 }),

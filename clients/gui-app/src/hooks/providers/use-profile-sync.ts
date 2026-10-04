@@ -16,7 +16,11 @@ import {
   useHostQueryWithResponseMap,
   useHostMutation,
 } from "@/hooks/host/use-host-query";
-import { refreshProfileSyncAfterWrite } from "@/hooks/providers/profile-sync-cache";
+import {
+  refreshProfileSyncAfterWrite,
+  writeProfileSyncSavedRule,
+  writeProfileSyncStoppedRule,
+} from "@/hooks/providers/profile-sync-cache";
 import { profileSyncMutationKeys } from "@/lib/query-keys/profile-sync-keys";
 import { profileCopyDraftMutationAttempt } from "@/hooks/providers/profile-copy/use-profile-copy-draft-pending";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
@@ -127,7 +131,7 @@ export function useProfileSyncStart(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: profileSyncMutationKeys.start(hostId),
-      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
+      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId, null),
     },
   });
 }
@@ -162,7 +166,10 @@ export function useProfileSyncSaveRule(
     },
     options: {
       mutationKey: profileSyncMutationKeys.saveRule(hostId),
-      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
+      onSuccess: (rule) =>
+        refreshProfileSyncAfterWrite(queryClient, hostId, () => {
+          writeProfileSyncSavedRule(queryClient, rule);
+        }),
     },
   });
 }
@@ -194,7 +201,18 @@ export function useProfileSyncStopRule(
     },
     options: {
       mutationKey: profileSyncMutationKeys.stopRule(hostId),
-      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
+      onSuccess: (response, request) =>
+        refreshProfileSyncAfterWrite(queryClient, hostId, () => {
+          writeProfileSyncStoppedRule(
+            queryClient,
+            hostId,
+            request.ruleId,
+            response,
+          );
+          useProfileCopyFlowStore
+            .getState()
+            .forgetStoppedSyncRuleId(hostId, request.ruleId);
+        }),
     },
   });
 }
@@ -246,7 +264,7 @@ export function useProfileSyncResolve(
     },
     options: {
       mutationKey: profileSyncMutationKeys.resolve(hostId),
-      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId),
+      onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId, null),
     },
   });
 }

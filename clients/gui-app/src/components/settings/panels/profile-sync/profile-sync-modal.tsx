@@ -8,8 +8,6 @@ import { PROFILE_SYNC_MAX_ITEMS } from "@traycer/protocol/host/profile-sync-sche
 import type { Dispatch, SetStateAction } from "react";
 import {
   useQueryClient,
-  type QueryClient,
-  type QueryKey,
   type UseQueryResult,
   type UseMutationResult,
 } from "@tanstack/react-query";
@@ -45,7 +43,10 @@ import {
   useProfileSyncPending,
 } from "@/hooks/providers/use-profile-sync";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
-import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  profileSyncListKey,
+  writeProfileSyncBatch,
+} from "@/hooks/providers/profile-sync-cache";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import {
   PROFILE_COPY_PROVIDERS,
@@ -93,8 +94,6 @@ export function ProfileSyncModal(props: {
     catalog,
     list,
     rules,
-    acceptSavedRule,
-    acceptStoppedRule,
     selection,
     selectionKey,
     settledKey,
@@ -176,8 +175,6 @@ export function ProfileSyncModal(props: {
               rules={rules}
               batches={list.data.batches}
               onViewRun={setBatchId}
-              onSaved={acceptSavedRule}
-              onStopped={acceptStoppedRule}
             />
           ) : null}
           {batch === null && tab === "now" ? (
@@ -618,120 +615,20 @@ interface ScopedStartNotice {
 interface ScopedStartRefusal extends ScopedStartNotice {
   readonly message: string;
 }
-interface SyncListObservation {
-  readonly query: object | undefined;
-  readonly successes: number;
-}
 interface ViewedSyncBatch {
   readonly batch: ProfileSyncBatch;
-  readonly listObservation: SyncListObservation;
-}
-
-function syncListQueryKey(sourceHostId: string): QueryKey {
-  return hostQueryKeys.method<
-    HostRpcRegistry,
-    "providers.profileCopy.sync.list"
-  >(sourceHostId, "providers.profileCopy.sync.list", { sourceHostId });
-}
-
-function currentSyncListObservation(
-  queryClient: QueryClient,
-  sourceHostId: string,
-): SyncListObservation {
-  const query = queryClient.getQueryCache().find({
-    queryKey: syncListQueryKey(sourceHostId),
-    exact: true,
-  });
-  return { query, successes: query?.state.dataUpdateCount ?? 0 };
-}
-
-function newerSyncListObservation(
-  observed: SyncListObservation,
-  accepted: SyncListObservation,
-): boolean {
-  return (
-    observed.successes > 0 &&
-    (observed.query !== accepted.query ||
-      observed.successes > accepted.successes)
-  );
+  readonly listed: ProfileSyncBatch | undefined;
 }
 
 function latestViewedSyncBatch(
   current: ViewedSyncBatch,
   listed: ProfileSyncBatch | undefined,
-  observed: SyncListObservation,
 ): ViewedSyncBatch {
-  return listed !== undefined &&
-    newerSyncListObservation(observed, current.listObservation)
-    ? {
-        batch: reconcileSyncListBatch(listed, current.batch),
-        listObservation: observed,
-      }
+  // Query owns accepted answers. A changed cached batch is a new observation;
+  // omission from bounded history keeps the opened snapshot and observers.
+  return listed !== undefined && listed !== current.listed
+    ? { batch: reconcileSyncListBatch(listed, current.batch), listed }
     : current;
-}
-
-interface AcceptedSyncRules {
-  readonly rules: readonly ProfileSyncRule[];
-  readonly listObservation: SyncListObservation;
-}
-
-function useProfileSyncAcceptedRules(
-  sourceHostId: string,
-  list: UseQueryResult<ProfileSyncList, HostRpcError>,
-): {
-  readonly rules: readonly ProfileSyncRule[];
-  readonly acceptSavedRule: (rule: ProfileSyncRule) => void;
-  readonly acceptStoppedRule: (list: ProfileSyncList) => void;
-} {
-  const queryClient = useQueryClient();
-  // Keep acknowledged rule writes above the tab/editor branches. Only a
-  // later successful list can supersede them, including after navigation.
-  const [accepted, setAccepted] = useState<AcceptedSyncRules | null>(null);
-  const observed = currentSyncListObservation(queryClient, sourceHostId);
-  const superseded =
-    accepted !== null &&
-    !list.isFetching &&
-    newerSyncListObservation(observed, accepted.listObservation);
-  if (superseded) setAccepted(null);
-  return {
-    rules:
-      accepted !== null && !superseded
-        ? accepted.rules
-        : (list.data?.rules ?? []),
-    acceptSavedRule: (rule) => {
-      const listObservation = currentSyncListObservation(
-        queryClient,
-        sourceHostId,
-      );
-      const listed = queryClient.getQueryData<ProfileSyncList>(
-        syncListQueryKey(sourceHostId),
-      );
-      setAccepted((current) => {
-        const baseline =
-          current !== null &&
-          !newerSyncListObservation(listObservation, current.listObservation)
-            ? current.rules
-            : (listed?.rules ?? []);
-        return {
-          rules: [
-            ...baseline.filter(
-              (prior) =>
-                prior.ruleId !== rule.ruleId &&
-                prior.destinationHostId !== rule.destinationHostId,
-            ),
-            rule,
-          ],
-          listObservation,
-        };
-      });
-    },
-    acceptStoppedRule: (response) => {
-      setAccepted({
-        rules: response.rules,
-        listObservation: currentSyncListObservation(queryClient, sourceHostId),
-      });
-    },
-  };
 }
 
 function useProfileSyncViewedBatch(
@@ -751,17 +648,21 @@ function useProfileSyncViewedBatch(
   // A bounded history poll can omit the opened run; its pending action
   // observers and last accepted receipt must remain mounted.
   const [viewedBatch, setViewedBatch] = useState<ViewedSyncBatch | null>(null);
+  const readListed = (batchId: string): ProfileSyncBatch | undefined =>
+    queryClient
+      .getQueryData<ProfileSyncList>(profileSyncListKey(sourceHostId))
+      ?.batches.find((batch) => batch.batchId === batchId);
+  const accept = (batch: ProfileSyncBatch): void => {
+    // Query publication is synchronous and precedes the exits unlocking.
+    writeProfileSyncBatch(queryClient, batch);
+    setViewedBatch({ batch, listed: readListed(batch.batchId) });
+  };
   const observedBatch = list.data?.batches.find(
     (b) => b.batchId === viewedBatch?.batch.batchId,
   );
-  const listObservation = currentSyncListObservation(queryClient, sourceHostId);
-  // A successful response is fresher than the list already cached when its
-  // response arrived; write hooks cancel older in-flight reads first. Only a
-  // subsequent list success may replace it; a failed
-  // refetch has no new success. Query identity also fences cache recreation.
   const latest =
-    viewedBatch !== null && !list.isFetching
-      ? latestViewedSyncBatch(viewedBatch, observedBatch, listObservation)
+    viewedBatch !== null
+      ? latestViewedSyncBatch(viewedBatch, observedBatch)
       : viewedBatch;
   if (latest !== viewedBatch) setViewedBatch(latest);
   return {
@@ -775,71 +676,50 @@ function useProfileSyncViewedBatch(
           ? null
           : {
               batch: selectedBatch,
-              listObservation,
+              listed: selectedBatch,
             },
       );
     },
-    acceptStarted: (batch) => {
-      setViewedBatch({
-        batch,
-        // Read the LIVE cache at settlement, rather than the list captured
-        // when the request was sent: it may have polled while start was held.
-        listObservation: currentSyncListObservation(queryClient, sourceHostId),
-      });
-    },
+    acceptStarted: accept,
     acceptResolved: (batch, requested) => {
-      const listObservation = currentSyncListObservation(
-        queryClient,
-        sourceHostId,
-      );
+      if (viewedBatch?.batch.batchId !== batch.batchId) return;
+      const listed = readListed(batch.batchId);
+      const latest = latestViewedSyncBatch(viewedBatch, listed);
       const resolved = batch.items.find(
         (item) => item.operationId === requested.operationId,
       );
-      const listed = queryClient
-        .getQueryData<ProfileSyncList>(syncListQueryKey(sourceHostId))
-        ?.batches.find((candidate) => candidate.batchId === batch.batchId);
-      setViewedBatch((current) => {
-        if (current?.batch.batchId !== batch.batchId || resolved === undefined)
-          return current;
-        const latest = latestViewedSyncBatch(current, listed, listObservation);
-        const prior = latest.batch.items.find(
-          (item) => item.operationId === requested.operationId,
-        );
-        // A newer poll or destination draft can change this same row while
-        // Resolve is in flight. Its old answer must not undo that observation.
-        if (
-          prior === undefined ||
-          profileSyncItemObservationKey(prior) !==
-            profileSyncItemObservationKey(requested)
-        )
-          return latest;
-        // Resolve changes one operation. Its sibling snapshot can predate a
-        // concurrent Retry or resolution already accepted in this dialog.
-        return {
-          batch: {
-            ...latest.batch,
-            items: latest.batch.items.map((item) =>
-              item.operationId === requested.operationId ? resolved : item,
-            ),
-          },
-          listObservation,
-        };
-      });
+      const prior = latest.batch.items.find(
+        (item) => item.operationId === requested.operationId,
+      );
+      // Fence changes to this row, including polled identity/settings and
+      // destination draft receipts. Resolve's sibling snapshot is not applied.
+      if (
+        resolved === undefined ||
+        prior === undefined ||
+        profileSyncItemObservationKey(prior) !==
+          profileSyncItemObservationKey(requested)
+      ) {
+        setViewedBatch(latest);
+        return;
+      }
+      const accepted = {
+        ...latest.batch,
+        items: latest.batch.items.map((item) =>
+          item.operationId === requested.operationId ? resolved : item,
+        ),
+      };
+      accept(accepted);
     },
     acceptRetried: (receipt) => {
-      const listObservation = currentSyncListObservation(
-        queryClient,
-        sourceHostId,
-      );
-      const listed = queryClient
-        .getQueryData<ProfileSyncList>(syncListQueryKey(sourceHostId))
-        ?.batches.find((candidate) => candidate.batchId === receipt.batchId);
-      setViewedBatch((current) => {
-        if (current?.batch.batchId !== receipt.batchId) return current;
-        const latest = latestViewedSyncBatch(current, listed, listObservation);
-        const batch = reconcileSyncRetryBatch(latest.batch, receipt);
-        return batch === latest.batch ? latest : { batch, listObservation };
-      });
+      if (viewedBatch?.batch.batchId !== receipt.batchId) return;
+      const listed = readListed(receipt.batchId);
+      const latest = latestViewedSyncBatch(viewedBatch, listed);
+      const batch = reconcileSyncRetryBatch(latest.batch, receipt);
+      if (batch === latest.batch) {
+        setViewedBatch(latest);
+        return;
+      }
+      accept(batch);
     },
   };
 }
@@ -861,8 +741,6 @@ interface SyncModalModel {
   >;
   readonly list: UseQueryResult<ProfileSyncList, HostRpcError>;
   readonly rules: readonly ProfileSyncRule[];
-  readonly acceptSavedRule: (rule: ProfileSyncRule) => void;
-  readonly acceptStoppedRule: (list: ProfileSyncList) => void;
   readonly selection: ProfileSyncSelection | null;
   readonly selectionKey: string;
   readonly settledKey: string;
@@ -922,8 +800,7 @@ function useProfileSyncModalState(props: {
     { enabled: true, subscribed: true },
   );
   const list = useProfileSyncList(sourceHostId);
-  const { rules, acceptSavedRule, acceptStoppedRule } =
-    useProfileSyncAcceptedRules(sourceHostId, list);
+  const rules = list.data?.rules ?? [];
   const { batch, setBatchId, acceptStarted, acceptResolved, acceptRetried } =
     useProfileSyncViewedBatch(sourceHostId, list);
   const { selected, profileCount } = selectedCatalogProfiles(
@@ -1019,8 +896,6 @@ function useProfileSyncModalState(props: {
     catalog,
     list,
     rules,
-    acceptSavedRule,
-    acceptStoppedRule,
     selection,
     selectionKey,
     settledKey,

@@ -298,3 +298,38 @@ describe("useProfileCopyFlowStore uncertain rule ids", () => {
     expect(idFor(SOURCE_HOST_ID, DEST_HOST_TWO_ID)).toBe(other);
   });
 });
+
+describe("useProfileCopyFlowStore forgetStoppedSyncRuleId", () => {
+  afterEach(resetFlowStore);
+
+  const store = () => useProfileCopyFlowStore.getState();
+  const OTHER_SOURCE = "another-source-host";
+
+  it("retires the matching rule's remembered id without needing its destination", () => {
+    const stopped = store().getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID);
+    const sibling = store().getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_TWO_ID);
+    store().forgetStoppedSyncRuleId(SOURCE_HOST_ID, stopped);
+    // Another remembered destination remains.
+    expect(store().getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_TWO_ID)).toBe(
+      sibling,
+    );
+    // The stopped destination mints a new identity.
+    expect(store().getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID)).not.toBe(
+      stopped,
+    );
+  });
+
+  it("preserves ids for an unrelated source or a wrong rule id", () => {
+    const mine = store().getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID);
+    const theirs = store().getSyncRuleId(OTHER_SOURCE, DEST_HOST_ID);
+    // The right rule id under another source only retires that source's.
+    store().forgetStoppedSyncRuleId(OTHER_SOURCE, mine);
+    expect(store().getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID)).toBe(mine);
+    store().forgetStoppedSyncRuleId(
+      SOURCE_HOST_ID,
+      "00000000-0000-4000-8000-0000000000aa",
+    );
+    expect(store().getSyncRuleId(SOURCE_HOST_ID, DEST_HOST_ID)).toBe(mine);
+    expect(store().getSyncRuleId(OTHER_SOURCE, DEST_HOST_ID)).toBe(theirs);
+  });
+});
