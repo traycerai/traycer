@@ -637,7 +637,10 @@ function useProfileSyncViewedBatch(
 ): {
   readonly batch: ProfileSyncBatch | null;
   readonly setBatchId: (batchId: string | null) => void;
-  readonly acceptStarted: (batch: ProfileSyncBatch) => void;
+  readonly acceptStarted: (
+    batch: ProfileSyncBatch,
+    submitted: ProfileSyncBatch | undefined,
+  ) => void;
   readonly acceptResolved: (
     batch: ProfileSyncBatch,
     requested: ProfileSyncItem,
@@ -680,7 +683,13 @@ function useProfileSyncViewedBatch(
             },
       );
     },
-    acceptStarted: accept,
+    acceptStarted: (batch, submitted) => {
+      const listed = readListed(batch.batchId);
+      // A changed listed batch proves Start committed; the driver may have
+      // advanced it before the answer arrived. A pre-request snapshot does
+      // not outrank the answer to a replay of an uncertain Start.
+      accept(listed !== submitted ? (listed ?? batch) : batch);
+    },
     acceptResolved: (batch, requested) => {
       if (viewedBatch?.batch.batchId !== batch.batchId) return;
       const listed = readListed(batch.batchId);
@@ -750,7 +759,8 @@ interface SyncModalModel {
   readonly start: UseMutationResult<
     ProfileSyncBatch,
     HostRpcError,
-    RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">
+    RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">,
+    ProfileSyncBatch | undefined
   >;
   readonly batch: ProfileSyncBatch | null;
   readonly acceptResolved: (
@@ -855,7 +865,7 @@ function useProfileSyncModalState(props: {
         batchId: id,
       },
       {
-        onSuccess: (result, request) => {
+        onSuccess: (result, request, submitted) => {
           const refusal = startResponseRefusal(result, request, currentPreview);
           if (refusal !== null) {
             setRefusedStart({
@@ -877,7 +887,7 @@ function useProfileSyncModalState(props: {
             void preview.refetch();
             return;
           }
-          acceptStarted(result);
+          acceptStarted(result, submitted);
         },
       },
     );

@@ -47,6 +47,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { profileCopyDraftStatusKey } from "@/hooks/providers/profile-copy/profile-copy-cache";
+import { profileSyncListKey } from "@/hooks/providers/profile-sync-cache";
 import { clearProfileCopyObservations } from "@/hooks/providers/profile-copy/profile-copy-observations";
 import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-store";
 import { useProfileCopyOperationsStore } from "@/stores/settings/profile-copy-operations-store";
@@ -4573,6 +4574,7 @@ describe("ProfileSyncModal review regressions", () => {
 
     it("keeps a fresh start answer over an older same-batch snapshot polled during the hold, through a failed refetch, until a newer poll supersedes it", async () => {
       const held = gate();
+      const heldRead = gate();
       startGate = held.promise;
       const messenger = mountWith({
         rules: [],
@@ -4606,6 +4608,11 @@ describe("ProfileSyncModal review regressions", () => {
             items: [retryableItem()],
           },
         ];
+        // An OLD read dispatched before the start answer, held until after
+        // the answer is accepted: the host commits a start's batch before any
+        // later successful list can contain it, so only a held read can
+        // carry an older snapshot of that batch.
+        listGate = heldRead.promise;
         const listCalls = (): number =>
           messenger.calls.filter(
             (call) => call.method === "providers.profileCopy.sync.list",
@@ -4614,52 +4621,62 @@ describe("ProfileSyncModal review regressions", () => {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(6_000);
         });
-        // The poll really reached the host and (with listFails still off)
-        // was answered successfully with the older same-batch snapshot.
+        // The old read was dispatched (and stays held).
         await waitFor(() => expect(listCalls()).toBeGreaterThan(listsBefore));
         // Then the next refetch fails, and the start answer lands.
         listFails = true;
+        held.release();
+        expect(await screen.findByText("Synced")).toBeTruthy();
+        expect(
+          screen.queryByRole("button", { name: "Check status" }),
+        ).toBeNull();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        // The old read now lands, after the answer was accepted.
+        heldRead.release();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        expect(screen.getByText("Synced")).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        // A failed post-success refetch does not bring the older snapshot back.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        expect(screen.getByText("Synced")).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        // A later, newer poll does supersede it, and survives omission.
+        listFails = false;
+        const submittedId = profileSyncStartSchema.parse(
+          startCalls(messenger)[0].params,
+        ).batchId;
+        listBatches = [
+          {
+            batchId: submittedId,
+            sourceHostId: SOURCE_HOST_ID,
+            createdAt: 1,
+            automatic: false,
+            items: [
+              {
+                ...syncItem(1, DEST_HOST_ID, "source-removed", []),
+                preview: null,
+              },
+            ],
+          },
+        ];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        expect(await screen.findByText("Profile removed")).toBeTruthy();
+        listBatches = [];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        expect(screen.getByText("Profile removed")).toBeTruthy();
+        expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
       } finally {
         held.release();
+        heldRead.release();
       }
-      expect(await screen.findByText("Synced")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Check status" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-      // A failed post-success refetch does not bring the older snapshot back.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
-      });
-      expect(screen.getByText("Synced")).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-      // A later, newer poll does supersede it, and survives omission.
-      listFails = false;
-      const submittedId = profileSyncStartSchema.parse(
-        startCalls(messenger)[0].params,
-      ).batchId;
-      listBatches = [
-        {
-          batchId: submittedId,
-          sourceHostId: SOURCE_HOST_ID,
-          createdAt: 1,
-          automatic: false,
-          items: [
-            {
-              ...syncItem(1, DEST_HOST_ID, "source-removed", []),
-              preview: null,
-            },
-          ],
-        },
-      ];
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
-      });
-      expect(await screen.findByText("Profile removed")).toBeTruthy();
-      listBatches = [];
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
-      });
-      expect(screen.getByText("Profile removed")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "← Back" })).toBeTruthy();
     });
   });
 
@@ -6358,6 +6375,250 @@ describe("ProfileSyncModal review regressions", () => {
         );
         expect(remembered()).toBe(first.ruleId);
       });
+    });
+  });
+
+  describe("round 32: a delayed answer never overrides what was already observed", () => {
+    const B_RULE_ID = "00000000-0000-4000-8000-0000000000b1";
+
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    // The real Query cache's list for the source, as the client holds it.
+    const cachedList = (): ProfileSyncList | undefined =>
+      mountedQueryClient?.getQueryData<ProfileSyncList>(
+        profileSyncListKey(SOURCE_HOST_ID),
+      );
+
+    it("keeps a poll that already observed Synced over a delayed Start answer that is still queued", async () => {
+      const held = gate();
+      startGate = held.promise;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        // The delayed answer is the initial, still-queued receipt.
+        startItems: () => [
+          { ...syncItem(1, DEST_HOST_ID, "queued", []), preview: null },
+        ],
+      });
+      try {
+        openSync(null);
+        await pickDestinations([/Linux box/]);
+        await screen.findByText("1 profile transfers selected");
+        fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+        await waitFor(() => expect(startCalls(messenger)).toHaveLength(1));
+        const submitted = profileSyncStartSchema.parse(
+          startCalls(messenger)[0].params,
+        ).batchId;
+        // A poll answers while the start is held: the same batch, now Synced.
+        listBatches = [
+          {
+            batchId: submitted,
+            sourceHostId: SOURCE_HOST_ID,
+            createdAt: 1,
+            automatic: false,
+            items: [
+              { ...syncItem(1, DEST_HOST_ID, "synced", []), preview: null },
+            ],
+          },
+        ];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        // The poll's response was actually observed: it is in the real Query
+        // cache, as Synced, before the delayed start answer is released.
+        await waitFor(() =>
+          expect(
+            cachedList()?.batches.find((b) => b.batchId === submitted)?.items[0]
+              ?.state,
+          ).toBe("synced"),
+        );
+        listFails = true;
+      } finally {
+        held.release();
+      }
+      expect(await screen.findByText("Synced")).toBeTruthy();
+      expect(screen.queryByText("Queued")).toBeNull();
+      // A later valid poll still supersedes it.
+      listFails = false;
+      const submittedId = profileSyncStartSchema.parse(
+        startCalls(messenger)[0].params,
+      ).batchId;
+      listBatches = [
+        {
+          batchId: submittedId,
+          sourceHostId: SOURCE_HOST_ID,
+          createdAt: 1,
+          automatic: false,
+          items: [
+            {
+              ...syncItem(1, DEST_HOST_ID, "source-removed", []),
+              preview: null,
+            },
+          ],
+        },
+      ];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      expect(await screen.findByText("Profile removed")).toBeTruthy();
+    });
+
+    it("accepts an uncertain Start's reattempt answer over a cached snapshot that predates the new request", async () => {
+      startFailures = 1;
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        // The reattempt is answered as Synced.
+        startItems: () => [
+          { ...syncItem(1, DEST_HOST_ID, "synced", []), preview: null },
+        ],
+      });
+      openSync(null);
+      await pickDestinations([/Linux box/]);
+      await screen.findByText("1 profile transfers selected");
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      expect(await screen.findByText(/could not be confirmed/)).toBeTruthy();
+      const firstId = profileSyncStartSchema.parse(
+        startCalls(messenger)[0].params,
+      ).batchId;
+      // The host did start it: a valid list observes its queued snapshot.
+      listBatches = [
+        {
+          batchId: firstId,
+          sourceHostId: SOURCE_HOST_ID,
+          createdAt: 1,
+          automatic: false,
+          items: [
+            { ...syncItem(1, DEST_HOST_ID, "queued", []), preview: null },
+          ],
+        },
+      ];
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+      await waitFor(() =>
+        expect(
+          cachedList()?.batches.find((b) => b.batchId === firstId)?.items[0]
+            ?.state,
+        ).toBe("queued"),
+      );
+      // The reattempt reuses the id; follow-up reads fail from here on.
+      listFails = true;
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Sync now" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+      await waitFor(() => expect(startCalls(messenger)).toHaveLength(2));
+      expect(
+        profileSyncStartSchema.parse(startCalls(messenger)[1].params).batchId,
+      ).toBe(firstId);
+      // The answer is newer than the unchanged pre-request cache.
+      expect(await screen.findByText("Synced")).toBeTruthy();
+      expect(screen.queryByText("Queued")).toBeNull();
+    });
+
+    async function openRules(): Promise<MockHostMessenger<HostRpcRegistry>> {
+      const messenger = mount([SAVED_RULE]);
+      openSync(null);
+      fireEvent.mouseDown(
+        await screen.findByRole("tab", { name: /Automatic sync/ }),
+        { button: 0 },
+      );
+      await screen.findByRole("heading", { name: "Linux box" });
+      return messenger;
+    }
+
+    const saveCalls = (messenger: MockHostMessenger<HostRpcRegistry>) =>
+      messenger.calls
+        .filter((call) => call.method === "providers.profileCopy.sync.saveRule")
+        .map((call) => profileSyncSaveRuleSchema.parse(call.params));
+
+    it("keeps a different rule that took the destination over a delayed Pause of the old one", async () => {
+      const held = gate();
+      saveRuleGate = held.promise;
+      const messenger = await openRules();
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        await waitFor(() => expect(saveCalls(messenger)).toHaveLength(1));
+        // Another rule (B) now holds the same destination.
+        listRules = [{ ...SAVED_RULE, ruleId: B_RULE_ID }];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        // B is in the real Query cache before the delayed answer is released.
+        await waitFor(() =>
+          expect(cachedList()?.rules.some((r) => r.ruleId === B_RULE_ID)).toBe(
+            true,
+          ),
+        );
+        listFails = true;
+      } finally {
+        held.release();
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      // B stays active; A's late answer neither paused it nor came back.
+      expect(await screen.findByRole("button", { name: "Pause" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+      expect(
+        screen.getAllByRole("heading", { name: "Linux box" }),
+      ).toHaveLength(1);
+      // Acting on the row now acts on B.
+      saveRuleGate = null;
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      await waitFor(() => expect(saveCalls(messenger)).toHaveLength(2));
+      expect(saveCalls(messenger)[1].ruleId).toBe(B_RULE_ID);
+    });
+
+    it("does not resurrect a rule that was observed removed when its delayed Pause answers", async () => {
+      const held = gate();
+      saveRuleGate = held.promise;
+      const messenger = await openRules();
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+        await waitFor(() => expect(saveCalls(messenger)).toHaveLength(1));
+        // The rule is observed removed, with no replacement.
+        listRules = [];
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6_000);
+        });
+        await waitFor(() =>
+          expect(
+            screen.queryByRole("heading", { name: "Linux box" }),
+          ).toBeNull(),
+        );
+        // The removal is in the real Query cache before the release.
+        await waitFor(() => expect(cachedList()?.rules).toEqual([]));
+        listFails = true;
+      } finally {
+        held.release();
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(screen.queryByRole("heading", { name: "Linux box" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
     });
   });
 });

@@ -133,7 +133,7 @@ describe("writeProfileSyncSavedRule", () => {
     const first = rule(1, 1);
     const second = rule(2, 1);
     const queryClient = seeded({ batches: [b], rules: [first] });
-    writeProfileSyncSavedRule(queryClient, second);
+    writeProfileSyncSavedRule(queryClient, second, undefined);
     expect(read(queryClient)).toEqual({
       batches: [b],
       rules: [first, second],
@@ -144,18 +144,22 @@ describe("writeProfileSyncSavedRule", () => {
     const old = rule(1, 1);
     const accepted = { ...old, paused: true, revision: 2 };
     const queryClient = seeded({ batches: [], rules: [old] });
-    writeProfileSyncSavedRule(queryClient, accepted);
+    writeProfileSyncSavedRule(queryClient, accepted, old);
     expect(read(queryClient)?.rules).toEqual([accepted]);
   });
 
   it("does not regress a rule already at a higher revision", () => {
     const newer = { ...rule(1, 5), paused: true };
     const queryClient = seeded({ batches: [], rules: [newer] });
-    writeProfileSyncSavedRule(queryClient, {
-      ...newer,
-      paused: false,
-      revision: 3,
-    });
+    writeProfileSyncSavedRule(
+      queryClient,
+      {
+        ...newer,
+        paused: false,
+        revision: 3,
+      },
+      newer,
+    );
     expect(read(queryClient)?.rules).toEqual([newer]);
   });
 });
@@ -184,5 +188,33 @@ describe("writeProfileSyncStoppedRule", () => {
       rules: [stopped, other],
     });
     expect(read(queryClient)?.rules).toEqual([other]);
+  });
+});
+
+describe("writeProfileSyncSavedRule against what changed since dispatch", () => {
+  const submitted = rule(1, 1);
+  const accepted = { ...submitted, paused: true, revision: 2 };
+
+  it("keeps a different rule that now holds the destination and does not add the late answer", () => {
+    const current: ProfileSyncRule = {
+      ...rule(1, 1),
+      ruleId: uuid(399_999),
+    };
+    const queryClient = seeded({ batches: [], rules: [current] });
+    writeProfileSyncSavedRule(queryClient, accepted, submitted);
+    expect(read(queryClient)?.rules).toEqual([current]);
+  });
+
+  it("does not resurrect a submitted rule that was observed removed", () => {
+    const sibling = rule(2, 1);
+    const queryClient = seeded({ batches: [], rules: [sibling] });
+    writeProfileSyncSavedRule(queryClient, accepted, submitted);
+    expect(read(queryClient)?.rules).toEqual([sibling]);
+  });
+
+  it("still applies the answer when the submitted rule is the one cached", () => {
+    const queryClient = seeded({ batches: [], rules: [submitted] });
+    writeProfileSyncSavedRule(queryClient, accepted, submitted);
+    expect(read(queryClient)?.rules).toEqual([accepted]);
   });
 });

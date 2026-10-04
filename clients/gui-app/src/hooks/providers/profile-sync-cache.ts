@@ -50,15 +50,21 @@ export function writeProfileSyncBatch(
 export function writeProfileSyncSavedRule(
   queryClient: QueryClient,
   rule: ProfileSyncRule,
+  submitted: ProfileSyncRule | undefined,
 ): void {
   queryClient.setQueryData<ProfileSyncList>(
     profileSyncListKey(rule.sourceHostId),
     (previous) => {
-      const newer = previous?.rules.find(
-        (prior) =>
-          prior.ruleId === rule.ruleId && prior.revision > rule.revision,
+      const current = previous?.rules.find(
+        (prior) => prior.destinationHostId === rule.destinationHostId,
       );
-      if (newer !== undefined) return previous;
+      // A poll can observe this rule stopped/replaced while Save is in transit.
+      if (
+        (current === undefined && submitted !== undefined) ||
+        (current !== undefined &&
+          (current.ruleId !== rule.ruleId || current.revision >= rule.revision))
+      )
+        return previous;
       const others =
         previous?.rules.filter(
           (prior) =>

@@ -17,6 +17,7 @@ import {
   useHostMutation,
 } from "@/hooks/host/use-host-query";
 import {
+  profileSyncListKey,
   refreshProfileSyncAfterWrite,
   writeProfileSyncSavedRule,
   writeProfileSyncStoppedRule,
@@ -31,6 +32,8 @@ import type {
   ProfileSyncScope,
   ProfileSyncResolve,
   ProfileSyncItem,
+  ProfileSyncRule,
+  ProfileSyncBatch,
 } from "@traycer/protocol/host/profile-sync-schemas";
 
 function sameSyncScope(
@@ -122,15 +125,24 @@ export function useProfileSyncStart(
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">
+  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.start">,
+  ProfileSyncBatch | undefined
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "providers.profileCopy.sync.start">({
+  return useHostMutation<
+    HostRpcRegistry,
+    "providers.profileCopy.sync.start",
+    ProfileSyncBatch | undefined
+  >({
     client: useHostClientForHostId(hostId),
     method: "providers.profileCopy.sync.start",
     mapVariables: (variables) => variables,
     options: {
       mutationKey: profileSyncMutationKeys.start(hostId),
+      onMutate: (request) =>
+        queryClient
+          .getQueryData<ProfileSyncList>(profileSyncListKey(hostId))
+          ?.batches.find((batch) => batch.batchId === request.batchId),
       onSuccess: () => refreshProfileSyncAfterWrite(queryClient, hostId, null),
     },
   });
@@ -141,12 +153,14 @@ export function useProfileSyncSaveRule(
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "providers.profileCopy.sync.saveRule">,
   HostRpcError,
-  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.saveRule">
+  RequestOfMethod<HostRpcRegistry, "providers.profileCopy.sync.saveRule">,
+  ProfileSyncRule | undefined
 > {
   const queryClient = useQueryClient();
   return useHostMutation<
     HostRpcRegistry,
-    "providers.profileCopy.sync.saveRule"
+    "providers.profileCopy.sync.saveRule",
+    ProfileSyncRule | undefined
   >({
     client: useHostClientForHostId(hostId),
     method: "providers.profileCopy.sync.saveRule",
@@ -166,9 +180,15 @@ export function useProfileSyncSaveRule(
     },
     options: {
       mutationKey: profileSyncMutationKeys.saveRule(hostId),
-      onSuccess: (rule) =>
+      onMutate: (request) =>
+        queryClient
+          .getQueryData<ProfileSyncList>(profileSyncListKey(hostId))
+          ?.rules.find(
+            (rule) => rule.destinationHostId === request.destinationHostId,
+          ),
+      onSuccess: (rule, _request, submitted) =>
         refreshProfileSyncAfterWrite(queryClient, hostId, () => {
-          writeProfileSyncSavedRule(queryClient, rule);
+          writeProfileSyncSavedRule(queryClient, rule, submitted);
         }),
     },
   });
