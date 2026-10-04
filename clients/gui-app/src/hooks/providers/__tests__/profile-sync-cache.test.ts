@@ -74,17 +74,22 @@ const read = (queryClient: QueryClient) =>
   queryClient.getQueryData<ProfileSyncList>(profileSyncListKey(SOURCE));
 
 describe("writeProfileSyncBatch", () => {
-  it("adds a batch beside its siblings and the rules, creating the list when absent", () => {
+  it("adds a batch beside its siblings and the rules", () => {
     const first = batch(1, [item(1)]);
     const second = batch(2, [item(2)]);
     const r = rule(1, 1);
     const queryClient = seeded({ batches: [first], rules: [r] });
     writeProfileSyncBatch(queryClient, second);
     expect(read(queryClient)).toEqual({ batches: [first, second], rules: [r] });
+  });
 
+  it("writes nothing when the list never succeeded, so it invents no rule information", () => {
+    const first = batch(1, [item(1)]);
     const empty = createAppQueryClient();
     writeProfileSyncBatch(empty, first);
-    expect(read(empty)).toEqual({ batches: [first], rules: [] });
+    // Rules are unknown, not empty: no list is created from a batch alone.
+    expect(read(empty)).toBeUndefined();
+    expect(empty.getQueryData(profileSyncListKey(SOURCE))).toBeUndefined();
   });
 
   it("replaces the same batch id with the accepted batch, without duplicating it", () => {
@@ -138,6 +143,13 @@ describe("writeProfileSyncSavedRule", () => {
       batches: [b],
       rules: [first, second],
     });
+  });
+
+  it("writes nothing when the list never succeeded, so it invents no batch information", () => {
+    const queryClient = createAppQueryClient();
+    writeProfileSyncSavedRule(queryClient, rule(1, 1), undefined);
+    // Batches are unknown, not empty: no list is created from a rule alone.
+    expect(read(queryClient)).toBeUndefined();
   });
 
   it("replaces the same rule with its accepted newer revision", () => {

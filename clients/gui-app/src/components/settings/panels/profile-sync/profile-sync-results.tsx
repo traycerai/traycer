@@ -2,8 +2,8 @@ import { useProfileCopyDraftStatusQuery } from "@/hooks/providers/profile-copy/u
 import {
   SYNC_STATE_LABELS,
   profileSyncItemObservationKey,
-  type ProfileSyncRetryReceipt,
 } from "./profile-sync-state";
+import type { ProfileSyncRetryReceipt } from "@/hooks/providers/profile-sync-cache";
 import { useEffect, useState, type ReactNode } from "react";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {

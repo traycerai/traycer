@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -61,6 +61,7 @@ import {
   useProfileSyncStopRule,
   type ProfileSyncResolveVariables,
 } from "@/hooks/providers/use-profile-sync";
+import { profileSyncListKey } from "@/hooks/providers/profile-sync-cache";
 
 const SOURCE = "source-host";
 const DEST = "dest-host";
@@ -139,6 +140,7 @@ let stopAnswer:
 let listAnswer: ProfileSyncList = { batches: [], rules: [] };
 
 function setup(): {
+  readonly queryClient: QueryClient;
   readonly messenger: MockHostMessenger<HostRpcRegistry>;
   readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
 } {
@@ -191,6 +193,7 @@ function setup(): {
   );
   harness.spine = spine;
   return {
+    queryClient,
     messenger,
     wrapper: (props) => (
       <QueryClientProvider client={queryClient}>
@@ -786,5 +789,107 @@ describe("resolve answers are correlated with the intended transfer", () => {
     act(() => result.current.mutate(request, { onSuccess }));
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(onSuccess).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useProfileSyncList keeps a newer cached receipt over an older response", () => {
+  const ATTEMPT = "55555555-5555-4555-8555-555555555555";
+  const withReceipt = (
+    revision: number,
+    state: "preparing" | "signed-in",
+    overrides: Partial<ProfileSyncItem>,
+  ): ProfileSyncItem => ({
+    ...resolvedItem(OPERATION_ID),
+    state: "copying",
+    outcome: profileCopyOutcome({
+      attempt: profileCopyAttempt({
+        sourceHostId: SOURCE,
+        sourceProfileId: RESOLVED_PROFILE,
+        operationId: OPERATION_ID,
+        destinationHostId: DEST,
+        attemptId: ATTEMPT,
+      }),
+      revision,
+      state,
+    }),
+    ...overrides,
+  });
+  const listWith = (item: ProfileSyncItem): ProfileSyncList => ({
+    batches: [{ ...BATCH, items: [item] }],
+    rules: [],
+  });
+
+  beforeEach(() => {
+    harness.spine = null;
+    listAnswer = { batches: [], rules: [] };
+  });
+  afterEach(() => {
+    cleanup();
+    harness.spine = null;
+  });
+
+  async function cachedAtNewer() {
+    listAnswer = listWith(withReceipt(3, "preparing", {}));
+    const { queryClient, wrapper } = setup();
+    // Read `data` during render, as the real consumer does, so the observer
+    // is subscribed to receipt-only changes before anything is dispatched.
+    const { result } = renderHook(
+      () => {
+        const list = useProfileSyncList(SOURCE);
+        return {
+          data: list.data,
+          isSuccess: list.isSuccess,
+          refetch: list.refetch,
+        };
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // A newer accepted receipt (revision 6) now sits in the live cache.
+    const newer = listWith(withReceipt(6, "signed-in", { state: "queued" }));
+    act(() => {
+      queryClient.setQueryData(profileSyncListKey(SOURCE), newer);
+    });
+    return { result };
+  }
+
+  it("does not regress the receipt when an older same-attempt response arrives", async () => {
+    const { result } = await cachedAtNewer();
+    listAnswer = listWith(withReceipt(3, "preparing", {}));
+    await act(async () => {
+      await result.current.refetch();
+    });
+    // The observer publishes after the refetch settles: wait for the newer
+    // receipt to be what the hook shows before reading anything else.
+    await waitFor(() =>
+      expect(result.current.data?.batches[0]?.items[0]?.outcome?.revision).toBe(
+        6,
+      ),
+    );
+    const held = result.current.data?.batches[0]?.items[0];
+    expect(held?.outcome?.revision).toBe(6);
+    expect(held?.outcome?.state).toBe("signed-in");
+  });
+
+  it("still accepts the polled source settings and terminal state while keeping the newer receipt", async () => {
+    const { result } = await cachedAtNewer();
+    listAnswer = listWith(
+      withReceipt(3, "preparing", {
+        state: "synced",
+        sourceSettings: { name: "Renamed", color: "#10b981", enabled: false },
+      }),
+    );
+    await act(async () => {
+      await result.current.refetch();
+    });
+    await waitFor(() =>
+      expect(result.current.data?.batches[0]?.items[0]?.outcome?.revision).toBe(
+        6,
+      ),
+    );
+    const item = result.current.data?.batches[0]?.items[0];
+    expect(item?.outcome?.revision).toBe(6);
+    expect(item?.state).toBe("synced");
+    expect(item?.sourceSettings.name).toBe("Renamed");
   });
 });

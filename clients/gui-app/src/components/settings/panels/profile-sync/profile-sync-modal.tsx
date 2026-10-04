@@ -46,6 +46,9 @@ import { useProfileCopyFlowStore } from "@/stores/settings/profile-copy-flow-sto
 import {
   profileSyncListKey,
   writeProfileSyncBatch,
+  reconcileSyncRetryBatch,
+  reconcileSyncListBatch,
+  type ProfileSyncRetryReceipt,
 } from "@/hooks/providers/profile-sync-cache";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import {
@@ -69,10 +72,7 @@ import { ProfileSyncRules } from "./profile-sync-rules";
 import { ProfileSyncResults } from "./profile-sync-results";
 import {
   SYNC_STATE_LABELS,
-  reconcileSyncRetryBatch,
-  reconcileSyncListBatch,
   profileSyncItemObservationKey,
-  type ProfileSyncRetryReceipt,
 } from "./profile-sync-state";
 
 export function ProfileSyncModal(props: {
@@ -847,6 +847,7 @@ function useProfileSyncModalState(props: {
   );
   const sourceName = hosts.nameFor(sourceHostId);
   const canStart =
+    list.data !== undefined &&
     currentPreview !== null &&
     currentPreview.items.some((i) =>
       ["ready", "synced", "queued", "copying"].includes(i.state),

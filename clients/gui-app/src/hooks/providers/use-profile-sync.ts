@@ -18,6 +18,7 @@ import {
 } from "@/hooks/host/use-host-query";
 import {
   profileSyncListKey,
+  reconcileSyncListBatch,
   refreshProfileSyncAfterWrite,
   writeProfileSyncSavedRule,
   writeProfileSyncStoppedRule,
@@ -77,6 +78,7 @@ export function useProfileSyncPending(hostId: string | null): boolean {
 export function useProfileSyncList(
   hostId: string,
 ): UseQueryResult<ProfileSyncList, HostRpcError> {
+  const queryClient = useQueryClient();
   return useHostQueryWithResponseMap<
     HostRpcRegistry,
     "providers.profileCopy.sync.list",
@@ -99,7 +101,22 @@ export function useProfileSyncList(
       const { forgetSyncRuleId } = useProfileCopyFlowStore.getState();
       for (const rule of response.rules)
         forgetSyncRuleId(hostId, rule.destinationHostId, rule.ruleId);
-      return response;
+      const previous = queryClient.getQueryData<ProfileSyncList>(
+        profileSyncListKey(hostId),
+      );
+      // Destination writes can advance a receipt before the source driver.
+      // Reconcile before caching so closing the dialog cannot lose that receipt.
+      return {
+        ...response,
+        batches: response.batches.map((batch) => {
+          const retained = previous?.batches.find(
+            (prior) => prior.batchId === batch.batchId,
+          );
+          return retained === undefined
+            ? batch
+            : reconcileSyncListBatch(batch, retained);
+        }),
+      };
     },
   });
 }

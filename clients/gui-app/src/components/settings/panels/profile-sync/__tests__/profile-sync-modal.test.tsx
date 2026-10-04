@@ -6648,4 +6648,158 @@ describe("ProfileSyncModal review regressions", () => {
       expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
     });
   });
+
+  describe("round 34: an unknown list and a post-draft list read", () => {
+    const OP = "00000000-0000-4000-8000-000000000001";
+    const RUN = "00000000-0000-4000-8000-0000000000fc";
+
+    function gate(): { promise: Promise<void>; release: () => void } {
+      let release: () => void = () => undefined;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { promise, release };
+    }
+
+    it("keeps Sync now off while the list is unknown, and enables it once a list with its rules arrives", async () => {
+      listFails = true;
+      const messenger = mountWith({
+        rules: [SAVED_RULE],
+        providers: defaultProviders(),
+        previewItems: () => [
+          syncItem(1, DEST_HOST_ID, "ready", [
+            previewDestination(DEST_HOST_ID, "automatic"),
+          ]),
+        ],
+        startItems: noItems,
+      });
+      openSync(null);
+      await pickDestinations([/Linux box/]);
+      // The preview is valid, but the list (and so the rules) is unknown.
+      await screen.findByText("1 profile transfers selected");
+      const sync = screen.getByRole("button", { name: "Sync now" });
+      expect(sync.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(sync);
+      expect(startCalls(messenger)).toHaveLength(0);
+      // The list recovers, with an existing rule.
+      listFails = false;
+      fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Sync now" })
+            .hasAttribute("disabled"),
+        ).toBe(false),
+      );
+      fireEvent.mouseDown(
+        await screen.findByRole("tab", { name: /Automatic sync/ }),
+        { button: 0 },
+      );
+      expect(
+        await screen.findByRole("heading", { name: "Linux box" }),
+      ).toBeTruthy();
+    });
+
+    it("keeps the accepted Verify receipt over an older held list read, through Done and reopen", async () => {
+      const heldRead = gate();
+      const readiness = {
+        preparation: "complete" as const,
+        verification: "not-checked" as const,
+        verificationRevision: null,
+        acceptedVerificationRevision: null,
+        identity: "not-checked" as const,
+        identityRevision: null,
+        acceptedIdentityRevision: null,
+        writer: "none" as const,
+        writerGeneration: 0,
+        quarantined: false,
+      };
+      const pending = recordedOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "verification-pending",
+        revision: 6,
+        readiness,
+      });
+      const signedIn = recordedOutcome({
+        attempt: profileCopyAttempt({ operationId: OP }),
+        state: "signed-in",
+        revision: 7,
+      });
+      draftStatusOutcome = pending;
+      listBatches = [
+        {
+          batchId: RUN,
+          sourceHostId: SOURCE_HOST_ID,
+          createdAt: 1_700_000_000_000,
+          automatic: false,
+          items: [
+            {
+              ...syncItem(1, DEST_HOST_ID, "needs-action", []),
+              preview: null,
+              outcome: pending,
+            },
+          ],
+        },
+      ];
+      const messenger = mountWith({
+        rules: [],
+        providers: defaultProviders(),
+        previewItems: noItems,
+        startItems: noItems,
+      });
+      const listCalls = (): number =>
+        messenger.calls.filter(
+          (call) => call.method === "providers.profileCopy.sync.list",
+        ).length;
+      try {
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        await screen.findByRole("button", { name: "Verify" });
+        const client = mountedQueryClient;
+        if (client === null) throw new Error("harness query client missing");
+        const sourceRevision = (): number | undefined =>
+          client.getQueryData<ProfileSyncList>(
+            profileSyncListKey(SOURCE_HOST_ID),
+          )?.batches[0]?.items[0]?.outcome?.revision;
+        expect(sourceRevision()).toBe(6);
+        // Arm the gate, but dispatch no poll: Verify's own success
+        // invalidation must dispatch the read that is then held, after the
+        // write's initial cancellation, carrying the old revision 6.
+        listGate = heldRead.promise;
+        const before = listCalls();
+        draftStatusOutcome = signedIn;
+        fireEvent.click(screen.getByRole("button", { name: "Verify" }));
+        await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+        // Verify's accepted receipt (revision 7) is in the SOURCE list cache.
+        await waitFor(() => expect(sourceRevision()).toBe(7));
+        expect(await screen.findByText("Queued")).toBeTruthy();
+        // Only now does the old read land; later reads fail.
+        listFails = true;
+        heldRead.release();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        expect(sourceRevision()).toBe(7);
+        expect(screen.getByText("Queued")).toBeTruthy();
+        // Done, reopen and open the run again.
+        fireEvent.click(screen.getByRole("button", { name: "Done" }));
+        await waitFor(() =>
+          expect(useProfileCopyFlowStore.getState().view).toBeNull(),
+        );
+        openSync(null);
+        fireEvent.click(
+          await screen.findByRole("button", { name: /profile transfers/ }),
+        );
+        expect(await screen.findByText("Queued")).toBeTruthy();
+        expect(screen.queryByText("Needs attention")).toBeNull();
+        fireEvent.click(await screen.findByRole("button", { name: "Review…" }));
+        expect(screen.queryByRole("button", { name: "Verify" })).toBeNull();
+      } finally {
+        heldRead.release();
+      }
+    });
+  });
 });
