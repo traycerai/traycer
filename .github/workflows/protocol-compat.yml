@@ -19,15 +19,15 @@ name: Protocol Compatibility
 #    new releases ship.
 #  - `guarded-files-tripwire` fails any PR that edits (not adds) the compat
 #    governance files without the `protocol-compat-override` label, making
-#    baseline regeneration a deliberate, reviewable act. It runs on EVERY
-#    PR, a team PR into `main` included (see the job). This
-#    closes the failure mode that shipped `terminal.defaultCwd` (#227): the
+#    baseline regeneration a deliberate, reviewable act. Like every job here
+#    it is skipped on a team PR into `main`, so it only sees a fork PR, a bot
+#    PR or a PR into another base (see the job). On those it closes the
+#    failure mode that shipped `terminal.defaultCwd` (#227): the
 #    frozen-fixture test went red and was silenced by editing the fixture in
-#    the same PR. `host-v1.1.5-mutation-v20.ts` is guarded here for a second
-#    reason: its regenerate-and-compare test reads the host-v1.1.5 tag, which
-#    `actions/checkout` does not fetch, so that test SKIPS on CI and this
-#    tripwire is the only thing standing between a hand-edit of that frozen
-#    fixture and a green run.
+#    the same PR. `host-v1.1.5-mutation-v20.ts` is also covered by the
+#    regenerate-and-compare test in the `@traycer/protocol` leg of `test.yml`,
+#    which fetches the host-v1.1.5 tag and so runs on the merge, but the
+#    tripwire is the only guard on the other four.
 #
 # `protocol-compat` is a required status check on `main`; the tripwire is not.
 
@@ -181,14 +181,20 @@ jobs:
 
   guarded-files-tripwire:
     runs-on: ubuntu-latest
-    # THE ONE JOB THAT STILL RUNS ON A TEAM PR INTO `main`. Every other job is
-    # skipped there and runs on the merge instead, but this one has no merge-time
-    # form: it asks whether a PR that edits a governance file carries the
-    # override label, and on `main` the edit has already landed and the push run
-    # reads the edited file and passes. That is the #227 failure, and the people
-    # who can make it are the team. It is a few seconds on a free runner and is
-    # not a required check, so it holds up no merge it does not fail.
-    if: github.event_name == 'pull_request'
+    # Runs only where CI runs on a pull request: a fork PR, a bot PR, or a PR
+    # into a base other than `main`. On the push run no job reports a guarded-file
+    # edit as an edit: the `protocol-compat` job reads the edited exceptions and
+    # floor as they stand, so a team edit to either goes unflagged. Only the
+    # `host-v1.1.5-mutation-v20.ts` fixture can still redden it, through the
+    # regenerate-and-compare test in the `@traycer/protocol` leg of `test.yml`.
+    if: >-
+      github.event_name == 'pull_request'
+      && (
+        github.event_name != 'pull_request'
+        || github.base_ref != 'main'
+        || github.event.pull_request.head.repo.full_name != github.repository
+        || github.event.pull_request.user.type == 'Bot'
+      )
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

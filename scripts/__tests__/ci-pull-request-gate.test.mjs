@@ -27,14 +27,14 @@ const GATE =
 const PR_KEYED =
   "github.event_name == 'pull_request' && github.ref || github.run_id";
 
-// The one job that runs on every PR, a team PR into `main` included, so it
-// carries no gate: an unlabelled edit to a compat governance file can only be
-// caught before it lands (see the job's own comment).
-const UNGATED = {
+// A job that only makes sense on a pull request (a check of the PR's own diff
+// or labels) restricts itself to one, and still carries the gate: `PR_ONLY &&
+// (gate)`. No job is exempt from the gate.
+const PR_ONLY = "github.event_name == 'pull_request'";
+const TRIPWIRE = {
   file: "protocol-compat.yml",
   jobId: "guarded-files-tripwire",
 };
-const UNGATED_IF = "github.event_name == 'pull_request'";
 
 // The workflows AGENTS.md says can be run on a branch.
 const DISPATCHABLE = [
@@ -109,16 +109,21 @@ const hasTopLevelOr = (expression) => {
   return false;
 };
 
-// The three shapes under which the gate really gates: it is the whole `if`; it
-// is the only thing an `always()` aggregator adds; or it is the first conjunct
-// of an `if` with no `||` outside a parenthesis. `(gate) || x` and
-// `always() && (gate) || x` run on a team PR whenever `x` holds.
+// The shapes under which the gate really gates: it is the whole `if`; it is
+// the only thing an `always()` aggregator adds; or it is a top-level conjunct
+// of an `if` with no `||` outside a parenthesis, either the first (`(gate) &&
+// x`) or right after a pull-request-only restriction (`PR_ONLY && (gate)`).
+// `(gate) || x` and `always() && (gate) || x` run on a team PR whenever `x`
+// holds, and `PR_ONLY && (gate) || x` is `(PR_ONLY && (gate)) || x`.
 const gates = (condition) => {
   if (condition === GATE) return true;
   if (condition === `always() && (${GATE})`) return true;
-  if (condition.startsWith(`(${GATE}) && `)) {
-    const rest = condition.slice(`(${GATE}) && `.length);
-    return rest.length > 0 && !hasTopLevelOr(rest);
+  if (condition === `${PR_ONLY} && (${GATE})`) return true;
+  for (const lead of [`(${GATE})`, `${PR_ONLY} && (${GATE})`]) {
+    if (condition.startsWith(`${lead} && `)) {
+      const rest = condition.slice(`${lead} && `.length);
+      return rest.length > 0 && !hasTopLevelOr(rest);
+    }
   }
   return false;
 };
@@ -213,27 +218,59 @@ describe("every job of a workflow that runs on a pull request", () => {
 
   for (const { file, workflow } of pullRequestWorkflows) {
     for (const [jobId, job] of Object.entries(workflow.jobs)) {
-      const ungated = file === UNGATED.file && jobId === UNGATED.jobId;
       describe(`${file} / ${jobId}`, () => {
-        const condition = normalize(job.if ?? "");
-
-        if (ungated) {
-          it("is the one deliberate exemption: it runs on every PR, with no gate", () => {
-            expect(condition).toBe(UNGATED_IF);
-          });
-          return;
-        }
-
-        it("is gated: the gate is the whole if, an always() aggregator's only addition, or its first conjunct", () => {
-          expect(gates(condition)).toBe(true);
+        it("is gated: the gate is the whole if, an always() aggregator's only addition, or a top-level conjunct", () => {
+          expect(gates(normalize(job.if ?? ""))).toBe(true);
         });
       });
     }
   }
 
-  it("has exactly one exempt job, and it exists", () => {
-    const { workflow } = workflows.find(({ file }) => file === UNGATED.file);
-    expect(Object.keys(workflow.jobs)).toContain(UNGATED.jobId);
+  it("exempts no job: every job of these workflows was checked above", () => {
+    const jobCount = pullRequestWorkflows.reduce(
+      (total, { workflow }) => total + Object.keys(workflow.jobs).length,
+      0,
+    );
+    expect(jobCount).toBeGreaterThan(0);
+    for (const { workflow } of pullRequestWorkflows) {
+      for (const job of Object.values(workflow.jobs)) {
+        expect(job.if).toBeDefined();
+      }
+    }
+  });
+});
+
+describe("what counts as gated", () => {
+  const PR_ONLY_GATED = `${PR_ONLY} && (${GATE})`;
+
+  it("accepts the whole gate, an aggregator, and a top-level conjunct", () => {
+    expect(gates(GATE)).toBe(true);
+    expect(gates(`always() && (${GATE})`)).toBe(true);
+    expect(gates(`(${GATE}) && x`)).toBe(true);
+    expect(gates(PR_ONLY_GATED)).toBe(true);
+    expect(gates(`${PR_ONLY_GATED} && x`)).toBe(true);
+  });
+
+  it("rejects a gate that another term can bypass, or none at all", () => {
+    expect(gates(`(${GATE}) || x`)).toBe(false);
+    expect(gates(`${PR_ONLY_GATED} || x`)).toBe(false);
+    expect(gates(`always() && (${GATE}) || x`)).toBe(false);
+    expect(gates(PR_ONLY)).toBe(false);
+    expect(gates("")).toBe(false);
+  });
+});
+
+describe("protocol-compat.yml / guarded-files-tripwire", () => {
+  const { workflow } = workflows.find(({ file }) => file === TRIPWIRE.file);
+
+  it("exists", () => {
+    expect(Object.keys(workflow.jobs)).toContain(TRIPWIRE.jobId);
+  });
+
+  it("runs only on a pull request, and only where CI runs on one: no team PR into main", () => {
+    expect(normalize(workflow.jobs[TRIPWIRE.jobId].if)).toBe(
+      `${PR_ONLY} && (${GATE})`,
+    );
   });
 });
 
