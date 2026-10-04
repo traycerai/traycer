@@ -167,6 +167,9 @@ describe("trunk-red.yml", () => {
   it("acts only on a failed push run", () => {
     const condition = normalize(Object.values(workflow.jobs)[0].if);
     expect(condition).toContain("github.event.workflow_run.event == 'push'");
+    // Its own retry is attempt two: the job that started it waits for it, so
+    // a second run of this workflow must not retry or post again.
+    expect(condition).toContain("github.event.workflow_run.run_attempt == 1");
     expect(condition).toContain(
       "github.event.workflow_run.conclusion == 'failure'",
     );
