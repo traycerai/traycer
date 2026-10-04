@@ -197,6 +197,7 @@ describe("<OpeningBehaviorPanel /> search targets", () => {
         runnerHost: null,
         featureSettings: null,
         mobileApp: false,
+        phoneLayout: false,
       },
       container,
     );

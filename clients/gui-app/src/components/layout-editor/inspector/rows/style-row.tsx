@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import { LayoutFormRow } from "@/components/layout-editor/inspector/rows/layout-form-row";
+import type { ShownRowAvailability } from "@/components/layout-editor/regions/row-availability";
 import {
   changedControlKeys,
   revertControlValues,
@@ -14,11 +16,16 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 
 /**
- * A single-value style enum (Context usage and Model's Style, Model's
- * Reasoning control), each value drawn as the real thing: a radio group of
- * pictures rather than a list of words.
+ * A single-value style enum (Context usage's Chip style, Model's Style and
+ * Reasoning control, the Composer's Toolbar style), each value drawn as the
+ * real thing: a radio group of pictures rather than a list of words.
+ *
+ * A region's detail row has no anchor and no icon; the Composer's Toolbar
+ * style is an AREA row, which has both.
  */
 export function StyleRow(props: {
+  readonly anchor: string | null;
+  readonly icon: LucideIcon | null;
   readonly label: string;
   readonly description: string | null;
   /** The one key every example writes. */
@@ -32,6 +39,8 @@ export function StyleRow(props: {
   readonly regionId: RegionId;
   readonly values: LayoutValues;
   readonly arrangement: LayoutArrangement;
+  readonly availability: ShownRowAvailability;
+  readonly depth: 0 | 1;
 }): ReactNode {
   const { label, styleKey, labelPlacement, examples, regionId, values } = props;
   const arrangement = useLiveUsageArrangement(props.arrangement);
@@ -46,8 +55,8 @@ export function StyleRow(props: {
 
   return (
     <LayoutFormRow
-      anchor={null}
-      icon={null}
+      anchor={props.anchor}
+      icon={props.icon}
       label={label}
       description={props.description}
       onRevert={
@@ -60,6 +69,8 @@ export function StyleRow(props: {
       revertLabel={`Revert ${label}`}
       stacked
       selected={false}
+      availability={props.availability}
+      depth={props.depth}
       control={
         <StyleExamples
           label={label}
@@ -70,6 +81,7 @@ export function StyleRow(props: {
           values={values}
           arrangement={arrangement}
           matches={matches}
+          disabled={props.availability.kind === "disabled"}
         />
       }
     />
@@ -89,6 +101,7 @@ function StyleExamples(props: {
   readonly values: LayoutValues;
   readonly arrangement: LayoutArrangement;
   readonly matches: ReadonlyArray<boolean>;
+  readonly disabled: boolean;
 }): ReactNode {
   const {
     label,
@@ -105,7 +118,7 @@ function StyleExamples(props: {
     <PicturedOptions
       label={label}
       value={checked === -1 ? null : examples[checked].id}
-      disabled={false}
+      disabled={props.disabled}
       labelPlacement={labelPlacement}
       onChange={(id) => {
         const example = examples.find((candidate) => candidate.id === id);

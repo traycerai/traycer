@@ -99,6 +99,7 @@ function notificationsHost(options: {
     }),
     featureSettings: null,
     mobileApp: false,
+    phoneLayout: false,
   };
 }
 
@@ -106,6 +107,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   runnerHost: null,
   featureSettings: null,
   mobileApp: false,
+  phoneLayout: false,
 };
 
 export const SETTINGS_SEARCH_FIXTURES = [
@@ -134,7 +136,7 @@ export const SETTINGS_SEARCH_FIXTURES = [
       },
       {
         name: "the installed mobile app",
-        context: { ...NO_BRIDGES, mobileApp: true },
+        context: { ...NO_BRIDGES, mobileApp: true, phoneLayout: true },
       },
       {
         name: "only the desktop host lifecycle bridge",
@@ -163,11 +165,14 @@ export const SETTINGS_SEARCH_FIXTURES = [
       },
     ],
   },
-  // Layout's one shell-level gate is the surface-level row that decides
-  // whether the installed mobile app draws a strip at all (L-51). Every region
-  // section renders in every shell, because a region the strip does not host is
-  // hosted by the header instead - so two shells are the whole question: the
-  // build without that row and the build with it.
+  // Layout's shell-level gates are two. The small-screen footer's switch
+  // (L-51) exists wherever the PHONE layout is drawn; and the rows only the
+  // desktop layout draws (the tab strip's rows, the sidebar's side, the
+  // reading width, a reading's Location, the minimap) are absent from the
+  // installed app, which draws the phone layout at every width, and kept in a
+  // browser tab that merely happens to be narrow. Every other region section
+  // renders in every shell, because a region the strip does not host is hosted
+  // by the header instead - so three shells are the whole question.
   {
     section: "layout",
     hostScope: null,
@@ -179,11 +184,20 @@ export const SETTINGS_SEARCH_FIXTURES = [
         context: { ...NO_BRIDGES, runnerHost: createFakeRunnerHost({}) },
       },
       {
+        name: "a narrow browser tab",
+        context: {
+          ...NO_BRIDGES,
+          runnerHost: createFakeRunnerHost({}),
+          phoneLayout: true,
+        },
+      },
+      {
         name: "the installed mobile app",
         context: {
           ...NO_BRIDGES,
           runnerHost: createFakeRunnerHost({}),
           mobileApp: true,
+          phoneLayout: true,
         },
       },
     ],

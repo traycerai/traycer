@@ -12,6 +12,7 @@ const CONTEXT: SettingsAvailabilityContext = {
   runnerHost: null,
   featureSettings: null,
   mobileApp: false,
+  phoneLayout: false,
 };
 
 /**

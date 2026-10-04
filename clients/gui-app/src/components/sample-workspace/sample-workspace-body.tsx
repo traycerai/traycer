@@ -44,6 +44,7 @@ import {
   useRegionValues,
 } from "@/lib/layout-overrides";
 import { chatDockSection } from "@/lib/chat/chat-dock-sections";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { SampleWorkspaceSidebar } from "./sample-workspace-sidebar";
 import { SampleModelPicker } from "./sample-model-picker";
 import {
@@ -191,6 +192,12 @@ export function SampleWorkspaceBody() {
       : [];
   });
   const sidebarSide = useArrangementValue("sidebarSide");
+  // The real composer draws no mic while Voice input is off; the scene still
+  // draws it so the user can find it, dimmed the way the form greys its row,
+  // and its menu offers to turn Voice input on (C4).
+  const voiceInputEnabled = useSettingsStore(
+    (state) => state.voiceInputEnabled,
+  );
   return (
     <ComposerTileIdProvider tileId={SAMPLE_TILE_ID}>
       <div className="flex min-h-0 flex-1 bg-canvas" data-sample-workspace-body>
@@ -290,7 +297,11 @@ export function SampleWorkspaceBody() {
                         (`layout-editor.css`). */}
                     <div
                       data-sample-model-anchor
-                      className="relative flex flex-col gap-3"
+                      className={cn(
+                        "relative flex flex-col gap-3",
+                        !voiceInputEnabled &&
+                          "[&_[data-layout-region=mic]]:opacity-45",
+                      )}
                     >
                       {/* Ahead of the chip in document order on purpose:
                           it is a part of the Model region, not its node, so

@@ -4,6 +4,7 @@ import { PanelLeft } from "lucide-react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LayoutFormRow } from "@/components/layout-editor/inspector/rows/layout-form-row";
+import { LIVE } from "@/components/layout-editor/regions/row-availability";
 
 afterEach(cleanup);
 
@@ -24,6 +25,8 @@ function renderRow(
       revertLabel="Revert Side"
       stacked={stacked}
       selected={selected}
+      availability={LIVE}
+      depth={0}
     />,
   );
   const row = container.querySelector<HTMLElement>("[data-layout-form-row]");

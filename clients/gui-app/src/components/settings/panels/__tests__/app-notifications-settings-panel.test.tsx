@@ -258,6 +258,7 @@ describe("<AppNotificationsSettingsPanel />", () => {
           runnerHost,
           featureSettings: null,
           mobileApp: false,
+          phoneLayout: false,
         };
         expect(isSystemNotificationsRowAvailable(context)).toBe(
           testCase.system,

@@ -1,11 +1,16 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_ARRANGEMENT } from "@/lib/layout/layout-arrangement";
 import { SHIPPED_DEFAULT_VALUES } from "@/lib/layout/layout-presets";
 import {
   depictRegion,
+  regionDepiction,
   type HostContextId,
 } from "@/components/layout-editor/region-depiction";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
 import { isWindowedRateLimitProvider } from "@/lib/rate-limits/rate-limit-window-catalog";
 import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
 import type { LayoutValues } from "@/lib/layout/layout-values";
@@ -361,5 +366,52 @@ describe("what a depiction draws", () => {
     );
     expect(repeatedNeighbour).toHaveLength(0);
     expect(new Set(fills).size).toBe(3);
+  });
+});
+
+/**
+ * A picture is drawn from the values it is handed, never from the store
+ * (`lib/layout-overrides.ts`): the toolbar chips read `model.toolbarStyle`
+ * through the override seam, so a picture of the mic in a preset miniature,
+ * or of the model chip in a Toolbar style example, carries the model's answer
+ * with it.
+ */
+describe("a depiction's toolbar chrome", () => {
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  function chipBordered(container: HTMLElement): boolean {
+    const chip = container.querySelector("[data-layout-depiction] button");
+    if (!(chip instanceof HTMLButtonElement)) {
+      throw new Error("the depiction draws no toolbar chip");
+    }
+    return chip.className.split(/\s+/).includes("border-border");
+  }
+
+  it("follows the region's own values, not the stored Toolbar style", () => {
+    useLayoutStore.getState().setRegionValues("model", {
+      toolbarStyle: "bordered",
+    });
+    const { container } = render(
+      depictRegion(
+        "model",
+        { ...SHIPPED_DEFAULT_VALUES.model, toolbarStyle: "flat" },
+        DEFAULT_ARRANGEMENT,
+      ),
+    );
+    expect(chipBordered(container)).toBe(false);
+  });
+
+  it("follows the whole layout for a chip whose chrome is another region's", () => {
+    const bordered: LayoutValues = {
+      ...SHIPPED_DEFAULT_VALUES,
+      model: { ...SHIPPED_DEFAULT_VALUES.model, toolbarStyle: "bordered" },
+    };
+    const { container } = render(
+      regionDepiction("mic", bordered, DEFAULT_ARRANGEMENT),
+    );
+    expect(chipBordered(container)).toBe(true);
   });
 });

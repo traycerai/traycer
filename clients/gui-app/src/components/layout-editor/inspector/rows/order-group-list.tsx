@@ -1,8 +1,7 @@
 import { useLayoutUsage } from "@/components/layout-editor/inspector/use-layout-usage";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isVoiceInputRowAvailable } from "@/lib/settings/settings-availability";
 import { NoLayoutUsageProviders } from "@/components/layout-editor/inspector/provider-limit-windows";
+import type { LayoutFormContext } from "@/components/layout-editor/regions/row-availability";
 import { useState, type ReactNode } from "react";
 import { ChevronRight, MoreHorizontal, Plus } from "lucide-react";
 import { SortableList } from "@/components/layout-editor/inspector/sortable-list";
@@ -20,9 +19,11 @@ import {
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
 import {
   ORDER_GROUPS,
+  orderGroupHeaded,
   orderGroupInstruction,
   orderGroupListLabel,
   PHONE_RAIL_INSTRUCTION,
+  toolbarMembers,
 } from "@/components/layout-editor/regions/surface-groups";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,7 @@ export function OrderGroupList(props: {
   readonly values: LayoutValues;
   readonly arrangement: LayoutArrangement;
   readonly decorate: SortableRowDecorator | null;
+  readonly context: LayoutFormContext;
 }): ReactNode {
   const { group, arrangement } = props;
   const gutter = useSortableRowPadding();
@@ -131,8 +133,7 @@ export function OrderGroupHeader(props: {
   const gutter = useSortableRowPadding();
   const page = useLayoutFormHost() === "page";
   const narrow = useIsMobileViewport();
-  if (narrow && (group === "toolbarLeft" || group === "toolbarRight"))
-    return null;
+  if (!orderGroupHeaded(group, narrow)) return null;
   // At the row edge, the same x the area's own heading starts at; the rows'
   // grip column hangs under it.
   return (
@@ -163,13 +164,11 @@ function OrderGroupRows(props: {
   readonly values: LayoutValues;
   readonly arrangement: LayoutArrangement;
   readonly decorate: SortableRowDecorator | null;
+  readonly context: LayoutFormContext;
 }): ReactNode {
-  const { group, selectedId, values, arrangement, decorate } = props;
+  const { group, selectedId, values, arrangement, decorate, context } = props;
   const { providerIds } = useLayoutUsage();
   const narrow = useIsMobileViewport();
-  const availability = useSettingsAvailabilityContext();
-  const toolbarRegions = (ids: ReadonlyArray<ToolbarRegionId>) =>
-    ids.filter((id) => id !== "mic" || isVoiceInputRowAvailable(availability));
   const visibleProviders = arrangement.usageProviders.filter((id) =>
     providerIds.includes(id),
   );
@@ -194,7 +193,7 @@ function OrderGroupRows(props: {
           label={orderGroupListLabel(group)}
           selectedId={selectedId}
           items={regionRowItems(
-            toolbarRegions(narrow ? ["attachImage"] : arrangement.toolbarLeft),
+            toolbarMembers("toolbarLeft", narrow, context),
             values,
             decorate,
           )}
@@ -220,7 +219,7 @@ function OrderGroupRows(props: {
           label={orderGroupListLabel(group)}
           selectedId={selectedId}
           items={regionRowItems(
-            toolbarRegions(narrow ? ["mic"] : arrangement.toolbarRight),
+            toolbarMembers("toolbarRight", narrow, context),
             values,
             decorate,
           )}
@@ -278,7 +277,7 @@ function OrderGroupRows(props: {
             if (entry.kind === "divider")
               return dividerOrderItem(entry.id, arrangement);
             if (entry.kind === "stack")
-              return stackOrderItem(entry.id, arrangement);
+              return stackOrderItem(entry.id, arrangement, values);
             return railPanelOrderItem(entry.id, arrangement, values, decorate);
           })}
           // Panels, dividers and stack links alike (L-155, L-166): the rail is

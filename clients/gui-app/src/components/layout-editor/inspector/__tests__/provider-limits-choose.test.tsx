@@ -1,5 +1,11 @@
 import type { ReactNode } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StatusBarRateLimitWindow } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import {
@@ -42,7 +48,18 @@ vi.mock("@/components/layout-editor/inspector/provider-limit-windows", () => ({
   }) => props.children(live),
 }));
 
+const navigation = vi.hoisted(() => ({
+  navigateToLayoutRegion: vi.fn(),
+  navigateToLayoutRegionRow: vi.fn(),
+}));
+vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
+  navigateToLayoutRegion: navigation.navigateToLayoutRegion,
+  navigateToLayoutRegionRow: navigation.navigateToLayoutRegionRow,
+}));
+
 import { ProviderLimitsControl } from "@/components/layout-editor/inspector/provider-limits";
+import { LayoutFormHostContext } from "@/components/layout-editor/inspector/layout-form-host";
 
 const PROVIDER: RateLimitProviderId = "claude-code";
 const CREDIT_PROVIDER: RateLimitProviderId = "kilocode";
@@ -273,20 +290,117 @@ describe("credit-only providers (isWindowedRateLimitProvider: false) never get a
 });
 
 describe("what a hidden provider's limits look like (L-08)", () => {
-  it("greys the limits in place rather than removing them", () => {
+  function hideProvider(): void {
     const arrangement = useLayoutStore.getState().arrangement;
     useLayoutStore.setState({
       arrangement: { ...arrangement, hiddenProviders: [PROVIDER] },
     });
+  }
+
+  function hideUsageLimits(): void {
+    useLayoutStore.getState().setRegionValues("usageLimits", {
+      shown: "hidden",
+    });
+  }
+
+  const CASES: ReadonlyArray<{
+    readonly name: string;
+    readonly hide: () => void;
+    readonly reason: string;
+  }> = [
+    {
+      name: "the provider is hidden in Layout > Usage limits > Profiles",
+      hide: hideProvider,
+      reason: "Hidden in Layout > Usage limits > Profiles.",
+    },
+    {
+      name: "the usage readings are hidden as a whole",
+      hide: hideUsageLimits,
+      reason: "Usage limits are hidden in Layout.",
+    },
+  ];
+
+  it.each(CASES)(
+    "greys the limits in place, with the reason and a link to Layout, when $name",
+    ({ hide, reason }) => {
+      hide();
+      render(<ProviderLimitsControl providerId={PROVIDER} />);
+
+      // Still readable. A disabled `fieldset` turns off every control under it
+      // without hiding any of them, so a screen-reader user who turned a
+      // provider off can still read what its greyed limits say (L-08's "greyed
+      // in place", rather than `inert`'s "gone from the tree") - and the group
+      // is described by the reason, so it is heard on the control it explains.
+      const mode = screen.getByRole("radiogroup", { name: "Limits" });
+      const group = mode.closest("fieldset");
+      expect(group?.disabled).toBe(true);
+      const line = screen.getByText(reason);
+      expect(line.getAttribute("data-row-availability")).toBe("disabled");
+      expect(group?.getAttribute("aria-describedby")).toBe(line.id);
+      expect(
+        within(line).getByRole("button", { name: "Open Layout" }),
+      ).toBeTruthy();
+    },
+  );
+
+  describe("the link lands on the switch that decides it (U5)", () => {
+    // Settings > Providers draws this control in the page host.
+    function renderOnProvidersPage(): void {
+      render(
+        <LayoutFormHostContext value="page">
+          <ProviderLimitsControl providerId={PROVIDER} />
+        </LayoutFormHostContext>,
+      );
+    }
+
+    beforeEach(() => {
+      navigation.navigateToLayoutRegion.mockReset();
+      navigation.navigateToLayoutRegionRow.mockReset();
+    });
+
+    it("lands on this provider's own row in the Profiles list when only the provider is hidden", () => {
+      hideProvider();
+      renderOnProvidersPage();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open Layout" }));
+
+      expect(
+        navigation.navigateToLayoutRegionRow,
+      ).toHaveBeenCalledExactlyOnceWith("usageLimits", PROVIDER);
+      expect(navigation.navigateToLayoutRegion).not.toHaveBeenCalled();
+    });
+
+    it("lands on the Usage limits row itself when the readings are hidden as a whole", () => {
+      hideUsageLimits();
+      renderOnProvidersPage();
+
+      fireEvent.click(screen.getByRole("button", { name: "Open Layout" }));
+
+      expect(navigation.navigateToLayoutRegion).toHaveBeenCalledExactlyOnceWith(
+        "usageLimits",
+      );
+      expect(navigation.navigateToLayoutRegionRow).not.toHaveBeenCalled();
+    });
+
+    it("names the readings, not the provider, when both are hidden: the switch above decides first", () => {
+      hideProvider();
+      hideUsageLimits();
+      renderOnProvidersPage();
+
+      expect(
+        screen.getByText("Usage limits are hidden in Layout."),
+      ).toBeTruthy();
+      expect(screen.queryByText(/Hidden in Layout > Usage limits/)).toBeNull();
+    });
+  });
+
+  it("draws no reason and leaves the controls operable while the provider and the readings are shown", () => {
     render(<ProviderLimitsControl providerId={PROVIDER} />);
 
-    // Still readable. A disabled `fieldset` turns off every control under it
-    // without hiding any of them, so a screen-reader user who turned a
-    // provider off can still read what its greyed limits say (L-08's "greyed
-    // in place", rather than `inert`'s "gone from the tree").
-    const mode = screen.getByRole("radiogroup", { name: "Limits" });
-    const group = mode.closest("fieldset");
-    expect(group?.disabled).toBe(true);
-    expect(group?.getAttribute("aria-disabled")).toBe("true");
+    const group = screen
+      .getByRole("radiogroup", { name: "Limits" })
+      .closest("fieldset");
+    expect(group?.disabled).toBe(false);
+    expect(screen.queryByText(/Hidden in Layout|hidden in Layout/)).toBeNull();
   });
 });

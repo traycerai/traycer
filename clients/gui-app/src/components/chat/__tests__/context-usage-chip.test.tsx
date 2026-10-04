@@ -792,6 +792,33 @@ describe("ContextUsageChip", () => {
     ).toBeTruthy();
   });
 
+  it("prints the selected fields in the order Breakdown rows was dragged into (C2)", () => {
+    useLayoutStore.getState().setRegionValues("contextUsage", {
+      pinBreakdown: true,
+      pinnedFields: ["used", "cacheRead", "output"],
+    });
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      // Every field, as the form writes it: Fresh and Cache write are
+      // unchecked but keep a place in the order.
+      pinnedContextFieldOrder: [
+        "output",
+        "fresh",
+        "cacheRead",
+        "cacheWrite",
+        "used",
+      ],
+    });
+    render(<ContextUsageChip usage={CACHED_USAGE} onCompact={null} />);
+
+    const details = screen.getByTestId("context-usage-pinned-details");
+    expect(pinnedFieldLabels(details)).toEqual([
+      "Output",
+      "Cache read",
+      "Used",
+    ]);
+  });
+
   it("drops the narrow-width used summary when Used is not a selected field", () => {
     useLayoutStore.getState().setRegionValues("contextUsage", {
       pinBreakdown: true,
