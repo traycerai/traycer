@@ -90,9 +90,10 @@ run on push) run every check, as before.
 The full suite runs once on the merged commit, on every push to `main`, and a
 later merge never cancels an earlier merge's run. A failed merge run is rerun
 once (`trunk-red.yml`, failed jobs only, because the test suites have known
-flakes); if the rerun fails too it is posted to Slack with the commit, its
-author and the run. So when `main` goes red, the failure is a break to fix or
-revert, not a flake.
+flakes); if the rerun fails too, the `trunk-red` run itself fails, with the
+commit, its author and the run in its summary. It sends nothing anywhere: a
+failed `trunk-red` run is the signal that `main` is really red, a break to fix
+or revert and not a flake, and the one thing an alert has to watch.
 
 A merge run that narrows to what changed (`nx affected` in `pre-commit.yml`, the
 `changes` job of `browser-regressions.yml`) compares against the last push its

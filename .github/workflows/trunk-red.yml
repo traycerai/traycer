@@ -6,10 +6,15 @@ name: Trunk red
 # be noticed by something other than whoever happens to look.
 #
 # When a push run on `main` fails, its failed jobs are re-run once, and only a
-# second failure is posted to Slack with the workflow, the commit, its author
-# and the run. The test suites have known flakes, and one retry separates a
-# flake from a break without a person: a flake passes the retry, a break fails
-# it again.
+# second failure is reported. The test suites have known flakes, and one retry
+# separates a flake from a break without a person: a flake passes the retry, a
+# break fails it again.
+#
+# REPORTED MEANS THIS JOB FAILS, with the workflow, the commit, its author and
+# the run in its summary. It sends nothing anywhere. So this workflow's own
+# result is the signal: a green run of it absorbed a flake or had nothing to
+# do, a red run of it means `main` is really red. Whatever tells people (a
+# Slack automation, a notification rule) has that one thing to watch.
 #
 # The job WAITS FOR ITS OWN RETRY instead of reacting to the retry's
 # completion. The retry is started with this job's token, and GitHub starts no
@@ -19,7 +24,7 @@ name: Trunk red
 # to the end. Every conclusion other than success, skipped and cancelled is
 # answered, so one nobody thought to list cannot leave `main` red in silence.
 # A cancelled run is ignored: a person cancelled it. A run that cannot be
-# retried (`startup_failure`, a broken workflow file) is posted as such.
+# retried (`startup_failure`, a broken workflow file) is reported as such.
 #
 # Only push runs count. A pull-request run is its author's to read, a schedule
 # run (CodeQL's weekly scan) has no commit to blame, and a manual run is
@@ -31,11 +36,7 @@ name: Trunk red
 # commits. `scripts/__tests__/ci-pull-request-gate.test.mjs` fails when this
 # list and the workflows' push triggers disagree.
 #
-# Needs the repository secret TRUNK_RED_SLACK_WEBHOOK (a Slack incoming
-# webhook). With it missing the post FAILS rather than skipping, so a red run
-# of this workflow is the signal that the alert has nowhere to go.
-#
-# No checkout and no third-party action: `gh` and `jq` are on the runner, and
+# No secret, no checkout and no third-party action: `gh` is on the runner, and
 # nothing here runs repository code with a write token.
 
 on:
@@ -65,16 +66,15 @@ jobs:
       && github.event.workflow_run.conclusion != 'cancelled'
     runs-on: ubuntu-latest
     # The longest retried leg is the macOS packaging job; the poll below gives
-    # up, and posts, before this does.
+    # up, and reports, before this does.
     timeout-minutes: 60
     permissions:
       # `gh run rerun` is a write on the Actions API; nothing else is needed.
       actions: write
     steps:
-      - name: Retry the failed jobs once, and post if the run is still red
+      - name: Retry the failed jobs once, and fail if the run is still red
         env:
           GH_TOKEN: ${{ github.token }}
-          SLACK_WEBHOOK: ${{ secrets.TRUNK_RED_SLACK_WEBHOOK }}
           RUN_ID: ${{ github.event.workflow_run.id }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
@@ -90,24 +90,17 @@ jobs:
           # squash merge.
           title="${COMMIT_MESSAGE%%$'\n'*}"
 
-          # $1 says what happened to the run. The title and the author are text
-          # somebody else wrote: they reach the payload only as jq arguments,
-          # and Slack's markup is neutralised (`<` opens a link or a mention),
-          # so neither can forge a link or ping a channel.
-          post() {
+          # $1 says what happened to the run. Nothing is sent anywhere: the
+          # line goes to this job's summary and the job FAILS, so a failed run
+          # of this workflow means the branch is really red, and that is the
+          # one thing an alert has to watch. The title and the author are text
+          # somebody else wrote, so they go to the summary only, never into a
+          # workflow command.
+          report() {
             printf '%s is red: %s %s on %s "%s" by %s: %s\n' \
               "${BRANCH}" "${WORKFLOW_NAME}" "$1" "${short}" "${title}" "${COMMIT_AUTHOR}" "${RUN_URL}" >> "$GITHUB_STEP_SUMMARY"
-            if [ -z "${SLACK_WEBHOOK}" ]; then
-              echo "::error::TRUNK_RED_SLACK_WEBHOOK is not set, so nobody was told that ${BRANCH} is red. Add the secret."
-              exit 1
-            fi
-            jq -n \
-              --arg branch "${BRANCH}" --arg workflow "${WORKFLOW_NAME}" --arg what "$1" \
-              --arg sha "${short}" --arg title "${title}" --arg author "${COMMIT_AUTHOR}" --arg url "${RUN_URL}" \
-              'def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-               {text: ":red_circle: \($branch | esc) is red: *\($workflow | esc)* \($what) on \($sha) \"\($title | esc)\" by \($author | esc) <\($url)|run>"}' \
-              | curl --fail --silent --show-error --retry 3 --max-time 30 \
-                  -X POST -H 'Content-Type: application/json' --data-binary @- "${SLACK_WEBHOOK}" >/dev/null
+            echo "::error::${BRANCH} is red: ${WORKFLOW_NAME} $1 on ${short}."
+            exit 1
           }
 
           # One retry in all, whoever starts it. The attempt is read before
@@ -132,8 +125,7 @@ jobs:
             sleep 15
           done
           if [ "${retry_exists}" != "true" ] && [ "$(attempt_now)" -lt 2 ]; then
-            post "failed and could not be retried"
-            exit 0
+            report "failed and could not be retried"
           fi
 
           # Poll the retry to its end. The run's status goes back to queued once
@@ -149,17 +141,16 @@ jobs:
               break
             fi
             if [ "${SECONDS}" -ge "${deadline}" ]; then
-              post "failed, and its retry has not finished after 45 minutes"
-              exit 0
+              report "failed, and its retry has not finished after 45 minutes"
             fi
           done
 
           if [ "${conclusion}" = "success" ]; then
-            echo "${WORKFLOW_NAME} on ${short} passed on its retry: a flake, nothing posted." >> "$GITHUB_STEP_SUMMARY"
+            echo "${WORKFLOW_NAME} on ${short} passed on its retry: a flake." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           if [ "${conclusion}" = "cancelled" ]; then
-            echo "The retry of ${WORKFLOW_NAME} on ${short} was cancelled by a person; nothing posted." >> "$GITHUB_STEP_SUMMARY"
+            echo "The retry of ${WORKFLOW_NAME} on ${short} was cancelled by a person; not reported." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          post "failed twice (${conclusion})"
+          report "failed twice (${conclusion})"
