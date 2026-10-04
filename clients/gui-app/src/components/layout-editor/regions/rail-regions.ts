@@ -7,8 +7,18 @@ import {
   type LayoutRegion,
 } from "@/components/layout-editor/regions/region-grammar";
 import { railStateWord } from "@/components/layout-editor/regions/region-state-words";
-import { leftPanelIdForRailRegion } from "@/lib/layout/rail";
+import {
+  LIVE,
+  liveWithNote,
+} from "@/components/layout-editor/regions/row-availability";
+import {
+  isLastShownRailPanel,
+  LAST_RAIL_PANEL_REASON,
+  leftPanelIdForRailRegion,
+  railPanelShownByValue,
+} from "@/lib/layout/rail";
 import type { RailRegionId } from "@/lib/layout/region-id";
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
 
 /**
  * The sidebar rail's nine regions, which are nine because each icon is
@@ -37,6 +47,16 @@ function railRegionBase<K extends RailRegionId>(
     hint,
     keywords: [...keywords, "sidebar", "rail", "panel"],
     rows: RAIL_ROWS,
+    shellGate: alwaysAvailable,
+    // The rail always draws one panel (T3): the last one shown keeps its row
+    // live, offers no Hidden, and says why - the rail's own menu reads the
+    // same rule.
+    availability: (context) =>
+      isLastShownRailPanel(regionId, (candidate) =>
+        railPanelShownByValue(context.values, candidate),
+      )
+        ? liveWithNote(LAST_RAIL_PANEL_REASON)
+        : LIVE,
     quickVerbs: SHOW_HIDE_VERBS,
     stateWord: railStateWord,
   };

@@ -1344,7 +1344,7 @@ describe("<EpicLeftPanelRail />", () => {
       expect(screen.queryByTestId("epic-rail-unstack-terminals")).toBeNull();
     });
 
-    it("refuses to hide the last visible panel", () => {
+    it("refuses to hide the last shown panel, and says why (T3)", () => {
       for (const panelId of [
         "terminals",
         "browsers",
@@ -1359,14 +1359,45 @@ describe("<EpicLeftPanelRail />", () => {
       renderRail();
       openRailMenu();
 
-      // Agents is all that is left; the body always renders some panel, so an
-      // empty rail would leave nothing to click back with.
+      // Agents is the only panel left SHOWN (Comments is `auto`, which never
+      // counts); the body always renders some panel, so an empty rail would
+      // leave nothing to click back with.
       const lastItem = screen.getByTestId("epic-rail-toggle-chats");
-      expect(lastItem.getAttribute("data-disabled")).not.toBeNull();
+      // Off but still in keyboard focus, so its reason can be reached.
+      expect(lastItem.getAttribute("aria-disabled")).toBe("true");
+      expect(lastItem.getAttribute("data-disabled")).toBeNull();
+      expect(lastItem.textContent).toContain("One panel always stays shown.");
       expect(screen.queryByTestId("epic-rail-hide-pointed-panel")).toBeNull();
 
       fireEvent.click(lastItem);
       expect(visibilityOverrides().chats).toBeUndefined();
+    });
+
+    it("still locks Agents when Pull requests is auto and drawn in this task: only saved Shown counts", () => {
+      for (const panelId of [
+        "terminals",
+        "browsers",
+        "artifacts",
+        "git-diff",
+        "file-tree",
+        "sharing",
+        "comments",
+      ] as const) {
+        setRailVisibilityOverride(panelId, false);
+      }
+      // Pull requests keeps its default `auto` and this epic has one, so the
+      // rail DRAWS it. The saved layout must still hold in a task with none.
+      setPullRequestPresence(true);
+      renderRail();
+      expect(screen.getByTestId("epic-rail-pull-requests")).not.toBeNull();
+      openRailMenu();
+
+      const lastItem = screen.getByTestId("epic-rail-toggle-chats");
+      // Off but still in keyboard focus, so its reason can be reached.
+      expect(lastItem.getAttribute("aria-disabled")).toBe("true");
+      expect(lastItem.getAttribute("data-disabled")).toBeNull();
+      expect(lastItem.textContent).toContain("One panel always stays shown.");
+      expect(screen.queryByTestId("epic-rail-hide-pointed-panel")).toBeNull();
     });
 
     it("highlights the fallback icon when the active panel is hidden", () => {

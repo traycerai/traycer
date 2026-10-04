@@ -26,6 +26,7 @@ import type { HideableRegionId } from "@/lib/layout/layout-values";
 import {
   navigateToLayoutArea,
   navigateToLayoutRegion,
+  navigateToLayoutRegionRow,
 } from "@/lib/settings-navigation";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
@@ -432,9 +433,12 @@ describe("Settings - Layout", () => {
       }
     });
 
-    it("keeps only what the phone footer honours: no Location or Density (L-162)", async () => {
+    it("keeps only what the phone footer honours: no Location, Density in the footer's words, and nothing live while the footer is off (L-162, U1)", async () => {
+      // The installed app, which draws the phone layout at every width.
+      setMobileApp(true);
       setPhoneLayoutOnly(true);
-      // Both in the Tab strip, where a desktop window would offer Density.
+      // Both in the Tab strip, where a desktop window would offer Density in
+      // its own words; the footer ignores the pick.
       useLayoutStore.setState({
         ...DEFAULT_LAYOUT_SNAPSHOT,
         arrangement: {
@@ -443,6 +447,9 @@ describe("Settings - Layout", () => {
           resourceHost: "header",
         },
       });
+      // Agent rows stay on at the shipped default, and Metrics still follows
+      // the gate: the phone layout draws no agent rows to keep it live
+      // (`METRICS`, L-174).
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "statusBar");
@@ -454,20 +461,136 @@ describe("Settings - Layout", () => {
       for (const regionId of ["usageLimits", "resourceMonitor"] as const) {
         const name = names[regionId];
         const opened = within(row(regionId));
+        // Where a reading sits is a desktop-layout choice: not offered here.
         expect(
           opened.queryByRole("radiogroup", { name: `${name} location` }),
         ).toBeNull();
+        // Density is drawn: the footer honours it, and Auto is detailed there.
         expect(
-          opened.queryByRole("radiogroup", { name: "Density" }),
-        ).toBeNull();
+          opened.getByRole("radiogroup", { name: "Density" }),
+        ).not.toBeNull();
+        expect(
+          opened.getByText("Auto is detailed in the status bar."),
+        ).not.toBeNull();
       }
-      // The readouts themselves still apply to the footer.
+
+      // The switch is the area's first row, and says what off means.
+      const footerSwitch = screen.getByRole("switch", {
+        name: "Status bar on small screens",
+      });
+      expect(footerSwitch.getAttribute("aria-checked")).toBe("false");
       expect(
-        within(row("usageLimits")).getByRole("radio", { name: "Remaining" }),
+        screen.getByText(
+          "Off, usage and resources show as icons in the header.",
+        ),
       ).not.toBeNull();
       expect(
-        within(row("resourceMonitor")).getByRole("checkbox", { name: "CPU" }),
+        footerSwitch.compareDocumentPosition(row("usageLimits")) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      // While it is off, every reading detail row stays drawn but disabled by
+      // the ONE hint under the switch, which each one's group points at; the
+      // two Show switches stay live, since they decide the header's icons.
+      const hint = screen.getByText(
+        "Turn on Status bar on small screens to use these. Show still decides the header icons.",
+      );
+      const remaining = within(row("usageLimits")).getByRole("radio", {
+        name: "Remaining",
+      });
+      const cpu = within(row("resourceMonitor")).getByRole("checkbox", {
+        name: "CPU",
+      });
+      for (const readout of [remaining, cpu]) {
+        expect(readout.matches(":disabled")).toBe(true);
+        // Every group around it, the row's own and the section's gate.
+        const described: string[] = [];
+        for (
+          let group = readout.closest("fieldset");
+          group !== null;
+          group = group.parentElement?.closest("fieldset") ?? null
+        ) {
+          described.push(group.getAttribute("aria-describedby") ?? "");
+        }
+        expect(described.join(" ").split(" ")).toContain(hint.id);
+      }
+      for (const name of ["Show Usage limits", "Show Resource monitor"]) {
+        expect(screen.getByRole("switch", { name }).matches(":disabled")).toBe(
+          false,
+        );
+      }
+
+      await user.click(footerSwitch);
+
+      // On: no hint, and the same readouts operable.
+      expect(
+        screen.queryByText(
+          "Turn on Status bar on small screens to use these. Show still decides the header icons.",
+        ),
+      ).toBeNull();
+      expect(remaining.matches(":disabled")).toBe(false);
+      expect(cpu.matches(":disabled")).toBe(false);
+    });
+  });
+
+  describe("the phone footer's gate in a narrow browser tab (U1)", () => {
+    // The row keys on the PHONE LAYOUT, which a browser tab below 768px draws
+    // too, never on the installed app alone.
+    it("draws the switch first in its area, gates the readings behind one linked hint, and keeps Density", async () => {
+      setMobileApp(false);
+      setPhoneLayoutOnly(true);
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
+
+      const footerSwitch = screen.getByRole("switch", {
+        name: "Status bar on small screens",
+      });
+      const firstRow = surface("statusBar").querySelector(
+        "[data-sortable-id], [data-layout-form-row]",
+      );
+      expect(firstRow?.contains(footerSwitch)).toBe(true);
+
+      const hint = screen.getByText(
+        "Turn on Status bar on small screens to use these. Show still decides the header icons.",
+      );
+      const remaining = within(row("usageLimits")).getByRole("radio", {
+        name: "Remaining",
+      });
+      expect(remaining.matches(":disabled")).toBe(true);
+      const described: string[] = [];
+      for (
+        let group = remaining.closest("fieldset");
+        group !== null;
+        group = group.parentElement?.closest("fieldset") ?? null
+      ) {
+        described.push(group.getAttribute("aria-describedby") ?? "");
+      }
+      expect(described.join(" ").split(" ")).toContain(hint.id);
+      // Density is a row the footer honours, so it is drawn (and gated the
+      // same way) rather than removed.
+      expect(
+        within(row("usageLimits")).getByRole("radiogroup", { name: "Density" }),
       ).not.toBeNull();
+
+      await user.click(footerSwitch);
+
+      expect(remaining.matches(":disabled")).toBe(false);
+      expect(
+        screen.queryByText(
+          "Turn on Status bar on small screens to use these. Show still decides the header icons.",
+        ),
+      ).toBeNull();
+    });
+
+    it("is absent where no phone layout is drawn", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+      await goToSurfaceTab(user, "statusBar");
+
+      expect(
+        screen.queryByRole("switch", { name: "Status bar on small screens" }),
+      ).toBeNull();
     });
   });
 
@@ -730,10 +853,72 @@ describe("Settings - Layout", () => {
       screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
     ).toBe("true");
     expect(
-      within(row("contextUsage")).getByRole("radiogroup", { name: "Style" }),
+      within(row("contextUsage")).getByRole("radiogroup", {
+        name: "Chip style",
+      }),
     ).toBeTruthy();
     // The scroll is for the eye; the focus is for the hands (5.9).
     expect(row("contextUsage").querySelector("[data-row-grab]")).toBe(
+      document.activeElement,
+    );
+  });
+
+  it("lands a provider-row link on that provider's own row inside Usage limits, not on the region's row (U5)", async () => {
+    setSystemTabModalApi({
+      active: null,
+      openSettings: vi.fn(),
+      openHistory: vi.fn(),
+      close: vi.fn(),
+      setSection: vi.fn(),
+      promoteToTab: vi.fn(),
+      isOverlayActive: () => true,
+    });
+    renderPanel();
+    const provider = USAGE_PROVIDER_IDS[0];
+
+    await act(async () => {
+      navigateToLayoutRegionRow("usageLimits", provider);
+      await Promise.resolve();
+    });
+
+    expect(
+      screen
+        .getByRole("tab", { name: "Usage and resources" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    const landed = row("usageLimits").querySelector(
+      `[data-sortable-id="${provider}"]`,
+    );
+    if (!(landed instanceof HTMLElement)) throw new Error("no provider row");
+    expect(landed.getAttribute("data-settings-anchor-flash")).toBe("true");
+    expect(landed.contains(document.activeElement)).toBe(true);
+    expect(
+      row("usageLimits").getAttribute("data-settings-anchor-flash"),
+    ).toBeNull();
+  });
+
+  it("falls back to the region's own row when the provider row is not drawn, rather than consuming the landing with nothing shown", async () => {
+    setSystemTabModalApi({
+      active: null,
+      openSettings: vi.fn(),
+      openHistory: vi.fn(),
+      close: vi.fn(),
+      setSection: vi.fn(),
+      promoteToTab: vi.fn(),
+      isOverlayActive: () => true,
+    });
+    renderPanel();
+
+    await act(async () => {
+      // No provider the usage readings list has this id.
+      navigateToLayoutRegionRow("usageLimits", "not-a-listed-provider");
+      await Promise.resolve();
+    });
+
+    const section = row("usageLimits");
+    expect(section.getAttribute("data-settings-anchor-flash")).toBe("true");
+    // The section's stop is its Show switch, as a plain region landing's is.
+    expect(section.querySelector("[data-region-show]")).toBe(
       document.activeElement,
     );
   });
@@ -749,7 +934,9 @@ describe("Settings - Layout", () => {
     await user.click(within(row("contextUsage")).getByRole("button"));
 
     expect(
-      within(row("contextUsage")).getByRole("radiogroup", { name: "Style" }),
+      within(row("contextUsage")).getByRole("radiogroup", {
+        name: "Chip style",
+      }),
     ).toBeTruthy();
     expect(useLayoutEditorStore.getState().selected).toBeNull();
   });
@@ -812,7 +999,7 @@ describe("Settings - Layout", () => {
   });
 
   describe("the small-screen status bar row (L-51)", () => {
-    it("is absent outside the installed mobile app", async () => {
+    it("is absent while the phone layout is not drawn", async () => {
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "statusBar");
@@ -824,8 +1011,15 @@ describe("Settings - Layout", () => {
       ).toBeNull();
     });
 
-    it("writes the arrangement in the mobile app", async () => {
-      setMobileApp(true);
+    // The switch the phone layout's footer mounts from exists wherever that
+    // layout is drawn: the installed app, which draws it at every width, and
+    // a browser tab narrow enough to.
+    it.each([
+      { where: "the installed mobile app", installed: true },
+      { where: "a narrow browser tab", installed: false },
+    ])("writes the arrangement in $where", async ({ installed }) => {
+      setMobileApp(installed);
+      setPhoneLayoutOnly(true);
       const user = userEvent.setup();
       renderPanel();
       await goToSurfaceTab(user, "statusBar");
@@ -873,10 +1067,12 @@ describe("Settings - Layout", () => {
       const taskTabLayout = within(surface("topBar")).getByRole("radiogroup", {
         name: "Tab overflow",
       });
+      // Off by the row's own disabled group, which `:disabled` reads and the
+      // button's `disabled` attribute does not.
       const disabledStates = (): ReadonlyArray<boolean> =>
         within(taskTabLayout)
           .getAllByRole<HTMLButtonElement>("radio")
-          .map((radio) => radio.disabled);
+          .map((radio) => radio.matches(":disabled"));
       expect(disabledStates()).toEqual([false, false]);
 
       await user.click(
@@ -889,9 +1085,13 @@ describe("Settings - Layout", () => {
         "left",
       );
       expect(disabledStates()).toEqual([true, true]);
-      expect(surface("topBar").textContent).toContain(
-        "Available when tabs are at the top.",
+      const reason = within(surface("topBar")).getByText(
+        "Set Placement to Top to use this.",
       );
+      expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+      expect(
+        taskTabLayout.closest("fieldset")?.getAttribute("aria-describedby"),
+      ).toBe(reason.id);
       expect(
         within(taskTabLayout)
           .getByRole("radio", { name: "Scroll" })
@@ -917,9 +1117,13 @@ describe("Settings - Layout", () => {
           .getAllByRole<HTMLButtonElement>("radio")
           .every((option) => option.disabled),
       ).toBe(true);
-      expect(tabs.textContent).toContain(
-        "Available when tabs are on the left or right.",
+      const reason = within(tabs).getByText(
+        "Set Placement to Left or Right to use this.",
       );
+      expect(reason.getAttribute("data-row-availability")).toBe("disabled");
+      expect(
+        viewGroup.closest("fieldset")?.getAttribute("aria-describedby"),
+      ).toBe(reason.id);
 
       await user.click(
         within(
@@ -961,7 +1165,9 @@ describe("Settings - Layout", () => {
     });
 
     it("withholds the desktop-only rows and the editor door in the installed mobile app", async () => {
+      // The installed app is the phone layout at every width.
       setMobileApp(true);
+      setPhoneLayoutOnly(true);
       useLayoutStore.setState({
         ...DEFAULT_LAYOUT_SNAPSHOT,
         arrangement: {
@@ -1006,18 +1212,14 @@ describe("Settings - Layout", () => {
       expect(
         screen.queryByRole("radiogroup", { name: "Reading width" }),
       ).toBeNull();
-      // The phone's minimap is a bottom drawer with no side, so the Minimap
-      // row keeps its Shown control and opens nothing.
-      const minimap = surface("chat").querySelector(
-        '[data-sortable-id="minimap"]',
-      );
-      if (!(minimap instanceof HTMLElement)) throw new Error("no Minimap row");
+      // The phone's minimap is a bottom drawer that ignores the region, so
+      // there is no row to show it by (and no Side to pick): nothing at all.
       expect(
-        within(minimap)
-          .getByRole("button", { name: /^Minimap/ })
-          .hasAttribute("aria-expanded"),
-      ).toBe(false);
-      expect(minimap.querySelector("[data-region-detail]")).toBeNull();
+        surface("chat").querySelector('[data-sortable-id="minimap"]'),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("radiogroup", { name: "Minimap side" }),
+      ).toBeNull();
     });
 
     it("says what the Home tab still decides on a phone, which has no tab strip", async () => {
@@ -1042,6 +1244,7 @@ describe("Settings - Layout", () => {
           runnerHost: null,
           featureSettings: null,
           mobileApp: false,
+          phoneLayout: false,
         }).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-tab-strip-placement");
@@ -1055,6 +1258,7 @@ describe("Settings - Layout", () => {
           runnerHost: null,
           featureSettings: null,
           mobileApp: false,
+          phoneLayout: false,
         }).map((result) => result.entry.anchor);
 
         expect(anchors).toContain("layout-side-strip-view");
@@ -1266,6 +1470,43 @@ describe("Settings - Layout", () => {
       );
     });
 
+    describe("while another window holds the editor (T6)", () => {
+      beforeEach(() => {
+        useLayoutEditorStore.setState({ lockedBy: "other-window" });
+      });
+      afterEach(() => {
+        useLayoutEditorStore.setState({ lockedBy: "none" });
+      });
+
+      it("is disabled with the reason beside it, and a press opens nothing", () => {
+        renderPanel();
+
+        const button = screen.getByRole("button", { name: "Customize layout" });
+
+        expect(button.matches(":disabled")).toBe(true);
+        const reasonId = button.getAttribute("aria-describedby");
+        expect(reasonId).not.toBeNull();
+        expect(
+          reasonId === null
+            ? null
+            : document.getElementById(reasonId)?.textContent,
+        ).toBe("Open in another window. Your layout is saved there.");
+
+        fireEvent.click(button);
+        expect(openLayoutEditorMock).not.toHaveBeenCalled();
+      });
+
+      it("is plain again once the lease is released", () => {
+        useLayoutEditorStore.setState({ lockedBy: "none" });
+        renderPanel();
+
+        const button = screen.getByRole("button", { name: "Customize layout" });
+
+        expect(button.matches(":disabled")).toBe(false);
+        expect(button.getAttribute("aria-describedby")).toBeNull();
+      });
+    });
+
     it("names the current surface tab as the origin's area", async () => {
       const user = userEvent.setup();
       renderPanel();
@@ -1330,9 +1571,10 @@ describe("Settings - Layout", () => {
             option.querySelector('[data-testid="area-changed-dot"]') !== null,
         )
         .map((option) => option.querySelector(".truncate")?.textContent);
-      // Presets reads as changed whenever anything differs from the shipped
-      // preset (its own summary says "Modified"); of the surfaces, only Chat.
-      expect(marked).toEqual(["Presets", "Chat"]);
+      // Presets reads as changed only while a VALUE differs from the shipped
+      // preset (its own summary says "Modified"): a placement is not one a
+      // preset puts back (T5), so a moved minimap marks Chat alone.
+      expect(marked).toEqual(["Chat"]);
     });
 
     it("keeps focus inside the area's panel when Enter on a changed row's revert puts the row back", async () => {

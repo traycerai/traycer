@@ -63,6 +63,7 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   runnerHost: null,
   featureSettings: null,
   mobileApp: false,
+  phoneLayout: false,
 };
 
 describe("settings search index", () => {

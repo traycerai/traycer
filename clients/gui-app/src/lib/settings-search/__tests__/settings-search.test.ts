@@ -33,6 +33,7 @@ const DESKTOP: SettingsAvailabilityContext = {
   }),
   featureSettings: null,
   mobileApp: false,
+  phoneLayout: false,
 };
 
 /** The installed mobile app: no desktop bridges, push permission present. */
@@ -47,6 +48,7 @@ const MOBILE: SettingsAvailabilityContext = {
   }),
   featureSettings: null,
   mobileApp: true,
+  phoneLayout: true,
 };
 
 /** A desktop feature-settings bridge: only its presence gates Experimental. */
@@ -291,13 +293,14 @@ describe("settings search", () => {
       ).toEqual([]);
     });
 
-    it("offers every region but the microphone in the installed mobile app too", () => {
+    it("offers every region but the microphone and the minimap in the installed mobile app too", () => {
       // A region the strip does not host is hosted by the header instead, so
       // no shell withholds one for that reason - the switch that used to gate
-      // the whole page is gone with the page. The mic alone follows its own
-      // row's availability, which the mobile app lacks.
+      // the whole page is gone with the page. Two regions follow their own
+      // row's availability, which the mobile app lacks: the mic (it refuses
+      // dictation) and the minimap (its edge rail is never drawn there, so it
+      // has no row and no search entry).
       const cases: ReadonlyArray<readonly [string, string]> = [
-        ["minimap", "minimap"],
         ["usage limits", "usageLimits"],
         ["resource monitor", "resourceMonitor"],
       ];
@@ -305,6 +308,7 @@ describe("settings search", () => {
         expect(launchesFor(query, MOBILE), query).toContain(region);
       }
       expect(launchesFor("microphone", MOBILE)).not.toContain("mic");
+      expect(launchesFor("minimap", MOBILE)).not.toContain("minimap");
     });
 
     it("still lets the page win on its own name", () => {
@@ -320,6 +324,30 @@ describe("settings search", () => {
       expect(landingsFor("top bar", DESKTOP)).toContain(
         "layout#layout-surface-top-bar",
       );
+    });
+
+    it("agrees with the form in a narrow browser tab: the rows it keeps live with a note are searchable, the installed app's absent ones are not", () => {
+      // The phone layout without the installed app: the same layout the
+      // window can widen out of, so the form keeps these rows (live, noting
+      // "Applies on wider windows.") and search must not hide them.
+      const NARROW_BROWSER: SettingsAvailabilityContext = {
+        ...DESKTOP,
+        phoneLayout: true,
+      };
+
+      expect(launchesFor("minimap", NARROW_BROWSER)).toContain("minimap");
+      for (const label of [
+        "Tab overflow",
+        "Readings on agent rows",
+        "Reading width",
+        "Status bar on small screens",
+      ]) {
+        expect(labelsFor(label, NARROW_BROWSER), label).toContain(label);
+      }
+      // The installed app, the same phone layout at every width, has none of
+      // the desktop-layout rows, whatever the window.
+      expect(launchesFor("minimap", MOBILE)).not.toContain("minimap");
+      expect(labelsFor("Reading width", MOBILE)).not.toContain("Reading width");
     });
 
     it("indexes the small-screen status bar row in the installed app only", () => {

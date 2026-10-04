@@ -5,6 +5,18 @@ import type {
   StyleExample,
 } from "@/components/layout-editor/regions/region-grammar";
 import { barPlacementStateWord } from "@/components/layout-editor/regions/region-state-words";
+import {
+  METRICS,
+  PERCENT_SHOWS,
+  READING_LOCATION,
+  READING_STYLE,
+  RESET_TIME,
+} from "@/components/layout-editor/regions/reading-placement";
+import {
+  alwaysLive,
+  INDEPENDENT,
+} from "@/components/layout-editor/regions/row-availability";
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
 
 /**
  * How much a reading says. The row's description, which names what Auto is at
@@ -67,8 +79,10 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
     "location",
     "move",
   ],
+  // Location and Density decide whether the three rows under Density do
+  // anything at all (U3): they stay in place, disabled with the reason.
   rows: [
-    { kind: "position-host" },
+    { kind: "position-host", depends: READING_LOCATION },
     {
       kind: "fine-tune",
       rows: [
@@ -77,8 +91,7 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
           label: "Density",
           description: null,
           pinsTransient: false,
-          liveWhileHidden: null,
-          requires: null,
+          depends: INDEPENDENT,
           control: {
             kind: "segment",
             key: "density",
@@ -92,9 +105,10 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
       key: "readingStyle",
       label: "Reading style",
       description:
-        "What a calm profile shows. A profile running low or at its limit always shows its name and percent.",
+        "In the status bar, what a calm profile shows. A profile running low or at its limit always shows its name and percent.",
       labelPlacement: "above",
       examples: READING_STYLE_EXAMPLES,
+      depends: READING_STYLE,
     },
     {
       kind: "fine-tune",
@@ -104,8 +118,7 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
           label: "Percent shows",
           description: null,
           pinsTransient: false,
-          liveWhileHidden: null,
-          requires: null,
+          depends: PERCENT_SHOWS,
           control: {
             kind: "segment",
             key: "amount",
@@ -120,14 +133,15 @@ export const USAGE_LIMITS_REGION: LayoutRegion<"usageLimits"> = {
           label: "Reset time",
           description: "Shows each profile's time until reset.",
           pinsTransient: false,
-          liveWhileHidden: null,
-          requires: null,
+          depends: RESET_TIME,
           control: { kind: "switch", key: "reset" },
         },
       ],
     },
     { kind: "children", level: "usage-providers" },
   ],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   // The section header's Show switch replaces the Show and Hide verbs.
   quickVerbs: [],
   stateWord: (values, arrangement) =>
@@ -163,7 +177,7 @@ export const RESOURCE_MONITOR_REGION: LayoutRegion<"resourceMonitor"> = {
     "move",
   ],
   rows: [
-    { kind: "position-host" },
+    { kind: "position-host", depends: READING_LOCATION },
     {
       kind: "fine-tune",
       rows: [
@@ -172,8 +186,7 @@ export const RESOURCE_MONITOR_REGION: LayoutRegion<"resourceMonitor"> = {
           label: "Density",
           description: null,
           pinsTransient: false,
-          liveWhileHidden: null,
-          requires: null,
+          depends: INDEPENDENT,
           control: {
             kind: "segment",
             key: "density",
@@ -187,9 +200,8 @@ export const RESOURCE_MONITOR_REGION: LayoutRegion<"resourceMonitor"> = {
             "What the monitor reports. Readings on agent rows use the same choice.",
           pinsTransient: false,
           // The rows' only metric control, so it stays editable while they
-          // print, even with the monitor itself Hidden (L-174).
-          liveWhileHidden: "agentRows",
-          requires: null,
+          // print, even with the monitor itself Hidden (L-174, `METRICS`).
+          depends: METRICS,
           control: {
             kind: "checks",
             options: [
@@ -203,6 +215,8 @@ export const RESOURCE_MONITOR_REGION: LayoutRegion<"resourceMonitor"> = {
       ],
     },
   ],
+  shellGate: alwaysAvailable,
+  availability: alwaysLive,
   quickVerbs: [],
   stateWord: (values, arrangement) =>
     barPlacementStateWord(values, arrangement, "resourceMonitor"),

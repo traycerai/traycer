@@ -1,15 +1,18 @@
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
-import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isVoiceInputRowAvailable } from "@/lib/settings/settings-availability";
-import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useId, type ReactNode } from "react";
-import { SegmentedControl } from "@/components/layout-editor/inspector/segmented-control";
+import type { ReactNode } from "react";
+import {
+  SegmentedControl,
+  type SegmentedControlOption,
+} from "@/components/layout-editor/inspector/segmented-control";
 import { readControlValue } from "@/components/layout-editor/inspector/region-control-io";
 import {
   regionShownOnValue,
   setRegionShown,
 } from "@/components/layout-editor/layout-gestures";
-import { regionFacts } from "@/components/layout-editor/regions/region-facts";
+import {
+  regionFacts,
+  regionHasDisplayControl,
+} from "@/components/layout-editor/regions/region-facts";
 import {
   ACCESS_DISPLAY_OPTIONS,
   AUTO_SHOWN_HIDDEN_OPTIONS,
@@ -23,7 +26,12 @@ import {
 import { writeArrangement } from "@/lib/layout/arrangement-gestures";
 import type { LayoutArrangement } from "@/lib/layout/layout-arrangement";
 import { PRESET_VALUES } from "@/lib/layout/layout-presets";
-import { isAutoRailRegionId, RAIL_REGION_IDS } from "@/lib/layout/rail";
+import {
+  isAutoRailRegionId,
+  isLastShownRailPanel,
+  RAIL_REGION_IDS,
+  railPanelShownByValue,
+} from "@/lib/layout/rail";
 import {
   regionValuesHidden,
   type LayoutValues,
@@ -66,24 +74,29 @@ export function RegionDisplayControl(props: {
   const regionValues = values[regionId];
   const hidden = regionValuesHidden(regionValues);
   const narrow = useIsMobileViewport();
-  if (regionId === "mic") return <MicrophoneDisplayControl values={values} />;
-  if (regionId === "access" && narrow) return null;
+  if (!regionHasDisplayControl(regionId, narrow)) return null;
   const ariaLabel = `${facts.name} display`;
 
   // A phone has no rail: a panel switched off there moves into the tab
   // switcher's More menu rather than disappearing, so the off state says so.
-  const inMore = narrow && RAIL_REGION_IDS.some((id) => id === regionId);
+  const rail = RAIL_REGION_IDS.find((id) => id === regionId) ?? null;
+  const inMore = narrow && rail !== null;
+  // The last panel the rail draws cannot leave Shown (T3), not even for Auto,
+  // which counts as not shown and would let every panel be hidden next. Its
+  // row says why, and the rail's own menu refuses the same press by the same
+  // rule.
+  const lastShown =
+    rail !== null &&
+    isLastShownRailPanel(rail, (candidate) =>
+      railPanelShownByValue(values, candidate),
+    );
 
   if (isAutoRailRegionId(regionId)) {
     return (
       <SegmentedControl
         ariaLabel={ariaLabel}
         value={String(readControlValue(regionValues, "shown"))}
-        options={
-          inMore
-            ? inMoreOptions(AUTO_SHOWN_HIDDEN_OPTIONS)
-            : AUTO_SHOWN_HIDDEN_OPTIONS
-        }
+        options={railOptions(AUTO_SHOWN_HIDDEN_OPTIONS, inMore, lastShown)}
         onChange={(next) => {
           writeAutoRailVisibility(regionId, next);
         }}
@@ -109,14 +122,11 @@ export function RegionDisplayControl(props: {
       />
     );
   }
-  if (!regionHides(regionId)) return null;
   return (
     <SegmentedControl
       ariaLabel={ariaLabel}
       value={hidden ? "hidden" : "shown"}
-      options={
-        inMore ? inMoreOptions(SHOWN_HIDDEN_OPTIONS) : SHOWN_HIDDEN_OPTIONS
-      }
+      options={railOptions(SHOWN_HIDDEN_OPTIONS, inMore, lastShown)}
       onChange={(next) => {
         setRegionShown(regionId, next === "shown");
       }}
@@ -124,13 +134,22 @@ export function RegionDisplayControl(props: {
   );
 }
 
-/** A rail panel's options on a phone, where `hidden` means "in More". */
-function inMoreOptions(
+/**
+ * A region's Shown options as a rail panel's row offers them: on a phone,
+ * where the switcher has no rail, `hidden` means "In More"; on the last panel
+ * shown, every option but `shown` is off. Every other region's options pass
+ * through.
+ */
+function railOptions(
   options: ReadonlyArray<SegmentOption>,
-): ReadonlyArray<SegmentOption> {
-  return options.map((option) =>
-    option.value === "hidden" ? { ...option, label: "In More" } : option,
-  );
+  inMore: boolean,
+  lastShown: boolean,
+): ReadonlyArray<SegmentedControlOption> {
+  return options.map((option) => ({
+    ...option,
+    label: inMore && option.value === "hidden" ? "In More" : option.label,
+    disabled: lastShown && option.value !== "shown",
+  }));
 }
 
 /** The words a sized region's one control uses for its two sizes. */
@@ -200,41 +219,5 @@ export function RegionSideControl(props: {
         writeArrangement({ ...arrangement, minimapSide: next });
       }}
     />
-  );
-}
-
-function MicrophoneDisplayControl(props: {
-  readonly values: LayoutValues;
-}): ReactNode {
-  const availability = useSettingsAvailabilityContext();
-  const enabled = useSettingsStore((state) => state.voiceInputEnabled);
-  const reasonId = useId();
-  if (!isVoiceInputRowAvailable(availability)) return null;
-  const shown = props.values.mic.shown !== "hidden";
-  return (
-    <div className="flex min-w-0 flex-col items-end gap-1.5">
-      <SegmentedControl
-        ariaLabel="Microphone display"
-        value={shown ? "shown" : "hidden"}
-        options={SHOWN_HIDDEN_OPTIONS.map((option) => ({
-          ...option,
-          disabled: !enabled,
-          describedBy: enabled ? undefined : reasonId,
-        }))}
-        onChange={(next) => {
-          setRegionShown("mic", next === "shown");
-        }}
-      />
-      {!enabled ? (
-        <p
-          id={reasonId}
-          // `w-0 min-w-full`: as wide as the control above and no wider, so
-          // the reason wraps under it instead of widening the control column.
-          className="w-0 min-w-full text-ui-xs text-pretty text-muted-foreground"
-        >
-          Enable Voice input in General settings to show the microphone.
-        </p>
-      ) : null}
-    </div>
   );
 }

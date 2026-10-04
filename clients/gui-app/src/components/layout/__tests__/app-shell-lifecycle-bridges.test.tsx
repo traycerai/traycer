@@ -688,6 +688,53 @@ describe("<AppShell />", () => {
       expect(screen.getByTestId("app-status-bar")).not.toBeNull();
     });
 
+    it("draws no empty footer when the switch is on but both readings are hidden (U1)", async () => {
+      selectMobileFooter("status-bar");
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { shown: "hidden" });
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { shown: "hidden" });
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.queryByTestId("app-status-bar")).toBeNull();
+
+      // One reading back on is enough, as on the desktop layout.
+      act(() => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("resourceMonitor", { shown: "shown" });
+      });
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+
+    it("mounts the footer in a layout-editor session even with both readings hidden (U1)", async () => {
+      selectMobileFooter("status-bar");
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { shown: "hidden" });
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { shown: "hidden" });
+      setViewportWidth(MOBILE_VIEWPORT_WIDTH);
+      useLayoutEditorStore.getState().beginSession({
+        entry: "pointer",
+        source: "direct_ui",
+        startedAt: 0,
+        origin: { kind: "tab" },
+      });
+
+      queryClient = renderAppShell();
+      await screen.findByTestId("app-shell-child");
+
+      expect(screen.getByTestId("app-status-bar")).not.toBeNull();
+    });
+
     it("draws the strip on `header` placement too, and the header still gives up its own glyphs to it", async () => {
       // `placement` names which of two surfaces hosts the gauge on a DESKTOP
       // window; a phone has no separate status-bar surface for it to name, so

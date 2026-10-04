@@ -61,17 +61,6 @@ export function readControlValue(
   return false;
 }
 
-/** Whether a Hidden region still leaves this fine-tune row editable (L-174). */
-export function fineTuneRowLiveWhileHidden(
-  row: { readonly liveWhileHidden: RegionValueKey | null },
-  values: LayoutValues[RegionId],
-): boolean {
-  return (
-    row.liveWhileHidden !== null &&
-    readControlValue(values, row.liveWhileHidden) === true
-  );
-}
-
 /** One control's new value, written through the editor's gesture recording. */
 export function writeControlValue(
   region: RegionId,

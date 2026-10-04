@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
-import { Eye, EyeOff, Layers, PanelTop } from "lucide-react";
+import { Eye, EyeOff, Layers, Mic, PanelTop } from "lucide-react";
 import { toast } from "sonner";
 import { CustomizeLayoutMenuItem } from "@/components/layout-editor/customize-layout-menu-item";
 import { regionShownOnValue } from "@/components/layout-editor/layout-gestures";
@@ -41,6 +41,7 @@ import { openLayoutEditor } from "@/lib/layout/editor-session";
 import { activateTabIntent } from "@/lib/tab-navigation";
 import { opensNestedContextMenu } from "@/lib/dom/nested-context-menu";
 import { useTitleBarDragSuppression } from "@/stores/layout/title-bar-drag-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   regionValuesHidden,
   type LayoutValues,
@@ -179,6 +180,33 @@ function runQuickVerb(input: {
 }
 
 /**
+ * Voice input on, through the same store write and event General settings
+ * makes, as one more verb under the one toast: a later verb replaces it, and
+ * Undo turns it back off.
+ */
+function turnOnVoiceInput(): void {
+  resolvePendingQuickVerb(false);
+  const settings = useSettingsStore.getState();
+  Analytics.getInstance().track(AnalyticsEvent.VoiceEnabled, {
+    source: "direct_ui",
+  });
+  settings.setVoiceInputEnabled(true);
+  toast("Voice input on", {
+    id: QUICK_VERB_TOAST_ID,
+    duration: QUICK_VERB_TOAST_DURATION_MS,
+    action: {
+      label: "Undo",
+      onClick: () => {
+        Analytics.getInstance().track(AnalyticsEvent.VoiceDisabled, {
+          source: "direct_ui",
+        });
+        useSettingsStore.getState().setVoiceInputEnabled(false);
+      },
+    },
+  });
+}
+
+/**
  * The region's own verbs, then the way into the editor on that region.
  *
  * The two halves are separate components because a menu over a CONTAINER of
@@ -215,6 +243,9 @@ export function LayoutRegionVerbItems(props: {
   const facts = regionFacts(regionId);
   const values = useRegionValues(regionId);
   const navigate = useNavigate();
+  const voiceInputEnabled = useSettingsStore(
+    (state) => state.voiceInputEnabled,
+  );
 
   const hidden = regionValuesHidden(values);
   // Asked only of a region whose registry entry says it has a size; a region
@@ -222,6 +253,24 @@ export function LayoutRegionVerbItems(props: {
   const sizeable = facts.quickVerbs.includes("chip");
   const chip = sizeable && readControlValue(values, "size") === "chip";
   const verbs = offeredQuickVerbs(facts.quickVerbs, { hidden, chip });
+
+  // With Voice input off the form disables Microphone (C4), so Show or Hide
+  // here would write a value nothing reads. The verb that does something is
+  // the one the form's reason names. Only the sample scene draws a mic then.
+  if (regionId === "mic" && !voiceInputEnabled) {
+    return (
+      <>
+        <ContextMenuItem
+          data-testid="layout-quick-verb-mic-voice-input"
+          onSelect={turnOnVoiceInput}
+        >
+          <Mic aria-hidden />
+          Turn on Voice input
+        </ContextMenuItem>
+        {props.separator ? <ContextMenuSeparator /> : null}
+      </>
+    );
+  }
 
   const separated = props.separator && verbs.length > 0;
 

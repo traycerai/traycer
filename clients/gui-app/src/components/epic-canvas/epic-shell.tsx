@@ -31,8 +31,10 @@ import {
 } from "@/lib/registries/epic-session-registry";
 import { Button } from "@/components/ui/button";
 import { sideTabStripEdge } from "@/lib/layout/layout-arrangement";
-import { useArrangementValue } from "@/lib/layout-overrides";
-import { useStatusBarShown } from "@/stores/layout/layout-store";
+import {
+  useArrangementValue,
+  useStatusBarVisible,
+} from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import {
   selectHasActiveInitialChatHandoffForEpic,
@@ -342,7 +344,9 @@ function CanvasColumn(props: {
   const stripEdge = sideTabStripEdge(useArrangementValue("tabStripPlacement"));
   const sidebarSide = useArrangementValue("sidebarSide");
   const seam = stripEdge === sidebarSide ? null : stripEdge;
-  const statusBarShown = useStatusBarShown();
+  // The shell's own mount decision, so the frame keeps its bottom border
+  // whenever the strip is not actually there to draw one.
+  const statusBarShown = useStatusBarVisible();
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       {props.statusRow}

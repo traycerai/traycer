@@ -12,6 +12,7 @@ import {
 } from "@/lib/layout/editor-width";
 import {
   acquireLayoutEditorLease,
+  LAYOUT_EDITOR_HELD_ELSEWHERE_REASON,
   releaseLayoutEditorLease,
   startLayoutEditorHeartbeat,
 } from "@/lib/layout/editor-lease";
@@ -170,7 +171,13 @@ export function openLayoutEditor(input: OpenLayoutEditorInput): boolean {
       );
     return false;
   }
-  if (!acquireLayoutEditorLease()) return false;
+  // Said rather than silently refused (T6), for a door that reached here
+  // before the lease watcher had marked it disabled - a search result, a
+  // quick verb's toast. The doors that can read the lease first say the same.
+  if (!acquireLayoutEditorLease()) {
+    toast.info(LAYOUT_EDITOR_HELD_ELSEWHERE_REASON);
+    return false;
+  }
   const entry = Symbol("layout-editor-entry");
   pendingEntry = entry;
   // The app's own system overlay is chrome the editor is about to decorate,
