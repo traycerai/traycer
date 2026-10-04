@@ -286,6 +286,32 @@ describe("AssistantMessageBody promoted subagent controls", () => {
   });
 });
 
+describe("AssistantMessageBody reply-only promoted subagent", () => {
+  it("offers Open as chat on a finished card with no nested activity", () => {
+    const open = vi.fn<OpenSubagentAsChat>();
+    const replyOnly: SubagentSegmentModel = {
+      ...PROMOTED_SUBAGENT_SEGMENT,
+      id: "reply-only-subagent",
+      result: "All done.",
+      children: [],
+    };
+    render(
+      <OpenSubagentAsChatContext.Provider value={open}>
+        <AssistantMessageBody
+          turnId={null}
+          {...bodyProps({ segments: [replyOnly] })}
+        />
+      </OpenSubagentAsChatContext.Provider>,
+    );
+
+    fireEvent.click(
+      screen.getByTestId("subagent-open-as-chat-reply-only-subagent"),
+    );
+
+    expect(open).toHaveBeenCalledWith("reply-only-subagent");
+  });
+});
+
 describe("AssistantMessageBody stopped turn rendering", () => {
   it('renders "Stopped · {elapsed}" with the stop glyph, not the natural-completion verb', () => {
     render(

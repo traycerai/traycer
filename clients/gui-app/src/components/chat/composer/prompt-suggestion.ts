@@ -7,7 +7,7 @@ import type { PendingChatAction } from "@/stores/chats/chat-session-store";
 /**
  * Whether the composer may offer the suggestion at all, before asking whether
  * there is one to offer. The suggestion is the empty composer's placeholder,
- * and → (or a tap on a touch device) fills it.
+ * and → (or a rightward swipe on a touch device) fills it.
  *
  * - **Only when no banner is up.** A fallback card or a re-auth prompt is
  *   something the user has to deal with; a suggestion is not, and it does not
@@ -105,12 +105,6 @@ export function suggestionOfferableWhilePending(
   );
   return sendPending ? undefined : suggestedPrompt;
 }
-
-/**
- * How far a touch may travel between down and up and still count as a tap on
- * the composer, not a scroll or a drag that happened to start there.
- */
-export const PROMPT_SUGGESTION_TAP_SLOP_PX = 10;
 
 /**
  * Fills the composer with the suggestion and focuses it. `setContent` is the
