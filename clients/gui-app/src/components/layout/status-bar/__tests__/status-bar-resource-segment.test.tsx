@@ -120,7 +120,7 @@ describe("<StatusBarResourceSegment />", () => {
       };
     }
 
-    it("draws the CPU icon and its percent alone when Density is Compact, whatever Metrics says", () => {
+    it("draws the CPU icon alone, no number, when Density is Compact, whatever Metrics says", () => {
       registry.projection = liveProjection("host-b");
       useLayoutStore.getState().setRegionValues("resourceMonitor", {
         density: "compact",
@@ -130,13 +130,43 @@ describe("<StatusBarResourceSegment />", () => {
 
       renderSegment({ hasExplicitPick: true });
 
-      expect(screen.getByTestId("resource-cpu-reading").textContent).toBe(
-        "12%",
-      );
+      const icon = screen.getByTestId("status-bar-resource-cpu-icon");
+      expect(icon.textContent).toBe("");
+      expect(icon.querySelector("svg")).not.toBeNull();
+      expect(screen.queryByTestId("resource-cpu-reading")).toBeNull();
       expect(
         screen.queryByTestId("status-bar-resource-metric-processes"),
       ).toBeNull();
       expect(screen.queryByTestId("status-bar-resource-metric-cpu")).toBeNull();
+    });
+
+    it("carries the compact CPU value in the icon's tooltip", async () => {
+      registry.projection = liveProjection("host-b");
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "CPU 12%",
+      );
+    });
+
+    it("carries the compact unavailable reason in the icon's tooltip", async () => {
+      registry.projection = liveProjection("host-a");
+      registry.unsupported = true;
+      useLayoutStore
+        .getState()
+        .setRegionValues("resourceMonitor", { density: "compact" });
+
+      renderSegment({ hasExplicitPick: true });
+      fireEvent.focus(screen.getByTestId("status-bar-resource-cpu-icon"));
+
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Office Linux is running an older Traycer host",
+      );
     });
 
     it.each([
@@ -157,7 +187,7 @@ describe("<StatusBarResourceSegment />", () => {
       },
     );
 
-    it("warns on the compact reading too", () => {
+    it("warns on the compact icon too", () => {
       registry.projection = projectionWithCpu(92);
       useLayoutStore
         .getState()
@@ -165,9 +195,9 @@ describe("<StatusBarResourceSegment />", () => {
 
       renderSegment({ hasExplicitPick: true });
 
-      expect(screen.getByTestId("resource-cpu-reading").className).toContain(
-        RUNNING_LOW_TEXT_CLASS_NAME,
-      );
+      expect(
+        screen.getByTestId("status-bar-resource-cpu-icon").className,
+      ).toContain(RUNNING_LOW_TEXT_CLASS_NAME);
     });
 
     it("never warns on the other metrics", () => {

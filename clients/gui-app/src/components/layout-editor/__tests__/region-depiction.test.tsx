@@ -139,7 +139,7 @@ describe("what a depiction draws", () => {
     expect(text).not.toContain("ram");
   });
 
-  it("draws Compact as CPU alone, whatever Metrics says, as the live reading does", () => {
+  it("draws Compact as the CPU icon alone, whatever Metrics says, as the live reading does", () => {
     const { container } = render(
       depictRegion(
         "resourceMonitor",
@@ -155,7 +155,9 @@ describe("what a depiction draws", () => {
         DEFAULT_ARRANGEMENT,
       ),
     );
-    expect(frameOf("resourceMonitor", container).textContent).toBe("12%");
+    const frame = frameOf("resourceMonitor", container);
+    expect(frame.textContent).toBe("");
+    expect(frame.querySelector("svg")).not.toBeNull();
   });
 
   it("draws Usage limits as the glyph where it resolves to Compact", () => {

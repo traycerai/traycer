@@ -16,6 +16,8 @@ import {
   createChatRequestSchemaV12,
   createChatResponseSchema,
   createChatResponseSchemaV12,
+  continueSubagentRequestSchema,
+  continueSubagentResponseSchema,
   createCommentThreadRequestSchema,
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
@@ -1709,6 +1711,16 @@ export const epicGetChatRunSettingsBatchV10 = defineRpcContract({
 // `lane-unaries.ts` - the `tui-agent-records.ts` and `communication-graph.ts`
 // arrangement, not this file's. They are exported through the epic index, not
 // re-exported here, so `export *` consumers see exactly one binding.
+
+// A native subagent's conversation carried on as its own chat, through
+// session import (see `continueSubagentRequestSchema`). New method, first
+// minor: nothing released carries it, so there is nothing to upgrade from.
+export const epicContinueSubagentV10 = defineRpcContract({
+  method: "epic.continueSubagent",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: continueSubagentRequestSchema,
+  responseSchema: continueSubagentResponseSchema,
+});
 
 export {
   epicSubscribeV10,

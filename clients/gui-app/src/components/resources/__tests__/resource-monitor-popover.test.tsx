@@ -5366,7 +5366,7 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       });
     }
 
-    it("draws the CPU icon and percent whatever Metrics says, in a fixed-width slot", () => {
+    it("draws the CPU icon alone in the top strip, whatever Metrics says, with the reading one hover away", async () => {
       useLayoutStore.getState().setRegionValues("resourceMonitor", {
         cpu: false,
         memory: true,
@@ -5375,14 +5375,16 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       emitCpu(stub, 16);
 
       const button = screen.getByTestId("resource-monitor-header-button");
-      expect(button.getAttribute("data-variant")).toBe("ghost");
+      expect(button.getAttribute("data-variant")).toBe("muted");
       expect(button.getAttribute("aria-label")).toBe("Resources");
-      const reading = within(button).getByTestId("resource-cpu-reading");
-      expect(reading.textContent).toBe("16%");
-      expect(reading.querySelector("span")?.className).toContain("min-w-6");
-      expect(
-        within(button).queryByTestId("status-bar-resource-metric-memory"),
-      ).toBeNull();
+      expect(button.textContent).toBe("");
+      expect(within(button).queryByTestId("resource-cpu-reading")).toBeNull();
+      expect(button.querySelector("svg")).not.toBeNull();
+
+      fireEvent.focus(button);
+      expect((await screen.findByRole("tooltip")).textContent).toContain(
+        "Resources · CPU 16%",
+      );
     });
 
     it("says cpu before the percent in the expanded strip's outlined tile", () => {
@@ -5397,18 +5399,34 @@ describe("ResourceMonitorPopover · header-button forms (G6)", () => {
       ).toBe("cpu 16%");
     });
 
-    // The threshold itself is held once, at the status bar segment.
-    it("reads the CPU in the warning color once it crosses the threshold", () => {
-      const stub = renderPopoverForm("strip");
-      const reading = (): HTMLElement =>
-        within(
-          screen.getByTestId("resource-monitor-header-button"),
-        ).getByTestId("resource-cpu-reading");
+    it("says why there is no CPU reading in the strip icon's tooltip, before the first sample", async () => {
+      renderPopoverForm("strip");
 
-      emitCpu(stub, 16);
-      expect(reading().className).not.toContain("text-warning-foreground");
-      emitCpu(stub, 92);
-      expect(reading().className).toContain("text-warning-foreground");
+      const button = screen.getByTestId("resource-monitor-header-button");
+      fireEvent.focus(button);
+      const tooltip = (await screen.findByRole("tooltip")).textContent;
+      expect(tooltip).toContain("Resources · Waiting for resource data.");
+    });
+
+    // The threshold itself is held once, at the status bar segment.
+    it("turns the top strip's CPU icon the warning color once CPU crosses the threshold, and prints no number", () => {
+      const stub = renderPopoverForm("strip");
+      const icon = (): Element | null =>
+        screen
+          .getByTestId("resource-monitor-header-button")
+          .querySelector("svg");
+
+      emitCpu(stub, 84);
+      expect(icon()?.getAttribute("class")).not.toContain(
+        "text-warning-foreground",
+      );
+      emitCpu(stub, 85);
+      expect(icon()?.getAttribute("class")).toContain(
+        "text-warning-foreground",
+      );
+      expect(
+        screen.getByTestId("resource-monitor-header-button").textContent,
+      ).toBe("");
     });
 
     it("keeps the background stream with every metric off, since CPU is always read", () => {

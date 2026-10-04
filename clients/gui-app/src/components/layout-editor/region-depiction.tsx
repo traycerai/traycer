@@ -493,7 +493,7 @@ const RESOURCE_SPECIMEN: ReadonlyArray<StatusBarResourceMetricView> = (
 }));
 
 /**
- * Compact is the CPU icon and its percent whatever Metrics says; Detailed is
+ * Compact is the CPU icon alone whatever Metrics says; Detailed is
  * the chosen metrics, as the live reading resolves its density at its spot.
  */
 function depictResourceMonitor(
@@ -507,23 +507,21 @@ function depictResourceMonitor(
   return (
     <span className="inline-flex h-6 max-w-full shrink-0 items-center gap-1.5 px-2 text-muted-foreground">
       <Cpu className="size-3 shrink-0" aria-hidden />
-      {compact ? (
-        <span>{SAMPLE_RESOURCE_VALUES.cpu}</span>
-      ) : (
-        readings.map((view, index) => (
-          <span
-            key={view.metric}
-            className="inline-flex min-w-0 items-center gap-1"
-          >
-            {index === 0 ? null : (
-              <span aria-hidden className="text-muted-foreground/60">
-                ·
-              </span>
-            )}
-            <StatusBarMetric view={view} warning={false} />
-          </span>
-        ))
-      )}
+      {compact
+        ? null
+        : readings.map((view, index) => (
+            <span
+              key={view.metric}
+              className="inline-flex min-w-0 items-center gap-1"
+            >
+              {index === 0 ? null : (
+                <span aria-hidden className="text-muted-foreground/60">
+                  ·
+                </span>
+              )}
+              <StatusBarMetric view={view} warning={false} />
+            </span>
+          ))}
     </span>
   );
 }

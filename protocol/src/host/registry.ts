@@ -540,6 +540,7 @@ import {
   epicCreateChatV10,
   epicCreateChatV11,
   epicCreateChatV12,
+  epicContinueSubagentV10,
   epicCreateCommentThreadV10,
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
@@ -7769,6 +7770,22 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  "epic.continueSubagent": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicContinueSubagentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    // Optional: a host without it cannot continue a subagent at all, and
+    // there is no older verb that could stand in. The GUI reads the host's
+    // manifest and does not offer the control there.
+    degrade: { kind: "unsupported" },
   },
   "epic.createChat": {
     1: {

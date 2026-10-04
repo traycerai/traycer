@@ -22,6 +22,7 @@ import {
   subagentHasChildText,
 } from "@/components/chat/segments/subagent-display";
 import { SubagentAvatar } from "@/components/chat/segments/subagent-avatar";
+import { SubagentContinueAsChatButton } from "@/components/chat/segments/subagent-continue-as-chat-button";
 import { SubagentConversation } from "@/components/chat/segments/subagent-conversation";
 import {
   queryOpenAsChatControl,
@@ -288,6 +289,10 @@ function SubagentChatBreadcrumb(props: {
           </Fragment>
         );
       })}
+      {/* Trailing, clear of the crumbs: it acts on the card that is open. */}
+      <div className="ml-auto flex shrink-0 items-center pl-2">
+        <SubagentContinueAsChatButton testId="subagent-chat-continue" />
+      </div>
     </nav>
   );
 }
