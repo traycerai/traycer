@@ -69,8 +69,7 @@ jobs:
     # up, and reports, before this does.
     timeout-minutes: 60
     permissions:
-      # `gh run rerun` is a write on the Actions API; nothing else is needed.
-      actions: write
+      actions: write # `gh run rerun` is a write on the Actions API; nothing else is needed
     steps:
       - name: Retry the failed jobs once, and fail if the run is still red
         env:
